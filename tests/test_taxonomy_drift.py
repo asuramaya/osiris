@@ -31,11 +31,14 @@ test_unbounded_wait.py's own docstring), not a perfect classifier:
     parameter literally named `resync_house` is code, not a string, and never counted),
     which is exactly the comment/identifier exclusion the census itself used to separate
     surfaces 1-6 from the "second pass" (307 comments+identifiers, decision 70c001ec).
-  - .js/.html surfaces: `//` line comments are stripped before matching; no attempt to
-    tell a JS string literal from a bare identifier on the same line, so this is looser
-    than the .py scan -- acceptable here since src/ui/static's own retired-word footprint
-    is small and mostly comments already (Surface 1 census note: "one user-visible string
-    carries a retired word").
+  - .js/.html surfaces: `/* */` block comments (CSS and JS both use them) are stripped
+    from the whole file first, then `//` line comments are stripped per remaining line;
+    no attempt to tell a JS string literal from a bare identifier on the same line, so
+    this is looser than the .py scan -- acceptable here since src/ui/static's own
+    retired-word footprint is small and mostly comments already (Surface 1 census note:
+    "one user-visible string carries a retired word"). Found missing its first day live
+    (Seshat's 12088, Thoth mail 12189 item 1): index.html:32's CSS `/* ... cluster ... */`
+    comment was counted as a live hit because only `//` was stripped.
   - docs/*.md and commands/*.md: every line counts -- there is no comment/identifier
     concept in prose, and the census's own Surface 4/5 rows confirm every hit there was
     already classified "doc prose".
@@ -90,9 +93,13 @@ def _scan_py(relpath: str) -> int:
     return count
 
 
+_BLOCK_COMMENT_RE = re.compile(r"/\*.*?\*/", re.DOTALL)
+
+
 def _scan_js_html(path: Path) -> int:
+    text = _BLOCK_COMMENT_RE.sub("", path.read_text())
     count = 0
-    for raw in path.read_text().splitlines():
+    for raw in text.splitlines():
         cidx = raw.find("//")
         line = raw if cidx == -1 else raw[:cidx]
         count += len(_RETIRED_RE.findall(line))
@@ -120,6 +127,21 @@ def _live_counts() -> dict[str, int]:
         if n:
             counts[str(path.relative_to(ROOT))] = n
     return counts
+
+
+def test_scan_js_html_strips_block_comments_not_just_line_comments(tmp_path: Path) -> None:
+    """THE SPECIMEN (Seshat 12088, index.html:32): a CSS `/* ... */` block comment
+    mentioning a retired word must not count -- only `//` was stripped before this fix,
+    so a block comment (CSS's only comment form, and legal in JS too) sailed through."""
+    fixture = tmp_path / "fixture.html"
+    fixture.write_text(
+        "<style>\n"
+        "/* this whole cluster of rules styles the district fill, a room, a hub */\n"
+        ".foo { color: red; } // trailing line comment mentions office too\n"
+        "</style>\n"
+        '<div class="house">real hit, not a comment</div>\n'
+    )
+    assert _scan_js_html(fixture) == 1
 
 
 def test_taxonomy_drift_baseline_file_is_valid_json() -> None:
