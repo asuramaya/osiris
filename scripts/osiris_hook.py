@@ -1438,11 +1438,13 @@ _READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
     "team": ("team", False),
     "search": ("search", False),
     "recall": ("show", False),
-    # `osiris inspect` (Khnum's own fan-out aggregator, WAVE 27 PARITY GAPS 2/5/6, branch
-    # khnum-parity-gaps commit a7ca7dc9) is not yet on main as of this wave — served here
-    # off the flat `dossier` door (identity properties only, no --events/--chain/
-    # --candidates) until that branch lands; update to `inspect` then, not before.
-    "inspect": ("dossier", False),
+    # `osiris inspect` (Khnum's own fan-out aggregator, WAVE 27 PARITY GAPS 2/5/6) landed
+    # on main in fc2eea19 — served off the real aggregator now (dossier + whatever
+    # --events/--chain/--candidates flags the caller's own args ask for would need, but
+    # this hook is bare-ref-only like every other ref-taking door below, so it always
+    # serves the dossier-only form; a flagged inspect falls through to the model same as
+    # any other unrecognized arg, per the bare-only discipline in `_cmd_read`).
+    "inspect": ("inspect", False),
     "digest": ("digest", False),
     "mail": ("inbox", True),
     "desk": ("desk", False),
@@ -1502,7 +1504,7 @@ def _cmd_read(hook: dict[str, Any]) -> int:
         if not project:
             return 0  # no project baked into this seat's own wired hook command
         cli_args += ["--project", project]
-    if subcmd in ("dossier", "show"):
+    if subcmd in ("dossier", "show", "inspect"):
         if not args:
             return 0  # a ref-taking door with no ref -- nothing to render
         cli_args.append(args[0])
