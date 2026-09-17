@@ -201,6 +201,46 @@ def test_reads_with_project_bakes_the_env_prefix(tmp_path: Path) -> None:
                and c.endswith("scripts/osiris_hook.py read") for c in cmds)
 
 
+def test_settle_gate_installs_pretooluse_and_precompact(tmp_path: Path) -> None:
+    """--settle-gate (#93) wires BOTH PreToolUse (the refusal gate, matcher `.*` — every
+    tool, not just osiris ones) AND PreCompact (the machine-handoff fallback) — the gate
+    without the fallback would be half the ruling, so settle_gate implies both on its own
+    rather than depending on the caller having separately asked for --precompact."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, settle_gate=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    pre_groups = settings["hooks"]["PreToolUse"]
+    gate_cmds = [h["command"] for g in pre_groups for h in g["hooks"]]
+    assert any(c.endswith("scripts/osiris_hook.py settle-gate") for c in gate_cmds)
+    gate_group = next(g for g in pre_groups
+                      if any(h["command"].endswith("settle-gate") for h in g["hooks"]))
+    assert gate_group["matcher"] == ".*"
+    precompact_cmds = [h["command"] for g in settings["hooks"]["PreCompact"]
+                       for h in g["hooks"]]
+    assert any(c.endswith("scripts/osiris_hook.py precompact") for c in precompact_cmds)
+    _, changed = merge_settings(settings, tmp_path, settle_gate=True)
+    assert changed is False
+
+
+def test_settle_gate_never_clobbers_an_existing_anchor_matcher(tmp_path: Path) -> None:
+    """PreToolUse already carries `anchor`'s own scoped `mcp__osiris__.*` group — the new
+    `.*` settle-gate group must land ALONGSIDE it, not replace or merge into it (two
+    genuinely different matchers, two genuinely different commands)."""
+    repo = tmp_path / "fleet"
+    (repo / ".claude").mkdir(parents=True)
+    onboard(repo, anchor=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    onboard(repo, anchor=True, settle_gate=True, osiris_home=tmp_path)
+    settings = _read(repo / ".claude" / "settings.json")
+    groups = settings["hooks"]["PreToolUse"]
+    matchers = {g.get("matcher") for g in groups}
+    assert matchers == {"mcp__osiris__.*", ".*"}
+    anchor_cmds = [h["command"] for g in groups if g.get("matcher") == "mcp__osiris__.*"
+                  for h in g["hooks"]]
+    assert any(c.endswith("scripts/osiris_hook.py anchor") for c in anchor_cmds)
+
+
 def test_settings_merge_preserves_other_keys(tmp_path: Path) -> None:
     repo = tmp_path / "hassettings"
     (repo / ".claude").mkdir(parents=True)

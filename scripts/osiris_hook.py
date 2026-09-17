@@ -18,6 +18,9 @@ Subcommands:
   anchor         PreToolUse stdin filter — inject session_anchor + subagent_id
   read           UserPromptSubmit — the zero-token read hook: a matched bare slash read
                  renders straight to the screen (block+reason), never reaches the model
+  settle-gate    PreToolUse — THE MECHANICAL SETTLE: refuses non-osiris tool calls past
+                 context 65% until a complete settle lands; precompact also mints a
+                 machine handoff marker as a last resort when one never did
 
 FAIL-OPEN: any error exits 0 silently — a session is never blocked by a hook glitch.
 """
@@ -129,6 +132,7 @@ def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool
 _TIMEOUTS: dict[str, int] = {
     "statusline": 3, "stop": 3, "whisper": 3, "session-end": 2,
     "precompact": 2, "spawn": 2, "anchor": 5, "stop_stage_a": 2,
+    "settle_gate": 3,
 }
 
 # THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has to
@@ -1081,6 +1085,171 @@ def _clear_life_markers(marker_dir: Path | None) -> None:
             pass
 
 
+# --- settle-gate (PreToolUse) + the PreCompact fallback — THE MECHANICAL SETTLE (#93,
+# operator ruling 2026-09-17, narrows a3fb7c11: "settle always runs before the compact
+# injection, not as an art or a discipline, but a mechanical mandate"). Once context is at
+# or past MECHANICAL_SETTLE_PCT and no complete settle exists since, every tool call is
+# refused except the handful that can actually CLOSE that gap — never left to a body's own
+# discipline under pressure. If compaction still arrives unsettled anyway (the gate missed
+# it, or fired too late), PreCompact mints a MACHINE handoff marker as a last resort: a
+# pointer for the successor, never a substitute for the board a real settle() would leave.
+
+_SETTLE_GATE_ALLOWLIST = frozenset({
+    "mcp__osiris__settle", "mcp__osiris__record_decision", "mcp__osiris__open_thread",
+    "mcp__osiris__thread", "mcp__osiris__amend_decision", "mcp__osiris__get_status",
+})
+_CALL_LOG_CAP = 10
+
+
+def _call_log_path(session_id: str) -> Path | None:
+    sid8 = (session_id or "")[:8]
+    return (Path.home() / ".claude" / "jobs" / sid8 / ".osiris_call_log") \
+        if len(sid8) == 8 else None
+
+
+def _append_call_log(session_id: str, tool_name: str) -> None:
+    """Every PreToolUse fire, allow or refuse, gate crossed or not — the PreCompact
+    fallback below needs the session's REAL recent activity, not just what happened
+    after the line was crossed. Best-effort: never blocks a tool call over a log write."""
+    path = _call_log_path(session_id)
+    if path is None:
+        return
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        lines = path.read_text().splitlines() if path.exists() else []
+        lines.append(tool_name)
+        path.write_text("\n".join(lines[-_CALL_LOG_CAP:]) + "\n")
+    except OSError:
+        pass
+
+
+def _read_call_log(session_id: str) -> list[str]:
+    path = _call_log_path(session_id)
+    if path is None or not path.exists():
+        return []
+    try:
+        return path.read_text().splitlines()[-_CALL_LOG_CAP:]
+    except OSError:
+        return []
+
+
+def _settle_boxes_now(cwd: str, session_id: str) -> dict[str, Any] | None:
+    """The SAME `/stop` `phase='offload'` round trip `_self_compact_ready` already POSTs
+    (settle_boxes under the hood) — no new server route, no persisted flag: a settle is
+    "complete" exactly when its own boxes read empty right now, the live definition
+    settle() itself uses, never a second, independently-drifting notion of "settled".
+    None on any probe trouble — the caller decides how to fail, never guessed here."""
+    resp = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd, "session_id": session_id},
+                 timeout=_TIMEOUTS["settle_gate"])
+    if resp is None or resp.get("error"):
+        return None
+    boxes = resp.get("result") if isinstance(resp.get("result"), dict) else resp
+    return boxes if isinstance(boxes, dict) else None
+
+
+def _gate_context_pct(hook: dict[str, Any]) -> int | None:
+    """Prefer the harness's own figure when PreToolUse carries one (unconfirmed whether
+    it always does — this is the fallback-first, not fallback-only, so either way is
+    covered); else derive the same way `_cmd_stop`'s own alarm gate does — via context_
+    lens's own primitives, NEVER alarming on an assumed window (a guessed window is not
+    a real measurement to hard-block a whole session over)."""
+    cw = hook.get("context_window")
+    if isinstance(cw, dict):
+        raw = cw.get("used_percentage")
+        if isinstance(raw, (int, float)):
+            return int(raw)
+    pct, assumed = _offload_pct(hook, None)
+    return None if assumed else pct
+
+
+def _cmd_settle_gate(hook: dict[str, Any]) -> int:
+    """PreToolUse filter. Logs every call, allow or refuse; refuses non-allowlisted tools
+    once past MECHANICAL_SETTLE_PCT with no complete settle since. Fails OPEN on every
+    kind of trouble (no tool name, no import, a probe failure, an unmeasurable context) —
+    a missed refusal costs nothing new; a wrong one would freeze a session on a hook
+    glitch, exactly the failure this whole file's own module docstring forbids."""
+    tool_name = str(hook.get("tool_name") or "")
+    session_id = str(hook.get("session_id") or "")
+    if tool_name:
+        _append_call_log(session_id, tool_name)
+    if not tool_name or tool_name in _SETTLE_GATE_ALLOWLIST:
+        return 0
+    if tool_name == "mcp__osiris__inbox":
+        ti = hook.get("tool_input")
+        if isinstance(ti, dict) and ti.get("peek"):
+            return 0
+    try:
+        from src.orchestrator.context_lens import MECHANICAL_SETTLE_PCT
+    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+        return 0
+    pct = _gate_context_pct(hook)
+    if pct is None or pct < MECHANICAL_SETTLE_PCT:
+        return 0
+    boxes = _settle_boxes_now(str(hook.get("cwd") or ""), session_id)
+    if boxes is None or not _missing_boxes(boxes):
+        return 0  # settled, or unmeasurable — same fail-open floor `_missing_boxes` holds
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": "deny",
+        "permissionDecisionReason": (
+            f"settle first: context {pct}% ≥ {MECHANICAL_SETTLE_PCT}% and no "
+            "complete settle since; call settle() then /compact"),
+    }}))
+    return 0
+
+
+def _git_status_porcelain(repo_dir: str, *, timeout_s: float = 2.0) -> str:
+    """Same subprocess shape as `src.orchestrator.settle.uncommitted_git_work` — a
+    direct call here rather than importing that DB-flavored module into a stdlib-only
+    script for one subprocess line. Empty string on any trouble (not a git repo, no
+    such path, a timeout) — the fallback marker still mints without it."""
+    if not repo_dir:
+        return ""
+    try:
+        proc = subprocess.run(["git", "-C", repo_dir, "status", "--porcelain"],
+                              capture_output=True, text=True, timeout=timeout_s,
+                              check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return proc.stdout if proc.returncode == 0 else ""
+
+
+def _mint_machine_handoff(hook: dict[str, Any], boxes: dict[str, Any]) -> None:
+    """THE LAST RESORT (#93 item 2): compaction is about to destroy this session's own
+    context and no complete settle happened first — mint a pointer for the successor
+    anyway, tagged plainly as machine-assembled so nobody mistakes it for a mind's own
+    judgment. Built from what a stdlib-only script CAN actually see without a DB/MCP
+    client: which boxes are still missing, `git status --porcelain` of the governed
+    repo, and the session's own last 10 tool calls (`_append_call_log`'s own log) — never
+    a re-listing of this session's decisions/threads verbatim, which would need the graph
+    itself. Best-effort throughout: a failure here costs a missing pointer, never a
+    crashed hook."""
+    session_id = str(hook.get("session_id") or "")
+    cwd = str(hook.get("cwd") or "")
+    missing = _missing_boxes(boxes)
+    calls = _read_call_log(session_id)
+    git_status = _git_status_porcelain(cwd)
+    summary = "MACHINE-MINTED FALLBACK HANDOFF — no complete settle before compaction"
+    rationale = (
+        f"Assembled by scripts/osiris_hook.py's own PreCompact fallback, not judged by "
+        f"a mind — a pointer, never a board. Missing settle box(es): "
+        f"{', '.join(missing) if missing else '(unknown)'}. "
+        f"Last {len(calls)} tool call(s), oldest first: "
+        f"{', '.join(calls) if calls else '(none logged)'}. "
+        f"git status --porcelain at {cwd!r}: "
+        f"{git_status.strip() if git_status.strip() else '(clean, or unavailable)'}"
+    )
+    decisions = json.dumps([{
+        "summary": summary, "kind": "ruling", "rationale": rationale,
+        "is_handoff": True,
+    }])
+    try:
+        subprocess.run([_OSIRIS_BIN, "settle", "--decisions", decisions],
+                       capture_output=True, text=True, timeout=8, check=False)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
 def _cmd_precompact(hook: dict[str, Any]) -> int:
     transcript = str(hook.get("transcript_path") or "")
     sid8 = str(hook.get("session_id") or "")[:8]
@@ -1092,6 +1261,14 @@ def _cmd_precompact(hook: dict[str, Any]) -> int:
                            "trigger": str(hook.get("trigger") or "")},
                      timeout=_TIMEOUTS["precompact"])
         _log_post("osiris_hook.precompact", url, resp)
+    # #93 item 2, THE FALLBACK: if a complete settle never happened this session, mint the
+    # machine handoff before the compaction that's about to destroy this context. A probe
+    # failure (boxes is None) is treated as "cannot confirm settled" — mint anyway, since
+    # staying silent on an unmeasurable state is exactly the gap this fallback exists to
+    # close, and a redundant handoff costs nothing a real one wouldn't have superseded.
+    boxes = _settle_boxes_now(str(hook.get("cwd") or ""), str(hook.get("session_id") or ""))
+    if boxes is None or _missing_boxes(boxes):
+        _mint_machine_handoff(hook, boxes or {})
     return 0
 
 
@@ -1364,6 +1541,7 @@ _CMDS = {
     "statusline": _cmd_statusline, "stop": _cmd_stop, "whisper": _cmd_whisper,
     "session-end": _cmd_session_end, "precompact": _cmd_precompact,
     "spawn": _cmd_spawn, "anchor": _cmd_anchor, "read": _cmd_read,
+    "settle-gate": _cmd_settle_gate,
 }
 
 

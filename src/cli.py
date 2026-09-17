@@ -4998,6 +4998,62 @@ async def cmd_decide(
     return 0
 
 
+# --- settle (#93, THE MECHANICAL SETTLE, Thoth mail 11789): the console-script door onto
+# the settle MCP tool, called OVER THE WIRE — unlike cmd_decide above, settle()'s own logic
+# lives entirely in mcp_server.py, never split into a directly-callable orchestrator
+# function, so this door reaches the wire, same shape as osiris backfill/osiris backup-
+# settings (a write door with no local orchestrator function to call instead). Built so
+# scripts/osiris_hook.py's own PreCompact fallback (a stdlib-only script with no MCP
+# client) has a real subcommand to mint a machine-handoff decision through.
+
+async def cmd_settle(
+    *, decisions: str | None = None, threads_open: str | None = None,
+    threads_resolve: str | None = None, repo_path: str | None = None,
+    standing_orders: str | None = None, because: str | None = None,
+    as_json: bool = False, text: bool = False,
+) -> int:
+    """osiris settle [--decisions JSON] [--threads-open JSON] [--threads-resolve JSON]
+    [--repo-path PATH] [--standing-orders unchanged] [--because R] — no args = the
+    read-only completeness-boxes surface, same as calling settle() with nothing. Each
+    of --decisions/--threads-open/--threads-resolve is a JSON array of objects, each
+    object that verb's own kwargs (same convention as `osiris composition run-spec
+    --spec`'s own JSON-blob argument) — `[{"summary": "...", "is_handoff": true}]` for
+    one handoff decision, for instance."""
+    import json as json_mod
+
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    def _parse_json(raw: str | None, flag: str) -> Any:
+        if raw is None:
+            return None
+        try:
+            return json_mod.loads(raw)
+        except ValueError as e:
+            print(f"osiris settle: {flag} is not valid JSON — {e}", file=sys.stderr)
+            raise SystemExit(2) from e
+
+    params = {
+        "decisions": _parse_json(decisions, "--decisions"),
+        "threads_open": _parse_json(threads_open, "--threads-open"),
+        "threads_resolve": _parse_json(threads_resolve, "--threads-resolve"),
+        "repo_path": repo_path,
+        "standing_orders": standing_orders,
+        "because": because,
+    }
+    url = await _mcp_url()
+    result = await call_mcp_tool(url, "settle", params)
+    if isinstance(result, str):
+        print(f"osiris settle: {result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    if text:
+        print(json_mod.dumps(result))
+        return 0
+    render.emit(result, as_json=as_json, title="settle")
+    return 1 if isinstance(result, dict) and result.get("error") else 0
+
+
 async def cmd_thread(
     ref: list[str], *, because: str | None = None, artifact: str | None = None,
     dry_run: bool = True, actor: str = _CONSOLE_ACTOR, as_json: bool = False,
@@ -7103,7 +7159,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   read the record       desk, show, threads, inbox, search, dossier, object-events,
                         succession-chain, candidates, composition, citation, inspect,
                         practices
-  write to the record   send, decide, thread, annotate-thread, amend-decision,
+  write to the record   send, decide, settle, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
                         transition-seat-project, correct-agent-house, reconcile-merge,
@@ -7946,6 +8002,33 @@ def _build_parser() -> argparse.ArgumentParser:
                           help=f"who is deciding — defaults to {_CONSOLE_ACTOR!r}")
     p_decide.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line")
+
+    p_settle = sub.add_parser("settle", description=_d(
+        "the end-of-context ritual — the same settle() MCP tool, called over the wire. "
+        "No args = the read-only completeness-boxes surface"),
+        epilog="example: osiris settle\n"
+               "example: osiris settle --decisions "
+               "'[{\"summary\": \"state of the board\", \"is_handoff\": true}]'")
+    p_settle.add_argument("--decisions", default=None,
+                          help="a JSON array of record_decision kwargs, one object per "
+                               "decision (e.g. [{\"summary\": \"...\", \"is_handoff\": "
+                               "true}])")
+    p_settle.add_argument("--threads-open", default=None, dest="threads_open",
+                          help="a JSON array of open_thread kwargs, one object per thread")
+    p_settle.add_argument("--threads-resolve", default=None, dest="threads_resolve",
+                          help="a JSON array of resolve_thread kwargs, one object per "
+                               "thread")
+    p_settle.add_argument("--repo-path", default=None, dest="repo_path",
+                          help="the code repo for the git-status box (defaults to your "
+                               "mounted cwd)")
+    p_settle.add_argument("--standing-orders", default=None, dest="standing_orders",
+                          help="'unchanged' closes the standing-orders box honestly — "
+                               "requires --because")
+    p_settle.add_argument("--because", default=None,
+                          help="required with --standing-orders unchanged")
+    p_settle.add_argument("--json", action="store_true", dest="as_json",
+                          help="machine-readable: one compact JSON line")
+    _add_text_flag(p_settle)
 
     p_thread = sub.add_parser("thread", description=_d(
         "resolve (close) a Thread — the same `thread` MCP tool's own action='resolve' "
@@ -8846,6 +8929,12 @@ def main(argv: list[str] | None = None) -> int:
             unlinked_because=args.unlinked_because,
             operator_authorized=args.operator_authorized, actor=args.actor,
             as_json=args.as_json))
+    if args.command == "settle":
+        return asyncio.run(cmd_settle(
+            decisions=args.decisions, threads_open=args.threads_open,
+            threads_resolve=args.threads_resolve, repo_path=args.repo_path,
+            standing_orders=args.standing_orders, because=args.because,
+            as_json=args.as_json, text=args.text))
     if args.command == "thread":
         return asyncio.run(cmd_thread(
             args.ref, because=args.because, artifact=args.artifact,

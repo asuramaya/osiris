@@ -17,7 +17,9 @@ import scripts.osiris_hook as osiris_hook
 from scripts.osiris_hook import (
     ALARM_PCT,
     HARD_ALARM_PCT,
+    _cmd_precompact,
     _cmd_read,
+    _cmd_settle_gate,
     _cmd_stop,
     _fire_stage_a,
     _implies_an_act,
@@ -1708,3 +1710,171 @@ def test_cmd_read_blank_render_is_a_clean_fall_through(monkeypatch: Any) -> None
     monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
     assert _cmd_read({"prompt": "/backlog"}) == 0
     assert printed == []
+
+
+# --- settle-gate (PreToolUse) + the PreCompact fallback — THE MECHANICAL SETTLE (#93,
+# Thoth mail 11789). _post is monkeypatched throughout (pure/no-DB, same discipline this
+# whole file already keeps for /stop round trips). ------------------------------------
+
+def _hook_with_pct(pct: int, **extra: Any) -> dict[str, Any]:
+    return {"tool_name": "Bash", "session_id": "settlegate-0000-4000-8000-000000000000",
+            "cwd": "/repo", "context_window": {"used_percentage": pct}, **extra}
+
+
+def test_settle_gate_allows_below_the_mechanical_line(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls: list[Any] = []
+    monkeypatch.setattr(osiris_hook, "_post", lambda *a, **k: calls.append(1) or None)
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_settle_gate(_hook_with_pct(64)) == 0
+    assert printed == []
+    assert calls == []  # never even probes settle state below the line
+
+
+def test_settle_gate_allowlisted_tool_always_permitted(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    calls: list[Any] = []
+    monkeypatch.setattr(osiris_hook, "_post", lambda *a, **k: calls.append(1) or None)
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    hook = _hook_with_pct(90, tool_name="mcp__osiris__settle")
+    assert _cmd_settle_gate(hook) == 0
+    assert printed == []
+    assert calls == []
+
+
+def test_settle_gate_inbox_peek_permitted_inbox_non_peek_refused(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: {"result": {"decisions recorded this session": False}})
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    peek = _hook_with_pct(90, tool_name="mcp__osiris__inbox", tool_input={"peek": True})
+    assert _cmd_settle_gate(peek) == 0
+    assert printed == []
+    non_peek = _hook_with_pct(90, tool_name="mcp__osiris__inbox", tool_input={"peek": False})
+    assert _cmd_settle_gate(non_peek) == 0
+    assert len(printed) == 1
+
+
+def test_settle_gate_refuses_past_the_line_when_unsettled(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: {"result": {"decisions recorded this session": False,
+                                                    "threads trued this session": True}})
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_settle_gate(_hook_with_pct(70)) == 0
+    assert len(printed) == 1
+    payload = json.loads(printed[0])
+    out = payload["hookSpecificOutput"]
+    assert out["hookEventName"] == "PreToolUse"
+    assert out["permissionDecision"] == "deny"
+    assert "settle first: context 70% ≥ 65%" in out["permissionDecisionReason"]
+    assert "settle() then /compact" in out["permissionDecisionReason"]
+
+
+def test_settle_gate_permits_past_the_line_once_settled(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: {"result": {"decisions recorded this session": True,
+                                                    "threads trued this session": True}})
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_settle_gate(_hook_with_pct(70)) == 0
+    assert printed == []
+
+
+def test_settle_gate_fails_open_on_a_probe_failure(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post", lambda *a, **k: None)  # the network-down shape
+    printed: list[str] = []
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: printed.append(s))
+    assert _cmd_settle_gate(_hook_with_pct(90)) == 0
+    assert printed == []
+
+
+def test_settle_gate_logs_every_call_allow_or_refuse(tmp_path: Path, monkeypatch: Any) -> None:
+    """The PreCompact fallback's own 'last 10 tool calls' needs the session's REAL
+    activity, logged on every fire -- not just the ones that end up refused."""
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post", lambda *a, **k: None)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    sid = "logtest0-0000-4000-8000-000000000000"
+    _cmd_settle_gate({"tool_name": "Read", "session_id": sid, "cwd": "/repo",
+                      "context_window": {"used_percentage": 10}})
+    _cmd_settle_gate({"tool_name": "Bash", "session_id": sid, "cwd": "/repo",
+                      "context_window": {"used_percentage": 10}})
+    logged = osiris_hook._read_call_log(sid)
+    assert logged == ["Read", "Bash"]
+
+
+def test_settle_gate_call_log_caps_at_ten(tmp_path: Path, monkeypatch: Any) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post", lambda *a, **k: None)
+    monkeypatch.setattr("builtins.print", lambda s="", **kw: None)
+    sid = "captest0-0000-4000-8000-000000000000"
+    for i in range(15):
+        _cmd_settle_gate({"tool_name": f"Tool{i}", "session_id": sid, "cwd": "/repo",
+                          "context_window": {"used_percentage": 10}})
+    logged = osiris_hook._read_call_log(sid)
+    assert logged == [f"Tool{i}" for i in range(5, 15)]
+
+
+def test_precompact_fallback_mints_a_machine_handoff_when_unsettled(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: {"result": {"decisions recorded this session": False}})
+    monkeypatch.setattr(osiris_hook, "_git_status_porcelain", lambda *a, **k: " M foo.py\n")
+    sid = "precompact0-0000-4000-8000-00000000000"
+    monkeypatch.setattr(osiris_hook, "_read_call_log", lambda s: ["Read", "Edit"])
+    seen: list[list[str]] = []
+
+    def _fake_run(args: list[str], **kw: Any) -> Any:
+        seen.append(args)
+        import subprocess as _sp
+        return _sp.CompletedProcess(args, returncode=0, stdout="{}", stderr="")
+
+    monkeypatch.setattr(osiris_hook.subprocess, "run", _fake_run)
+    hook = {"session_id": sid, "cwd": "/repo", "transcript_path": ""}
+    assert _cmd_precompact(hook) == 0
+    assert len(seen) == 1
+    args = seen[0]
+    assert args[0] == osiris_hook._OSIRIS_BIN
+    assert args[1] == "settle"
+    assert args[2] == "--decisions"
+    payload = json.loads(args[3])
+    assert len(payload) == 1
+    item = payload[0]
+    assert item["is_handoff"] is True
+    assert "MACHINE-MINTED" in item["summary"]
+    assert "Read, Edit" in item["rationale"]
+    assert "foo.py" in item["rationale"]
+
+
+def test_precompact_fallback_stays_silent_when_already_settled(
+    tmp_path: Path, monkeypatch: Any,
+) -> None:
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    monkeypatch.setattr(osiris_hook, "_post",
+                        lambda *a, **k: {"result": {"decisions recorded this session": True}})
+    seen: list[list[str]] = []
+    monkeypatch.setattr(osiris_hook.subprocess, "run",
+                        lambda args, **kw: seen.append(args) or None)
+    hook = {"session_id": "settled00-0000-4000-8000-000000000000", "cwd": "/repo",
+            "transcript_path": ""}
+    assert _cmd_precompact(hook) == 0
+    assert seen == []

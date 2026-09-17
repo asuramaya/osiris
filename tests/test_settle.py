@@ -723,6 +723,37 @@ async def test_settle_tool_refuses_when_unmounted(actions: Actions) -> None:
     assert "error" in out
 
 
+async def test_settle_tool_receipt_carries_context_pct(actions: Actions) -> None:
+    """#93, THE MECHANICAL SETTLE (Thoth mail 11789, item 3): settle's own receipt gains
+    a plain numeric `context_pct` -- scripts/osiris_hook.py's PreToolUse gate needs a
+    number to compare against MECHANICAL_SETTLE_PCT, not the debounced prose `_seam_field`
+    puts on every OTHER tool's receipt. None here (no agent_mounts row for this identity,
+    so no job_dir to read a transcript from) is the correct, honest answer for an
+    unmeasurable session -- same fail-open floor `_raw_context_pct` documents, proven by
+    the key's PRESENCE, not a particular value."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = AgentIdentity(
+        agent_id="agent:settlectx01", session="settlectx01", project="settlectxproj",
+        model=None, cwd=None)
+    try:
+        out = await srv.settle(ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    assert "context_pct" in out
+    assert out["context_pct"] is None
+
+
 async def test_settle_tool_accepts_a_decision_and_a_thread_and_verifies_landed(
     actions: Actions,
 ) -> None:

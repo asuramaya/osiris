@@ -398,6 +398,11 @@ CLI_ONLY_PARAMS = {
         "at all until this).",
     ("digest", "text"): "same PRESENTATION-flag reasoning as digest's own --json entry "
         "directly above — #92, the zero-token read hook.",
+    ("settle", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry above — #93, the mechanical settle (settle had no CLI door at all "
+        "until this).",
+    ("settle", "text"): "same PRESENTATION-flag reasoning as settle's own --json entry "
+        "directly above — #93, the mechanical settle.",
     # 'composition' is a DISPATCHER tool (COMPOSITION_INPUT_SCHEMA's oneOf, task #202,
     # operator ruling f9182ad7): its own bare top-level schema has NO properties at all
     # (every real param lives behind one of the save/run/list branches) — same shape

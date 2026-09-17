@@ -383,6 +383,16 @@ obligation_pressure). Omitting `--hours` matches watermark mode: what's new sinc
 operator last looked, never advancing the watermark unless `--mark-seen` says so
 explicitly. `--text` prints the raw human render with no `--json`, for a script or a hook.
 
+## `osiris settle [--decisions JSON] [--threads-open JSON] [--threads-resolve JSON] [--repo-path P] [--standing-orders unchanged] [--because R] [--json] [--text]`
+
+The console-script door onto the `settle` MCP tool, called over the wire — the end-of-
+context ritual. No args = the read-only completeness-boxes surface. Each of
+`--decisions`/`--threads-open`/`--threads-resolve` is a JSON array of that verb's own
+kwargs (`[{"summary": "...", "is_handoff": true}]` mints a handoff decision, for
+instance) — same convention as `osiris composition run-spec`'s own `--spec`. Built so
+scripts/osiris_hook.py's PreCompact fallback (THE MECHANICAL SETTLE, below) has a real
+subcommand to mint a machine-handoff decision through.
+
 ## The house law behind every subcommand
 
 `osiris` is one of exactly two ways into this system — the other is the MCP tool surface an

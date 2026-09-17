@@ -82,6 +82,10 @@ JSON_COMMANDS = frozenset({
     # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): fleet_digest had no CLI
     # door at all until now — needed so the hook has a real subcommand to shell out to.
     "digest",
+    # #93, THE MECHANICAL SETTLE (Thoth mail 11789): settle had no CLI door at all until
+    # now — needed so the PreCompact fallback (stdlib-only, no MCP client) can mint a
+    # machine-handoff decision through it.
+    "settle",
 })
 
 
