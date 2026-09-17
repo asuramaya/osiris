@@ -29,7 +29,7 @@ from src.parsers.evidence import confidence_for
 
 MIGRATION_TARGETS = frozenset({
     "repo_seats_fix", "file_the_unfiled", "assertion_links",
-    "owned_by_second_pass", "file_the_residual",
+    "owned_by_second_pass", "file_the_residual", "commits_to_agents",
 })
 
 _TIER = EvidenceClass.DIRECT_OBSERVATION
@@ -58,6 +58,9 @@ async def run_migration(
             actions, actor=actor, dry_run=dry_run, because=because)
     if name == "file_the_residual":
         return await migrate_file_the_residual(
+            actions, actor=actor, dry_run=dry_run, because=because)
+    if name == "commits_to_agents":
+        return await migrate_commits_to_agents(
             actions, actor=actor, dry_run=dry_run, because=because)
     return {"error": f"unknown migration {name!r}", "valid_targets": sorted(MIGRATION_TARGETS)}
 
@@ -903,5 +906,111 @@ async def migrate_file_the_residual(
         "filed": len(filed), "filed_via_broadcast": filed_via_broadcast,
         "ties": len(ties), "ties_plan": ties,
         "still_unfiled": still_unfiled,
+        "because": because if not dry_run else None,
+    }
+
+
+async def migrate_commits_to_agents(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """COMMITS ATTRIBUTED TO AGENT IDENTITIES, THE BACKFILL DOOR (WAVE 27, ruling
+    4cf5e4b3/b8fb26494e0e, Thoth dispatch 11924): commit f14f47aa taught `ingest_repo`
+    to mint `committed_by` going forward; every Commit it minted BEFORE that landed has
+    none. Same resolution as the going-forward path, applied retroactively: the
+    Commit's own `in_repo` SoftwareProject's registered `on_disk_path` names the
+    worktree (`_worktree_seat`/`tree_seat_hint` resolves the bound seat from it, never a
+    string-guess), crossed with which generation held that seat at the Commit's own
+    `authored_date` (`_seat_holder_at`, the holds link's own time-windowed history).
+    Never guesses.
+
+    THREE RECEIPT BUCKETS, Thoth's own naming (dispatch 11924): `minted_by_worktree_time`
+    (this pass's own resolution — the only kind it mints); `sharpened_by_trailer`
+    (RESERVED, always 0 here — the Claude-Session-trailer disambiguation step is its own
+    scoped follow-up, built only if `abstained` below turns out big enough to warrant
+    it, per Thoth's own sequencing); `abstained` (no committed_by minted, cause named
+    per reason: no registered on_disk_path for the commit's repo, no seat bound to that
+    path, or no holder's window covers the commit's own author time — a small sample of
+    each, for a human to spot-check).
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call only ever considers Commits still missing committed_by — a real write
+    here can never re-mint or duplicate."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "migrating without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    from src.ingest.gitlog import _seat_holder_at, _worktree_seat
+
+    pool = actions.pool
+    now = datetime.now(UTC)
+    rows = await pool.fetch(
+        "SELECT c.id AS commit_id, c.canonical AS commit_canonical, "
+        " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=c.id "
+        "   AND a.name='authored_date' ORDER BY a.confidence DESC, a.observed_at DESC "
+        "   LIMIT 1) AS authored_date, "
+        " p.id AS project_id "
+        "FROM objects c "
+        "JOIN links l ON l.from_id=c.id AND l.type='in_repo' "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()) "
+        "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
+        "WHERE c.type='Commit' AND c.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links cb WHERE cb.from_id=c.id "
+        "  AND cb.type='committed_by' "
+        "  AND (cb.valid_until IS NULL OR cb.valid_until > now()))")
+
+    project_ids = list({r["project_id"] for r in rows})
+    on_disk_paths: dict[uuid.UUID, str | None] = {}
+    if project_ids:
+        path_rows = await pool.fetch(
+            "SELECT o.id, (SELECT a.value #>> '{}' FROM current_assertions a "
+            "  WHERE a.object_id=o.id AND a.name='on_disk_path' "
+            "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS on_disk_path "
+            "FROM objects o WHERE o.id = ANY($1::uuid[])", project_ids)
+        on_disk_paths = {r["id"]: r["on_disk_path"] for r in path_rows}
+
+    seat_by_project: dict[uuid.UUID, str | None] = {}
+    minted: dict[uuid.UUID, str] = {}
+    abstained: Counter[str] = Counter()
+    abstained_sample: dict[str, list[str]] = defaultdict(list)
+
+    def _abstain(reason: str, commit_canon: str) -> None:
+        abstained[reason] += 1
+        if len(abstained_sample[reason]) < 5:
+            abstained_sample[reason].append(commit_canon)
+
+    for r in rows:
+        commit_id, commit_canon = r["commit_id"], r["commit_canonical"]
+        project_id, authored_date = r["project_id"], r["authored_date"]
+        if not authored_date:
+            _abstain("no-authored-date", commit_canon)
+            continue
+        at = datetime.fromisoformat(authored_date.replace("Z", "+00:00"))
+        if project_id not in seat_by_project:
+            path = on_disk_paths.get(project_id)
+            seat_by_project[project_id] = (
+                await _worktree_seat(pool, worktree_path=path) if path else None)
+        seat_id = seat_by_project[project_id]
+        if seat_id is None:
+            _abstain("no-seat-bound-to-worktree", commit_canon)
+            continue
+        holder = await _seat_holder_at(pool, seat_id=seat_id, at=at)
+        if holder is None:
+            _abstain("no-holder-at-author-time", commit_canon)
+            continue
+        minted[commit_id] = holder
+
+    if not dry_run and minted:
+        for commit_id, holder in minted.items():
+            agent_oid = await actions.create_or_find_object("Agent", holder, actor)
+            await actions.create_link(commit_id, agent_oid, "committed_by", actor, now,
+                                      _CONF, evidence_class=_EC)
+
+    return {
+        "dry_run": dry_run,
+        "scanned": len(rows),
+        "minted_by_worktree_time": len(minted),
+        "sharpened_by_trailer": 0,
+        "abstained": sum(abstained.values()),
+        "abstained_reasons": dict(abstained),
+        "abstained_sample": dict(abstained_sample),
         "because": because if not dry_run else None,
     }
