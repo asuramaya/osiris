@@ -41,7 +41,7 @@ const Osiris = (() => {
       case "union": return ["union"];
       case "intersect": return ["intersect"];
       case "aggregate": return [...inner, `aggregate by ${(spec.group_by || []).join(", ") || "all"} (${(spec.metric || {}).type || "count"})`];
-      case "bundle": return [...inner, `⑂ fan out by ${spec.by || "neighborhood"}`];
+      case "bundle": return [...inner, `⑂ fan out by ${spec.by || "project"}`];
       case "order": return [...inner, `order ${spec.dir || "asc"}`];
       case "take": return [...inner, `take ${spec.n}`];
       case "function": return [`${spec.name}()`];
