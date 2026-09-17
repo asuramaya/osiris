@@ -10,6 +10,7 @@ from src.orchestrator.graph_migrations import (
     migrate_commits_to_agents,
     migrate_file_the_residual,
     migrate_file_the_unfiled,
+    migrate_holds_sandwich,
     migrate_house_to_project,
     migrate_owned_by_second_pass,
     migrate_repo_seats_fix,
@@ -791,5 +792,143 @@ async def test_migrate_house_to_project_skips_a_seat_already_correct(
 
 async def test_run_migration_accepts_house_to_project(actions: Actions) -> None:
     out = await run_migration(actions.pool, "house_to_project", actor="test")
+    assert "error" not in out
+    assert out["dry_run"] is True
+
+
+# --- holds_sandwich (WAVE 27/28 boundary, Thoth dispatch 12079/12190) --------------
+
+
+async def _seed_sandwich(
+    actions: Actions, *, house: str, handle: str, real_holder: str, phantom: str,
+    t1: datetime, t2: datetime, t3: datetime, t4: datetime | None,
+) -> str:
+    """Three consecutive holds rows: real_holder [t1,t2) -> phantom [t2,t3) -> real_holder
+    [t3,t4-or-open) -- the exact bind-before-spawn sandwich shape, built directly (never
+    through bind_holder, which would refuse/collapse a same-agent-twice sequence and
+    can't backdate history anyway)."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = (await ensure_seat(actions, house=house, handle=handle, source="test"))["seat_id"]
+    seat_oid = await actions.create_or_find_object("Seat", seat, "test")
+    real_oid = await actions.create_or_find_object("Agent", real_holder, "test")
+    phantom_oid = await actions.create_or_find_object("Agent", phantom, "test")
+    await actions.assert_property(
+        phantom_oid, "minted_because", "launch_seat: bind-before-spawn (piece 1, msg 6692)",
+        "test", t2, 0.9)
+    await actions.create_link(real_oid, seat_oid, "holds", "test", t1, 1.0)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=$1 WHERE from_id=$2 AND to_id=$3 AND type='holds'",
+        t2, real_oid, seat_oid)
+    await actions.create_link(phantom_oid, seat_oid, "holds", "test", t2, 1.0)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=$1 WHERE from_id=$2 AND to_id=$3 AND type='holds'",
+        t3, phantom_oid, seat_oid)
+    third = await actions.create_link(real_oid, seat_oid, "holds", "test", t3, 1.0)
+    if t4 is not None:
+        await actions.pool.execute("UPDATE links SET valid_until=$1 WHERE id=$2", t4, third)
+    return seat
+
+
+async def test_holds_sandwich_requires_because_to_apply(actions: Actions) -> None:
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="")
+    assert "error" in out
+
+
+async def test_holds_sandwich_dry_run_finds_it_without_writing(actions: Actions) -> None:
+    t1, t2 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, 1, tzinfo=UTC)
+    t3 = datetime(2026, 1, 1, 1, 0, 5, tzinfo=UTC)
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwich1", real_holder="agent:gm-sw1-real",
+        phantom="agent:gm-sw1-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=True)
+    found = [s for s in out["sandwiches"] if s["seat"] == seat]
+    assert len(found) == 1
+    assert found[0]["real_holder"] == "agent:gm-sw1-real"
+    assert found[0]["phantom"] == "agent:gm-sw1-phantom"
+    assert found[0]["window"] == [t1.isoformat(), None]
+
+    rows = await actions.pool.fetch(
+        "SELECT valid_until FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
+    assert [r["valid_until"] for r in rows] == [t2, t3, None]  # nothing written yet
+
+
+async def test_holds_sandwich_apply_re_opens_the_real_holders_window(
+    actions: Actions,
+) -> None:
+    t1, t2 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, 1, tzinfo=UTC)
+    t3 = datetime(2026, 1, 1, 1, 0, 5, tzinfo=UTC)
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwich2", real_holder="agent:gm-sw2-real",
+        phantom="agent:gm-sw2-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
+    assert out["sandwiches_found"] == 1
+
+    rows = await actions.pool.fetch(
+        "SELECT f.canonical AS holder, l.first_seen, l.valid_until FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
+    assert len(rows) == 3  # never a delete — all three original rows still exist
+    real1, phantom_row, real2 = rows
+    assert real1["holder"] == "agent:gm-sw2-real" and real1["first_seen"] == t1
+    assert real1["valid_until"] is None  # re-opened across the whole sandwich
+    assert phantom_row["valid_until"] == phantom_row["first_seen"] == t2  # zeroed
+    assert real2["valid_until"] == real2["first_seen"] == t3  # zeroed, now redundant
+
+    # AT ANY POINT IN TIME, exactly one row answers "who held this seat" — never two
+    at = t2 + (t3 - t2) / 2
+    covering = [r for r in rows if r["first_seen"] <= at
+               and (r["valid_until"] is None or r["valid_until"] > at)]
+    assert len(covering) == 1 and covering[0]["holder"] == "agent:gm-sw2-real"
+
+
+async def test_holds_sandwich_apply_is_idempotent(actions: Actions) -> None:
+    t1, t2 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, 1, tzinfo=UTC)
+    t3 = datetime(2026, 1, 1, 1, 0, 5, tzinfo=UTC)
+    await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwich3", real_holder="agent:gm-sw3-real",
+        phantom="agent:gm-sw3-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
+    again = await migrate_holds_sandwich(actions, actor="test", dry_run=True)
+    assert again["sandwiches_found"] == 0
+
+
+async def test_holds_sandwich_never_matches_a_genuine_lineage_succession(
+    actions: Actions,
+) -> None:
+    """Three consecutive holders, no bind-before-spawn `minted_because` anywhere, and the
+    first and third holders are DIFFERENT agents — an ordinary succession chain, never a
+    sandwich, never touched."""
+    from src.orchestrator.seats import ensure_seat
+
+    seat = (await ensure_seat(actions, house="osiris", handle="GmNotASandwich",
+                              source="test"))["seat_id"]
+    seat_oid = await actions.create_or_find_object("Seat", seat, "test")
+    a = await actions.create_or_find_object("Agent", "agent:gm-succ-a", "test")
+    b = await actions.create_or_find_object("Agent", "agent:gm-succ-b", "test")
+    c = await actions.create_or_find_object("Agent", "agent:gm-succ-c", "test")
+    t1 = datetime(2026, 1, 1, tzinfo=UTC)
+    t2 = datetime(2026, 1, 2, tzinfo=UTC)
+    t3 = datetime(2026, 1, 3, tzinfo=UTC)
+    await actions.create_link(a, seat_oid, "holds", "test", t1, 1.0)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=$1 WHERE from_id=$2 AND to_id=$3 AND type='holds'",
+        t2, a, seat_oid)
+    await actions.create_link(b, seat_oid, "holds", "test", t2, 1.0)
+    await actions.pool.execute(
+        "UPDATE links SET valid_until=$1 WHERE from_id=$2 AND to_id=$3 AND type='holds'",
+        t3, b, seat_oid)
+    await actions.create_link(c, seat_oid, "holds", "test", t3, 1.0)
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=True)
+    assert not any(s["seat"] == seat for s in out["sandwiches"])
+
+
+async def test_run_migration_accepts_holds_sandwich(actions: Actions) -> None:
+    out = await run_migration(actions.pool, "holds_sandwich", actor="test")
     assert "error" not in out
     assert out["dry_run"] is True

@@ -3969,13 +3969,15 @@ async def test_dispatch_dm_boots_a_fresh_heir_when_the_holder_sits_past_the_seam
     row = await actions.pool.fetchrow(
         "SELECT mode FROM agent_wakes WHERE message_id=$1", msg_id)
     assert row is not None and row["mode"] == "dm-fresh-heir"
-    # THE BIND ITSELF LANDED (not just the prompt's own wording): a real heir now holds
-    # this seat, minted server-side before the fresh body ever called mount() — a
-    # DIFFERENT holder than before the dispatch, never left to a fresh session's own
-    # claim_name to establish.
+    # THE BIND ITSELF LANDED (not just the prompt's own wording): a real Agent identity
+    # is minted and pre-registered server-side before the fresh body ever calls mount()
+    # — but per THE HOLDS-SANDWICH FIX, the seat's own `holds` edge never moves onto
+    # that fresh bookkeeping heir (it has done no work yet and may never do any); it
+    # stays on the ancestor it already correctly named, unbroken, never left to a fresh
+    # session's own claim_name to re-establish.
     after = await _seat_receipt(actions.pool, worker_seat)
     assert after is not None and after.get("holder") is not None
-    assert after["holder"] != (before or {}).get("holder")
+    assert after["holder"] == (before or {}).get("holder")
 
 
 async def test_dispatch_dm_never_mints_fresh_for_a_non_compaction_gate(
@@ -4495,9 +4497,12 @@ async def test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage(
     actions: Actions,
 ) -> None:
     """The ordinary case: the seat's handle-assertion source AND its `holds` edge agree on
-    the same lineage. Reuses mint_heir outright — next generation, succeeds_seat edge — and
-    the seat's holds link ends up on the heir (via the explicit bind_holder call, not left
-    to mint_heir's own follow_binding alone — see the disagreement test below for why)."""
+    the same lineage. Reuses mint_heir outright (bind_seat=False — the fresh heir has done
+    no work yet and never opens a holds window of its own, THE HOLDS-SANDWICH FIX) — next
+    generation, succeeds_seat edge, `out["agent"]` names the heir for the spawn prompt. The
+    seat's own holds link stays on the ANCESTOR, unbroken (via the explicit bind_holder call
+    below, never left to mint_heir's own follow_binding alone — see the disagreement test
+    below for why)."""
     seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Marquee",
                                  source="agent:38cf08a9"))["seat_id"]
     await bind_holder(actions, seat_id=seat_id, agent_id="agent:38cf08a9")
@@ -4513,7 +4518,46 @@ async def test_bind_before_spawn_mints_an_heir_of_the_seats_own_lineage(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
-    assert row["canonical"] == "agent:38cf08a9-ii"
+    assert row["canonical"] == "agent:38cf08a9"  # the ANCESTOR — never the fresh heir
+
+
+async def test_bind_before_spawn_never_breaks_the_real_holders_holds_row(
+    actions: Actions,
+) -> None:
+    """THE HOLDS-SANDWICH FIX, THE DIRECT ASSERTION (Thoth's own word, msg 12079/12190):
+    a launch through the bind-before-spawn path must never open a second, near-instant
+    holds window for the fresh bookkeeping heir — the real holder's own row (first_seen,
+    and staying valid_until IS NULL) is untouched, not invalidated-then-recreated, proving
+    bind_holder below is a true no-op here rather than a same-agent rebind that still
+    breaks the row in two."""
+    seat_id = (await ensure_seat(actions, house="dealer-to-fb", handle="Sandwich",
+                                 source="agent:sandwichline"))["seat_id"]
+    bound = await bind_holder(actions, seat_id=seat_id, agent_id="agent:sandwichline")
+    before = await actions.pool.fetchrow(
+        "SELECT l.id, l.first_seen FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND f.canonical='agent:sandwichline' AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    assert before is not None
+    assert bound["new_holder"] == "agent:sandwichline"
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Sandwich", house="dealer-to-fb",
+        current_holder="agent:sandwichline", office="/tmp/sandwich",
+        anchor="/tmp/anchors/sandwich", source="agent:thoth01")
+
+    assert out["agent"] == "agent:sandwichline-ii"  # the fresh bookkeeping heir, minted
+    rows = await actions.pool.fetch(
+        "SELECT f.canonical, l.id, l.first_seen, l.valid_until FROM links l "
+        "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds'", seat_id)
+    # exactly ONE holds row exists — the original, byte-identical, never invalidated —
+    # never a second row for the fresh heir sandwiched in front of or behind it
+    assert len(rows) == 1
+    assert rows[0]["id"] == before["id"]
+    assert rows[0]["first_seen"] == before["first_seen"]
+    assert rows[0]["canonical"] == "agent:sandwichline"
+    assert rows[0]["valid_until"] is None
 
 
 async def test_bind_before_spawn_confesses_a_legacy_lineage_source_without_changing_it(
@@ -4589,7 +4633,9 @@ async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
-    assert row["canonical"] == "agent:realmind-ii"  # the stale edge is corrected, not left
+    # the stale edge is corrected to the REAL ancestor, not left on staleholder, and never
+    # handed to the fresh bookkeeping heir either (the holds-sandwich fix)
+    assert row["canonical"] == "agent:realmind"
 
 
 async def test_bind_before_spawn_never_treats_a_console_established_handle_as_an_ancestor(
@@ -4620,7 +4666,8 @@ async def test_bind_before_spawn_never_treats_a_console_established_handle_as_an
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
-    assert row["canonical"] == "agent:7451509a-ii"  # never a phantom console lineage
+    assert row["canonical"] == "agent:7451509a"  # the real holder — never console, never
+    # the fresh bookkeeping heir either (the holds-sandwich fix)
     phantom = await actions.pool.fetchval(
         "SELECT 1 FROM objects WHERE canonical IN ('console', 'console-ii')")
     assert phantom is None  # nothing minted from the CLI actor label at all
@@ -6920,7 +6967,9 @@ async def test_bind_before_spawn_trusts_tenure_over_the_handle_assertions_author
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
-    assert row["canonical"] == "agent:wernerline-iii"
+    # the ANCESTOR (heir, wernerline-ii) — never the fresh bookkeeping heir (wernerline-iii),
+    # the holds-sandwich fix
+    assert row["canonical"] == heir
 
 
 async def test_bind_before_spawn_a_single_stale_edge_is_not_tenure(actions: Actions) -> None:
