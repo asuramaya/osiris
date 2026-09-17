@@ -1054,6 +1054,7 @@ const POWER_TOOLS = [
   { label: 'Closure Health', hint: 'Thread closures', run: () => runTool('closure-health') },
   { label: 'Echoes', hint: 'Open questions', run: () => runTool('echoes') },
   { label: 'The Wall', hint: 'Obligations wall', run: () => runTool('the-wall') },
+  { label: 'Backlog', hint: 'Open obligations by project and by seat', run: () => runTool('backlog') },
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },

@@ -1385,7 +1385,11 @@ export async function initSpace(container) {
   // node-type checkboxes (renderLegend, below) call this too, so both controls drive the
   // exact same aVisible flag rather than two independent mechanisms.
   function setHiddenTypes(types) {
-    hiddenNodeTypes = new Set(types || []);
+    // mutate in place, matching hiddenEdgeClasses/hiddenEdgeTypes/applyLensStateFromHash's
+    // own convention -- a plain reassignment here would desync any closure that captured
+    // the Set object itself rather than reading the outer binding fresh.
+    hiddenNodeTypes.clear();
+    for (const t of types || []) hiddenNodeTypes.add(t);
     applyDim();
     buildEdgeLines(idToNode, edges);
     scheduleLabelPick(); // review flaw #5: labels never re-picked on a filter change before
@@ -3498,6 +3502,7 @@ export async function initSpace(container) {
     get highDegreeBadgesHiddenByLens() { return highDegreeBadgesHiddenByLens; },
     get landmarkBadgeEntryCount() { return landmarkBadgeEntries.length; },
     get lensHashParam() { return new URLSearchParams(location.hash.replace(/^#/, "")).get(LENS_HASH_PARAM); },
+    get hiddenNodeTypes() { return [...hiddenNodeTypes]; },
     readLensStateFromHash, applyLensStateFromHash,
     get edgeSegmentsDrawn() { return edgeLines ? edgeLines.geometry.attributes.position.count / 2 : 0; },
     get ribbonSegmentsDrawn() { return ribbonLines ? ribbonLines.geometry.attributes.position.count / 2 : 0; },

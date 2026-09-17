@@ -3743,6 +3743,20 @@ async def test_census_cohort_composition_is_registered_and_runs(actions: Actions
     assert "cohorts" in res["items"]
 
 
+async def test_backlog_composition_is_registered_and_runs(actions: Actions) -> None:
+    """WAVE 27, THE BACKLOG VIEW (Thoth mail 11754): a parity census gap closed with zero
+    bespoke rendering, same shape as fleet-strip/fleet-live/mail/overhead/desk above --
+    `obligation_backlog` wrapped as its own saved composition, osiris.js's generic
+    `renderData` does the rest (its own test lives in tests/test_render_hygiene.py and
+    the JS-side static-source-guard convention, not here)."""
+    await save_composition(actions.pool, "backlog", DEFAULT_COMPOSITIONS["backlog"])
+    res = await run_composition(actions.pool, "backlog")
+    assert res["kind"] == "data"           # a dict-shaped Function output stays kind="data"
+    for key in ("by_project", "by_seat", "unowned", "operator_owned", "literal_owner",
+                "fleet_total"):
+        assert key in res["items"]
+
+
 # ── UNVERIFIED-CITATION (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d) ──
 
 

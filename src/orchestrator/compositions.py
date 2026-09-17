@@ -6863,6 +6863,18 @@ CENSUS_COHORT: dict[str, Any] = {
 }
 
 
+# THE BACKLOG VIEW (WAVE 27, Thoth mail 11754, a parity census gap: the console had a lens
+# for the fleet's own LIVE bodies (/fleet, and its own composition-engine port FLEET_STRIP
+# above) but none for its OPEN OBLIGATIONS -- the other half of "what needs a mind's
+# attention"). Zero new UI code, same as fleet-strip's own pilot: `obligation_backlog` is
+# already registered and SUBJECT_FREE, so wrapping it as its own saved composition is the
+# whole port -- osiris.js's generic `renderData` (its own dict/list-shaped Function-output
+# path, the render-hygiene ratchet's intended exit for exactly this kind of page, task #44/
+# ruling d42c543b) renders by_project/by_seat as tables and the scalar counts as header
+# chips with no bespoke renderer, in Python or JS, needed at all.
+BACKLOG: dict[str, Any] = {"op": "function", "name": "obligation_backlog"}
+
+
 # THE MAIL OVERVIEW (task #71 consolidation wave 2, ruling d42c543b, msg 1929) — the
 # overview-only half of /mail's port. `mail_threads` (registered as a Function, above) is
 # NOT saved as its own composition here — it takes `args.box`, and a saved composition with
@@ -6904,6 +6916,9 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # _fn_fleet_live's own docstring for what that means and why), the wake ledger, the
     # hourly budget, and the cross-project view all live here. No subject needed.
     "fleet-live": {"op": "function", "name": "fleet_live"},
+    # WAVE 27, THE BACKLOG VIEW (Thoth mail 11754) — see BACKLOG's own comment above for why
+    # this needed no bespoke renderer at all, in Python or JS. No subject needed.
+    "backlog": BACKLOG,
     # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929) — no subject
     # needed. mail_threads stays a Function only (no saved composition): see MAIL_OVERVIEW's
     # own comment for why a fixed-box composition isn't the right shape yet.
@@ -7096,6 +7111,9 @@ _COMP_META: dict[str, tuple[str, str]] = {
                       "see mail_threads for one box)"),
     "desk": ("wall", "what you owe each project, oldest first — see desk_project for one "
                      "(overview only — same shape as mail/mail_threads)"),
+    "backlog": ("wall", "every open obligation, by project and by seat, past-window "
+                        "flagged — desk's own per-project gauge widened fleet-wide, plus "
+                        "who's actually carrying it"),
     "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
