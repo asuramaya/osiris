@@ -5812,8 +5812,10 @@ async def cmd_backfill(
 async def cmd_graph_migrate(
     target: str, *, apply: bool = False, because: str | None = None,
     actor: str, as_json: bool = False, pool: asyncpg.Pool | None = None,
+    only_seat: str | None = None,
 ) -> int:
-    """osiris graph-migrate <target> [--apply] [--because R] [--json] [--actor W] — the
+    """osiris graph-migrate <target> [--apply] [--because R] [--json] [--actor W]
+    [--only SEAT] — the
     console-script door onto orchestrator.graph_migrations.run_migration (DRAWING THE
     WHOLE GRAPH, thread 325ef660): three graph-shape repairs (repo:seats' phantom
     project, the unfiled-object fog, the assertion-pair-to-real-link mints) feeding the
@@ -5823,7 +5825,9 @@ async def cmd_graph_migrate(
     class (graph shape, not identity/provenance). Named `graph-migrate` rather than
     `migrate` to avoid colliding with the pre-existing `osiris migrate` (alembic's
     env-correct schema tool, unrelated). Dry run is the default (returns the receipt,
-    writes nothing); `--apply` performs it, and REQUIRES `--because`."""
+    writes nothing); `--apply` performs it, and REQUIRES `--because`. `--only SEAT`
+    (a seat's `seat:<id>` or its bare handle) is refused for every target but
+    `holds_sandwich`, which it narrows to that one seat."""
     from src.orchestrator.graph_migrations import run_migration
 
     if apply and not (because or "").strip():
@@ -5849,7 +5853,9 @@ async def cmd_graph_migrate(
                   "instance.", file=sys.stderr)
             return 1
     try:
-        out = await run_migration(pool, target, actor=actor, dry_run=not apply, because=because)
+        out = await run_migration(
+            pool, target, actor=actor, dry_run=not apply, because=because,
+            only_seat=only_seat)
     finally:
         if owns_pool:
             await pool.close()
@@ -8393,6 +8399,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                       f"{_CONSOLE_ACTOR!r}")
     p_graph_migrate.add_argument("--json", action="store_true", dest="as_json",
                                  help="machine-readable receipt")
+    p_graph_migrate.add_argument("--only", default=None, dest="only_seat",
+                                 help="narrow to one seat (seat:<id> or its bare "
+                                      "handle) — holds_sandwich only, refused for "
+                                      "every other target")
 
     p_heal_transcript = sub.add_parser(
         "heal-seat-transcript", description=_d(
@@ -9054,7 +9064,7 @@ def main(argv: list[str] | None = None) -> int:
         # unbounded-wait-ok: asyncio.run() drives the event loop to completion
         return asyncio.run(cmd_graph_migrate(
             args.target, apply=args.apply, because=args.because,
-            actor=args.actor, as_json=args.as_json))
+            actor=args.actor, as_json=args.as_json, only_seat=args.only_seat))
     if args.command == "heal-seat-transcript":
         return asyncio.run(cmd_heal_seat_transcript(
             args.seat, args.source_paths, apply=args.apply, because=args.because))

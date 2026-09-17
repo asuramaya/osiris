@@ -35,6 +35,17 @@ MIGRATION_TARGETS = frozenset({
 
 _BIND_BEFORE_SPAWN_PREFIX = "launch_seat: bind-before-spawn"
 
+# THE EVIDENCE GATE (Thoth DM 12215/12245, off the live dry-run finding five real
+# sandwiches — not the ~two the diagnosis anticipated, one spanning six weeks): a
+# phantom's own window longer than this is NOT "near-instant" bookkeeping by any
+# reading, whatever the real holder was doing meanwhile — it cleanly separates the
+# four short specimens actually found (9h/40h/12h/8h) from the six-week outlier
+# without needing a per-seat judgment call. One week, not one day, because a real
+# holder's own genuinely idle stretch (a weekend, a short leave) must not itself
+# trip this gate — the SEPARATE in-gap-activity check below is what catches an
+# actual vacancy; this constant only catches "this was never a brief blip".
+_NEAR_INSTANT_MAX_SECONDS = 7 * 24 * 3600
+
 _TIER = EvidenceClass.DIRECT_OBSERVATION
 _CONF = confidence_for(_TIER)
 _EC = _TIER.value
@@ -43,9 +54,13 @@ _SOURCE = "graph_migrations"
 
 async def run_migration(
     pool: asyncpg.Pool, name: str, *, actor: str, dry_run: bool = True,
-    because: str | None = None,
+    because: str | None = None, only_seat: str | None = None,
 ) -> dict[str, Any]:
-    """Dispatch on `name` -- see `MIGRATION_TARGETS` for the full set."""
+    """Dispatch on `name` -- see `MIGRATION_TARGETS` for the full set. `only_seat`
+    (a seat's canonical `seat:<id>` or its bare handle) narrows `holds_sandwich` to
+    one seat -- refused for every other target, since none of them are seat-scoped."""
+    if only_seat and name != "holds_sandwich":
+        return {"error": f"--only is only supported for holds_sandwich, not {name!r}"}
     actions = Actions(pool)
     if name == "repo_seats_fix":
         return await migrate_repo_seats_fix(
@@ -70,7 +85,7 @@ async def run_migration(
             actions, actor=actor, dry_run=dry_run, because=because)
     if name == "holds_sandwich":
         return await migrate_holds_sandwich(
-            actions, actor=actor, dry_run=dry_run, because=because)
+            actions, actor=actor, dry_run=dry_run, because=because, only_seat=only_seat)
     return {"error": f"unknown migration {name!r}", "valid_targets": sorted(MIGRATION_TARGETS)}
 
 
@@ -1107,6 +1122,7 @@ async def migrate_house_to_project(
 
 async def migrate_holds_sandwich(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+    only_seat: str | None = None,
 ) -> dict[str, Any]:
     """THE HOLDS-SANDWICH REPAIR (WAVE 27/28 boundary, Thoth dispatch 12079/12190,
     off Sekhmet's own commits_to_agents diagnosis): `_bind_before_spawn` used to mint a
@@ -1137,13 +1153,44 @@ async def migrate_holds_sandwich(
     stays exactly where it was written, in whose name, and why; only the recorded
     interval each one covers changes.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
-    a repeat call finds no sandwich left (the middle and third rows read zero-width,
+    THE EVIDENCE GATE (Thoth DM 12215/12245, off the live dry-run's own finding: five
+    real sandwiches, not the ~two the diagnosis anticipated, one spanning six weeks —
+    a bridge across that much time risks laundering a genuine vacancy into continuous
+    tenure). Every sandwich found now carries, in the receipt, its own PHANTOM WINDOW
+    (`w2.first_seen` -> `w2.valid_until` — the actual gap the real holder's tenure was
+    split across, distinct from the outer `window` field which spans the whole
+    real-holder-claimed interval either side of it) and GAP EVIDENCE: whether the real
+    holder (the shared `w1`/`w3` agent id) has any messages sent, commits committed_by
+    them, or Decisions/Threads they authored, timestamped inside that phantom window —
+    proof the seat was actively BEING WORKED, not silently vacant under a name that
+    happened to resume later. A sandwich is REFUSED (reported, never written, even
+    under `--apply`) when either gate fails: zero gap evidence ("vacancy, not a cut"),
+    or a phantom window longer than `_NEAR_INSTANT_MAX_SECONDS` (not a brief blip by
+    any reading, whatever the evidence says). `only_seat` (a seat's `seat:<id>` or its
+    bare handle) narrows the whole scan to one seat — refused with an `error` receipt
+    if it does not resolve to exactly one active seat.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`, and writes
+    only the sandwiches that PASS both gates — a refused sandwich stays listed, with
+    `refused_why`, on every call, applied or not. Idempotent: a repeat call finds no
+    sandwich left among the ones it wrote (the middle and third rows read zero-width,
     never matching the three-consecutive-rows shape again)."""
     if not dry_run and not (because or "").strip():
         return {"error": "migrating without a because is an un-audited repair — cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
+
+    seat_filter: str | None = None
+    if only_seat:
+        if only_seat.startswith("seat:"):
+            seat_filter = only_seat
+        else:
+            resolved = await seat_by_handle(pool, only_seat)
+            if resolved is None:
+                return {"error": f"--only {only_seat!r} does not resolve to exactly "
+                                 "one active seat"}
+            seat_filter = resolved["seat_id"]
+
     rows = await pool.fetch(
         "SELECT t.canonical AS seat, f.canonical AS holder, l.id, l.first_seen, "
         " l.valid_until, "
@@ -1152,7 +1199,9 @@ async def migrate_holds_sandwich(
         "   LIMIT 1) AS minted_because "
         "FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE l.type='holds' AND t.type='Seat' "
-        "ORDER BY t.canonical, l.first_seen")
+        + ("AND t.canonical=$1 " if seat_filter else "")
+        + "ORDER BY t.canonical, l.first_seen",
+        *([seat_filter] if seat_filter else []))
 
     by_seat: dict[str, list[Any]] = defaultdict(list)
     for r in rows:
@@ -1179,13 +1228,32 @@ async def migrate_holds_sandwich(
                               w3["valid_until"].isoformat() if w3["valid_until"] else None],
                     "_w1_id": w1["id"], "_w2_id": w2["id"], "_w3_id": w3["id"],
                     "_w3_valid_until": w3["valid_until"],
+                    "_gap_start": w2["first_seen"], "_gap_end": w2["valid_until"],
                 })
                 i += 3  # the whole sandwich is consumed — never re-match its own pieces
             else:
                 i += 1
 
+    for s in sandwiches:
+        gap_start, gap_end = s.pop("_gap_start"), s.pop("_gap_end")
+        duration_s = (gap_end - gap_start).total_seconds() if gap_end else None
+        near_instant = duration_s is not None and duration_s <= _NEAR_INSTANT_MAX_SECONDS
+        evidence = await _gap_activity(
+            pool, agent=s["real_holder"], start=gap_start, end=gap_end)
+        s["phantom_window"] = [gap_start.isoformat(), gap_end.isoformat() if gap_end else None]
+        s["phantom_duration_seconds"] = duration_s
+        s["gap_evidence"] = evidence
+        refused_why = []
+        if evidence["count"] == 0:
+            refused_why.append("vacancy_no_evidence_in_gap")
+        if not near_instant:
+            refused_why.append("phantom_not_near_instant")
+        s["refused_why"] = refused_why or None
+
     if not dry_run:
         for s in sandwiches:
+            if s["refused_why"]:
+                continue
             await pool.execute(
                 "UPDATE links SET valid_until=$1 WHERE id=$2",
                 s["_w3_valid_until"], s["_w1_id"])
@@ -1193,8 +1261,10 @@ async def migrate_holds_sandwich(
                 "UPDATE links SET valid_until=first_seen WHERE id=$1", s["_w2_id"])
             await pool.execute(
                 "UPDATE links SET valid_until=first_seen WHERE id=$1", s["_w3_id"])
+            s["applied"] = True
 
     for s in sandwiches:  # internal row ids are an implementation detail, never in the receipt
+        s.setdefault("applied", False)
         for key in ("_w1_id", "_w2_id", "_w3_id", "_w3_valid_until"):
             del s[key]
 
@@ -1203,4 +1273,40 @@ async def migrate_holds_sandwich(
         "sandwiches_found": len(sandwiches),
         "sandwiches": sandwiches,
         "because": because if not dry_run else None,
+    }
+
+
+async def _gap_activity(
+    pool: asyncpg.Pool, *, agent: str, start: datetime, end: datetime | None,
+) -> dict[str, Any]:
+    """Evidence the `agent` (a canonical `agent:<id>`) was actively doing something —
+    a message sent, a commit committed_by them, a Decision/Thread they authored —
+    timestamped in `[start, end)`. `end=None` (an open holds row — should not occur
+    for an already-closed phantom middle row, but a real caller never crashes on it)
+    reads as "no upper bound". Uses `created_at` (server-assigned at write time, never
+    backdatable by the writer) for messages/Decisions/Threads, and the `committed_by`
+    link's own `first_seen` (the commit's real author date, from git, not this
+    migration's clock) for commits — never `observed_at`, which a source can honestly
+    claim for a past instant and so proves nothing about when the WORK happened."""
+    end_clause = "AND ts < $3" if end is not None else ""
+    args: list[Any] = [agent, start] + ([end] if end is not None else [])
+    row = await pool.fetchrow(
+        "WITH ev AS ("
+        " SELECT created_at AS ts FROM fleet_messages"
+        "   WHERE from_agent=$1 AND created_at >= $2"
+        " UNION ALL"
+        " SELECT a.created_at AS ts FROM assertions a JOIN objects o ON o.id=a.object_id"
+        "   WHERE o.type IN ('Decision', 'Thread') AND a.name='summary'"
+        "     AND a.source_id=$1 AND a.created_at >= $2"
+        " UNION ALL"
+        " SELECT l.first_seen AS ts FROM links l JOIN objects t ON t.id=l.to_id"
+        "   WHERE l.type='committed_by' AND t.canonical=$1 AND l.first_seen >= $2"
+        ") "
+        "SELECT count(*) AS n, min(ts) AS first_ts, max(ts) AS last_ts "
+        f"FROM ev WHERE 1=1 {end_clause}",
+        *args)
+    return {
+        "count": row["n"],
+        "first": row["first_ts"].isoformat() if row["first_ts"] else None,
+        "last": row["last_ts"].isoformat() if row["last_ts"] else None,
     }

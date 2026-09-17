@@ -2,7 +2,7 @@
 the three name-dispatched graph-shape repairs in graph_migrations.py."""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.graph_migrations import (
@@ -830,6 +830,17 @@ async def _seed_sandwich(
     return seat
 
 
+async def _seed_gap_evidence(
+    actions: Actions, *, agent: str, at: datetime,
+) -> None:
+    """A message FROM `agent`, timestamped `at` -- the evidence gate's own proof the
+    real holder was actively working inside the phantom's window, not silently
+    vacant. `to_project`='osiris' since fleet_messages requires a non-null one."""
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, to_project, body, created_at) "
+        "VALUES ($1, 'osiris', 'evidence', $2)", agent, at)
+
+
 async def test_holds_sandwich_requires_because_to_apply(actions: Actions) -> None:
     out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="")
     assert "error" in out
@@ -848,6 +859,12 @@ async def test_holds_sandwich_dry_run_finds_it_without_writing(actions: Actions)
     assert found[0]["real_holder"] == "agent:gm-sw1-real"
     assert found[0]["phantom"] == "agent:gm-sw1-phantom"
     assert found[0]["window"] == [t1.isoformat(), None]
+    assert found[0]["phantom_window"] == [t2.isoformat(), t3.isoformat()]
+    assert found[0]["phantom_duration_seconds"] == 5.0
+    # no evidence seeded -- a vacancy, refused even though the phantom is near-instant
+    assert found[0]["gap_evidence"]["count"] == 0
+    assert found[0]["refused_why"] == ["vacancy_no_evidence_in_gap"]
+    assert found[0]["applied"] is False
 
     rows = await actions.pool.fetch(
         "SELECT valid_until FROM links l JOIN objects t ON t.id=l.to_id "
@@ -863,9 +880,12 @@ async def test_holds_sandwich_apply_re_opens_the_real_holders_window(
     seat = await _seed_sandwich(
         actions, house="osiris", handle="GmSandwich2", real_holder="agent:gm-sw2-real",
         phantom="agent:gm-sw2-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+    await _seed_gap_evidence(actions, agent="agent:gm-sw2-real", at=t2)
 
     out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
-    assert out["sandwiches_found"] == 1
+    found = next(s for s in out["sandwiches"] if s["seat"] == seat)
+    assert found["refused_why"] is None
+    assert found["applied"] is True
 
     rows = await actions.pool.fetch(
         "SELECT f.canonical AS holder, l.first_seen, l.valid_until FROM links l "
@@ -888,13 +908,14 @@ async def test_holds_sandwich_apply_re_opens_the_real_holders_window(
 async def test_holds_sandwich_apply_is_idempotent(actions: Actions) -> None:
     t1, t2 = datetime(2026, 1, 1, tzinfo=UTC), datetime(2026, 1, 1, 1, tzinfo=UTC)
     t3 = datetime(2026, 1, 1, 1, 0, 5, tzinfo=UTC)
-    await _seed_sandwich(
+    seat = await _seed_sandwich(
         actions, house="osiris", handle="GmSandwich3", real_holder="agent:gm-sw3-real",
         phantom="agent:gm-sw3-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+    await _seed_gap_evidence(actions, agent="agent:gm-sw3-real", at=t2)
 
     await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
     again = await migrate_holds_sandwich(actions, actor="test", dry_run=True)
-    assert again["sandwiches_found"] == 0
+    assert not any(s["seat"] == seat for s in again["sandwiches"])
 
 
 async def test_holds_sandwich_never_matches_a_genuine_lineage_succession(
@@ -932,3 +953,88 @@ async def test_run_migration_accepts_holds_sandwich(actions: Actions) -> None:
     out = await run_migration(actions.pool, "holds_sandwich", actor="test")
     assert "error" not in out
     assert out["dry_run"] is True
+
+
+async def test_holds_sandwich_refuses_apply_on_a_vacancy(actions: Actions) -> None:
+    """No evidence the real holder did anything in the gap -- "vacancy, not a cut"
+    (Thoth DM 12215): --apply reports the sandwich but writes nothing."""
+    t1, t2 = datetime(2026, 2, 1, tzinfo=UTC), datetime(2026, 2, 1, 1, tzinfo=UTC)
+    t3 = datetime(2026, 2, 1, 1, 0, 5, tzinfo=UTC)
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichVacancy", real_holder="agent:gm-swv-real",
+        phantom="agent:gm-swv-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
+    found = next(s for s in out["sandwiches"] if s["seat"] == seat)
+    assert found["refused_why"] == ["vacancy_no_evidence_in_gap"]
+    assert found["applied"] is False
+
+    rows = await actions.pool.fetch(
+        "SELECT valid_until FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
+    assert [r["valid_until"] for r in rows] == [t2, t3, None]  # untouched
+
+
+async def test_holds_sandwich_refuses_apply_when_phantom_not_near_instant(
+    actions: Actions,
+) -> None:
+    """Real-holder activity throughout the gap does not rescue a phantom window longer
+    than a week (Thoth DM 12215: jenny's six-week span, too risky to bridge whatever
+    the evidence)."""
+    t1 = datetime(2026, 3, 1, tzinfo=UTC)
+    t2 = datetime(2026, 3, 2, tzinfo=UTC)
+    t3 = t2 + timedelta(days=42)
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichSixWeeks", real_holder="agent:gm-sw6w-real",
+        phantom="agent:gm-sw6w-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+    await _seed_gap_evidence(actions, agent="agent:gm-sw6w-real", at=t2 + timedelta(days=21))
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
+    found = next(s for s in out["sandwiches"] if s["seat"] == seat)
+    assert found["gap_evidence"]["count"] == 1  # evidence exists...
+    assert found["refused_why"] == ["phantom_not_near_instant"]  # ...but still refused
+    assert found["applied"] is False
+
+    rows = await actions.pool.fetch(
+        "SELECT valid_until FROM links l JOIN objects t ON t.id=l.to_id "
+        "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
+    assert [r["valid_until"] for r in rows] == [t2, t3, None]  # untouched
+
+
+async def test_holds_sandwich_only_seat_filters_by_canonical(actions: Actions) -> None:
+    t1, t2 = datetime(2026, 4, 1, tzinfo=UTC), datetime(2026, 4, 1, 1, tzinfo=UTC)
+    t3 = datetime(2026, 4, 1, 1, 0, 5, tzinfo=UTC)
+    seat_a = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichOnlyA", real_holder="agent:gm-swoa-real",
+        phantom="agent:gm-swoa-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+    seat_b = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichOnlyB", real_holder="agent:gm-swob-real",
+        phantom="agent:gm-swob-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=True, only_seat=seat_a)
+    seats_seen = {s["seat"] for s in out["sandwiches"]}
+    assert seat_a in seats_seen
+    assert seat_b not in seats_seen
+
+
+async def test_holds_sandwich_only_seat_by_handle(actions: Actions) -> None:
+    t1, t2 = datetime(2026, 4, 5, tzinfo=UTC), datetime(2026, 4, 5, 1, tzinfo=UTC)
+    t3 = datetime(2026, 4, 5, 1, 0, 5, tzinfo=UTC)
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichHandle", real_holder="agent:gm-swh-real",
+        phantom="agent:gm-swh-phantom", t1=t1, t2=t2, t3=t3, t4=None)
+
+    out = await migrate_holds_sandwich(
+        actions, actor="test", dry_run=True, only_seat="GmSandwichHandle")
+    assert out["sandwiches"] and all(s["seat"] == seat for s in out["sandwiches"])
+
+
+async def test_holds_sandwich_only_seat_unknown_handle_errors(actions: Actions) -> None:
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=True, only_seat="nope-nope")
+    assert "error" in out
+
+
+async def test_run_migration_only_seat_refused_for_other_targets(actions: Actions) -> None:
+    out = await run_migration(
+        actions.pool, "repo_seats_fix", actor="test", only_seat="seat:whatever")
+    assert "error" in out
