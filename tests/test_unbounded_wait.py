@@ -98,7 +98,10 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # dispatch line, `asyncio.run(cmd_declare_machine_identity(...))`, same
     # false-positive class as every comment above — not a genuine new unbounded
     # subprocess call.
-    "src/cli.py": 85,
+    # 85 -> 86 (2026-09-17, Imhotep, WAVE 27 PARITY GAPS, Thoth mail 11751): one new
+    # dispatch line, `asyncio.run(cmd_backup_settings(...))`, same false-positive
+    # class as every comment above — not a genuine new unbounded subprocess call.
+    "src/cli.py": 86,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new

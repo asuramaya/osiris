@@ -218,6 +218,8 @@ CLI_ONLY_PARAMS = {
         "own entry below.",
     ("settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
         "own entry below.",
+    ("backup-settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+        "fleet's own entry below (PARITY GAPS, WAVE 27 item 3, thread 45aff160).",
     ("backfill", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
         "own entry below.",
     ("backfill", "apply"): "the CLI's own --apply is the same concept as the MCP tool's "
