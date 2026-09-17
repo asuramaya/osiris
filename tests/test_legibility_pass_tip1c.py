@@ -46,8 +46,9 @@ def test_inspect_checks_the_response_and_never_silently_stays_stale() -> None:
 
 
 def test_load_rels_failure_never_blanks_an_already_populated_rail() -> None:
-    body = _SPACE_JS.split("async function inspect(id)", 1)[1][:2200]
-    assert "await Osiris.loadRels(relsEl, id, (pickId) => focusObject(pickId), () => {});" in body
+    body = _SPACE_JS.split("async function inspect(id)", 1)[1][:2300]
+    assert "await Osiris.loadRels(relsEl, id, (pickId) => focusObject(pickId), () => {}, obj);" \
+        in body
     assert 'console.error("loadRels() failed for", id, err);' in body
 
 

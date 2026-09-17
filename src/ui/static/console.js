@@ -932,7 +932,7 @@ async function inspect(id) {
   right.className = 'rail';
   right.innerHTML = Osiris.objectDetail(obj, '');
   var relsEl = right.querySelector('[data-rels]');
-  if (relsEl) await Osiris.loadRels(relsEl, id, inspectOnly, openAsSet);
+  if (relsEl) await Osiris.loadRels(relsEl, id, inspectOnly, openAsSet, obj);
   bindUpstreamExpansions(right);
 }
 // PROVENANCE PIECE 3(b) (thread b4477e9e): "who else read this upstream" — a property
