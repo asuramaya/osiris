@@ -260,6 +260,32 @@ const Osiris = (() => {
     if (isRanked(result.spec)) return "table";
     return result.items.length > 35 ? "table" : "graph";
   }
+  // THE CANONICAL-RESOLVE DOOR, client half (Thoth mail 12120/12231): every `[data-canon]`
+  // span table()'s own cell() just emitted starts showing the bare canonical (already a
+  // correct, if unfriendly, fallback) -- this batches them into ONE POST and patches each
+  // span's own text once the answer comes back, same "starts as a bare id, resolves async,
+  // never blocks the rest of the panel" convention loadRels' own property-pair resolution
+  // already established (above). A canonical the door couldn't resolve (deleted, mistyped)
+  // is left showing itself -- already the most honest thing to show.
+  async function resolveCanonRefs(el) {
+    const spans = [...el.querySelectorAll("[data-canon]")];
+    if (!spans.length) return;
+    const canonicals = [...new Set(spans.map((s) => s.dataset.canon))];
+    try {
+      const r = await fetch("/objects/resolve-canonicals", {
+        method: "POST", headers: { "content-type": "application/json" },
+        body: JSON.stringify({ canonicals }),
+      });
+      if (!r.ok) return;
+      const { resolved } = await r.json();
+      const byCanon = new Map(resolved.map((x) => [x.canonical, x]));
+      for (const s of spans) {
+        const hit = byCanon.get(s.dataset.canon);
+        if (hit && hit.handle_or_name) s.textContent = hit.handle_or_name;
+      }
+    } catch { /* left showing the canonical -- no worse than before this door existed */ }
+  }
+
   async function renderResult(result, mounts, view, onPick, onDrill, onCtx) {
     const { board, panel } = mounts;
     const kind = result.kind, items = result.items;
@@ -276,8 +302,13 @@ const Osiris = (() => {
           : `<div class="o-empty">Empty result.</div>`);
       return "panel";
     }
-    if (kind === "rows") { renderRows(panel, items, result.spec, onDrill); return "panel"; }
+    if (kind === "rows") {
+      renderRows(panel, items, result.spec, onDrill);
+      resolveCanonRefs(panel);
+      return "panel";
+    }
     panel.innerHTML = renderData(items);  // a Function's native output, by shape
+    resolveCanonRefs(panel);
     return "panel";
   }
 
@@ -586,6 +617,15 @@ const Osiris = (() => {
   const UNAVAILABLE_KEY = "_unavailable";
   const isUnavailable = (v) =>
     !!(v && typeof v === "object" && !Array.isArray(v) && UNAVAILABLE_KEY in v);
+  // THE CANONICAL-RESOLVE DOOR (Thoth mail 12120/12231): a raw canonical (seat:xxxx,
+  // agent:xxxx, repo:xxxx, ...) in a table cell is an id, not a name -- table()'s own
+  // generic cell() has no per-Function knowledge to know a value is one, so it detects the
+  // SHAPE instead (a lowercase-starting prefix, a colon, no whitespace) rather than a
+  // hardcoded prefix list that drifts every time a new ObjectType lands. Deliberately
+  // excludes http(s): -- those already read fine as urls and are never an object identity.
+  const CANON_REF_RE = /^[a-z][a-z0-9_-]*:\S+$/;
+  const isCanonicalRef = (v) =>
+    typeof v === "string" && CANON_REF_RE.test(v) && !/^https?:/i.test(v);
   function _hasNestedObject(v) {
     return Array.isArray(v) ? v.some((x) => x && typeof x === "object") : !!(v && typeof v === "object");
   }
@@ -753,6 +793,15 @@ const Osiris = (() => {
     const cell = (v) => {
       if (isUnavailable(v))  // stripped to a distinct dimmed marker, the real reason on hover
         return `<span class="o-faint" title="${esc(v[UNAVAILABLE_KEY])}">unavailable</span>`;
+      const canonSpan = (c) => `<span class="o-canon-ref" data-canon="${esc(c)}" title="${esc(c)}">${esc(c)}</span>`;
+      if (isCanonicalRef(v))  // resolved async, after this table lands in the DOM (below)
+        return canonSpan(v);
+      // a flat array of owner-shaped strings (oldest_owners, and anything else built the
+      // same way) mixes real canonicals with plain literals ("operator") -- each canonical
+      // gets its own resolvable span, a plain literal passes through untouched, joined the
+      // same way _txt's own flat-array branch already joins a non-canonical list.
+      if (Array.isArray(v) && !_hasNestedObject(v) && v.some(isCanonicalRef))
+        return v.map((x) => (isCanonicalRef(x) ? canonSpan(x) : esc(String(x)))).join(", ");
       const s = _txt(v);
       if (s.length > 160)                       // a genuine wall of text: hard-cap the DOM weight
         return `<span class="clamp" title="${esc(s)}">${esc(s.slice(0, 157))}…</span>`;
