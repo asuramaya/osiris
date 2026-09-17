@@ -1385,10 +1385,7 @@ export async function initSpace(container) {
   // node-type checkboxes (renderLegend, below) call this too, so both controls drive the
   // exact same aVisible flag rather than two independent mechanisms.
   function setHiddenTypes(types) {
-    // mutate in place, matching hiddenEdgeClasses/hiddenEdgeTypes/applyLensStateFromHash's
-    // own convention -- a plain reassignment here would desync any closure that captured
-    // the Set object itself rather than reading the outer binding fresh.
-    hiddenNodeTypes.clear();
+    hiddenNodeTypes.clear(); // in place, like hiddenEdgeClasses/hiddenEdgeTypes
     for (const t of types || []) hiddenNodeTypes.add(t);
     applyDim();
     buildEdgeLines(idToNode, edges);
