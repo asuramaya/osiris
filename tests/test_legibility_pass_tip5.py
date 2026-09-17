@@ -161,7 +161,7 @@ def test_edges_are_no_longer_bundled_or_density_scaled() -> None:
 def test_labels_are_top_n_by_degree_within_the_viewport_no_tier_gating() -> None:
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:2500]
     # THE DRAWING TIP (mail 11408) factored the viewport bounds check into a shared `inView`
-    # predicate (district labels reuse it too) -- the underlying rule is unchanged: a node
+    # predicate (project labels reuse it too) -- the underlying rule is unchanged: a node
     # must be nodeVisible AND genuinely on screen to be a label candidate.
     assert "const inView = (nd) => nd.x >= minX && nd.x <= maxX && nd.y >= minY && " \
         "nd.y <= maxY;" in body

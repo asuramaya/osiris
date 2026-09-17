@@ -48,7 +48,7 @@ def test_one_hop_by_type_direction_scans_all_edge_types_both_directions() -> Non
 
 
 def test_small_buckets_place_directly_large_buckets_page_like_the_container_drill() -> None:
-    body = _SPACE_JS.split("function buildEgoGroups(id, hub)", 1)[1][:3900]
+    body = _SPACE_JS.split("function buildEgoGroups(id, center)", 1)[1][:3900]
     assert "if (members.length <= DRILL_PAGE_SIZE && members.length <= budgetLeft) {" in body
     assert "const take = Math.min(ranked.length, DRILL_PAGE_SIZE * egoGroupPageCount, " \
         "Math.max(0, budgetLeft));" in body
@@ -156,7 +156,7 @@ def test_chain_members_are_pinned_never_relaxed_back_into_a_smear() -> None:
     # spreads a wide rank run over it just as happily unfolds the chain back into the wide
     # smear this fix exists to prevent. pinned: true routes into applyEgoLayout's own
     # fixedIds set, which relaxPositions now accepts as a Set (not just one id).
-    body = _SPACE_JS.split("function buildEgoGroups(id, hub)", 1)[1][:3900]
+    body = _SPACE_JS.split("function buildEgoGroups(id, center)", 1)[1][:3900]
     assert "pinned: true" in body
     relax_body = _SPACE_JS.split(
         "function relaxPositions(seed, springs, fixedId)", 1)[1][:1500]
@@ -183,8 +183,8 @@ def test_only_the_focus_overlay_bundles_the_base_dim_layer_stays_straight() -> N
 
 def test_cross_cluster_edges_over_the_screen_px_threshold_bundle_as_curves() -> None:
     body = _SPACE_JS.split("function updatePathEdges()", 1)[1][:3000]
-    assert "const crossCluster = a.project && b.project && a.project !== b.project;" in body
-    assert "if (!crossCluster || screenLen <= BUNDLE_SCREEN_PX_THRESHOLD) {" in body
+    assert "const crossProject = a.project && b.project && a.project !== b.project;" in body
+    assert "if (!crossProject || screenLen <= BUNDLE_SCREEN_PX_THRESHOLD) {" in body
     assert "const ctrlX = midX + nx * bow, ctrlY = midY + ny * bow;" in body
     assert body.count("BUNDLE_CURVE_SEGMENTS") >= 2  # the const, and the loop bound
 
@@ -245,7 +245,7 @@ def test_group_seeding_spirals_instead_of_a_constant_radius_circle() -> None:
     # structural defence alongside the physics-side fixes: a growing radius per index means
     # no two members can land at the exact same seed regardless of how large a bucket or a
     # repeatedly-"more"-clicked page gets.
-    body = _SPACE_JS.split("function buildEgoGroups(id, hub)", 1)[1][:4300]
+    body = _SPACE_JS.split("function buildEgoGroups(id, center)", 1)[1][:4300]
     assert "const r2 = ringR * 1.3 + k * 2;" in body
     assert "const r2 = ringR + i * 2;" in body
 
@@ -318,7 +318,7 @@ def test_group_offers_are_filtered_to_members_not_already_reachable() -> None:
     # PATH_EDGE_TYPES walk already reached -- a group entirely made of already-reachable
     # members is a dead click (expanding it never grows pathReachable) and must never be
     # offered at all.
-    body = _SPACE_JS.split("function buildEgoGroups(id, hub)", 1)[1][:1600]
+    body = _SPACE_JS.split("function buildEgoGroups(id, center)", 1)[1][:1600]
     assert "const members = groups.get(key).filter((nd) => " \
         "!focusBasePathReachable.has(nd.id));" in body
     assert "if (members.length === 0) continue;" in body

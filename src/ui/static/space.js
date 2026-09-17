@@ -6,7 +6,7 @@
 // navigation is a CLICK; (2) a click doesn't change what's loaded either — "more like click
 // to highlight" — every positioned object is drawn AT ONCE (matching 0a3d6719's own original
 // wording, "an engine that can handle all objects at once"), and a click only lights the
-// clicked object's neighborhood, dims everything else, and opens the inspector. There is no
+// clicked object's focus, dims everything else, and opens the inspector. There is no
 // tier concept in this file.
 //
 // Labels: the operator caught a real lag bug — DOM label positions were only recomputed on
@@ -170,8 +170,8 @@ async function fetchStreamSnapshot() {
       // spanning weeks/months/years, not sub-minute precision.
       createdAt: snap.created_at ? snap.created_at[i] : 0,
       // WAVE 26, COMMUNITY REGIONS (mail 11592/11664): index-aligned, 0 = no real
-      // community (a small project, or a Leiden cluster too small to be a real
-      // district-refinement) -- Khnum's own graph_physics._detect_communities,
+      // community (a small project, or a Leiden-detected community too small to be a real
+      // project-refinement) -- Khnum's own graph_physics._detect_communities,
       // unchanged, the same partition the compact-arrangement layout is built on.
       communityCode: snap.community_code ? snap.community_code[i] : 0,
       // TIP 1b (Thoth mail 10755): "swap the client label fallback for the header
@@ -221,23 +221,23 @@ async function fetchStreamSnapshot() {
   // Khnum's own project_aggregates/type_aggregates/cluster_edges/type_pair_edges (tip
   // 2i/2j/h) still ride the same wire header; type_aggregates/cluster_edges/type_pair_edges
   // remain unread client-side, but THE DRAWING TIP (mail 11408) reuses project_aggregates
-  // as exactly the district geometry it needs (a real centroid + exact member-distance-
+  // as exactly the project geometry it needs (a real centroid + exact member-distance-
   // bound radius per project, already computed server-side from the same positions) --
   // resolve its numeric project code back to a name off the same `projects` table
   // node.project already reads, rather than re-deriving anything.
-  const districtAggregates = (snap.project_aggregates || []).map((a) => ({
+  const projectAggregates = (snap.project_aggregates || []).map((a) => ({
     name: snap.projects[a.project], count: a.count, cx: a.cx, cy: a.cy, radius: a.radius,
   }));
   // WAVE 26, COMMUNITY REGIONS (mail 11592): `communities` is Khnum's own header table,
   // the SAME shape as project_aggregates/type_aggregates -- one row per real (non-zero)
   // community code, project resolved back to a name off the same `projects` table
-  // districts already use, so a community's own district membership is a plain string
+  // projects already use, so a community's own project membership is a plain string
   // comparison, never a second id space to reconcile.
   const communityAggregates = (snap.communities || []).map((c) => ({
-    code: c.community, districtName: snap.projects[c.project],
+    code: c.community, projectName: snap.projects[c.project],
     count: c.count, cx: c.cx, cy: c.cy, radius: c.radius,
   }));
-  return { nodes, edges, edgeClassByType, districtAggregates, communityAggregates };
+  return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates };
 }
 
 // resolves DOM refs from a passed-in container map, falling back to the same fixed ids
@@ -344,7 +344,7 @@ export async function initSpace(container) {
   // than resetting to a stale guess. minViewSize/maxViewSize (Thoth's own live-verified fix,
   // mail 10581) are likewise derived from the real fitted bbox, not the old hardcoded
   // [8, 2000] clamp — that clamp predated the deterministic layout and let one wheel tick
-  // snap a 259,779-unit-wide view down to 2,862 (a 90x jump into a single dense cluster,
+  // snap a 259,779-unit-wide view down to 2,862 (a 90x jump into a single dense group,
   // read by the operator as "zoom does not work").
   let viewSize = 1300;
   let minViewSize = 20, maxViewSize = 2000;
@@ -468,18 +468,21 @@ export async function initSpace(container) {
   // the legend's existing node-type/edge-class/edge-type checkboxes — default false (shown),
   // same "a reader's lens, never a default hide" convention. Declared here, not down by
   // their own build functions, for the same TDZ-safety reason as every other early-block
-  // state this file already collects (syncCommunityVisibility/buildLandmarkBadges run
+  // state this file already collects (syncCommunityVisibility/buildHighDegreeBadges run
   // during initSpace's own synchronous setup, before a `let` declared near those functions'
   // own definitions would have executed yet).
   let communitiesHiddenByLens = false;
   let highDegreeBadgesHiddenByLens = false;
   // WAVE 27, THE LENS PANEL: "state on the URL hash so a view is shareable" -- one JSON
   // blob under its own hash param (never the whole hash, so other hash consumers keep their
-  // own room), sorted arrays so two sessions with the same lens produce the SAME hash text,
+  // own space), sorted arrays so two sessions with the same lens produce the SAME hash text,
   // not just an equivalent one. Read once at load (applyLensStateFromHash, before the first
-  // buildScene/renderLegend), written after every toggle (renderLegend's own last line) --
-  // never a live hashchange listener, since a shared link is opened fresh, not edited by
-  // hand mid-session.
+  // buildScene/renderLegend), written after every toggle (renderLegend's own last line).
+  // THE HASH-RESTORE FIX (Thoth mail 11981/12052): a same-document navigation to a
+  // different #lens fragment never re-runs this file's own init path, so a live
+  // hashchange listener (below, near the initial buildScene call) reapplies the hash and
+  // rebuilds the same way a toggle does -- opening a shared link in an already-open tab
+  // now restores correctly too, not just a genuinely fresh load.
   const LENS_HASH_PARAM = "lens";
   function readLensStateFromHash() {
     const params = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -612,7 +615,7 @@ export async function initSpace(container) {
   }
 
   // THE READING LAYER, part A: edges fade by SCREEN length, not by zoom level — a long line
-  // crossing most of the view (two clusters that happen to be linked) reads as noise; a
+  // crossing most of the view (two groups that happen to be linked) reads as noise; a
   // short local one is the actual signal. Same GPU-uniform discipline as node sizing (mail
   // 10581): each vertex carries the OTHER endpoint's world position too (`otherPosition`),
   // so the vertex shader can project both ends to screen pixels and compute the segment's
@@ -668,35 +671,36 @@ export async function initSpace(container) {
   // THE DRAWING TIP (Thoth mail 11408, operator ruling 4a51cab1/1178e7d9, thread 325ef660):
   // "nothing hidden, nothing drawn twice" -- caps and hides (ruling c5953bb1's own
   // "structural hidden by default") were the OLD answer to graph density; this tip
-  // replaces the answer, not just the renderer. Membership is a REGION (a district fill),
-  // the two universal fans are LANDMARKS with a count, every other edge draws at rest
-  // (same-district as a line, cross-district aggregated into a per-(district,district,type)
-  // ribbon that resolves to individual lines once that specific ribbon's own endpoints are
-  // far enough apart on screen). Confirmed by the two numbers-first spikes this tip builds
-  // on: Seshat 57992143 (this district/ribbon/landmark model, frame 0.77ms, accounting
-  // exact) and Khnum 5f6c4db3 (hubs are already excluded as membership containers, not a
-  // separate hub-zone concern for this renderer).
+  // replaces the answer, not just the renderer. Membership is a fill (a project fill),
+  // the two universal fans are HIGH-DEGREE OBJECTS with a count, every other edge draws
+  // at rest (same-project as a line, cross-project aggregated into a per-(project,project,
+  // type) ribbon that resolves to individual lines once that specific ribbon's own
+  // endpoints are far enough apart on screen). Confirmed by the two numbers-first spikes
+  // this tip builds on: Seshat 57992143 (this project/ribbon/high-degree-object model,
+  // frame 0.77ms, accounting exact) and Khnum 5f6c4db3 (high-degree objects are already
+  // excluded as membership containers, not a separate concern for this renderer).
   //
-  // THE DISTRICT MODEL: `districts` is project_aggregates (already computed server-side --
-  // a real centroid + exact member-distance-bound radius per project, no new query).
-  // `DISTRICT_FILL_TYPES` are the five membership link types (item 1: the original four
-  // plus Sekhmet's new `owned_by`) -- never drawn as lines at all, the district fill IS the
-  // membership claim, drawn once as a filled region instead of once per member as a spoke.
-  // `landmarks` are the two universal-fan targets (item 3) -- found DATA-DRIVEN (the single
-  // node receiving the most edges of that type), not hardcoded by canonical id. Every edge
-  // landing on a landmark's own target, of that landmark's own type, is excluded from
-  // line-drawing and folded into that node's own badge count instead.
-  const DISTRICT_FILL_TYPES = new Set(["in_repo", "works_in", "holds", "member_of", "owned_by"]);
-  const LANDMARK_EDGE_TYPES = ["acts_for", "authored_by"];
-  let districts = []; // [{name, count, cx, cy, radius}]
-  let districtByName = new Map();
-  let landmarks = {}; // {acts_for: {id,count}|null, authored_by: {id,count}|null}
-  let ribbons = []; // [{a, b, type, count}] -- a/b are district names, a <= b
+  // THE PROJECT FILL MODEL: `projectFills` is project_aggregates (already computed
+  // server-side -- a real centroid + exact member-distance-bound radius per project, no
+  // new query). `PROJECT_FILL_TYPES` are the five membership link types (item 1: the
+  // original four plus Sekhmet's new `owned_by`) -- never drawn as lines at all, the
+  // project fill IS the membership claim, drawn once as a filled region instead of once
+  // per member as a spoke. `highDegreeTargets` are the two universal-fan targets (item 3)
+  // -- found DATA-DRIVEN (the single node receiving the most edges of that type), not
+  // hardcoded by canonical id. Every edge landing on a high-degree target's own target, of
+  // that target's own type, is excluded from line-drawing and folded into that node's own
+  // badge count instead.
+  const PROJECT_FILL_TYPES = new Set(["in_repo", "works_in", "holds", "member_of", "owned_by"]);
+  const HIGH_DEGREE_EDGE_TYPES = ["acts_for", "authored_by"];
+  let projectFills = []; // [{name, count, cx, cy, radius}]
+  let projectFillByName = new Map();
+  let highDegreeTargets = {}; // {acts_for: {id,count}|null, authored_by: {id,count}|null}
+  let ribbons = []; // [{a, b, type, count}] -- a/b are project names, a <= b
   let ribbonsResolvedKeys = new Set(); // "a|b|type" keys currently resolved to individual lines
-  let districtLabelCandidates = []; // pseudo-nodes for pickLabels' own shared budget, below
+  let projectLabelCandidates = []; // pseudo-nodes for pickLabels' own shared budget, below
   // WAVE 26, THE STORYLINE (mail 11534): declared here, well before fitToNodes' own initial
   // synchronous call site (below) reads storylineActive via syncStorylineAxis -- the exact
-  // TDZ crash class districtLabelCandidates above already hit once; see renderStoryline's
+  // TDZ crash class projectLabelCandidates above already hit once; see renderStoryline's
   // own docstring, further down, for what these actually mean.
   let storylineActive = false;
   let storylineChainIds = new Set();
@@ -710,7 +714,7 @@ export async function initSpace(container) {
   // the storyline state just above -- syncCommunityVisibility (further down) is read from
   // fitToNodes' own initial synchronous call site, well before this point in the file
   // would otherwise execute a `let` declared near its own function.
-  let communities = []; // [{code, districtName, count, cx, cy, radius}]
+  let communities = []; // [{code, projectName, count, cx, cy, radius}]
   let communityByCode = new Map();
   let communityRegionsVisible = false;
   let communityRibbons = []; // [{a, b, type, count}] -- a/b are community codes, a <= b
@@ -718,35 +722,35 @@ export async function initSpace(container) {
   let communityLabelCandidates = [];
   let communityMeshGroup = null;
   function ribbonKey(r) { return `${r.a}|${r.b}|${r.type}`; }
-  function findLandmark(type) {
+  function findHighDegreeTarget(type) {
     const counts = new Map();
     for (const e of edges) { if (e.type === type) counts.set(e.target, (counts.get(e.target) || 0) + 1); }
     let bestId = null, bestN = 0;
     for (const [id, n] of counts) { if (n > bestN) { bestN = n; bestId = id; } }
     return bestId ? { id: bestId, count: bestN } : null;
   }
-  function buildDistrictModel(districtAggregates, edgeList) {
-    districts = districtAggregates || [];
-    districtByName = new Map(districts.map((d) => [d.name, d]));
-    edges = edgeList; // findLandmark reads the module-level `edges` closure
-    landmarks = {};
-    for (const t of LANDMARK_EDGE_TYPES) landmarks[t] = findLandmark(t);
-    // the real per-district-pair aggregation (computeRibbons) needs idById, not built yet
+  function buildProjectFillModel(projectAggregates, edgeList) {
+    projectFills = projectAggregates || [];
+    projectFillByName = new Map(projectFills.map((d) => [d.name, d]));
+    edges = edgeList; // findHighDegreeTarget reads the module-level `edges` closure
+    highDegreeTargets = {};
+    for (const t of HIGH_DEGREE_EDGE_TYPES) highDegreeTargets[t] = findHighDegreeTarget(t);
+    // the real per-project-pair aggregation (computeRibbons) needs idById, not built yet
     // at this fetch/parse stage -- deferred to buildRibbonLines, called after buildScene.
     ribbonsResolvedKeys = new Set();
-    buildDistrictLabelCandidates();
+    buildProjectLabelCandidates();
   }
   function computeRibbons() {
     const counts = new Map(); // "a|b|type" -> count
     const meta = new Map();
     for (const e of edges) {
-      if (DISTRICT_FILL_TYPES.has(e.type)) continue;
-      const lm = landmarks[e.type];
+      if (PROJECT_FILL_TYPES.has(e.type)) continue;
+      const lm = highDegreeTargets[e.type];
       if (lm && e.target === lm.id) continue;
       const na = idById.get(e.source), nb = idById.get(e.target);
-      if (!na || !nb || na.project === nb.project) continue; // same-district: drawn individually
+      if (!na || !nb || na.project === nb.project) continue; // same-project: drawn individually
       const [a, b] = na.project <= nb.project ? [na.project, nb.project] : [nb.project, na.project];
-      if (!districtByName.has(a) || !districtByName.has(b)) continue;
+      if (!projectFillByName.has(a) || !projectFillByName.has(b)) continue;
       const key = `${a}|${b}|${e.type}`;
       counts.set(key, (counts.get(key) || 0) + 1);
       meta.set(key, { a, b, type: e.type });
@@ -767,25 +771,25 @@ export async function initSpace(container) {
   // verified live never double-counting the same edge either way.
   //
   // the spike's own single median-radius-derived threshold flipped EVERY ribbon at once
-  // regardless of how far apart its own two districts actually sit -- a ribbon between two
-  // ADJACENT small districts resolved at the exact same zoom step as one spanning the whole
-  // graph. Each ribbon's own two district centroids are projected to real screen pixels (the
-  // same camera.project convention positionLandmarkBadges already uses); a ribbon resolves
+  // regardless of how far apart its own two projectFills actually sit -- a ribbon between two
+  // ADJACENT small projectFills resolved at the exact same zoom step as one spanning the whole
+  // graph. Each ribbon's own two project centroids are projected to real screen pixels (the
+  // same camera.project convention positionHighDegreeBadges already uses); a ribbon resolves
   // once its own on-screen centroid distance crosses the threshold. Recomputed on the same
   // deliberate-step cadence buildEdgeLines' other callers already follow (a zoom step or a
   // camera fit, never per pointermove) -- cheap, and consistent with "rebuild on a
   // deliberate step, never per frame."
   const RIBBON_RESOLVE_SCREEN_PX = 900;
-  function districtScreenPx(d) {
+  function projectFillScreenPx(d) {
     _screenV.set(d.cx, d.cy, 0).project(camera);
     return { x: (_screenV.x * 0.5 + 0.5) * wrap.clientWidth, y: (-_screenV.y * 0.5 + 0.5) * wrap.clientHeight };
   }
   function computeResolvedRibbonKeys() {
     const resolved = new Set();
     for (const r of ribbons) {
-      const da = districtByName.get(r.a), db = districtByName.get(r.b);
+      const da = projectFillByName.get(r.a), db = projectFillByName.get(r.b);
       if (!da || !db) continue;
-      const pa = districtScreenPx(da), pb = districtScreenPx(db);
+      const pa = projectFillScreenPx(da), pb = projectFillScreenPx(db);
       if (Math.hypot(pa.x - pb.x, pa.y - pb.y) > RIBBON_RESOLVE_SCREEN_PX) resolved.add(ribbonKey(r));
     }
     return resolved;
@@ -796,23 +800,23 @@ export async function initSpace(container) {
     return true;
   }
   // "accounting exact" (mail 11408's own acceptance line, echoing the spike's 11392):
-  // every live edge counted into EXACTLY one of fill/landmark/line/ribbon -- a live-
+  // every live edge counted into EXACTLY one of fill/highDegree/line/ribbon -- a live-
   // verification receipt hook, not consulted by the renderer itself.
   function edgeAccounting() {
-    let fill = 0, landmark = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;
+    let fill = 0, highDegree = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;
     for (const e of edges) {
-      if (DISTRICT_FILL_TYPES.has(e.type)) { fill++; continue; }
-      const lm = landmarks[e.type];
+      if (PROJECT_FILL_TYPES.has(e.type)) { fill++; continue; }
+      const lm = highDegreeTargets[e.type];
       // WAVE 27, THE LENS PANEL: a hidden badge still isn't "gone" -- its own edges just
       // draw (and count) as ordinary lines instead, same "nothing hidden" promise the
       // community bucket below already keeps under its own visibility gate.
       if (lm && e.target === lm.id) {
-        if (highDegreeBadgesHiddenByLens) { line++; } else { landmark++; }
+        if (highDegreeBadgesHiddenByLens) { line++; } else { highDegree++; }
         continue;
       }
       const na = idById.get(e.source), nb = idById.get(e.target);
       if (na && nb && na.project !== nb.project &&
-        districtByName.has(na.project) && districtByName.has(nb.project)) {
+        projectFillByName.has(na.project) && projectFillByName.has(nb.project)) {
         const a = na.project <= nb.project ? na.project : nb.project;
         const b = na.project <= nb.project ? nb.project : na.project;
         if (ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) line++; else ribbon++;
@@ -820,7 +824,7 @@ export async function initSpace(container) {
       }
       // WAVE 26, PIECE 2: the SAME swap one level down, only live once communities are
       // actually visible (mid zoom) -- below that, this bucket stays empty and every
-      // same-district edge counts as an ordinary "line", matching what's actually drawn.
+      // same-project edge counts as an ordinary "line", matching what's actually drawn.
       if (communityRegionsVisible && na && nb && na.project === nb.project &&
         na.communityCode && nb.communityCode && na.communityCode !== nb.communityCode) {
         const ca = na.communityCode <= nb.communityCode ? na.communityCode : nb.communityCode;
@@ -831,8 +835,8 @@ export async function initSpace(container) {
       if (na && nb) { line++; continue; }
       other++; // an endpoint missing from idById -- should never happen, disclosed not hidden
     }
-    return { total: edges.length, fill, landmark, line, ribbon, communityRibbon, other,
-      accounted: fill + landmark + line + ribbon + communityRibbon + other };
+    return { total: edges.length, fill, highDegree, line, ribbon, communityRibbon, other,
+      accounted: fill + highDegree + line + ribbon + communityRibbon + other };
   }
   // recomputes the resolved set and rebuilds ONLY when it actually changed -- same
   // "rebuild on a deliberate step, not per frame" discipline as syncRibbonResolve's own
@@ -861,7 +865,7 @@ export async function initSpace(container) {
     const ec = new THREE.Color();
     let vi = 0;
     for (const r of unresolved) {
-      const da = districtByName.get(r.a), db = districtByName.get(r.b);
+      const da = projectFillByName.get(r.a), db = projectFillByName.get(r.b);
       if (!da || !db) continue;
       // Reinhard-shaped brightness by count, same convention as the bundled-curve alpha
       // falloff (BUNDLE_ALPHA_FLOOR) elsewhere in this file -- baked into vertex color
@@ -884,56 +888,56 @@ export async function initSpace(container) {
     ribbonLines = new THREE.LineSegments(geo, makeEdgeFadeMaterial());
     scene.add(ribbonLines);
   }
-  // THE DISTRICT LABEL BUDGET (item 4, mail 11408: "district labels earn their place by
+  // THE PROJECT LABEL BUDGET (item 4, mail 11408: "project labels earn their place by
   // size -- one shared label budget with object labels, declutter with the same
-  // overlapsPlaced, small districts under a threshold unlabelled at rest and folded into an
-  // 'other' wash"). District labels no longer own a permanent div per district (the spike's
-  // own always-on districtLabelEntries) -- they compete for the SAME N_LABELS slots and the
+  // overlapsPlaced, small projectFills under a threshold unlabelled at rest and folded into an
+  // 'other' wash"). Project labels no longer own a permanent div per project (the spike's
+  // own always-on per-project label divs) -- they compete for the SAME N_LABELS slots and the
   // SAME overlapsPlaced declutter pass pickLabels/positionLabels already run for object
-  // labels, entered as label-pool CANDIDATES (see pickLabels' own DISTRICT_LABEL_MIN_COUNT
-  // gate and positionLabels' own district-label pass). `districtMeshGroup` (the fill
-  // geometry itself) is unaffected -- every district still fills, labelled or not; only the
-  // TEXT is budget-gated, and an unlabelled small district is what "folded into an 'other'
+  // labels, entered as label-pool CANDIDATES (see pickLabels' own PROJECT_LABEL_MIN_COUNT
+  // gate and positionLabels' own project-label pass). `projectFillMeshGroup` (the fill
+  // geometry itself) is unaffected -- every project still fills, labelled or not; only the
+  // TEXT is budget-gated, and an unlabelled small project is what "folded into an 'other'
   // wash" means here -- its fill alone, unlabeled, reads as background texture rather than
   // a named place.
-  const DISTRICT_LABEL_MIN_COUNT = 8; // below this member count, a district never labels at rest
-  let districtMeshGroup = null;
-  function buildDistrictFills() {
-    if (districtMeshGroup) { scene.remove(districtMeshGroup); districtMeshGroup = null; }
-    if (!districts.length) return;
-    districtMeshGroup = new THREE.Group();
+  const PROJECT_LABEL_MIN_COUNT = 8; // below this member count, a project never labels at rest
+  let projectFillMeshGroup = null;
+  function buildProjectFillMeshes() {
+    if (projectFillMeshGroup) { scene.remove(projectFillMeshGroup); projectFillMeshGroup = null; }
+    if (!projectFills.length) return;
+    projectFillMeshGroup = new THREE.Group();
     const dc = new THREE.Color("#2a3f5f");
-    for (const d of districts) {
+    for (const d of projectFills) {
       const geo = new THREE.CircleGeometry(Math.max(d.radius, 1), 32);
       const mat = new THREE.MeshBasicMaterial({ color: dc, transparent: true, opacity: 0.14, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
       mesh.position.set(d.cx, d.cy, -0.5); // behind both edges and nodes
-      districtMeshGroup.add(mesh);
+      projectFillMeshGroup.add(mesh);
     }
-    scene.add(districtMeshGroup);
+    scene.add(projectFillMeshGroup);
   }
-  let landmarkBadgeEntries = []; // [{id, type, div}]
-  function buildLandmarkBadges() {
-    for (const e of landmarkBadgeEntries) e.div.remove();
-    landmarkBadgeEntries = [];
+  let highDegreeBadgeEntries = []; // [{id, type, div}]
+  function buildHighDegreeBadges() {
+    for (const e of highDegreeBadgeEntries) e.div.remove();
+    highDegreeBadgeEntries = [];
     // WAVE 27, THE LENS PANEL: the lens's own hide -- no divs at all, same "rare, deliberate
     // rebuild" convention every other legend checkbox already uses (not a per-frame CSS
     // hide). buildEdgeLines/edgeAccounting's own highDegreeBadgesHiddenByLens checks are
     // what keep those edges drawn as ordinary lines instead of vanishing outright.
     if (highDegreeBadgesHiddenByLens) return;
-    for (const t of LANDMARK_EDGE_TYPES) {
-      const lm = landmarks[t];
+    for (const t of HIGH_DEGREE_EDGE_TYPES) {
+      const lm = highDegreeTargets[t];
       if (!lm) continue;
       const div = document.createElement("div");
       div.className = "lod-glyph-label";
       const nd = idById.get(lm.id);
       div.textContent = `${nd ? labelTextFor(nd) : lm.id} — ${lm.count} ${t}`;
       labelsEl.appendChild(div);
-      landmarkBadgeEntries.push({ id: lm.id, type: t, div });
+      highDegreeBadgeEntries.push({ id: lm.id, type: t, div });
     }
   }
-  function positionLandmarkBadges() {
-    for (const e of landmarkBadgeEntries) {
+  function positionHighDegreeBadges() {
+    for (const e of highDegreeBadgeEntries) {
       const nd = idById.get(e.id);
       if (!nd) continue;
       _screenV.set(nd.x || 0, nd.y || 0, 0).project(camera);
@@ -943,13 +947,13 @@ export async function initSpace(container) {
   }
 
   // WAVE 26, PIECE 2: COMMUNITY REGIONS (Thoth mail 11592/11664, thread 3683a12a): "at mid
-  // zoom inside a district, each community is a labelled region refined from the district
+  // zoom inside a project, each community is a labelled region refined from the project
   // fill, never replacing it." Khnum's own `communities` header table is the SAME Leiden
   // partition his compact-arrangement layout is already built on -- reused, never
-  // re-derived. Nested inside the district model, not a peer of it: a community only ever
-  // exists WITHIN one district (a small project never has one at all, community_code stays
+  // re-derived. Nested inside the project model, not a peer of it: a community only ever
+  // exists WITHIN one project (a small project never has one at all, community_code stays
   // 0 for every one of its members), so every community-level check below runs on top of
-  // an edge/node that already passed its own district-level check first.
+  // an edge/node that already passed its own project-level check first.
   const COMMUNITY_LABEL_MIN_COUNT = 20; // below this member count, a community never labels
   function buildCommunityModel(communityAggregates) {
     communities = communityAggregates || [];
@@ -958,14 +962,14 @@ export async function initSpace(container) {
     communityLabelCandidates = communities
       .filter((c) => c.count >= COMMUNITY_LABEL_MIN_COUNT)
       .map((c) => ({
-        __isCommunity: true, id: `community:${c.code}`, name: `${c.districtName} · community ${c.code}`,
+        __isCommunity: true, id: `community:${c.code}`, name: `${c.projectName} · community ${c.code}`,
         x: c.cx, y: c.cy, degree: c.count,
       }));
     computeCommunityZoomViewSize();
   }
   // "AT MID ZOOM": a single global viewSize gate (not per-community -- the ask is "zoomed
-  // into roughly a district's own scale," a whole-view state, not a per-region one) --
-  // the median community radius is the same "one outlier district dominates the extent"
+  // into roughly a project's own scale," a whole-view state, not a per-region one) --
+  // the median community radius is the same "one outlier project dominates the extent"
   // defence THE DRAWING TIP's own spike used for its first (later replaced) ribbon
   // threshold, reused here because visibility genuinely IS a single yes/no at this zoom,
   // unlike ribbon resolution (which stays per-ribbon, computeResolvedCommunityRibbonKeys
@@ -980,12 +984,12 @@ export async function initSpace(container) {
     if (communityMeshGroup) { scene.remove(communityMeshGroup); communityMeshGroup = null; }
     if (!communities.length) return;
     communityMeshGroup = new THREE.Group();
-    const cc = new THREE.Color("#3a2f5f"); // a distinct, warmer tone from the district fill's
+    const cc = new THREE.Color("#3a2f5f"); // a distinct, warmer tone from the project fill's
     for (const c of communities) {          // #2a3f5f -- nesting must read visually, not just logically
       const geo = new THREE.CircleGeometry(Math.max(c.radius, 1), 24);
       const mat = new THREE.MeshBasicMaterial({ color: cc, transparent: true, opacity: 0.22, depthWrite: false });
       const mesh = new THREE.Mesh(geo, mat);
-      mesh.position.set(c.cx, c.cy, -0.45); // between the district fill (-0.5) and edges (-0.1)
+      mesh.position.set(c.cx, c.cy, -0.45); // between the project fill (-0.5) and edges (-0.1)
       communityMeshGroup.add(mesh);
     }
     communityMeshGroup.visible = communityRegionsVisible;
@@ -995,13 +999,13 @@ export async function initSpace(container) {
     const counts = new Map(); // "a|b|type" -> count
     const meta = new Map();
     for (const e of edges) {
-      if (DISTRICT_FILL_TYPES.has(e.type)) continue;
-      const lm = landmarks[e.type];
+      if (PROJECT_FILL_TYPES.has(e.type)) continue;
+      const lm = highDegreeTargets[e.type];
       if (lm && e.target === lm.id) continue;
       const na = idById.get(e.source), nb = idById.get(e.target);
-      if (!na || !nb || na.project !== nb.project) continue; // community ribbons are SAME-district only
+      if (!na || !nb || na.project !== nb.project) continue; // community ribbons are SAME-project only
       const ca = na.communityCode, cb = nb.communityCode;
-      if (!ca || !cb || ca === cb) continue; // same-community: drawn individually, like same-district
+      if (!ca || !cb || ca === cb) continue; // same-community: drawn individually, like same-project
       const [a, b] = ca <= cb ? [ca, cb] : [cb, ca];
       const key = `${a}|${b}|${e.type}`;
       counts.set(key, (counts.get(key) || 0) + 1);
@@ -1013,7 +1017,7 @@ export async function initSpace(container) {
     return communityRibbons;
   }
   // per-ribbon screen-distance resolve, same convention as computeResolvedRibbonKeys --
-  // "ribbons between communities resolve the same way district ribbons do" (mail 11664).
+  // "ribbons between communities resolve the same way project ribbons do" (mail 11664).
   function pointScreenPx(x, y) {
     _screenV.set(x, y, 0).project(camera);
     return { x: (_screenV.x * 0.5 + 0.5) * wrap.clientWidth, y: (-_screenV.y * 0.5 + 0.5) * wrap.clientHeight };
@@ -1040,7 +1044,7 @@ export async function initSpace(container) {
     computeCommunityRibbons();
     const unresolved = communityRegionsVisible
       ? communityRibbons.filter((r) => !communityRibbonsResolvedKeys.has(ribbonKey(r)))
-      : []; // never drawn at all below mid zoom -- the plain same-district line covers it
+      : []; // never drawn at all below mid zoom -- the plain same-project line covers it
     if (!unresolved.length) return;
     const positions = new Float32Array(unresolved.length * 6);
     const otherPositions = new Float32Array(unresolved.length * 6);
@@ -1095,7 +1099,7 @@ export async function initSpace(container) {
   // hidden by DEFAULT under the old "not drawn at rest" rule (ruling c5953bb1); THE DRAWING
   // TIP's own operator ruling (4a51cab1/1178e7d9) retires that rule outright -- "nothing
   // hidden ... caps and hides are escape hatches" -- structural edges that aren't already
-  // folded into a district fill or a landmark badge (the five new types Sekhmet minted:
+  // folded into a project fill or a high-degree badge (the five new types Sekhmet minted:
   // recorded_by, owned_by [also a fill type], admitted_by, vendor_of) now draw
   // at rest same as anything else; the legend remains how a reader opts back OUT.
   const hiddenEdgeClasses = new Set();
@@ -1116,21 +1120,21 @@ export async function initSpace(container) {
   }
   // THE LAST RENDERER (Thoth mail 11066): "an edge draws only when both ends are visible,
   // no structural-hop exception." Every prior tier/budget/bundling mechanism (TIP 3's LOD
-  // cutoff, TIP 4's density scale, THE DRILL's cross-cluster Bezier bundling) is gone --
+  // cutoff, TIP 4's density scale, THE DRILL's cross-group Bezier bundling) is gone --
   // one universal rule, straight lines, nodeVisible on both ends, same at every zoom.
   function buildEdgeLines(nodes, edgeList) {
     if (edgeLines) { scene.remove(edgeLines); edgeLines.geometry.dispose(); edgeLines.material.dispose(); edgeLines = null; }
     const byId = new Map(nodes.map((nd) => [nd.id, nd]));
-    // THE DRAWING TIP: district-fill types never draw as individual lines at all (the fill
-    // IS the claim); a landmark's own incoming edges of its own type fold into that node's
-    // badge count instead of a spoke; a cross-district edge of any other type is
+    // THE DRAWING TIP: project-fill types never draw as individual lines at all (the fill
+    // IS the claim); a high-degree target's own incoming edges of its own type fold into that node's
+    // badge count instead of a spoke; a cross-project edge of any other type is
     // represented once, either as a ribbon (its own key not yet in ribbonsResolvedKeys) or
     // individually (its own ribbon HAS resolved) -- never both, per "nothing drawn twice."
     const visible = edgeList.filter((e) => {
-      if (DISTRICT_FILL_TYPES.has(e.type)) return false;
-      const lm = landmarks[e.type];
+      if (PROJECT_FILL_TYPES.has(e.type)) return false;
+      const lm = highDegreeTargets[e.type];
       // WAVE 27, THE LENS PANEL: hiding the badge falls through to an ordinary line, never
-      // to the district/community ribbon logic below (a landmark type's edges were never
+      // to the project/community ribbon logic below (a high-degree type's edges were never
       // part of any ribbon aggregate -- computeRibbons excludes them unconditionally, badge
       // shown or not -- so routing them through that swap here would misclassify them).
       if (lm && e.target === lm.id) {
@@ -1140,16 +1144,16 @@ export async function initSpace(container) {
       }
       const na = byId.get(e.source), nb = byId.get(e.target);
       if (na && nb && na.project !== nb.project &&
-        districtByName.has(na.project) && districtByName.has(nb.project)) {
+        projectFillByName.has(na.project) && projectFillByName.has(nb.project)) {
         const a = na.project <= nb.project ? na.project : nb.project;
         const b = na.project <= nb.project ? nb.project : na.project;
         if (!ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) return false;
       } else if (communityRegionsVisible && na && nb && na.project === nb.project &&
         na.communityCode && nb.communityCode && na.communityCode !== nb.communityCode) {
-        // WAVE 26, PIECE 2: a same-district edge refines one level further once the
+        // WAVE 26, PIECE 2: a same-project edge refines one level further once the
         // reader is zoomed to community scale -- the same "line unless the ribbon hasn't
         // resolved" swap, one level down, only checked at all when communities are
-        // actually showing (never below mid zoom, where the plain same-district line
+        // actually showing (never below mid zoom, where the plain same-project line
         // this `else` skips is exactly right).
         const ca = na.communityCode <= nb.communityCode ? na.communityCode : nb.communityCode;
         const cb = na.communityCode <= nb.communityCode ? nb.communityCode : na.communityCode;
@@ -1265,7 +1269,7 @@ export async function initSpace(container) {
           syncCommunityVisibility();
         } else if (key === "highDegree") {
           highDegreeBadgesHiddenByLens = !el.checked;
-          buildLandmarkBadges();
+          buildHighDegreeBadges();
           buildEdgeLines(idToNode, edges);
         }
         // syncCommunityVisibility bails out before reaching buildEdgeLines/renderLegend's
@@ -1343,9 +1347,9 @@ export async function initSpace(container) {
     scene.add(mesh);
     pickScene.add(pickMesh);
 
-    buildDistrictFills();
-    buildLandmarkBadges();
-    buildRibbonLines(); // needs idById, built above -- first real call after buildDistrictModel
+    buildProjectFillMeshes();
+    buildHighDegreeBadges();
+    buildRibbonLines(); // needs idById, built above -- first real call after buildProjectFillModel
     buildCommunityFills();
     buildCommunityRibbonLines(); // needs idById too, same reason
     buildEdgeLines(nodes, edges);
@@ -1432,7 +1436,7 @@ export async function initSpace(container) {
 
   // frames the camera around the REAL bounding box of whatever's currently loaded —
   // the fixed viewSize=1300 default this used to reset to was measured against the old
-  // force-relax layout's small extent and reads as "zoomed into one dense cluster" against
+  // force-relax layout's small extent and reads as "zoomed into one dense group" against
   // Khnum's new deterministic hash-placement layout, whose extent can run tens of
   // thousands of world units wide depending on how far apart two project hashes land.
   // THE FILTER-FIT FIX (Thoth mail 11241, live review of w299): "the canvas rendered fully
@@ -1445,7 +1449,7 @@ export async function initSpace(container) {
   }
   function fitToNodes(list) {
     // THE 98TH-PERCENTILE FIT FIX (Thoth mail 11249): a handful of far outliers in the
-    // visible set stretched the exact min/max bbox enough that the actual cluster sat in
+    // visible set stretched the exact min/max bbox enough that the actual group sat in
     // one corner at a much-too-zoomed-out view (measured live: osiris at 67 wpp). Trim the
     // outermost 1% on each axis before framing -- still the real bbox, just not held
     // hostage by a few stray points.
@@ -1465,7 +1469,7 @@ export async function initSpace(container) {
     const span = Math.max(maxX - minX, maxY - minY, 0);
     viewSize = Math.max(30, span * 1.1 + 40);
     // the wheel clamp's own bounds (Thoth's fix, mail 10581) — derived from THIS fit's real
-    // span, not a guess: a floor small enough to inspect one dense cluster, a ceiling about
+    // span, not a guess: a floor small enough to inspect one dense group, a ceiling about
     // 2x the whole fitted graph so "zoom out" can't run away past anything meaningful.
     minViewSize = 20;
     maxViewSize = Math.max(span * 2, 200);
@@ -1477,17 +1481,17 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // ---- THE LAST RENDERER retired the whole LOD/tier/cluster/halo machinery this comment
+  // ---- THE LAST RENDERER retired the whole LOD/tier/group/halo machinery this comment
   // block used to introduce (operator ruling d7d55257, Thoth mail 11066: "kill LOD
-  // entirely -- remove zoomLOD, label tiers, cluster_edges at far, cluster rings, the halo
+  // entirely -- remove zoomLOD, label tiers, cluster_edges at far, group rings, the halo
   // texture, per-tier alpha, and every far/mid/near branch; delete their tests"). See
   // positionLabels/pickLabels below for the one label rule that replaces it (viewport
   // top-N by degree, de-overlapped, at every zoom, no separate project-label pass).
   setStatus("loading the whole graph…");
-  let { nodes, edges, edgeClassByType, districtAggregates, communityAggregates } =
+  let { nodes, edges, edgeClassByType, projectAggregates, communityAggregates } =
     await fetchStreamSnapshot();
   applyLensStateFromHash(); // before the first buildScene/fitToNodes so the initial render already reflects a shared link
-  buildDistrictModel(districtAggregates, edges);
+  buildProjectFillModel(projectAggregates, edges);
   buildCommunityModel(communityAggregates);
   buildScene(nodes, edges);
   fitToNodes(nodes);
@@ -1507,7 +1511,7 @@ export async function initSpace(container) {
     buildEdgeLines(idToNode, edges);
     scheduleLabelPick();
     syncCommunityVisibility();
-    buildLandmarkBadges();
+    buildHighDegreeBadges();
   });
 
   // ---- deltas: GET /graph/stream/deltas is an SSE poll-diff over the outbox, keyed by
@@ -1571,19 +1575,20 @@ export async function initSpace(container) {
   // restored by clearFocus or before laying out a new focus — never written back anywhere.
   const EGO_COL_SPACING_PX = 150;
   const EGO_ROW_SPACING_PX = 34;
-  // review flaw #2: "until roots" with no cap let a real hub (repo:osiris, degree 20,560)
-  // reach 20,266 nodes in 3.1s and light the whole graph -- not a lens any more. Rank-capped
-  // now: the walk still goes to genuine roots for an ordinary object, but never surfaces
-  // more than this many nodes for one direction, so a hub focus stays a legible tree.
+  // review flaw #2: "until roots" with no cap let a real high-degree object (repo:osiris,
+  // degree 20,560) reach 20,266 nodes in 3.1s and light the whole graph -- not a lens any
+  // more. Rank-capped now: the walk still goes to genuine roots for an ordinary object,
+  // but never surfaces more than this many nodes for one direction, so a high-degree
+  // focus stays a legible tree.
   const MAX_EGO_NODES = 300;
   let egoSaved = null; // Map<id, {x,y}> of positions the active relayout overwrote
-  // THE ONE-HOP NEIGHBOURHOOD FIX (operator ruling, grounds 5b37d219, Thoth mail 11272):
+  // THE ONE-HOP FOCUS FIX (operator ruling, grounds 5b37d219, Thoth mail 11272):
   // measured defect -- focus walked PATH_EDGE_TYPES only, so focusing a real agent
   // (Sekhmet, degree 402) reached 43 nodes over succeeded_from/succeeds_seat and nothing
   // else; the operator saw a wall of same-named labels and never what the agent actually
   // did. focusBasePathReachable is the ORIGINAL provenance-path walk's own reachable set
   // (upstream/downstream over PATH_EDGE_TYPES, unchanged); the one-hop-all-types
-  // neighbourhood is additive on top of it, grouped per (type, direction) into a paged
+  // focus is additive on top of it, grouped per (type, direction) into a paged
   // count node when a bucket exceeds DRILL_PAGE_SIZE, added as real objects otherwise.
   let focusBasePathReachable = new Set();
   let focusHopsUp = new Map(), focusHopsDown = new Map();
@@ -1674,10 +1679,10 @@ export async function initSpace(container) {
         seed.set(id, { x, y: cy + (i - (ids.length - 1) / 2) * rowH });
       });
     }
-    // ONE-HOP NEIGHBOURHOOD (mail 11272 item 1): real neighbour objects a (type, direction)
-    // bucket was small enough to place directly, seeded radially around the hub by
+    // ONE-HOP FOCUS (mail 11272 item 1): real neighbour objects a (type, direction)
+    // bucket was small enough to place directly, seeded radially around the center by
     // buildEgoGroups -- merged into the SAME seed/relax pass so real edges between them and
-    // the path-ranked members still pull toward each other, not just toward the hub. A node
+    // the path-ranked members still pull toward each other, not just toward the center. A node
     // already placed by the path walk keeps its ranked-column seed; the one-hop walk never
     // fights it.
     // pinned ids (SUCCESSION CHAIN LAYOUT, mail 11272 item 4): a chain member's own
@@ -1713,8 +1718,8 @@ export async function initSpace(container) {
     }
   }
 
-  // THE ONE-HOP NEIGHBOURHOOD (mail 11272 item 1): "focus = the clicked object plus its
-  // ONE-HOP neighbourhood over ALL link types, both directions ... container-class
+  // THE ONE-HOP FOCUS (mail 11272 item 1): "focus = the clicked object plus its
+  // ONE-HOP focus over ALL link types, both directions ... container-class
   // neighbours appear as one anchor each." Groups every real one-hop neighbour by
   // (edge type, direction relative to id) -- a container-scale neighbour (isContainerFocus
   // of its own) gets pulled out separately, one anchor each, never grouped into a bucket.
@@ -1846,11 +1851,11 @@ export async function initSpace(container) {
   // the MAX_EGO_NODES budget) becomes a paged count node instead, same mechanic THE DRILL's
   // own container buckets use.
   const CHAIN_SPACING_PX = 22; // tighter than EGO_ROW_SPACING_PX (34) -- lineage siblings, not the ranked tree
-  function buildEgoGroups(id, hub) {
+  function buildEgoGroups(id, center) {
     disposeEgoGroupDivs();
     disposeEgoContainerAnchors();
     const { groups, containerNeighbors } = oneHopByTypeDirection(id);
-    const cx = hub.x || 0, cy = hub.y || 0;
+    const cx = center.x || 0, cy = center.y || 0;
     const wpp = maxViewSize / wrap.clientHeight;
     const ringR = EGO_COL_SPACING_PX * wpp * 1.6;
     const chainStep = CHAIN_SPACING_PX * wpp;
@@ -1933,9 +1938,9 @@ export async function initSpace(container) {
   // or a click handler, decides that), the exact bug THE DRILL's own clearDrillState hit
   // (mail 11241) if this had reset unconditionally instead.
   function renderFocusEgoGroups(id, hopsUp, hopsDown) {
-    const hub = idById.get(id);
-    if (!hub) return;
-    const extraSeed = buildEgoGroups(id, hub);
+    const center = idById.get(id);
+    if (!center) return;
+    const extraSeed = buildEgoGroups(id, center);
     pathReachable = new Set([...focusBasePathReachable, ...extraSeed.keys()]);
     // THE STALE TABLE FIX (Thoth mail 11308): onFocus (console.js's own onSpaceFocus,
     // wired through to renderEntityExplorerStage/hydrateFocusReachable) used to fire only
@@ -1982,8 +1987,8 @@ export async function initSpace(container) {
   // positions (the rank layout's own output, or a simple radial scatter for the drill) --
   // a good seed matters far more than iteration count for this to converge quickly and
   // legibly; `edges` is a list of [aId, bId] pairs to spring together (real reachable-set
-  // edges for an ego tree, synthetic hub-to-child pairs for a drill's star topology).
-  // `fixedId` (usually the focus/hub) never moves. O(n^2) repulsion is fine at this scale
+  // edges for an ego tree, synthetic center-to-child pairs for a drill's star topology).
+  // `fixedId` (usually the focus/center) never moves. O(n^2) repulsion is fine at this scale
   // -- the whole point of THE DRILL and the ego cap is that n never exceeds MAX_EGO_NODES.
   const EGO_FORCE_ITERATIONS = 180;
   const EGO_REPULSION = 3200;
@@ -2082,12 +2087,12 @@ export async function initSpace(container) {
 
   // ---- THE DRILL (operator ruling d7d55257, Thoth mail 11048) ----------------------------
   // A CONTAINER is any object whose own structural (containment/membership) degree exceeds
-  // MAX_EGO_NODES -- a project, an agent with a huge working set, any hub the ordinary ego
+  // MAX_EGO_NODES -- a project, an agent with a huge working set, any high-degree object the ordinary ego
   // walk could never show in full. Khnum's own `container` value in link_type_class landed
   // (Thoth mail 11291) and is normalized into "structural" at decode time (fetchStreamSnapshot's
   // own edgeClassByType) -- the exact set every other container-shaped check in this file
   // already uses. Focusing a container
-  // is a DRILL, not the ordinary ego tree: the hub plus one count node per member type,
+  // is a DRILL, not the ordinary ego tree: the center plus one count node per member type,
   // sorted by count, real members hidden until a reader clicks a type open. Acceptance:
   // "focusing repo:osiris opens under 30 nodes" -- confirmed live, see the tip's own commit.
   function containerMembersByType(id) {
@@ -2191,8 +2196,8 @@ export async function initSpace(container) {
     if (!options.skipStackPush) pushFocusStack(id);
     if (onFocus) onFocus(id);
 
-    const hub = idById.get(id);
-    const cx = hub.x || 0, cy = hub.y || 0;
+    const center = idById.get(id);
+    const cx = center.x || 0, cy = center.y || 0;
     const wpp = maxViewSize / wrap.clientHeight;
     const ringR = EGO_COL_SPACING_PX * wpp;
 
@@ -2377,7 +2382,7 @@ export async function initSpace(container) {
     storylineTickOf = new Map();
     storylineMaxSubrowOffsetPx = 0;
   }
-  // a dedicated straight-line overlay -- NOT updatePathEdges (its own cross-cluster bow/
+  // a dedicated straight-line overlay -- NOT updatePathEdges (its own cross-project bow/
   // bundle logic answers a different question, "how far apart are two projects", which
   // means nothing on a time axis where every body sits in the same single view).
   function buildStorylineLines() {
@@ -2668,7 +2673,7 @@ export async function initSpace(container) {
       groups.set(key, g);
     }
     if (!groups.size) { projectStubEntries = []; return; }
-    // THE STUB PLACEMENT FIX (Thoth mail 11249): "place each at the cluster boundary
+    // THE STUB PLACEMENT FIX (Thoth mail 11249): "place each at the project boundary
     // toward its hidden project's centroid" -- every project's own centroid and radius,
     // in one pass over idToNode (real positions exist regardless of visibility), so a
     // stub for (osiris, projA) and one for (osiris, projB) fan out toward projA's and
@@ -2707,7 +2712,7 @@ export async function initSpace(container) {
       if (vc && hc) {
         const dx = hc.x - vc.x, dy = hc.y - vc.y;
         const dist = Math.hypot(dx, dy) || 1;
-        const r = (radii.get(g.visibleProject) || 0) + 60; // a small margin past the cluster edge
+        const r = (radii.get(g.visibleProject) || 0) + 60; // a small margin past the project edge
         x = vc.x + (dx / dist) * r;
         y = vc.y + (dy / dist) * r;
       }
@@ -2765,14 +2770,14 @@ export async function initSpace(container) {
   // touching the focus regardless of whether the other end was ever positioned or visible,
   // which for a container-scale focus (repo:osiris, ~20k structural neighbours) meant
   // thousands of lines fanning to scattered original positions, "a solid disc of edges."
-  // A structural edge among the reachable set (e.g. a drill's own hub-to-member link) still
+  // A structural edge among the reachable set (e.g. a drill's own center-to-member link) still
   // draws through the ordinary base layer (buildEdgeLines) if the legend's own structural
   // checkbox is opted back in -- no separate exception needed or wanted any more.
   let pathHighlightEdges = null;
   const PATH_EDGE_BRIGHT = new THREE.Color(0x58a6ff);
   const PATH_EDGE_DIM = new THREE.Color(0x58a6ff).multiplyScalar(0.35);
-  // CROSS-CLUSTER FOCUS EDGE BUNDLING (operator ruling, grounds 5b37d219, Thoth mail 11272
-  // item 5): "cross-cluster edges longer than a threshold in screen pixels draw as bundled
+  // CROSS-PROJECT FOCUS EDGE BUNDLING (operator ruling, grounds 5b37d219, Thoth mail 11272
+  // item 5): "cross-project edges longer than a threshold in screen pixels draw as bundled
   // quadratic curves with alpha falling with length." Scoped to the FOCUS overlay only
   // (this function) -- THE LAST RENDERER's own "no bundling, straight lines" rule (mail
   // 11066) stays in force for the base dim layer (buildEdgeLines); this reopens rendering
@@ -2800,8 +2805,8 @@ export async function initSpace(container) {
       const ax = a.x || 0, ay = a.y || 0, bx = b.x || 0, by = b.y || 0;
       const worldLen = Math.hypot(bx - ax, by - ay);
       const screenLen = worldLen / wpp;
-      const crossCluster = a.project && b.project && a.project !== b.project;
-      if (!crossCluster || screenLen <= BUNDLE_SCREEN_PX_THRESHOLD) {
+      const crossProject = a.project && b.project && a.project !== b.project;
+      if (!crossProject || screenLen <= BUNDLE_SCREEN_PX_THRESHOLD) {
         pos.push(ax, ay, -0.05, bx, by, -0.05);
         col.push(PATH_EDGE_BRIGHT.r, PATH_EDGE_BRIGHT.g, PATH_EDGE_BRIGHT.b,
           PATH_EDGE_DIM.r, PATH_EDGE_DIM.g, PATH_EDGE_DIM.b);
@@ -3165,8 +3170,8 @@ export async function initSpace(container) {
     // the camera fit to a point. When the walk finds nothing beyond the focused node itself,
     // widen one hop over its own STRUCTURAL edges instead (ranked as upstream, hop 1, for
     // the ego layout below) — still just this node's real neighbours, never a synthetic
-    // minimum. review flaw #2's OWN second half: this loop had no cap at all — a real hub
-    // (repo:osiris, structural degree 20k+) has few/no PATH_EDGE_TYPES links of its own, so
+    // minimum. review flaw #2's OWN second half: this loop had no cap at all — a real
+    // high-degree object (repo:osiris, structural degree 20k+) has few/no PATH_EDGE_TYPES links of its own, so
     // pathReachable.size<=1 was true and this fallback alone reproduced the exact same
     // whole-graph blowup the rank cap above was built to prevent. Same MAX_EGO_NODES cap.
     if (pathReachable.size <= 1) {
@@ -3182,8 +3187,8 @@ export async function initSpace(container) {
     if (!options.skipStackPush) pushFocusStack(id);
     if (onFocus) onFocus(id); // shares the selection with an embedding table (console.js)
 
-    // ONE-HOP NEIGHBOURHOOD (mail 11272 item 1): the provenance-path walk above stays the
-    // BASE reachable set (unchanged semantics); the one-hop-all-types neighbourhood is
+    // ONE-HOP FOCUS (mail 11272 item 1): the provenance-path walk above stays the
+    // BASE reachable set (unchanged semantics); the one-hop-all-types focus is
     // additive on top of it. A fresh focus onto a DIFFERENT object resets the group/page
     // expand state; re-focusing the SAME one (or a group/"more" click within it) keeps it.
     focusBasePathReachable = new Set(pathReachable);
@@ -3288,23 +3293,23 @@ export async function initSpace(container) {
     if (labelPickTimer) return;
     labelPickTimer = setTimeout(() => { labelPickTimer = null; pickLabels(); }, 150);
   }
-  // THE DISTRICT LABEL BUDGET (item 4, mail 11408): a district "earns its place by size" in
+  // THE PROJECT LABEL BUDGET (item 4, mail 11408): a project "earns its place by size" in
   // the SAME N_LABELS pool object labels compete for -- built as a stable pseudo-node per
-  // district (own .x/.y/.degree so it drops into the identical sort/slice/declutter path
+  // project (own .x/.y/.degree so it drops into the identical sort/slice/declutter path
   // with no special-casing there), never real graph nodes, so `.id` is namespaced
-  // (`district:<name>`) and `isLit` naturally never matches one. Rebuilt only when the
-  // district model itself changes (buildDistrictModel/buildDistrictFills), not per pick --
-  // identity stays stable across picks so labelDivs doesn't churn DOM nodes for a district
-  // that stays labeled from one pick to the next. `districtLabelCandidates` itself is
-  // declared up in THE DISTRICT MODEL block, not here -- buildDistrictModel calls this
+  // (`project:<name>`) and `isLit` naturally never matches one. Rebuilt only when the
+  // project model itself changes (buildProjectFillModel/buildProjectFillMeshes), not per pick --
+  // identity stays stable across picks so labelDivs doesn't churn DOM nodes for a project
+  // that stays labeled from one pick to the next. `projectLabelCandidates` itself is
+  // declared up in THE PROJECT MODEL block, not here -- buildProjectFillModel calls this
   // function during initSpace's own synchronous setup, well before this point in the file
   // would otherwise execute; declaring the `let` down here hit the exact TDZ crash class
   // THE LAST RENDERER's own commit message already named once (projectObjectByName).
-  function buildDistrictLabelCandidates() {
-    districtLabelCandidates = districts
-      .filter((d) => d.count >= DISTRICT_LABEL_MIN_COUNT)
+  function buildProjectLabelCandidates() {
+    projectLabelCandidates = projectFills
+      .filter((d) => d.count >= PROJECT_LABEL_MIN_COUNT)
       .map((d) => ({
-        __isDistrict: true, id: `project:${d.name}`, name: d.name,
+        __isProjectFill: true, id: `project:${d.name}`, name: d.name,
         x: d.cx, y: d.cy, degree: d.count,
       }));
   }
@@ -3314,7 +3319,7 @@ export async function initSpace(container) {
     const minY = camera.position.y - halfH, maxY = camera.position.y + halfH;
     const inView = (nd) => nd.x >= minX && nd.x <= maxX && nd.y >= minY && nd.y <= maxY;
     const pool = idToNode.filter((nd) => nodeVisible(nd) && inView(nd));
-    const districtPool = districtLabelCandidates.filter(inView);
+    const projectPool = projectLabelCandidates.filter(inView);
     // WAVE 26, PIECE 2: community labels only ever compete for a slot once communities
     // are actually visible (mid zoom) -- below that they'd just be noise nobody asked for
     // yet, the exact same reasoning the fill/ribbon gates above already use.
@@ -3327,15 +3332,15 @@ export async function initSpace(container) {
     // highest-degree-first among themselves; only remaining slots go to the ordinary
     // degree ranking. Acceptance: every reachable node gets a label slot up to N_LABELS.
     const isLit = (nd) => nd.id === pathFocusId || pathReachable.has(nd.id) || nd.id === selectedId;
-    // WAVE 26 live-verification finding: a district's own count (thousands) always beat an
+    // WAVE 26 live-verification finding: a project's own count (thousands) always beat an
     // ordinary node's degree by luck, so it never needed special priority -- a community's
     // own count (order 10s-100s, same order as plenty of individual node degrees) does not
     // have that luck, and the plain degree sort silently crowded every community label out
-    // (0 ever won a slot against ordinary high-degree nodes in the same view). A district/
+    // (0 ever won a slot against ordinary high-degree nodes in the same view). A project/
     // community pseudo-node now sits in its own tier, between lit and ordinary -- ranked
     // by its own size within that tier, never competing against unrelated object degree.
-    const tier = (nd) => (isLit(nd) ? 2 : (nd.__isDistrict || nd.__isCommunity) ? 1 : 0);
-    labeledNodes = pool.concat(districtPool, communityPool)
+    const tier = (nd) => (isLit(nd) ? 2 : (nd.__isProjectFill || nd.__isCommunity) ? 1 : 0);
+    labeledNodes = pool.concat(projectPool, communityPool)
       .sort((a, b) => tier(b) - tier(a) || (b.degree || 0) - (a.degree || 0))
       .slice(0, N_LABELS);
     // reconcile DOM: remove divs for nodes no longer labeled, add for newly labeled ones —
@@ -3347,10 +3352,10 @@ export async function initSpace(container) {
     for (const nd of labeledNodes) {
       if (labelDivs.has(nd)) continue;
       const div = document.createElement("div");
-      div.className = nd.__isDistrict ? "lbl project-label"
+      div.className = nd.__isProjectFill ? "lbl project-label"
         : nd.__isCommunity ? "lbl community-label" : "lbl";
       // fallback text now, swapped for the real name async (real nodes only)
-      div.textContent = (nd.__isDistrict || nd.__isCommunity)
+      div.textContent = (nd.__isProjectFill || nd.__isCommunity)
         ? `${nd.name} (${nd.degree})` : labelTextFor(nd);
       labelsEl.appendChild(div);
       labelDivs.set(nd, div);
@@ -3395,10 +3400,10 @@ export async function initSpace(container) {
       const x = (_screenV.x * 0.5 + 0.5) * wrap.clientWidth;
       const y = (-_screenV.y * 0.5 + 0.5) * wrap.clientHeight;
       const w = labelWidths.get(nd) || LABEL_W;
-      // a district (or WAVE 26 community) pseudo-node is never focus-reachable and never
+      // a project (or WAVE 26 community) pseudo-node is never focus-reachable and never
       // the succession-chain declutter's own concern -- it just competes for a slot and
       // yields to overlap like any ordinary (non-lit) label, keeping its own class untouched.
-      if (nd.__isDistrict || nd.__isCommunity) {
+      if (nd.__isProjectFill || nd.__isCommunity) {
         if (overlapsPlaced(x, y, w)) { div.hidden = true; continue; }
         div.hidden = false;
         div.style.left = `${x}px`;
@@ -3439,7 +3444,7 @@ export async function initSpace(container) {
       _placed.push([x - w / 2, y - LABEL_H, x + w / 2, y]);
     }
     positionFocusRing();
-    positionLandmarkBadges();
+    positionHighDegreeBadges();
     positionStorylineAxis();
     if (window.__spaceWheelTiming) {
       const t0 = performance.now();
@@ -3486,11 +3491,11 @@ export async function initSpace(container) {
     get selectedId() { return selectedId; },
     // DRAWING THE WHOLE GRAPH (spike, Thoth mail 11392) -- live-verification/report hooks,
     // same convention as the rest of this debug surface.
-    get districts() { return districts.map((d) => ({ ...d })); },
-    get landmarks() { return { ...landmarks }; },
+    get projectFills() { return projectFills.map((d) => ({ ...d })); },
+    get highDegreeTargets() { return { ...highDegreeTargets }; },
     get ribbons() { return ribbons.map((r) => ({ ...r })); },
     get ribbonsResolvedKeys() { return [...ribbonsResolvedKeys]; },
-    get districtLabelCandidateCount() { return districtLabelCandidates.length; },
+    get projectLabelCandidateCount() { return projectLabelCandidates.length; },
     edgeAccounting,
     // WAVE 26, THE STORYLINE (mail 11534) -- live-verification hooks, same convention.
     isAgentFocus,
@@ -3513,7 +3518,7 @@ export async function initSpace(container) {
     isStructuralLike,
     get communitiesHiddenByLens() { return communitiesHiddenByLens; },
     get highDegreeBadgesHiddenByLens() { return highDegreeBadgesHiddenByLens; },
-    get landmarkBadgeEntryCount() { return landmarkBadgeEntries.length; },
+    get highDegreeBadgeEntryCount() { return highDegreeBadgeEntries.length; },
     get lensHashParam() { return new URLSearchParams(location.hash.replace(/^#/, "")).get(LENS_HASH_PARAM); },
     get hiddenNodeTypes() { return [...hiddenNodeTypes]; },
     readLensStateFromHash, applyLensStateFromHash,
@@ -3542,7 +3547,7 @@ export async function initSpace(container) {
     get projectAnchorCount() { return projectAnchorEntries.length; },
     get projectStubEntries() { return projectStubEntries.map((e) => ({ visibleProject: e.visibleProject, hiddenProject: e.hiddenProject, count: e.count })); },
     revealProjectStub,
-    // THE ONE-HOP NEIGHBOURHOOD (mail 11272 item 1): live-verification/test hooks, same
+    // THE ONE-HOP FOCUS (mail 11272 item 1): live-verification/test hooks, same
     // convention as the container drill's own hooks above.
     oneHopByTypeDirection,
     get egoGroupEntries() { return egoGroupEntries.map((e) => ({ key: e.key, kind: e.kind, type: e.type, direction: e.direction, count: e.count })); },
