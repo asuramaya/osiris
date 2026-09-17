@@ -53,12 +53,16 @@ from src.cli import (
     cmd_heal_seat_anchor,
     cmd_heal_seat_transcript,
     cmd_inbox,
+    cmd_inspect,
     cmd_launch,
     cmd_lint,
+    cmd_lint_audit,
+    cmd_lint_triage,
     cmd_merge,
     cmd_migrate,
     cmd_mint_seat,
     cmd_new,
+    cmd_practices,
     cmd_rebind_seat,
     cmd_reconcile_merge,
     cmd_rematerialize,
@@ -4430,6 +4434,173 @@ async def test_cmd_audit_every_declared_name_actually_runs(actions: Actions) -> 
 async def test_cmd_audit_unknown_name_refuses_with_exit_1(actions: Actions) -> None:
     out = await cmd_audit("no-such-audit-anywhere", pool=actions.pool)
     assert out == 1
+
+
+# --- WAVE 27, PARITY GAP 2 (Thoth mail 11752): osiris lint --check triage / --check
+# <audit-name>, folding the whole graph-health namespace into one door -------------------
+
+async def test_cmd_lint_widens_check_to_triage_via_the_main_door(actions: Actions) -> None:
+    """`osiris lint --check triage` (the door a user actually types) reaches the same
+    branch `cmd_lint_triage` implements directly -- exercised through cmd_lint itself,
+    not just the helper, so a future refactor that breaks the dispatch is caught here.
+    A "blank" hermetic DB is never actually empty of active objects: the catalog seed
+    itself mints one Type row per declared object/link type (`seed_catalog`), and
+    triage's own census counts every active object, Type included -- those rows read
+    as orphans by construction (a Type carries no live link), so exit 1 here is the
+    CORRECT reading of this population, not a bug in the door."""
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_lint(check="triage", pool=actions.pool)
+    assert out == 1
+    assert "triage census" in buf.getvalue()
+
+
+async def test_cmd_lint_check_audit_name_delegates_to_run_composition(
+    actions: Actions,
+) -> None:
+    """`osiris lint --check the-wall` reaches the SAME comp.run_composition call
+    `osiris audit the-wall` makes -- always exit 0 unless the composition itself
+    errors, matching `osiris audit`'s own disclosed contract (no fleet-agreed
+    pass/fail signal for these five lenses)."""
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+    out = await cmd_lint(check="the-wall", pool=actions.pool)
+    assert out == 0
+
+
+async def test_cmd_lint_check_audit_name_exits_1_on_a_real_composition_error(
+    monkeypatch: pytest.MonkeyPatch, actions: Actions,
+) -> None:
+    async def _erroring_run_composition(pool: Any, name: str, subject: Any) -> dict[str, Any]:
+        return {"error": f"no composition named {name!r}"}
+
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "run_composition", _erroring_run_composition)
+    out = await cmd_lint(check="the-wall", pool=actions.pool)
+    assert out == 1
+
+
+async def test_cmd_lint_triage_helper_reports_findings_present(
+    monkeypatch: pytest.MonkeyPatch, actions: Actions,
+) -> None:
+    async def _fake_run_spec(pool: Any, spec: dict[str, Any], subject: Any, *, name: str) -> Any:
+        return {"items": [{"type": "Thread", "status": "active", "n": 5, "orphans": 2,
+                           "thin": 0}]}
+
+    import src.orchestrator.compositions as compositions_mod
+    monkeypatch.setattr(compositions_mod, "run_spec", _fake_run_spec)
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_lint_triage(actions.pool, as_json=False)
+    assert out == 1
+    assert "orphans/thin" in buf.getvalue()
+
+
+async def test_cmd_lint_audit_helper_json_mode(actions: Actions) -> None:
+    assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
+    out = await cmd_lint_audit(actions.pool, "type-census", as_json=True)
+    assert out == 0
+
+
+# --- WAVE 27, PARITY GAP 5 (Thoth mail 11752): osiris inspect, the CLI-side aggregator
+# over dossier/object-events/succession-chain/candidates --------------------------------
+
+async def test_cmd_inspect_calls_dossier_only_by_default(monkeypatch: Any) -> None:
+    calls: list[tuple[str, dict[str, Any]]] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append((name, arguments))
+        return {"id": "5f234a1c", "type": "Thread"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    assert await cmd_inspect("5f234a1c") == 0
+    assert calls == [("dossier", {"object_ref": "5f234a1c", "want_relationships": False})]
+
+
+async def test_cmd_inspect_fans_out_to_every_requested_flag(monkeypatch: Any) -> None:
+    calls: list[str] = []
+
+    async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        calls.append(name)
+        return {"ok": True}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
+    out = await cmd_inspect(
+        "osiris", want_events=True, want_chain=True, want_candidates=True)
+    assert out == 0
+    assert calls == ["dossier", "object_events", "succession_chain", "candidates"]
+
+
+async def test_cmd_inspect_exits_nonzero_when_dossier_errors(monkeypatch: Any) -> None:
+    async def _no_match(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {"error": "no object matches 'nope'"}
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _no_match)
+    assert await cmd_inspect("nope") == 1
+
+
+async def test_cmd_inspect_dark_daemon_reports_honestly(monkeypatch: Any, capsys: Any) -> None:
+    async def _dark(url: str, name: str, arguments: dict[str, Any]) -> str:
+        return "error: connection refused"
+
+    monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _dark)
+    assert await cmd_inspect("nope") == 1
+    assert "osiris-mcp" in capsys.readouterr().err
+
+
+# --- WAVE 27, PARITY GAP 6 (Thoth mail 11752): osiris practices, the plain-read door
+# amend-practice's own write door never covered --------------------------------------------
+
+async def test_cmd_practices_list_on_a_blank_db(actions: Actions) -> None:
+    out = await cmd_practices(pool=actions.pool)
+    assert out == 0
+
+
+async def test_cmd_practices_show_finds_a_real_practice(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from datetime import UTC, datetime
+
+    pid = await actions.create_or_find_object(
+        "Practice", "practice:cli-inspect-test", "test")
+    await actions.assert_property(
+        pid, "statement", "test the CLI door, not just the MCP one", "test",
+        datetime.now(UTC), 0.9)
+
+    out = await cmd_practices("show", str(pid), as_json=True, pool=actions.pool)
+    assert out == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert len(payload) == 1
+    assert payload[0]["statement"] == "test the CLI door, not just the MCP one"
+
+
+async def test_cmd_practices_show_unknown_ref_exits_1(actions: Actions) -> None:
+    out = await cmd_practices("show", "no-such-practice-anywhere", pool=actions.pool)
+    assert out == 1
+
+
+async def test_cmd_practices_show_requires_a_ref(actions: Actions) -> None:
+    out = await cmd_practices("show", None, pool=actions.pool)
+    assert out == 1
+
+
+async def test_cmd_practices_unknown_action_refuses(actions: Actions) -> None:
+    out = await cmd_practices("delete-everything", pool=actions.pool)
+    assert out == 1
+
+
+async def test_cmd_practices_json_mode_emits_a_list(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    out = await cmd_practices(as_json=True, pool=actions.pool)
+    assert out == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert isinstance(payload, list)
 
 
 # --- fold-project: the sanctioned second door (thread 2446) — calls the SAME

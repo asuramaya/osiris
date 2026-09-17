@@ -68,6 +68,13 @@ NO_MCP_EQUIVALENT = {
         "consistency/family-drift) via comp.run_composition, the same function "
         "composition(action='run') calls; no single MCP tool named 'audit' to match "
         "1:1, by design (Thoth's own instruction: one door, not a subcommand each).",
+    "inspect": "NOT actually MCP-less — WAVE 27, PARITY GAP 5 (Thoth mail 11752): one "
+        "CLI door fans out to FOUR existing tools (dossier/object_events/"
+        "succession_chain/candidates), same shape as audit's own entry directly above "
+        "and the same reason the block comment above cmd_dossier already gives: no "
+        "single MCP tool named 'inspect' exists to mirror, and candidates() has no "
+        "per-object ref at all — a pure CLI-side aggregator over four wire calls, by "
+        "design, not a new tool.",
     "deploy": "operator devops act — an agent should not restart shared services",
     "migrate": "operator devops act — an agent should not run schema migrations",
     "graph-migrate": "DRAWING THE WHOLE GRAPH (thread 325ef660, Thoth mail 11407/11423): "
@@ -230,6 +237,15 @@ CLI_ONLY_PARAMS = {
     ("backfill", "apply"): "the CLI's own --apply is the same concept as the MCP tool's "
         "dry_run, inverted and renamed to match this house's --apply repair convention "
         "(thread c89a9873) — identical shape to seat:heal_anchor's own entry below.",
+    ("practices", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        "own entry below.",
+    ("practices", "action"): "WAVE 27, PARITY GAP 6 (Thoth mail 11752): 'list' calls the "
+        "SAME practices() MCP tool; 'show REF' reaches past that public wrapper straight "
+        "to the underlying composition function's own `id` arg (the door amend_practice's "
+        "own receipt already uses) — the public tool exposes no by-id lookup at all, so "
+        "this dispatch param has nothing on the MCP side to name-match.",
+    ("practices", "ref"): "show-only: the practice to look up by id — see the 'action' "
+        "entry directly above for why the public practices() tool has no equivalent param.",
     ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
         "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
         "bare console caller has no mount to derive it from, so this names the gap with "

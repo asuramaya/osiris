@@ -585,6 +585,51 @@ def _lint_project_match(finding: dict[str, Any], project: str) -> bool:
     return False
 
 
+async def cmd_lint_triage(pool: asyncpg.Pool, *, as_json: bool) -> int:
+    """`osiris lint --check triage`'s own branch (WAVE 27, PARITY GAP 2, Thoth mail
+    11752: "a headless door onto graph_lint and its sibling audits (triage, ...)"):
+    the SAME `triage(mode='census')` MCP call, one row per (type, status). Pass/fail
+    signal: any row carrying a live orphan or thin count -- the two columns census
+    mode itself flags as worth a mind's attention; a real bucket-mode dig is what a
+    human reaches for next, this door only needs to say whether the fleet has
+    anything to look at."""
+    from src import cli_render as render
+    from src.orchestrator import compositions as comp
+
+    spec = {"op": "function", "name": "triage", "args": {"mode": "census"}}
+    out = await comp.run_spec(pool, spec, None, name="triage")
+    rows: list[dict[str, Any]] = out["items"]
+    findings_present = any((r.get("orphans") or 0) or (r.get("thin") or 0) for r in rows)
+    if as_json:
+        render.emit({"rows": rows, "findings_present": findings_present}, as_json=True)
+        return 1 if findings_present else 0
+    for r in rows:
+        print(f"{r.get('type', '?')}/{r.get('status', '?')}: n={r.get('n')} "
+              f"orphans={r.get('orphans')} thin={r.get('thin')}")
+    print("osiris lint: triage census -- " +
+          ("some types carry orphans/thin members" if findings_present else "clean"))
+    return 1 if findings_present else 0
+
+
+async def cmd_lint_audit(pool: asyncpg.Pool, name: str, *, as_json: bool) -> int:
+    """`osiris lint --check <audit-name>` for one of `AUDIT_NAMES` (WAVE 27, PARITY
+    GAP 2): the SAME `comp.run_composition` call `osiris audit` itself makes -- no
+    second implementation. DISCLOSED, same as `cmd_audit`'s own docstring: these five
+    are read-only lenses with no fleet-agreed pass/fail signal (closure-health
+    reports four summary numbers, not a findings list) -- exit 1 only on the
+    composition's OWN error (an unknown name, a query failure), never on content,
+    exactly `osiris audit`'s own contract. Reached through `osiris lint` purely so
+    the whole graph-health namespace (checks + triage + audits) has one door,
+    per Thoth's own wording; `osiris audit <name>` stays the direct, unaggregated
+    way to run just one."""
+    from src import cli_render as render
+    from src.orchestrator import compositions as comp
+
+    out = await comp.run_composition(pool, name, None)
+    render.emit(out, as_json=as_json, title=f"lint · {name}")
+    return 1 if isinstance(out, dict) and out.get("error") else 0
+
+
 async def cmd_lint(
     *, check: str | None = None, project: str | None = None, as_json: bool = False,
     stale_days: int = 14, limit: int | None = None, offset: int = 0,
@@ -603,7 +648,15 @@ async def cmd_lint(
     SQL-level project scoping to mirror, so inventing one here would be new capability,
     not a mirror. The receipt names which checks' findings could not even be evaluated
     for project membership (most of them), rather than silently implying a scoped-clean
-    pass just because nothing matched."""
+    pass just because nothing matched.
+
+    THE SIBLING-AUDITS WIDENING (WAVE 27, PARITY GAP 2, Thoth mail 11752): `--check`
+    now also accepts `"triage"` (delegates to `cmd_lint_triage`) or any of
+    `AUDIT_NAMES` (delegates to `cmd_lint_audit`) — one door onto the whole graph-
+    health namespace her own dispatch named, rather than a fourth-through-eighth
+    subcommand. `--project`/`--stale-days`/`--limit`/`--offset` are inert on either
+    branch (graph_lint-only concepts); a caller mixing them with a widened `--check`
+    gets the branch's own, narrower contract, not a silent no-op."""
     from src.orchestrator import compositions as comp
 
     owns_pool = pool is None
@@ -622,6 +675,18 @@ async def cmd_lint(
             print(f"osiris lint: could not reach postgres at {settings.database_url} — "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
+    if check == "triage":
+        try:
+            return await cmd_lint_triage(pool, as_json=as_json)
+        finally:
+            if owns_pool:
+                await pool.close()
+    if check is not None and check in AUDIT_NAMES:
+        try:
+            return await cmd_lint_audit(pool, check, as_json=as_json)
+        finally:
+            if owns_pool:
+                await pool.close()
     args: dict[str, Any] = {"stale_days": stale_days}
     if check is not None:
         args["check"] = check
@@ -1757,6 +1822,67 @@ async def cmd_candidates(*, project: str | None = None, limit: int = 50,
         return 1
     render.emit(result, as_json=as_json, title="candidates")
     return 1 if isinstance(result, dict) and result.get("error") else 0
+
+
+async def cmd_inspect(
+    ref: str, *, want_events: bool = False, want_chain: bool = False,
+    want_candidates: bool = False, want_relationships: bool = False,
+    as_json: bool = False,
+) -> int:
+    """osiris inspect <ref> [--events] [--chain] [--candidates] [--relationships]
+    [--json] — WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic "look at this
+    object" convenience over dossier / object_events / succession_chain / candidates.
+    NOT a fifth MCP tool -- an earlier pass at this exact gap (the block comment
+    above this function) found no single tool named "inspect" to mirror and shipped
+    four flat 1:1 doors instead; this is a CLI-side aggregator sitting on top of
+    those same four wire calls (dossier always, the other three opt-in), never a
+    second implementation and never requiring a new MCP tool of its own -- the
+    concern that stopped the earlier attempt doesn't apply to a pure client-side
+    fan-out. `--candidates` passes `ref` straight through as `candidates`' own
+    `project` param (that tool has no per-object ref at all, dossier() docstring's
+    resolver is the only shared one); a `ref` that isn't a project name gets
+    whatever fleet-wide/empty answer candidates() itself would give a bad project.
+
+    Exit 1 if dossier (the one call that always runs) reports an error, or if any
+    requested extra section does; a section's own genuine "nothing here" (e.g. no
+    events) is not an error and never flips the exit code."""
+    from src import cli_render as render
+    from src.orchestrator.mcp_client import call_mcp_tool
+
+    url = await _mcp_url()
+    out: dict[str, Any] = {}
+    rc = 0
+
+    dossier_result = await call_mcp_tool(
+        url, "dossier", {"object_ref": ref, "want_relationships": want_relationships})
+    if isinstance(dossier_result, str):
+        print(f"osiris inspect: {dossier_result} — is osiris-mcp running? "
+              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        return 1
+    out["dossier"] = dossier_result
+    if isinstance(dossier_result, dict) and dossier_result.get("error"):
+        rc = 1
+
+    if want_events:
+        events_result = await call_mcp_tool(
+            url, "object_events", {"object_ref": ref, "event_type": None})
+        out["object_events"] = events_result
+        if isinstance(events_result, dict) and events_result.get("error"):
+            rc = 1
+    if want_chain:
+        chain_result = await call_mcp_tool(url, "succession_chain", {"ref": ref, "max_hops": 10})
+        out["succession_chain"] = chain_result
+        if isinstance(chain_result, dict) and chain_result.get("error"):
+            rc = 1
+    if want_candidates:
+        candidates_result = await call_mcp_tool(
+            url, "candidates", {"project": ref, "limit": 50})
+        out["candidates"] = candidates_result
+        if isinstance(candidates_result, dict) and candidates_result.get("error"):
+            rc = 1
+
+    render.emit(out, as_json=as_json, title=f"inspect · {ref}")
+    return rc
 
 
 async def cmd_composition(
@@ -4232,6 +4358,84 @@ async def cmd_backup_settings(
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title=f"backup-settings {action}")
+    return 0
+
+
+# --- practices -----------------------------------------------------------------------------
+
+async def cmd_practices(
+    action: str = "list", ref: str | None = None, *, surface: str | None = None,
+    limit: int = 50, recent: bool = False, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris practices [list|show REF] [--surface S] [--limit N] [--recent] [--json]
+    — WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain READS of the practices
+    composition had no CLI door at all (`amend-practice` above covers the one
+    write). `list` (default) is the SAME `comp.run_spec(pool, {"op":"function",
+    "name":"practices","args":{"surface","limit","recent"}}, None, name="practices")`
+    the `practices` MCP tool itself calls. `show REF` goes one step past that public
+    tool's own surface, straight to the composition function's own `id` arg
+    (`_fn_practices`'s own docstring: "the shape amend_practice's own receipt uses
+    so a write is never invisible on its own receipt") — the SAME direct-by-id
+    lookup, never a second implementation, just reached from a door the public
+    `practices()` wrapper doesn't expose. `REF` accepts a practice's own uuid or
+    8-char short id (matches a listing row's own `id` field, same convention as
+    `dossier`'s short-id acceptance elsewhere in this file).
+
+    Report-only, exit 0 always unless the underlying composition call itself
+    errors (an unknown ref for `show`) — there is no fleet-agreed "findings
+    present" signal for a technique log the way there is for graph_lint."""
+    from src.orchestrator import compositions as comp
+
+    if action not in ("list", "show"):
+        print(f"osiris practices: unknown action {action!r} — choose list or show",
+              file=sys.stderr)
+        return 1
+    if action == "show" and not (ref or "").strip():
+        print("osiris practices: show requires a REF", file=sys.stderr)
+        return 1
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:practices")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris practices: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        if action == "show":
+            oid = await comp.resolve_ref(pool, ref or "")
+            if oid is None:
+                print(f"osiris practices: no object matches {ref!r}", file=sys.stderr)
+                return 1
+            args: dict[str, Any] = {"id": str(oid)}
+        else:
+            args = {"surface": surface, "limit": limit, "recent": recent}
+        spec = {"op": "function", "name": "practices", "args": args}
+        out = await comp.run_spec(pool, spec, None, name="practices")
+    except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+        print(f"osiris practices: {exc}", file=sys.stderr)
+        return 1
+    finally:
+        if owns_pool:
+            await pool.close()
+    items = out["items"]
+    if action == "show" and not items:
+        print(f"osiris practices: no practice matches {ref!r}", file=sys.stderr)
+        return 1
+    from src import cli_render as render
+    title = "practices" if action == "list" else f"practices · {ref}"
+    render.emit(items, as_json=as_json, title=title)
     return 0
 
 
@@ -6845,7 +7049,8 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
   see the fleet         fleet, roster, backlog, team, status, boot-status, smoke, lint,
                         audit, graph-export
   read the record       desk, show, threads, inbox, search, dossier, object-events,
-                        succession-chain, candidates, composition, citation
+                        succession-chain, candidates, composition, citation, inspect,
+                        practices
   write to the record   send, decide, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
@@ -6936,13 +7141,19 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_lint = sub.add_parser("lint", description=_d(
         "the graph audits itself — headless mirror of the graph_lint MCP tool/CMD-K "
-        "power tool, same 32 checks, same receipt (report-only; exit 1 if any findings)"),
+        "power tool, same 32 checks, same receipt (report-only; exit 1 if any findings). "
+        "WAVE 27 widening (Thoth mail 11752): --check also takes 'triage' or one of "
+        "AUDIT_NAMES, folding the whole graph-health namespace into one door"),
                    epilog="example: osiris lint\nexample: osiris lint --check false-mint "
-                          "--json\nexample: osiris lint --project osiris")
+                          "--json\nexample: osiris lint --project osiris\n"
+                          "example: osiris lint --check triage\n"
+                          "example: osiris lint --check closure-health")
     p_lint.add_argument("--check", default=None,
-                        help="one check name (a `counts` key) to list in full, past the "
-                             "default 50-per-check cap — see --json's own counts for the "
-                             "complete name list")
+                        help="one graph_lint check name (a `counts` key) to list in "
+                             "full, past the default 50-per-check cap; or 'triage'; or "
+                             "one of AUDIT_NAMES (closure-health/the-wall/type-census/"
+                             "family-consistency/family-drift) — see --json's own "
+                             "counts for the complete graph_lint name list")
     p_lint.add_argument("--project", default=None,
                         help="best-effort client-side filter (no SQL-level scoping exists "
                              "upstream) — keeps only findings whose subject/detail "
@@ -7201,6 +7412,48 @@ def _build_parser() -> argparse.ArgumentParser:
                               help="max candidates returned (default 50)")
     p_candidates.add_argument("--json", action="store_true", dest="as_json",
                               help="machine-readable: one compact JSON line")
+
+    p_inspect = sub.add_parser("inspect", description=_d(
+        "WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic 'look at this object' "
+        "convenience over dossier/object-events/succession-chain/candidates — dossier "
+        "always runs, the other three are opt-in flags, one combined receipt"),
+        epilog="example: osiris inspect agent:ad1a1cb0\n"
+               "example: osiris inspect thread:a948c7156418 --events --chain\n"
+               "example: osiris inspect osiris --candidates --json")
+    p_inspect.add_argument("ref", help="uuid, short id, canonical, or name — same "
+                           "resolver dossier itself uses")
+    p_inspect.add_argument("--events", action="store_true", dest="want_events",
+                           help="also fetch object-events")
+    p_inspect.add_argument("--chain", action="store_true", dest="want_chain",
+                           help="also fetch succession-chain")
+    p_inspect.add_argument("--candidates", action="store_true", dest="want_candidates",
+                           help="also fetch candidates, treating REF as a project name")
+    p_inspect.add_argument("--relationships", action="store_true", dest="want_relationships",
+                           help="dossier's own want_relationships — every relationship "
+                                "row, not just the first 10 per type")
+    p_inspect.add_argument("--json", action="store_true", dest="as_json",
+                           help="machine-readable: one combined JSON receipt")
+
+    p_practices = sub.add_parser("practices", description=_d(
+        "WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain reads of the practices "
+        "composition (amend-practice above covers the one write) — the same "
+        "practices() MCP tool call for 'list', a direct by-id lookup for 'show'"),
+        epilog="example: osiris practices\n"
+               "example: osiris practices list --surface deploy --recent\n"
+               "example: osiris practices show 3e96c10e")
+    p_practices.add_argument("action", nargs="?", default="list", choices=["list", "show"],
+                             help="list (default) | show REF")
+    p_practices.add_argument("ref", nargs="?", default=None,
+                             help="practice uuid/short-id/name, required for show")
+    p_practices.add_argument("--surface", default=None,
+                             help="list only: narrow to one domain vocabulary")
+    p_practices.add_argument("--limit", type=int, default=50,
+                             help="list only: max practices returned (default 50)")
+    p_practices.add_argument("--recent", action="store_true",
+                             help="list only: order by last-touched instead of most-"
+                                  "confirmed")
+    p_practices.add_argument("--json", action="store_true", dest="as_json",
+                             help="machine-readable: one compact JSON line")
 
     p_composition = sub.add_parser("composition", description=_d(
         "the composition MCP tool's own save/run/list actions (called over the wire), "
@@ -8412,6 +8665,17 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "candidates":
         return asyncio.run(cmd_candidates(
             project=args.project, limit=args.limit, as_json=args.as_json))
+    if args.command == "inspect":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_inspect(
+            args.ref, want_events=args.want_events, want_chain=args.want_chain,
+            want_candidates=args.want_candidates, want_relationships=args.want_relationships,
+            as_json=args.as_json))
+    if args.command == "practices":
+        # unbounded-wait-ok: asyncio.run() drives the event loop to completion
+        return asyncio.run(cmd_practices(
+            args.action, args.ref, surface=args.surface, limit=args.limit,
+            recent=args.recent, as_json=args.as_json))
     if args.command == "composition":
         return asyncio.run(cmd_composition(
             args.action, args.name, spec=args.spec, kind=args.kind, room=args.room,
