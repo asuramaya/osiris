@@ -948,6 +948,41 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             ],
         }
 
+    @app.post("/objects/resolve-canonicals")
+    async def resolve_canonicals(
+        body: ResolveCanonicalsBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        """THE CANONICAL-RESOLVE DOOR (Thoth mail 12231, backlog view's seat-handle follow-
+        up to mail 12120): a batch of raw canonicals -> {canonical, uuid, handle_or_name}
+        each, ONE call, so any table cell showing a bare `seat:xxxx`/`agent:xxxx`/`repo:xxxx`
+        can render the reader-facing handle with the canonical on hover instead of the
+        canonical itself. Composes the SAME resolve_label/fetch_label_props two-tier
+        machinery every other object-identity surface already uses (get_object, above) —
+        never a second labelling rule. A canonical this project's own objects table has
+        never seen (deleted, mistyped, or from a different graph entirely) comes back with
+        `uuid`/`handle_or_name` both null rather than dropped from the list — the caller's
+        own canonical is always the key it gets an answer back under, requested order
+        preserved, duplicates in the request answered identically without a second query."""
+        seen: list[str] = []
+        for c in body.canonicals[:500]:
+            if c not in seen:
+                seen.append(c)
+        rows = await p.fetch(
+            "SELECT id, type, canonical FROM objects WHERE canonical = ANY($1::text[])", seen,
+        ) if seen else []
+        by_canonical = {r["canonical"]: r for r in rows}
+        label_props = await fetch_label_props(p, [r["id"] for r in rows])
+        resolved: dict[str, dict[str, Any]] = {}
+        for c in seen:
+            row = by_canonical.get(c)
+            if row is None:
+                resolved[c] = {"canonical": c, "uuid": None, "handle_or_name": None}
+                continue
+            props = label_props.get(row["id"], {})
+            handle_or_name = resolve_label(row["type"], props, row["canonical"]).label
+            resolved[c] = {"canonical": c, "uuid": str(row["id"]), "handle_or_name": handle_or_name}
+        return {"resolved": [resolved[c] for c in body.canonicals[:500]]}
+
     @app.get("/objects/{object_id}/content")
     async def object_content(
         object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
@@ -2225,6 +2260,15 @@ class LayoutMigrateBody(BaseModel):
     """THE MIGRATION DOOR's own body (Thoth mail 10609) — `limit` overrides the live
     `layout.batch_size` setting for this one run; omit it to use the setting."""
     limit: int | None = None
+
+
+class ResolveCanonicalsBody(BaseModel):
+    """THE CANONICAL-RESOLVE DOOR (Thoth mail 12231): a raw canonical string
+    (`seat:xxxx`, `agent:xxxx`, `repo:xxxx`, ...) is an id, not a name — a console table
+    showing one bare has nowhere to get the reader-facing handle from without this.
+    `canonicals` is capped at 500 per call (a reader-facing table's own row count, never
+    a bulk-export shape) and deduped server-side before querying."""
+    canonicals: list[str]
 
 
 class ActBody(BaseModel):

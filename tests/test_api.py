@@ -528,6 +528,52 @@ async def test_object_404(client: httpx.AsyncClient) -> None:
     assert r.status_code == 404
 
 
+async def test_resolve_canonicals_returns_the_label_field_handle(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    """THE CANONICAL-RESOLVE DOOR (Thoth mail 12120/12231): a console table showing a
+    bare `seat:xxxx` has nowhere to get the reader-facing handle from without this. Seat's
+    own declared label_field ("handle", ontology/schema.py) is exactly what should win —
+    same resolve_label rule tier /objects/{id} already uses, not a second labelling rule."""
+    seat = await actions.create_or_find_object("Seat", "seat:resolvetest", "test")
+    await actions.assert_property(seat, "handle", "Testhandle", "test", datetime.now(UTC), 0.9)
+    r = await client.post("/objects/resolve-canonicals",
+                          json={"canonicals": ["seat:resolvetest"]})
+    assert r.status_code == 200
+    resolved = r.json()["resolved"]
+    assert len(resolved) == 1
+    assert resolved[0]["canonical"] == "seat:resolvetest"
+    assert resolved[0]["uuid"] == str(seat)
+    assert resolved[0]["handle_or_name"] == "Testhandle"
+
+
+async def test_resolve_canonicals_unknown_canonical_comes_back_null_not_dropped(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/objects/resolve-canonicals",
+                          json={"canonicals": ["operator", "no-such:canonical"]})
+    assert r.status_code == 200
+    resolved = r.json()["resolved"]
+    assert resolved == [
+        {"canonical": "operator", "uuid": None, "handle_or_name": None},
+        {"canonical": "no-such:canonical", "uuid": None, "handle_or_name": None},
+    ]
+
+
+async def test_resolve_canonicals_preserves_request_order_and_duplicates(
+    client: httpx.AsyncClient, actions: Actions,
+) -> None:
+    a = await actions.create_or_find_object("Seat", "seat:resolveorder1", "test")
+    b = await actions.create_or_find_object("Seat", "seat:resolveorder2", "test")
+    await actions.assert_property(a, "handle", "First", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(b, "handle", "Second", "test", datetime.now(UTC), 0.9)
+    r = await client.post("/objects/resolve-canonicals", json={
+        "canonicals": ["seat:resolveorder2", "seat:resolveorder1", "seat:resolveorder2"],
+    })
+    assert r.status_code == 200
+    assert [x["handle_or_name"] for x in r.json()["resolved"]] == ["Second", "First", "Second"]
+
+
 async def test_list_cases_with_counts(client: httpx.AsyncClient, actions: Actions) -> None:
     cid = await _seed(actions)
     cases = (await client.get("/cases")).json()
