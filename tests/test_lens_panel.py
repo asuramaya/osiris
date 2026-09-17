@@ -165,6 +165,54 @@ def test_read_lens_state_never_throws_on_malformed_hash_json() -> None:
     assert "return null;" in body
 
 
+def test_lens_hash_round_trips_all_five_keys_symmetrically() -> None:
+    # Thoth mail 11981: hiddenNodeTypes was written to the hash but never restored on load --
+    # the write side and the read side had silently drifted apart. This locks the two
+    # functions' own key lists together so that kind of drift fails a test instead of a
+    # live tab: every key writeLensStateToHash serializes must be one applyLensStateFromHash
+    # reads back, and vice versa.
+    write_body = _SPACE_JS.split("function writeLensStateToHash()", 1)[1][:700]
+    apply_body = _SPACE_JS.split("function applyLensStateFromHash()", 1)[1][:700]
+    written_keys = {
+        "hiddenNodeTypes: [...hiddenNodeTypes].sort(),": "state.hiddenNodeTypes",
+        "hiddenEdgeClasses: [...hiddenEdgeClasses].sort(),": "state.hiddenEdgeClasses",
+        "hiddenEdgeTypes: [...hiddenEdgeTypes].sort(),": "state.hiddenEdgeTypes",
+        "hideCommunities: communitiesHiddenByLens,": "state.hideCommunities",
+        "hideHighDegree: highDegreeBadgesHiddenByLens,": "state.hideHighDegree",
+    }
+    for written, restored in written_keys.items():
+        assert written in write_body, f"written but never read back: {written}"
+        assert restored in apply_body, f"written but never read back: {restored}"
+
+
+def test_set_hidden_types_mutates_in_place_like_the_hash_restore_path_does() -> None:
+    # THE LENS PANEL hash-restore bug (mail 11981): the header taxonomy pills drive the same
+    # hiddenNodeTypes Set through setHiddenTypes, which used to reassign it wholesale
+    # (`hiddenNodeTypes = new Set(...)`) instead of mutating in place -- the one place this
+    # file broke its own applyLensStateFromHash/hiddenEdgeClasses/hiddenEdgeTypes convention.
+    body = _SPACE_JS.split("function setHiddenTypes(types)", 1)[1][:400]
+    assert "hiddenNodeTypes = new Set(types" not in body
+    assert "hiddenNodeTypes.clear();" in body
+    assert "for (const t of types || []) hiddenNodeTypes.add(t);" in body
+
+
+def test_hashchange_reapplies_lens_state_and_rebuilds_every_dependent_view() -> None:
+    # THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): navigating to the
+    # same page with a different #lens fragment is a same-document hash navigation -- no
+    # reload, so applyLensStateFromHash's own once-at-load call (above) never re-runs, and the
+    # new hash's state was silently ignored until the next manual toggle overwrote it with
+    # stale in-memory state. A hashchange listener must reapply the hash and rebuild
+    # everything a toggle already rebuilds: dimming, edge geometry (which also re-renders the
+    # legend's own checkboxes), label picking, and both lens gates.
+    body = _SPACE_JS.split('window.addEventListener("hashchange"', 1)[1][:400]
+    assert "applyLensStateFromHash();" in body
+    assert "applyDim();" in body
+    assert "buildEdgeLines(idToNode, edges);" in body
+    assert "scheduleLabelPick();" in body
+    assert "syncCommunityVisibility();" in body
+    assert "buildLandmarkBadges();" in body
+
+
 def test_lens_state_is_a_single_named_hash_param_not_the_whole_hash() -> None:
     # shares the hash with any other future hash consumer -- URLSearchParams over the hash
     # string, one param, never a bare `location.hash = ...` overwrite.

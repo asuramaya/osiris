@@ -1385,7 +1385,8 @@ export async function initSpace(container) {
   // node-type checkboxes (renderLegend, below) call this too, so both controls drive the
   // exact same aVisible flag rather than two independent mechanisms.
   function setHiddenTypes(types) {
-    hiddenNodeTypes = new Set(types || []);
+    hiddenNodeTypes.clear(); // in place, like hiddenEdgeClasses/hiddenEdgeTypes
+    for (const t of types || []) hiddenNodeTypes.add(t);
     applyDim();
     buildEdgeLines(idToNode, edges);
     scheduleLabelPick(); // review flaw #5: labels never re-picked on a filter change before
@@ -1492,6 +1493,22 @@ export async function initSpace(container) {
   fitToNodes(nodes);
   setStatus(`${nodes.length} objects, ${edges.length} edges`);
   levelBadge.textContent = "whole graph";
+
+  // THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): applyLensStateFromHash
+  // only ran once, at the top of this async function, on the assumption that a shared #lens
+  // link always means a full page load. It doesn't -- navigating to the same page with a
+  // different #lens fragment is a same-document hash navigation (no reload), so this whole
+  // function never re-runs and the new hash's state was silently ignored until the next
+  // manual toggle overwrote it with stale in-memory state. Listening for hashchange and
+  // re-running the same restore + rebuild a toggle already does closes that gap.
+  window.addEventListener("hashchange", () => {
+    applyLensStateFromHash();
+    applyDim();
+    buildEdgeLines(idToNode, edges);
+    scheduleLabelPick();
+    syncCommunityVisibility();
+    buildLandmarkBadges();
+  });
 
   // ---- deltas: GET /graph/stream/deltas is an SSE poll-diff over the outbox, keyed by
   // object id (not array index — see the module docstring). Applied live so the canvas
@@ -3498,6 +3515,7 @@ export async function initSpace(container) {
     get highDegreeBadgesHiddenByLens() { return highDegreeBadgesHiddenByLens; },
     get landmarkBadgeEntryCount() { return landmarkBadgeEntries.length; },
     get lensHashParam() { return new URLSearchParams(location.hash.replace(/^#/, "")).get(LENS_HASH_PARAM); },
+    get hiddenNodeTypes() { return [...hiddenNodeTypes]; },
     readLensStateFromHash, applyLensStateFromHash,
     get edgeSegmentsDrawn() { return edgeLines ? edgeLines.geometry.attributes.position.count / 2 : 0; },
     get ribbonSegmentsDrawn() { return ribbonLines ? ribbonLines.geometry.attributes.position.count / 2 : 0; },
