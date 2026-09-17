@@ -694,20 +694,19 @@ async def test_commits_to_agents_abstains_when_the_commit_predates_any_holder(
 
 # --- house_to_project (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY") --------------
 
-async def test_migrate_house_to_project_repairs_a_fabricated_house_on_apply(
+async def test_migrate_house_to_project_repairs_a_null_house_on_apply(
     actions: Actions,
 ) -> None:
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import ensure_seat
 
-    seat = await ensure_seat(actions, house="gm-h2p-fabricated", handle="GmH2pRepair",
-                             source="test")
+    seat = await ensure_seat(actions, house=None, handle="GmH2pRepair", source="test")
     await actions.create_or_find_object("SoftwareProject", "repo:gm-h2p-realproj", "test")
     await set_charter(actions, seat["seat_id"], ["gm-h2p-realproj"], actor="test")
 
     dry = await migrate_house_to_project(actions, actor="test", dry_run=True)
     entry = next(e for e in dry["entries"] if e["seat"] == seat["seat_id"])
-    assert entry["old_house"] == "gm-h2p-fabricated"
+    assert entry["old_house"] is None
     assert entry["new_project"] == "gm-h2p-realproj"
     assert entry["refused_why"] is None
     # dry run writes nothing
@@ -715,7 +714,7 @@ async def test_migrate_house_to_project_repairs_a_fabricated_house_on_apply(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
         "(SELECT id FROM objects WHERE canonical=$1) AND name='house' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", seat["seat_id"])
-    assert still == "gm-h2p-fabricated"
+    assert still is None
 
     out = await migrate_house_to_project(
         actions, actor="test", dry_run=False, because="test repair")
@@ -725,6 +724,40 @@ async def test_migrate_house_to_project_repairs_a_fabricated_house_on_apply(
         "(SELECT id FROM objects WHERE canonical=$1) AND name='house'", seat["seat_id"])
     assert len(rows) == 1
     assert rows[0]["v"] == "gm-h2p-realproj"
+
+
+async def test_migrate_house_to_project_refuses_a_stamped_house_that_disagrees(
+    actions: Actions,
+) -> None:
+    """w347 (Thoth mail 12153): a NON-NULL stamped house that disagrees with the
+    charter's own governed project is the house anchor's own carve-out — the door
+    refuses rather than overwriting a real value it has no standing to guess about."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house="gm-h2p-fabricated", handle="GmH2pDisagree",
+                             source="test")
+    await actions.create_or_find_object("SoftwareProject", "repo:gm-h2p-realproj", "test")
+    await set_charter(actions, seat["seat_id"], ["gm-h2p-realproj"], actor="test")
+
+    dry = await migrate_house_to_project(actions, actor="test", dry_run=True)
+    entry = next(e for e in dry["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["old_house"] == "gm-h2p-fabricated"
+    assert entry["new_project"] is None
+    assert entry["refused_why"] == (
+        "stamped house disagrees with charter: gm-h2p-fabricated vs gm-h2p-realproj")
+
+    out = await migrate_house_to_project(
+        actions, actor="test", dry_run=False, because="test refusal")
+    entry = next(e for e in out["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["refused_why"] == (
+        "stamped house disagrees with charter: gm-h2p-fabricated vs gm-h2p-realproj")
+    # never written
+    still = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND name='house' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", seat["seat_id"])
+    assert still == "gm-h2p-fabricated"
 
 
 async def test_migrate_house_to_project_reports_no_charter_without_guessing(

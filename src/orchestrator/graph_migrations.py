@@ -1035,8 +1035,13 @@ async def migrate_house_to_project(
     touches a seat whose charter governs EXACTLY ONE project, and stamps that.
     Every other shape is reported, never guessed: no charter at all (`refused_why:
     "no charter"`), a charter governing more than one project (`refused_why:
-    "ambiguous charter"`), or a seat whose stamped house ALREADY matches its
-    charter's own single governed project (skipped, not listed — nothing to repair).
+    "ambiguous charter"`), a seat whose stamped house ALREADY matches its charter's
+    own single governed project (skipped, not listed — nothing to repair), or a
+    seat whose stamped house is NON-NULL and disagrees with the charter's own
+    single governed project (`refused_why: "stamped house disagrees with charter:
+    <old> vs <new>"` — the house anchor's own carve-out, w347: a real value already
+    on the seat is a fact this door has no standing to overwrite; only a null house
+    is repaired here, a disagreement goes to the operator's own hand).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`.
     Idempotent: a repeat call finds every already-repaired seat's house matching its
@@ -1068,6 +1073,13 @@ async def migrate_house_to_project(
         new_project = governed[0]
         if house == new_project:
             continue  # already correct -- nothing to repair
+        if house is not None:
+            entries.append({
+                "seat": seat_id, "old_house": house, "new_project": None,
+                "refused_why": f"stamped house disagrees with charter: "
+                               f"{house} vs {new_project}",
+            })
+            continue
         if dry_run:
             entries.append({"seat": seat_id, "old_house": house,
                             "new_project": new_project, "refused_why": None})
