@@ -100,7 +100,10 @@ const Osiris = (() => {
     const demo = o.properties.some((p) => p.name === "demo" && String(p.value).toLowerCase() === "true");
     const title = o.name || o.canonical;
     const m = ty(o.type);
-    const facts = o.properties.filter((p) => !["name", "demo", "tag"].includes(p.name));
+    // WAVE 27, THE INSPECTOR: supersedes/superseded_by render as relationship rows now
+    // (loadRels, below), not a bare unclickable uuid string in the property grid.
+    const facts = o.properties.filter((p) =>
+      !["name", "demo", "tag", "supersedes", "superseded_by"].includes(p.name));
     const pv = facts.map(propRow).join("") || `<div class="o-muted" style="grid-column:1/4">No properties.</div>`;
     
     // Extract top provenance fact for the provenance badge
@@ -140,15 +143,43 @@ const Osiris = (() => {
   // The flat 80-row dump becomes `→ authored_by (80) ▸` — collapsed, expand on demand, and
   // "open as set" promotes the group into the center as a result set (a typed pivot).
   // `onOpenSet(type, dir, label)` renders that set; `onPick(id)` inspects one neighbour.
-  async function loadRels(el, id, onPick, onOpenSet) {
+  // `obj` (optional, the SAME object objectDetail() already rendered) carries the property-
+  // pair relationships below -- omitted, this degrades to the pre-WAVE-27 link-only walk.
+  //
+  // WAVE 27, THE INSPECTOR (Thoth mail 11754/11874): every new relationship type
+  // (recorded_by, owned_by, admitted_by, vendor_of, and committed_by once Sekhmet's lane
+  // lands) is a REAL link and already flows through the walk above unchanged -- no code
+  // needed there, by construction (driven by whatever edges actually exist on the wire,
+  // never a hardcoded type list, so committed_by appears the moment it starts being
+  // minted). `supersedes`/`superseded_by` are the one exception: declared as a LinkType at
+  // birth but never actually instantiated as a link row (ruling dd04d7dd, decision
+  // 5dea28e5, 0 rows ever) -- shipped 11 days later as a PROPERTY PAIR on the Decision
+  // objects themselves instead (record_decision(supersedes=...)). The graph walk above can
+  // never surface a property value, so it needs its own synthetic group, resolved by a
+  // second fetch (the pointer is a bare object id, no label attached).
+  const PROPERTY_REL_NAMES = ["supersedes", "superseded_by"];
+  async function loadRels(el, id, onPick, onOpenSet, obj) {
     const g = await fetch(`/objects/${id}/graph?hops=1`).then((r) => r.json());
     const lab = {}; g.nodes.forEach((n) => (lab[n.id] = n));
-    const groups = {};  // key: dir|type -> {dir, type, members:[{id,label,type}]}
+    const groups = {};  // key: dir|type -> {dir, type, members:[{id,label,type}], isProperty?}
     g.edges.filter((e) => e.source === id || e.target === id).forEach((e) => {
       const out = e.source === id, other = out ? e.target : e.source, dir = out ? "out" : "in";
       const k = `${dir}|${e.type}`;
       (groups[k] = groups[k] || { dir, type: e.type, members: [] }).members.push(lab[other] || { id: other, label: other, type: "?" });
     });
+    // live-caught duplicate (the LinkType's own "0 rows ever" comment has since gone stale
+    // for at least one real Decision -- a genuine `supersedes` link now coexists with the
+    // property pair, both naming the SAME target, "drawn twice"): a type real links already
+    // cover for this object is trusted fully instead, never duplicated by the synthetic row
+    // below.
+    const realTypes = new Set(Object.values(groups).map((gr) => gr.type));
+    for (const p of (obj && obj.properties) || []) {
+      if (!PROPERTY_REL_NAMES.includes(p.name) || !p.value || realTypes.has(p.name)) continue;
+      const targetId = String(p.value);
+      const k = `prop|${p.name}`;
+      (groups[k] = groups[k] || { dir: "out", type: p.name, members: [], isProperty: true })
+        .members.push({ id: targetId, label: targetId.slice(0, 8), type: "?" });
+    }
     const entries = Object.values(groups);
     if (!entries.length) { el.innerHTML = '<span class="o-faint">No links.</span>'; return; }
     el.innerHTML = entries
@@ -158,13 +189,18 @@ const Osiris = (() => {
           .map((m) => `<div class="o-rel" style="padding-left:18px"><a data-pick="${m.id}" style="cursor:pointer">${esc(m.label)}</a>
             <span class="o-faint">${esc(m.id).slice(0,8)}</span></div>`)
           .join("");
+        // a property-pair pointer is never a "set" -- exactly one target, no real link type
+        // to query against, so the control that promotes a real group to a result set is
+        // simply omitted rather than offering a dead click.
+        const openSet = gr.isProperty ? "" :
+          `<span class="o-openset" data-open="${i}" title="open these as a set">open as set</span>`;
         return `<div class="o-relgrp">
             <div class="o-relhdr" data-grp="${i}">
               <span class="o-faint">${arrow}</span>
               <span class="o-reltype">${esc(gr.type)}</span>
               <span class="o-faint">(${gr.members.length})</span>
               <span class="o-disc">▸</span>
-              <span class="o-openset" data-open="${i}" title="open these as a set">open as set</span>
+              ${openSet}
             </div>
             <div class="o-relbody" data-body="${i}" style="display:none">${rows}</div>
           </div>`;
@@ -184,6 +220,19 @@ const Osiris = (() => {
       const gr = entries[s.dataset.open];
       onOpenSet && onOpenSet(gr.type, gr.dir, `${gr.type} of this object`);
     }));
+    // resolve each property-pair pointer's real label asynchronously -- it starts as a bare
+    // id (no `g.nodes` entry exists for it, since it was never a link) and never blocks the
+    // rest of the panel, which already has real labels from the graph walk above.
+    for (const gr of entries) {
+      if (!gr.isProperty) continue;
+      for (const m of gr.members) {
+        fetch(`/objects/${m.id}`).then((r) => (r.ok ? r.json() : null)).then((resolved) => {
+          if (!resolved) return;
+          const a = el.querySelector(`[data-pick="${m.id}"]`);
+          if (a) a.textContent = resolved.name || resolved.canonical || m.id.slice(0, 8);
+        }).catch(() => {});
+      }
+    }
   }
 
   // ---- THE GENERIC RENDERER (P4/W1) ----------------------------------------

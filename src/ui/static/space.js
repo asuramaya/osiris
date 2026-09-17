@@ -3225,7 +3225,7 @@ export async function initSpace(container) {
     const relsEl = rightRail.querySelector("[data-rels]");
     if (relsEl) {
       try {
-        await Osiris.loadRels(relsEl, id, (pickId) => focusObject(pickId), () => {});
+        await Osiris.loadRels(relsEl, id, (pickId) => focusObject(pickId), () => {}, obj);
       } catch (err) {
         console.error("loadRels() failed for", id, err);
       }
