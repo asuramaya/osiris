@@ -65,9 +65,6 @@ from src.orchestrator.compositions import (
     save_composition,
     save_watch,
 )
-from src.orchestrator.compositions import (
-    create_room as _create_room,
-)
 from src.orchestrator.console import get_console, set_console
 from src.orchestrator.dossier import entity_dossier
 from src.orchestrator.federation import federated_query, promote, to_preview
@@ -291,36 +288,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         return [dict(r) for r in rows]
 
-    # --- rooms: the stance switcher (segmentation over the shared graph) ------
-    @app.get("/rooms")
-    async def list_rooms(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        """The Rooms (stances). Each carries how many cases + compositions it scopes — the
-        graph itself is never room-scoped, so resolution and search stay global."""
-        rows = await p.fetch(
-            "SELECT r.id, r.name, r.config, "
-            "  (SELECT count(*) FROM cases c "
-            "     WHERE c.room_id=r.id AND c.archived_at IS NULL) AS cases, "
-            "  (SELECT count(*) FROM compositions x WHERE x.room_id=r.id) AS compositions "
-            "FROM rooms r ORDER BY r.created_at"
-        )
-        return [
-            {"id": str(r["id"]), "name": r["name"], "config": _coerce_json(r["config"]) or {},
-             "cases": r["cases"], "compositions": r["compositions"]}
-            for r in rows
-        ]
-
-    @app.post("/rooms")
-    async def create_room_route(
-        body: RoomBody, p: asyncpg.Pool = Depends(get_pool)
-    ) -> dict[str, str]:
-        """Routed through orchestrator.compositions.create_room (Seshat's #203 console
-        grep, msg 6859) — this file's own module docstring claims "mutations stay in the
-        Actions layer... read-only plus a couple of analyst decisions", and this route
-        was an undeclared third mutation, inlining its own duplicate INSERT instead of
-        the one function every other room-creating caller (the MCP tool, the CLI) already
-        shares. Same SQL, now one copy."""
-        rid = await _create_room(p, body.name, body.config)
-        return {"id": str(rid), "name": body.name}
+    # ROOM'S REST SURFACE IS DELETED, NOT RENAMED (WAVE 28, ruling 70c001ec/decision
+    # a47a0c7f, Thoth dispatch 12310): GET/POST /rooms are gone, matching the MCP tools
+    # (create_room/list_rooms) and the composition() dispatcher's own `room` save-time
+    # parameter, both removed earlier this wave. UNTOUCHED, per the same ruling: the
+    # underlying orchestrator.compositions.create_room/list_rooms functions, the `rooms`
+    # table itself (migration 0070_room_retirement's own law — "REVERSIBLE, NOT A
+    # DELETE... stays as read-only history"), room_id columns, and the still-live
+    # `?room=` scoping on /cases and /compositions below (a READ filter over existing
+    # data, never a mint/list door — a different surface from the one retired here).
 
     @app.get("/search")
     async def knowledge_search(
@@ -2136,11 +2112,6 @@ class NewCaseBody(BaseModel):
     name: str
     budgets: dict[str, Any] | None = None
     room_id: uuid.UUID | None = None
-
-
-class RoomBody(BaseModel):
-    name: str
-    config: dict[str, Any] = {}
 
 
 class IntakeBody(BaseModel):

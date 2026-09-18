@@ -1983,9 +1983,16 @@ async def handoff_briefing(
 # and made itself obsolete"). The underlying orchestrator.compositions.create_room/
 # list_rooms functions and the `rooms` table itself are UNTOUCHED here — migration
 # 0070_room_retirement's own law is "REVERSIBLE, NOT A DELETE... the `rooms` table itself
-# is NOT dropped, it stays as read-only history" — this pass only removes the MCP doors
-# that could mint or list rooms going forward, matching the console/CLI surfaces that
-# already stopped exposing them.
+# is NOT dropped, it stays as read-only history" — this pass removes the MCP doors that
+# could mint or list rooms going forward, matching the console/CLI surfaces that already
+# stopped exposing them. A SEPARATE, LATER FOLLOW-UP (Thoth dispatch 12310, same wave)
+# removed the composition() dispatcher's own `room` save-time parameter and the /rooms
+# REST routes (src/api/app.py) — the door that could SCOPE a composition to a room at
+# save time, a different surface from this one. `resolve_room`/`save_composition`'s own
+# `room_id` parameter in orchestrator.compositions are likewise untouched by either pass;
+# `save_composition` already falls back to the 'engineer' room by name on a create with
+# no room_id at all (its own docstring, ruling 89e67c49), so removing the caller-supplied
+# path changes nothing about a composition's own visibility.
 
 
 # THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
@@ -2002,7 +2009,7 @@ COMPOSITION_INPUT_SCHEMA: dict[str, Any] = {
     "oneOf": [
         _dispatcher_action_schema({
             "action": _action_const("save"), "name": _s(), "spec": _obj_s(),
-            "kind": _s(), "room": _opt_s(),
+            "kind": _s(),
         }, ["action", "name", "spec"]),
         _dispatcher_action_schema({
             "action": _action_const("run"), "name": _s(), "subject": _opt_s(),
@@ -2017,7 +2024,7 @@ COMPOSITION_INPUT_SCHEMA: dict[str, Any] = {
 _HAND_BUILT_SCHEMAS["composition"] = COMPOSITION_INPUT_SCHEMA
 
 _COMPOSITION_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
-    "save": (["name", "spec", "kind", "room"], ["name", "spec"]),
+    "save": (["name", "spec", "kind"], ["name", "spec"]),
     "run": (["name", "subject", "fields", "take", "depth", "offset"], ["name"]),
     "list": ([], []),
 }
@@ -2026,7 +2033,7 @@ _COMPOSITION_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
 async def _composition_impl(
     action: str, *,
     name: str | None = None, spec: dict[str, Any] | None = None, kind: str = "lens",
-    room: str | None = None, subject: str | None = None, fields: list[str] | None = None,
+    subject: str | None = None, fields: list[str] | None = None,
     take: int | None = None, depth: int | None = None, offset: int | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any] | list[dict[str, Any]]:
@@ -2052,8 +2059,7 @@ async def _composition_impl(
     if action == "save":
         assert name is not None and spec is not None  # pre-dispatch validation guaranteed this
         pool = await _pool_get()
-        rid = await comp.resolve_room(pool, room)
-        cid = await comp.save_composition(pool, name, spec, kind, room_id=rid)
+        cid = await comp.save_composition(pool, name, spec, kind)
         return {"id": str(cid), "name": name}
     if action == "run":
         assert name is not None  # pre-dispatch validation guaranteed this
@@ -2075,7 +2081,7 @@ async def _composition_impl(
 @mcp.tool()
 async def composition(
     action: str, name: str | None = None, spec: dict[str, Any] | None = None,
-    kind: str = "lens", room: str | None = None, subject: str | None = None,
+    kind: str = "lens", subject: str | None = None,
     fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
     offset: int | None = None, ctx: Context | None = None,
 ) -> dict[str, Any] | list[dict[str, Any]]:
@@ -2084,22 +2090,22 @@ async def composition(
     the graph). See `describe('composition')` for the full per-action shape.
 
     ACTION TABLE — action: what it does (required params beyond action):
-      save: save a reusable query/lens (name, spec — kind defaults 'lens', room scopes
-        to a stance). `spec` is a small closed op-tree (no `join` — use intersect/
-        traverse instead; fuzzy matching is a Function): subject (the focus object);
-        select (object_type?, where=[{property,op,value}], op in eq|contains|
-        matches_all|lt|gt|present|absent); traverse (from, direction=both|out|in,
-        hops<=3); collect (from, properties, transform=country|lower); subtract/union/
-        intersect (over sets); aggregate (from, group_by<=3 dims, metric={type: count|
-        sum|avg|min|max|cardinality, field}); order (from, by, dir); take (from, n).
-        Worked examples: consult_canon('composition spec').
+      save: save a reusable query/lens (name, spec — kind defaults 'lens'). `spec` is a
+        small closed op-tree (no `join` — use intersect/traverse instead; fuzzy matching
+        is a Function): subject (the focus object); select (object_type?,
+        where=[{property,op,value}], op in eq|contains|matches_all|lt|gt|present|
+        absent); traverse (from, direction=both|out|in, hops<=3); collect (from,
+        properties, transform=country|lower); subtract/union/intersect (over sets);
+        aggregate (from, group_by<=3 dims, metric={type: count|sum|avg|min|max|
+        cardinality, field}); order (from, by, dir); take (from, n). Worked examples:
+        consult_canon('composition spec').
       run: run a saved composition, optionally against a subject object (UUID or name),
         AND light it up on the operator's live screen (name). `fields`/`take`/`depth`
         bound a large result at the source; `offset` pages past the first `take`.
       list: the saved compositions (lenses/watches) — the user's questions, as objects.
     """
     return await _composition_impl(
-        action, name=name, spec=spec, kind=kind, room=room, subject=subject,
+        action, name=name, spec=spec, kind=kind, subject=subject,
         fields=fields, take=take, depth=depth, offset=offset, ctx=ctx)
 
 
@@ -2109,12 +2115,12 @@ async def composition(
     "since": "task #202 composition dispatcher (msg 7073/7095)",
 })
 async def save_composition(
-    name: str, spec: dict[str, Any], kind: str = "lens", room: str | None = None
+    name: str, spec: dict[str, Any], kind: str = "lens"
 ) -> dict[str, str]:
     """DEPRECATED — hidden alias, still callable. Forwards to
     composition(action='save')."""
     return cast(dict[str, str],
-               await _composition_impl("save", name=name, spec=spec, kind=kind, room=room))
+               await _composition_impl("save", name=name, spec=spec, kind=kind))
 
 
 # --- the shared console (real-time Claude↔front sync) -----------------------
