@@ -1156,19 +1156,28 @@ async def migrate_holds_sandwich(
     THE EVIDENCE GATE (Thoth DM 12215/12245, off the live dry-run's own finding: five
     real sandwiches, not the ~two the diagnosis anticipated, one spanning six weeks —
     a bridge across that much time risks laundering a genuine vacancy into continuous
-    tenure). Every sandwich found now carries, in the receipt, its own PHANTOM WINDOW
-    (`w2.first_seen` -> `w2.valid_until` — the actual gap the real holder's tenure was
-    split across, distinct from the outer `window` field which spans the whole
-    real-holder-claimed interval either side of it) and GAP EVIDENCE: whether the real
-    holder (the shared `w1`/`w3` agent id) has any messages sent, commits committed_by
-    them, or Decisions/Threads they authored, timestamped inside that phantom window —
-    proof the seat was actively BEING WORKED, not silently vacant under a name that
-    happened to resume later. A sandwich is REFUSED (reported, never written, even
-    under `--apply`) when either gate fails: zero gap evidence ("vacancy, not a cut"),
-    or a phantom window longer than `_NEAR_INSTANT_MAX_SECONDS` (not a brief blip by
-    any reading, whatever the evidence says). `only_seat` (a seat's `seat:<id>` or its
-    bare handle) narrows the whole scan to one seat — refused with an `error` receipt
-    if it does not resolve to exactly one active seat.
+    tenure). Every sandwich found now carries, in the receipt, TWO DISTINCT windows —
+    conflating them was this gate's own first bug (Thoth DM 12288, w352's live probe: a
+    real specimen on Thoth's own seat had a 174ms phantom immediately followed by a
+    further ~43-MINUTE stretch with NO holds row at all before the real holder's next
+    row began, so gap evidence checked against the phantom's own window alone found
+    nothing even though the 19 commits from the original diagnosis sat inside that wider
+    stretch):
+      - `phantom_window`/`phantom_duration_seconds` — the middle row's OWN tenure
+        (`w2.first_seen` -> `w2.valid_until`), how long the bind-before-spawn mint sat
+        there before something superseded it. Gates on `_NEAR_INSTANT_MAX_SECONDS`.
+      - `gap_evidence` — activity from the real holder (the shared `w1`/`w3` agent id:
+        messages sent, commits committed_by them, Decisions/Threads they authored)
+        timestamped ANYWHERE BETWEEN THE TWO REAL-HOLDER ROWS (`w1.valid_until` ->
+        `w3.first_seen`) — which is NOT always the same interval as the phantom's own
+        window, since the holds chain's rows need not be back-to-back. This is the span
+        Thoth's own DM literally names: "between the two rows".
+    A sandwich is REFUSED (reported, never written, even under `--apply`) when either
+    gate fails: zero gap evidence ("vacancy, not a cut"), or a phantom window longer
+    than `_NEAR_INSTANT_MAX_SECONDS` (not a brief blip by any reading, whatever the
+    evidence says). `only_seat` (a seat's `seat:<id>` or its bare handle) narrows the
+    whole scan to one seat — refused with an `error` receipt if it does not resolve to
+    exactly one active seat.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`, and writes
     only the sandwiches that PASS both gates — a refused sandwich stays listed, with
@@ -1228,19 +1237,33 @@ async def migrate_holds_sandwich(
                               w3["valid_until"].isoformat() if w3["valid_until"] else None],
                     "_w1_id": w1["id"], "_w2_id": w2["id"], "_w3_id": w3["id"],
                     "_w3_valid_until": w3["valid_until"],
-                    "_gap_start": w2["first_seen"], "_gap_end": w2["valid_until"],
+                    # PHANTOM WINDOW: the bookkeeping row's own tenure -- how long the
+                    # bind-before-spawn mint sat there before something superseded it.
+                    "_phantom_start": w2["first_seen"], "_phantom_end": w2["valid_until"],
+                    # THE REAL GAP: between the two REAL-HOLDER rows, not the phantom's
+                    # own window -- these are NOT always the same instant. The holds
+                    # chain's own rows are consecutive by construction (this migration's
+                    # query), but w2.valid_until need not equal w3.first_seen: a live
+                    # specimen (Thoth's own seat, DM 12288) showed a phantom lasting
+                    # 174ms immediately followed by a further ~43-MINUTE stretch with NO
+                    # holds row at all before the real holder's next row begins. Evidence
+                    # of activity belongs to THIS wider span -- "between the two rows" is
+                    # literally w1's end to w3's start, whatever sits in between.
+                    "_gap_start": w1["valid_until"], "_gap_end": w3["first_seen"],
                 })
                 i += 3  # the whole sandwich is consumed — never re-match its own pieces
             else:
                 i += 1
 
     for s in sandwiches:
+        phantom_start, phantom_end = s.pop("_phantom_start"), s.pop("_phantom_end")
         gap_start, gap_end = s.pop("_gap_start"), s.pop("_gap_end")
-        duration_s = (gap_end - gap_start).total_seconds() if gap_end else None
+        duration_s = (phantom_end - phantom_start).total_seconds() if phantom_end else None
         near_instant = duration_s is not None and duration_s <= _NEAR_INSTANT_MAX_SECONDS
         evidence = await _gap_activity(
             pool, agent=s["real_holder"], start=gap_start, end=gap_end)
-        s["phantom_window"] = [gap_start.isoformat(), gap_end.isoformat() if gap_end else None]
+        s["phantom_window"] = [phantom_start.isoformat(),
+                               phantom_end.isoformat() if phantom_end else None]
         s["phantom_duration_seconds"] = duration_s
         s["gap_evidence"] = evidence
         refused_why = []
