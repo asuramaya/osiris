@@ -29,6 +29,9 @@ dependencies = [
     # already resolved transitively (model2vec) at this exact version
     "datastar-py>=1.0.2",  # THE INBOX — SSE/patch helpers matching vendored datastar-core.js v1.0.2
     "python-igraph>=1.0.0",
+    "scipy>=1.18.1",       # THE DECLUMP REWRITE (operator's word 2026-09-18) — cKDTree
+                           # pair search replaces graph_layout._declump's own spatial-hash
+                           # grid; installed version 1.18.1
 ]
 
 [dependency-groups]
@@ -83,7 +86,7 @@ module = ["arq.*", "playwright.*"]   # partial/untyped public API at the worker/
 disallow_untyped_calls = false
 
 [[tool.mypy.overrides]]
-module = ["keyring.*", "reportlab.*", "phonenumbers.*", "igraph.*"]   # no bundled stubs
+module = ["keyring.*", "reportlab.*", "phonenumbers.*", "igraph.*", "scipy.*"]   # no bundled stubs
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
