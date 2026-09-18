@@ -197,10 +197,11 @@ async def test_tool_traffic_reports_both_cuts_persisted_and_live_plus_blind_spot
     # disuse, confessed here so the next reader of tool_traffic() sees it directly.
     assert any("THE CLI ITSELF" in s and "unmerge" in s for s in out["blind_spots"])
     # #203 (Seshat, 2026-09-03): the console (src/api/app.py) also bypasses this tool for
-    # get_console, AND independently duplicates create_room's own SQL rather than calling
-    # it — both confessed here, not left to a zero reading alone.
+    # get_console — confessed here, not left to a zero reading alone. (The sibling
+    # create_room duplicate-SQL confession this line used to pair with was retired
+    # alongside the MCP tool itself, WAVE 28 ROOM deletion — app.py now calls the one
+    # shared orchestrator function, no duplicate left to confess.)
     assert any("get_console" in s and "app.py" in s for s in out["blind_spots"])
-    assert any("duplicate implementation" in s and "create_room" in s for s in out["blind_spots"])
     assert "MCP tool calls" in out["measures"]
 
 

@@ -929,7 +929,14 @@ def _tool_chars(t: Any) -> int:
 # 88 -> 89 (2026-09-15, Khnum, Thoth mail 11047, ruling d7d55257): physics_layout_
 # migrate — see TOOL_CONTRACT_CEILING_CHARS's own changelog entry just above for the
 # full reason.
-TOOL_CONTRACT_EXPECTED_COUNT = 89
+# 89 -> 88 (2026-09-17, Sekhmet, WAVE 28 ROOM deletion, ruling 70c001ec/decision
+# a47a0c7f): create_room + list_rooms removed outright. create_room already carried
+# meta={"deprecated": True} since task #199 lane 2 (zero MCP traffic); ROOM is a
+# retired concept (decision 31717ca7) with no CLI/daemon bypass calling either tool.
+# The underlying orchestrator.compositions.create_room/list_rooms functions and the
+# `rooms` table are untouched — migration 0070_room_retirement's own law keeps the
+# table as read-only history, never dropped.
+TOOL_CONTRACT_EXPECTED_COUNT = 88
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided

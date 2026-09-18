@@ -348,12 +348,8 @@ _TOOL_STATS_BLIND_SPOTS = (
     "2026-09-03): src/api/app.py imports and calls orchestrator.console.get_console "
     "directly, bypassing this MCP tool entirely — its own zero-MCP-traffic reading "
     "already misled one retirement pass into hiding it as dead (decision b49a844f) "
-    "before that seat's own live-test run caught it. Separately, and worse: the "
-    "console's POST /rooms handler does NOT call this MCP tool's create_room at all — "
-    "it inlines the exact same SQL as orchestrator.compositions.create_room verbatim, a "
-    "genuine duplicate implementation (not a bypass of one canonical function, two "
-    "independent copies that can silently drift), and it contradicts this daemon's own "
-    "service file (deploy/user/osiris-console.service: 'never a write path')",
+    "before that seat's own live-test run caught it, and it contradicts this daemon's "
+    "own service file (deploy/user/osiris-console.service: 'never a write path')",
     "osiris-worker (arq cron: drain_cascade/evaluate_watch/sweep_doors/trigger_mail) — "
     "not counted, calls orchestrator functions directly",
     "osiris-pulse (heartbeat) — not counted, calls orchestrator functions directly",
@@ -612,7 +608,7 @@ def _seam_pct_sync(job: str, model_raw: str | None, window_hint: int | None) -> 
 
 def _seam_note(pct: int | None, whisper_pct: int) -> str | None:
     """The one line, tiered: seam-soon at the whisper threshold, write-back-NOW at the
-    house alarm (context_lens.ALARM_PCT — one authority, never a second constant)."""
+    fleet's own alarm (context_lens.ALARM_PCT — one authority, never a second constant)."""
     if pct is None or not whisper_pct or pct < whisper_pct:
         return None
     from src.orchestrator.context_lens import ALARM_PCT
@@ -659,8 +655,9 @@ def _seam_note_once(agent_id: str, pct: int | None, whisper_pct: int) -> str | N
     """`_seam_note`, debounced to fire once per tier-crossing rather than once per call.
     Stays silent on every later call inside the SAME band; re-arms the moment `pct` drops
     back below `whisper_pct` (a real write-back/compaction happened) or steps UP from
-    'seam' into 'alarm' (a real escalation, worth exactly one more note — the house alarm,
-    context_lens.ALARM_PCT, is one authority; this never re-derives its own threshold)."""
+    'seam' into 'alarm' (a real escalation, worth exactly one more note — the fleet's own
+    alarm, context_lens.ALARM_PCT, is one authority; this never re-derives its own
+    threshold)."""
     from src.orchestrator.context_lens import ALARM_PCT
 
     band = _seam_band(pct, whisper_pct, ALARM_PCT)
@@ -1007,7 +1004,7 @@ def _infer_harness(cwd: str | None, job_dir: str | None) -> str:
     e7f173a6, Thoth's ruling msg 8544) — read off the anchor's own SHAPE, never asked
     for or assumed: a job_dir under `~/.claude/jobs/` is Claude Code's own convention
     (CLAUDE_JOB_DIR); a DSH workspace anchors under `~/.dsh/`; a crush session anchors
-    under a project's (or seat office's) own `.crush/` data dir. Checks `job_dir` first
+    under a project's (or seat directory's) own `.crush/` data dir. Checks `job_dir` first
     (the more durable anchor when both are given), then `cwd`. Ambiguous or missing —
     neither string names a known harness's own directory shape — falls back to the
     box's own resolved adapter (`resolve_process_adapter().name`), the SAME "declared,
@@ -1146,7 +1143,7 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     """IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed, correcting mount-guard #6's
     original refusal): osiris orients from the SEAT (anchor→holds→seat), never from cwd — the
     whole point of a seat is that where a session happens to be sitting doesn't matter. For a
-    SEATED session, project is the SEAT'S OWN derived house — UNCONDITIONALLY, overriding
+    SEATED session, project is the SEAT'S OWN derived value — UNCONDITIONALLY, overriding
     whatever cwd produced, not merely filling in a gap when cwd came up empty. Deliberately
     NOT house_of(agent_id): that reads the AGENT's own project stamp, exactly what a
     transient bad mount can pollute (Thoth's own case) — trusting it here would let a
@@ -1158,7 +1155,7 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     CALLED BEFORE register_agent, NOT AFTER (thread 178e5a41, Thoth dispatch 6713/6724 —
     this docstring used to say the opposite and that was the bug: register_agent's own
     project mint read `ident.project` two lines before this correction ran, so a seated
-    session with a non-project-shaped cwd — the bare office slug, the canonical case —
+    session with a non-project-shaped cwd — the bare seat-directory slug, the canonical case —
     minted a phantom SoftwareProject off the pre-correction guess before anyone fixed it).
     SAFE BEFORE THE MINT FOR EVERY ARRIVAL, proven by a schema constraint: `links.from_id`/
     `to_id` are `NOT NULL REFERENCES objects(id)`, so a `holds` link cannot exist unless its
@@ -1358,7 +1355,7 @@ async def _stamp_read_ids(
     door, for every real object id a read tool is about to hand back. A no-op when
     nobody is mounted (`ident is None`) — an unattributed read has no session for a
     later write to be dependent ON. Never lets a stamping failure break the read tool
-    it rides along on (the same fails-open discipline this house already applies to
+    it rides along on (the same fails-open discipline this codebase already applies to
     every other side channel that must never become the thing it's watching, e.g.
     trigger.py's own `_manager_windows` docstring) — the caller's real result is
     already decided by the time this runs."""
@@ -1390,8 +1387,8 @@ async def _actor_for(
     (live repro, 2026-07-10). The stamp is harness truth (payload agent_id, present only
     inside a sidechain; the hook strips it from main-session calls, so nobody masquerades
     DOWN either). First touch registers the child — spawned_by the mounted parent, acts_for
-    its principal — under the same keying the swarm miner uses, so disk reconstruction
-    converges on the same object."""
+    its principal — under the same keying the fleet's own session-miner uses, so disk
+    reconstruction converges on the same object."""
     from src.orchestrator import lineage
 
     rid = lineage.normalize_spawn_id(subagent_id)
@@ -1862,8 +1859,8 @@ async def dossier(object_ref: str, want_relationships: bool = False,
     (task #64, ruling ad19a779).
 
     `want_relationships=True` returns every relationship row; default is a per-type
-    count plus the first 10 (a busy hub's relationships were measured at 76% of this
-    verb's own bytes/call, decision a065171f)."""
+    count plus the first 10 (a busy high-degree object's relationships were measured at
+    76% of this verb's own bytes/call, decision a065171f)."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if not oid:
@@ -1973,26 +1970,16 @@ async def handoff_briefing(
 
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
 
-@mcp.tool(meta={
-    "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
-})
-async def create_room(name: str) -> dict[str, str]:
-    """Create a ROOM — a saved STANCE the operator switches between (journalist / broker /
-    engineer). A Room scopes WORK ARTIFACTS (cases + compositions) to a beat, never the
-    shared entity graph. The FDE move: author a room from a sentence ("set up a Harris
-    foreclosure desk"), then save_composition(..., room="<name>") to stock it."""
-    pool = await _pool_get()
-    rid = await comp.create_room(pool, name)
-    return {"id": str(rid), "name": name}
-
-
-@mcp.tool()
-async def list_rooms() -> list[dict[str, Any]]:
-    """The Rooms (stances) the operator can switch between."""
-    pool = await _pool_get()
-    return await comp.list_rooms(pool)
+# ROOM IS DELETED, NOT RENAMED (WAVE 28, ruling 70c001ec/decision a47a0c7f): create_room
+# had already been carrying meta={"deprecated": True} since task #199 lane 2 (zero MCP
+# traffic, no CLI/daemon/slash bypass found) — this MCP surface is now removed outright,
+# alongside list_rooms (the same retired concept, decision 31717ca7: "scope really died
+# and made itself obsolete"). The underlying orchestrator.compositions.create_room/
+# list_rooms functions and the `rooms` table itself are UNTOUCHED here — migration
+# 0070_room_retirement's own law is "REVERSIBLE, NOT A DELETE... the `rooms` table itself
+# is NOT dropped, it stays as read-only history" — this pass only removes the MCP doors
+# that could mint or list rooms going forward, matching the console/CLI surfaces that
+# already stopped exposing them.
 
 
 # THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
@@ -3790,8 +3777,8 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — an office ceremony is a mind's act, and the "
-                             "graph must know whose", "why": _anchorless(ctx)}
+            return {"error": "mount first — a seat-directory ceremony is a mind's act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.offices import establish_office as _establish
         return await _establish(Actions(await _pool_get()), seat_or_agent=target,
                                 actor=ident.agent_id)
@@ -4710,7 +4697,7 @@ async def graph_search(
     """GRAPH-AWARE search -- same lexical/semantic engine as search() but scoped
     to a subgraph. project narrows results to one project. lineage scopes to
     a specific agent lineage (e.g. 'ad1a1cb0'). max_depth > 0 expands results
-    to include the N-hop neighborhood around each hit (linked objects).
+    to include the N-hop expansion around each hit (linked objects).
     Without scope params, behaves exactly like search()."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
@@ -8775,12 +8762,12 @@ _SEAT_MANUAL: dict[str, str] = {
         "invoking this on its own behalf — if a human runs this with no mounted "
         "session behind it, say so and point at `new` instead."),
     "mint": (
-        "mint <handle> --manager <seat> [--project] [--house] [--model] — found a "
+        "mint <handle> --manager <seat> [--project] [--model] — found a "
         "MANAGED worker seat under an existing one. Composes the `mint_seat` MCP tool "
         "(`handle`, `project`, `model`, `house` — no `manager` param on the tool "
         "itself: an agent caller lets it infer the manager from its own held seat; an "
         "operator caller supplies `--manager` explicitly or, if omitted, infers it the "
-        "same way `osiris mint-seat` does — the sole seat in the target house — and "
+        "same way `osiris mint-seat` does — the sole seat in the target project — and "
         "refuses rather than guesses among several)."),
     "launch": (
         "launch <handle> [--model] — give a seat a body, ALWAYS a fresh mint, never a "
