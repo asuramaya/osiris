@@ -1925,7 +1925,7 @@ async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
 
 async def cmd_composition(
     action: str, name: str | None = None, *, spec: str | None = None, kind: str = "lens",
-    room: str | None = None, subject: str | None = None, fields: list[str] | None = None,
+    subject: str | None = None, fields: list[str] | None = None,
     take: int | None = None, depth: int | None = None, offset: int | None = None,
     actor: str = _CONSOLE_ACTOR, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
@@ -1995,7 +1995,7 @@ async def cmd_composition(
 
     url = await _mcp_url()
     result = await call_mcp_tool(url, "composition", {
-        "action": action, "name": name, "spec": parsed_spec, "kind": kind, "room": room,
+        "action": action, "name": name, "spec": parsed_spec, "kind": kind,
         "subject": subject, "fields": fields, "take": take, "depth": depth, "offset": offset,
     })
     if isinstance(result, str):

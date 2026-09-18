@@ -156,9 +156,16 @@ async def test_rooms_scope_artifacts_not_the_graph(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
     """W2: a Room scopes the WORK (cases + compositions) to a stance, but never the graph.
-    Switching rooms re-scopes /compositions and /cases; the objects stay global."""
-    eng = (await client.post("/rooms", json={"name": "engineer"})).json()["id"]
-    jour = (await client.post("/rooms", json={"name": "journalist"})).json()["id"]
+    Switching rooms re-scopes /compositions and /cases; the objects stay global.
+
+    GET/POST /rooms are gone (WAVE 28, Thoth dispatch 12310) -- rooms are minted here
+    through orchestrator.compositions.create_room/list_rooms directly, the same
+    underlying functions the retired REST routes used to call, per ruling 70c001ec/
+    decision a47a0c7f's own "the rooms table stays as read-only history" law."""
+    from src.orchestrator.compositions import create_room, list_rooms
+
+    eng = str(await create_room(actions.pool, "engineer"))
+    jour = str(await create_room(actions.pool, "journalist"))
     # a composition + a case in each stance
     await client.post("/compositions", json={
         "name": "commits", "spec": {"op": "select", "object_type": "Commit"}, "room_id": eng})
@@ -176,11 +183,13 @@ async def test_rooms_scope_artifacts_not_the_graph(
     # the All view (no room) sees both
     assert {"commits", "screen"} <= {c["name"] for c in (await client.get("/compositions")).json()}
 
-    # /cases scopes too; /rooms carries the counts
+    # /cases scopes too. The per-room compositions/cases COUNT enrichment lived only in
+    # the now-retired GET /rooms handler (a presentation join, not orchestrator logic) --
+    # list_rooms itself just names the rooms; the counts are already proven above via
+    # eng_comps/jour_comps and the /cases assertions themselves.
     assert [c["name"] for c in (await client.get(f"/cases?room={eng}")).json()] == ["self-track"]
     assert (await client.get(f"/cases?room={jour}")).json() == []
-    rooms = {r["name"]: r for r in (await client.get("/rooms")).json()}
-    assert rooms["engineer"]["compositions"] == 1 and rooms["engineer"]["cases"] == 1
+    assert {"engineer", "journalist"} <= {r["name"] for r in await list_rooms(actions.pool)}
 
     # the GRAPH is never room-scoped: a global search sees the object from any stance
     found = (await client.get("/objects", params={"q": "commit:z"})).json()
@@ -188,8 +197,11 @@ async def test_rooms_scope_artifacts_not_the_graph(
 
 
 async def test_claude_authors_a_room_from_a_sentence(actions: Actions) -> None:
-    """W5: the FDE move — create_room + save_composition(room=) is all Claude needs to mint
-    a stance from a sentence ('set up a compliance desk'). resolve_room takes name or id."""
+    """W5: orchestrator.compositions.create_room + save_composition(room_id=) still mint
+    a stance from a sentence ('set up a compliance desk') and scope a composition to it —
+    the MCP composition() dispatcher's own `room` save-time parameter is gone (WAVE 28,
+    Thoth dispatch 12310), this is the underlying door it used to call, still live per
+    ruling 70c001ec/decision a47a0c7f. resolve_room takes name or id."""
     from src.orchestrator.compositions import (
         create_room,
         list_compositions,
