@@ -47,7 +47,7 @@ async def test_seat_schema_is_a_well_formed_discriminated_union() -> None:
     jsonschema.Draft7Validator.check_schema(schema)  # raises SchemaError if malformed
     assert schema["type"] == "object"
     branches = schema["oneOf"]
-    assert len(branches) == 35, "one branch per seat action — update this count and " \
+    assert len(branches) == 37, "one branch per seat action — update this count and " \
         "the ACTION TABLE docstring together if the action set changes"
     actions = {b["properties"]["action"]["const"] for b in branches}
     assert len(actions) == len(branches), "two branches sharing one action const would " \

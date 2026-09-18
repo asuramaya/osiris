@@ -348,12 +348,8 @@ _TOOL_STATS_BLIND_SPOTS = (
     "2026-09-03): src/api/app.py imports and calls orchestrator.console.get_console "
     "directly, bypassing this MCP tool entirely — its own zero-MCP-traffic reading "
     "already misled one retirement pass into hiding it as dead (decision b49a844f) "
-    "before that seat's own live-test run caught it. Separately, and worse: the "
-    "console's POST /rooms handler does NOT call this MCP tool's create_room at all — "
-    "it inlines the exact same SQL as orchestrator.compositions.create_room verbatim, a "
-    "genuine duplicate implementation (not a bypass of one canonical function, two "
-    "independent copies that can silently drift), and it contradicts this daemon's own "
-    "service file (deploy/user/osiris-console.service: 'never a write path')",
+    "before that seat's own live-test run caught it, and it contradicts this daemon's "
+    "own service file (deploy/user/osiris-console.service: 'never a write path')",
     "osiris-worker (arq cron: drain_cascade/evaluate_watch/sweep_doors/trigger_mail) — "
     "not counted, calls orchestrator functions directly",
     "osiris-pulse (heartbeat) — not counted, calls orchestrator functions directly",
@@ -612,7 +608,7 @@ def _seam_pct_sync(job: str, model_raw: str | None, window_hint: int | None) -> 
 
 def _seam_note(pct: int | None, whisper_pct: int) -> str | None:
     """The one line, tiered: seam-soon at the whisper threshold, write-back-NOW at the
-    house alarm (context_lens.ALARM_PCT — one authority, never a second constant)."""
+    fleet's own alarm (context_lens.ALARM_PCT — one authority, never a second constant)."""
     if pct is None or not whisper_pct or pct < whisper_pct:
         return None
     from src.orchestrator.context_lens import ALARM_PCT
@@ -659,8 +655,9 @@ def _seam_note_once(agent_id: str, pct: int | None, whisper_pct: int) -> str | N
     """`_seam_note`, debounced to fire once per tier-crossing rather than once per call.
     Stays silent on every later call inside the SAME band; re-arms the moment `pct` drops
     back below `whisper_pct` (a real write-back/compaction happened) or steps UP from
-    'seam' into 'alarm' (a real escalation, worth exactly one more note — the house alarm,
-    context_lens.ALARM_PCT, is one authority; this never re-derives its own threshold)."""
+    'seam' into 'alarm' (a real escalation, worth exactly one more note — the fleet's own
+    alarm, context_lens.ALARM_PCT, is one authority; this never re-derives its own
+    threshold)."""
     from src.orchestrator.context_lens import ALARM_PCT
 
     band = _seam_band(pct, whisper_pct, ALARM_PCT)
@@ -1007,7 +1004,7 @@ def _infer_harness(cwd: str | None, job_dir: str | None) -> str:
     e7f173a6, Thoth's ruling msg 8544) — read off the anchor's own SHAPE, never asked
     for or assumed: a job_dir under `~/.claude/jobs/` is Claude Code's own convention
     (CLAUDE_JOB_DIR); a DSH workspace anchors under `~/.dsh/`; a crush session anchors
-    under a project's (or seat office's) own `.crush/` data dir. Checks `job_dir` first
+    under a project's (or seat directory's) own `.crush/` data dir. Checks `job_dir` first
     (the more durable anchor when both are given), then `cwd`. Ambiguous or missing —
     neither string names a known harness's own directory shape — falls back to the
     box's own resolved adapter (`resolve_process_adapter().name`), the SAME "declared,
@@ -1146,7 +1143,7 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     """IDENTITY IS LOCATION-INDEPENDENT (operator ruling 577988ed, correcting mount-guard #6's
     original refusal): osiris orients from the SEAT (anchor→holds→seat), never from cwd — the
     whole point of a seat is that where a session happens to be sitting doesn't matter. For a
-    SEATED session, project is the SEAT'S OWN derived house — UNCONDITIONALLY, overriding
+    SEATED session, project is the SEAT'S OWN derived value — UNCONDITIONALLY, overriding
     whatever cwd produced, not merely filling in a gap when cwd came up empty. Deliberately
     NOT house_of(agent_id): that reads the AGENT's own project stamp, exactly what a
     transient bad mount can pollute (Thoth's own case) — trusting it here would let a
@@ -1158,7 +1155,7 @@ async def _resolve_project_seat_first(pool: asyncpg.Pool, ident: AgentIdentity) 
     CALLED BEFORE register_agent, NOT AFTER (thread 178e5a41, Thoth dispatch 6713/6724 —
     this docstring used to say the opposite and that was the bug: register_agent's own
     project mint read `ident.project` two lines before this correction ran, so a seated
-    session with a non-project-shaped cwd — the bare office slug, the canonical case —
+    session with a non-project-shaped cwd — the bare seat-directory slug, the canonical case —
     minted a phantom SoftwareProject off the pre-correction guess before anyone fixed it).
     SAFE BEFORE THE MINT FOR EVERY ARRIVAL, proven by a schema constraint: `links.from_id`/
     `to_id` are `NOT NULL REFERENCES objects(id)`, so a `holds` link cannot exist unless its
@@ -1358,7 +1355,7 @@ async def _stamp_read_ids(
     door, for every real object id a read tool is about to hand back. A no-op when
     nobody is mounted (`ident is None`) — an unattributed read has no session for a
     later write to be dependent ON. Never lets a stamping failure break the read tool
-    it rides along on (the same fails-open discipline this house already applies to
+    it rides along on (the same fails-open discipline this codebase already applies to
     every other side channel that must never become the thing it's watching, e.g.
     trigger.py's own `_manager_windows` docstring) — the caller's real result is
     already decided by the time this runs."""
@@ -1390,8 +1387,8 @@ async def _actor_for(
     (live repro, 2026-07-10). The stamp is harness truth (payload agent_id, present only
     inside a sidechain; the hook strips it from main-session calls, so nobody masquerades
     DOWN either). First touch registers the child — spawned_by the mounted parent, acts_for
-    its principal — under the same keying the swarm miner uses, so disk reconstruction
-    converges on the same object."""
+    its principal — under the same keying the fleet's own session-miner uses, so disk
+    reconstruction converges on the same object."""
     from src.orchestrator import lineage
 
     rid = lineage.normalize_spawn_id(subagent_id)
@@ -1636,6 +1633,12 @@ async def describe(table: str) -> dict[str, Any]:
                 "hint": "describe('seat:<verb>') for one verb's full text"}
     if table.startswith("seat:"):
         verb = table.split(":", 1)[1]
+        # correct-agent-house -> correct-agent-project (ONE TAXONOMY, ruling
+        # 52a59652/70c001ec): the CLI's own `aliases=["correct-agent-house"]` on its
+        # `correct-agent-project` subparser means `args.command` can still read either
+        # spelling verbatim -- this mirrors that so the deprecated spelling still
+        # resolves to the one manual entry, never a second copy.
+        verb = {"correct-agent-house": "correct-agent-project"}.get(verb, verb)
         text = _SEAT_MANUAL.get(verb)
         return {"verb": verb, "text": text} if text else {"exists": False, "verb": verb}
     return await describe_table(await _pool_get(), table)
@@ -1862,8 +1865,8 @@ async def dossier(object_ref: str, want_relationships: bool = False,
     (task #64, ruling ad19a779).
 
     `want_relationships=True` returns every relationship row; default is a per-type
-    count plus the first 10 (a busy hub's relationships were measured at 76% of this
-    verb's own bytes/call, decision a065171f)."""
+    count plus the first 10 (a busy high-degree object's relationships were measured at
+    76% of this verb's own bytes/call, decision a065171f)."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if not oid:
@@ -1973,26 +1976,16 @@ async def handoff_briefing(
 
 # --- the composer: author/run/list compositions (the front end as a primitive) ---
 
-@mcp.tool(meta={
-    "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
-})
-async def create_room(name: str) -> dict[str, str]:
-    """Create a ROOM — a saved STANCE the operator switches between (journalist / broker /
-    engineer). A Room scopes WORK ARTIFACTS (cases + compositions) to a beat, never the
-    shared entity graph. The FDE move: author a room from a sentence ("set up a Harris
-    foreclosure desk"), then save_composition(..., room="<name>") to stock it."""
-    pool = await _pool_get()
-    rid = await comp.create_room(pool, name)
-    return {"id": str(rid), "name": name}
-
-
-@mcp.tool()
-async def list_rooms() -> list[dict[str, Any]]:
-    """The Rooms (stances) the operator can switch between."""
-    pool = await _pool_get()
-    return await comp.list_rooms(pool)
+# ROOM IS DELETED, NOT RENAMED (WAVE 28, ruling 70c001ec/decision a47a0c7f): create_room
+# had already been carrying meta={"deprecated": True} since task #199 lane 2 (zero MCP
+# traffic, no CLI/daemon/slash bypass found) — this MCP surface is now removed outright,
+# alongside list_rooms (the same retired concept, decision 31717ca7: "scope really died
+# and made itself obsolete"). The underlying orchestrator.compositions.create_room/
+# list_rooms functions and the `rooms` table itself are UNTOUCHED here — migration
+# 0070_room_retirement's own law is "REVERSIBLE, NOT A DELETE... the `rooms` table itself
+# is NOT dropped, it stays as read-only history" — this pass only removes the MCP doors
+# that could mint or list rooms going forward, matching the console/CLI surfaces that
+# already stopped exposing them.
 
 
 # THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
@@ -2649,9 +2642,10 @@ async def mount(
                 "declared": cwd, "kept": cwd,
                 **({"declared_pin_kept_for_identity": declared_project_label}
                    if declared_project_label else {}),
-                "note": ("registry recollection pointed at the bare seat-office container "
-                         "(~/.osiris/seats), never a home of its own — your declared cwd is "
-                         "a real, existing office and wins outright; nothing was corrected"),
+                "note": ("registry recollection pointed at the bare seat-directory "
+                         "container (~/.osiris/seats), never a home of its own — your "
+                         "declared cwd is a real, existing seat directory and wins "
+                         "outright; nothing was corrected"),
             }
             # cwd is left as the caller's own declared value — no reassignment.
         else:
@@ -2669,10 +2663,11 @@ async def mount(
                                "address was corrected (ruling 13af22fc)"
                                if declared_project_label else ""))
             if kept_is_bare_container:
-                honest_note = ("could not resolve a specific office for either the declared "
-                                "or the recollected cwd — mounted at the bare seat-office "
-                                "container for session bookkeeping only; this is NOT your "
-                                "home, it is a fallback with nowhere better to point"
+                honest_note = ("could not resolve a specific seat directory for either the "
+                                "declared or the recollected cwd — mounted at the bare "
+                                "seat-directory container for session bookkeeping only; "
+                                "this is NOT your home, it is a fallback with nowhere "
+                                "better to point"
                                 + (f" — its own project pin ({declared_project_label!r}) "
                                    "still won identity resolution" if declared_project_label
                                    else ""))
@@ -3299,6 +3294,18 @@ SEAT_INPUT_SCHEMA: dict[str, Any] = {
         _dispatcher_action_schema({
             "action": _action_const("establish_office"), "target": _s(),
         }, ["action", "target"]),
+        # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): "office" retired as the
+        # place-word for a seat's own directory — reissue_office/establish_office kept
+        # above as deprecated aliases for one release only (same spelling the CLI's own
+        # reissue-office/establish-office aliases already carry for reissue-seat-dir/
+        # establish-seat-dir).
+        _dispatcher_action_schema({
+            "action": _action_const("reissue_seat_dir"), "target": _s(), "because": _s(),
+            "adopt": _b(False),
+        }, ["action", "target", "because"]),
+        _dispatcher_action_schema({
+            "action": _action_const("establish_seat_dir"), "target": _s(),
+        }, ["action", "target"]),
         _dispatcher_action_schema({
             "action": _action_const("invalidate_works_in"), "stale_project": _s(),
             "because": _s(),
@@ -3379,8 +3386,8 @@ _SEAT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "sweep_disk": (["target", "dry_run", "because"], ["target"]),
     "rename": (["target", "new_handle", "because"], ["target", "new_handle", "because"]),
     "set_attended": (["target", "attended", "because"], ["target", "attended", "because"]),
-    "reissue_office": (["target", "because", "adopt"], ["target", "because"]),
-    "establish_office": (["target"], ["target"]),
+    "reissue_seat_dir": (["target", "because", "adopt"], ["target", "because"]),
+    "establish_seat_dir": (["target"], ["target"]),
     "invalidate_works_in": (["stale_project", "because"], ["stale_project", "because"]),
     "reconcile_identity": (["target", "agent_id", "because"], []),
     "rehold": (["target", "agent_id", "because", "override_live", "dry_run"],
@@ -3412,8 +3419,8 @@ _RETIRED_ALIAS_ACTIONS: dict[str, str] = {
     "heal_seat_anchor": "heal_anchor", "heal_seat_transcript": "heal_transcript",
     "transition_seat_project": "transition_project", "resync_seat_house": "resync_house",
     "sweep_seat_disk": "sweep_disk", "rename_seat": "rename",
-    "set_seat_attended": "set_attended", "reissue_office": "reissue_office",
-    "establish_office": "establish_office", "invalidate_works_in": "invalidate_works_in",
+    "set_seat_attended": "set_attended", "reissue_office": "reissue_seat_dir",
+    "establish_office": "establish_seat_dir", "invalidate_works_in": "invalidate_works_in",
     "reconcile_seat_identity": "reconcile_identity", "correct_house": "correct_house",
     "correct_pin_value": "correct_pin", "revert_own_pin_write": "revert_pin",
 }
@@ -3457,6 +3464,11 @@ async def _seat_impl(
     PRE-DISPATCH VALIDATION (price-minimizer #2): before any branch runs, checks the
     action is known and every REQUIRED param for it was actually supplied — a mistake
     costs one round trip naming exactly what was missing, never a wrong write."""
+    # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): reissue_office/establish_office's
+    # own deprecated spellings normalize to their canonical names here, before the params
+    # lookup — one dict entry per action under its new name, never a duplicate.
+    action = {"reissue_office": "reissue_seat_dir",
+             "establish_office": "establish_seat_dir"}.get(action, action)
     if action not in _SEAT_ACTION_PARAMS:
         return {"error": f"unknown action {action!r}",
                 "known_actions": sorted(_SEAT_ACTION_PARAMS)}
@@ -3759,7 +3771,7 @@ async def _seat_impl(
         return await _set_seat_attended(Actions(await _pool_get()), seat_id=target,
                                         attended=attended, because=because, actor=ident.agent_id)
 
-    if action == "reissue_office":
+    if action == "reissue_seat_dir":
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
@@ -3769,12 +3781,12 @@ async def _seat_impl(
         return await _reissue_office(Actions(await _pool_get()), seat_id=target,
                                      because=because, actor=ident.agent_id, adopt=adopt)
 
-    if action == "establish_office":
+    if action == "establish_seat_dir":
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — an office ceremony is a mind's act, and the "
-                             "graph must know whose", "why": _anchorless(ctx)}
+            return {"error": "mount first — a seat-directory ceremony is a mind's act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.offices import establish_office as _establish
         return await _establish(Actions(await _pool_get()), seat_or_agent=target,
                                 actor=ident.agent_id)
@@ -4001,8 +4013,8 @@ async def seat(
       sweep_disk: delete a retired seat's office+workspace directories (target)
       rename: change a seat's handle, manager/operator-invoked (target, new_handle, because)
       set_attended: stamp a seat 'human'/'worker' (target, attended, because)
-      reissue_office: recompile a seat's CLAUDE.md managed section (target, because)
-      establish_office: move a seat into its Osiris-owned office (target)
+      reissue_seat_dir: recompile a seat's CLAUDE.md managed section (target, because)
+      establish_seat_dir: move a seat into its Osiris-owned directory (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
       rehold: third-party re-hold a seat's holds link (target, agent_id, because)
@@ -4693,7 +4705,7 @@ async def graph_search(
     """GRAPH-AWARE search -- same lexical/semantic engine as search() but scoped
     to a subgraph. project narrows results to one project. lineage scopes to
     a specific agent lineage (e.g. 'ad1a1cb0'). max_depth > 0 expands results
-    to include the N-hop neighborhood around each hit (linked objects).
+    to include the N-hop expansion around each hit (linked objects).
     Without scope params, behaves exactly like search()."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
@@ -7631,13 +7643,14 @@ async def _seat_edge_impl(
     """Shared body behind `seat_edge` and its two hidden single-purpose aliases (attach_
     seat/detach_seat) — one code path, three names. Each action below is copied
     verbatim from what was that alias's own top-level function body before the fold,
-    plus a reissue of BOTH sides' offices (thread 613cda0a): promote already refreshes
+    plus a reissue of BOTH sides' seat directories (thread 613cda0a): promote already
+    refreshes
     manager and worker through its own caller (mcp_server.py's `seat(action='promote')`
     branch); attach/detach mint or cut the SAME `managed_by` edge but, before this,
     refreshed neither — a manager's own "## Your team" listing and a worker's own
     manager-of-record line both went stale the moment either verb ran outside promote.
     Also heals the WORKER's own mount cache (never the manager's — a manager's own
-    project is unaffected by gaining/losing a worker, only the worker's derived house
+    project is unaffected by gaining/losing a worker, only the worker's derived project
     depends on the managed_by chain attach/detach changes; mount-cache heal
     generalization, wave 6, dispatch 7dfc38a5)."""
     ident = await _ident_for(ctx)
@@ -7783,6 +7796,14 @@ AGENT_INPUT_SCHEMA: dict[str, Any] = {
             "action": _action_const("correct_house"), "agent_id": _s(),
             "project": _opt_s(), "seat_generation": _opt_int_s(),
         }, ["action", "agent_id"]),
+        # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): "house" retired as the word
+        # for the project a seat governs — correct_project is the real name now,
+        # correct_house kept above as a deprecated alias for one release only (same
+        # spelling as the CLI's own correct-agent-house -> correct-agent-project).
+        _dispatcher_action_schema({
+            "action": _action_const("correct_project"), "agent_id": _s(),
+            "project": _opt_s(), "seat_generation": _opt_int_s(),
+        }, ["action", "agent_id"]),
         _dispatcher_action_schema({
             "action": _action_const("correct_succession"), "agent_id": _s(),
             "value": _opt_s(), "because": _s(), "override_live": _b(False),
@@ -7819,7 +7840,7 @@ _HAND_BUILT_SCHEMAS["agent"] = AGENT_INPUT_SCHEMA
 
 _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "claim_name": (["name"], ["name"]),
-    "correct_house": (["agent_id", "project", "seat_generation"], ["agent_id"]),
+    "correct_project": (["agent_id", "project", "seat_generation"], ["agent_id"]),
     # `value` is deliberately NOT in required here, same _UNSET reason as correct_pin's own
     # `value` above — "" is a legal, meaningful retraction, not an omission, and the shared
     # missing-check below treats "" as absent; the branch itself refuses a genuine _UNSET.
@@ -7858,6 +7879,10 @@ async def _agent_impl(
     Thoth dispatch 7162).
 
     PRE-DISPATCH VALIDATION (price-minimizer #2), same discipline as _seat_impl's own."""
+    # ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): correct_house's own deprecated
+    # spelling normalizes to its canonical name here, before the params lookup — one
+    # dict entry under the new name, never a duplicate.
+    action = {"correct_house": "correct_project"}.get(action, action)
     if action not in _AGENT_ACTION_PARAMS:
         return {"error": f"unknown action {action!r}",
                 "known_actions": sorted(_AGENT_ACTION_PARAMS)}
@@ -7877,7 +7902,7 @@ async def _agent_impl(
         from src.orchestrator.agents import claim_name as _claim
         return await _claim(Actions(await _pool_get()), ident.agent_id, name,
                             source=ident.agent_id)
-    if action == "correct_house":
+    if action == "correct_project":
         assert agent_id is not None
         ident = await _ident_for(ctx)
         if ident is None:
@@ -7982,7 +8007,7 @@ async def agent(
 
     ACTION TABLE — action: what it does (required params beyond action):
       claim_name: self-name your own mounted identity (name)
-      correct_house: heal an already-polluted agent's project/seat_generation stamps,
+      correct_project: heal an already-polluted agent's project/seat_generation stamps,
         third-party (agent_id; at least one of project/seat_generation)
       correct_succession: correct an agent's own succeeded_by pointer (agent_id,
         because, value="" or retract=True to retract). Refuses blank because or a LIVE target
@@ -8003,7 +8028,7 @@ async def agent(
         SoftwareProject, or resolves but the agent carries no live governs edge to it,
         is reported in `not_found`/`no_edge` rather than aborting the whole batch.
       invalidate_works_in: THIRD-PARTY works_in duplicate repair (agent_id; project=the
-        STALE project to drop, the same shared slot correct_house's own `project` uses
+        STALE project to drop, the same shared slot correct_project's own `project` uses
         above; because) — refuses agent_id naming your own mounted identity (use
         seat(action='invalidate_works_in') for that, self-scoped and auto-filled). The
         SAME underlying repair, exposed for a mind acting on someone ELSE's duplicate
@@ -8021,15 +8046,15 @@ async def agent(
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "agent(action='correct_house')",
+    "use_instead": "agent(action='correct_project')",
     "since": "task #202 agent dispatcher (msg 7162)",
 })
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    agent(action='correct_house')."""
-    return await _agent_impl("correct_house", agent_id=agent_id, project=project,
+    agent(action='correct_project')."""
+    return await _agent_impl("correct_project", agent_id=agent_id, project=project,
                              seat_generation=seat_generation, ctx=ctx)
 
 
@@ -8343,16 +8368,16 @@ async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "seat(action='reissue_office')",
+    "use_instead": "seat(action='reissue_seat_dir')",
     "since": "task #202 seat dispatcher (msg 7039)",
 })
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    seat(action='reissue_office')."""
-    return await _seat_impl("reissue_office", target=seat_id, because=because, adopt=adopt,
-                            ctx=ctx)
+    seat(action='reissue_seat_dir')."""
+    return await _seat_impl("reissue_seat_dir", target=seat_id, because=because,
+                            adopt=adopt, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -8509,13 +8534,13 @@ async def fleet_reconcile(execute: bool = False,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "use_instead": "seat(action='establish_office')",
+    "use_instead": "seat(action='establish_seat_dir')",
     "since": "task #202 seat dispatcher (msg 7039)",
 })
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
     """DEPRECATED — hidden alias, still callable. Forwards to
-    seat(action='establish_office')."""
-    return await _seat_impl("establish_office", target=seat, ctx=ctx)
+    seat(action='establish_seat_dir')."""
+    return await _seat_impl("establish_seat_dir", target=seat, ctx=ctx)
 
 
 @mcp.tool(meta={
@@ -8526,13 +8551,14 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
 async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
-    P2V move: import a running-but-unmanaged instance, preserve its state,
-    give it a clean managed identity. Composes `identify_agent(ref)` to resolve the target
-    (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id
-    instead — and on a LIVE match: moving a live seat splits its running session's history
-    between two homes, close its tab first), `claim_name(handle)` (propagating its own real
-    refusals: a visitor, a name held live elsewhere, a cross-house collision), and
+    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris seat
+    directory — the P2V move: import a running-but-unmanaged instance, preserve its
+    state, give it a clean managed identity. Composes `identify_agent(ref)` to resolve
+    the target (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a
+    specific `agent:` id instead — and on a LIVE match: moving a live seat splits its
+    running session's history between two homes, close its tab first),
+    `claim_name(handle)` (propagating its own real refusals: a visitor, a name held
+    live elsewhere, a cross-project collision), and
     `establish_office` (the actual move). `ref` accepts anything `identify_agent()` does — an
     `agent:` id, a `seat:` id, a bare handle, or an absolute cwd path. The receipt's `verified`
     field is a FRESH post-write `identify_agent()` read, never an echo of what the earlier
@@ -8746,12 +8772,12 @@ _SEAT_MANUAL: dict[str, str] = {
         "invoking this on its own behalf — if a human runs this with no mounted "
         "session behind it, say so and point at `new` instead."),
     "mint": (
-        "mint <handle> --manager <seat> [--project] [--house] [--model] — found a "
+        "mint <handle> --manager <seat> [--project] [--model] — found a "
         "MANAGED worker seat under an existing one. Composes the `mint_seat` MCP tool "
         "(`handle`, `project`, `model`, `house` — no `manager` param on the tool "
         "itself: an agent caller lets it infer the manager from its own held seat; an "
         "operator caller supplies `--manager` explicitly or, if omitted, infers it the "
-        "same way `osiris mint-seat` does — the sole seat in the target house — and "
+        "same way `osiris mint-seat` does — the sole seat in the target project — and "
         "refuses rather than guesses among several)."),
     "launch": (
         "launch <handle> [--model] — give a seat a body, ALWAYS a fresh mint, never a "
@@ -8818,14 +8844,16 @@ _SEAT_MANUAL: dict[str, str] = {
         "never this verb's). `dry_run` defaults true; the caller must confirm before "
         "passing `--apply`/`dry_run=False`. Run `roster` first if unsure which seats "
         "need this."),
-    "correct-agent-house": (
-        "correct-agent-house <agent> [--project] [--seat-generation] — heal an "
+    "correct-agent-project": (
+        "correct-agent-project <agent> [--project] [--seat-generation] — heal an "
         "already-polluted agent's own project/seat_generation stamps, THIRD-PARTY "
         "(unlike `correct-house`, which is self-scoped and has no console door for "
         "that reason). Composes `correct_agent_house` (hidden from `list_tools()` "
         "since retirement wave 1, zero traffic at the time — still fully callable as "
-        "a deprecated alias). No CLI door yet (#204, declared-not-built). `<agent>` "
-        "accepts a claimed handle or a raw agent id."),
+        "a deprecated alias). Has a CLI door: `osiris correct-agent-project <agent> "
+        "[--project P] [--seat-generation N]` (`correct-agent-house` still works this "
+        "release as a deprecated alias, ONE TAXONOMY, ruling 52a59652/70c001ec). "
+        "`<agent>` accepts a claimed handle or a raw agent id."),
     "retire-agent": (
         "retire-agent <agent> --because [--override-live] — third-party AGENT "
         "retirement, distinct from `retire` (which ends a SEAT's role — this ends one "

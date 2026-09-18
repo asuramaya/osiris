@@ -929,7 +929,14 @@ def _tool_chars(t: Any) -> int:
 # 88 -> 89 (2026-09-15, Khnum, Thoth mail 11047, ruling d7d55257): physics_layout_
 # migrate — see TOOL_CONTRACT_CEILING_CHARS's own changelog entry just above for the
 # full reason.
-TOOL_CONTRACT_EXPECTED_COUNT = 89
+# 89 -> 88 (2026-09-17, Sekhmet, WAVE 28 ROOM deletion, ruling 70c001ec/decision
+# a47a0c7f): create_room + list_rooms removed outright. create_room already carried
+# meta={"deprecated": True} since task #199 lane 2 (zero MCP traffic); ROOM is a
+# retired concept (decision 31717ca7) with no CLI/daemon bypass calling either tool.
+# The underlying orchestrator.compositions.create_room/list_rooms functions and the
+# `rooms` table are untouched — migration 0070_room_retirement's own law keeps the
+# table as read-only history, never dropped.
+TOOL_CONTRACT_EXPECTED_COUNT = 88
 # 116 -> 117 (2026-09-04, Seshat, #203/Thoth dispatch 6966, decision a49d2730/38755abe):
 # list_unfiled_threads — the H-bucket instrument gap: a Thread filter on absence of an
 # in_repo edge (plus source=/kind= equality), paginated, that no existing door provided
@@ -1627,7 +1634,17 @@ TOOL_CONTRACT_EXPECTED_COUNT = 89
 # genuinely different execution shape from layout_migrate (a single global force
 # simulation, not a batch loop) so not a parameterization of it. Measured exact
 # (141,046).
-TOOL_CONTRACT_CEILING_CHARS = 141045
+# -> 141889 (2026-09-17, Sekhmet, ruling 52a59652/70c001ec, ONE TAXONOMY WAVE 28): three
+# new schema branches (seat's reissue_seat_dir/establish_seat_dir, agent's
+# correct_project) — the canonical replacements for reissue_office/establish_office/
+# correct_house, each needing its own oneOf branch by this file's own one-branch-per-
+# action convention, the old branches kept unchanged as deprecated aliases for one
+# release (never a parameterization of an existing branch, so trimming an existing
+# entry would not have avoided this). Docstring prose already trimmed to the bare
+# action-table line each; no further category-rule trim available without dropping a
+# real action's own description. Tool count unchanged (no new @mcp.tool()). Measured
+# exact (141,888).
+TOOL_CONTRACT_CEILING_CHARS = 141888
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical

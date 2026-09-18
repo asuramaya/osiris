@@ -3278,6 +3278,52 @@ async def test_promote_mcp_dispatcher_delegates_reissues_offices_and_heals_the_c
         assert "error" in verdict  # no CLAUDE.md/anchor exists for either seat in this test
 
 
+async def test_establish_seat_dir_is_canonical_establish_office_a_deprecated_alias(
+    actions: Actions,
+) -> None:
+    """ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): establish_office is retired in
+    favor of establish_seat_dir at the MCP-facing action-name layer only — the
+    underlying orchestrator function stays named establish_office unchanged (Imhotep's
+    own doc-scope finding, decision 445b1091: 'office' verbs are kept). Both action
+    strings must normalize to the SAME dispatch branch — asserted here by their
+    identical receipt, not by re-testing establish_office's own behavior (test_offices.py
+    already covers that in full)."""
+    from src import mcp_server as srv
+    from src.orchestrator.agents import AgentIdentity
+
+    class _Ctx:
+        class request_context:  # noqa: N801
+            request = None
+            session = object()
+
+    # two SEPARATE seats — establish_office's own receipt is not idempotent-identical
+    # across repeats on the SAME seat (a second establish is a genuinely different
+    # lifecycle point), so the fair comparison is two fresh, otherwise-identical seats,
+    # one per spelling.
+    seat_canonical = (await ensure_seat(actions, house=None, handle="TaxEstDirA",
+                                        source="test"))["seat_id"]
+    seat_alias = (await ensure_seat(actions, house=None, handle="TaxEstDirB",
+                                    source="test"))["seat_id"]
+    ident = AgentIdentity(agent_id="agent:taxestdir", session="taxestdir", project="p",
+                          model="claude-sonnet-5", cwd=None, model_method="job_dir",
+                          model_history=("claude-sonnet-5",))
+    ctx = _Ctx()
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    srv._agents[srv._conn_key(ctx)] = ident
+    try:
+        canonical = await srv._seat_impl("establish_seat_dir", target=seat_canonical, ctx=ctx)
+        alias = await srv._seat_impl("establish_office", target=seat_alias, ctx=ctx)
+    finally:
+        srv._pool = saved_pool
+        srv._agents.pop(srv._conn_key(ctx), None)
+    # both reach the SAME real establish_office call (never "unknown action", never two
+    # different behaviors) — proven by the receipt SHAPE agreeing, not a field-by-field
+    # diff (seat_id/office/handle/rebind naturally differ, one real seat per call)
+    assert "unknown action" not in str(canonical.get("error", ""))
+    assert canonical.keys() == alias.keys()
+
+
 async def test_promote_mcp_dispatcher_refuses_before_mount(actions: Actions) -> None:
     from src import mcp_server as srv
 
