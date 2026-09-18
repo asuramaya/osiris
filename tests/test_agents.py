@@ -328,6 +328,54 @@ async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
         "recorded at derived-tier confidence, same as before this guard")
 
 
+async def test_register_agent_mount_never_supersedes_its_own_prior_rename(
+    actions: Actions,
+) -> None:
+    """THE SUPERSEDE-NOT-OUTRANK GAP (operator ruling b5663511, PROJECT IDENTITY DRIFT,
+    Thoth mail 12419/12413, the live Marquee specimen 2026-09-18): repo:dtfb renamed to
+    "lotstretcher" at 0.95 confidence, then a mount 74 SECONDS LATER from the SAME
+    session re-derived the still-unmoved on-disk folder's basename and wrote "dtfb"
+    back at DERIVED/0.4. The two sibling tests above (never_clobbers/still_downgrades)
+    use a DIFFERENT session for the later mount, so the confidence-ordered read alone
+    saves them — assert_property's own supersession is SAME-SOURCE-ONLY, so those two
+    rows never fight for the SAME slot. This is the shape that does: the later mount
+    comes from the identical source as the rename itself (the coordinator's own session
+    continuing to work in the still-unmoved directory right after renaming it), so a
+    DERIVED write there SUPERSEDES that source's own prior "lotstretcher" row outright
+    — it doesn't lose a confidence contest, it vanishes from current_assertions
+    entirely, dragging the confidence-ordered winner back to whatever remains."""
+    from src.orchestrator.project_identity import rename_project
+
+    ident = resolve_identity(cwd="/w/dtfb", session="sess-samesrc", model="claude-fable-5")
+    await register_agent(actions, ident, actor="analyst:operator")
+    proj = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical='repo:dtfb'")
+
+    await rename_project(actions, project="dtfb", new_name="lotstretcher",
+                         because="operator-approved rename", actor=ident.agent_id,
+                         dry_run=False)
+    winning = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+    assert winning == "lotstretcher"
+
+    # the SAME session mounts again — the pin/cwd basename still says "dtfb" (the
+    # on-disk folder was never moved, rename_project's own permanent scope limit)
+    await register_agent(actions, ident, actor="analyst:operator")
+
+    winning_after = await actions.pool.fetchval(
+        "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+    assert winning_after == "lotstretcher", (
+        "a same-source re-mount superseded and erased its own declared rename — "
+        "the exact bug this test guards")
+    # the rename's own row must still be CURRENT (not merely won a contest that no
+    # longer exists) -- the whole point is that it was never superseded at all
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "AND value#>>'{}'='lotstretcher'", proj) == 1
+
+
 # --- _resolve_or_mint_project — a case-differing pin must FIND the existing SoftwareProject,
 # never mint a twin (thread 69911d0c, Thoth dispatch 3824). NEVER lowercase-normalizes:
 # cassandra's own "Like-Us" is genuine upstream truth, so this is about matching

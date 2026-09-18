@@ -4287,15 +4287,48 @@ async def register_agent(
                 "    AND ca.name='name' AND lower(ca.value #>> '{}') = lower($3))) "
                 "LIMIT 1",
                 proj, f"repo:{identity.project}", identity.project)
-            existing_name = await actions.pool.fetchval(
-                "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
-                "AND name='name' ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+            existing_row = await actions.pool.fetchrow(
+                "SELECT value #>> '{}' AS name, confidence, source_id FROM current_assertions "
+                "WHERE object_id=$1 AND name='name' AND source_id=$2 "
+                "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj, src)
+            top_row = await actions.pool.fetchrow(
+                "SELECT value #>> '{}' AS name FROM current_assertions "
+                "WHERE object_id=$1 AND name='name' "
+                "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
+            existing_name = top_row["name"] if top_row else None
+            # THE SUPERSEDE-NOT-OUTRANK GAP (operator ruling b5663511, PROJECT IDENTITY
+            # DRIFT, Thoth mail 12419/12413, the Marquee specimen live 2026-09-18:
+            # repo:dtfb renamed to "lotstretcher" at 0.95 confidence, then a mount 74
+            # SECONDS LATER from the SAME session re-derived the still-unmoved on-disk
+            # folder's basename and wrote "dtfb" back at DERIVED/0.4 — comment above
+            # already downgrades this write's own confidence so a CROSS-source
+            # confidence-ordered read would still favor the rename... but
+            # assert_property's supersession is SAME-SOURCE-ONLY (by design, every
+            # other write in this codebase depends on that), so a SAME-SOURCE write at
+            # ANY confidence SUPERSEDES that source's own prior current row outright —
+            # the rename's own assertion vanishes from current_assertions entirely, not
+            # merely loses a confidence contest. Scoped to same-source ONLY: a cross-
+            # source DERIVED write never erases anything (a different source's row is
+            # untouched by supersession), so the existing "still recorded, just
+            # outranked" behavior for THAT case (test_..._still_downgrades_a_genuine_
+            # unrelated_rename) stays exactly as it was. Extends the existing "skip the
+            # write entirely" structural fix (dead_husk_name, ruling a73aafa2) to this
+            # second shape: THIS source's own prior current row for this property
+            # already carries higher confidence than a DERIVED write would — skip,
+            # never write-and-erase it.
+            outranked = (existing_row is not None
+                        and existing_row["confidence"] > confidence_for(EvidenceClass.DERIVED))
             if dead_husk_name:
                 pass  # a folded husk's own name resurrected by a stale pin — never written
             elif (existing_name is None
                     or existing_name.strip().casefold() == identity.project.strip().casefold()):
                 await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
                                               evidence_class=_EC)
+            elif outranked:
+                pass  # a higher-confidence current name already stands (a deliberate
+                # rename, most likely) — writing even a DERIVED-confidence value from
+                # THIS SAME source would supersede and erase it, not merely lose a
+                # confidence-ordered contest; skip rather than clobber
             else:
                 do = EvidenceClass.DERIVED
                 await actions.assert_property(proj, "name", identity.project, src, now,
