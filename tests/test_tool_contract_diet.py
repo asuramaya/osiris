@@ -1644,7 +1644,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 88
 # action-table line each; no further category-rule trim available without dropping a
 # real action's own description. Tool count unchanged (no new @mcp.tool()). Measured
 # exact (141,888).
-TOOL_CONTRACT_CEILING_CHARS = 141888
+TOOL_CONTRACT_CEILING_CHARS = 141656
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD (thread c655c757). This file used to carry every historical
