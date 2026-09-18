@@ -235,6 +235,15 @@ _MEMBERSHIP_CONTAINER_LINK_TYPES = frozenset({"in_repo", "works_in", "holds", "m
                               # narrower than the module-wide constant.
 
 
+LAST_DECLUMP_WORK: dict[str, int] = {"pairs_resolved": 0, "iterations_run": 0}
+# THE DECLUMP REWRITE (operator's word 2026-09-18): `_declump` has no timing
+# assertion of its own (a shared box's load is never a correctness signal) -- this
+# is the real, measured DETERMINISTIC work its most recent call actually did
+# (pairs the KD-tree search resolved across every iteration, and how many
+# iterations actually ran before the fixed-point stop), for a caller's own
+# acceptance test to assert a work bound against instead of a wall-clock one.
+
+
 def _hash01(key: str) -> float:
     """A deterministic pseudo-random float in [0,1) from a stable hash of `key` -- never
     Python's own hash() (salted per-process, so it would jitter every restart); sha256
@@ -421,17 +430,23 @@ def _centroid_seed(
 
 
 def _grid_cells(pos: np.ndarray, cell_size: float) -> dict[tuple[int, int], list[int]]:
-    """THE PHYSICS LAYOUT OOM FIX (Thoth mail 11097): the spatial-hash structure
-    `_declump` now uses instead of a full (n,n,2) pairwise array -- `_declump`'s own
-    old form built exactly that array over the WHOLE population every iteration,
-    40 GB at n=50,087 (kernel-confirmed OOM kill, anon-rss 26.3 GB before it died).
+    """THE PHYSICS LAYOUT OOM FIX (Thoth mail 11097): a spatial-hash structure built
+    to replace a full (n,n,2) pairwise array -- the old form of that array-building
+    code built exactly that array over the WHOLE population every iteration, 40 GB
+    at n=50,087 (kernel-confirmed OOM kill, anon-rss 26.3 GB before it died).
     Bucketing by `floor(pos / cell_size)` with `cell_size == min_sep` is the
     standard grid-hash guarantee: any two points within `min_sep` of each other are
     either in the same cell or one of its 8 neighbors (never farther), so checking
     only those 9 cells per point catches every real collision with no O(n^2) memory
     anywhere -- the heartbeat's own 1000-object batches never surfaced this because
     a 1000x1000 array (16 MB) is nothing; the physics migration's 50,087x50,087 one
-    was 40 GB."""
+    was 40 GB.
+
+    `graph_layout._declump` (THE DECLUMP REWRITE, operator's word 2026-09-18) no
+    longer uses this -- it moved to a `scipy.spatial.cKDTree` pair search instead,
+    see that function's own docstring. This spatial-hash structure is still real,
+    live code: `graph_physics.py`'s own whole-graph hard-minimum-distance clamp
+    (a genuinely separate pass, at migration scale) calls it directly."""
     cells: dict[tuple[int, int], list[int]] = defaultdict(list)
     if len(pos) == 0:
         return cells
@@ -451,137 +466,76 @@ def _neighbor_cell_indices(
     return out
 
 
-_DECLUMP_VECTORIZE_THRESHOLD = 400  # pair count above which a vectorized numpy pass
-                                    # beats a plain Python loop -- BELOW it, numpy's
-                                    # own fixed per-call overhead (building small
-                                    # arrays, meshgrid, norm) costs MORE than just
-                                    # looping: measured live, the sparse 60,000-point
-                                    # performance test (near-empty cells almost
-                                    # everywhere) went from ~20s with a plain loop to
-                                    # 78s fully vectorized. The reverse (a live
-                                    # specimen, one cell holding 6,131 points) is what
-                                    # justifies the vectorized path existing at all --
-                                    # see `_resolve_cell_pair`'s own docstring.
-_DECLUMP_MAX_VECTORIZE_PAIRS = 5_000_000  # ~80 MB delta array ceiling (THE
-                                          # COLLAPSED-CONTAINER FIX, Thoth mail
-                                          # 11111, item (b) "cap per-cell work") --
-                                          # defense in depth: the LAYOUT fix
-                                          # (container gravity scaled by
-                                          # 1/sqrt(member count)) should keep any
-                                          # post-FR cell under ~50 points (2,500
-                                          # same-cell pairs) before this ever
-                                          # matters, but a cell denser than this
-                                          # falls back to the slow-but-memory-safe
-                                          # loop instead of a huge vectorized array.
+_DECLUMP_PAIR_CHUNK = 1_000_000  # THE DENSE-CELL FIX's own successor: the grid-hash
+                                 # version this replaced deliberately capped its own
+                                 # vectorized pass at 5,000,000 pairs (~80 MB) and fell
+                                 # back to a slow-but-memory-safe Python loop above it
+                                 # -- a live specimen (one grid cell, 6,131 coincident
+                                 # points, 634M candidate pairs) is exactly why. A
+                                 # cKDTree query_pairs call over a similarly dense
+                                 # cluster returns the SAME huge pair count in one
+                                 # shot (that's real, unavoidable math: if N points are
+                                 # all mutually within `min_sep`, there really are
+                                 # N*(N-1)/2 violating pairs) -- measured live testing
+                                 # this rewrite: 6,000 fully-coincident points spiked
+                                 # RSS by 1.4 GB fully vectorized in one pass. Chunking
+                                 # the deficit/direction/push math (never the KD-tree
+                                 # query itself, which stays one call) keeps the SAME
+                                 # vectorized numpy speed with bounded peak memory
+                                 # (~56 MB/chunk) regardless of how dense any one
+                                 # cluster gets.
 
 
-def _resolve_cell_pair_loop(
-    pos: np.ndarray, a_idx: np.ndarray, b_idx: np.ndarray, *, same_cell: bool,
-    min_sep: float, ids: list[uuid.UUID], other_pos: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray | None, bool] | None:
-    """The plain per-pair Python loop, kept for the SMALL-candidate-count case
-    (`_DECLUMP_VECTORIZE_THRESHOLD`'s own docstring) -- cheaper than numpy's fixed
-    per-call overhead when there's almost nothing to check, which is the common
-    case for any reasonably spread population."""
-    b_pos_arr = other_pos if other_pos is not None else pos
-    push_a = np.zeros((len(a_idx), 2))
-    push_b = None if other_pos is not None else np.zeros((len(b_idx), 2))
-    moved = False
-    for ri, i in enumerate(a_idx):
-        for rj, j in enumerate(b_idx):
-            if same_cell and j <= i:
-                continue
-            d = pos[i] - b_pos_arr[j]
-            dist = float(math.hypot(d[0], d[1]))
-            if dist >= min_sep:
-                continue
-            moved = True
-            if dist < 1e-9:
-                tag = "declump" if other_pos is None else "declump-anchor"
-                j_key = ids[int(j)] if other_pos is None else int(j)
-                a = _hash01(f"{tag}:{ids[int(i)]}:{j_key}") * 2 * math.pi
-                d = np.array([math.cos(a), math.sin(a)])
-                dist = 1.0
-            deficit = min_sep - dist
-            direction = d / dist
-            if other_pos is not None:
-                push_a[ri] = push_a[ri] + direction * deficit
-            else:
-                push_a[ri] = push_a[ri] + direction * deficit / 2
-                push_b[rj] = push_b[rj] - direction * deficit / 2  # type: ignore[index]
-    if not moved:
-        return None
-    return push_a, push_b, True
+def _apply_pair_pushes(
+    disp: np.ndarray, pos_a: np.ndarray, pos_b: np.ndarray, i_arr: np.ndarray,
+    j_arr: np.ndarray, *, min_sep: float, ids: list[uuid.UUID], tag: str,
+    b_is_movable: bool, split: bool,
+) -> float:
+    """The vectorized deficit/direction/push computation shared by both the
+    movable-movable and movable-anchor KD-tree passes below: given the two
+    endpoints' own positions (`pos_a[i_arr]`, `pos_b[j_arr]`) for every pair already
+    known to be closer than `min_sep` (`query_pairs`/`query_ball_tree` only ever
+    return pairs meeting that test), scatters the push into `disp` IN PLACE -- split
+    in half onto both sides for a movable-movable pair (`split=True`), or applied
+    whole onto the `a` (movable) side alone for a movable/anchor one (`split=False`,
+    the anchor never moves) -- and returns the total deficit magnitude summed (a
+    real, work-proportional number for the caller's own deterministic-work-bound
+    reporting, never a timing figure).
 
+    CHUNKED over `_DECLUMP_PAIR_CHUNK`-sized batches (see its own docstring) --
+    bounds peak memory regardless of how many pairs `query_pairs`/`query_ball_tree`
+    hand back in one call, without giving up the vectorized numpy speed within each
+    chunk.
 
-def _resolve_cell_pair(
-    pos: np.ndarray, a_idx: np.ndarray, b_idx: np.ndarray, *, same_cell: bool,
-    min_sep: float, ids: list[uuid.UUID], other_pos: np.ndarray | None = None,
-) -> tuple[np.ndarray, np.ndarray | None, bool] | None:
-    """THE DENSE-CELL FIX (Thoth mail 11109/11110 -- a live specimen: one grid cell
-    held 6,131 post-FR points, 634 million candidate PAIRS in a pure-Python loop on
-    the FIRST declump iteration alone, ~130s and multi-GB just from Python-level
-    tuple/float overhead at that count). Resolves every pair between `a_idx` (this
-    cell's own movable points) and `b_idx` (a neighbor cell's points, or itself when
-    `same_cell`, or an anchor cell's points when `other_pos` is given) in ONE
-    vectorized numpy pass bounded by `len(a_idx) * len(b_idx)` -- the worst real
-    cell (6,131^2 * 16 bytes =~ 600 MB for a same-cell pass) is a real but bounded
-    and FAST cost, not 634M individual Python-level comparisons. Returns
-    `(push_on_a, push_on_b_or_None, moved)` -- `push_on_b` is None when `other_pos`
-    is given (anchors never move, full deficit already folded into `push_on_a`).
-
-    HYBRID (`_DECLUMP_VECTORIZE_THRESHOLD`): delegates to `_resolve_cell_pair_loop`
-    for a small candidate count instead -- the vectorized path's own fixed overhead
-    costs more than it saves when there's almost nothing to check, the common case
-    for any reasonably spread population. Also delegates for a pair count ABOVE
-    `_DECLUMP_MAX_VECTORIZE_PAIRS` -- see that constant's own docstring: a cell
-    this dense should never occur after the layout fix, but if one does, slow-and-
-    memory-safe beats fast-and-OOMing."""
-    pair_count = (
-        len(a_idx) * (len(a_idx) - 1) // 2 if same_cell else len(a_idx) * len(b_idx))
-    if pair_count == 0:
-        return None
-    if not _DECLUMP_VECTORIZE_THRESHOLD <= pair_count <= _DECLUMP_MAX_VECTORIZE_PAIRS:
-        return _resolve_cell_pair_loop(
-            pos, a_idx, b_idx, same_cell=same_cell, min_sep=min_sep, ids=ids,
-            other_pos=other_pos)
-
-    b_pos = other_pos[b_idx] if other_pos is not None else pos[b_idx]
-    delta = pos[a_idx][:, None, :] - b_pos[None, :, :]
-    dist = np.linalg.norm(delta, axis=2)
-    if same_cell:
-        ru, cu = (a.ravel() for a in np.triu_indices(len(a_idx), k=1))
-    else:
-        mesh_r, mesh_c = np.meshgrid(
-            np.arange(len(a_idx)), np.arange(len(b_idx)), indexing="ij")
-        ru, cu = mesh_r.ravel(), mesh_c.ravel()
-    if len(ru) == 0:
-        return None
-    dd = dist[ru, cu]
-    close = dd < min_sep
-    if not close.any():
-        return None
-    sel_r, sel_c, sel_d = ru[close], cu[close], dd[close].copy()
-    sel_delta = delta[sel_r, sel_c].copy()
-    zero_idx = np.where(sel_d < 1e-9)[0]
-    for z in zero_idx:
-        gi, gj = int(a_idx[sel_r[z]]), int(b_idx[sel_c[z]])
-        tag = "declump" if other_pos is None else "declump-anchor"
-        gj_key = ids[gj] if other_pos is None else gj
-        a = _hash01(f"{tag}:{ids[gi]}:{gj_key}") * 2 * math.pi
-        sel_delta[z] = (math.cos(a), math.sin(a))
-        sel_d[z] = 1.0
-    deficit = min_sep - sel_d
-    direction = sel_delta / sel_d[:, None]
-    push_full = direction * deficit[:, None]
-
-    push_a = np.zeros((len(a_idx), 2))
-    np.add.at(push_a, sel_r, push_full if other_pos is not None else push_full / 2)
-    push_b = None
-    if other_pos is None:
-        push_b = np.zeros((len(b_idx), 2))
-        np.add.at(push_b, sel_c, -push_full / 2)
-    return push_a, push_b, True
+    EXACT-COINCIDENCE TIE-BREAK unchanged from the grid-hash version: a pair at
+    `dist < 1e-9` gets a deterministic hash-derived direction instead of a
+    divide-by-zero, keyed on the `a` side's own stable id and the `b` side's own
+    stable id when `b_is_movable` (both endpoints share `ids`) or its plain
+    positional index when `b` is an anchor (anchors carry no id of their own here)
+    -- exactly the same key shape the grid-hash version's own tie-break used."""
+    total_deficit = 0.0
+    for start in range(0, len(i_arr), _DECLUMP_PAIR_CHUNK):
+        i_chunk = i_arr[start:start + _DECLUMP_PAIR_CHUNK]
+        j_chunk = j_arr[start:start + _DECLUMP_PAIR_CHUNK]
+        delta = pos_a[i_chunk] - pos_b[j_chunk]
+        dist = np.linalg.norm(delta, axis=1)
+        zero_idx = np.where(dist < 1e-9)[0]
+        for z in zero_idx:
+            gi, gj = int(i_chunk[z]), int(j_chunk[z])
+            gj_key: uuid.UUID | int = ids[gj] if b_is_movable else gj
+            a = _hash01(f"{tag}:{ids[gi]}:{gj_key}") * 2 * math.pi
+            delta[z] = (math.cos(a), math.sin(a))
+            dist[z] = 1.0
+        deficit = min_sep - dist
+        direction = delta / dist[:, None]
+        push_full = direction * deficit[:, None]
+        total_deficit += float(deficit.sum())
+        if split:
+            np.add.at(disp, i_chunk, push_full / 2)
+            np.add.at(disp, j_chunk, -push_full / 2)
+        else:
+            np.add.at(disp, i_chunk, push_full)
+    return total_deficit
 
 
 def _declump(
@@ -599,69 +553,61 @@ def _declump(
     times since separating one pair can nudge another pair together, and stops the
     moment a full pass finds nothing left to fix.
 
-    SPATIAL-HASH GRID, not a pairwise array (THE PHYSICS LAYOUT OOM FIX, Thoth mail
-    11097) -- see `_grid_cells`'s own docstring for the memory story. Anchors are
-    bucketed ONCE, outside the iteration loop, since they never move; movable points
-    are re-bucketed each iteration since `pos` changes.
+    KD-TREE PAIR SEARCH (THE DECLUMP REWRITE, operator's word 2026-09-18, superseding
+    the spatial-hash-grid version this function held before): `scipy.spatial.cKDTree`
+    replaces the grid-hash's own cell bucketing entirely. Movable-movable pairs come
+    from `cKDTree(pos).query_pairs(min_sep)` -- a single C-level call over the whole
+    population, rebuilt each iteration since `pos` moves. Movable-anchor pairs use a
+    SECOND tree over `anchor_pos`, built EXACTLY ONCE outside the iteration loop
+    (anchors never move, so re-building it every pass would be pure waste) queried via
+    `query_ball_tree` from a fresh movable tree each iteration. Same deterministic
+    semantics as the grid-hash version it replaces: the same even split of the
+    deficit between two movable points, the full deficit onto the movable side of a
+    movable/anchor pair, and the same stop-the-moment-a-full-pass-finds-nothing rule
+    (`LAST_DECLUMP_WORK` is left holding the real, measured count of pairs resolved
+    and iterations actually run by this call -- the acceptance test's own
+    deterministic work bound, never a timing figure)."""
+    from scipy.spatial import cKDTree
 
-    CELL-PAIR VECTORIZED, not a per-point Python loop (THE DENSE-CELL FIX, Thoth
-    mail 11109/11110) -- see `_resolve_cell_pair`'s own docstring for the live
-    specimen this fixes. The outer loop is now over CELL PAIRS (bounded: at most 9x
-    the number of occupied cells), each resolved in one numpy pass over that pair's
-    own combined point count -- bounded by the size of the densest cell actually
-    found, never by the whole population `n`."""
-    anchor_cells = _grid_cells(anchor_pos, min_sep) if len(anchor_pos) else {}
+    anchor_tree = cKDTree(anchor_pos) if len(anchor_pos) else None
+    pairs_resolved = 0
+    iterations_run = 0
     for _ in range(iterations):
+        iterations_run += 1
         moved = False
-        disp = np.zeros_like(pos)
-        cells = _grid_cells(pos, min_sep)
-        seen_cell_pairs: set[tuple[tuple[int, int], tuple[int, int]]] = set()
-        for (cx, cy), idxs_a in cells.items():
-            key_a = (cx, cy)
-            a_idx = np.asarray(idxs_a, dtype=np.int64)
-            for dx in (-1, 0, 1):
-                for dy in (-1, 0, 1):
-                    key_b = (cx + dx, cy + dy)
-                    idxs_b = cells.get(key_b)
-                    if idxs_b is None:
-                        continue
-                    pair_key = (key_a, key_b) if key_a <= key_b else (key_b, key_a)
-                    if pair_key in seen_cell_pairs:
-                        continue
-                    seen_cell_pairs.add(pair_key)
-                    resolved = _resolve_cell_pair(
-                        pos, a_idx, np.asarray(idxs_b, dtype=np.int64),
-                        same_cell=key_b == key_a, min_sep=min_sep, ids=ids)
-                    if resolved is None:
-                        continue
-                    push_a, push_b, moved_here = resolved
-                    moved = moved or moved_here
-                    disp[a_idx] += push_a
-                    if push_b is not None:
-                        disp[np.asarray(idxs_b, dtype=np.int64)] += push_b
-        pos = pos + disp
 
-        if len(anchor_pos):
-            disp2 = np.zeros_like(pos)
-            movable_cells = _grid_cells(pos, min_sep)
-            for (cx, cy), idxs_a in movable_cells.items():
-                candidate_anchor_idx = _neighbor_cell_indices(anchor_cells, cx, cy)
-                if not candidate_anchor_idx:
-                    continue
-                a_idx = np.asarray(idxs_a, dtype=np.int64)
-                b_idx = np.asarray(candidate_anchor_idx, dtype=np.int64)
-                resolved = _resolve_cell_pair(
-                    pos, a_idx, b_idx, same_cell=False, min_sep=min_sep, ids=ids,
-                    other_pos=anchor_pos)
-                if resolved is None:
-                    continue
-                push_a, _push_b, moved_here = resolved
-                moved = moved or moved_here
-                disp2[a_idx] += push_a
-            pos = pos + disp2
+        tree = cKDTree(pos)
+        mm_pairs = tree.query_pairs(min_sep, output_type="ndarray")
+        if len(mm_pairs):
+            i_arr, j_arr = mm_pairs[:, 0], mm_pairs[:, 1]
+            disp = np.zeros_like(pos)
+            _apply_pair_pushes(
+                disp, pos, pos, i_arr, j_arr, min_sep=min_sep, ids=ids, tag="declump",
+                b_is_movable=True, split=True)
+            pos = pos + disp
+            moved = True
+            pairs_resolved += len(i_arr)
+
+        if anchor_tree is not None:
+            movable_tree = cKDTree(pos)
+            candidates = movable_tree.query_ball_tree(anchor_tree, min_sep)
+            i_list = [i for i, cand in enumerate(candidates) for _j in cand]
+            j_list = [j for cand in candidates for j in cand]
+            if i_list:
+                i_arr = np.asarray(i_list, dtype=np.int64)
+                j_arr = np.asarray(j_list, dtype=np.int64)
+                disp2 = np.zeros_like(pos)
+                _apply_pair_pushes(
+                    disp2, pos, anchor_pos, i_arr, j_arr, min_sep=min_sep, ids=ids,
+                    tag="declump-anchor", b_is_movable=False, split=False)
+                pos = pos + disp2
+                moved = True
+                pairs_resolved += len(i_arr)
 
         if not moved:
             break
+    LAST_DECLUMP_WORK["pairs_resolved"] = pairs_resolved
+    LAST_DECLUMP_WORK["iterations_run"] = iterations_run
     return pos
 
 
