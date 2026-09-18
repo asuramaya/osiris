@@ -802,13 +802,20 @@ async def test_run_migration_accepts_house_to_project(actions: Actions) -> None:
 async def _seed_sandwich(
     actions: Actions, *, house: str, handle: str, real_holder: str, phantom: str,
     t1: datetime, t2: datetime, t3: datetime, t4: datetime | None,
+    phantom_closes: datetime | None = None,
 ) -> str:
-    """Three consecutive holds rows: real_holder [t1,t2) -> phantom [t2,t3) -> real_holder
-    [t3,t4-or-open) -- the exact bind-before-spawn sandwich shape, built directly (never
-    through bind_holder, which would refuse/collapse a same-agent-twice sequence and
-    can't backdate history anyway)."""
+    """Three holds rows: real_holder [t1,t2) -> phantom [t2, phantom_closes-or-t3) ->
+    real_holder [t3,t4-or-open) -- the bind-before-spawn sandwich shape, built directly
+    (never through bind_holder, which would refuse/collapse a same-agent-twice sequence
+    and can't backdate history anyway). `phantom_closes` defaults to `t3` (the phantom's
+    own row and the real holder's next row are back-to-back, no separate gap); passing
+    it distinct from `t3` seeds a DISCONTINUOUS sandwich -- the phantom closes early and
+    a further stretch with NO holds row at all follows before the real holder resumes,
+    the exact live shape found on Thoth's own seat (DM 12288): a 174ms phantom followed
+    by ~43 minutes with no covering row before the real holder's next row began."""
     from src.orchestrator.seats import ensure_seat
 
+    phantom_closes = phantom_closes or t3
     seat = (await ensure_seat(actions, house=house, handle=handle, source="test"))["seat_id"]
     seat_oid = await actions.create_or_find_object("Seat", seat, "test")
     real_oid = await actions.create_or_find_object("Agent", real_holder, "test")
@@ -823,7 +830,7 @@ async def _seed_sandwich(
     await actions.create_link(phantom_oid, seat_oid, "holds", "test", t2, 1.0)
     await actions.pool.execute(
         "UPDATE links SET valid_until=$1 WHERE from_id=$2 AND to_id=$3 AND type='holds'",
-        t3, phantom_oid, seat_oid)
+        phantom_closes, phantom_oid, seat_oid)
     third = await actions.create_link(real_oid, seat_oid, "holds", "test", t3, 1.0)
     if t4 is not None:
         await actions.pool.execute("UPDATE links SET valid_until=$1 WHERE id=$2", t4, third)
@@ -999,6 +1006,39 @@ async def test_holds_sandwich_refuses_apply_when_phantom_not_near_instant(
         "SELECT valid_until FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
     assert [r["valid_until"] for r in rows] == [t2, t3, None]  # untouched
+
+
+async def test_holds_sandwich_evidence_gap_spans_a_discontinuous_holds_chain(
+    actions: Actions,
+) -> None:
+    """REGRESSION (Thoth DM 12288, w352's live probe): the phantom's own window and
+    the real gap between the two real-holder rows are NOT always the same interval --
+    a live specimen on Thoth's own seat had a 174ms phantom immediately followed by a
+    further ~43-minute stretch with no covering holds row at all before the real
+    holder's next row began. Evidence seeded ONLY in that wider stretch (never inside
+    the phantom's own tiny window) must still pass the gate -- checking against the
+    phantom's own window alone (the first cut of this fix) found nothing and refused
+    every real specimen as a vacancy."""
+    t1 = datetime(2026, 5, 1, tzinfo=UTC)
+    t2 = datetime(2026, 5, 1, 14, 40, 37, 237120, tzinfo=UTC)
+    phantom_closes = datetime(2026, 5, 1, 14, 40, 37, 411288, tzinfo=UTC)  # +174ms
+    t3 = datetime(2026, 5, 1, 15, 23, 33, 893582, tzinfo=UTC)  # ~43 min after phantom_closes
+    seat = await _seed_sandwich(
+        actions, house="osiris", handle="GmSandwichDiscontinuous",
+        real_holder="agent:gm-swd-real", phantom="agent:gm-swd-phantom",
+        t1=t1, t2=t2, t3=t3, t4=None, phantom_closes=phantom_closes)
+    # evidence sits in the ~43-minute stretch AFTER the phantom closes, well outside
+    # the phantom's own [t2, phantom_closes) window
+    await _seed_gap_evidence(
+        actions, agent="agent:gm-swd-real",
+        at=phantom_closes + timedelta(minutes=20))
+
+    out = await migrate_holds_sandwich(actions, actor="test", dry_run=False, because="test")
+    found = next(s for s in out["sandwiches"] if s["seat"] == seat)
+    assert round(found["phantom_duration_seconds"], 3) == 0.174
+    assert found["gap_evidence"]["count"] == 1
+    assert found["refused_why"] is None
+    assert found["applied"] is True
 
 
 async def test_holds_sandwich_only_seat_filters_by_canonical(actions: Actions) -> None:
