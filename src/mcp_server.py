@@ -1633,6 +1633,12 @@ async def describe(table: str) -> dict[str, Any]:
                 "hint": "describe('seat:<verb>') for one verb's full text"}
     if table.startswith("seat:"):
         verb = table.split(":", 1)[1]
+        # correct-agent-house -> correct-agent-project (ONE TAXONOMY, ruling
+        # 52a59652/70c001ec): the CLI's own `aliases=["correct-agent-house"]` on its
+        # `correct-agent-project` subparser means `args.command` can still read either
+        # spelling verbatim -- this mirrors that so the deprecated spelling still
+        # resolves to the one manual entry, never a second copy.
+        verb = {"correct-agent-house": "correct-agent-project"}.get(verb, verb)
         text = _SEAT_MANUAL.get(verb)
         return {"verb": verb, "text": text} if text else {"exists": False, "verb": verb}
     return await describe_table(await _pool_get(), table)
@@ -2636,9 +2642,10 @@ async def mount(
                 "declared": cwd, "kept": cwd,
                 **({"declared_pin_kept_for_identity": declared_project_label}
                    if declared_project_label else {}),
-                "note": ("registry recollection pointed at the bare seat-office container "
-                         "(~/.osiris/seats), never a home of its own — your declared cwd is "
-                         "a real, existing office and wins outright; nothing was corrected"),
+                "note": ("registry recollection pointed at the bare seat-directory "
+                         "container (~/.osiris/seats), never a home of its own — your "
+                         "declared cwd is a real, existing seat directory and wins "
+                         "outright; nothing was corrected"),
             }
             # cwd is left as the caller's own declared value — no reassignment.
         else:
@@ -2656,10 +2663,11 @@ async def mount(
                                "address was corrected (ruling 13af22fc)"
                                if declared_project_label else ""))
             if kept_is_bare_container:
-                honest_note = ("could not resolve a specific office for either the declared "
-                                "or the recollected cwd — mounted at the bare seat-office "
-                                "container for session bookkeeping only; this is NOT your "
-                                "home, it is a fallback with nowhere better to point"
+                honest_note = ("could not resolve a specific seat directory for either the "
+                                "declared or the recollected cwd — mounted at the bare "
+                                "seat-directory container for session bookkeeping only; "
+                                "this is NOT your home, it is a fallback with nowhere "
+                                "better to point"
                                 + (f" — its own project pin ({declared_project_label!r}) "
                                    "still won identity resolution" if declared_project_label
                                    else ""))
@@ -7635,13 +7643,14 @@ async def _seat_edge_impl(
     """Shared body behind `seat_edge` and its two hidden single-purpose aliases (attach_
     seat/detach_seat) — one code path, three names. Each action below is copied
     verbatim from what was that alias's own top-level function body before the fold,
-    plus a reissue of BOTH sides' offices (thread 613cda0a): promote already refreshes
+    plus a reissue of BOTH sides' seat directories (thread 613cda0a): promote already
+    refreshes
     manager and worker through its own caller (mcp_server.py's `seat(action='promote')`
     branch); attach/detach mint or cut the SAME `managed_by` edge but, before this,
     refreshed neither — a manager's own "## Your team" listing and a worker's own
     manager-of-record line both went stale the moment either verb ran outside promote.
     Also heals the WORKER's own mount cache (never the manager's — a manager's own
-    project is unaffected by gaining/losing a worker, only the worker's derived house
+    project is unaffected by gaining/losing a worker, only the worker's derived project
     depends on the managed_by chain attach/detach changes; mount-cache heal
     generalization, wave 6, dispatch 7dfc38a5)."""
     ident = await _ident_for(ctx)
@@ -8542,13 +8551,14 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
 async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris office — the
-    P2V move: import a running-but-unmanaged instance, preserve its state,
-    give it a clean managed identity. Composes `identify_agent(ref)` to resolve the target
-    (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a specific `agent:` id
-    instead — and on a LIVE match: moving a live seat splits its running session's history
-    between two homes, close its tab first), `claim_name(handle)` (propagating its own real
-    refusals: a visitor, a name held live elsewhere, a cross-house collision), and
+    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris seat
+    directory — the P2V move: import a running-but-unmanaged instance, preserve its
+    state, give it a clean managed identity. Composes `identify_agent(ref)` to resolve
+    the target (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a
+    specific `agent:` id instead — and on a LIVE match: moving a live seat splits its
+    running session's history between two homes, close its tab first),
+    `claim_name(handle)` (propagating its own real refusals: a visitor, a name held
+    live elsewhere, a cross-project collision), and
     `establish_office` (the actual move). `ref` accepts anything `identify_agent()` does — an
     `agent:` id, a `seat:` id, a bare handle, or an absolute cwd path. The receipt's `verified`
     field is a FRESH post-write `identify_agent()` read, never an echo of what the earlier
@@ -8834,14 +8844,16 @@ _SEAT_MANUAL: dict[str, str] = {
         "never this verb's). `dry_run` defaults true; the caller must confirm before "
         "passing `--apply`/`dry_run=False`. Run `roster` first if unsure which seats "
         "need this."),
-    "correct-agent-house": (
-        "correct-agent-house <agent> [--project] [--seat-generation] — heal an "
+    "correct-agent-project": (
+        "correct-agent-project <agent> [--project] [--seat-generation] — heal an "
         "already-polluted agent's own project/seat_generation stamps, THIRD-PARTY "
         "(unlike `correct-house`, which is self-scoped and has no console door for "
         "that reason). Composes `correct_agent_house` (hidden from `list_tools()` "
         "since retirement wave 1, zero traffic at the time — still fully callable as "
-        "a deprecated alias). No CLI door yet (#204, declared-not-built). `<agent>` "
-        "accepts a claimed handle or a raw agent id."),
+        "a deprecated alias). Has a CLI door: `osiris correct-agent-project <agent> "
+        "[--project P] [--seat-generation N]` (`correct-agent-house` still works this "
+        "release as a deprecated alias, ONE TAXONOMY, ruling 52a59652/70c001ec). "
+        "`<agent>` accepts a claimed handle or a raw agent id."),
     "retire-agent": (
         "retire-agent <agent> --because [--override-live] — third-party AGENT "
         "retirement, distinct from `retire` (which ends a SEAT's role — this ends one "
