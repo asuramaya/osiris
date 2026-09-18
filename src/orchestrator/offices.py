@@ -401,6 +401,46 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
             "reason": reason, "path": str(p), "backup": str(backup)}
 
 
+def _correct_or_add_pin_value(
+    path: str, key: str, value: str | None, *, reason: str,
+) -> dict[str, Any]:
+    """`correct_pin_value`, widened to also cover a pin that never declared `key` at
+    all (operator ruling b5663511, PROJECT IDENTITY DRIFT, Thoth mail 12419 item 5,
+    live specimen: Marquee's rename cascade hit a seat whose `.osiris` had no
+    top-level `project` key — `correct_pin_value`'s own refusal, "only rewrites an
+    EXISTING key," is correct in isolation but the wrong terminal answer for THIS
+    caller: a cascade acting with the project rename's own elevated authority (see
+    `_cascade_governing_seats`) already has standing to FILL a genuinely absent key,
+    the same way `write_pin_additions` exists to do — it just never tried, because
+    `correct_pin_value` is deliberately narrow (its own docstring: a disagreement
+    between a declared pin and reality must stay visible, never silently resolved by
+    a tool guessing at intent; a MISSING key is not that shape, there is no
+    disagreement to preserve).
+
+    Tries `correct_pin_value` first; falls back to `write_pin_additions` only on
+    that EXACT refusal (the "use write_pin_additions to add a missing one" tail is
+    this file's own message, authored here, checked verbatim rather than re-parsing
+    the TOML a second time). Every OTHER refusal (invalid TOML, an empty reason)
+    passes through unchanged — this widens exactly one failure mode, nothing else.
+    `value=None` against a missing key is already correct (nothing to unset, nothing
+    to add) and reports as such rather than attempting a write.
+
+    THE FALLBACK RESULT CARRIES `old_value`/`new_value` TOO (never a bare `write_pin_
+    additions` shape standing in unannounced): every existing caller of `correct_
+    pin_value`'s own return contract — cmd_correct_pin_value's own CLI door among
+    them — reads `old_value`/`new_value` unconditionally once `written` is true;
+    `write_pin_additions` never carried those keys (it has no "old" value, only
+    `added`/`skipped`/`discarded`), so returning it bare would trade one caller's
+    KeyError for another's. `old_value=None` (there was none — that IS the finding)
+    and `new_value=value`, layered onto write_pin_additions' own receipt unchanged."""
+    result = correct_pin_value(path, key, value, reason=reason)
+    if (result.get("error", "").endswith("use write_pin_additions to add a missing one")
+            and value is not None):
+        added = write_pin_additions(path, {key: value})
+        return {**added, "old_value": None, "new_value": value}
+    return result
+
+
 async def correct_own_pin_value(
     pool: asyncpg.Pool, agent_id: str, key: str, value: str | None, *, reason: str,
     office_root: Path | None = None, workspace_root: Path | None = None,
@@ -472,7 +512,7 @@ async def correct_own_pin_value(
     handle = bound["handle"].lower()
     root = office_root or _default_office_root()
     office = root / handle
-    result = correct_pin_value(str(office), key, value, reason=reason)
+    result = _correct_or_add_pin_value(str(office), key, value, reason=reason)
     if not result.get("error"):
         result["seat_id"] = bound["seat_id"]
     touched = {_resolved(office)}
@@ -482,7 +522,7 @@ async def correct_own_pin_value(
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", bound["seat_id"])
     if anchor_cwd and _resolved(Path(anchor_cwd)) not in touched and \
             (Path(anchor_cwd) / ".osiris").is_file():
-        result["anchor"] = correct_pin_value(anchor_cwd, key, value, reason=reason)
+        result["anchor"] = _correct_or_add_pin_value(anchor_cwd, key, value, reason=reason)
         touched.add(_resolved(Path(anchor_cwd)))
     declared_tree = tree_cwd or await pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
@@ -491,7 +531,7 @@ async def correct_own_pin_value(
     workspace = Path(declared_tree) if declared_tree else \
         (workspace_root or (Path.home() / "code")) / handle
     if _resolved(workspace) not in touched and (workspace / ".osiris").is_file():
-        result["workspace"] = correct_pin_value(str(workspace), key, value, reason=reason)
+        result["workspace"] = _correct_or_add_pin_value(str(workspace), key, value, reason=reason)
     return result
 
 
@@ -586,6 +626,21 @@ async def correct_pin_value_third_party(
         peek = _peek_pin_value(str(path), key)
         if peek.get("ok") and peek["value"] != value:
             plan[label] = {"path": str(path), "old_value": peek["value"], "new_value": value}
+        elif (not peek.get("ok") and value is not None
+                and peek.get("error", "").startswith(f"{key!r} is not declared in ")):
+            # THE MISSING-KEY PLAN (operator ruling b5663511, PROJECT IDENTITY DRIFT,
+            # Thoth mail 12419 item 5, live specimen: Marquee's own .osiris never
+            # declared `project` at all): a peek that only ever recognizes VALUE
+            # disagreements silently plans nothing for a genuinely missing key, so the
+            # cascade's own "elif not plan: already-correct" reads a real gap as a
+            # no-op and never even calls the real write below -- correct_own_pin_value
+            # now resolves this exact shape via _correct_or_add_pin_value (write_pin_
+            # additions), and the dry-run plan must say so or the two permanently
+            # disagree, exactly the invariant this function's own docstring already
+            # names ("the dry-run plan and the write it previews never disagree").
+            # `_peek_pin_value`'s "does not exist"/invalid-TOML errors are deliberately
+            # NOT matched here -- those stay unplanned, same as before this fix.
+            plan[label] = {"path": str(path), "old_value": None, "new_value": value}
 
     return {"seat_id": seat_id, "handle": handle, "key": key, "dry_run": True, "plan": plan}
 

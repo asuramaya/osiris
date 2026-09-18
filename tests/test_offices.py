@@ -1217,6 +1217,33 @@ async def test_correct_pin_value_third_party_dry_run_previews_without_writing(
     assert (office / ".osiris").read_text() == 'project = "Jesus"\n'  # untouched
 
 
+async def test_correct_pin_value_third_party_dry_run_plans_a_genuinely_missing_key(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12419 item 5): a
+    .osiris that never declared `project` at all must PLAN an add, never read as
+    already-correct — the cascade's own PIN tier (_cascade_governing_seats) checks
+    `plan or {} -> "already-correct"` before ever calling the real write, so an
+    unplanned missing key would silently skip this seat's rename cascade entirely."""
+    from src.orchestrator.agents import claim_name
+
+    claimed = await claim_name(actions, "agent:tp4nokey", "TpFour", source="test")
+    office = tmp_path / "tpfour"
+    office.mkdir()
+    (office / ".osiris").write_text('seat = "tpfour"\n')
+
+    out = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
+    assert out["plan"]["office"] == {
+        "path": str(office), "old_value": None, "new_value": "Godel"}
+
+    real = await correct_pin_value_third_party(
+        actions.pool, claimed["seat_id"], "project", "Godel", reason="test",
+        dry_run=False, office_root=tmp_path)
+    assert real["written"] is True
+    assert (office / ".osiris").read_text() == 'seat = "tpfour"\nproject = "Godel"\n'
+
+
 async def test_correct_pin_value_third_party_dry_run_reports_no_plan_when_already_correct(
     actions: Actions, tmp_path: Path,
 ) -> None:
@@ -1430,9 +1457,14 @@ async def test_revert_own_pin_write_skips_workspace_with_no_backup(
     assert "workspace" not in out
 
 
-async def test_correct_own_pin_value_propagates_a_missing_key_refusal(
+async def test_correct_own_pin_value_adds_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
+    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12419 item 5, live
+    specimen: Marquee's own .osiris never declared `project` at all): correct_pin_
+    value's own "only rewrites an EXISTING key" refusal was the WRONG terminal answer
+    here — a pin missing the key entirely is not a disagreement to leave visible, it's
+    an absence this door already has standing to fill, via write_pin_additions."""
     from src.orchestrator.agents import claim_name
 
     await claim_name(actions, "agent:cov5nokey", "CovNokey", source="test")
@@ -1442,7 +1474,27 @@ async def test_correct_own_pin_value_propagates_a_missing_key_refusal(
 
     out = await correct_own_pin_value(
         actions.pool, "agent:cov5nokey", "project", "x", reason="x", office_root=tmp_path)
-    assert "not declared" in out["error"]
+    assert "error" not in out
+    assert out["written"] is True
+    assert out["added"] == ["project"]
+    assert (office / ".osiris").read_text() == 'seat = "covnokey"\nproject = "x"\n'
+
+
+async def test_correct_own_pin_value_still_refuses_invalid_toml(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The widened door stays narrow everywhere else — invalid TOML is still an outright
+    refusal, never silently "fixed" by appending onto a broken file."""
+    from src.orchestrator.agents import claim_name
+
+    await claim_name(actions, "agent:cov6badtoml", "CovBadToml", source="test")
+    office = tmp_path / "covbadtoml"
+    office.mkdir()
+    (office / ".osiris").write_text("not [ valid toml")
+
+    out = await correct_own_pin_value(
+        actions.pool, "agent:cov6badtoml", "project", "x", reason="x", office_root=tmp_path)
+    assert "not valid TOML" in out["error"]
 
 
 # ═══ _pin_backup_path (obligation 27ae4f89) — a REPO-side pin's backup must never land

@@ -130,16 +130,28 @@ async def bootstrap_project(
     lineage.py's register_spawn/register_swarm): a path-shaped or otherwise malformed
     caller-supplied name refuses BEFORE any object is touched. The `project or root.name`
     default (`_plan`'s own fallback) is a directory basename, not caller text, so it never
-    needs this — the guard only ever fires on an EXPLICIT `project=` argument."""
+    needs this — the guard only ever fires on an EXPLICIT `project=` argument.
+
+    RESOLVES BY NAME BEFORE MINTING (operator ruling b5663511, PROJECT IDENTITY DRIFT):
+    a bare `create_or_find_object` on `repo:{project}` matches only the CANONICAL,
+    frozen at whatever label first minted it — re-running this against a project since
+    renamed (its canonical stays `repo:<old>` forever, `rename_project`'s own law) would
+    mint a fresh stub under the new label instead of finding the real object, the exact
+    twin-project shape the ruling's own live specimens (`repo:handlingtheloop` beside
+    `repo:xxit`) already produced. `_resolve_repo` (capture.py, the same choke point
+    `create_project`/`_mint_or_find_repo` already trust) is tried first; only a genuine
+    zero-match mints."""
     project, log_specs, essays = _plan(path, project)
-    from src.orchestrator.capture import _validate_repo_name
+    from src.orchestrator.capture import _resolve_repo, _validate_repo_name
     try:
         _validate_repo_name(project, project)
     except ValueError as exc:
         return {"error": str(exc)}
     now = datetime.now(UTC)
 
-    proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
+    proj = await _resolve_repo(actions.pool, project)
+    if proj is None:
+        proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
     await actions.assert_property(proj, "name", project, source, now, _CONF,
                                   evidence_class=_EC.value)
 

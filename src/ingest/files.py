@@ -123,17 +123,29 @@ async def ingest_files(
     degenerate basename (an empty toplevel, a stray punctuation-only directory) rather than
     trusting derivation alone. Returns `{"error": ...}` instead of raising: this runs from
     the pulse daemon's own unattended tick (pulse.py), where an uncaught exception would
-    take down monitoring for every OTHER repo in the same pass, not just this one."""
+    take down monitoring for every OTHER repo in the same pass, not just this one.
+
+    RESOLVES BY NAME BEFORE MINTING (operator ruling b5663511, PROJECT IDENTITY DRIFT):
+    the git toplevel's own basename is stable canonical-forming ONLY while the on-disk
+    folder itself is never renamed — the moment it is (the exact live specimen: a repo
+    still `repo:xxit` in the graph after being renamed to `handlingtheloop` both on
+    disk and via `rename_project`), a fresh ingest here derives the NEW basename and
+    would mint a stub twin under it rather than finding the real, already-`repo:xxit`
+    object. `_resolve_repo` (capture.py, the same choke point `create_project`/
+    `_mint_or_find_repo` already trust) is tried first; only a genuine zero-match
+    mints."""
     top = _git(path, "rev-parse", "--show-toplevel").strip()
     name = Path(top).name
-    from src.orchestrator.capture import _validate_repo_name
+    from src.orchestrator.capture import _resolve_repo, _validate_repo_name
     try:
         _validate_repo_name(name, name)
     except ValueError as exc:
         return {"error": str(exc)}
     now = datetime.now(UTC)
-    repo = await actions.create_or_find_object("SoftwareProject", f"repo:{name}", source_id,
-                                               case_id)
+    repo = await _resolve_repo(actions.pool, name)
+    if repo is None:
+        repo = await actions.create_or_find_object("SoftwareProject", f"repo:{name}",
+                                                    source_id, case_id)
     existing = {(r["from_id"], r["to_id"]) for r in await actions.pool.fetch(
         "SELECT from_id, to_id FROM links WHERE type='in_repo' "
         "AND (valid_until IS NULL OR valid_until > now())")}

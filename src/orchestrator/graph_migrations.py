@@ -30,7 +30,7 @@ from src.parsers.evidence import confidence_for
 MIGRATION_TARGETS = frozenset({
     "repo_seats_fix", "file_the_unfiled", "assertion_links",
     "owned_by_second_pass", "file_the_residual", "commits_to_agents",
-    "house_to_project", "holds_sandwich",
+    "house_to_project", "holds_sandwich", "project_name_singular",
 })
 
 _BIND_BEFORE_SPAWN_PREFIX = "launch_seat: bind-before-spawn"
@@ -86,6 +86,9 @@ async def run_migration(
     if name == "holds_sandwich":
         return await migrate_holds_sandwich(
             actions, actor=actor, dry_run=dry_run, because=because, only_seat=only_seat)
+    if name == "project_name_singular":
+        return await migrate_project_name_singular(
+            actions, actor=actor, dry_run=dry_run, because=because)
     return {"error": f"unknown migration {name!r}", "valid_targets": sorted(MIGRATION_TARGETS)}
 
 
@@ -1069,7 +1072,7 @@ async def migrate_house_to_project(
     if not dry_run and not (because or "").strip():
         return {"error": "migrating without a because is an un-audited repair — cite "
                          "the evidence/ruling that authorizes it"}
-    from src.orchestrator.charter import charter_of
+    from src.orchestrator.charter import charter_of, project_current_name
     from src.orchestrator.seats import resync_seat_project
 
     pool = actions.pool
@@ -1090,7 +1093,11 @@ async def migrate_house_to_project(
                 "refused_why": "no charter" if not governed else "ambiguous charter",
             })
             continue
-        new_project = governed[0]
+        # THE CURRENT NAME, NEVER THE CANONICAL (operator ruling b5663511, PROJECT
+        # IDENTITY DRIFT — the live specimen: repo:xxit renamed to "handlingtheloop",
+        # this comparison reading governed[0]'s bare canonical "xxit" made an already-
+        # correct "handlingtheloop" stamp look like a disagreement that never existed).
+        new_project = await project_current_name(pool, governed[0])
         if house == new_project:
             continue  # already correct -- nothing to repair
         if house is not None:
@@ -1332,4 +1339,68 @@ async def _gap_activity(
         "count": row["n"],
         "first": row["first_ts"].isoformat() if row["first_ts"] else None,
         "last": row["last_ts"].isoformat() if row["last_ts"] else None,
+    }
+
+
+async def migrate_project_name_singular(
+    actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
+) -> dict[str, Any]:
+    """THE PROJECT-NAME COLLAPSE (operator ruling b5663511, PROJECT IDENTITY DRIFT,
+    Thoth dispatch 12401): a SoftwareProject's `name` is a SINGULAR fact — exactly one
+    current value, ever — but `assert_property`'s own same-source-only supersession
+    (ruling 1335332e) lets a genuine rename sit BESIDE every prior self-declared/
+    disk-census/ingest-sourced name rather than retiring them, so a project can carry
+    many simultaneously-current names at once. The live specimen: repo:bytebye reads
+    27 competing current `name` assertions (bytebye/ByeByte/byebyte) from six different
+    sources (decision 3adc0f0b) — `dossier`/`triage` already MARK this as "contradicted"
+    (the general #102 rule), but marking is not resolving, and every "which project"
+    derivation this same ruling's other fixes (`project_current_name`, charter.py) now
+    depend on needs exactly one answer to read back.
+
+    THE WINNER: highest confidence, ties broken by most recent `observed_at` — the
+    SAME `ORDER BY a.confidence DESC, a.observed_at DESC` every other "current winning
+    value" reader in this codebase already uses (charter_of, governed_trees, the seat-
+    facts readers). `rename_project`'s own writes are confidence 0.95, deliberately
+    above every ordinary evidence-class ceiling (SELF_DECLARED's own 0.9 is the highest
+    ordinary tier) — a live human-directed rename always outranks a stale disk-census
+    or ingest-sourced guess without needing a second, source-string-based special case.
+
+    COMPENSATING, VIA `assert_singular_property` (cross-source collapse, ruling
+    1335332e's own intended door for exactly this shape): every losing current
+    assertion is superseded, none deleted — the full history of every name this
+    project ever carried, and who claimed it, stays in the assertion log forever.
+
+    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
+    a repeat call finds no SoftwareProject left with more than one current `name`."""
+    if not dry_run and not (because or "").strip():
+        return {"error": "migrating without a because is an un-audited repair — cite "
+                         "the evidence/ruling that authorizes it"}
+    pool = actions.pool
+    dupes = await pool.fetch(
+        "SELECT o.id AS oid, o.canonical FROM objects o "
+        "JOIN current_assertions a ON a.object_id=o.id AND a.name='name' "
+        "WHERE o.type='SoftwareProject' AND o.status='active' "
+        "GROUP BY o.id, o.canonical HAVING count(DISTINCT a.value #>> '{}') > 1")
+
+    entries: list[dict[str, Any]] = []
+    for r in dupes:
+        names = await pool.fetch(
+            "SELECT a.value #>> '{}' AS name FROM current_assertions a "
+            "WHERE a.object_id=$1 AND a.name='name' "
+            "ORDER BY a.confidence DESC, a.observed_at DESC", r["oid"])
+        winner = names[0]["name"]
+        entries.append({
+            "project": r["canonical"], "winner": winner,
+            "current_names": [n["name"] for n in names],
+        })
+        if not dry_run:
+            await actions.assert_singular_property(
+                r["oid"], "name", winner, actor, datetime.now(UTC), _CONF,
+                because=f"{because} (migrate_project_name_singular: collapsed "
+                        f"{len(names)} competing current names — highest-confidence/"
+                        "newest value wins)",
+                evidence_class=_EC)
+    return {
+        "dry_run": dry_run, "found": len(entries), "entries": entries,
+        "because": because if not dry_run else None,
     }

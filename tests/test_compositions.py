@@ -3808,3 +3808,89 @@ async def test_lint_unverified_citation_flags_a_tampered_citation(
     assert result["counts"]["unverified-citation"] == 1
     finding = next(f for f in result["findings"] if f["check"] == "unverified-citation")
     assert finding["subject"] == "agent:lint-cite-tampered"
+
+
+# --- _fn_lint: project-identity (operator ruling b5663511, PROJECT IDENTITY DRIFT, -----
+# Thoth dispatch 12401) -------------------------------------------------------------
+
+
+async def test_lint_project_identity_clean_on_a_fresh_tree(actions: Actions) -> None:
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["project-identity"] == 0
+    assert "project-identity" in result["clean"]
+
+
+async def test_lint_project_identity_flags_an_empty_stub_colliding_by_name(
+    actions: Actions,
+) -> None:
+    """The live specimen: repo:xxit renamed to 'handlingtheloop' (a real, referenced
+    project); a stub repo:handlingtheloop with no inbound link sits beside it under a
+    canonical that happens to spell the SAME string the real project's name now
+    reads — exactly the twin a rename-blind mint would have produced."""
+    now = datetime.now(UTC)
+    real = await actions.create_or_find_object("SoftwareProject", "repo:xxit", "test")
+    await actions.assert_property(real, "name", "handlingtheloop", "test", now, 0.95,
+                                  evidence_class="self_declared")
+    referrer = await actions.create_or_find_object("Thread", "thread:lint-pi-referrer",
+                                                    "test")
+    await actions.create_link(referrer, real, "in_repo", "test", now, 0.9,
+                              evidence_class="direct_observation")
+    stub = await actions.create_or_find_object(
+        "SoftwareProject", "repo:handlingtheloop", "test")
+    await actions.assert_property(stub, "name", "handlingtheloop", "test", now, 0.6,
+                                  evidence_class="direct_observation")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["project-identity"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "project-identity")
+    assert finding["subject"] == "repo:handlingtheloop"
+    assert "repo:xxit" in finding["detail"]
+
+
+async def test_lint_project_identity_never_flags_a_stub_with_no_collision(
+    actions: Actions,
+) -> None:
+    """An empty stub whose name/canonical matches nothing else is a genuinely new,
+    not-yet-referenced project — never this check's business (orphan's own, if
+    anyone's)."""
+    await actions.create_or_find_object("SoftwareProject", "repo:lint-pi-lonely", "test")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["project-identity"] == 0
+
+
+async def test_lint_project_identity_flags_a_project_with_more_than_one_current_name(
+    actions: Actions,
+) -> None:
+    """The other live specimen: repo:bytebye's 27 competing current names, collapsed
+    here to two sources disagreeing — genuinely DISTINCT values, never merely
+    redundant agreement across sources (count(DISTINCT ...), not a raw row count)."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
+    await actions.assert_property(proj, "name", "bytebye", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "ByeByte", "src-b", now, 0.6,
+                                  evidence_class="direct_observation")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["project-identity"] == 1
+    finding = next(f for f in result["findings"] if f["check"] == "project-identity")
+    assert finding["subject"] == "repo:bytebye"
+    assert "bytebye" in finding["detail"] and "ByeByte" in finding["detail"]
+
+
+async def test_lint_project_identity_never_flags_redundant_agreement(
+    actions: Actions,
+) -> None:
+    """Two sources asserting the IDENTICAL name value are agreement, not
+    contradiction — count(DISTINCT value), never a raw >1-row count."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:lint-pi-agree",
+                                                "test")
+    await actions.assert_property(proj, "name", "agreeable", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "agreeable", "src-b", now, 0.6,
+                                  evidence_class="direct_observation")
+
+    result = await _fn_lint(actions.pool, None, {})
+    assert result["counts"]["project-identity"] == 0

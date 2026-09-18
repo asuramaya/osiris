@@ -290,8 +290,17 @@ async def register_swarm(
                 _log.warning("register_swarm(%s): refusing to mint a SoftwareProject from "
                             "project=%r — %s", s.agent_id, s.project, exc)
             else:
-                proj = await actions.create_or_find_object(
-                    "SoftwareProject", f"repo:{s.project}", _SOURCE)
+                # RESOLVES BY NAME BEFORE MINTING (operator ruling b5663511, PROJECT
+                # IDENTITY DRIFT): a bare create_or_find_object on the canonical alone
+                # would mint a twin the instant a project's own name has moved since
+                # this disk basename was recorded (rename_project's own law: canonical
+                # never re-points). Same _resolve_repo choke point create_project/
+                # _mint_or_find_repo already trust.
+                from src.orchestrator.capture import _resolve_repo
+                proj = await _resolve_repo(actions.pool, s.project)
+                if proj is None:
+                    proj = await actions.create_or_find_object(
+                        "SoftwareProject", f"repo:{s.project}", _SOURCE)
                 await _link_once(actions, a, proj, "works_in", now)
         # delegation: child → its DIRECT parent (a sibling sub-agent, or the root agent)
         parent = await actions.create_or_find_object("Agent", parents[s.agent_id], _SOURCE)
@@ -377,8 +386,14 @@ async def register_spawn(
             _log.warning("register_spawn(%s): refusing to mint a SoftwareProject from "
                         "project=%r — %s", child, project, exc)
         else:
-            proj = await actions.create_or_find_object(
-                "SoftwareProject", f"repo:{project}", _SOURCE)
+            # RESOLVES BY NAME BEFORE MINTING (operator ruling b5663511, PROJECT
+            # IDENTITY DRIFT) -- same fix as register_swarm's own sibling site above,
+            # via the same _resolve_repo choke point.
+            from src.orchestrator.capture import _resolve_repo
+            proj = await _resolve_repo(actions.pool, project)
+            if proj is None:
+                proj = await actions.create_or_find_object(
+                    "SoftwareProject", f"repo:{project}", _SOURCE)
             await _link_once(actions, a, proj, "works_in", now)
     model: str | None = None
     if transcript is not None:

@@ -5586,13 +5586,15 @@ async def test_cmd_correct_pin_value_refuses_an_unclaimed_name(
     assert "no such claimed seat or live agent" in buf.getvalue()
 
 
-async def test_cmd_correct_pin_value_propagates_the_missing_key_refusal(
+async def test_cmd_correct_pin_value_adds_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No parallel guard logic — the underlying correct_own_pin_value's own refusal (an
-    EXISTING key only) surfaces through this door unchanged."""
+    """No parallel guard logic — the underlying correct_own_pin_value's own widened
+    behavior (operator ruling b5663511, PROJECT IDENTITY DRIFT: a missing key is
+    ADDED via write_pin_additions, never refused) surfaces through this door
+    unchanged."""
     import io
-    from contextlib import redirect_stderr
+    from contextlib import redirect_stdout
 
     from src.orchestrator.agents import claim_name
 
@@ -5602,12 +5604,12 @@ async def test_cmd_correct_pin_value_propagates_the_missing_key_refusal(
     (office / ".osiris").write_text('project = "tony"\n')
 
     buf = io.StringIO()
-    with redirect_stderr(buf):
+    with redirect_stdout(buf):
         out = await cmd_correct_pin_value(
             "CliPinMissingKey", "no_such_key", "x", "y",
             pool=actions.pool, office_root=tmp_path)
-    assert out == 1
-    assert "is not declared in" in buf.getvalue()
+    assert out == 0
+    assert (office / ".osiris").read_text() == 'project = "tony"\nno_such_key = "x"\n'
 
 
 async def test_cli_parser_accepts_correct_pin_value(actions: Actions) -> None:

@@ -3881,6 +3881,33 @@ async def test_derive_house_ghost_stamp_under_a_real_house_manager_derives_the_m
     assert await derive_house(actions.pool, "seat:hg1wrk00") == "monsterhouse"
 
 
+async def test_derive_house_ghost_clause_compares_against_the_renamed_project_name(
+    actions: Actions,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511): the ghost clause's own
+    "house stamp equals its governed project's name" comparison must resolve through
+    to that project's CURRENT name — a house correctly re-stamped to a renamed
+    project by resync_seat_project must still ghost-match, not anchor as a false
+    boundary crossing just because charter_of's raw canonical no longer matches it."""
+    from src.orchestrator.seats import derive_house
+
+    manager = await actions.create_or_find_object("Seat", "seat:hg2mgr00", "test")
+    await actions.assert_property(manager, "house", "monsterhouse", "test",
+                                  datetime.now(UTC), 0.9)
+    worker = await actions.create_or_find_object("Seat", "seat:hg2wrk00", "test")
+    project = await actions.create_or_find_object("SoftwareProject", "repo:hg2oldname",
+                                                   "test")
+    await actions.assert_property(project, "name", "hg2newname", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    await actions.create_link(worker, project, "governs", "test", datetime.now(UTC), 0.9)
+    # the ghost: house stamp == the project's CURRENT (renamed) name, not its canonical
+    await actions.assert_property(worker, "house", "hg2newname", "operator",
+                                  datetime.now(UTC), 0.9)
+    await _link_managed_by(actions, worker, manager, source="operator")
+
+    assert await derive_house(actions.pool, "seat:hg2wrk00") == "monsterhouse"
+
+
 async def test_derive_house_none_clause_a_houseless_manager_never_anchors_a_real_stamp(
     actions: Actions,
 ) -> None:
@@ -4632,6 +4659,34 @@ async def test_sweep_seat_trees_repairs_a_fabricated_tree_on_apply(
     assert rows[0]["v"] == str(real_tree)
 
 
+async def test_sweep_seat_trees_repo_label_reflects_a_rename(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511): governed_trees' own repo
+    label feeds the receipt/audit text, never a graph write of its own -- but a stale
+    canonical-derived label there is exactly the confusion this ruling exists to end.
+    The entry's own `repo` must read the project's CURRENT name."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import sweep_seat_trees
+
+    real_tree = tmp_path / "renamed-repo"
+    (real_tree / ".git").mkdir(parents=True)
+    seat = await actions.create_or_find_object("Seat", "seat:sweep-renamed", "test")
+    await actions.assert_property(seat, "handle", "SweepRenamed", "test",
+                                  datetime.now(UTC), 0.9)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:sweep-oldname",
+                                                "test")
+    await actions.assert_property(proj, "name", "sweep-newname", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    await actions.assert_property(proj, "on_disk_path", str(real_tree), "test",
+                                  datetime.now(UTC), 0.9)
+    await set_charter(actions, "seat:sweep-renamed", ["sweep-oldname"], actor="test")
+
+    dry = await sweep_seat_trees(actions, apply=False, actor="operator")
+    entry = next(e for e in dry["entries"] if e["seat"] == "seat:sweep-renamed")
+    assert entry["repo"] == "sweep-newname"
+
+
 async def test_sweep_seat_trees_reports_a_seat_with_zero_current_rows_without_crashing(
     actions: Actions,
 ) -> None:
@@ -5032,6 +5087,29 @@ async def test_resync_seat_project_re_derives_from_the_charter(actions: Actions)
     assert out["already_correct"] is False
     facts = await seat_facts(actions.pool, "seat:rsp1derive")
     assert facts["house"] == "rsp1real"
+
+
+async def test_resync_seat_project_stamps_the_renamed_name_not_the_canonical(
+    actions: Actions,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
+    renamed to 'handlingtheloop'): a governed project's canonical stays frozen at
+    mint forever (rename_project's own law); this must stamp the seat's own house
+    with the project's CURRENT name, never charter_of's raw canonical."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import resync_seat_project, seat_facts
+
+    await actions.create_or_find_object("Seat", "seat:rsp1renamed", "test")
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:rsp1oldname", "test")
+    await actions.assert_property(proj, "name", "rsp1newname", "test", datetime.now(UTC),
+                                  0.95, evidence_class="self_declared")
+    await set_charter(actions, "seat:rsp1renamed", ["rsp1oldname"], actor="test")
+
+    out = await resync_seat_project(
+        actions, "seat:rsp1renamed", source="test", reason="rename resolution")
+    assert out["project"] == "rsp1newname"
+    facts = await seat_facts(actions.pool, "seat:rsp1renamed")
+    assert facts["house"] == "rsp1newname"
 
 
 async def test_resync_seat_project_refuses_an_empty_reason(actions: Actions) -> None:
