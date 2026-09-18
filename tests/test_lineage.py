@@ -113,6 +113,28 @@ async def test_register_swarm_wires_tree_model_and_authority(
     assert await _target("agent:gc000002", "acts_for") == "principal:analyst:op"
 
 
+async def test_register_swarm_resolves_an_existing_project_by_name_not_canonical(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511): the session dir derives a
+    project label ("demo") that must be resolved against an EXISTING project's
+    current name, not re-minted under a fresh `repo:demo` canonical when the real
+    object already lives under an older, renamed-away canonical."""
+    existing = await actions.create_or_find_object("SoftwareProject", "repo:demo-old", "test")
+    await actions.assert_property(existing, "name", "demo", "test", NOW, 0.95,
+                                  evidence_class="self_declared")
+
+    await register_swarm(actions, _write_swarm(tmp_path))
+
+    target = await actions.pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects c ON c.id=l.from_id "
+        "JOIN objects p ON p.id=l.to_id "
+        "WHERE c.canonical='agent:child01' AND l.type='works_in'")
+    assert target == "repo:demo-old"
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:demo'")
+
+
 async def test_register_swarm_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     session = _write_swarm(tmp_path)
     r1 = await register_swarm(actions, session)

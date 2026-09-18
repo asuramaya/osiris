@@ -159,6 +159,37 @@ async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, st
                   if r["path"])
 
 
+async def project_current_name(pool: asyncpg.Pool, repo_label: str) -> str:
+    """A `charter_of`/`governed_trees` entry (a project's CANONICAL, `repo:` stripped)
+    resolved to that project's own CURRENT `name` property — the identity value every
+    "which project" derivation must compare/write (operator ruling b5663511, PROJECT
+    IDENTITY DRIFT, Thoth dispatch 12401): the live specimen was `house_to_project`
+    stamping a seat's own `house` as `repo:xxit`'s bare canonical ("xxit") when the
+    project had since been renamed to "handlingtheloop" — every later "does this seat's
+    stamped project match its charter" comparison then read as a disagreement that
+    wasn't one, and `osiris new`/ingest-time mint doors that only ever see the CURRENT
+    name (never the frozen-at-mint canonical) minted a fresh stub project instead of
+    finding the real one.
+
+    `charter_of`/`set_charter` themselves stay canonical FOREVER, on purpose (decision
+    5031a74 — that is exactly why a rename never needs to re-point a `governs` edge);
+    this is the READ-TIME resolution a caller applies to one of their own entries when
+    what it needs is what that canonical MEANS today, not the frozen label it happened
+    to mint under. A close cousin of `charter_display_label`'s own `_live_label`
+    resolution, but for COMPARISON/WRITE use (never presentation-only formatting —
+    `charter_display_label` explicitly refuses that role for the opposite reason).
+    Falls back to `repo_label` itself when the project was never named, or the
+    canonical does not resolve to any object at all — never raises; a caller with a
+    genuinely unresolvable label is exactly the population `charter_of` already forces
+    into "no charter"/"ambiguous charter" refusals upstream of this."""
+    name = await pool.fetchval(
+        "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+        "WHERE o.type='SoftwareProject' AND o.canonical=$1 AND a.name='name' "
+        "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
+        f"repo:{repo_label}")
+    return str(name) if name else repo_label
+
+
 async def set_charter(
     actions: Actions, seat_id: str, repos: list[str], *, actor: str,
 ) -> dict[str, Any]:

@@ -1562,11 +1562,17 @@ async def _is_ghost_house(pool: asyncpg.Pool, seat_id: str, house: str) -> bool:
     declaration. `derive_house` must read it as empty before any comparison, exactly as
     if the property had never been stamped, on both branches that consult it (a head's
     own answer, and the anchor's real-crossing check alike) — never a special case one
-    of the two forgets."""
-    from src.orchestrator.charter import charter_of
+    of the two forgets. Compares against each governed project's own CURRENT NAME
+    (operator ruling b5663511, PROJECT IDENTITY DRIFT), not charter_of's raw canonical —
+    a house correctly re-stamped to a project's live name by resync_seat_project must
+    still ghost-match once that project's OWN name has since moved again, the same
+    "compare by what it means today" discipline every other derivation in this ruling
+    holds."""
+    from src.orchestrator.charter import charter_of, project_current_name
 
     governed = await charter_of(pool, seat_id)
-    return any(house.lower() == g.lower() for g in governed)
+    names = [await project_current_name(pool, g) for g in governed]
+    return any(house.lower() == n.lower() for n in names)
 
 
 _MAX_HOUSE_HOPS = 32  # generous for any real org depth (mirrors mint_heir's own bounded-
@@ -2127,6 +2133,14 @@ async def sweep_seat_trees(
                 })
                 continue
             repo, winner = real_trees[0]
+            # THE CURRENT NAME, NEVER THE CANONICAL (operator ruling b5663511, PROJECT
+            # IDENTITY DRIFT): governed_trees' own repo label is charter_of's frozen-at-
+            # mint canonical — this only ever feeds the receipt/audit text below, never
+            # a graph write of its own (bind_seat_tree writes `winner`, the tree path),
+            # but a stale label in an audit trail is exactly the confusion this ruling
+            # exists to end.
+            from src.orchestrator.charter import project_current_name
+            repo = await project_current_name(actions.pool, repo)
         if not apply:
             entries.append({
                 "seat": seat_id, "old_tree_cwd": old_display, "new_tree_cwd": winner,
@@ -2889,7 +2903,7 @@ async def resync_seat_project(
         seat_id)
     if seat_row is None:
         return {"error": f"no active seat matches {seat_id!r}"}
-    from src.orchestrator.charter import charter_of
+    from src.orchestrator.charter import charter_of, project_current_name
 
     governed = await charter_of(actions.pool, seat_id)
     if not governed:
@@ -2898,7 +2912,10 @@ async def resync_seat_project(
         return {"error": f"{seat_id}'s charter governs {len(governed)} projects "
                          f"({', '.join(governed)}) — ambiguous, no single project to "
                          "derive"}
-    new_project = governed[0]
+    # THE CURRENT NAME, NEVER THE CANONICAL (operator ruling b5663511, PROJECT IDENTITY
+    # DRIFT): governed[0] is charter_of's own frozen-at-mint canonical label — a project
+    # renamed since would stamp the seat's own house with the STALE label forever.
+    new_project = await project_current_name(actions.pool, governed[0])
     facts = await seat_facts(actions.pool, seat_id)
     was = facts.get("house") or None
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)

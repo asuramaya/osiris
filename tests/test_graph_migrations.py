@@ -13,6 +13,7 @@ from src.orchestrator.graph_migrations import (
     migrate_holds_sandwich,
     migrate_house_to_project,
     migrate_owned_by_second_pass,
+    migrate_project_name_singular,
     migrate_repo_seats_fix,
     run_migration,
 )
@@ -790,6 +791,40 @@ async def test_migrate_house_to_project_skips_a_seat_already_correct(
     assert not any(e["seat"] == seat["seat_id"] for e in out["entries"])
 
 
+async def test_migrate_house_to_project_stamps_the_renamed_name_not_the_canonical(
+    actions: Actions,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
+    renamed to 'handlingtheloop'): a seat whose charter governs a project that has
+    since been RENAMED (canonical stays repo:<old>, only `name` changes -- rename_
+    project's own law) must be stamped with the project's CURRENT name, never
+    charter_of's own frozen-at-mint canonical."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import ensure_seat
+
+    seat = await ensure_seat(actions, house=None, handle="GmH2pRenamed", source="test")
+    proj = await actions.create_or_find_object(
+        "SoftwareProject", "repo:gm-h2p-oldname", "test")
+    await actions.assert_property(proj, "name", "gm-h2p-newname", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+    await set_charter(actions, seat["seat_id"], ["gm-h2p-oldname"], actor="test")
+
+    dry = await migrate_house_to_project(actions, actor="test", dry_run=True)
+    entry = next(e for e in dry["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["new_project"] == "gm-h2p-newname"
+    assert entry["refused_why"] is None
+
+    out = await migrate_house_to_project(
+        actions, actor="test", dry_run=False, because="test rename resolution")
+    entry = next(e for e in out["entries"] if e["seat"] == seat["seat_id"])
+    assert entry["new_project"] == "gm-h2p-newname"
+    house = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
+        "(SELECT id FROM objects WHERE canonical=$1) AND name='house' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", seat["seat_id"])
+    assert house == "gm-h2p-newname"
+
+
 async def test_run_migration_accepts_house_to_project(actions: Actions) -> None:
     out = await run_migration(actions.pool, "house_to_project", actor="test")
     assert "error" not in out
@@ -1078,3 +1113,97 @@ async def test_run_migration_only_seat_refused_for_other_targets(actions: Action
     out = await run_migration(
         actions.pool, "repo_seats_fix", actor="test", only_seat="seat:whatever")
     assert "error" in out
+
+
+# --- project_name_singular (operator ruling b5663511, PROJECT IDENTITY DRIFT, -----------
+# Thoth dispatch 12401) -------------------------------------------------------------------
+
+
+async def test_project_name_singular_requires_because_to_apply(actions: Actions) -> None:
+    out = await migrate_project_name_singular(actions, actor="test", dry_run=False, because="")
+    assert "error" in out
+
+
+async def test_project_name_singular_finds_the_highest_confidence_winner(
+    actions: Actions,
+) -> None:
+    """The live specimen: repo:bytebye's 27 competing current names — the winner is
+    whichever current value carries the highest confidence, newest breaking a tie
+    (rename_project's own 0.95 always outranks any ordinary evidence-class write)."""
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gm-pns-bytebye",
+                                                "test")
+    await actions.assert_property(proj, "name", "bytebye", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "ByeByte", "src-b", now, 0.95,
+                                  evidence_class="self_declared")
+
+    dry = await migrate_project_name_singular(actions, actor="test", dry_run=True)
+    entry = next(e for e in dry["entries"] if e["project"] == "repo:gm-pns-bytebye")
+    assert entry["winner"] == "ByeByte"
+    assert set(entry["current_names"]) == {"bytebye", "ByeByte"}
+
+    # nothing written yet
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='name'", proj)
+    assert len(rows) == 2
+
+
+async def test_project_name_singular_apply_collapses_to_one_current_row(
+    actions: Actions,
+) -> None:
+    now = datetime.now(UTC)
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:gm-pns-apply",
+                                                "test")
+    await actions.assert_property(proj, "name", "old-spelling", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "new-spelling", "src-b", now, 0.95,
+                                  evidence_class="self_declared")
+
+    out = await migrate_project_name_singular(
+        actions, actor="test", dry_run=False, because="test collapse")
+    entry = next(e for e in out["entries"] if e["project"] == "repo:gm-pns-apply")
+    assert entry["winner"] == "new-spelling"
+
+    rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
+        "AND name='name'", proj)
+    assert [r["v"] for r in rows] == ["new-spelling"]
+
+
+async def test_project_name_singular_apply_is_idempotent(actions: Actions) -> None:
+    now = datetime.now(UTC)
+    proj_id = "repo:gm-pns-idempotent"
+    proj = await actions.create_or_find_object("SoftwareProject", proj_id, "test")
+    await actions.assert_property(proj, "name", "a", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "b", "src-b", now, 0.95,
+                                  evidence_class="self_declared")
+
+    await migrate_project_name_singular(actions, actor="test", dry_run=False, because="test")
+    again = await migrate_project_name_singular(actions, actor="test", dry_run=True)
+    assert not any(e["project"] == proj_id for e in again["entries"])
+
+
+async def test_project_name_singular_never_flags_redundant_agreement(
+    actions: Actions,
+) -> None:
+    """Two sources asserting the IDENTICAL name value are agreement, not a
+    contradiction — count(DISTINCT value), never a raw multi-row count."""
+    now = datetime.now(UTC)
+    proj_id = "repo:gm-pns-agree"
+    proj = await actions.create_or_find_object("SoftwareProject", proj_id, "test")
+    await actions.assert_property(proj, "name", "agreeable", "src-a", now, 0.6,
+                                  evidence_class="direct_observation")
+    await actions.assert_property(proj, "name", "agreeable", "src-b", now, 0.6,
+                                  evidence_class="direct_observation")
+
+    out = await migrate_project_name_singular(actions, actor="test", dry_run=True)
+    assert not any(e["project"] == proj_id for e in out["entries"])
+
+
+async def test_run_migration_accepts_project_name_singular(actions: Actions) -> None:
+    out = await run_migration(actions.pool, "project_name_singular", actor="test")
+    assert "error" not in out
+    assert out["dry_run"] is True

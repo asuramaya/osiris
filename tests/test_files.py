@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -55,6 +56,35 @@ async def test_ingest_files(actions: Actions, tmp_path: Path) -> None:
     assert again["files"] == 4
     assert await p.fetchval("SELECT count(*) FROM objects WHERE type='File'") == 4
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 4
+
+
+async def test_ingest_files_resolves_an_existing_project_by_name_not_canonical(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: a repo folder
+    still on disk under its OLD basename after rename_project moved the graph's own
+    `name` on -- or a folder itself renamed to match -- must resolve to the EXISTING
+    object, never mint a fresh stub twin under a canonical matching the disk basename
+    alone."""
+    repo = tmp_path / "util"
+    repo.mkdir()
+    _git(repo, "init", "-q")
+    (repo / "README.md").write_text("# util")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", "init")
+
+    existing = await actions.create_or_find_object("SoftwareProject", "repo:util-old", "test")
+    await actions.assert_property(existing, "name", "util", "test", datetime.now(UTC), 0.95,
+                                  evidence_class="self_declared")
+
+    res = await ingest_files(actions, str(repo))
+    assert res["repo"] == "util"
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:util'")
+    linked = await actions.pool.fetchval(
+        "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
+        "WHERE l.type='in_repo' LIMIT 1")
+    assert linked == "repo:util-old"
 
 
 async def test_ingest_files_relinks_a_file_whose_edge_was_retracted(

@@ -1504,7 +1504,7 @@ _LINT_CHECK_NAMES = [
     "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
     "stale-off-head-link", "stale-current-flag", "kindless-open-thread",
     "unresolvable-owner", "zero-recipient-dm", "orphan", "untraceable-output",
-    "contested-summary", "unverified-citation",
+    "contested-summary", "unverified-citation", "project-identity",
 ]
 
 
@@ -1648,6 +1648,69 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
         "total": len(rows),
         "abstained_total": sum(1 for r in rows if r["abstained"]),
     }
+
+
+async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
+    """PROJECT IDENTITY DRIFT'S OWN LINT (operator ruling b5663511, Thoth dispatch
+    12401) — two populations, the same disease from either end.
+
+    STUB COLLISIONS: an active SoftwareProject with ZERO live INBOUND links (nothing
+    `in_repo`/`works_in`/`governs` it — the mint-time resolve-by-name fixes this same
+    ruling built elsewhere exist precisely so nothing NEW joins this population) whose
+    own name or canonical matches ANOTHER active project's name or canonical. The live
+    specimens (repo:handlingtheloop, repo:ByeByte) were both exactly this: an empty
+    stub sitting beside the real, already-referenced object under a DIFFERENT canonical
+    (repo:xxit/repo:bytebye) that had simply been renamed since the stub minted. This
+    census is for what already happened before this ruling's other fixes landed —
+    a fold, not a migration door, is the intended repair (merge_project onto the live
+    survivor), so this only ever flags, never writes.
+
+    NAME NOT SINGULAR: an active SoftwareProject carrying more than one
+    simultaneously-current `name` assertion (ruling 1335332e's own contradiction
+    shape, on this one property specifically — `count(DISTINCT value)`, never a raw
+    row count, so redundant agreement across sources never falsely counts). The exact
+    population `migrate_project_name_singular`'s own dry run reports, surfaced here
+    too so a fleet-wide lint pass catches it without a separate invocation."""
+    stubs = await pool.fetch(
+        "SELECT o.id, o.canonical, "
+        "  (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
+        "   AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) "
+        "   AS name "
+        "FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' "
+        "AND NOT EXISTS (SELECT 1 FROM links l WHERE l.to_id=o.id "
+        "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
+
+    stub_collisions: list[dict[str, Any]] = []
+    for s in stubs:
+        candidates = {s["canonical"].removeprefix("repo:")}
+        if s["name"]:
+            candidates.add(s["name"])
+        collider = None
+        for label in candidates:
+            oid = await pool.fetchval(
+                "SELECT o.id FROM objects o WHERE o.type='SoftwareProject' "
+                "AND o.status='active' AND o.id<>$1 AND ("
+                "  lower(o.canonical) = lower($2) OR EXISTS ("
+                "    SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
+                "    AND a.name='name' AND lower(a.value #>> '{}') = lower($3)))",
+                s["id"], f"repo:{label}", label)
+            if oid is not None:
+                collider = await pool.fetchval(
+                    "SELECT canonical FROM objects WHERE id=$1", oid)
+                break
+        if collider:
+            stub_collisions.append({
+                "canonical": s["canonical"], "name": s["name"], "collides_with": collider,
+            })
+
+    dupes = await pool.fetch(
+        "SELECT o.canonical, array_agg(DISTINCT a.value #>> '{}') AS names "
+        "FROM objects o JOIN current_assertions a ON a.object_id=o.id AND a.name='name' "
+        "WHERE o.type='SoftwareProject' AND o.status='active' "
+        "GROUP BY o.canonical HAVING count(DISTINCT a.value #>> '{}') > 1")
+    not_singular = [{"canonical": r["canonical"], "names": sorted(r["names"])} for r in dupes]
+
+    return {"stub_collisions": stub_collisions, "not_singular": not_singular}
 
 
 async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -3086,6 +3149,23 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "detail": f"citing object {r['from_id']} line {r['line_idx']}: "
                        f"{r['reason']}"}
             for r in citation_result["rows"]])
+
+        # PROJECT-IDENTITY — operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth
+        # dispatch 12401). See project_identity_census's own docstring for both halves.
+        identity_result = await project_identity_census(pool)
+        land("project-identity", "warn", [
+            {"subject": r["canonical"],
+             "detail": f"empty stub (name={r['name']!r}, no live inbound link) shares "
+                       f"its own name/canonical with {r['collides_with']} — likely the "
+                       "same project split across a rename; verify and merge_project "
+                       "onto the live survivor, never auto-fold"}
+            for r in identity_result["stub_collisions"]
+        ] + [
+            {"subject": r["canonical"],
+             "detail": f"{len(r['names'])} competing current `name` values: "
+                       f"{', '.join(r['names'])} — migrate_project_name_singular "
+                       "collapses this, newest/highest-confidence wins"}
+            for r in identity_result["not_singular"]])
     except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
         # other: a genuinely distinct could-not-evaluate state (ruling on thread
         # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call

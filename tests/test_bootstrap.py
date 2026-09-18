@@ -6,6 +6,7 @@ registered, and a boot-sector is suggested (Osiris never writes the project's fi
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 from src.actions.core import Actions
@@ -57,6 +58,30 @@ async def test_bootstrap_migrates_memory_and_registers_project(
     assert "mount(cwd=" in res["suggested_boot_sector"]
     assert "sibling-two constitution" in res["suggested_boot_sector"]
     assert (root / "CLAUDE.md").read_text() == _LOG  # NO HANDS: the file is untouched
+
+
+async def test_bootstrap_resolves_to_an_existing_project_by_name_not_canonical(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
+    renamed to 'handlingtheloop'): a project already carrying this basename as its
+    CURRENT `name` — under a DIFFERENT, older canonical — must be found and reused,
+    never re-minted under a fresh `repo:<basename>` twin."""
+    root = await _make_project(tmp_path)
+    existing = await actions.create_or_find_object(
+        "SoftwareProject", "repo:sibling-two-old-canonical", "test")
+    await actions.assert_property(existing, "name", "sibling-two", "test",
+                                  datetime.now(UTC), 0.95, evidence_class="self_declared")
+
+    res = await bootstrap_project(actions, str(root))
+
+    assert res["project"] == "sibling-two"
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:sibling-two'")
+    proj_count = await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND "
+        "(canonical='repo:sibling-two-old-canonical' OR canonical='repo:sibling-two')")
+    assert proj_count == 1
 
 
 async def test_bootstrap_links_every_ingested_reference_in_repo(

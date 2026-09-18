@@ -96,6 +96,32 @@ async def test_register_spawn_wires_child_parent_and_authority(actions: Actions)
         "WHERE c.canonical=$1 AND l.type='spawned_by'", child) == 1
 
 
+async def test_register_spawn_resolves_an_existing_project_by_name_not_canonical(
+    actions: Actions,
+) -> None:
+    """PROJECT IDENTITY DRIFT (operator ruling b5663511): a bare create_or_find_object
+    on `repo:<project>` matches only the canonical, frozen at whatever label first
+    minted it — a project renamed since (canonical stays repo:<old> forever) must be
+    FOUND by its current name here, never re-minted as a fresh stub twin."""
+    await actions.create_or_find_object("Agent", "agent:par00002", "agent:par00002")
+    existing = await actions.create_or_find_object(
+        "SoftwareProject", "repo:rsp-oldcanonical", "test")
+    await actions.assert_property(existing, "name", "rsp-newname", "test", NOW, 0.95,
+                                  evidence_class="self_declared")
+
+    child = await register_spawn(
+        Actions(actions.pool), "agent-kid00002", agent_type="Explore",
+        parent_agent="agent:par00002", project="rsp-newname", session="par00002")
+    edges = await actions.pool.fetch(
+        "SELECT t.canonical AS target FROM links l "
+        "JOIN objects c ON c.id=l.from_id JOIN objects t ON t.id=l.to_id "
+        "WHERE c.canonical=$1 AND l.type='works_in'", child)
+    assert [r["target"] for r in edges] == ["repo:rsp-oldcanonical"]
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' "
+        "AND canonical='repo:rsp-newname'")
+
+
 async def test_register_spawn_refuses_a_path_shaped_project_but_still_registers_the_child(
     actions: Actions, caplog: pytest.LogCaptureFixture,
 ) -> None:
