@@ -309,13 +309,27 @@ async def _contradicting_properties(
     disagree" (belief). A corrector (assert_project_property, etc.) that WINS on
     confidence/recency must be able to unblock a fold without a second, unexposed act
     (retiring the loser assertion by row id — no read verb surfaces one) just to make the
-    old row stop counting."""
+    old row stop counting.
+
+    LAYOUT/CRON-OWNED PROPERTIES EXCLUDED TOO (operator ruling b5663511, PROJECT
+    IDENTITY DRIFT, Thoth mail 12453 item b): `graph_x`/`graph_y`/`graph_layout_v`
+    (graph_layout.py's own placement cron) are a RENDERING COORDINATE, never an
+    identity fact — two distinct objects always carry independently-placed positions,
+    by construction, whether or not they are the same real-world referent. Counting
+    them as identity evidence meant a genuine twin (the exact live specimen: a stub
+    SoftwareProject minted mid-rename, one edge, its own layout position assigned on
+    the very next cron tick) could NEVER fold — the gate would report "contradicting"
+    on the layout properties forever, the same false-positive shape `name`/`tag`
+    were already excluded for, just from a different direction (those two are
+    IDENTICAL-by-construction across a real twin; these three are DIFFERENT-by-
+    construction regardless)."""
     rows = await pool.fetch(
         "WITH belief AS ("
         "  SELECT DISTINCT ON (object_id, name) object_id, name, "
         "    value #>> '{}' AS v "
         "  FROM current_assertions "
-        "  WHERE object_id = ANY($1::uuid[]) AND name NOT IN ('name', 'tag') "
+        "  WHERE object_id = ANY($1::uuid[]) "
+        "  AND name NOT IN ('name', 'tag', 'graph_x', 'graph_y', 'graph_layout_v') "
         "  ORDER BY object_id, name, confidence DESC, observed_at DESC"
         ") "
         "SELECT name FROM belief GROUP BY name HAVING count(DISTINCT v) > 1",

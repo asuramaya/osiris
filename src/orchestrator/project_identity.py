@@ -61,6 +61,7 @@ behind an argument default is not a declaration.
 """
 from __future__ import annotations
 
+import logging
 import subprocess
 import uuid
 from datetime import UTC, datetime
@@ -72,6 +73,8 @@ import asyncpg
 from src.actions.core import Actions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
+
+logger = logging.getLogger("osiris.project_identity")
 
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -1035,7 +1038,16 @@ async def rename_project(
     `dry_run=True` (the default, same convention as every other write verb in this
     file) returns the exact plan — resolved project, old/new name, any collision found —
     without writing anything: no `assert_property`, no `agent_mounts` repoint, no
-    prior-art search. Pass `dry_run=False` explicitly to actually rename."""
+    prior-art search. Pass `dry_run=False` explicitly to actually rename.
+
+    THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT, Thoth
+    mail 12453 item c, live Marquee specimen): a real write, `dry_run=False` returns
+    `current_name_after_write` (the SAME confidence-ordered current-value read every
+    other "which name wins" reader in this codebase uses, run immediately after the
+    write) and `rename_confirmed` (whether it equals `new_name`) — the write above
+    succeeding is proof the row was WRITTEN, never proof it is still the winner a
+    moment later (register_agent's own same-source clobber guard, before its own
+    fix, is exactly the kind of write that could erase this one)."""
     from src.orchestrator.projects import AmbiguousProjectRef, _resolve_software_project
 
     project = (project or "").strip()
@@ -1092,6 +1104,26 @@ async def rename_project(
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "name", new_name, actor, now, _RENAME_CONF,
                                   evidence_class=_EC)
+    # THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT,
+    # Thoth mail 12453 item c, live Marquee specimen: repo:dtfb read NINE current
+    # "dtfb" values and no "lotstretcher" at all after an earlier rename): a write
+    # this verb just made is not proof the write STUCK — the same-source clobber
+    # register_agent's own project-name guard could still (pre-fix) commit had
+    # already erased a rename's own row before its writer ever checked. Reads back
+    # the SAME confidence-ordered query every other "which name wins" reader in this
+    # codebase already uses, immediately after the write, so the receipt PROVES what
+    # actually landed rather than assuming the call above succeeded just because it
+    # didn't raise — `assert_property` returning cleanly says the row was written,
+    # never that it's still the winner a moment later.
+    current_name_after_write = await actions.pool.fetchval(
+        "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
+        "ORDER BY confidence DESC, observed_at DESC LIMIT 1", row["id"])
+    rename_confirmed = current_name_after_write == new_name
+    if not rename_confirmed:
+        logger.warning(
+            "rename_project(%s): wrote name=%r but the confidence-ordered current "
+            "value reads %r immediately after — the write did not win",
+            row["canonical"], new_name, current_name_after_write)
     bare_old = row["canonical"].removeprefix("repo:")
     mount_tag = await actions.pool.execute(
         "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
@@ -1108,6 +1140,8 @@ async def rename_project(
     stale = await detect_possibly_stale_seats(actions.pool, old_name or bare_old)
     return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
            "manifest": manifest,
+           "current_name_after_write": current_name_after_write,
+           "rename_confirmed": rename_confirmed,
            "mounts_moved": mounts_moved, "because": because,
            "note": f"{row['canonical']}'s canonical id never changes; edges already "
                    "pointing at it are unaffected; every GOVERNING SEAT's own pin/"

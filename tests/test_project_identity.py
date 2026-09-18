@@ -5,7 +5,7 @@ read that report. (correct_project_name, the third writer, lives in projects.py/
 test_projects.py beside its lifecycle-verb siblings.)"""
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
 from src.orchestrator.project_identity import (
@@ -470,6 +470,42 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
         "SELECT project FROM agent_mounts WHERE job_dir='/j/xxit'")
     assert mount_row == "handlingtheloop"
     assert out["possibly_stale_seats"]["checked"] is True  # additive, detection-only
+
+
+async def test_rename_project_receipt_confirms_the_write_stuck(actions: Actions) -> None:
+    """THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT,
+    Thoth mail 12453 item c): the receipt proves what actually WON the confidence-
+    ordered read immediately after the write, not merely that assert_property
+    returned without raising."""
+    await _mk_project(actions, "readbackproj")
+    out = await rename_project(actions, project="readbackproj", new_name="readbacknew",
+                               because="test: post-write read-back", actor="agent:test",
+                               dry_run=False)
+    assert out["current_name_after_write"] == "readbacknew"
+    assert out["rename_confirmed"] is True
+
+
+async def test_rename_project_receipt_reports_a_write_that_did_not_win(
+    actions: Actions,
+) -> None:
+    """The honest-failure half: a same-source row of EQUAL confidence, written a
+    hair later within the same instant, can still out-tie-break the rename on
+    recency (a real, if narrow, race — the receipt must say so, never silently
+    report success just because the write itself didn't raise)."""
+    proj = await _mk_project(actions, "readbackrace")
+    from src.orchestrator.project_identity import _RENAME_CONF
+
+    # sabotage: a same-confidence, later-observed row already sits current before
+    # the rename call even starts, simulating a race the rename write loses on
+    # the recency tie-break
+    await actions.assert_property(proj, "name", "alreadywon", "agent:racer",
+                                  datetime.now(UTC) + timedelta(seconds=5), _RENAME_CONF,
+                                  evidence_class="self_declared")
+    out = await rename_project(actions, project="readbackrace", new_name="readbacklose",
+                               because="test: a write that does not win", actor="agent:test",
+                               dry_run=False)
+    assert out["current_name_after_write"] == "alreadywon"
+    assert out["rename_confirmed"] is False
 
 
 async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion(

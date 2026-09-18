@@ -550,6 +550,33 @@ async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
     assert row["status"] == "active"
 
 
+async def test_fold_project_never_treats_independent_layout_positions_as_contradiction(
+    actions: Actions,
+) -> None:
+    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12453 item b): a
+    stub minted mid-rename picks up its OWN graph_x/graph_y/graph_layout_v the very
+    next cron tick — independently of the real object's own position, by
+    construction, never a sign these are two different projects. Before this fix, a
+    genuine twin with two cron-assigned positions could never fold at all."""
+    await _stub_project(actions, "repo:lp1", "lp1")
+    await _stub_project(actions, "repo:lp2", "lp2")
+    lp1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:lp1'")
+    lp2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:lp2'")
+    for oid, x, y, v in ((lp1_id, 100.0, 200.0, 7), (lp2_id, -50.0, 30.0, 7)):
+        await actions.assert_property(oid, "graph_x", x, "cron:layout", NOW, 0.6,
+                                      evidence_class="direct_observation")
+        await actions.assert_property(oid, "graph_y", y, "cron:layout", NOW, 0.6,
+                                      evidence_class="direct_observation")
+        await actions.assert_property(oid, "graph_layout_v", v, "cron:layout", NOW, 0.6,
+                                      evidence_class="direct_observation")
+
+    out = await fold_project(actions, dupe="lp1", into="lp2", evidence="same project, two mints",
+                             actor="agent:test")
+    assert "error" not in out
+    row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:lp1'")
+    assert row["status"] == "merged"
+
+
 # ═══ THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07) — self stays open,
 # third-party-on-live refuses by default, force=True (+ because) overrides and prices
 # the exception with a mandatory `live_session_repointed` signal. ═══
