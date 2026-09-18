@@ -8,6 +8,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 
 from src.actions.core import Actions
+from src.orchestrator.capture import record_decision
 from src.orchestrator.project_identity import (
     create_project,
     fork_project,
@@ -506,6 +507,106 @@ async def test_rename_project_receipt_reports_a_write_that_did_not_win(
                                dry_run=False)
     assert out["current_name_after_write"] == "alreadywon"
     assert out["rename_confirmed"] is False
+
+
+async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
+    actions: Actions,
+) -> None:
+    """THE OPERATOR'S OWN WORD, relayed via Thoth mail 12460 (decision 55921b94): "the
+    repo/project name is now lotstretcher, osiris should be able to handle the rename
+    as a common thing not a weird special case." The acceptance test on the exact live
+    specimen (repo:dtfb -> lotstretcher), all five criteria in one place — not three
+    separate patches trusted in isolation.
+
+    (1) dossier's own name resolution reads the new name.
+    (2) BOTH the old name (via canonical — a rename never rewrites `objects.canonical`,
+        rename_project's own law) and the new name (via the now-correctly-current
+        `name` property) resolve to the SAME object, through every "which project"
+        door this ruling's own fixes touch — capture's repo=, and mount's own
+        identity.project resolution (_resolve_or_mint_project, agents.py, already
+        fixed pre-dating this ruling per decision 0cdc5735) — never a stub, either
+        name.
+    (3) an agent's own `project` property (what get_status/orient actually read —
+        thin readers of this one stored fact, no separate logic of their own to
+        re-verify) resolves correctly for a pin declaring EITHER name.
+    (4) re-running the rename with the same new_name is a clean, confirmed no-op.
+    (5) a name-only stub (the exact live shape: one edge, no real content) folds
+        through merge() into the real object without any manual intervention."""
+    from src.orchestrator.agents import register_agent, resolve_identity
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.dossier import entity_dossier
+    from src.orchestrator.merge import merge
+
+    # SEED: repo:dtfb with a governing seat and a working agent, matching the real
+    # specimen's own shape before the rename.
+    proj = await _mk_project(actions, "dtfb")
+    seat = await ensure_seat(actions, house=None, handle="DtfbSeat", source="test")
+    await set_charter(actions, seat["seat_id"], ["dtfb"], actor="test")
+    worker = await _mk_agent(actions, "agent:dtfbworker")
+    await actions.create_link(worker, proj, "works_in", "test", datetime.now(UTC), 0.9,
+                              evidence_class="self_declared")
+
+    out = await rename_project(actions, project="dtfb", new_name="lotstretcher",
+                               because="operator: repo renamed on its remote",
+                               actor="agent:renamer", dry_run=False)
+    assert out["rename_confirmed"] is True
+
+    # (1) dossier
+    d = await entity_dossier(actions.pool, proj)
+    assert d["name"] == "lotstretcher"
+
+    # (2) capture's repo= — both spellings, no stub, same object
+    d_old = await record_decision(actions, "filed under the old spelling", repo="dtfb")
+    d_new = await record_decision(actions, "filed under the new spelling", repo="lotstretcher")
+    for d_id in (d_old, d_new):
+        target = await actions.pool.fetchval(
+            "SELECT p.id FROM links l JOIN objects p ON p.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='in_repo'", d_id)
+        assert target == proj
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:lotstretcher'")
+
+    # (2)/(3) mount's own identity.project resolution + the stored Agent.project fact
+    # get_status/orient actually read
+    for pin_name, session in (("dtfb", "sess-e2e-old"), ("lotstretcher", "sess-e2e-new")):
+        ident = resolve_identity(cwd=f"/w/{pin_name}", session=session,
+                                 model="claude-fable-5")
+        a = await register_agent(actions, ident, actor="analyst:operator")
+        works_in_target = await actions.pool.fetchval(
+            "SELECT p.id FROM links l JOIN objects p ON p.id=l.to_id "
+            "WHERE l.from_id=$1 AND l.type='works_in'", a)
+        assert works_in_target == proj, f"pin={pin_name!r} landed on a different object"
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:lotstretcher'")
+
+    # (4) re-running the rename is a clean, confirmed no-op
+    again = await rename_project(actions, project="lotstretcher", new_name="lotstretcher",
+                                 because="operator: idempotent re-run", actor="agent:renamer",
+                                 dry_run=False)
+    assert "error" not in again
+    assert again["rename_confirmed"] is True
+    assert again["current_name_after_write"] == "lotstretcher"
+
+    # (5) a name-only stub folds through merge() without manual help
+    stub = await actions.create_or_find_object(
+        "SoftwareProject", "repo:lotstretcher-stub", "agent:stray-mount")
+    await actions.assert_property(stub, "name", "lotstretcher", "agent:stray-mount",
+                                  datetime.now(UTC), 0.6, evidence_class="direct_observation")
+    other_thread = await actions.create_or_find_object("Thread", "thread:e2e-stub-ref", "test")
+    await actions.create_link(other_thread, stub, "in_repo", "test", datetime.now(UTC), 0.6,
+                              evidence_class="direct_observation")
+
+    merged = await merge(actions, dupe="repo:lotstretcher-stub", into="repo:dtfb",
+                         evidence="a stub minted mid-rename, one edge, same referent",
+                         actor="agent:renamer")
+    assert "error" not in merged
+    row = await actions.pool.fetchrow(
+        "SELECT status, merged_into FROM objects WHERE canonical='repo:lotstretcher-stub'")
+    assert row["status"] == "merged" and row["merged_into"] == proj
+    # the stub's own edge migrated onto the real object, not orphaned
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
+        "AND (valid_until IS NULL OR valid_until > now())", other_thread, proj)
 
 
 async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion(
