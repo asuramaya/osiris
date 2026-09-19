@@ -2927,7 +2927,18 @@ async def mount(
     # "nothing was observed" without re-deriving it from ident.model itself. Same idiom
     # this dict already uses for "seat"/"anonymous" and "visitor": a real value gets its
     # normal key, an absence gets its OWN key naming the absence and what to do about it.
+    proj_canonical = None
+    if ident.project:
+        # THE CANONICAL IN ITS OWN FIELD (item (f), same fix as get_status/orient — see
+        # get_status's own comment): `project` is the current display name,
+        # `project_canonical` the stable `repo:<slug>` identity a rename never touches.
+        from src.orchestrator.capture import _resolve_repo
+        proj_oid = await _resolve_repo(pool, ident.project)
+        if proj_oid is not None:
+            proj_canonical = await pool.fetchval(
+                "SELECT canonical FROM objects WHERE id=$1", proj_oid)
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
+           **({"project_canonical": proj_canonical} if proj_canonical else {}),
            **({"model": ident.model} if ident.model else
               {"model_unresolved": "model unresolved — pass model= explicitly"}),
            **({"co_agents": co_agents} if co_agents and want_co_agents else
@@ -4288,6 +4299,19 @@ async def get_status(render: str | None = None, ctx: Context | None = None) -> d
         pass
     result: dict[str, Any] = {
         "you": ident.agent_id if ident else "unmounted", "project": proj}
+    if proj:
+        # THE CANONICAL IN ITS OWN FIELD (item (f), Thoth's live Marquee re-run, mail
+        # 12475/12481): `project` is now always the CURRENT display name (see
+        # `_seated_house`'s own fix) — a project can rename any number of times, but its
+        # `repo:<slug>` canonical never does (rename_project's own eternal-canonical
+        # law), so a caller that wants the STABLE handle across a rename (a bookmark, a
+        # cross-reference) needs it named separately rather than re-deriving it from
+        # whichever display name happened to be current when it was written down.
+        from src.orchestrator.capture import _resolve_repo
+        proj_oid = await _resolve_repo(pool, proj)
+        if proj_oid is not None:
+            result["project_canonical"] = await pool.fetchval(
+                "SELECT canonical FROM objects WHERE id=$1", proj_oid)
     if ident:
         sb = await seat_bearings(pool, ident.agent_id)
         result["model"] = ident.model
@@ -4764,6 +4788,16 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
     lease = get_settings().osiris_mail_lease_secs
     ident = await _ident_for(ctx, session_anchor)
     proj = project or (ident.project if ident else None)  # explicit scope overrides the mount
+    proj_canonical = None
+    if proj:
+        # THE CANONICAL IN ITS OWN FIELD (item (f), same fix as get_status — see its own
+        # comment): `project` is the current display name, `project_canonical` the
+        # stable `repo:<slug>` identity a rename never touches.
+        from src.orchestrator.capture import _resolve_repo
+        proj_oid = await _resolve_repo(pool, proj)
+        if proj_oid is not None:
+            proj_canonical = await pool.fetchval(
+                "SELECT canonical FROM objects WHERE id=$1", proj_oid)
     who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
     reader = ident.agent_id if ident else (proj or "")
     # a SPAWN asking for bearings must not be told it IS the seat: 'you' is the child, the
@@ -4967,6 +5001,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             "  = 'open'")
         result = {
             "you": who, "model": (ident.model if ident else None), "project": proj,
+            **({"project_canonical": proj_canonical} if proj_canonical else {}),
             **({"osiris_health": organs} if organs else {}),
             **seam,
             **(await seat_bearings(pool, who) if who else {}),
