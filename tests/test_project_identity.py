@@ -486,27 +486,130 @@ async def test_rename_project_receipt_confirms_the_write_stuck(actions: Actions)
     assert out["rename_confirmed"] is True
 
 
-async def test_rename_project_receipt_reports_a_write_that_did_not_win(
+async def test_rename_project_always_wins_a_cross_source_race_now(
     actions: Actions,
 ) -> None:
-    """The honest-failure half: a same-source row of EQUAL confidence, written a
-    hair later within the same instant, can still out-tie-break the rename on
-    recency (a real, if narrow, race — the receipt must say so, never silently
-    report success just because the write itself didn't raise)."""
+    """item (g) (Thoth's live Marquee re-run, mail 12475/12481) upgraded the rename
+    write from `assert_property` to `assert_singular_property` — a rename is a
+    DECLARED workflow transition, not a competing opinion, so it now unconditionally
+    collapses every OTHER source's still-current `name` row rather than merely
+    coexisting with it at a comparable confidence.
+
+    This changes the OLD race this test used to name (a same-source row of equal
+    confidence, written a hair later, could out-tie-break the rename on recency) from
+    "an honest, narrow loss the receipt must confess" to "structurally impossible":
+    assert_singular_property does not compete on confidence/observed_at ordering at
+    all, it retires every other current row outright. Same sabotage setup as before —
+    a rival row already sitting current, timestamped INTO THE FUTURE, would have won
+    the old tie-break — now the rename still wins, and `rename_confirmed` is True."""
     proj = await _mk_project(actions, "readbackrace")
     from src.orchestrator.project_identity import _RENAME_CONF
 
-    # sabotage: a same-confidence, later-observed row already sits current before
-    # the rename call even starts, simulating a race the rename write loses on
-    # the recency tie-break
-    await actions.assert_property(proj, "name", "alreadywon", "agent:racer",
+    await actions.assert_property(proj, "name", "wouldhavewon", "agent:racer",
                                   datetime.now(UTC) + timedelta(seconds=5), _RENAME_CONF,
                                   evidence_class="self_declared")
-    out = await rename_project(actions, project="readbackrace", new_name="readbacklose",
-                               because="test: a write that does not win", actor="agent:test",
+    out = await rename_project(actions, project="readbackrace", new_name="readbackwins",
+                               because="test: the rename always wins now", actor="agent:test",
                                dry_run=False)
-    assert out["current_name_after_write"] == "alreadywon"
-    assert out["rename_confirmed"] is False
+    assert out["current_name_after_write"] == "readbackwins"
+    assert out["rename_confirmed"] is True
+
+
+async def test_rename_project_never_collides_with_a_merged_object(actions: Actions) -> None:
+    """item (d), Thoth's live Marquee re-run (mail 12471, decision 5d9192d0): after
+    folding a name-only stub into a project, renaming that project back onto the
+    stub's own old label used to still refuse as a collision (status=merged),
+    forcing merge_into=True even though nothing ACTIVE disputes the name — a merged
+    object is permanently dead, never a rival identity to acknowledge."""
+    from src.orchestrator.projects import fold_project
+
+    await _mk_project(actions, "willbemerged")
+    await _mk_project(actions, "survivorproj")
+    await fold_project(actions, dupe="willbemerged", into="survivorproj",
+                       evidence="same repo, operator confirmed", actor="agent:test")
+
+    out = await rename_project(actions, project="survivorproj", new_name="willbemerged",
+                               because="reclaiming the dead label", actor="agent:test",
+                               dry_run=False)
+
+    assert "error" not in out
+    assert out["new_name"] == "willbemerged"
+
+
+async def test_rename_project_still_refuses_colliding_with_a_retired_project(
+    actions: Actions,
+) -> None:
+    """The scope boundary of item (d): only `merged` (permanent, terminal) is
+    excluded — `retired` stays a real collision, unchanged from 93af8ced, since a
+    retired project is dormant, not dead, and could still be revived under its own
+    name."""
+    await _mk_project(actions, "willstayretired")
+    await _mk_project(actions, "renamemetoo")
+    retired = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical='repo:willstayretired'")
+    await actions.pool.execute("UPDATE objects SET status='retired' WHERE id=$1", retired)
+
+    out = await rename_project(actions, project="renamemetoo", new_name="willstayretired",
+                               because="x", actor="agent:test", dry_run=False)
+
+    assert "already names a DIFFERENT project" in out["error"]
+    assert "status=retired" in out["error"]
+
+
+async def test_rename_project_collapses_every_other_sources_current_name(
+    actions: Actions,
+) -> None:
+    """item (g), Thoth's live Marquee re-run (mail 12475/12481, live specimen:
+    repo:dtfb's dossier listed 9 old "dtfb" rows beside the new "lotstretcher" one as
+    agreement=contradicting): a declared rename now collapses every OTHER source's
+    still-current `name` opinion via assert_singular_property, so a real rename never
+    reads as a live, unresolved multi-source dispute — exactly the surface
+    entity_dossier's own #102 agreement marker would otherwise flag."""
+    proj = await _mk_project(actions, "manynamed")
+    for i in range(3):
+        await actions.assert_property(proj, "name", "manynamed", f"agent:witness{i}",
+                                      datetime.now(UTC), 0.9, evidence_class="self_declared")
+
+    out = await rename_project(actions, project="manynamed", new_name="renamedforreal",
+                               because="test: collapse every witness", actor="agent:test",
+                               dry_run=False)
+    assert out["rename_confirmed"] is True
+
+    current_rows = await actions.pool.fetch(
+        "SELECT value #>> '{}' AS value FROM current_assertions "
+        "WHERE object_id=$1 AND name='name'", proj)
+    assert len(current_rows) == 1
+    assert current_rows[0]["value"] == "renamedforreal"
+
+
+async def test_link_repo_confesses_a_genuine_mint(actions: Actions) -> None:
+    """The mint confession (Thoth's live Marquee re-run, mail 12464/12481, item (a)
+    closed as a NARROWER addition rather than the earlier reverted refuse-not-mint
+    rewrite): a hand-typed `repo=` that finds nothing genuinely new still mints, same
+    as always — this just stops it being silent."""
+    from src.orchestrator.capture import link_repo
+
+    thread = await actions.create_or_find_object("Thread", "thread:confessone", "test")
+    confession = await link_repo(actions, thread, "brandnewrepo", datetime.now(UTC),
+                                 source="test")
+    assert confession is not None
+    assert confession["minted_project"] == "repo:brandnewrepo"
+    assert "minted" in confession["confession"]
+
+
+async def test_link_repo_never_confesses_finding_an_existing_project(
+    actions: Actions,
+) -> None:
+    """The confession's own negative case: linking to a project that already exists
+    is the ordinary, silent find-or-create path — no confession, exactly as before
+    this fix (additive, not a behavior change for the common case)."""
+    from src.orchestrator.capture import link_repo
+
+    await _mk_project(actions, "alreadyexists")
+    thread = await actions.create_or_find_object("Thread", "thread:confesstwo", "test")
+    confession = await link_repo(actions, thread, "alreadyexists", datetime.now(UTC),
+                                 source="test")
+    assert confession is None
 
 
 async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(

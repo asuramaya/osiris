@@ -534,9 +534,22 @@ async def project_identity_evidence(
         candidates[name] = entry
 
     # write_attribution only counts as SUPPORT for the majority target — a single stray
-    # commit filed under the wrong project is not the same claim as 145/163 (ballgem)
+    # commit filed under the wrong project is not the same claim as 145/163 (ballgem).
+    #
+    # REMOTE NEVER COUNTS AS SUPPORT (item (e), Thoth's live Marquee re-run, mail 12471):
+    # remote_agrees answers a DIFFERENT question — whether the on-disk checkout's git
+    # remote has caught up — and this verb never moves or renames that checkout
+    # (rename_project's own documented scope, `_cascade_governing_seats`'s `could_not_
+    # reach.folder_path`). Folding it into "supported" meant a project object every
+    # OTHER real tier (charter, pin) already agrees on still read "disagree" for as long
+    # as the operator hadn't separately moved the directory — the graph was correct and
+    # this function said otherwise. `remote_agrees` stays on every candidate's own entry
+    # for a human to read (a real, useful signal — see the stale-remote test), it just
+    # never manufactures a rival CANDIDATE or drives `agreement` on its own; the
+    # project object's own tiers (declared_charter, pin_match, and write_attribution's
+    # majority) are what this function actually verifies.
     supported = {n for n, e in candidates.items()
-                if e["declared_charter"] or e["pin_match"] or e["remote_agrees"]
+                if e["declared_charter"] or e["pin_match"]
                 or n == write_attr["top"]}
     if len(supported) <= 1:
         agreement = "single-candidate" if supported else "no-signal"
@@ -1029,11 +1042,14 @@ async def rename_project(
     Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
     `project` ref (AmbiguousProjectRef, named exactly like every other project verb);
     a non-active project; `new_name` already resolving to a DIFFERENT SoftwareProject
-    OF ANY STATUS — active, retired, or already-merged (a real collision, never
-    silently merged — fold_project is the deliberate, evidence-gated verb for that) —
-    unless `merge_into=True` is passed explicitly, acknowledging the caller has already
-    seen the collision and means to reuse the name anyway (this still never merges the
-    two objects itself; it only lifts the refusal).
+    that is active OR retired (a real collision either way, 93af8ced — retired is a
+    dormant, revivable identity, not a dead one) — unless `merge_into=True` is passed
+    explicitly, acknowledging the caller has already seen the collision and means to
+    reuse the name anyway (this still never merges the two objects itself; it only lifts
+    the refusal). An ALREADY-MERGED object under `new_name` is NEVER a collision (item
+    (d), Thoth's live Marquee re-run, mail 12471): `merged` is permanent and terminal
+    (only fold_project ever sets it, and nothing un-sets it) — a dead identity is
+    exactly what a rename is free to reclaim; `merge_into` is never needed for that case.
 
     `dry_run=True` (the default, same convention as every other write verb in this
     file) returns the exact plan — resolved project, old/new name, any collision found —
@@ -1077,7 +1093,22 @@ async def rename_project(
     except AmbiguousProjectRef:
         collide = None  # an ambiguity already living under new_name is a pre-existing
                         # problem this rename did not create and is not asked to solve
-    if collide is not None and collide["id"] != row["id"] and not merge_into:
+    # A MERGED OBJECT IS NOT A HOLDER OF THE NAME (item (d), Thoth's live Marquee
+    # re-run, mail 12471, DECISION 5d9192d0): `_resolve_software_project`'s own fallback
+    # finds a non-active object by exact canonical with no status filter (its own
+    # comment: "a caller resolving a KNOWN-dead label ... must still find it"), which is
+    # correct for THAT caller but wrong reused here unfiltered — a project this rename's
+    # own caller just folded (fold_project sets status='merged', never deletes the row)
+    # still answers to its old canonical, so renaming the survivor back onto that exact
+    # label read as a live collision requiring merge_into=True even though nothing
+    # active disputes the name at all; `merged` is a PERMANENT terminal state (only
+    # fold_project ever sets it, and it never un-sets), unlike `retired`, which a project
+    # can be revived from — 93af8ced's own retired-collision test (a distinct, still-
+    # correct specimen: a dormant-but-revivable identity really can collide) stays
+    # exactly as strict as before. Only `merged` is excluded here; `retired` still
+    # counts as a real collision requiring `merge_into=True` to lift.
+    if (collide is not None and collide["id"] != row["id"] and collide["status"] != "merged"
+            and not merge_into):
         return {"error": f"{new_name!r} already names a DIFFERENT project "
                          f"({collide['canonical']}, status={collide['status']}) — "
                          "rename_project never collides two identities silently; pass "
@@ -1098,12 +1129,27 @@ async def rename_project(
                 "collision": (f"{collide['canonical']} (status={collide['status']}) — "
                               f"would proceed only because merge_into={merge_into!r}"
                               if collide is not None and collide["id"] != row["id"]
+                              and collide["status"] != "merged"
                               else None),
                 "manifest": manifest,
                 "note": "preview only — pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
-    await actions.assert_property(row["id"], "name", new_name, actor, now, _RENAME_CONF,
-                                  evidence_class=_EC)
+    # SINGULAR, NOT SAME-SOURCE-ONLY (item (g), Thoth's live Marquee re-run, mail 12475/
+    # 12481, live specimen: repo:dtfb's dossier listed 9 old "dtfb" rows beside the new
+    # "lotstretcher" one as agreement=contradicting): assert_property's own supersession
+    # is same-source-only by design — correct for genuine multi-source corroboration,
+    # but wrong for a DECLARED rename, which is a workflow transition exactly like
+    # resolve_thread's own status write (assert_singular_property's own documented
+    # shape): once a human declares the identity has changed, every OTHER source's
+    # still-current "name" opinion is not a competing witness to preserve, it is exactly
+    # what the rename supersedes. Using assert_property here left every session that had
+    # ever self-declared the OLD name still "current" forever after, so a real,
+    # confirmed rename read as a live, unresolved dispute in entity_dossier — the graph
+    # was right (current_assertions' own confidence-ordered read already picked
+    # "lotstretcher") and the dossier's own multi-source agreement view said otherwise.
+    await actions.assert_singular_property(
+        row["id"], "name", new_name, actor, now, _RENAME_CONF,
+        because=f"rename_project: {because}", evidence_class=_EC)
     # THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT,
     # Thoth mail 12453 item c, live Marquee specimen: repo:dtfb read NINE current
     # "dtfb" values and no "lotstretcher" at all after an earlier rename): a write

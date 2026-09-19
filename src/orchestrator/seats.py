@@ -410,14 +410,24 @@ async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     Split out so mount()'s own wrapper can call ONLY this half (its cwd guess already
     came from resolve_identity moments earlier, in the SAME pipeline, and must win
     untouched when this returns None — re-deriving a second, independent cwd guess here
-    risks disagreeing with it, e.g. under a test's monkeypatched office root)."""
+    risks disagreeing with it, e.g. under a test's monkeypatched office root).
+
+    RESOLVED THROUGH `project_current_name` (item (f), Thoth's live Marquee re-run, mail
+    12475/12481): `charter_of`'s own entries are `governs`'s CANONICAL, stripped of its
+    `repo:` prefix, and stay canonical forever on purpose (decision 5031a74) — but this
+    function feeds `ident.project`, the live-displayed label every mount()/get_status()/
+    orient() caller reads as "your project", and a canonical is a mint-time slug, not a
+    name (`repo:dtfb` -> "dtfb" even long after the project renamed to "lotstretcher").
+    Every OTHER seat-project derivation this drift already touched (resync_seat_project,
+    _is_ghost_house, sweep_seat_trees) already resolves through this same function; this
+    was the one seat-first-mount path still reading the frozen canonical instead."""
     seat = await held_seat(pool, agent_id)
     if seat is None:
         return None
-    from src.orchestrator.charter import charter_of
+    from src.orchestrator.charter import charter_of, project_current_name
     repos = await charter_of(pool, seat["seat_id"])
     if len(repos) == 1:
-        return repos[0]
+        return await project_current_name(pool, repos[0])
     return str(seat["house"]) if seat.get("house") else None
 
 

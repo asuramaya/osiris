@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -49,6 +50,8 @@ import asyncpg
 from src.actions.core import ActionError, Actions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
+
+logger = logging.getLogger("osiris.capture")
 
 # The session channel — distinct from the miner's `git-memory` so provenance reads true
 # (a captured decision and a mined one coexist as a multi-source set on the same object).
@@ -640,8 +643,11 @@ async def backfill_lineage_repo_links(
                      "to": repo, "source": row["source_id"]}
             minted += 1
             if not dry_run:
-                await link_repo(actions, row["id"], repo, observed, source=actor,
-                                evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                mint_confession = await link_repo(
+                    actions, row["id"], repo, observed, source=actor,
+                    evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                if mint_confession:
+                    entry.update(mint_confession)
                 # CROSS-SOURCE, ON PURPOSE: a live abstention was stamped under its OWN
                 # writer's actor at the object's own birth (or a prior backfill run under
                 # a different actor than this one) — `assert_property`'s own supersession
@@ -722,8 +728,11 @@ async def backfill_lineage_repo_links_at_write_time(
                      "to": repo, "source": row["source_id"]}
             minted += 1
             if not dry_run:
-                await link_repo(actions, row["id"], repo, observed, source=actor,
-                                evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                mint_confession = await link_repo(
+                    actions, row["id"], repo, observed, source=actor,
+                    evidence_class=_DERIVE_TIER.value, confidence=_DERIVE_CONF)
+                if mint_confession:
+                    entry.update(mint_confession)
                 await _supersede_stale_in_repo_abstention(
                     actions, row["id"], repo, actor, observed,
                     f"backfill_lineage_repo_links_at_write_time resolved this object to "
@@ -1866,7 +1875,7 @@ async def _mint_or_find_repo(
 async def link_repo(
     actions: Actions, obj_id: uuid.UUID, repo: str, observed: datetime,
     *, source: str = _SOURCE, evidence_class: str = _EC, confidence: float = _CONF,
-) -> None:
+) -> dict[str, Any] | None:
     """Attach a captured Decision/Thread to its project. A session item has no commit, so
     it links `in_repo` → the SoftwareProject directly (the miner's `decided_in`→Commit→
     `in_repo` chain collapsed by one hop). Find-or-create on `repo:<name>` so the link
@@ -1877,7 +1886,24 @@ async def link_repo(
     project name (task #107, `_validate_repo_name`): a path-shaped or otherwise malformed
     string refuses here, BEFORE any object is touched, so a caller can never mint a bogus
     project by accident — this validates first so the failure never depends on transaction
-    rollback to stay clean."""
+    rollback to stay clean.
+
+    THE MINT CONFESSION (Thoth's live Marquee re-run, mail 12464/12481, closing item (a)
+    as a NARROWER addition rather than the earlier reverted refuse-not-mint rewrite —
+    see project #107/#137's own choke point being already correct, root cause was item
+    6's now-fixed same-source clobber, not a capture-path resolution gap): a hand-typed
+    `repo=` that finds nothing genuinely new mints silently, same as it always has — this
+    just STOPS it being silent. Returns `{"minted_project": "repo:<name>", "confession":
+    "no project named <name> existed; minted"}` when THIS call minted the object (a
+    resolve-check immediately before the find-or-create — good enough for a confession,
+    never load-bearing for correctness the way a write-path check would need to be: a
+    concurrent racer minting the same name between the two reads produces, at worst, a
+    confession on the call that lost the race too, never a wrong object or a missed
+    link), else `None` — every existing caller that ignores this return value keeps
+    working exactly as before; the confession is additive, never a behavior change."""
+    name = repo.removeprefix("repo:").strip()
+    _validate_repo_name(name, repo)  # raises before the resolve-check if malformed
+    pre_existing = await _resolve_repo(actions.pool, name) is not None
     proj = await _mint_or_find_repo(actions, repo, observed, source=source,
                                     evidence_class=evidence_class, confidence=confidence)
     exists = await actions.pool.fetchval(
@@ -1888,6 +1914,10 @@ async def link_repo(
     if not exists:
         await actions.create_link(obj_id, proj, "in_repo", source, observed, confidence,
                                   evidence_class=evidence_class)
+    if not pre_existing:
+        return {"minted_project": f"repo:{name}",
+                "confession": f"no project named {name!r} existed; minted"}
+    return None
 
 
 # THE DECLARE-OR-REFUSE GATE (task #189, ruling 5ac06206, decision 7ea187b9 — shape (b)):
@@ -2373,8 +2403,12 @@ async def record_decision(
                                     evidence_class=_EC)
         if repo:
             rec = repo_evidence_class or _EC
-            await link_repo(a, d, repo, observed, source=source, evidence_class=rec,
-                            confidence=confidence_for(EvidenceClass(rec)))
+            mint_confession = await link_repo(a, d, repo, observed, source=source,
+                                              evidence_class=rec,
+                                              confidence=confidence_for(EvidenceClass(rec)))
+            if mint_confession:
+                logger.warning("record_decision(repo=%r): %s", repo,
+                               mint_confession["confession"])
         for ref in grounds or []:
             exists = await a.pool.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='grounded_by'",
@@ -3001,8 +3035,12 @@ async def ingest_reference(
                                         evidence_class=_EC)
         if repo:
             rec = repo_evidence_class or _EC
-            await link_repo(a, ref, repo, observed, source=source, evidence_class=rec,
-                            confidence=confidence_for(EvidenceClass(rec)))
+            mint_confession = await link_repo(a, ref, repo, observed, source=source,
+                                              evidence_class=rec,
+                                              confidence=confidence_for(EvidenceClass(rec)))
+            if mint_confession:
+                logger.warning("ingest_reference(repo=%r): %s", repo,
+                               mint_confession["confession"])
         for cited in cites or []:
             exists = await a.pool.fetchval(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='cites'",
@@ -3573,8 +3611,12 @@ async def open_thread(
                                     observed, _CONF, evidence_class=_EC)
         if repo:
             rec = repo_evidence_class or _EC
-            await link_repo(a, t, repo, observed, source=source, evidence_class=rec,
-                            confidence=confidence_for(EvidenceClass(rec)))
+            mint_confession = await link_repo(a, t, repo, observed, source=source,
+                                              evidence_class=rec,
+                                              confidence=confidence_for(EvidenceClass(rec)))
+            if mint_confession:
+                logger.warning("open_thread(repo=%r): %s", repo,
+                               mint_confession["confession"])
         await _enforce_required_links(
             a, t, "Thread", kinds_in_scope=("repo",),
             unlinked_because=unlinked_because, source=source, observed=observed)
@@ -4307,8 +4349,11 @@ async def record_reflection(
     await actions.assert_property(r, "summary", summary or body[:160], source, observed,
                                   _CONF, evidence_class=_EC)
     if repo:
-        await link_repo(actions, r, repo, observed, source=source, evidence_class=_EC,
-                        confidence=_CONF)
+        mint_confession = await link_repo(actions, r, repo, observed, source=source,
+                                          evidence_class=_EC, confidence=_CONF)
+        if mint_confession:
+            logger.warning("record_reflection(repo=%r): %s", repo,
+                           mint_confession["confession"])
     return r
 
 
@@ -4333,8 +4378,11 @@ async def record_tension(
         await actions.assert_property(t, "lean_why", why, source, observed, _CONF,
                                       evidence_class=_EC)
     if repo:
-        await link_repo(actions, t, repo, observed, source=source, evidence_class=_EC,
-                        confidence=_CONF)
+        mint_confession = await link_repo(actions, t, repo, observed, source=source,
+                                          evidence_class=_EC, confidence=_CONF)
+        if mint_confession:
+            logger.warning("record_tension(repo=%r): %s", repo,
+                           mint_confession["confession"])
     return t
 
 
@@ -4363,8 +4411,11 @@ async def record_blind_spot(
         await actions.assert_property(b, "verify_with", verify_with, source, observed, _CONF,
                                       evidence_class=_EC)
     if repo:
-        await link_repo(actions, b, repo, observed, source=source, evidence_class=_EC,
-                        confidence=_CONF)
+        mint_confession = await link_repo(actions, b, repo, observed, source=source,
+                                          evidence_class=_EC, confidence=_CONF)
+        if mint_confession:
+            logger.warning("record_blind_spot(repo=%r): %s", repo,
+                           mint_confession["confession"])
     return b
 
 
@@ -4454,8 +4505,11 @@ async def kill_superstition(
     await actions.assert_property(s, "killed_at", observed.isoformat(), source, observed,
                                   _CONF, evidence_class=_EC)
     if repo:
-        await link_repo(actions, s, repo, observed, source=source, evidence_class=_EC,
-                        confidence=_CONF)
+        mint_confession = await link_repo(actions, s, repo, observed, source=source,
+                                          evidence_class=_EC, confidence=_CONF)
+        if mint_confession:
+            logger.warning("kill_superstition(repo=%r): %s", repo,
+                           mint_confession["confession"])
     target = await _find_artifact(actions.pool, killed_by)
     if target is not None and not await actions.pool.fetchval(
             "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='killed_by' LIMIT 1",
@@ -4548,8 +4602,11 @@ async def record_practice(
             await a.assert_property(p, "surface", surface, source, observed, _CONF,
                                     evidence_class=_EC)
         if repo:
-            await link_repo(a, p, repo, observed, source=source, evidence_class=_EC,
-                            confidence=_CONF)
+            mint_confession = await link_repo(a, p, repo, observed, source=source,
+                                              evidence_class=_EC, confidence=_CONF)
+            if mint_confession:
+                logger.warning("record_practice(repo=%r): %s", repo,
+                               mint_confession["confession"])
         for w in witnesses or []:
             await _witness_link(a, p, w, source, observed)
         await _enforce_required_links(

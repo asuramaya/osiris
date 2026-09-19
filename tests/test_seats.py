@@ -1806,6 +1806,31 @@ async def test_seated_house_falls_back_to_house_on_an_ambiguous_multi_repo_chart
     assert await _seated_house(actions.pool, "agent:ambigtest1") == "osiris"
 
 
+async def test_seated_house_stamps_the_renamed_name_not_the_frozen_canonical(
+    actions: Actions,
+) -> None:
+    """item (f), Thoth's live Marquee re-run (mail 12475/12481, decision 5d9192d0): a
+    seated agent's project used to read `charter_of`'s own entry verbatim — the
+    project's CANONICAL, `repo:` stripped, which is frozen at mint forever
+    (rename_project's own law) — so get_status()/mount()/orient()'s own project field
+    still showed 'dtfb' long after a real rename to 'lotstretcher'. Every OTHER seat-
+    project derivation this drift already touched (resync_seat_project, _is_ghost_
+    house, sweep_seat_trees) already resolves through project_current_name; this was
+    the one seat-first-mount path still reading the frozen canonical instead."""
+    from src.orchestrator.charter import set_charter
+    from src.orchestrator.seats import _seated_house, bind_holder
+
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:seatedoldname", "test")
+    await actions.assert_property(proj, "name", "seatednewname", "test", datetime.now(UTC),
+                                  0.95, evidence_class="self_declared")
+    seat = await ensure_seat(actions, house="osiris", handle="Seatedrenamed1", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:seatedrn1",
+                      source="test")
+    await set_charter(actions, seat["seat_id"], ["seatedoldname"], actor="test")
+
+    assert await _seated_house(actions.pool, "agent:seatedrn1") == "seatednewname"
+
+
 # --- pin_charter_agreement: the jesus/chad/marquee detector (Thoth DM 6279/6287) ---------
 
 async def test_roster_pin_charter_agreement_agree_when_pin_is_among_charter(
