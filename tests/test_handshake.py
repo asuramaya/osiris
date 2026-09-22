@@ -205,6 +205,52 @@ async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_
     ) == 0
 
 
+async def test_automount_demotes_a_self_reinforcing_stranger_and_re_adopts_the_holder(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """LAW 3a, end to end (thread 124732175759, Thoth mail 13141 — Thoth's own SECOND
+    specimen): the trap the first rescue alone cannot close — a wrong mint from law 1's
+    own gap registers its OWN live agent_mounts row, so the NEXT restart's find_mount
+    finds THAT row directly and never even reaches rescue_seat_holder_mount. automount
+    must still re-adopt the seat's current holder, retiring the stranger's live claim
+    on the job_dir so it stops perpetuating."""
+    seat = await ensure_seat(actions, house="osiris", handle="Demoteholder",
+                             anchor_cwd=str(tmp_path / "seats" / "demoteholder"),
+                             source="test")
+    assert seat.get("error") is None
+    holder = "agent:demoteholderseat"
+    await actions.create_or_find_object("Agent", holder, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=holder, source="test")
+
+    job_dir = str(tmp_path / "jobs" / "5e1f708f")
+    live = tmp_path / "live-demote"
+    live.mkdir()
+    await mounts_mod.save_mount(actions.pool, job_dir=job_dir, agent_id=holder,
+                                project="osiris", cwd=str(live), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir=$1", job_dir)
+    await mounts_mod.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    # THE SELF-REINFORCING WRITE: a stranger (a wrong mint from an earlier restart)
+    # already owns a LIVE row for this exact job_dir — find_mount alone would keep
+    # finding it forever.
+    stranger = "agent:5e1f708f-iii"
+    await actions.create_or_find_object("Agent", stranger, "test")
+    await mounts_mod.save_mount(actions.pool, job_dir=job_dir, agent_id=stranger,
+                                project=None, cwd=str(live), model=None, session_key=None)
+    assert (await mounts_mod.find_mount(actions.pool, job_dir=job_dir)).agent_id == stranger
+
+    out = await automount(actions, session_id=SID, cwd="/w/irrelevant-launch-cwd",
+                          actor="analyst:operator", job_dir=job_dir, jobs_home=tmp_path / "jobs")
+    assert out["agent"] == holder  # the seat's own current holder, not the stranger
+    # the stranger's OWN Agent object is left untouched — only its job_dir claim is gone
+    assert await actions.pool.fetchval(
+        "SELECT status FROM objects WHERE type='Agent' AND canonical=$1", stranger) == "active"
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='retire_seatless_mount_claim'") == 1
+
+
 async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
     actions: Actions, tmp_path: Path
 ) -> None:

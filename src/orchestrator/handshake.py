@@ -844,6 +844,16 @@ async def automount(
     # now — never a fresh mint over a live holder.
     if bound is None and job_dir:
         bound = await mounts.rescue_seat_holder_mount(actions.pool, job_dir=job_dir)
+    elif bound is not None and job_dir:
+        # LAW 3a (thread 124732175759, Thoth mail 13141): the self-reinforcing trap —
+        # a wrong mint from law 1's own gap registers its OWN row, so every LATER
+        # restart's find_mount keeps finding the stranger instead of ever reaching the
+        # rescue above. A seat holder outranks a seatless row's live claim on this
+        # job_dir just as much as it outranks the row's own absence.
+        outranked = await mounts.demote_seatless_mount_if_outranked(
+            actions.pool, job_dir=job_dir, actor=actor)
+        if outranked is not None:
+            bound = outranked
     # THE INHERITED-JOB_DIR LEAK (Thoth's ruling on Chad/aad6603a, msg 6852 item (a)): a
     # hand-run `claude --resume` from ANOTHER agent's own shell carries THAT agent's
     # CLAUDE_JOB_DIR — `bound` above then finds the LEAKER's own registry row, not this

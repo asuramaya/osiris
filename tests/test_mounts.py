@@ -2271,6 +2271,139 @@ async def test_rescue_seat_holder_mount_finds_nothing_for_a_job_dir_never_swept(
         actions.pool, job_dir="/x/jobs/never-existed-at-all") is None
 
 
+async def test_rescue_seat_holder_mount_walks_past_its_own_retire_witness(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """LAW 3a's own compensating write (`retire_seatless_mount_claim`) can itself
+    become the NEWEST audit entry for a job_dir — the rescue must walk past it to an
+    OLDER entry naming the real seat holder, never stop cold on a drop that (by
+    construction) never names one."""
+    p = actions.pool
+    await _seated_holder(
+        actions, handle="Rescuewalk1", anchor_cwd="/home/asuramaya/.osiris/seats/rescuewalk1",
+        house="osiris")
+    holder = "agent:rescuewalk1"
+    stranger = "agent:strangerwalk1"
+    await actions.create_or_find_object("Agent", stranger, "test")
+
+    live = tmp_path / "live2"
+    live.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit4", agent_id=holder,
+                            project="osiris", cwd=str(live), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/rescuewit4'")
+    await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    # a stranger then re-registers the SAME job_dir (the self-reinforcing shape) — and
+    # is itself retired by law 3a's own compensating write, the NEWEST entry now.
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit4", agent_id=stranger,
+                            project=None, cwd=str(live), model=None, session_key=None)
+    await mounts._retire_seatless_mount_claim(p, job_dir="/x/jobs/rescuewit4", actor="test")
+
+    rescued = await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit4")
+    assert rescued is not None
+    assert rescued.agent_id == holder
+
+
+async def test_demote_seatless_mount_if_outranked_retires_the_stranger_and_re_adopts(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE SELF-REINFORCING TRAP, closed (law 3a, thread 124732175759, Thoth mail
+    13141): a stranger has ALREADY registered its own live agent_mounts row for a
+    job_dir a seat holder's own history claims — find_mount alone would keep finding
+    the stranger forever. The seat holder outranks it: its claim is retired (audited,
+    undoable) and the seat holder's current generation is returned instead."""
+    p = actions.pool
+    await _seated_holder(
+        actions, handle="Rescuedemote1",
+        anchor_cwd="/home/asuramaya/.osiris/seats/rescuedemote1", house="osiris")
+    holder = "agent:rescuedemote1"
+    stranger = "agent:strangerdemote1"
+    await actions.create_or_find_object("Agent", stranger, "test")
+
+    live = tmp_path / "live3"
+    live.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit5", agent_id=holder,
+                            project="osiris", cwd=str(live), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/rescuewit5'")
+    await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    # THE SELF-REINFORCING WRITE: the stranger now owns a LIVE row for this job_dir.
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit5", agent_id=stranger,
+                            project=None, cwd=str(live), model=None, session_key=None)
+    assert (await mounts.find_mount(p, job_dir="/x/jobs/rescuewit5")).agent_id == stranger
+
+    out = await mounts.demote_seatless_mount_if_outranked(
+        p, job_dir="/x/jobs/rescuewit5", actor="test")
+    assert out is not None
+    assert out.agent_id == holder
+    # the stranger's own live claim is gone — the NEXT find_mount can no longer perpetuate it
+    assert await mounts.find_mount(p, job_dir="/x/jobs/rescuewit5") is None
+    # a real, audited, undoable witness — the same shape every other drop leaves
+    wit = await p.fetchrow(
+        "SELECT id, actor, payload FROM audit_log WHERE action='retire_seatless_mount_claim' "
+        "ORDER BY id DESC LIMIT 1")
+    assert wit is not None and wit["actor"] == "test"
+    assert wit["payload"]["agent_id"] == stranger
+    # undoable through the SAME door every other _MOUNT_DROP_ACTIONS entry already uses
+    restore = await mounts.undrop_dead_project_mount(actions, audit_id=wit["id"], actor="test")
+    assert restore["restored"] == 1
+    restored_row = await mounts.find_mount(p, job_dir="/x/jobs/rescuewit5")
+    assert restored_row is not None and restored_row.agent_id == stranger
+
+
+async def test_demote_seatless_mount_if_outranked_leaves_a_genuine_seat_holder_alone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The current row's own lineage genuinely holds a seat — nothing outranks it, and
+    demote is a pure no-op."""
+    p = actions.pool
+    await _seated_holder(
+        actions, handle="Rescuestay1", anchor_cwd="/home/asuramaya/.osiris/seats/rescuestay1",
+        house="osiris")
+    holder = "agent:rescuestay1"
+    live = tmp_path / "live4"
+    live.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit6", agent_id=holder,
+                            project="osiris", cwd=str(live), model=None, session_key=None)
+
+    out = await mounts.demote_seatless_mount_if_outranked(
+        p, job_dir="/x/jobs/rescuewit6", actor="test")
+    assert out is None
+    assert (await mounts.find_mount(p, job_dir="/x/jobs/rescuewit6")).agent_id == holder
+    assert await p.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='retire_seatless_mount_claim'") == 0
+
+
+async def test_demote_seatless_mount_if_outranked_leaves_a_genuine_stranger_alone(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """No seat holder ever claimed this job_dir in its own history either — a real
+    stranger with a live row, left exactly as find_mount found it."""
+    p = actions.pool
+    stranger = "agent:strangeralone1"
+    await actions.create_or_find_object("Agent", stranger, "test")
+    live = tmp_path / "live5"
+    live.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit7", agent_id=stranger,
+                            project=None, cwd=str(live), model=None, session_key=None)
+
+    out = await mounts.demote_seatless_mount_if_outranked(
+        p, job_dir="/x/jobs/rescuewit7", actor="test")
+    assert out is None
+    assert (await mounts.find_mount(p, job_dir="/x/jobs/rescuewit7")).agent_id == stranger
+
+
+async def test_demote_seatless_mount_if_outranked_noop_with_no_row_at_all(
+    actions: Actions,
+) -> None:
+    assert await mounts.demote_seatless_mount_if_outranked(
+        actions.pool, job_dir="/x/jobs/never-mounted-at-all", actor="test") is None
+
+
 async def test_drop_dead_project_mount_releases_the_matched_row(actions: Actions) -> None:
     p = actions.pool
     await mounts.save_mount(p, job_dir="/x/jobs/deadstub1", agent_id="agent:deadstub1",
@@ -2798,6 +2931,100 @@ async def test_mount_defers_custody_for_an_identity_minted_this_same_call(
         "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='archived_memory'",
         obj_id)
     assert row is None  # never recorded — nothing was actually archived
+
+
+async def test_mount_defers_custody_when_a_seatless_caller_would_evict_a_seat_holder(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LAW 3b (thread 124732175759, Thoth mail 13141): the caller's own identity IS
+    confirmed (predates this call) — unlike the law 2 test above — but it holds no
+    seat, and this cwd's memory is currently owned by a lineage that DOES. A seatless
+    caller must never evict a seat holder's memory, whatever
+    `ensure_lineage_memory_custody` would otherwise report."""
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    cwd = str(tmp_path / "o3")
+    job_dir = str(tmp_path / "jobs" / "custody05")
+    caller = "agent:seatlesscaller1-vii"
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id=caller,
+                            project="osiris", cwd=cwd, model=None, session_key="k:custody5")
+    await actions.create_or_find_object("Agent", caller, "test")  # confirmed, but seatless
+
+    holder = "agent:sentinelholder1"
+    await actions.create_or_find_object("Agent", holder, "test")
+    seat = await ensure_seat(actions, house="osiris", handle="Sentinelholder1", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=holder, source="test")
+
+    monkeypatch.setattr(
+        lineage_memory, "peek_lineage_memory_owner", lambda cwd, home=None: holder)
+    called = False
+
+    def _spy(cwd: str, root: str) -> lineage_memory.MemoryCustodyResult:
+        nonlocal called
+        called = True  # must never even be reached — evicted BEFORE this would run
+        return lineage_memory.MemoryCustodyResult(
+            action="archived", path="whatever", prior_lineage=holder)
+
+    monkeypatch.setattr(lineage_memory, "ensure_lineage_memory_custody", _spy)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=cwd, job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert called is False
+    assert "prior_lineage_memory_archived" not in out
+    assert "memory_custody_deferred" in out
+    assert holder in out["memory_custody_deferred"]
+
+    obj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", caller)
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='archived_memory'",
+        obj_id)
+    assert row is None
+
+
+async def test_mount_still_archives_when_the_sentinel_owner_holds_no_seat_either(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LAW 3b is narrow: it only stops a SEATLESS caller evicting a SEAT HOLDER. A
+    seatless caller correcting a cwd whose memory belongs to some OTHER equally
+    seatless lineage (an ordinary rename/relocation, nothing load-bearing) archives
+    exactly as before — the gate must not over-defer."""
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+
+    cwd = str(tmp_path / "o4")
+    job_dir = str(tmp_path / "jobs" / "custody06")
+    caller = "agent:seatlesscaller2-vii"
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id=caller,
+                            project="osiris", cwd=cwd, model=None, session_key="k:custody6")
+    await actions.create_or_find_object("Agent", caller, "test")
+
+    monkeypatch.setattr(
+        lineage_memory, "peek_lineage_memory_owner",
+        lambda cwd, home=None: "agent:someunseatedstranger")
+    fake_result = lineage_memory.MemoryCustodyResult(
+        action="archived", path=str(tmp_path / "memory.archived-x"),
+        prior_lineage="agent:someunseatedstranger")
+    monkeypatch.setattr(
+        lineage_memory, "ensure_lineage_memory_custody", lambda cwd, root: fake_result)
+    monkeypatch.setattr(lineage_memory, "stamp_lineage_sentinel", lambda cwd, root: None)
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=cwd, job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert "memory_custody_deferred" not in out
+    assert out["prior_lineage_memory_archived"]["prior_lineage"] == "agent:someunseatedstranger"
 
 
 async def test_mount_surfaces_migration_needed_without_touching_anything(
