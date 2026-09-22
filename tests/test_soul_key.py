@@ -16,6 +16,10 @@ async def test_soul_key_status_absent(tmp_path, actions: Actions) -> None:
     out = await soul_key.soul_key_status(actions.pool, path=str(tmp_path / "no-such-file"))
     assert out["present"] is False
     assert out["legacy_plaintext_rows"] is None
+    # Thoth mail 13006: the live soul_key.rp_id setting, off the registry's own
+    # default — surfaced so Seshat's console reads it here instead of hard-coding
+    # a second copy that could drift from what a real enrollment used.
+    assert out["rp_id"] == "localhost"
 
 
 async def test_soul_key_status_present_runs_the_live_census(tmp_path, actions: Actions) -> None:

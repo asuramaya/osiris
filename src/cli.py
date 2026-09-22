@@ -1035,7 +1035,16 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
 
 # --- soul-key ---------------------------------------------------------------------------------
 
-_SOUL_KEY_POOL_FREE_ACTIONS = ("init", "enroll-recovery", "recover")
+# THE ONE genuinely pool-free action — `init` never needs a live setting, just the
+# filesystem. `enroll-recovery`/`recover` moved OUT of this bucket (Thoth mail 13006):
+# both now need `soul_key.rp_id` off the settings table (the WebAuthn RP id must match
+# the console's own origin, "localhost", to interoperate with a future browser
+# enrollment — see settings_registry.py's own comment) before calling into
+# `soul_crypto`, so both compose a short-lived pool JUST for that one read, same as
+# status/rotate/restore-drill below, even though the underlying `soul_crypto`
+# functions themselves remain pool-free (never touch Postgres for anything but that
+# one setting fetch, done here in the CLI layer, not inside soul_crypto.py itself).
+_SOUL_KEY_POOL_FREE_ACTIONS = ("init",)
 _SOUL_KEY_ACTIONS = (
     "status", "init", "rotate", "restore-drill", "enroll-recovery", "recover")
 
@@ -1052,11 +1061,13 @@ async def cmd_soul_key(
     REWRITTEN, ruling e0b98ff2). A thin console-script door, matching `osiris
     composition <action>`'s own shape.
 
-    init/enroll-recovery/recover stay POOL-FREE and call `src.ingest.soul_crypto`
-    directly — enroll-recovery/recover ALSO stay CLI-ONLY (never REST, see
-    `src.orchestrator.soul_key`'s own module docstring: minting or unwrapping a
-    recovery blob from a non-interactive HTTP call makes no sense — both need a
-    human's own PIN and touch right there in the terminal).
+    `init` stays POOL-FREE and calls `src.ingest.soul_crypto` directly.
+    `enroll-recovery`/`recover` ALSO call `src.ingest.soul_crypto` directly (both stay
+    CLI-ONLY — never REST, see `src.orchestrator.soul_key`'s own module docstring:
+    minting or unwrapping a recovery blob from a non-interactive HTTP call makes no
+    sense, both need a human's own PIN and touch right there in the terminal) but DO
+    compose a short-lived pool now, solely to read `soul_key.rp_id` (Thoth mail 13006)
+    before the FIDO2 ceremony.
 
     status/rotate/restore-drill compose a pool and call `src.orchestrator.
     soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
@@ -1065,13 +1076,8 @@ async def cmd_soul_key(
     from src.ingest import soul_crypto
 
     if action in _SOUL_KEY_POOL_FREE_ACTIONS:
-        if action == "init":
-            out = soul_crypto.soul_key_init(
-                owner=owner, path=path, backend=backend, print_recovery=print_recovery)
-        elif action == "enroll-recovery":
-            out = soul_crypto.soul_key_enroll_recovery(path=path)
-        else:  # recover
-            out = soul_crypto.soul_key_recover(path=path, backend=backend)
+        out = soul_crypto.soul_key_init(
+            owner=owner, path=path, backend=backend, print_recovery=print_recovery)
         if "error" in out:
             print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
             render.emit(out, as_json=as_json, title=f"soul-key {action}")
@@ -1108,8 +1114,16 @@ async def cmd_soul_key(
         elif action == "rotate":
             out = await soul_key_orchestrator.soul_key_rotate(
                 pool, path=path, finish=finish, print_recovery=print_recovery)
-        else:  # restore-drill
+        elif action == "restore-drill":
             out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
+        else:  # enroll-recovery / recover — pool-free soul_crypto calls, rp_id off settings
+            from src.orchestrator.settings_service import get_setting
+
+            rp_id = (await get_setting(pool, "soul_key.rp_id"))["value"]
+            if action == "enroll-recovery":
+                out = soul_crypto.soul_key_enroll_recovery(path=path, rp_id=rp_id)
+            else:  # recover
+                out = soul_crypto.soul_key_recover(path=path, backend=backend, rp_id=rp_id)
     finally:
         if owns_pool:
             await pool.close()

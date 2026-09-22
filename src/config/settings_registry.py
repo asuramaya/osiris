@@ -314,6 +314,21 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
                consequence="high", write_name="backup_settings"),
 )
 
+# THE KEY DOOR'S OWN RP_ID (Thoth mail 13006, correcting KEY CUSTODY REWRITTEN's own
+# hard-coded `_RP_ID = "osiris.local"` in soul_crypto.py): WebAuthn requires the RP id
+# to equal the page's own origin domain for a browser-based enrollment to interoperate
+# with one minted here — Seshat's console is served on localhost:8011, and plain http
+# is a secure context ONLY for localhost, so "localhost" is the one value that actually
+# works for both the native CLI flow (soul_crypto.py's own `_fido2_client`) and a
+# future browser PRF enrollment (Seshat's own piece, reading this same key off GET
+# /soul-key/status rather than hard-coding it a second time). `effect='next_tick'`:
+# read fresh at every enrollment/recovery call, no daemon caches this, no restart ever
+# needed — same reasoning wake.trigger.projects' own comment gives for that shape.
+_SOUL_KEY_SETTINGS: tuple[SettingSpec, ...] = (
+    SettingSpec("soul_key.rp_id", "str", "localhost", effect="next_tick",
+               consequence="low", requires_because=False),
+)
+
 # THE WAKE/TRIGGER LADDER (Wave 22 piece 2, Census gap-list-1 #2, Thoth's dispatch mail
 # 10111) — every env-only settings.py field src/orchestrator/trigger.py's own mail-wake
 # machinery reads, ALL fresh per call (`st = settings or get_settings()`, the exact test
@@ -606,8 +621,8 @@ _LAYOUT_SETTINGS: tuple[SettingSpec, ...] = (
 
 SETTINGS: tuple[SettingSpec, ...] = (
     _MANAGER_OVERLAY + _SECRETS + _DAEMON_KILL_SWITCHES + _MINER_BUDGETS + _BACKUP_SETTINGS
-    + _WAKE_LADDER + _DIAGNOSTICS + _DAEMON_UNIT_LITERALS + _POOL_SIZES + _INGEST_SETTINGS
-    + _LAYOUT_SETTINGS
+    + _SOUL_KEY_SETTINGS + _WAKE_LADDER + _DIAGNOSTICS + _DAEMON_UNIT_LITERALS + _POOL_SIZES
+    + _INGEST_SETTINGS + _LAYOUT_SETTINGS
 )
 
 

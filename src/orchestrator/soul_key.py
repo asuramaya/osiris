@@ -23,10 +23,17 @@ async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dic
     resolved key path rather than whatever the caller process's own env/default
     would resolve to (`soul_store.encrypt_existing_soul_lines`'s own `fernet=`
     seam) — the exact defect a hand-run `--path` census surfaced during this
-    door's own build. NEVER the key bytes."""
+    door's own build. NEVER the key bytes.
+
+    `rp_id` (Thoth mail 13006): the live `soul_key.rp_id` setting, surfaced here
+    so Seshat's console reads it off this SAME door (GET /soul-key/status)
+    instead of hard-coding a second copy — a future browser-based WebAuthn PRF
+    enrollment needs the exact value the CLI's own `enroll-recovery` used."""
     from src.ingest import soul_crypto
+    from src.orchestrator.settings_service import get_setting
 
     out = soul_crypto.soul_key_status(path=path)
+    out["rp_id"] = (await get_setting(pool, "soul_key.rp_id"))["value"]
     if out["present"]:
         from cryptography.fernet import Fernet, MultiFernet
 

@@ -624,7 +624,7 @@ def test_soul_key_enroll_recovery_and_recover_round_trip_with_a_fake_device(
 
     fake_client = _FakeFido2Client()
     monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
-    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device: fake_client)
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device, rp_id: fake_client)
 
     enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file))
     assert "error" not in enrolled
@@ -643,6 +643,54 @@ def test_soul_key_enroll_recovery_and_recover_round_trip_with_a_fake_device(
     assert "error" not in recovered
     assert key_file.read_bytes() == original_key
     assert init_out["backend"] == recovered["backend"] == "file"
+
+
+def test_soul_key_enroll_recovery_stamps_the_given_rp_id_into_the_blob(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thoth mail 13006: rp_id is now a caller-supplied param (the CLI reads
+    `soul_key.rp_id` off settings and passes it down), never the old hard-coded
+    `_RP_ID = "osiris.local"` module constant."""
+    key_file = tmp_path / "soul.key"
+    soul_key_init(path=str(key_file), backend="file")
+    fake_client = _FakeFido2Client()
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    seen_rp_ids: list[str] = []
+    monkeypatch.setattr(
+        soul_crypto, "_fido2_client",
+        lambda device, rp_id: (seen_rp_ids.append(rp_id), fake_client)[1])
+
+    enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file), rp_id="example.org")
+    assert "error" not in enrolled
+    blob = json.loads(Path(enrolled["path"]).read_text())
+    assert blob["rp_id"] == "example.org"
+    assert seen_rp_ids == ["example.org"]
+
+
+def test_soul_key_recover_prefers_the_blobs_own_rp_id_over_the_callers(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential must be addressed by the rp_id it was actually enrolled
+    under — if the live `soul_key.rp_id` setting ever changes between enroll and
+    recover, recovery must still use the ORIGINAL value, never the new one."""
+    key_file = tmp_path / "soul.key"
+    soul_key_init(path=str(key_file), backend="file")
+    fake_client = _FakeFido2Client()
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device, rp_id: fake_client)
+
+    enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file), rp_id="original.example")
+    assert "error" not in enrolled
+
+    key_file.unlink()
+    seen_rp_ids: list[str] = []
+    monkeypatch.setattr(
+        soul_crypto, "_fido2_client",
+        lambda device, rp_id: (seen_rp_ids.append(rp_id), fake_client)[1])
+    recovered = soul_crypto.soul_key_recover(
+        path=str(key_file), backend="file", rp_id="a-different-live-setting.example")
+    assert "error" not in recovered
+    assert seen_rp_ids == ["original.example"]  # the blob's own value, never the fallback
 
 
 def test_soul_key_recover_refuses_when_a_key_already_exists(tmp_path) -> None:
@@ -666,7 +714,7 @@ def test_soul_key_recover_refuses_a_tampered_blob(
     soul_key_init(path=str(key_file), backend="file")
     fake_client = _FakeFido2Client()
     monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
-    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device: fake_client)
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device, rp_id: fake_client)
     enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file))
     recovery_path = Path(enrolled["path"])
     blob = json.loads(recovery_path.read_text())

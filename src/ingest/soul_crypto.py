@@ -698,10 +698,17 @@ def soul_key_rotate_finish(*, path: str | None = None) -> dict[str, Any]:
 # operator's own hands to run once before this is trusted as the primary recovery
 # path -- flagged explicitly in the tip, not silently assumed correct.
 
-_RP_ID = "osiris.local"  # a fixed, non-network RP id/origin for this native CLI flow --
-                         # matches the shape a future browser-based WebAuthn PRF
-                         # enrollment (Seshat's own later piece) would need to share the
-                         # SAME rp_id to interoperate with a credential enrolled here.
+_DEFAULT_RP_ID = "localhost"  # THE KEY DOOR'S OWN RP_ID, CORRECTED (Thoth mail 13006):
+    # the original `_RP_ID = "osiris.local"` cannot interoperate with a browser
+    # enrollment at all — WebAuthn requires rp_id to equal the page's own origin
+    # domain, the console is served on localhost:8011, and plain http is a secure
+    # context ONLY for localhost. Now a settings-registry knob (`soul_key.rp_id`,
+    # settings_registry.py, default "localhost" — matches this same fallback) read by
+    # the CLI (`cmd_soul_key` in cli.py) and threaded down as an explicit `rp_id=`
+    # param; this module-level constant is ONLY the fallback a caller with no pool in
+    # hand (a test, a script) falls back to when it passes no `rp_id=` at all — never
+    # read from here directly by `soul_key_enroll_recovery`/`soul_key_recover`
+    # themselves, which always receive it as a parameter.
 _PRF_SALT_LEN = 32
 
 
@@ -739,11 +746,11 @@ def _cli_user_interaction() -> Any:
     return _CliUserInteraction()
 
 
-def _fido2_client(device: Any) -> Any:
+def _fido2_client(device: Any, *, rp_id: str) -> Any:
     from fido2.client import DefaultClientDataCollector, Fido2Client
 
     return Fido2Client(
-        device, DefaultClientDataCollector(f"https://{_RP_ID}"),
+        device, DefaultClientDataCollector(f"https://{rp_id}"),
         user_interaction=_cli_user_interaction())
 
 
@@ -764,7 +771,9 @@ def _hkdf_wrap_key(prf_output: bytes) -> Fernet:
     return Fernet(base64.urlsafe_b64encode(derived))
 
 
-def soul_key_enroll_recovery(*, path: str | None = None) -> dict[str, Any]:
+def soul_key_enroll_recovery(
+    *, path: str | None = None, rp_id: str = _DEFAULT_RP_ID,
+) -> dict[str, Any]:
     """Enrolls a NEW discoverable FIDO2 credential on the operator's Security Key
     with the PRF extension, derives a wrapping key from its PRF output at a fresh
     random salt (`_hkdf_wrap_key`), wraps the CURRENT primary key with it, and
@@ -776,6 +785,11 @@ def soul_key_enroll_recovery(*, path: str | None = None) -> dict[str, Any]:
     first), and if a recovery blob already exists at this path (re-enrolling on
     purpose is `--rotate`'s own job below, sharing this function's core, never a
     silent overwrite here).
+
+    `rp_id` (Thoth mail 13006): the caller's own resolved `soul_key.rp_id`
+    setting value — `cmd_soul_key` (cli.py) reads it live and passes it in; this
+    function's own default (`_DEFAULT_RP_ID`, "localhost") is only what a
+    caller with no pool in hand (a test, a script) falls back to.
 
     REQUIRES PIN + TOUCH — blocks on physical interaction via
     `_CliUserInteraction`; never call this from a non-interactive context (the
@@ -798,7 +812,7 @@ def soul_key_enroll_recovery(*, path: str | None = None) -> dict[str, Any]:
     # own `path=`/`explicit=` entirely and ignores an explicit path, the same
     # defect class caught in soul_key_rotate_begin during this door's own build.
     raw_key = read_key_bytes_at(resolved)
-    wrapped = _enroll_and_wrap(device, raw_key)
+    wrapped = _enroll_and_wrap(device, raw_key, rp_id=rp_id)
     if "error" in wrapped:
         return wrapped
     recovery_path.write_text(json.dumps(wrapped["blob"]))
@@ -806,12 +820,16 @@ def soul_key_enroll_recovery(*, path: str | None = None) -> dict[str, Any]:
     return {"path": str(recovery_path), "credential_id_fingerprint": wrapped["fingerprint"]}
 
 
-def _enroll_and_wrap(device: Any, raw_key: bytes) -> dict[str, Any]:
+def _enroll_and_wrap(device: Any, raw_key: bytes, *, rp_id: str) -> dict[str, Any]:
     """The actual CTAP2 ceremony, split out from `soul_key_enroll_recovery` so
     tests can inject a fake `device`/monkeypatch `_fido2_client` without also
     faking the filesystem side. Returns `{"blob": {...}, "fingerprint": ...}` on
     success or `{"error": ...}` on any `fido2`-layer failure (never lets a raw
-    library exception escape past this module's own boundary)."""
+    library exception escape past this module's own boundary). `rp_id` is stamped
+    into the blob (`"rp_id"`) so a later `soul_key_recover` reads back the SAME
+    value this credential was actually enrolled under, regardless of what the
+    live `soul_key.rp_id` setting says by then (Thoth mail 13006 — the setting
+    can change; an already-enrolled credential's own rp_id can't)."""
     import base64
     import hashlib
     import os as _os
@@ -827,10 +845,10 @@ def _enroll_and_wrap(device: Any, raw_key: bytes) -> dict[str, Any]:
         UserVerificationRequirement,
     )
 
-    client = _fido2_client(device)
+    client = _fido2_client(device, rp_id=rp_id)
     try:
         registration = client.make_credential(PublicKeyCredentialCreationOptions(
-            rp=PublicKeyCredentialRpEntity(id=_RP_ID, name="Osiris soul-store key"),
+            rp=PublicKeyCredentialRpEntity(id=rp_id, name="Osiris soul-store key"),
             user=PublicKeyCredentialUserEntity(
                 id=_os.urandom(16), name="soul-key", display_name="Osiris soul-store key"),
             challenge=_os.urandom(32),
@@ -845,7 +863,7 @@ def _enroll_and_wrap(device: Any, raw_key: bytes) -> dict[str, Any]:
         raise SoulKeyRecoveryError(f"FIDO2 enrollment failed: {exc}") from exc
     credential_id = registration.raw_id
     salt = _os.urandom(_PRF_SALT_LEN)
-    prf_output = _prf_eval(client, credential_id, salt)
+    prf_output = _prf_eval(client, credential_id, salt, rp_id=rp_id)
     if prf_output is None:
         return {"error": "this Security Key did not return a PRF/hmac-secret output — "
                          "it may not support the extension (needs FIDO2, not U2F-only)"}
@@ -857,12 +875,12 @@ def _enroll_and_wrap(device: Any, raw_key: bytes) -> dict[str, Any]:
         "salt": base64.urlsafe_b64encode(salt).decode(),
         "wrapped_key": base64.urlsafe_b64encode(wrapped_key).decode(),
         "key_fingerprint": fingerprint,
-        "rp_id": _RP_ID,
+        "rp_id": rp_id,
     }
     return {"blob": blob, "fingerprint": fingerprint}
 
 
-def _prf_eval(client: Any, credential_id: bytes, salt: bytes) -> bytes | None:
+def _prf_eval(client: Any, credential_id: bytes, salt: bytes, *, rp_id: str) -> bytes | None:
     """One `get_assertion` call against `credential_id` with the PRF extension
     evaluated at `salt`, returning the raw PRF output bytes or None if the
     authenticator didn't return one. Shared by enrollment (derive the wrap key
@@ -877,7 +895,7 @@ def _prf_eval(client: Any, credential_id: bytes, salt: bytes) -> bytes | None:
     )
 
     assertion = client.get_assertion(PublicKeyCredentialRequestOptions(
-        challenge=os.urandom(32), rp_id=_RP_ID,
+        challenge=os.urandom(32), rp_id=rp_id,
         allow_credentials=[PublicKeyCredentialDescriptor(
             type=PublicKeyCredentialType.PUBLIC_KEY, id=credential_id)],
         extensions={"prf": {"eval": {"first": salt}}},
@@ -889,7 +907,9 @@ def _prf_eval(client: Any, credential_id: bytes, salt: bytes) -> bytes | None:
     return bytes(first) if first else None
 
 
-def soul_key_recover(*, path: str | None = None, backend: str | None = None) -> dict[str, Any]:
+def soul_key_recover(
+    *, path: str | None = None, backend: str | None = None, rp_id: str = _DEFAULT_RP_ID,
+) -> dict[str, Any]:
     """Reverses `soul_key_enroll_recovery`: reads `_recovery_path(resolved)`,
     re-derives the SAME wrapping key via `_prf_eval` on the SAME credential+salt
     (PIN + touch required again — the physical key is the whole point), unwraps
@@ -900,6 +920,14 @@ def soul_key_recover(*, path: str | None = None, backend: str | None = None) -> 
     auto-selection `soul_key_init` uses) — the exact "recover on a new machine"
     story: the recovery blob is portable (safe on the NAS/vault), the host
     credential it re-seals under is NOT.
+
+    `rp_id` (Thoth mail 13006): the CALLER's own resolved `soul_key.rp_id`
+    setting — used only as a FALLBACK. The blob's own recorded `"rp_id"`
+    (stamped in by `_enroll_and_wrap` at enrollment time) is preferred whenever
+    present: a credential must be addressed by the rp_id it was actually
+    enrolled under, which may differ from whatever the live setting says by
+    recovery time if the operator ever changes it — this door recovers what was
+    actually minted, never what's merely configured today.
 
     REFUSES if a key already exists at the target path (this is a RECOVERY door,
     not a rotation — `soul-key rotate` is the door once you already have a live
@@ -916,15 +944,16 @@ def soul_key_recover(*, path: str | None = None, backend: str | None = None) -> 
     import hashlib
 
     blob = json.loads(recovery_path.read_text())
+    effective_rp_id = blob.get("rp_id") or rp_id
     device = _find_fido2_device()
     if device is None:
         return {"error": "no FIDO2 security key detected — plug in the SAME key you "
                          "enrolled recovery with, and try again"}
-    client = _fido2_client(device)
+    client = _fido2_client(device, rp_id=effective_rp_id)
     credential_id = base64.urlsafe_b64decode(blob["credential_id"])
     salt = base64.urlsafe_b64decode(blob["salt"])
     try:
-        prf_output = _prf_eval(client, credential_id, salt)
+        prf_output = _prf_eval(client, credential_id, salt, rp_id=effective_rp_id)
     except Exception as exc:  # noqa: BLE001 - the fido2 boundary: name it, never a raw traceback
         raise SoulKeyRecoveryError(f"FIDO2 recovery failed: {exc}") from exc
     if prf_output is None:
