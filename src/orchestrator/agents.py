@@ -2707,6 +2707,25 @@ async def _fold_zero_turn_ancestors(
             await a.execute(
                 "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
                 grandancestor, cur_id)
+            # THE SAME ESTATE-TRANSFER LAW mint_heir HOLDS (WAVE 27 BUG 4, thread
+            # bc517864/afd27e1a's own "a different door" finding): this walk is a SECOND
+            # mail-reassignment site, mint_heir's own sibling, and until this fix it only
+            # ever did the fleet_messages half above — a phantom generation folded here
+            # could carry a LEASE (message_recipients row, read_at IS NULL — the phantom
+            # itself read a message but never settled it before being folded) that then
+            # sat orphaned on the now-retired phantom's own id, invisible to the
+            # grandancestor it was folded into. Same fix, same filter: only a GENUINELY
+            # SETTLED row (read_at IS NOT NULL — real memory, not a lease) carries onto
+            # the grandancestor; a bare lease carries nothing, so the grandancestor's own
+            # next inbox() finds that message fresh — never silently vanished, never
+            # falsely pre-settled.
+            await a.execute(
+                "INSERT INTO message_recipients "
+                "(message_id, agent_id, delivered_at, read_at, deliveries) "
+                "SELECT message_id, $1, delivered_at, read_at, deliveries "
+                "FROM message_recipients WHERE agent_id=$2 AND read_at IS NOT NULL "
+                "ON CONFLICT (message_id, agent_id) DO NOTHING",
+                grandancestor, cur_id)
             await follow_binding(a, ancestor_oid=cur_oid, heir=grandancestor,
                                  heir_oid=grand_oid, now=now)
         cur_id, cur_oid = grandancestor, grand_oid
