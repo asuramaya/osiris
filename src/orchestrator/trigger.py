@@ -2997,6 +2997,45 @@ def _launch_anchor(seat_id: str) -> str:
     return str(Path.home() / ".claude" / "jobs" / seat_id.replace(":", "-"))
 
 
+async def _trustworthy_fallback_ancestor(
+    pool: asyncpg.Pool, agent_id: str, target_seat: str,
+) -> bool:
+    """Is `agent_id` a REAL prior identity — worth `_bind_before_spawn` inheriting a
+    lineage from — or actually SOMEONE ELSE'S session/job id, wearing this seat's
+    `holds` edge by mistake (the jenny/dustin crossing, Nebbercracker findings
+    ab59c731/a0fd7e5b — live specimen: jenny's seat resolved `current_holder` to
+    `agent:9c9a534f`, which is not a real identity at all, it is DUSTIN's own harness
+    session id, bare, no `agent:` prefix on the session itself, just a string that
+    happens to collide with an agent canonical shape)?
+
+    THE FINGERPRINT, measured against the live specimen directly rather than guessed:
+    `agent:9c9a534f` itself holds no OTHER seat (Dustin's own seat is held by his real
+    canonical, `agent:77afe60a-xv`, a different string) — so checking "is this id
+    itself another seat's current holder" finds nothing. What DOES distinguish it: a
+    LIVE `agent_mounts` row exists whose `job_dir` basename is this exact bare id, and
+    whose OWN `agent_id` is a DIFFERENT canonical — proof this string is borrowed from
+    a real, currently-mounted OTHER mind, never minted as an identity of its own. A
+    genuine pre-Seat-object holder (the one legitimate case this fallback exists for,
+    however sparse its own provenance) never collides with another agent's live
+    job_dir this way, so this check refuses only the borrowed-id shape and nothing
+    else — it deliberately does NOT require `agent_id` to carry any provenance of its
+    own (minted_because/handle/succeeded_from), since a real historical holder can
+    genuinely have none and still be exactly who the seat's own `holds` edge says."""
+    bare = agent_id.removeprefix("agent:")
+    borrowed = await pool.fetchval(
+        "SELECT 1 FROM agent_mounts WHERE job_dir LIKE '%/' || $1 AND agent_id <> $2 LIMIT 1",
+        bare, agent_id)
+    if borrowed:
+        return False
+    other_seat = await pool.fetchval(
+        "SELECT 1 FROM links hl "
+        "JOIN objects hf ON hf.id=hl.from_id AND hf.type='Agent' "
+        "JOIN objects ht ON ht.id=hl.to_id AND ht.type='Seat' AND ht.canonical<>$2 "
+        "WHERE hf.canonical=$1 AND hl.type='holds' "
+        "AND (hl.valid_until IS NULL OR hl.valid_until > now())", agent_id, target_seat)
+    return other_seat is None
+
+
 async def _bind_before_spawn(
     actions: Actions, *, target_seat: str, handle: str, house: str | None,
     current_holder: str | None, office: str, anchor: str, source: str,
@@ -3072,7 +3111,29 @@ async def _bind_before_spawn(
 
     now = datetime.now(UTC)
     lineage_ancestor = await _seat_lineage_ancestor(actions.pool, target_seat)
-    ancestor = lineage_ancestor or current_holder
+    # NEVER TRUST A BARE FALLBACK ANCESTOR (thread <jenny/dustin crossing>, Nebbercracker
+    # findings ab59c731/a0fd7e5b, live specimen): `current_holder` is the seat's own
+    # `holds` edge, read as-is by `_launch_target_setup` — a legitimate source for a seat
+    # that predates the Seat-object convention (this docstring's own "no handle
+    # assertion at all" case), but exactly as trusting of whatever garbage sits on that
+    # edge as any other unverified read. Live: jenny's seat resolved `current_holder` to
+    # `agent:9c9a534f` — an id equal to DUSTIN's own harness session, with zero real
+    # provenance of its own (no minted_because, no handle, no succeeded_from — never
+    # actually minted through any door, just a bare string an occupancy misread handed
+    # back) — and this function faithfully bound jenny's seat to it, no mint_heir call
+    # even reached (mint_heir mints the HEIR, never asserts anything on the ancestor it
+    # inherits from). `_seat_lineage_ancestor` itself stays trusted — it resolves the
+    # seat's OWN handle-sourced lineage and was not implicated in this specimen; only
+    # the RAW fallback to `current_holder` is checked, and only refused when it has no
+    # provenance of its own OR is live under a DIFFERENT seat right now — a real
+    # pre-Seat-object holder has one or the other; a job-id/session-shaped phantom has
+    # neither.
+    ancestor = lineage_ancestor
+    if ancestor is None and current_holder:
+        ancestor = (current_holder
+                   if await _trustworthy_fallback_ancestor(
+                       actions.pool, current_holder, target_seat)
+                   else None)
     legacy_warning = (
         await _legacy_lineage_confession(actions.pool, target_seat, lineage_ancestor)
         if lineage_ancestor else None)
