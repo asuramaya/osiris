@@ -94,11 +94,37 @@ const Osiris = (() => {
       <div class="o-upstream-expansion" data-for="${esc(p.name)}" style="display:none;grid-column:1/4"></div>`;
   }
 
+  // THE NAME, NEVER THE SLUG (operator ruling a1cde8a3): a rename migrates the canonical
+  // too (repo:<new_name>) -- so a project's own reader-facing name is simply its
+  // canonical with the `repo:` scheme stripped, a pure display transform, never a
+  // resolve. graph_stream.py's own _short_label already does this for an ordinary
+  // SoftwareProject node's label on the space canvas ("SoftwareProject by repo name");
+  // resolve_label (ontology/labels.py, every OTHER surface -- /objects, /objects/{id},
+  // /search, /objects/{id}/graph) has no such SoftwareProject-specific rule and falls
+  // straight to the raw canonical when no `name` property is asserted, which is the
+  // normal case for a repo. This is that same rule, client-side, for every one of those
+  // surfaces at once instead of teaching each one Python's own special case.
+  function projectDisplayName(canonical) {
+    return typeof canonical === "string" && canonical.startsWith("repo:")
+      ? canonical.slice(5) : canonical;
+  }
+  // the generic "what text represents this object" a table Name column, a board card's
+  // own title, and a search hit's own label all want -- SoftwareProject routed through
+  // projectDisplayName above, everything else trusting the server's own resolve_label
+  // output (display_label/label) unchanged.
+  function objectDisplayLabel(o) {
+    if (!o) return "";
+    if (o.type === "SoftwareProject") {
+      return projectDisplayName(o.canonical || o.display_label || o.label || o.id || "");
+    }
+    return o.display_label || o.label || "";
+  }
+
   // the object detail (the one noun) — type chip, title, provenance box, graded facts, slots for rels.
   // `acts` is HTML for action buttons the shell injects (search-around, dossier, …).
   function objectDetail(o, acts = "") {
     const demo = o.properties.some((p) => p.name === "demo" && String(p.value).toLowerCase() === "true");
-    const title = o.name || o.canonical;
+    const title = o.name || (o.type === "SoftwareProject" ? projectDisplayName(o.canonical) : o.canonical);
     const m = ty(o.type);
     // WAVE 27, THE INSPECTOR: supersedes/superseded_by render as relationship rows now
     // (loadRels, below), not a bare unclickable uuid string in the property grid.
@@ -186,7 +212,7 @@ const Osiris = (() => {
       .map((gr, i) => {
         const arrow = gr.dir === "out" ? "→" : "←";
         const rows = gr.members
-          .map((m) => `<div class="o-rel" style="padding-left:18px"><a data-pick="${m.id}" style="cursor:pointer">${esc(m.label)}</a>
+          .map((m) => `<div class="o-rel" style="padding-left:18px"><a data-pick="${m.id}" style="cursor:pointer">${esc(objectDisplayLabel(m) || m.label)}</a>
             <span class="o-faint">${esc(m.id).slice(0,8)}</span></div>`)
           .join("");
         // a property-pair pointer is never a "set" -- exactly one target, no real link type
@@ -229,7 +255,9 @@ const Osiris = (() => {
         fetch(`/objects/${m.id}`).then((r) => (r.ok ? r.json() : null)).then((resolved) => {
           if (!resolved) return;
           const a = el.querySelector(`[data-pick="${m.id}"]`);
-          if (a) a.textContent = resolved.name || resolved.canonical || m.id.slice(0, 8);
+          if (a) a.textContent = resolved.name ||
+            (resolved.type === "SoftwareProject" ? projectDisplayName(resolved.canonical) : resolved.canonical) ||
+            m.id.slice(0, 8);
         }).catch(() => {});
       }
     }
@@ -343,9 +371,9 @@ const Osiris = (() => {
       const d = _pickDate(p), s = _pickSummary(p);
       const when = d ? esc(String(d).slice(0, 10)) : `#${i + 1}`;
       const sum = s ? `<div class="tl-sum">${esc(String(s).slice(0, 160))}</div>` : "";
-      return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}" title="${esc(o.label || "")}">
+      return `<div class="tl-item" data-pick="${o.id}" data-type="${esc(o.type)}" title="${esc(o.canonical || o.label || "")}">
         <span class="tl-when">${when}</span>
-        <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(o.display_label || o.label)}${sum}</div></div>`;
+        <div class="tl-main"><span class="o-faint">${esc(o.type)}</span> ${esc(objectDisplayLabel(o))}${sum}</div></div>`;
     }).join("");
     panel.innerHTML = `<div class="r-head">${items.length} item${items.length === 1 ? "" : "s"} · in order</div>
       <div class="tl">${body}</div>` + (items.length > shown.length ? _more(items.length - shown.length) : "");
@@ -446,7 +474,7 @@ const Osiris = (() => {
             <span class="card-tag card-tag-type" style="color:${m.c};background:${m.c}18;border-color:${m.c}40">${esc(o.type)}</span>
             <span class="card-tag card-tag-id">${esc(shortId)}</span>
           </div>
-          <div class="card-title">${esc(o.display_label || o.label || summary.slice(0, 85))}</div>
+          <div class="card-title">${esc(objectDisplayLabel(o) || summary.slice(0, 85))}</div>
           ${summary && summary !== o.label ? `<div class="card-desc">${esc(summary)}</div>` : ''}
           <div class="card-tags-bottom">
             <span class="card-tag card-tag-status status-${esc(o.status || p.status || 'active')}">${esc(o.status || p.status || 'active')}</span>
@@ -487,7 +515,7 @@ const Osiris = (() => {
     const cell = (v, full) => `<td title="${esc(full != null ? full : v)}"><span class="clamp">${esc(v)}</span></td>`;
     const body = shown
       .map((o) => `<tr data-pick="${o.id}" data-type="${esc(o.type)}" style="cursor:pointer">
-        ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(o.display_label || o.label || "", o.label)}
+        ${showType ? `<td><span class="o-faint">${esc(o.type)}</span></td>` : ""}${cell(objectDisplayLabel(o), o.canonical || o.label)}
         ${cols.map((c) => cell((o.props || {})[c] || "")).join("")}</tr>`)
       .join("");
     const chipbar = chips.map((c) => `<span class="r-chip">${esc(c)}</span>`).join("");
@@ -825,5 +853,6 @@ const Osiris = (() => {
   }
 
   return { $, esc, pct, OPSYM, loadSchema, ty, objectDetail, loadRels,
-    renderResult, viewsFor, defaultView, lineage, innerSelect, cardsGrid };
+    renderResult, viewsFor, defaultView, lineage, innerSelect, cardsGrid,
+    projectDisplayName, objectDisplayLabel };
 })();

@@ -72,7 +72,10 @@ def test_property_rel_pointer_label_resolves_asynchronously_via_a_second_fetch()
     body = _OSIRIS_JS.split("async function loadRels(el, id, onPick, onOpenSet, obj)", 1)[1]
     assert "if (!gr.isProperty) continue;" in body
     assert 'fetch(`/objects/${m.id}`).then((r) => (r.ok ? r.json() : null))' in body
-    assert 'a.textContent = resolved.name || resolved.canonical || m.id.slice(0, 8);' in body
+    assert 'a.textContent = resolved.name ||' in body
+    assert '(resolved.type === "SoftwareProject" ? ' \
+        "projectDisplayName(resolved.canonical) : resolved.canonical) ||" in body
+    assert "m.id.slice(0, 8);" in body
 
 
 # --- objectDetail: supersedes/superseded_by leave the plain property grid ------------------

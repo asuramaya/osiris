@@ -99,24 +99,25 @@ def test_author_composition_previews_before_saving() -> None:
     body = _JS.split("async function authorComposition()", 1)[1].split("\nasync function ", 1)[0]
     # the preview call comes before the save call — a bad spec must never reach the DB
     preview_at = body.index("'/compositions/run-spec'")
-    save_at = body.index("JSON.stringify({ name: name, spec: spec, room_id: ROOM || null })")
+    save_at = body.index("JSON.stringify({ name: name, spec: spec })")
     assert preview_at < save_at
 
 
 def test_fork_composition_saves_the_on_screen_spec_under_a_new_name() -> None:
     body = _JS.split("async function forkComposition()", 1)[1].split("\nasync function ", 1)[0]
     assert "LAST_COMPOSITION_RUN.spec" in body
-    assert "room_id: ROOM || null" in body
+    assert "room_id" not in body
 
 
-def test_load_compositions_reads_the_room_conditional_query_now_always_inert() -> None:
-    """ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792): switchRoom
-    itself is gone (superseding this test's own old room-switch assertion), but
-    loadCompositions()'s own room-conditional query string is left as-is — ROOM is now a
-    plain `const ROOM = ''`, so the ternary always takes its falsy branch, an unscoped
-    fetch, without needing every reader scrubbed individually."""
-    assert "const ROOM = '';" in _JS
-    assert "'/compositions' + (ROOM ? ('?room=' + encodeURIComponent(ROOM)) : '')" in _JS
+def test_load_compositions_is_never_room_scoped() -> None:
+    """?ROOM= RESIDUE RETIRED (thread 96f09d48, decision 31717ca7, Thoth DM 10792/12807):
+    "end to end" turned out to mean the still-live ?room= READ filter too, not just the
+    mint/list doors retired earlier this wave — switchRoom itself was already gone; now
+    loadCompositions()'s own room-conditional query string, and the ROOM constant it read,
+    are gone too. An unscoped fetch, unconditionally, same as the retired ternary's own
+    always-falsy branch already produced."""
+    assert "const ROOM" not in _JS
+    assert "await fetch('/compositions').then(r => r.json());" in _JS
     assert "function switchRoom(" not in _JS
     assert "loadCompositions()" in _JS.split("Osiris.loadSchema().then", 1)[1][:300]
 
