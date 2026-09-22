@@ -35,11 +35,22 @@ legacy_tarballs`/`_scan_legacy_tarballs`) and the transcript-cache-prune session
 population (`_collect_session_prune_plan`, delegating to
 osiris_transcript_cache_prune.find_prunable_sessions unchanged).
 
+DORMANT SEAT TRANSCRIPTS (Thoth mail 13353 item 2, the chowder specimen: a re-minted
+seat can carry a 57 MB resumable transcript under its own office, 8 compactions, last
+touched days ago, that nothing currently ever revisits once the seat succeeds and its
+lineage moves on): `attribute_sessions_to_seats` groups the SAME already-safety-checked
+`_collect_session_prune_plan` population (dead AND fully captured — never a raw mtime
+guess) by which seat's OWN office directory produced it, purely for the manifest's own
+reading — "chowder: 3 file(s), 57.2 MB" instead of an unattributed flat path list. This
+changes nothing about what gets deleted, when, or how safely; it rides the identical
+manifest-then-dim gate and the identical `_apply` call every other population here does.
+
 Pure logic (`plan_prune`) is tested directly; the CLI is a thin scan-report-optionally-
 delete shell around it."""
 from __future__ import annotations
 
 import argparse
+import contextlib
 import re
 import sys
 from dataclasses import dataclass
@@ -360,19 +371,95 @@ def _report_sessions(plan: list[SessionRow]) -> None:
     print(_report_sessions_text(plan))
 
 
+def _seat_handles(office_root: Path) -> list[str]:
+    """Every seat with a real office directory on disk right now — one subdir per handle
+    (offices.py's own `_default_office_root`/`seat_office_target` convention: `<office_root>/
+    <handle>`, lowercased). Purely a disk scan, no DB — same "stays usable offline" shape
+    every other `_scan_*` helper in this file already has. Missing `office_root` (a fresh
+    box, or a synthetic tmp_path in a test) is a normal empty case, never an error."""
+    if not office_root.is_dir():
+        return []
+    return sorted(p.name for p in office_root.iterdir() if p.is_dir())
+
+
+def _seat_transcript_dir(handle: str, *, office_root: Path, projects_root: Path) -> Path:
+    """The harness transcript directory a seat's OWN office cwd writes to — the SAME
+    `_harness_slug` the harness itself keys `~/.claude/projects/` on (mounts.py), so this
+    always agrees with wherever a real seat's session files actually landed, never a
+    separately-maintained guess that could drift from the harness's own convention."""
+    from src.orchestrator.mounts import _harness_slug
+
+    cwd = str(office_root / handle)
+    return projects_root / _harness_slug(cwd)
+
+
+def attribute_sessions_to_seats(
+    sessions: list[SessionRow], *, office_root: Path, projects_root: Path,
+) -> dict[str, list[SessionRow]]:
+    """DORMANT SEAT TRANSCRIPTS (Thoth mail 13353 item 2) — groups an ALREADY-COMPUTED
+    prune-eligible `sessions` list (`find_prunable_sessions`'s own output: dead AND fully
+    captured, the identical safety test every other session-cache prune already uses) by
+    which SEAT's office directory produced it. Nothing here changes what gets deleted or
+    when — same session rows, same `_apply` call, same manifest-then-dim gate; this only
+    adds a per-seat rollup for the operator's own reading, "chowder: 3 file(s), 57.2 MB"
+    rather than a flat, unattributed path list. A session whose directory matches no
+    known seat's own transcript directory (an ordinary, non-office project) is left out
+    of the grouping entirely — it still appears in the existing flat session report,
+    untouched."""
+    handles = _seat_handles(office_root)
+    dir_to_handle = {
+        str(_seat_transcript_dir(h, office_root=office_root, projects_root=projects_root)): h
+        for h in handles
+    }
+    out: dict[str, list[SessionRow]] = {}
+    for s in sessions:
+        handle = dir_to_handle.get(str(Path(s.source_path).parent))
+        if handle is None:
+            continue
+        out.setdefault(handle, []).append(s)
+    return out
+
+
+def _report_seat_transcripts_text(groups: dict[str, list[SessionRow]]) -> str:
+    """Sizes are computed HERE, at report time — `SessionRow` itself carries no size
+    field (unlike `DumpFile`/`WalSegment`, `soul_sessions` never stores one) — a plain
+    `Path.stat()` per file, tolerant of a file that's already gone (0 bytes counted,
+    never a crash: the same file a concurrent `--apply-if-clear` run might have already
+    removed moments earlier)."""
+    if not groups:
+        return "\ndormant seat transcripts: none"
+    lines = [f"\ndormant seat transcripts, {len(groups)} seat(s):"]
+    for handle in sorted(groups):
+        rows = groups[handle]
+        size = 0
+        for r in rows:
+            with contextlib.suppress(OSError):
+                size += Path(r.source_path).stat().st_size
+        newest = max((r.file_mtime for r in rows if r.file_mtime is not None), default=None)
+        touched = f", last touched {newest.isoformat()}" if newest else ""
+        lines.append(f"  {handle}: {len(rows)} file(s), {size / (1024**2):.1f} MB{touched}")
+    return "\n".join(lines)
+
+
+def _report_seat_transcripts(groups: dict[str, list[SessionRow]]) -> None:
+    print(_report_seat_transcripts_text(groups))
+
+
 def build_manifest_body(
     plans: dict[str, dict[str, list[DumpFile]]],
     chain_plan: dict[str, list[TranscriptChain]],
     wal_plan: dict[str, list[WalSegment]] | None = None,
     legacy_plan: dict[str, list[DumpFile]] | None = None,
     session_plan: list[SessionRow] | None = None,
+    seat_transcript_groups: dict[str, list[SessionRow]] | None = None,
 ) -> str:
     """Pure: the exact text mailed to the operator's desk (thread 9fac4e0d part 1) —
     the SAME wording the dry-run CLI prints, so a human reading the mail sees exactly
     what a human running the command by hand would have seen. `wal_plan`, `legacy_plan`
-    (thread 9fac4e0d part 2 and Thoth mail 8441 item 2) and `session_plan` (mail 8441
-    item 1) are all optional — omitted callers/tests that predate each addition still
-    get a valid manifest, just without that section."""
+    (thread 9fac4e0d part 2 and Thoth mail 8441 item 2), `session_plan` (mail 8441
+    item 1) and `seat_transcript_groups` (mail 13353 item 2 — a rollup OF `session_plan`,
+    never a separate deletion) are all optional — omitted callers/tests that predate each
+    addition still get a valid manifest, just without that section."""
     total_remove = sum(len(p["remove"]) for p in plans.values())
     total_chains_remove = len(chain_plan["remove"])
     total_wal_remove = len(wal_plan["remove"]) if wal_plan else 0
@@ -391,6 +478,8 @@ def build_manifest_body(
         parts.append(_report_text("vault/legacy-transcripts", legacy_plan))
     if session_plan is not None:
         parts.append(_report_sessions_text(session_plan))
+    if seat_transcript_groups is not None:
+        parts.append(_report_seat_transcripts_text(seat_transcript_groups))
     parts.append("\nRun scripts/osiris_prune_ladder.py (no flags) yourself for the "
                  "identical dry-run at any time. To stop tomorrow's apply, dim this "
                  "brief.")
@@ -455,6 +544,7 @@ async def mail_manifest(
     wal_plan: dict[str, list[WalSegment]] | None = None,
     legacy_plan: dict[str, list[DumpFile]] | None = None,
     session_plan: list[SessionRow] | None = None,
+    seat_transcript_groups: dict[str, list[SessionRow]] | None = None,
 ) -> int:
     """Send the dry-run plan to the operator's desk as a decision-band brief (thread
     9fac4e0d part 1) — uses src.db.pool.create_pool, NOT bare asyncpg.create_pool
@@ -464,7 +554,8 @@ async def mail_manifest(
     from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
-    body = build_manifest_body(plans, chain_plan, wal_plan, legacy_plan, session_plan)
+    body = build_manifest_body(
+        plans, chain_plan, wal_plan, legacy_plan, session_plan, seat_transcript_groups)
     pool = await create_pool(
         DSN, min_size=1, max_size=1,
         application_name="osiris-script:prune-ladder-manifest")
@@ -555,12 +646,33 @@ def main(argv: list[str] | None = None) -> int:
                              "sent is at least 20h old and has not been dimmed — "
                              "refuses with a named reason otherwise. Deletes nothing "
                              "when refusing.")
+    parser.add_argument("--seat-root", type=Path, default=None,
+                        help="Root directory holding every seat's own scaffolded "
+                             "identity directory, for the dormant-seat-transcript "
+                             "rollup (default: src.orchestrator.offices' own real "
+                             "~/.osiris/seats). A test override, never set in production.")
+    parser.add_argument("--projects-root", type=Path, default=None,
+                        help="Harness transcript root for the dormant-seat-transcript "
+                             "rollup (default: ~/.claude/projects). A test override, "
+                             "never set in production.")
     args = parser.parse_args(argv)
+
+    def _office_root() -> Path:
+        if args.seat_root is not None:
+            return args.seat_root
+        from src.orchestrator.offices import _default_office_root
+        return _default_office_root()
+
+    def _projects_root() -> Path:
+        return args.projects_root or (Path.home() / ".claude" / "projects")
 
     if args.manifest:
         plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
         session_plan = asyncio.run(_collect_session_prune_plan())
-        mid = asyncio.run(mail_manifest(plans, chain_plan, wal_plan, legacy_plan, session_plan))
+        seat_groups = attribute_sessions_to_seats(
+            session_plan, office_root=_office_root(), projects_root=_projects_root())
+        mid = asyncio.run(mail_manifest(
+            plans, chain_plan, wal_plan, legacy_plan, session_plan, seat_groups))
         print(f"manifest mailed to the operator's desk — message {mid}")
         return 0
 

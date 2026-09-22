@@ -409,6 +409,37 @@ this is a CLI-side call over the Function, same NO_MCP_EQUIVALENT shape as `lint
 `audit` above). `--vault`/`--backups` override the production paths, for a test or a
 non-standard layout.
 
+## `scripts/osiris_prune_ladder.py [--manifest | --apply-if-clear | --apply]` — the retention ladder
+
+Not an `osiris` subcommand (no console-script door onto it yet) — a standalone script, run
+by hand or via a weekly timer pair (`deploy/osiris-prune-manifest.{service,timer}`,
+`deploy/osiris-prune-apply.{service,timer}`). Thins the DB dump population in `backups/`
+and the vault, plus the vault's own base backups, WAL archive, and transcript chains,
+GFS-style (every survivor
+inside 48h stays whole; 48h–30d thins to one/day; 30d–1y to one/week; beyond that to
+one/month). **DRY-RUN IS THE DEFAULT** (ruling 39384a87/c53a5fc0) — bare invocation only
+prints what WOULD be removed, `--apply` actually deletes what it just printed, and the
+weekly timer pair instead uses `--manifest` (mails the identical dry-run to the operator's
+desk as a decision brief) then, ~20h later, `--apply-if-clear` (applies only if that brief
+is still un-dimmed — dimming it is the operator's own word, given in advance, that the plan
+should NOT run). This is a distinct mechanism from `osiris retention` (which thins DB
+tables — `outbox`/`audit-log` rows — and has its own independent `--execute` gate); this
+script only ever touches files on disk.
+
+**Dormant seat transcripts** (thread 13353 item 2 — a re-minted seat can carry a large
+resumable harness transcript sitting under its own scaffolded identity directory,
+`~/.osiris/seats/<handle>/`, that nothing revisits once the seat succeeds and its lineage
+moves on): `--manifest`/`--apply-if-clear` now also group the SAME transcript-cache-prune
+population (dead — no file activity past `--dead-after-days`, default 30 — AND fully
+captured by the soul-store, the identical safety test every other session-cache prune
+already uses) by which seat's own identity directory produced it, naming each dormant
+seat and its total size in the manifest body: `chowder: 3 file(s), 57.2 MB`. This is a
+rollup for the operator's own reading, never a separate deletion path — the underlying
+files apply (or don't) exactly as the flat transcript-cache-prune population already did,
+behind the identical manifest-then-dim gate, never outside it. `--seat-root`/
+`--projects-root` override the real `~/.osiris/seats`/`~/.claude/projects` paths — test
+seams only, never set in production.
+
 ## `osiris digest [--hours N] [--mark-seen] [--json] [--text]`
 
 The console-script door onto `fleet_digest` — the operator's own membrane into the

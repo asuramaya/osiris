@@ -10,11 +10,15 @@ from scripts.osiris_prune_ladder import (
     TranscriptChain,
     WalSegment,
     _scan_legacy_tarballs,
+    _seat_handles,
+    _seat_transcript_dir,
+    attribute_sessions_to_seats,
     plan_prune,
     plan_prune_legacy_tarballs,
     plan_prune_transcript_chains,
     plan_prune_wal,
 )
+from scripts.osiris_transcript_cache_prune import SessionRow
 
 NOW = datetime(2026, 9, 8, 12, 0, tzinfo=UTC)
 
@@ -407,3 +411,96 @@ def test_cli_reports_and_prunes_legacy_tarballs_as_their_own_population(
     rc = main(["--backups", str(backups), "--vault", str(vault), "--apply"])
     assert rc == 0
     assert not stray.exists(), "--apply must actually remove the legacy tarball"
+
+
+# --- dormant seat transcripts (Thoth mail 13353 item 2) -------------------------------------
+
+def test_seat_handles_lists_office_subdirectories(tmp_path) -> None:  # noqa: ANN001
+    office_root = tmp_path / "seats"
+    (office_root / "chowder").mkdir(parents=True)
+    (office_root / "thoth").mkdir()
+    (office_root / "not-a-dir.txt").write_text("stray file, never a handle")
+    assert _seat_handles(office_root) == ["chowder", "thoth"]
+
+
+def test_seat_handles_empty_when_office_root_is_missing(tmp_path) -> None:  # noqa: ANN001
+    assert _seat_handles(tmp_path / "nonexistent") == []
+
+
+def test_seat_transcript_dir_agrees_with_the_harness_own_slug_convention(tmp_path) -> None:  # noqa: ANN001
+    from src.orchestrator.mounts import _harness_slug
+
+    office_root = tmp_path / "seats"
+    projects_root = tmp_path / "projects"
+    d = _seat_transcript_dir("chowder", office_root=office_root, projects_root=projects_root)
+    expected_cwd = str(office_root / "chowder")
+    assert d == projects_root / _harness_slug(expected_cwd)
+
+
+def test_attribute_sessions_to_seats_groups_only_matching_office_directories(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    office_root = tmp_path / "seats"
+    projects_root = tmp_path / "projects"
+    (office_root / "chowder").mkdir(parents=True)
+    chowder_dir = _seat_transcript_dir(
+        "chowder", office_root=office_root, projects_root=projects_root)
+    other_project_dir = projects_root / "-some-unrelated-project"
+    sessions = [
+        SessionRow("sid-a", str(chowder_dir / "a.jsonl"), NOW, NOW),
+        SessionRow("sid-b", str(chowder_dir / "b.jsonl"), NOW, NOW),
+        SessionRow("sid-c", str(other_project_dir / "c.jsonl"), NOW, NOW),
+    ]
+    groups = attribute_sessions_to_seats(
+        sessions, office_root=office_root, projects_root=projects_root)
+    assert set(groups) == {"chowder"}
+    assert {s.anchor_sid for s in groups["chowder"]} == {"sid-a", "sid-b"}
+
+
+def test_attribute_sessions_to_seats_is_empty_with_no_seat_offices_at_all(
+    tmp_path,  # noqa: ANN001
+) -> None:
+    sessions = [SessionRow("sid-a", "/tmp/somewhere/a.jsonl", NOW, NOW)]
+    groups = attribute_sessions_to_seats(
+        sessions, office_root=tmp_path / "no-such-office-root",
+        projects_root=tmp_path / "projects")
+    assert groups == {}
+
+
+def test_cli_manifest_names_dormant_seat_transcripts_with_sizes(
+    tmp_path, capsys, monkeypatch,  # noqa: ANN001
+) -> None:
+    """End to end through the actual CLI entrypoint's --seat-root/--projects-root test
+    seams (never the real ~/.osiris/seats or ~/.claude/projects) — proves the manifest text
+    itself names the seat, the file count, and a real byte-derived size, not just that the
+    pure helper functions above compose correctly in isolation."""
+    import scripts.osiris_prune_ladder as ladder
+
+    office_root = tmp_path / "seats"
+    projects_root = tmp_path / "projects"
+    (office_root / "chowder").mkdir(parents=True)
+    chowder_dir = _seat_transcript_dir(
+        "chowder", office_root=office_root, projects_root=projects_root)
+    chowder_dir.mkdir(parents=True)
+    (chowder_dir / "session-1.jsonl").write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+
+    async def _fake_collect_session_prune_plan(*, dead_after_days: int = 30):  # noqa: ANN001, ANN202, ARG001
+        return [SessionRow("sid-chowder", str(chowder_dir / "session-1.jsonl"), NOW, NOW)]
+
+    async def _fake_mail_manifest(*args, **kwargs) -> int:  # noqa: ANN002, ANN003
+        # captures the body the real function would have mailed, without a live DB
+        _fake_mail_manifest.body = ladder.build_manifest_body(*args, **kwargs)  # type: ignore[attr-defined]
+        return 999
+
+    monkeypatch.setattr(ladder, "_collect_session_prune_plan", _fake_collect_session_prune_plan)
+    monkeypatch.setattr(ladder, "mail_manifest", _fake_mail_manifest)
+
+    rc = ladder.main([
+        "--backups", str(tmp_path / "backups"), "--vault", str(tmp_path / "vault"),
+        "--seat-root", str(office_root), "--projects-root", str(projects_root),
+        "--manifest",
+    ])
+    assert rc == 0
+    body = _fake_mail_manifest.body  # type: ignore[attr-defined]
+    assert "dormant seat transcripts" in body
+    assert "chowder: 1 file(s), 2.0 MB" in body
