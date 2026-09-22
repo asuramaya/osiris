@@ -1593,6 +1593,55 @@ async def test_settle_no_longer_auto_retires_on_a_new_handoff_write(actions: Act
     assert await _is_handoff_value(actions.pool, d1) == "true"  # UNTOUCHED by the new write
 
 
+async def test_ack_handoff_retires_a_legacy_prose_only_handoff(actions: Actions) -> None:
+    """#cd101070 (Thoth mail 12808 item 1), the live specimen reproduced: a Decision whose
+    self_declared summary mentions "handoff" in prose but NEVER had an explicit
+    `is_handoff` property asserted on it at all — nearest_handoff_ancestor/get_status's
+    own HANDOFF_LIVE_PREDICATE_SQL surfaces it via the ILIKE fallback (same law
+    test_nearest_handoff_ancestor_walks_past_silence_within_the_bound already covers on
+    the pointer side), but before this fix ack_handoff only ever checked the structured
+    property and refused every such ref as "already acknowledged or is not a handoff" —
+    a permanently stuck pointer nothing could ever retire. Fixed: ack_handoff now shares
+    the identical predicate (`is_live_handoff`), succeeds here, and writes an explicit
+    `is_handoff='false'` that converts the legacy prose match into a real retirement."""
+    from src.orchestrator.agents import nearest_handoff_ancestor
+
+    did = str(await record_decision(
+        actions, "OPERATOR RULING — this mints a handoff marker on PreCompact, prose only",
+        kind="ruling", source="agent:legacyhandoff0001", repo="handoffbleed"))[:8]
+    assert await _is_handoff_value(actions.pool, did) is None  # never asserted
+    found, complete = await nearest_handoff_ancestor(actions.pool, "agent:legacyhandoff0001")
+    assert found is not None and found[0] == "agent:legacyhandoff0001"  # the pointer sees it
+    assert complete is True
+    await _succeed(actions, "agent:legacyhandoff0001-ii", "agent:legacyhandoff0001")
+
+    out = await _ack_as(actions.pool, "agent:legacyhandoff0001-ii", did)
+    assert out == {"id": did, "acknowledged": True, "resolved": False}
+    assert await _is_handoff_value(actions.pool, did) == "false"
+
+    # and the pointer agrees now — no more disagreement between get_status and ack_handoff
+    found2, complete2 = await nearest_handoff_ancestor(
+        actions.pool, "agent:legacyhandoff0001-ii")
+    assert found2 is None
+    assert complete2 is True
+
+
+async def test_ack_handoff_refuses_an_object_with_no_handoff_prose_and_no_property(
+    actions: Actions,
+) -> None:
+    """The fallback recognizes real prose ("handoff"/"letter"); an ordinary decision that
+    mentions neither, and never had the property asserted, still refuses — is_live_handoff
+    must not turn into "anything goes"."""
+    did = str(await record_decision(
+        actions, "ordinary ruling about the backup timer schedule, no relation to succession",
+        kind="ruling", source="agent:noophandoff0001", repo="handoffbleed"))[:8]
+    await _succeed(actions, "agent:noophandoff0001-ii", "agent:noophandoff0001")
+
+    out = await _ack_as(actions.pool, "agent:noophandoff0001-ii", did)
+    assert "error" in out and "already acknowledged or is not a handoff" in out["error"]
+    assert await _is_handoff_value(actions.pool, did) is None  # untouched
+
+
 async def test_ack_handoff_retires_a_same_lineage_handoff(actions: Actions) -> None:
     gen1 = await _settle_as(
         actions.pool, "agent:ackone",

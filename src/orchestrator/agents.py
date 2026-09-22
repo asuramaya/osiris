@@ -2176,6 +2176,42 @@ async def misfiled_by_lineage(
     }
 
 
+# THE SHARED HANDOFF-LIVENESS PREDICATE (#cd101070, Thoth mail 12808 item 1): a single
+# boolean SQL expression over a bare `objects o` row, self-contained (no outer join a
+# caller must already have set up) so BOTH nearest_handoff_ancestor's set query (below)
+# and ack_handoff's single-object check (mcp_server.py) resolve "is this a live handoff"
+# the identical way. STRUCTURED FIRST, PROSE AS FALLBACK, same law nearest_handoff_
+# ancestor's own docstring already named: an explicit is_handoff='true' property wins;
+# absent that property entirely, a self_declared summary mentioning "handoff"/"letter"
+# counts too (legacy pre-property handoffs). Before this fix, ack_handoff had NO fallback
+# half at all -- it only ever recognized the structured property, so a get_status()
+# handoff_pending pointer produced purely by the prose fallback (no is_handoff property
+# ever asserted on the object) could never be acknowledged: ack_handoff would always
+# refuse it as "already acknowledged or is not a handoff", a permanently stuck pointer.
+HANDOFF_LIVE_PREDICATE_SQL = (
+    "(SELECT h.value #>> '{}' FROM current_assertions h "
+    " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
+    " ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1) = 'true' "
+    "OR ("
+    "  NOT EXISTS (SELECT 1 FROM current_assertions h2 "
+    "              WHERE h2.object_id = o.id AND h2.name = 'is_handoff') "
+    "  AND EXISTS (SELECT 1 FROM current_assertions s WHERE s.object_id = o.id "
+    "              AND s.name = 'summary' AND s.evidence_class = 'self_declared' "
+    "              AND (s.value #>> '{}' ILIKE '%handoff%' "
+    "                   OR s.value #>> '{}' ILIKE '%letter%'))"
+    ")"
+)
+
+
+async def is_live_handoff(pool: asyncpg.Pool, object_id: Any) -> bool:
+    """Single-object door onto `HANDOFF_LIVE_PREDICATE_SQL` — the same answer
+    nearest_handoff_ancestor's own set query would give this one object, for a caller
+    (ack_handoff) that already has a specific id in hand rather than a chain to walk."""
+    return bool(await pool.fetchval(
+        f"SELECT ({HANDOFF_LIVE_PREDICATE_SQL}) FROM objects o WHERE o.id = $1",
+        object_id))
+
+
 async def nearest_handoff_ancestor(
     pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
 ) -> tuple[tuple[str, list[dict[str, Any]]] | None, bool]:
@@ -2240,16 +2276,7 @@ async def nearest_handoff_ancestor(
     as before for the same graph state. Surfacing `complete` to a reader is a deliberate,
     separate, operator-authorized step, held per that same decision: it changes what every
     session sees on its first call, which is not this build's authorization."""
-    ack_clause = (
-        "(SELECT h.value #>> '{}' FROM current_assertions h "
-        " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
-        " ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1) = 'true' "
-        "OR ("
-        "  NOT EXISTS (SELECT 1 FROM current_assertions h2 "
-        "              WHERE h2.object_id = o.id AND h2.name = 'is_handoff') "
-        "  AND (a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%')"
-        ")"
-    ) if respect_ack else (
+    ack_clause = HANDOFF_LIVE_PREDICATE_SQL if respect_ack else (
         "EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
         "        AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
         "OR a.value #>> '{}' ILIKE '%handoff%' OR a.value #>> '{}' ILIKE '%letter%'"
