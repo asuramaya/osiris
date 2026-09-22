@@ -189,6 +189,7 @@ def recover_from_browser(*, raw_key_b64: str, key_fingerprint: str,
     import base64
 
     from src.ingest.soul_crypto import (  # noqa: SLF001 — see docstring above
+        _credential_path,
         _resolve_backend,
         _write_key_for_backend,
     )
@@ -199,7 +200,12 @@ def recover_from_browser(*, raw_key_b64: str, key_fingerprint: str,
                          "to seal a possibly-tampered key; this is a real break, not "
                          "a retryable glitch"}
     resolved = Path(resolved_path)
-    if resolved.exists() or resolved.with_name(resolved.name + ".cred").exists():
+    # `explicit=False`: this is the same DEFAULT (credstore) resolution
+    # `_write_key_for_backend` below will use, matching the bootstrap-tolerant
+    # single-ladder discipline soul_crypto._credential_path now holds house-wide
+    # (never the old hardcoded sibling-`.cred` shape, which silently misses a
+    # credstore-resident key and would let a recovery attempt clobber one).
+    if resolved.exists() or _credential_path(resolved, explicit=False).exists():
         return {"error": f"a key already exists at {resolved} — refusing to overwrite"}
     resolved.parent.mkdir(parents=True, exist_ok=True)
     effective_backend = _resolve_backend(backend)
