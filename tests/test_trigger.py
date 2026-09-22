@@ -4975,6 +4975,49 @@ async def test_launch_harness_lane_catches_a_resumed_body_the_harness_roster_can
     assert d["body_exists"] is True and d["can_receive"] is True
 
 
+async def test_launch_never_treats_a_different_seats_live_mount_as_its_own_twin(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """TWO SEATS, ONE TREE, ONE LIVE MOUNT (Nebbercracker's monsterhouse report, DM
+    13152/13157): sweep-seat-trees (w329/w331) legitimately binds more than one seat to
+    the same tree_cwd. `_launch_twin_check`'s own `agent_mounts WHERE cwd=$1 LIMIT 1`
+    query used to return the single freshest LIVE row at that cwd from ANY agent, no
+    matter whose lineage it belonged to — chowder's own holder was stopped, but a
+    sibling seat's still-live mount at the SAME shared tree read as "already-live" for
+    chowder too, blocking its launch entirely. A cwd is not an identity: a mount only
+    counts as THIS seat's own body when `held_seat` confirms its agent actually holds
+    this seat (the same lineage-wide holds-link authority `identify_agent` trusts)."""
+    from src.orchestrator.seats import bind_seat_tree
+
+    chowder_seat, _chowder_mgr = await _managed_pair(
+        actions, worker_agent="agent:cho01", manager_agent="agent:chom01",
+        worker_handle="Chowder", manager_handle="ChowderMgr", house="monsterhouse")
+    dustin_seat, _dustin_mgr = await _managed_pair(
+        actions, worker_agent="agent:dus01", manager_agent="agent:dusm01",
+        worker_handle="Dustin", manager_handle="DustinMgr", house="monsterhouse")
+    shared_tree = tmp_path / "monsterhouse"
+    shared_tree.mkdir()
+    await _office(actions, chowder_seat, "/home/asuramaya/.osiris/seats/chowder")
+    await _office(actions, dustin_seat, "/home/asuramaya/.osiris/seats/dustin")
+    await bind_seat_tree(actions, seat_id=chowder_seat, tree_cwd=str(shared_tree),
+                         actor="operator", because="test: shared tree, chowder")
+    await bind_seat_tree(actions, seat_id=dustin_seat, tree_cwd=str(shared_tree),
+                         actor="operator", because="test: shared tree, dustin")
+    # chowder's own holder (agent:cho01) was stopped — no mount row for it at all, so
+    # `_launch_target_setup`'s own liveness gate finds nobody live and falls through to
+    # `_launch_twin_check`. Dustin's own holder is genuinely live, at the SAME cwd.
+    await save_mount(actions.pool, job_dir="/tmp/jobs/dustin-job", agent_id="agent:dus01",
+                     project="monsterhouse", cwd=str(shared_tree), model=None,
+                     session_key=None)
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:chom01", target=chowder_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched"  # never "already-live" — Dustin's mount is not a twin
+    assert spawned and spawned[0]["repo"] == str(shared_tree)
+
+
 async def test_launch_harness_lane_refuses_an_over_budget_mint(
     actions: Actions,
 ) -> None:
