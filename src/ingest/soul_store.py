@@ -2103,7 +2103,7 @@ class SoulStore:
 
 async def encrypt_existing_soul_lines(
     pool: asyncpg.Pool, *, batch_size: int = 2000, dry_run: bool = True,
-    fernet: MultiFernet | None = None,
+    fernet: MultiFernet | None = None, on_batch: Any = None,
 ) -> dict[str, Any]:
     """THE MIGRATION: encrypts every EXISTING soul_lines/soul_lines_
     cold row written before this build landed. Every write from now on already
@@ -2133,10 +2133,21 @@ async def encrypt_existing_soul_lines(
     whatever `OSIRIS_SOUL_KEY_FILE`/the installed unit resolves to; every other
     caller leaves it None and gets the ordinary live-primary behavior, unchanged.
 
-    `dry_run=True` (the default) counts what WOULD migrate without writing."""
+    `dry_run=True` (the default) counts what WOULD migrate without writing.
+
+    `on_batch=` (TIP B's own readiness pass, ruling 2c01e222's follow-up thread): fired
+    after EVERY hot-tier page, live progress — `(migrated_so_far, already_so_far,
+    batch_number)` — for a caller running this against a box that measured 1,255,671
+    rows once already (this function's own docstring, above): a silent multi-minute
+    `--apply` with nothing on stdout reads as a hang, not progress. None (the default)
+    is a no-op — every existing caller keeps its own current silence."""
+    import time
+
+    started_at = time.monotonic()
     fernet = fernet or get_soul_fernet()
     hot_migrated = 0
     hot_already = 0
+    hot_batches = 0
     cursor: tuple[str, str, int] | None = None
     while True:
         if cursor is None:
@@ -2166,6 +2177,9 @@ async def encrypt_existing_soul_lines(
                     "UPDATE soul_lines SET raw_line=$1 "
                     "WHERE harness=$2 AND anchor_sid=$3 AND line_idx=$4", updates)
         hot_migrated += len(updates)
+        hot_batches += 1
+        if on_batch is not None:
+            on_batch(hot_migrated, hot_already, hot_batches)
         last = rows[-1]
         cursor = (last["harness"], last["anchor_sid"], last["line_idx"])
         if len(rows) < batch_size:
@@ -2185,7 +2199,8 @@ async def encrypt_existing_soul_lines(
                     "WHERE harness=$2 AND anchor_sid=$3",
                     fernet.encrypt(blob), row["harness"], row["anchor_sid"])
     return {"dry_run": dry_run, "hot_migrated": hot_migrated, "hot_already_encrypted": hot_already,
-           "cold_migrated": cold_migrated, "cold_already_encrypted": cold_already}
+           "cold_migrated": cold_migrated, "cold_already_encrypted": cold_already,
+           "hot_batches": hot_batches, "elapsed_secs": round(time.monotonic() - started_at, 3)}
 
 
 async def rewrap_soul_lines_key(

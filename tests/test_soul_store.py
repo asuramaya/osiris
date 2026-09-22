@@ -2330,6 +2330,45 @@ async def test_encrypt_existing_soul_lines_is_idempotent(
     assert second["hot_already_encrypted"] == 5
 
 
+async def test_encrypt_existing_soul_lines_reports_batches_progress_and_elapsed(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """TIP B's own --apply readiness pass (ruling 2c01e222's follow-up thread): a
+    genuinely long `--apply` run against a real box's own million-row table needs
+    live progress, never a silent multi-minute hang, and the final receipt needs
+    enough shape (batch count, elapsed time) to be worth pasting into a decision.
+    `batch_size=2` over 5 rows forces 3 hot-tier pages, so `on_batch` firing exactly
+    3 times with a monotonically growing `migrated_so_far` proves it fires PER PAGE,
+    not once at the end."""
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "migrate-progress")
+    fernet = get_soul_fernet()
+    # all 5 rows start as legacy plaintext, forcing every batch to do real work
+    for idx in range(5):
+        plaintext_line = fernet.decrypt(await store.pool.fetchval(
+            "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate-progress' "
+            "AND line_idx=$1", idx))
+        await store.pool.execute(
+            "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='migrate-progress' "
+            "AND line_idx=$2", plaintext_line, idx)
+
+    calls: list[tuple[int, int, int]] = []
+    out = await encrypt_existing_soul_lines(
+        store.pool, batch_size=2, dry_run=False,
+        on_batch=lambda migrated, already, batch_num: calls.append(
+            (migrated, already, batch_num)))
+
+    assert out["hot_migrated"] == 5
+    assert out["hot_batches"] == 3  # 5 rows / batch_size=2 -> 3 pages (2, 2, 1)
+    assert out["elapsed_secs"] >= 0.0
+    assert [c[2] for c in calls] == [1, 2, 3]  # batch_number is 1-indexed, in order
+    assert [c[0] for c in calls] == [2, 4, 5]  # migrated_so_far grows monotonically
+    assert calls[-1][0] == out["hot_migrated"]  # the last callback matches the final total
+
+
 async def test_encrypt_existing_soul_lines_accepts_an_explicit_fernet_override(
     store: SoulStore, tmp_path: Path,
 ) -> None:
