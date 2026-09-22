@@ -5061,6 +5061,157 @@ async def test_cli_parser_accepts_backup_settings(actions: Actions) -> None:
     assert args.vault_path == "/mnt/vault"
 
 
+# --- backup-settings CLI ergonomics: --timer/--offload-add/--offload-remove,
+# THE BACKUP CLI DOOR piece 4 (Thoth mail 12809/12812) ------------------------------------------
+
+async def test_cli_parser_accepts_offload_add_and_remove(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["backup-settings", "write", "--offload-add", "docked-drive",
+         "--offload-kind", "local", "--offload-target", "/mnt/drive",
+         "--offload-mountpoint", "/mnt/drive", "--offload-schedule", "Sat 03:00:00",
+         "--offload-disabled", "--because", "adding it"])
+    assert args.offload_add == "docked-drive"
+    assert args.offload_kind == "local"
+    assert args.offload_target == "/mnt/drive"
+    assert args.offload_mountpoint == "/mnt/drive"
+    assert args.offload_schedule == "Sat 03:00:00"
+    assert args.offload_disabled is True
+
+    args2 = _build_parser().parse_args(
+        ["backup-settings", "write", "--offload-remove", "docked-drive",
+         "--because", "removing it"])
+    assert args2.offload_remove == "docked-drive"
+
+
+async def test_cli_parser_accepts_repeated_timer_flags(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["backup-settings", "write",
+         "--timer", "osiris-backup.timer=*-*-* 06:00:00",
+         "--timer", "osiris-preflight.timer=Mon *-*-* 05:00:00",
+         "--because", "x"])
+    assert args.timer == ["osiris-backup.timer=*-*-* 06:00:00",
+                          "osiris-preflight.timer=Mon *-*-* 05:00:00"]
+
+
+async def test_cmd_backup_settings_offload_add_upserts_a_local_target(
+    actions: Actions, tmp_path: Any,
+) -> None:
+    """A real, live-mounted findmnt target isn't needed here — the write-time refusal
+    is shape-only for the STORED fields; presence is a read-time, never-refused verdict
+    (test_backup_settings.py's own job to prove in depth)."""
+    out = await cmd_backup_settings(
+        "write", offload_add="docked-drive", offload_kind="local",
+        offload_target=str(tmp_path), offload_mountpoint=str(tmp_path),
+        offload_schedule="Sat 03:00:00", because="adding the docked drive",
+        actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    targets = (await get_backup_settings(actions.pool))["offload_targets"]
+    assert len(targets) == 1
+    assert targets[0]["name"] == "docked-drive"
+    assert targets[0]["kind"] == "local"
+    assert targets[0]["enabled"] is True
+
+    # a second add with the SAME name upserts (replaces), never duplicates
+    out2 = await cmd_backup_settings(
+        "write", offload_add="docked-drive", offload_kind="local",
+        offload_target=str(tmp_path), offload_mountpoint=str(tmp_path),
+        offload_schedule="Sun 04:00:00", offload_disabled=True,
+        because="rescheduling it", actor="operator", pool=actions.pool)
+    assert out2 == 0
+    targets2 = (await get_backup_settings(actions.pool))["offload_targets"]
+    assert len(targets2) == 1
+    assert targets2[0]["schedule"] == "Sun 04:00:00"
+    assert targets2[0]["enabled"] is False
+
+
+async def test_cmd_backup_settings_offload_remove_drops_only_the_named_target(
+    actions: Actions, tmp_path: Any,
+) -> None:
+    await cmd_backup_settings(
+        "write", offload_add="keep-me", offload_kind="restic",
+        offload_target="sftp://nas/keep", offload_schedule="daily",
+        because="x", actor="operator", pool=actions.pool)
+    await cmd_backup_settings(
+        "write", offload_add="drop-me", offload_kind="restic",
+        offload_target="sftp://nas/drop", offload_schedule="daily",
+        because="x", actor="operator", pool=actions.pool)
+    out = await cmd_backup_settings(
+        "write", offload_remove="drop-me", because="removing it",
+        actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    names = [t["name"] for t in (await get_backup_settings(actions.pool))["offload_targets"]]
+    assert names == ["keep-me"]
+
+
+async def test_cmd_backup_settings_offload_add_requires_kind_and_target(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", offload_add="incomplete", because="x", actor="operator",
+            pool=actions.pool)
+    assert out == 1
+    assert "--offload-kind" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_offload_add_local_requires_mountpoint(
+    actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", offload_add="no-mount", offload_kind="local",
+            offload_target="/mnt/drive", offload_schedule="daily",
+            because="x", actor="operator", pool=actions.pool)
+    assert out == 1
+    assert "--offload-mountpoint" in buf.getvalue()
+
+
+async def test_cmd_backup_settings_timer_merges_only_the_named_units(
+    actions: Actions,
+) -> None:
+    await cmd_backup_settings(
+        "write", timer_schedules='{"osiris-backup.timer": "*-*-* 06:00:00"}',
+        because="x", actor="operator", pool=actions.pool)
+    out = await cmd_backup_settings(
+        "write", timer=["osiris-preflight.timer=Mon *-*-* 05:00:00"],
+        because="adding one more", actor="operator", pool=actions.pool)
+    assert out == 0
+    from src.orchestrator.backup_settings import get_backup_settings
+
+    schedules = (await get_backup_settings(actions.pool))["timer_schedules"]
+    assert schedules == {"osiris-backup.timer": "*-*-* 06:00:00",
+                         "osiris-preflight.timer": "Mon *-*-* 05:00:00"}
+
+
+async def test_cmd_backup_settings_timer_rejects_a_bad_kv_shape(actions: Actions) -> None:
+    import io
+    from contextlib import redirect_stderr
+
+    buf = io.StringIO()
+    with redirect_stderr(buf):
+        out = await cmd_backup_settings(
+            "write", timer=["not-a-kv-pair"], because="x", actor="operator",
+            pool=actions.pool)
+    assert out == 1
+    assert "UNIT=ONCALENDAR" in buf.getvalue()
+
+
 # --- backup-status: THE BACKUP CLI DOOR, Thoth mail 12809 -------------------------------------
 
 async def test_cmd_backup_status_renders_the_live_panel(
