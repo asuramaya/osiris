@@ -63,6 +63,13 @@ NO_MCP_EQUIVALENT = {
         "tens of thousands of positioned objects as a binary blob has no sensible MCP "
         "tool-call shape (no model needs the raw typed-array payload) — the REST route "
         "and the three.js renderer are this capability's real consumers.",
+    "backup-status": "NOT actually MCP-less — THE BACKUP CLI DOOR (Thoth mail 12809): "
+        "calls compositions._fn_backup_status directly, the SAME Function "
+        "composition(action='run', name='backup_status') already runs; no single MCP "
+        "tool named 'backup_status' exists to mirror because the composition dispatcher "
+        "has no per-Function args passthrough for its own vault/backups path overrides "
+        "— same NO_MCP_EQUIVALENT shape as audit/inspect's own entries: a CLI-side "
+        "direct call over an existing Function, never a second implementation.",
     "audit": "NOT actually MCP-less — one CLI door (WAVE 22 item 2) fans out to FIVE "
         "differently-named compositions (closure-health/the-wall/type-census/family-"
         "consistency/family-drift) via comp.run_composition, the same function "

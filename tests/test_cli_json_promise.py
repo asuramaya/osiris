@@ -75,6 +75,8 @@ JSON_COMMANDS = frozenset({
     "retire-assertion", "retire-link", "cite", "citation",
     # PARITY GAPS, WAVE 27 item 3 (thread 45aff160)
     "backup-settings",
+    # THE BACKUP CLI DOOR, piece 1 (Thoth mail 12809)
+    "backup-status",
     # SEAT TREE FABRICATION priority fix (Thoth mail 11759)
     "sweep-seat-trees",
     # WAVE 27, PARITY GAPS 5/6 (Thoth mail 11752)

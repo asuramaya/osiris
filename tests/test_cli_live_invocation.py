@@ -55,6 +55,7 @@ from src.cli import (
     cmd_backfill,
     cmd_backlog,
     cmd_backup_settings,
+    cmd_backup_status,
     cmd_bind_seat_tree,
     cmd_boot_status,
     cmd_candidates,
@@ -323,6 +324,9 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     # backup-settings get: a pure read (get_backup_settings), never write-shaped —
     # PARITY GAPS, WAVE 27 item 3 (thread 45aff160).
     "backup-settings": lambda a: cmd_backup_settings("get", pool=a.pool),
+    # backup-status: a pure read (_fn_backup_status), never write-shaped — THE BACKUP
+    # CLI DOOR (Thoth mail 12809).
+    "backup-status": lambda a: cmd_backup_status(pool=a.pool),
     # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832): dossier/
     # object-events/succession-chain/candidates/composition are all pure reads called
     # over the wire (same shape as show/search above); retire-assertion/retire-link/

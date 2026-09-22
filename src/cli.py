@@ -4418,6 +4418,58 @@ async def cmd_backup_settings(
     return 0
 
 
+async def cmd_backup_status(
+    *, vault: str | None = None, backups: str | None = None, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris backup-status [--vault PATH] [--backups PATH] [--json] — the live health
+    panel: timers, vault dump/base-backup counts, disk headroom, prune-ladder tiers,
+    manifest state, and configured-vs-shipped schedule per timer. NOT a mirror onto the
+    `composition` MCP tool (its own action table has no per-Function args passthrough
+    for backup_status's `vault`/`backups` path overrides — the same NO_MCP_EQUIVALENT
+    shape `osiris lint`/`osiris audit` already document): calls
+    compositions._fn_backup_status directly, the identical Function the
+    `composition(action='run', name='backup_status')` door and the CMD-K panel both
+    already run, own connection, no duplicated logic.
+
+    `--vault`/`--backups` override the production paths — a test or an operator
+    checking a non-standard layout points these at a different directory; omitted,
+    `_fn_backup_status` resolves the real production paths (backup.vault_path setting,
+    falling back to its own env-derived default) the same way the panel does."""
+    from src.orchestrator.compositions import _fn_backup_status
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:backup-status")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris backup-status: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    args: dict[str, Any] = {}
+    if vault is not None:
+        args["vault"] = vault
+    if backups is not None:
+        args["backups"] = backups
+    try:
+        out = await _fn_backup_status(pool, None, args)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="backup-status")
+    return 0
+
+
 # --- practices -----------------------------------------------------------------------------
 
 async def cmd_practices(
@@ -7214,7 +7266,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         audit, graph-export, digest
   read the record       desk, show, threads, inbox, search, dossier, object-events,
                         succession-chain, candidates, composition, citation, inspect,
-                        practices
+                        practices, backup-status
   write to the record   send, decide, settle, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
@@ -7939,6 +7991,22 @@ def _build_parser() -> argparse.ArgumentParser:
                                         f"{_CONSOLE_ACTOR!r}")
     p_backup_settings.add_argument("--json", action="store_true", dest="as_json",
                                    help="machine-readable: one compact JSON line")
+
+    p_backup_status = sub.add_parser(
+        "backup-status", description=_d(
+            "the backup panel's own live health read: timers, vault dump/base-backup "
+            "counts, disk headroom, prune-ladder tiers, manifest state — the same "
+            "backup_status composition Function the CMD-K panel calls, called directly "
+            "(no MCP tool wraps its own vault/backups path overrides)"),
+        epilog="example: osiris backup-status\n"
+               "example: osiris backup-status --vault /tmp/vault-check --json")
+    p_backup_status.add_argument("--vault", default=None,
+                                 help="override the vault path this reads from "
+                                      "(defaults to the configured/production path)")
+    p_backup_status.add_argument("--backups", default=None,
+                                 help="override the backups directory this reads from")
+    p_backup_status.add_argument("--json", action="store_true", dest="as_json",
+                                 help="machine-readable: one compact JSON line")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
         "narrow or correct a LIVE practice's "
@@ -8974,6 +9042,9 @@ def main(argv: list[str] | None = None) -> int:
             args.action, vault_path=args.vault_path, timer_schedules=args.timer_schedules,
             offbox_repositories=args.offbox_repositories, because=args.because,
             ruling=args.ruling, actor=args.actor, as_json=args.as_json))
+    if args.command == "backup-status":
+        return asyncio.run(cmd_backup_status(
+            vault=args.vault, backups=args.backups, as_json=args.as_json))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     if args.command == "annotate-thread":

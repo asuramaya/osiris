@@ -39,6 +39,7 @@ from src.cli import (
     cmd_backfill,
     cmd_backlog,
     cmd_backup_settings,
+    cmd_backup_status,
     cmd_boot_status,
     cmd_bootstrap,
     cmd_charter_for,
@@ -5053,6 +5054,64 @@ async def test_cli_parser_accepts_backup_settings(actions: Actions) -> None:
     assert args.command == "backup-settings"
     assert args.action == "write"
     assert args.vault_path == "/mnt/vault"
+
+
+# --- backup-status: THE BACKUP CLI DOOR, Thoth mail 12809 -------------------------------------
+
+async def test_cmd_backup_status_renders_the_live_panel(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A real, empty vault/backups dir pair (tmp_path) — the same opt-in-args override
+    _fn_backup_status's own docstring names, so this never touches the real production
+    paths."""
+    import io
+    from contextlib import redirect_stdout
+
+    vault = tmp_path / "vault"
+    backups = tmp_path / "backups"
+    vault.mkdir()
+    backups.mkdir()
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backup_status(
+            vault=str(vault), backups=str(backups), pool=actions.pool)
+    assert out == 0
+    text = buf.getvalue()
+    assert "timers" in text
+    assert "disk" in text
+
+
+async def test_cmd_backup_status_json_shape(actions: Actions, tmp_path: Path) -> None:
+    import io
+    import json as _json
+    from contextlib import redirect_stdout
+
+    vault = tmp_path / "vault"
+    backups = tmp_path / "backups"
+    vault.mkdir()
+    backups.mkdir()
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_backup_status(
+            vault=str(vault), backups=str(backups), as_json=True, pool=actions.pool)
+    assert out == 0
+    parsed = _json.loads(buf.getvalue())
+    assert set(parsed) >= {"as_of", "timers", "vault", "disk", "ladder",
+                          "prune_manifest", "pitr_drill", "offbox"}
+    assert len(parsed["timers"]) == 5
+
+
+async def test_cli_parser_accepts_backup_status(actions: Actions) -> None:
+    from src.cli import _build_parser
+
+    args = _build_parser().parse_args(
+        ["backup-status", "--vault", "/tmp/v", "--backups", "/tmp/b", "--json"])
+    assert args.command == "backup-status"
+    assert args.vault == "/tmp/v"
+    assert args.backups == "/tmp/b"
+    assert args.as_json is True
 
 
 async def test_cmd_amend_practice_amends_and_reports(actions: Actions) -> None:
