@@ -2755,6 +2755,12 @@ async def wake_worker(
     # for a run. The check sits here, PAST authorization, so a refusal says honestly "you're
     # allowed, the lane is off" rather than a blanket "verb off" — and so no marker/DM is ever
     # minted when it is. Do not move it above the managed_by gate.
+    # #aedf2aab: `st` is the ONE resolved settings object this call uses from here on —
+    # the raw `settings` param (often None) must never be re-passed downstream once `st`
+    # exists, or a caller wired to `settings_with_overlay()`'s own result would see that
+    # override read here but silently dropped past this point (get_settings() is not
+    # memoized — dispatch_dm's own internal `settings or get_settings()` would re-resolve
+    # bare instead of reusing this exact snapshot).
     st = settings or get_settings()
     if not st.osiris_wake_enabled:
         return {"mode": "refused-wake-frozen",
@@ -2766,7 +2772,7 @@ async def wake_worker(
     res = await send_message(pool, from_agent=caller, from_project=await project_of(pool, caller),
                              to_agent=target_seat, body=body, grade="ask")
     d = await dispatch_dm(pool, addressee=res["to_agent"], msg_id=res["id"], sender=caller,
-                          settings=settings, spawn=spawn, windows=windows, poke=poke,
+                          settings=st, spawn=spawn, windows=windows, poke=poke,
                           jobs=jobs, nudge=nudge)
     mode = d.get("mode", "")
     status = _WAKE_STATUS.get(mode, "queued")

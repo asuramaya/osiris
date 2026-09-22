@@ -3829,6 +3829,36 @@ async def test_wake_translates_pull_only_and_refused_budget(
     assert d2["status"] == "refused-budget"
 
 
+async def test_wake_worker_forwards_its_own_resolved_settings_not_the_raw_param(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """#aedf2aab (Thoth mail 12808 item 3): wake_worker's own `st = settings or
+    get_settings()` resolves ONE settings snapshot for its osiris_wake_enabled check, but
+    the dispatch_dm call downstream used to forward the RAW `settings` param instead of
+    that resolved `st` — harmless only because every real caller today passes
+    settings=None either way, so both sides degenerate to the same bare get_settings()
+    read. get_settings() is not memoized (config/settings.py: `Settings()` constructed
+    fresh every call), so a future caller wired to `settings_with_overlay()`'s own live
+    override would have that override silently dropped the instant dispatch_dm
+    re-resolved bare instead of reusing wake_worker's own `st`. Proven with the only real
+    shape today (settings=None passed IN): dispatch_dm must receive a concrete resolved
+    Settings object, never None re-passed straight through."""
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:sender", manager_agent="agent:abcd1234")
+
+    captured: dict[str, Any] = {}
+
+    async def _capture_dispatch(*a: Any, **kw: Any) -> dict[str, Any]:
+        captured["settings"] = kw.get("settings")
+        return {"mode": "queued-no-listener", "detail": "nobody home"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _capture_dispatch)
+    await wake_worker(actions, caller="agent:sender", target=manager_seat, message="hey",
+                      settings=None)
+    assert captured["settings"] is not None
+    assert hasattr(captured["settings"], "osiris_wake_enabled")  # a real resolved Settings
+
+
 async def test_wake_translates_the_named_gate_refusals_and_not_injectable(
     actions: Actions, monkeypatch: pytest.MonkeyPatch
 ) -> None:
