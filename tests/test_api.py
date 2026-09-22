@@ -1144,21 +1144,34 @@ async def test_backup_settings_route_get_starts_empty(client: httpx.AsyncClient)
 
 
 async def test_backup_settings_route_writes_as_the_operator(
-    client: httpx.AsyncClient, actions: Actions,
+    client: httpx.AsyncClient, actions: Actions, tmp_path: Path, monkeypatch: Any,
 ) -> None:
     """The console is the operator's own surface (6c18709f) — every write here is
-    analyst:operator, an operator actor by construction, needing no ruling citation."""
+    analyst:operator, an operator actor by construction, needing no ruling citation.
+
+    The vault path must be a real, writable directory now that the shared validator
+    (backup_validation.validate_vault_path) sits on the write path — a fake box-specific
+    path like the old "/mnt/nas/osiris-vault" gets refused honestly, same as a genuine
+    caller would see. The always-present-mount check is exercised on its own in
+    test_backup_validation.py, so it's mocked true here to isolate this test to the
+    route's own write/read mechanics."""
+    from src.orchestrator import backup_validation
+
+    monkeypatch.setattr(backup_validation, "_is_always_present_mountpoint", lambda p: True)
+    vault = tmp_path / "osiris-vault"
+    vault.mkdir()
+    vault_path = str(vault)
     r = await client.post("/backup-settings", json={
-        "because": "switching to the NAS mount", "vault_path": "/mnt/nas/osiris-vault"})
+        "because": "switching to the NAS mount", "vault_path": vault_path})
     assert r.status_code == 200
     body = r.json()
-    assert body["vault_path"] == "/mnt/nas/osiris-vault"
+    assert body["vault_path"] == vault_path
     # a later partial write leaves vault_path untouched
     r2 = await client.post("/backup-settings", json={
         "because": "rescheduling dumps",
         "timer_schedules": {"osiris-backup.timer": "*-*-* 00,12:00:00"}})
     body2 = r2.json()
-    assert body2["vault_path"] == "/mnt/nas/osiris-vault"
+    assert body2["vault_path"] == vault_path
     assert body2["timer_schedules"] == {"osiris-backup.timer": "*-*-* 00,12:00:00"}
     read_back = (await client.get("/backup-settings")).json()
     body2.pop("because")  # write's own receipt-only field, absent from a plain read
