@@ -467,10 +467,14 @@ async def drop_dead_project_mount(
 
 _MOUNT_DROP_ACTIONS = frozenset({
     "drop_dead_project_mount", "sweep_ghost_doors", "sweep_stale_doors",
-    "drop_dead_transcript_mount",
+    "drop_dead_transcript_mount", "retire_seatless_mount_claim",
 })  # every action that snapshots a row via `_mount_snapshot` before deleting it — same
     # payload shape regardless of which one wrote it, so one inverse undoes all three
-    # (Thoth DM 2835: "do not invent a second shape for the same problem")
+    # (Thoth DM 2835: "do not invent a second shape for the same problem"); also the
+    # exact set `rescue_seat_holder_mount` walks — `retire_seatless_mount_claim`
+    # (law 3a, thread 124732175759) is deliberately included so that walk sees past its
+    # own compensating entry to an OLDER one naming the real seat holder, rather than
+    # stopping cold on a drop that (by construction) never names one
 
 
 async def drop_dead_transcript_mount(
@@ -774,6 +778,32 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
                        cwd=r["cwd"], model=r["model"])
 
 
+async def _active_seat_for_lineage_base(pool: asyncpg.Pool, base: str) -> dict[str, Any] | None:
+    """Does `base` (a lineage root, e.g. `agent:ad1a1cb0`) hold an ACTIVE seat right
+    now? Returns `{holder, seat_id, project, cwd}` (the seat's CURRENT generation, its
+    own durable `anchor_cwd`/`house`) or None (no live `holds` link for this base at
+    all — never held a seat, or genuinely released it since). The single query both
+    `rescue_seat_holder_mount` and `demote_seatless_mount_if_outranked` share, so the
+    two laws can never independently drift on what "holds a seat" means."""
+    row = await pool.fetchrow(
+        "SELECT hf.canonical AS holder, ht.canonical AS seat_id "
+        "FROM links hl JOIN objects hf ON hf.id=hl.from_id "
+        "  AND hf.type='Agent' AND hf.status='active' "
+        "JOIN objects ht ON ht.id=hl.to_id AND ht.type='Seat' "
+        "WHERE hl.type='holds' AND (hf.canonical=$1 OR hf.canonical LIKE $1 || '-%') "
+        "AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
+        "ORDER BY hl.created_at DESC LIMIT 1", base)
+    if row is None:
+        return None
+    seat_props = await pool.fetch(
+        "SELECT a.name, a.value #>> '{}' AS val FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name IN ('anchor_cwd','house')", row["seat_id"])
+    props = {p["name"]: p["val"] for p in seat_props}
+    return {"holder": row["holder"], "seat_id": row["seat_id"],
+            "project": props.get("house"), "cwd": props.get("anchor_cwd") or ""}
+
+
 async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
     """THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096, the
     Thoth/a93f82b4 specimen): `find_mount`'s own row can vanish for reasons that have
@@ -788,15 +818,15 @@ async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> Mount
     Thoth's.
 
     Every sweep drop is already reversible and audited — the SAME `_mount_snapshot`
-    shape `undrop_dead_project_mount` replays verbatim. This reads the MOST RECENT drop
-    for this exact job_dir and, ONLY when that snapshot's own `agent_id`'s lineage still
-    holds an ACTIVE seat right now (a `holds` link nothing has released since), re-
-    adopts that lineage's CURRENT generation — never a fresh mint, never the dropped
-    generation itself (a lineage moves on; the seat's PRESENT holder is the fact that
-    matters). Never fires for a lineage that never held a seat, or one that genuinely
-    released it since: those are real strangers or real retirements, not the ghost-sweep-
-    over-a-live-holder this exists to catch — the `holds` link check is what tells the
-    two apart, not merely "this job_dir used to name someone."
+    shape `undrop_dead_project_mount` replays verbatim. Walks this job_dir's own audit
+    history NEWEST FIRST (never just the single most recent entry — law 3a's own
+    `_retire_seatless_mount_claim` can itself be the newest entry, naming the very
+    stranger this door exists to see past) and, for the FIRST entry whose `agent_id`'s
+    lineage still holds an ACTIVE seat right now, re-adopts that lineage's CURRENT
+    generation — never a fresh mint, never the dropped generation itself (a lineage
+    moves on; the seat's PRESENT holder is the fact that matters). Never fires when NO
+    entry in this job_dir's history ever named a seat holder: a real stranger or a real
+    retirement, not the ghost-sweep-over-a-live-holder this exists to catch.
 
     A synthetic MountRecord, built from the SEAT's own durable `anchor_cwd`/`house`
     (facts the seat carries regardless of any one mount row's own history) — this never
@@ -804,33 +834,76 @@ async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> Mount
     would for a genuine `find_mount` hit."""
     from src.orchestrator.agents import _generation
 
-    last = await pool.fetchrow(
+    rows = await pool.fetch(
         "SELECT payload FROM audit_log WHERE action = ANY($1::text[]) "
-        "AND payload->>'job_dir' = $2 ORDER BY created_at DESC LIMIT 1",
+        "AND payload->>'job_dir' = $2 ORDER BY created_at DESC LIMIT 20",
         list(_MOUNT_DROP_ACTIONS), job_dir)
-    if last is None or not last["payload"]:
+    for r in rows:
+        dropped_agent = (r["payload"] or {}).get("agent_id")
+        if not dropped_agent:
+            continue
+        seat = await _active_seat_for_lineage_base(pool, _generation(dropped_agent)[0])
+        if seat is not None:
+            return MountRecord(job_dir=job_dir, agent_id=seat["holder"],
+                               project=seat["project"], cwd=seat["cwd"], model=None)
+    return None
+
+
+async def _retire_seatless_mount_claim(
+    pool: asyncpg.Pool, *, job_dir: str, actor: str,
+) -> None:
+    """THE COMPENSATING HALF OF LAW 3a (thread 124732175759, Thoth mail 13141): once a
+    seat holder is found to outrank a job_dir's own CURRENT (still-present, not merely
+    dropped) row — a seatless stranger that already minted itself once and now owns a
+    live `agent_mounts` row of its own, perpetuating on every later restart exactly as
+    Thoth's own second specimen showed — that row is released the same audited,
+    reversible way every other drop in this module is, so the NEXT restart's
+    `find_mount` stops finding the stranger too. The stranger's own Agent object is
+    left untouched (never deleted, never retired) — only its CLAIM on this job_dir. A
+    row gone by the time its lock is taken (already released some other way) is simply
+    skipped, same discipline as `sweep_stale_doors`/`sweep_ghost_doors`."""
+    async with pool.acquire() as conn, conn.transaction():
+        row = await conn.fetchrow(
+            f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts WHERE job_dir=$1 FOR UPDATE",
+            job_dir)
+        if row is None:
+            return
+        await conn.execute(
+            "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3)",
+            "retire_seatless_mount_claim", actor, _mount_snapshot(row))
+        await conn.execute("DELETE FROM agent_mounts WHERE job_dir=$1", job_dir)
+
+
+async def demote_seatless_mount_if_outranked(
+    pool: asyncpg.Pool, *, job_dir: str, actor: str,
+) -> MountRecord | None:
+    """LAW 3a (thread 124732175759, Thoth mail 13141): law 1's own rescue only fires
+    when `find_mount` comes back empty — but once a wrongly-minted stranger has ALREADY
+    registered its own `agent_mounts` row for this job_dir (exactly what happens the
+    very next time a wrong mint from law 1's own gap actually lands), `find_mount`
+    keeps finding THAT row forever after, self-reinforcing. This checks whether the
+    job_dir's CURRENT row belongs to a seatless lineage while this job_dir's own audit
+    history names a DIFFERENT lineage that holds an active seat right now — if so, the
+    seat holder wins, and the seatless row's claim is retired (an audited, undoable
+    compensating event; the stranger Agent object itself is never touched — the
+    operator's own `/merge` remains the one door that folds it away for good).
+
+    Returns the seat holder's MountRecord when it outranks the current row, else None
+    (either the current row's own lineage genuinely holds a seat, or nothing in this
+    job_dir's history ever claimed one — a real stranger, left exactly as `find_mount`
+    found it)."""
+    from src.orchestrator.agents import _generation
+
+    bound = await find_mount(pool, job_dir=job_dir)
+    if bound is None:
         return None
-    dropped_agent = last["payload"].get("agent_id")
-    if not dropped_agent:
-        return None
-    base = _generation(dropped_agent)[0]
-    row = await pool.fetchrow(
-        "SELECT hf.canonical AS holder, ht.canonical AS seat_id "
-        "FROM links hl JOIN objects hf ON hf.id=hl.from_id "
-        "  AND hf.type='Agent' AND hf.status='active' "
-        "JOIN objects ht ON ht.id=hl.to_id AND ht.type='Seat' "
-        "WHERE hl.type='holds' AND (hf.canonical=$1 OR hf.canonical LIKE $1 || '-%') "
-        "AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
-        "ORDER BY hl.created_at DESC LIMIT 1", base)
-    if row is None:
-        return None  # this lineage holds no seat (or never did) — a real stranger, no rescue
-    seat_props = await pool.fetch(
-        "SELECT a.name, a.value #>> '{}' AS val FROM current_assertions a "
-        "JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name IN ('anchor_cwd','house')", row["seat_id"])
-    props = {p["name"]: p["val"] for p in seat_props}
-    return MountRecord(job_dir=job_dir, agent_id=row["holder"], project=props.get("house"),
-                       cwd=props.get("anchor_cwd") or "", model=None)
+    if await _active_seat_for_lineage_base(pool, _generation(bound.agent_id)[0]) is not None:
+        return None  # the row's own lineage genuinely holds a seat — nothing outranks it
+    rescue = await rescue_seat_holder_mount(pool, job_dir=job_dir)
+    if rescue is None:
+        return None  # no seat holder ever claimed this job_dir — a real, seatless stranger
+    await _retire_seatless_mount_claim(pool, job_dir=job_dir, actor=actor)
+    return rescue
 
 
 async def resolve_dirty_tree_owner(

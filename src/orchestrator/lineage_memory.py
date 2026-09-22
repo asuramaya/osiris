@@ -67,6 +67,21 @@ class MemoryCustodyResult:
     prior_lineage: str | None = None
 
 
+def peek_lineage_memory_owner(cwd: str, *, home: Path | None = None) -> str | None:
+    """READ-ONLY (law 3b, thread 124732175759, Thoth mail 13141): the sentinel's current
+    named owner, or None (no sentinel, no directory, or a filesystem error — degrades
+    exactly like `ensure_lineage_memory_custody`'s own fail-open). Never touches
+    anything; a caller uses this to decide WHETHER to call that function at all — a
+    seatless stranger checking whose memory it's about to evict, before it evicts it."""
+    try:
+        sentinel = claude_memory_dir(cwd, home=home) / _SENTINEL_NAME
+        if not sentinel.is_file():
+            return None
+        return sentinel.read_text(encoding="utf-8").strip() or None
+    except OSError:
+        return None
+
+
 def ensure_lineage_memory_custody(
     cwd: str, lineage_root: str, *, home: Path | None = None,
 ) -> MemoryCustodyResult:

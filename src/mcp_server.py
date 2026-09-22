@@ -1226,6 +1226,16 @@ async def _reattach(
     # lineage that still holds a seat right now is never treated as unmounted.
     if rec is None:
         rec = await mounts.rescue_seat_holder_mount(pool, job_dir=job)
+    elif job:
+        # LAW 3a (thread 124732175759, Thoth mail 13141): the self-reinforcing trap — a
+        # wrong mint from law 1's own gap registers its OWN row, so every LATER re-attach
+        # keeps finding the stranger instead of ever reaching the rescue above. A seat
+        # holder outranks a seatless row's live claim on this job_dir just as much as it
+        # outranks the row's own absence.
+        outranked = await mounts.demote_seatless_mount_if_outranked(
+            pool, job_dir=job, actor=get_settings().osiris_actor)
+        if outranked is not None:
+            rec = outranked
     adopted_from = None
     self_restored = False
     if rec is None:
@@ -2631,6 +2641,16 @@ async def mount(
     # This never mints a stranger over a lineage that still holds a seat right now.
     if bound is None and job_dir:
         bound = await mounts.rescue_seat_holder_mount(pool, job_dir=job_dir)
+    elif bound is not None and job_dir:
+        # LAW 3a (thread 124732175759, Thoth mail 13141): the self-reinforcing trap — a
+        # wrong mint from law 1's own gap registers its OWN row, so every LATER restart's
+        # find_mount keeps finding the stranger instead of ever reaching the rescue
+        # above. A seat holder outranks a seatless row's live claim on this job_dir just
+        # as much as it outranks the row's own absence.
+        outranked = await mounts.demote_seatless_mount_if_outranked(
+            pool, job_dir=job_dir, actor=settings.osiris_actor)
+        if outranked is not None:
+            bound = outranked
     # THE RECOLLECTION GUARD (90f0cb3a): a resumed mind re-mounting after a bounce quotes
     # its own history for `cwd` — and an address is exactly what a move makes stale (alfred
     # re-mounted himself at the demolished husk this way, re-pointing his seated row). When
@@ -3054,8 +3074,10 @@ async def mount(
         # custody to. Filesystem-only, best-effort: must never be able to fail a mount.
         from src.orchestrator.lineage_memory import (
             ensure_lineage_memory_custody,
+            peek_lineage_memory_owner,
             stamp_lineage_sentinel,
         )
+        from src.orchestrator.seats import held_seat
         try:
             lineage_root = _generation(ident.agent_id)[0]
             # THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759, Thoth mail 13096):
@@ -3071,12 +3093,29 @@ async def mount(
                 "SELECT created_at FROM objects WHERE id=$1", agent_uuid)
             identity_confirmed = (
                 created_at is not None and created_at < mount_call_started_at)
+            # LAW 3b (thread 124732175759, Thoth mail 13141): a SEATLESS caller never
+            # evicts a seat HOLDER's memory — checked read-only (peek_lineage_memory_
+            # owner) before ever calling ensure_lineage_memory_custody, which performs
+            # its own rename as part of computing "archived". Only relevant when the
+            # caller itself holds no seat; a seated caller correcting its own office's
+            # memory is the system working as designed.
+            seatless_evicting_a_holder = False
+            if identity_confirmed and await held_seat(pool, ident.agent_id) is None:
+                sentinel_owner = peek_lineage_memory_owner(cwd)
+                if (sentinel_owner and sentinel_owner != lineage_root
+                        and await held_seat(pool, sentinel_owner) is not None):
+                    seatless_evicting_a_holder = True
             if not identity_confirmed:
                 out["memory_custody_deferred"] = (
                     f"{ident.agent_id} was minted in this same call — memory custody "
                     "(which can rename another lineage's real memory sideways) only "
                     "runs once the graph confirms this identity predates the call that "
                     "resolved it, on a later mount()")
+            elif seatless_evicting_a_holder:
+                out["memory_custody_deferred"] = (
+                    f"{ident.agent_id} holds no seat, and this cwd's memory is currently "
+                    f"owned by {sentinel_owner!r}, which does — a seatless mind never "
+                    "evicts a seat holder's memory; nothing was touched")
             else:
                 custody = ensure_lineage_memory_custody(cwd, lineage_root)
                 if custody.action == "archived":
