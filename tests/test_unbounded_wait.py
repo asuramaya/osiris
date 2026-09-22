@@ -108,7 +108,18 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # 87 -> 88 (2026-09-22, Imhotep, THE BACKUP CLI DOOR, Thoth mail 12809): one new
     # dispatch line, `asyncio.run(cmd_backup_status(...))`, same false-positive class
     # as every comment above — not a genuine new unbounded subprocess call.
-    "src/cli.py": 88,
+    # 88 -> 89 (2026-09-22, Imhotep, THE DEPLOY SNAPSHOT, thread e29b260c, Thoth mail
+    # 12947): `_real_update_deploy_snapshot`'s own `await asyncio.wait_for(proc.
+    # communicate(), timeout=300)` IS genuinely bounded (a real 300s ceiling — uv sync
+    # against a fresh worktree can take a while, a git worktree add/checkout alone is
+    # seconds), same shape as `_rendered_user_unit_contents`'s own precedent (72 -> 81
+    # baseline comment above): the scanner's own AST check looks at `communicate()`'s
+    # OWN kwargs, never the wrapping `wait_for`'s, so a wait_for-wrapped call always
+    # reads as unmarked here. The sibling `proc.communicate()` on the timeout branch
+    # (draining an already-killed process, genuinely near-instant) IS inline-marked
+    # instead, same as that precedent's own sibling — both are safe, this one just
+    # isn't textually markable without hiding the real timeout.
+    "src/cli.py": 89,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new

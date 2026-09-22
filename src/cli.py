@@ -3577,6 +3577,47 @@ def _run_install_script(script_rel: str, root: Path) -> str:
     return result.stdout.strip() or f"{script_rel}: ran, no output"
 
 
+UpdateDeploySnapshot = Callable[[Path, str], Awaitable[str]]
+
+
+async def _real_update_deploy_snapshot(root: Path, sha: str) -> str:
+    """THE DEPLOY SNAPSHOT (thread e29b260c, Thoth mail 12947): pins ~/.local/bin/osiris at
+    a worktree checked out to `sha` (scripts/update_deploy_snapshot.sh) rather than the main
+    checkout `root` itself — the live incident this closes is `osiris resume` dying with
+    SoulKeyMissing because the operator's CLI shim was an editable install reading straight
+    out of `root` while a gate had a candidate branch merged into it for a test run. Runs
+    only after a green restart+smoke, same as `osiris deploy`'s own install_*.sh scripts —
+    a 300s ceiling (an uv sync against a fresh worktree, first run, can genuinely take a
+    while; a git worktree add/checkout alone is seconds) rather than the 30s
+    `_run_install_script` uses for its own much lighter idempotent copies. A missing
+    scripts/update_deploy_snapshot.sh (a synthetic tmp_path repo_root, or a checkout
+    predating this) is reported, never crashes the rest of the deploy report. Genuinely
+    async (asyncio subprocess, not a blocking subprocess.run) — up to 300s of `uv sync`
+    against a fresh worktree must not stall the event loop `cmd_deploy` otherwise shares
+    with its own httpx/asyncpg calls earlier in the same ritual."""
+    script = root / "scripts" / "update_deploy_snapshot.sh"
+    if not script.is_file():
+        return "deploy snapshot: SOURCE MISSING (scripts/update_deploy_snapshot.sh) — skipped"
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            "sh", str(script), str(root), sha, cwd=root,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
+    except OSError as exc:
+        return f"deploy snapshot: could not run ({exc})"
+    try:
+        out_bytes, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+    except TimeoutError:
+        proc.kill()
+        # unbounded-wait-ok: draining an already-killed process's pipes is near-instant
+        await proc.communicate()
+        return "deploy snapshot: TIMED OUT after 300s (uv sync against a fresh worktree " \
+               "should not take this long) — worktree may be left mid-checkout"
+    out = out_bytes.decode(errors="replace").strip()
+    if proc.returncode != 0:
+        return f"deploy snapshot: FAILED (exit {proc.returncode}) — {out}"
+    return out or "deploy snapshot: ran, no output"
+
+
 async def cmd_deploy(
     *, repo_root: Path | None = None, git_status: GitStatus = _real_git_status,
     restart: RestartServices = _real_restart_services, pool: asyncpg.Pool | None = None,
@@ -3593,6 +3634,7 @@ async def cmd_deploy(
     check_false_mint_live: CheckFalseMintLive = _real_check_false_mint_live,
     full_suite_gate: FullSuiteGate = _real_full_suite_gate,
     wait_for_pg_dump: WaitForPgDump = _real_wait_for_pg_dump,
+    update_deploy_snapshot: UpdateDeploySnapshot = _real_update_deploy_snapshot,
     deploy_settings: Settings | None = None,
 ) -> int:
     """The deploy ritual as one verb (thread e51a841c): a live near-miss held batch 3 because
@@ -3627,6 +3669,17 @@ async def cmd_deploy(
     Also prints (never gates) a NOTE when any seat carries a current `anchor_cwd` outside
     the office root alongside the correct one (ruling 23771416) — this population was
     found by an operator hitting a broken resume, and should never be found that way again.
+
+    (8) THE DEPLOY SNAPSHOT (thread e29b260c, Thoth mail 12947): on a green deploy (smoke
+    all clear, `deployed_head` known) only, pins ~/.local/bin/osiris at a worktree checked
+    out to `deployed_head` (scripts/update_deploy_snapshot.sh) instead of the main checkout
+    `root` itself. The services already survive a gate untouched (they run in-process from
+    their own last restart); this closes the one door that didn't — the operator's own CLI
+    was an editable install reading straight out of `root`, so `osiris resume` mid-gate ran
+    whatever candidate branch a gate had merged into that checkout for its test run
+    (SoulKeyMissing, a live incident this closes). NEVER runs on smoke failure — a broken
+    deploy must not become the operator's next CLI. `osiris deploy` itself stays runnable
+    from the checkout either way; only the operator-facing shim moves.
 
     `wait_for_health`/`wait_for_smoke` default to the REAL bounded pollers (120s/30s
     ceilings, real network round-trips against the live console/MCP) — injectable for the
@@ -4002,6 +4055,12 @@ async def cmd_deploy(
         print(commands_status(root))
 
         print(_run_install_script("scripts/install_prune_timers.sh", root))
+
+        # THE DEPLOY SNAPSHOT (thread e29b260c) — only on a genuinely green deploy: smoke
+        # came back clean AND the HEAD it's pinning to is actually known (a non-git
+        # repo_root, or record_deploy's own failure, both already left deployed_head None).
+        if not fails and deployed_head:
+            print(await update_deploy_snapshot(root, deployed_head))
 
         return 1 if fails else 0
     finally:
