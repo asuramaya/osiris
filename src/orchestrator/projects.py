@@ -103,6 +103,16 @@ async def _resolve_software_project(pool: asyncpg.Pool, ref: str) -> asyncpg.Rec
         raise AmbiguousProjectRef(ref, sorted(str(r["canonical"]) for r in rows))
     if rows:
         return rows[0]
+    # A RETIRED CANONICAL (object_aliases — a rename migrated the canonical, Thoth DM
+    # 12786) names the SAME object: found, and flagged `resolved_via_alias` so no caller
+    # is surprised that the label it typed is no longer the object's own canonical.
+    aliased = await pool.fetchrow(
+        "SELECT o.id, o.canonical, o.status, al.alias AS resolved_via_alias "
+        "FROM object_aliases al JOIN objects o ON o.id=al.object_id "
+        "WHERE al.type='SoftwareProject' AND al.alias=$1 AND o.canonical <> al.alias",
+        canon)
+    if aliased is not None:
+        return aliased
     # a non-active (retired/merged) object is reachable only by its exact canonical — a
     # caller resolving a KNOWN-dead label (retire_project's own "already retired" message)
     # must still find it, just never through the ambiguity-checked label path above
@@ -1052,8 +1062,10 @@ async def normalize_project_casing(
     folds the OTHER way — `phantom` is retired INTO `populated` (which has nothing to
     lose; it was empty), and ONLY THEN does `rename_project` fix `populated`'s own
     `name` to `correct_case` IN PLACE, same object, same id, every property untouched
-    throughout. `populated`'s canonical never changes (rename_project's own guarantee)
-    — only its display `name` does.
+    throughout. `populated`'s uuid never changes; its CANONICAL now migrates too
+    (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/b5663511)
+    when `correct_case` differs in case from its own — the case fix lands on the
+    canonical as well as the name, and the pre-fix spelling becomes a resolvable alias.
 
     ATOMIC OR REFUSED — THE INVERTED RULE (577988ed inverts here, per the operator's own
     standing line and Thoth's explicit instruction: a partial rename is strictly WORSE

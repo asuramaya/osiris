@@ -3287,9 +3287,15 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
     assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in text
     assert "deploytwina -> repo:DeployTwinA" in text
 
+    # the canonical migrates to the corrected (lowercase) case too now (DM 12786) — the
+    # SURVIVOR now answers to repo:deploytwina; the phantom's own merged corpse was
+    # moved aside to free that string for it.
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploytwina'")
-    assert row["status"] == "merged"
+    assert row["status"] == "active"
+    corpse = await actions.pool.fetchrow(
+        "SELECT status FROM objects WHERE canonical LIKE 'repo:deploytwina~merged-%'")
+    assert corpse["status"] == "merged"
 
 
 async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
@@ -6773,11 +6779,14 @@ async def test_cmd_rename_project_discloses_the_gap_it_cannot_close(
         actor="agent:test", pool=actions.pool)
 
     assert code == 0
+    # the canonical MIGRATES too (operator ruling, DM 12786) — the object now answers
+    # to repo:cmdrenamedst, with repo:cmdrenamesrc an alias of the same object
     renamed = await actions.pool.fetchval(
         "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical='repo:cmdrenamesrc' AND a.name='name' "
+        "WHERE o.canonical='repo:cmdrenamedst' AND a.name='name' "
         "AND a.value #>> '{}' = 'cmdrenamedst'")
     assert renamed == 1
+    assert await actions.resolve_alias("SoftwareProject", "repo:cmdrenamesrc") is not None
 
 
 async def test_cmd_rename_project_gathers_evidence_when_a_seat_governs_it(

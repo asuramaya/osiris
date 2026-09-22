@@ -342,6 +342,14 @@ async def _normalize_project_label_through_merge(
                            "guessing which one this label means")
         row = candidates[0] if candidates else None
     if row is None:
+        # A RETIRED CANONICAL (object_aliases — a rename migrated the canonical, Thoth DM
+        # 12786): a stale pin/charter spelling names the SAME object, so it resolves to
+        # that object's live label instead of comparing as an unknown label.
+        row = await conn_or_pool.fetchrow(
+            "SELECT o.id, o.canonical FROM object_aliases al JOIN objects o ON o.id=al.object_id "
+            "WHERE al.type='SoftwareProject' AND al.alias=$1 AND o.canonical <> al.alias",
+            target_canon)
+    if row is None:
         return label, None
     current = row["id"]
     for _ in range(100):
@@ -985,19 +993,56 @@ async def _cascade_governing_seats(
     }
 
 
+# THE OFF-GRAPH STRING COLUMNS a project label lives in OUTSIDE objects/links/assertions
+# (measured against the live schema, Thoth DM 12786 item 6): plain `text` project fields,
+# never a foreign key. A rename's canonical migration re-addresses every one of them from
+# the old label(s) to the new in the SAME door. tests/test_project_identity.py asserts this
+# list still equals every `%project%` text column in the schema, so a new table cannot
+# silently join the population unmigrated.
+CANONICAL_STRING_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("agent_mounts", "project"),
+    ("agent_wakes", "to_project"),
+    ("body_usage", "project"),
+    ("fleet_messages", "from_project"),
+    ("fleet_messages", "to_project"),
+    ("harness_sessions", "project"),
+)
+
+
+async def _canonical_occurrences(
+    pool: asyncpg.Pool, old_labels: set[str],
+) -> dict[str, int]:
+    """Row counts per off-graph `table.column` currently holding one of `old_labels` —
+    the dry-run receipt's own "every literal occurrence the cascade will touch" list."""
+    out: dict[str, int] = {}
+    if not old_labels:
+        return out
+    for table, col in CANONICAL_STRING_COLUMNS:
+        n = await pool.fetchval(
+            f"SELECT count(*) FROM {table} WHERE {col} = ANY($1::text[])",  # noqa: S608
+            sorted(old_labels))
+        out[f"{table}.{col}"] = int(n)
+    return out
+
+
 async def rename_project(
     actions: Actions, *, project: str, new_name: str, because: str, actor: str,
     dry_run: bool = True, merge_into: bool = False,
 ) -> dict[str, Any]:
-    """RENAME: ONE object keeps its stable `canonical` id FOREVER — even though
-    SoftwareProject's canonical happens to be name-shaped (`repo:<name>`), it is treated
-    exactly as immutable as Seat's uuid-based `seat:<id>` is everywhere else in this
-    codebase; nothing here, or anywhere, ever rewrites `objects.canonical`. Only the
-    mutable `name` PROPERTY changes — a fresh `assert_property`, old values kept forever
-    in assertion history (never deleted), the same discipline rename_seat already holds
-    for a seat's handle. `_resolve_software_project`'s name-property fallback is what
-    makes the NEW name resolvable afterward; the OLD canonical string keeps resolving
-    too, forever — a rename never orphans either name.
+    """RENAME: ONE object (its uuid, every edge, every assertion) survives; the name AND
+    the canonical move. THE CANONICAL MIGRATES TOO (operator ruling, grounds 488ae750/
+    b5663511, Thoth DM 12786 — this reverses the older "canonical is immutable forever"
+    law for SoftwareProject): `repo:<old>` becomes `repo:<new_name>` by a compensating
+    `canonical_changed` object_event (`Actions.change_canonical`, never a delete), and
+    the retired string is appended to `object_aliases` so every resolver (create_or_find_
+    object, resolve_ref, _resolve_repo, _resolve_software_project, _resolve_or_mint_
+    project) still resolves it to the SAME object — a write naming the alias lands on the
+    migrated object, never a stub. A MERGED stub squatting the target canonical is moved
+    aside (`repo:<new>~merged-<id8>`); an active/retired holder refuses even with
+    merge_into. The `name` PROPERTY changes in the same atomic block, old values kept in
+    assertion history (never deleted). Every off-graph project string (see
+    CANONICAL_STRING_COLUMNS) is re-addressed in the same door; the receipt's
+    `canonical_migration` names every occurrence and what could not be reached.
 
     ZERO graph EDGES move: works_in/governs/in_repo already point at this object's
     stable `id`, not at its name or canonical, so every existing edge stays correct
@@ -1088,6 +1133,16 @@ async def rename_project(
     if row["status"] != "active":
         return {"error": f"{row['canonical']} is {row['status']}, not active — nothing "
                          "to rename"}
+    # REFUSE RATHER THAN SILENTLY FALL BACK (Thoth's own addition, DM 12798): a box that
+    # hasn't yet run alembic 0072 has no object_aliases table — `_resolve_software_
+    # project`'s own alias fallback (and every resolve site downstream) needs it to
+    # exist. Checked BEFORE any lookup that could touch it, so a stray direct call
+    # against an un-migrated box gets one clear refusal instead of a raw asyncpg error.
+    # The deploy runs alembic before code lands, so this should never fire live.
+    if not await actions.pool.fetchval("SELECT to_regclass('object_aliases') IS NOT NULL"):
+        return {"error": "object_aliases does not exist on this database — run alembic "
+                         "upgrade (migration 0072) before renaming a project; a canonical "
+                         "migration with nothing to alias the old string to would orphan it"}
     try:
         collide = await _resolve_software_project(actions.pool, new_name)
     except AmbiguousProjectRef:
@@ -1120,11 +1175,66 @@ async def rename_project(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         row["id"])
+    # THE CANONICAL MIGRATES TOO (operator ruling "A RENAME MIGRATES THE CANONICAL TOO",
+    # grounds 488ae750/b5663511, Thoth DM 12786): repo:<old> -> repo:<new_name>, the uuid
+    # and every edge stay; the retired string becomes an ALIAS (object_aliases). Every
+    # refusal that could apply is decided HERE, before any write.
+    from src.orchestrator.capture import _REPO_NAME_RE
+
+    old_canonical = str(row["canonical"])
+    new_canonical = f"repo:{new_name}"
+    migrates = new_canonical != old_canonical
+    holder = None
+    canonical_skip: str | None = None
+    if migrates:
+        if not _REPO_NAME_RE.fullmatch(new_name):
+            return {"error": f"{new_name!r} cannot be a canonical — a rename now migrates "
+                             "the canonical too, so new_name must be a bare project name "
+                             "(the same shape capture's repo= accepts), never a path or "
+                             "placeholder"}
+        holder = await actions.pool.fetchrow(
+            "SELECT id, canonical, status FROM objects WHERE type='SoftwareProject' "
+            "AND canonical=$1 AND id<>$2", new_canonical, row["id"])
+        if holder is not None and holder["status"] != "merged":
+            if not merge_into:
+                return {"error": f"{new_canonical} is already held by a "
+                                 f"{holder['status']} SoftwareProject — a canonical "
+                                 "cannot be shared; fold_project is the evidence-gated "
+                                 "verb for two live identities"}
+            # merge_into=True is the caller's explicit "reuse the NAME anyway": a unique
+            # canonical cannot be shared, so the name moves and the canonical stays put,
+            # said plainly in the receipt rather than silently skipped.
+            migrates = False
+            canonical_skip = (f"{new_canonical} is held by a {holder['status']} "
+                              "SoftwareProject (merge_into=True kept the name-only "
+                              "rename) — canonical NOT migrated")
+            holder = None
+        other_alias = await actions.pool.fetchval(
+            "SELECT object_id FROM object_aliases WHERE type='SoftwareProject' AND alias=$1",
+            new_canonical)
+        if other_alias is not None and other_alias != row["id"]:
+            return {"error": f"{new_canonical} is a retired canonical (alias) of a "
+                             "DIFFERENT project — refusing to steal an alias"}
+    old_labels = {old_canonical.removeprefix("repo:"), *([old_name] if old_name else [])}
+    old_labels.discard(new_name)
+    canonical_plan: dict[str, Any] = {
+        "migrates": migrates, "from": old_canonical, "to": new_canonical,
+        "skipped_because": canonical_skip,
+        "alias_retained": old_canonical if migrates else None,
+        "merged_holder_moved_aside": (
+            {"id": str(holder["id"]), "to": f"{new_canonical}~merged-{str(holder['id'])[:8]}"}
+            if holder is not None else None),
+        "off_graph_occurrences": await _canonical_occurrences(actions.pool, old_labels),
+        "not_migrated": ["Agent `project` assertion values (each agent's own "
+                         "self-declaration — healed at its next mount/register_agent)",
+                         "the project's on-disk folder (never moved by any Osiris verb)"],
+    }
     if dry_run:
         manifest = await _cascade_governing_seats(
             actions.pool, project_oid=row["id"], old_name=old_name or "", new_name=new_name,
             because=because, actor=actor, dry_run=True)
         return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
+                "canonical_migration": canonical_plan,
                 "because": because, "dry_run": True,
                 "collision": (f"{collide['canonical']} (status={collide['status']}) — "
                               f"would proceed only because merge_into={merge_into!r}"
@@ -1147,9 +1257,18 @@ async def rename_project(
     # confirmed rename read as a live, unresolved dispute in entity_dossier — the graph
     # was right (current_assertions' own confidence-ordered read already picked
     # "lotstretcher") and the dossier's own multi-source agreement view said otherwise.
-    await actions.assert_singular_property(
-        row["id"], "name", new_name, actor, now, _RENAME_CONF,
-        because=f"rename_project: {because}", evidence_class=_EC)
+    async with actions.atomic() as a:
+        if holder is not None:  # a MERGED stub squatting the target canonical: move aside
+            await a.change_canonical(
+                holder["id"], canonical_plan["merged_holder_moved_aside"]["to"],
+                f"rename_project freeing {new_canonical} from a merged stub: {because}",
+                actor, alias_old=False)
+        if migrates:
+            await a.change_canonical(row["id"], new_canonical,
+                                     f"rename_project: {because}", actor)
+        await a.assert_singular_property(
+            row["id"], "name", new_name, actor, now, _RENAME_CONF,
+            because=f"rename_project: {because}", evidence_class=_EC)
     # THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT,
     # Thoth mail 12453 item c, live Marquee specimen: repo:dtfb read NINE current
     # "dtfb" values and no "lotstretcher" at all after an earlier rename): a write
@@ -1171,9 +1290,13 @@ async def rename_project(
             "value reads %r immediately after — the write did not win",
             row["canonical"], new_name, current_name_after_write)
     bare_old = row["canonical"].removeprefix("repo:")
-    mount_tag = await actions.pool.execute(
-        "UPDATE agent_mounts SET project=$1 WHERE project=$2", new_name, bare_old)
-    mounts_moved = int(mount_tag.rsplit(" ", 1)[-1])
+    off_graph_moved: dict[str, int] = {}
+    for table, col in CANONICAL_STRING_COLUMNS:
+        tag = await actions.pool.execute(
+            f"UPDATE {table} SET {col}=$1 WHERE {col} = ANY($2::text[])",  # noqa: S608
+            new_name, sorted(old_labels))
+        off_graph_moved[f"{table}.{col}"] = int(tag.rsplit(" ", 1)[-1])
+    mounts_moved = off_graph_moved["agent_mounts.project"]
     manifest = await _cascade_governing_seats(
         actions.pool, project_oid=row["id"], old_name=old_name or bare_old, new_name=new_name,
         because=because, actor=actor, dry_run=False)
@@ -1181,16 +1304,22 @@ async def rename_project(
     from src.orchestrator.identity_heal import detect_possibly_stale_seats
 
     prior_art_bits = await property_prior_art(
-        actions.pool, subject_canonical=row["canonical"], field="name",
+        actions.pool, subject_canonical=new_canonical, field="name",
         new_value=new_name, because=because, actor=actor)
     stale = await detect_possibly_stale_seats(actions.pool, old_name or bare_old)
-    return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
+    real_canonical_migration = {k: v for k, v in canonical_plan.items()
+                                if k != "off_graph_occurrences"}
+    real_canonical_migration["off_graph_moved"] = off_graph_moved
+    return {"project": new_canonical, "old_canonical": old_canonical,
+           "old_name": old_name, "new_name": new_name,
+           "canonical_migration": real_canonical_migration,
            "manifest": manifest,
            "current_name_after_write": current_name_after_write,
            "rename_confirmed": rename_confirmed,
            "mounts_moved": mounts_moved, "because": because,
-           "note": f"{row['canonical']}'s canonical id never changes; edges already "
-                   "pointing at it are unaffected; every GOVERNING SEAT's own pin/"
+           "note": f"{old_canonical} -> {new_canonical}: the uuid and every edge stay (a "
+                   "compensating canonical_changed event, the old canonical an ALIAS "
+                   "that resolves forever); every GOVERNING SEAT's own pin/"
                    "house/charter/office/repo-root-.osiris is cascaded (see manifest) "
                    "— the project's own on-disk folder is not (manifest's own "
                    "could_not_reach names why; each seat's own 'tree' tier still "

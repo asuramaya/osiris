@@ -120,7 +120,17 @@ class Actions:
             # write triggered it.
             await check_object_type(conn, type_, actions=Actions(self.pool, conn=conn),
                                     actor=actor)
-            row = await conn.fetchrow(
+            # AN ALIAS IS NEVER A STUB (operator ruling "A RENAME MIGRATES THE CANONICAL
+            # TOO", Thoth DM 12786): a SoftwareProject's retired canonical (object_aliases,
+            # appended by change_canonical) names the SAME object forever — a write that
+            # still spells it lands on the migrated object instead of minting a twin. The
+            # one kernel choke point every mint door (capture, gitlog, ingest, mount)
+            # already funnels through, so no door needs its own alias check. Only
+            # SoftwareProject ever carries aliases; every other type pays nothing.
+            aliased = (await conn.fetchval(
+                "SELECT object_id FROM object_aliases WHERE type=$1 AND alias=$2",
+                type_, canonical) if type_ == "SoftwareProject" else None)
+            row = None if aliased is not None else await conn.fetchrow(
                 "INSERT INTO objects (type, canonical) VALUES ($1,$2) "
                 "ON CONFLICT (type, canonical) DO NOTHING RETURNING id",
                 type_,
@@ -149,7 +159,7 @@ class Actions:
             else:
                 object_id = cast(
                     uuid.UUID,
-                    await conn.fetchval(
+                    aliased if aliased is not None else await conn.fetchval(
                         "SELECT id FROM objects WHERE type=$1 AND canonical=$2", type_, canonical
                     ),
                 )
@@ -813,6 +823,76 @@ class Actions:
                 conn, "set_status", actor, case_id,
                 {"object_id": str(object_id), "status": status},
             )
+
+    # --- canonical migration (a rename moves the string, never the uuid) --
+
+    async def change_canonical(
+        self,
+        object_id: uuid.UUID,
+        new_canonical: str,
+        because: str,
+        actor: str,
+        *,
+        alias_old: bool = True,
+    ) -> dict[str, Any]:
+        """Migrate an object's `canonical` by a COMPENSATING EVENT ('canonical_changed'
+        in object_events, payload {from, to, because}) — the uuid, every edge and every
+        assertion stay put (they key on the uuid); only the unique (type, canonical)
+        string moves. With `alias_old=True` (the default) the RETIRED string is appended
+        to `object_aliases` in the same transaction so anything still spelling it
+        resolves to this object forever (append-only; nothing is deleted). No-op when
+        the canonical already equals `new_canonical`. Refuses (ActionError) when another
+        object of the same type already holds `new_canonical` — the caller (the rename
+        door) decides what to do about a merged holder BEFORE calling this; this kernel
+        verb never picks a side."""
+        async with self._tx() as conn:
+            row = await conn.fetchrow(
+                "SELECT type, canonical FROM objects WHERE id=$1 FOR UPDATE", object_id)
+            if row is None:
+                raise ActionError(f"no such object: {object_id}")
+            old = str(row["canonical"])
+            if old == new_canonical:
+                return {"changed": False, "canonical": old}
+            holder = await conn.fetchrow(
+                "SELECT id, status FROM objects WHERE type=$1 AND canonical=$2",
+                row["type"], new_canonical)
+            if holder is not None and holder["id"] != object_id:
+                raise ActionError(
+                    f"{new_canonical!r} is already held by {holder['id']} "
+                    f"(status={holder['status']})")
+            taken = await conn.fetchval(
+                "SELECT object_id FROM object_aliases WHERE type=$1 AND alias=$2",
+                row["type"], new_canonical)
+            if taken is not None and taken != object_id:
+                raise ActionError(
+                    f"{new_canonical!r} is an alias of a different object ({taken})")
+            await conn.execute(
+                "UPDATE objects SET canonical=$1 WHERE id=$2", new_canonical, object_id)
+            await conn.execute(
+                "INSERT INTO object_events (event_type, object_id, payload, actor) "
+                "VALUES ('canonical_changed',$1,$2,$3)",
+                object_id, {"from": old, "to": new_canonical, "because": because}, actor)
+            if alias_old:
+                await conn.execute(
+                    "INSERT INTO object_aliases (type, alias, object_id, because, actor) "
+                    "VALUES ($1,$2,$3,$4,$5) ON CONFLICT (type, alias) DO NOTHING",
+                    row["type"], old, object_id, because, actor)
+            # the new canonical may itself have been an alias of THIS object (a rename
+            # back): it is the live canonical again, so it stops being an alias
+            # (append-only means we never DELETE — the row is simply superseded by the
+            # objects row; resolution checks objects first, so it is inert)
+            await self._audit(
+                conn, "change_canonical", actor, None,
+                {"object_id": str(object_id), "from": old, "to": new_canonical})
+            await self._outbox(conn, "canonical_changed", object_id, None, {"from": old})
+            return {"changed": True, "from": old, "canonical": new_canonical}
+
+    async def resolve_alias(self, type_: str, canonical: str) -> uuid.UUID | None:
+        """The object a RETIRED canonical (an alias) names, or None. Live canonicals
+        are objects.canonical's job; this reads object_aliases only."""
+        return cast(uuid.UUID | None, await self.pool.fetchval(
+            "SELECT object_id FROM object_aliases WHERE type=$1 AND alias=$2",
+            type_, canonical))
 
     # --- 6. tag_object ---------------------------------------------------
 

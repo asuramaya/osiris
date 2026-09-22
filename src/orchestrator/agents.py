@@ -3196,6 +3196,15 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
             project)
         if len(name_matches) == 1:
             canonical = name_matches[0]["canonical"]
+    if canonical is None and not matches:
+        # A RETIRED CANONICAL IS AN ALIAS, NEVER A STUB (a rename migrates the canonical,
+        # Thoth DM 12786): a pin still spelling the pre-rename label resolves through
+        # object_aliases to the migrated object's CURRENT canonical, so it neither mints
+        # nor re-stamps `name` with the stale spelling.
+        canonical = await actions.pool.fetchval(
+            "SELECT o.canonical FROM object_aliases al JOIN objects o ON o.id=al.object_id "
+            "WHERE al.type='SoftwareProject' AND al.alias=$1 AND o.status='active'",
+            f"repo:{project}")
     if canonical is None:
         canonical = f"repo:{project}"
         # THE CORPSE CHECK, NOT THE ACTIVE-ONLY ONE (Marquee's own self-reinfecting-fold
