@@ -371,12 +371,37 @@ panel call. Dry run is the default for every target; `--apply` writes and requir
 Mirrors the `composition` MCP tool for `list`/`run`/`save`; `run-spec` is a CLI-only
 fourth mode straight onto `compositions.run_spec` for an ephemeral, never-saved spec.
 
-## `osiris backup-settings <get|write> [--vault-path P] [--timer-schedules JSON] [--offbox-repositories JSON] [--because R] [--ruling REF]`
+## `osiris backup-settings <get|write> [--vault-path P] [--timer UNIT=ONCALENDAR]... [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL --offload-schedule ONCALENDAR [--offload-mountpoint P] [--offload-disabled]] [--offload-remove NAME] [--timer-schedules JSON] [--offbox-repositories JSON] [--because R] [--ruling REF]`
 
 The backup config panel's own CLI door — get/write over the vault path, the five
-backup-lane timer schedules, and off-box repositories, the same functions the
-`backup_settings` MCP tool and the CMD-K panel call. `write` requires `--because`;
-`--timer-schedules` is a full-replace field (an omitted unit is cleared).
+backup-lane timer schedules, and offload targets, the same functions the
+`backup_settings` MCP tool and the CMD-K panel call. `write` requires `--because`.
+
+`--vault-path` is always-local (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, operator
+ruling be21384a): validated absolute/exists/writable, and refused outright if it
+doesn't resolve onto a mountpoint declared in `/etc/fstab` or a systemd `.mount` unit's
+own `Where=` — the vault must survive a reboot unattended. Sitting on the same block
+device as `/` only warns, never refuses.
+
+`offload_targets` replaces the deprecated `offbox_repositories` (still readable for one
+release; `get` synthesizes `offload_targets` read-time from old rows when the new field
+was never explicitly set). Each target is `{name, kind: local|restic, path_or_url,
+expected_mountpoint (local only), schedule, enabled}` — a laptop's own intermittent
+targets (a drive only present when docked, a NAS only on Tailscale/LAN), not just a
+URL. `--timer`/`--offload-add`/`--offload-remove` are ergonomic CLI-only flags: they
+read the CURRENT settings first and merge in just the named unit or target, so a
+one-line change doesn't require re-typing the whole field. `--timer-schedules`/
+`--offbox-repositories` (raw JSON, full-replace) remain for scripted bulk writes.
+
+## `osiris backup-status [--vault P] [--backups P] [--json]`
+
+The backup panel's own live health read: timers (schedule + configured-vs-shipped +
+live systemd state), vault dump/base-backup counts, disk headroom, prune-ladder tiers,
+manifest state — the same `backup_status` composition Function the CMD-K panel calls,
+called directly (no MCP tool wraps its own `--vault`/`--backups` path overrides, so
+this is a CLI-side call over the Function, same NO_MCP_EQUIVALENT shape as `lint`/
+`audit` above). `--vault`/`--backups` override the production paths, for a test or a
+non-standard layout.
 
 ## `osiris digest [--hours N] [--mark-seen] [--json] [--text]`
 

@@ -4332,28 +4332,46 @@ async def cmd_settings(
 
 async def cmd_backup_settings(
     action: str, *, vault_path: str | None = None, timer_schedules: str | None = None,
-    offbox_repositories: str | None = None, because: str | None = None,
+    offbox_repositories: str | None = None, timer: list[str] | None = None,
+    offload_add: str | None = None, offload_kind: str | None = None,
+    offload_target: str | None = None, offload_mountpoint: str | None = None,
+    offload_schedule: str | None = None, offload_disabled: bool = False,
+    offload_remove: str | None = None, because: str | None = None,
     ruling: str | None = None, actor: str = _CONSOLE_ACTOR, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris backup-settings <get|write> [--vault-path P] [--timer-schedules JSON]
-    [--offbox-repositories JSON] [--because R] [--ruling REF] [--json] [--actor W] —
-    the console-script door onto orchestrator.backup_settings.{get_backup_settings,
+    """osiris backup-settings <get|write> [--vault-path P] [--timer UNIT=CAL]...
+    [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL
+    [--offload-mountpoint P] [--offload-schedule CAL] [--offload-disabled]]
+    [--offload-remove NAME] [--because R] [--ruling REF] [--json] [--actor W] — the
+    console-script door onto orchestrator.backup_settings.{get_backup_settings,
     write_backup_settings}, the SAME functions the `backup_settings` MCP tool and the
-    CMD-K backup config panel call (PARITY GAPS, WAVE 27 item 3, thread 45aff160 —
-    `cmd_settings`'s own docstring already named this exact gap: "the CLI
-    backup_settings itself never got, per Thoth's own ask on thread f4498ab304e4").
+    CMD-K backup config panel call (PARITY GAPS, WAVE 27 item 3, thread 45aff160;
+    THE BACKUP CLI DOOR ergonomics, Thoth mail 12809/12812).
 
     `action='get'` reads current settings, no authority needed. `action='write'`
     changes them — gated like `charter-for`: the operator (a raw terminal call already
     carries operator authority, same law every other sanctioned-second-door command
     here holds) writes freely, anyone else must cite a standing `--ruling` naming
-    'backup_settings'; `--because` is required to write. `--timer-schedules`/
-    `--offbox-repositories` are JSON strings, same `--value` convention `osiris
-    settings set` already uses. `timer_schedules` is a FULL-REPLACE field: any of the
-    five backup-lane timer units missing from the given object is explicitly cleared
-    (written as null), not left alone — "clearing an input and saving drops it" holds
-    per-unit here too."""
+    'backup_settings'; `--because` is required to write.
+
+    `--timer UNIT=CAL` (repeatable) reads the CURRENT timer_schedules first and
+    overlays only the named unit(s) — the underlying door's own field is still a
+    FULL-REPLACE, this flag just does the merge for you so a one-unit tweak doesn't
+    require re-typing all five. `--offload-add`/`--offload-remove` do the same
+    read-merge-write dance over offload_targets, upserting or dropping ONE target by
+    `name` (never touching any other target already there); `--offload-add` REQUIRES
+    `--offload-kind`, `--offload-target`, and `--offload-schedule`, plus
+    `--offload-mountpoint` on top of those when `--offload-kind=local` (the presence
+    check's own anchor). A target's
+    read-only `presence` field is stripped before any re-submit — it is never a valid
+    write input.
+
+    `--timer-schedules`/`--offbox-repositories` (raw JSON strings, same `--value`
+    convention `osiris settings set` already uses) remain for a full-replace or a
+    scripted bulk write; `--offbox-repositories` writes the now-deprecated legacy
+    field directly (see backup_settings.py's own module docstring) — new callers want
+    `--offload-add`/`--offload-remove` instead."""
     import json as _json
 
     from src.orchestrator.backup_settings import get_backup_settings, write_backup_settings
@@ -4401,6 +4419,40 @@ async def cmd_backup_settings(
                     print("osiris backup-settings write: --offbox-repositories must be "
                           "valid JSON (a list of {url, schedule, enabled})", file=sys.stderr)
                     return 1
+            if timer:
+                merged = dict((await get_backup_settings(pool))["timer_schedules"])
+                for kv in timer:
+                    if "=" not in kv:
+                        print(f"osiris backup-settings write: --timer {kv!r} must be "
+                              "UNIT=ONCALENDAR", file=sys.stderr)
+                        return 1
+                    unit, cal = kv.split("=", 1)
+                    merged[unit] = cal
+                fields["timer_schedules"] = merged
+            if offload_add or offload_remove:
+                current = [
+                    {k: v for k, v in t.items() if k != "presence"}  # never a write input
+                    for t in (await get_backup_settings(pool))["offload_targets"]]
+                if offload_add:
+                    if not offload_kind or not offload_target or not offload_schedule:
+                        print("osiris backup-settings write: --offload-add requires "
+                              "--offload-kind, --offload-target, and --offload-schedule",
+                              file=sys.stderr)
+                        return 1
+                    new_target: dict[str, Any] = {
+                        "name": offload_add, "kind": offload_kind,
+                        "path_or_url": offload_target, "schedule": offload_schedule,
+                        "enabled": not offload_disabled}
+                    if offload_kind == "local":
+                        if not offload_mountpoint:
+                            print("osiris backup-settings write: --offload-kind=local "
+                                  "requires --offload-mountpoint", file=sys.stderr)
+                            return 1
+                        new_target["expected_mountpoint"] = offload_mountpoint
+                    current = [t for t in current if t["name"] != offload_add] + [new_target]
+                if offload_remove:
+                    current = [t for t in current if t["name"] != offload_remove]
+                fields["offload_targets"] = current
             out = await write_backup_settings(
                 pool, actor=actor, because=because or "", ruling=ruling, **fields)
         else:
@@ -4415,6 +4467,58 @@ async def cmd_backup_settings(
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title=f"backup-settings {action}")
+    return 0
+
+
+async def cmd_backup_status(
+    *, vault: str | None = None, backups: str | None = None, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris backup-status [--vault PATH] [--backups PATH] [--json] — the live health
+    panel: timers, vault dump/base-backup counts, disk headroom, prune-ladder tiers,
+    manifest state, and configured-vs-shipped schedule per timer. NOT a mirror onto the
+    `composition` MCP tool (its own action table has no per-Function args passthrough
+    for backup_status's `vault`/`backups` path overrides — the same NO_MCP_EQUIVALENT
+    shape `osiris lint`/`osiris audit` already document): calls
+    compositions._fn_backup_status directly, the identical Function the
+    `composition(action='run', name='backup_status')` door and the CMD-K panel both
+    already run, own connection, no duplicated logic.
+
+    `--vault`/`--backups` override the production paths — a test or an operator
+    checking a non-standard layout points these at a different directory; omitted,
+    `_fn_backup_status` resolves the real production paths (backup.vault_path setting,
+    falling back to its own env-derived default) the same way the panel does."""
+    from src.orchestrator.compositions import _fn_backup_status
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:backup-status")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris backup-status: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    args: dict[str, Any] = {}
+    if vault is not None:
+        args["vault"] = vault
+    if backups is not None:
+        args["backups"] = backups
+    try:
+        out = await _fn_backup_status(pool, None, args)
+    finally:
+        if owns_pool:
+            await pool.close()
+    from src import cli_render as render
+    render.emit(out, as_json=as_json, title="backup-status")
     return 0
 
 
@@ -7214,7 +7318,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         audit, graph-export, digest
   read the record       desk, show, threads, inbox, search, dossier, object-events,
                         succession-chain, candidates, composition, citation, inspect,
-                        practices
+                        practices, backup-status
   write to the record   send, decide, settle, thread, annotate-thread, amend-decision,
                         charter-for, amend-practice, merge, unmerge, fold-project,
                         rebind-seat, correct-pin-value, heal-seat-anchor,
@@ -7927,7 +8031,39 @@ def _build_parser() -> argparse.ArgumentParser:
              "(full-replace: an omitted unit is explicitly cleared)")
     p_backup_settings.add_argument(
         "--offbox-repositories", default=None, dest="offbox_repositories",
-        help="write only — a JSON list of {url, schedule, enabled}")
+        help="write only, DEPRECATED — a JSON list of {url, schedule, enabled}; use "
+             "--offload-add/--offload-remove instead")
+    p_backup_settings.add_argument(
+        "--timer", action="append", default=None, metavar="UNIT=ONCALENDAR",
+        help="write only, repeatable — merges into the CURRENT timer_schedules, only "
+             "touching the named unit(s); cannot CLEAR a unit back to its shipped "
+             "default (an empty ONCALENDAR= is refused) — use --timer-schedules with "
+             "that unit set to null for that")
+    p_backup_settings.add_argument(
+        "--offload-add", default=None, dest="offload_add", metavar="NAME",
+        help="write only — upsert one offload_targets entry by name (requires "
+             "--offload-kind and --offload-target)")
+    p_backup_settings.add_argument(
+        "--offload-kind", default=None, dest="offload_kind", choices=("local", "restic"),
+        help="--offload-add only")
+    p_backup_settings.add_argument(
+        "--offload-target", default=None, dest="offload_target", metavar="PATH_OR_URL",
+        help="--offload-add only — a filesystem path (kind=local) or a restic "
+             "repository URL (kind=restic)")
+    p_backup_settings.add_argument(
+        "--offload-mountpoint", default=None, dest="offload_mountpoint", metavar="PATH",
+        help="--offload-add --offload-kind=local only — the mountpoint the presence "
+             "check looks for")
+    p_backup_settings.add_argument(
+        "--offload-schedule", default=None, dest="offload_schedule", metavar="ONCALENDAR",
+        help="--offload-add only, REQUIRED — the schema itself requires a non-empty "
+             "schedule on every target")
+    p_backup_settings.add_argument(
+        "--offload-disabled", action="store_true", dest="offload_disabled",
+        help="--offload-add only — mint the target disabled (default: enabled)")
+    p_backup_settings.add_argument(
+        "--offload-remove", default=None, dest="offload_remove", metavar="NAME",
+        help="write only — drop one offload_targets entry by name")
     p_backup_settings.add_argument("--because", default=None,
                                    help="required to write")
     p_backup_settings.add_argument("--ruling", default=None,
@@ -7939,6 +8075,22 @@ def _build_parser() -> argparse.ArgumentParser:
                                         f"{_CONSOLE_ACTOR!r}")
     p_backup_settings.add_argument("--json", action="store_true", dest="as_json",
                                    help="machine-readable: one compact JSON line")
+
+    p_backup_status = sub.add_parser(
+        "backup-status", description=_d(
+            "the backup panel's own live health read: timers, vault dump/base-backup "
+            "counts, disk headroom, prune-ladder tiers, manifest state — the same "
+            "backup_status composition Function the CMD-K panel calls, called directly "
+            "(no MCP tool wraps its own vault/backups path overrides)"),
+        epilog="example: osiris backup-status\n"
+               "example: osiris backup-status --vault /tmp/vault-check --json")
+    p_backup_status.add_argument("--vault", default=None,
+                                 help="override the vault path this reads from "
+                                      "(defaults to the configured/production path)")
+    p_backup_status.add_argument("--backups", default=None,
+                                 help="override the backups directory this reads from")
+    p_backup_status.add_argument("--json", action="store_true", dest="as_json",
+                                 help="machine-readable: one compact JSON line")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
         "narrow or correct a LIVE practice's "
@@ -8972,8 +9124,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "backup-settings":
         return asyncio.run(cmd_backup_settings(
             args.action, vault_path=args.vault_path, timer_schedules=args.timer_schedules,
-            offbox_repositories=args.offbox_repositories, because=args.because,
+            offbox_repositories=args.offbox_repositories, timer=args.timer,
+            offload_add=args.offload_add, offload_kind=args.offload_kind,
+            offload_target=args.offload_target, offload_mountpoint=args.offload_mountpoint,
+            offload_schedule=args.offload_schedule, offload_disabled=args.offload_disabled,
+            offload_remove=args.offload_remove, because=args.because,
             ruling=args.ruling, actor=args.actor, as_json=args.as_json))
+    if args.command == "backup-status":
+        return asyncio.run(cmd_backup_status(
+            vault=args.vault, backups=args.backups, as_json=args.as_json))
     if args.command == "amend-practice":
         return asyncio.run(cmd_amend_practice(args.ref, args.amendment, actor=args.actor))
     if args.command == "annotate-thread":
