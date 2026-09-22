@@ -2495,7 +2495,7 @@ async def _dispatch_dm_body(
     await spawn(spawn_cwd, _DM_RESUME_PROMPT, resume_session=session_id,
                 model=st.osiris_dm_resume_model or None,
                 allowed_tools=st.osiris_wake_allowed_tools or None)
-    return {"mode": "resumed",
+    return {"mode": "resumed", "session_id": session_id,
             "detail": f"the addressee's own session ({session_id[:8]}) is continued with "
                       "this mail as its next turn — watch the hop in the agents view"}
 
@@ -4168,7 +4168,29 @@ async def _verify_brief_reached_a_turn(
     already bound this seat's `holds` edge to, so the ladder's own occupancy reads find
     the right generation) and returns `{"delivered": False, "nudge": <dispatch_dm's own
     receipt>}` — honest about what was tried and what it found, never a claim of
-    delivery this function never confirmed."""
+    delivery this function never confirmed.
+
+    `delivered_via` (thread 209d55f6, Nebbercracker DM 13255/13284): chowder's own live
+    specimen proved the nudge can genuinely deliver the brief while landing on a
+    DIFFERENT harness session than the one launch just spawned — dispatch_dm's own
+    `mode: "resumed"` continues the addressee's dormant LINEAGE session via `-p
+    --resume`, which is not necessarily the freshest one (Nebbercracker's own empirical
+    check: session 7806f810's transcript grew 69MB two seconds after the nudge — the
+    brief genuinely reached chowder, through his lineage, not a lost delivery). THE
+    DESIGN DECISION THIS FIELD RECORDS: "mint a body, deliver through the lineage" is
+    the accepted shape (dispatch_dm's own lineage-walk resume is exactly the resilient,
+    already-proven mechanism every other DM escalation in this house relies on — forcing
+    delivery onto the literal freshest spawned session instead would fight that
+    mechanism, not improve on it, and this house's own identity model is lineage-based
+    everywhere else too: held_seat/seat_receipt never pin to one generation's session
+    either). So the receipt NAMES which path fired rather than pretending session-exact
+    precision it cannot promise: `"lineage"` when `dispatch_dm`'s own `mode` is
+    `"resumed"` (a dormant, possibly-older session in this SAME lineage, continued);
+    `"direct"` when its `mode` is `"nudged"` (mail injected into an ALREADY-LIVE, still-
+    mounted session — immediately after a fresh launch, that is ordinarily the just-
+    spawned body itself, though this field does not itself re-verify which); omitted
+    (never guessed) for any other outcome (queued/refused/skipped), where delivery did
+    not actually happen through either concrete path."""
     for _ in range(attempts):
         read = await pool.fetchval(
             "SELECT (m.read_at IS NOT NULL) OR EXISTS ("
@@ -4180,7 +4202,13 @@ async def _verify_brief_reached_a_turn(
         await sleep(delay_secs)
     nudge_result = await dispatch_dm(
         pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings)
-    return {"delivered": False, "nudge": nudge_result}
+    out: dict[str, Any] = {"delivered": False, "nudge": nudge_result}
+    nudge_mode = nudge_result.get("mode")
+    if nudge_mode == "resumed":
+        out["delivered_via"] = "lineage"
+    elif nudge_mode == "nudged":
+        out["delivered_via"] = "direct"
+    return out
 
 
 async def resume_seat(
@@ -5324,7 +5352,7 @@ async def dispatch_broadcast(
         await spawn(repo, _RESUME_PROMPT, resume_session=session_id,
                     model=st.osiris_wake_model or None,
                     allowed_tools=st.osiris_wake_allowed_tools or None)
-        return {"mode": "resumed",
+        return {"mode": "resumed", "session_id": session_id,
                 "detail": f"continued the owner's own session ({session_id[:8]})"}
     assert mint_repo_path is not None  # the no-repo branch above already returned otherwise
     repo_path = mint_repo_path
