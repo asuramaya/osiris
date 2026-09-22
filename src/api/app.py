@@ -1575,6 +1575,49 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return await soul_key_restore_drill(p, repo_url=body.repo_url)
 
+    # THE BROWSER RECOVERY MATERIAL DOOR (Thoth mail 13002, THE KEY PANEL piece 2) —
+    # NEW routes only, no edits to Khnum's own soul-key routes above; see
+    # src/orchestrator/soul_key_recovery_material.py's own module docstring for the
+    # full design. Same OPERATOR-ONLY AUTHORITY LAW the KEY DOOR routes above state
+    # (console is localhost, the operator's own hands) — no MCP tool for any of this
+    # either, same reason.
+    @app.post("/soul-key/recovery-material")
+    async def soul_key_recovery_material_route(
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key_recovery_material import issue_recovery_material
+
+        return await issue_recovery_material(p)
+
+    @app.post("/soul-key/recovery-material/complete")
+    async def soul_key_recovery_material_complete_route(
+        body: SoulKeyRecoveryMaterialCompleteBody,
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key_recovery_material import write_recovery_blob
+
+        return write_recovery_blob(
+            token=body.token, credential_id=body.credential_id, salt=body.salt,
+            wrapped_key=body.wrapped_key, key_fingerprint=body.key_fingerprint,
+            rp_id=body.rp_id)
+
+    @app.get("/soul-key/recovery-blob")
+    async def soul_key_recovery_blob_route(
+        p: asyncpg.Pool = Depends(get_pool),
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key_recovery_material import read_recovery_blob
+
+        return await read_recovery_blob(p)
+
+    @app.post("/soul-key/recover-from-browser")
+    async def soul_key_recover_from_browser_route(
+        body: SoulKeyRecoverFromBrowserBody,
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key_recovery_material import recover_from_browser
+
+        return recover_from_browser(
+            raw_key_b64=body.raw_key, key_fingerprint=body.key_fingerprint,
+            resolved_path=body.resolved_path, backend=body.backend)
+
     # THE REPAIRS PANEL'S OWN REST DOOR (thread c89a9873, wave 22) — mirrors the
     # `backfill` MCP tool and the `osiris backfill` CLI command one-for-one, all three
     # calling orchestrator.backfill.run_backfill, never one wrapping another. A dry-run
@@ -2316,6 +2359,37 @@ class SoulKeyRestoreDrillBody(BaseModel):
     """THE KEY DOOR's own restore-drill body — `repo_url` explicit, or every URL
     in `backup.offbox_repositories` when omitted."""
     repo_url: str | None = None
+
+
+class SoulKeyRecoveryMaterialCompleteBody(BaseModel):
+    """THE BROWSER RECOVERY MATERIAL DOOR's own step 2 (Thoth mail 13002) — the
+    browser-wrapped blob, in the exact shape `soul_crypto._enroll_and_wrap` itself
+    produces: `token` from the matching `/soul-key/recovery-material` call,
+    `credential_id`/`salt`/`wrapped_key` all base64url (unpadded, matching Python's
+    own `base64.urlsafe_b64encode`), `key_fingerprint` the sha256(raw key)[:16] hex
+    the browser computed locally, `rp_id` the RP id the credential was created
+    against (see src/orchestrator/soul_key_recovery_material.py's own docstring on
+    why this must match `osiris.local`)."""
+    token: str
+    credential_id: str
+    salt: str
+    wrapped_key: str
+    key_fingerprint: str
+    rp_id: str
+
+
+class SoulKeyRecoverFromBrowserBody(BaseModel):
+    """THE BROWSER RECOVERY MATERIAL DOOR's own reverse-direction step 2 — the
+    browser has already unwrapped the recovered raw key client-side and confirmed
+    its own `key_fingerprint` locally; `resolved_path` is the logical key path
+    `/soul-key/recovery-blob`'s own caller already resolved via `soul_key_status`'s
+    `path` field (never trusted as free text elsewhere — this box's own
+    `soul_key_status` is the only source a caller should ever have gotten it from).
+    `backend` mirrors `soul_key_init`'s own optional override; None auto-selects."""
+    raw_key: str
+    key_fingerprint: str
+    resolved_path: str
+    backend: str | None = None
 
 
 class LayoutMigrateBody(BaseModel):
