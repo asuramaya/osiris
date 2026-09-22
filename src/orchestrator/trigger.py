@@ -3404,22 +3404,66 @@ async def _launch_twin_check(
     any harness row whose sessionId is one of the lineage's own graph sessions, or any
     live agent_mounts row for the lineage, at ANY cwd, refuses the same way. Jesus's live
     shape tonight: its real mind sat at ~/code/jesus while the seat's launch cwd had just
-    become ~/code/REPOS/Godel — the cwd check saw nothing there."""
+    become ~/code/REPOS/Godel — the cwd check saw nothing there.
+
+    A CWD IS NOT UNIQUE TO ONE SEAT, SO A MOUNTS HIT MUST BE OWNED, NOT JUST PRESENT
+    (Nebbercracker's monsterhouse report, DM 13152/13157 — the sweep-seat-trees hazard,
+    w329/w331: two seats can share one tree_cwd by design). The old `agent_mounts WHERE
+    cwd=$1 LIMIT 1` query returned the single freshest live row at that cwd from ANY
+    agent, no matter whose lineage it belonged to — chowder's own holder was stopped,
+    but Dustin's live mount at the SAME shared tree_cwd (chowder's and monsterhouse's
+    other worker seats all bound to one tree) still read as "already-live" for chowder,
+    exactly the two-body-problem class this file's own registry_census docstring warns
+    against (ruling 719ed5b1: occupancy is not identity). With `seat_id`, every candidate
+    row at `launch_cwd` is walked newest-first through `held_seat` (the SAME lineage-wide
+    holds-link authority `identify_agent`'s own doors.py already trusts — never a second
+    copy of that predicate) and REJECTED ONLY ON A POSITIVE MISMATCH — the candidate's own
+    agent confirmed to hold a DIFFERENT seat. A candidate holding no seat AT ALL (no
+    `holds` link ever recorded — the ordinary shape of a first-ever resume whose mount
+    landed before its own claim_name, task #148's contested seam 4's own test) is not
+    evidence it belongs to anybody else, so it still counts as this seat's own body,
+    exactly as before this fix; only a genuinely different seat's holder is skipped.
+    `seat_id=None` (no seat to own the row) keeps the old best-effort freshest-row
+    reading — a caller with no seat has no lineage to check a hit against."""
+    from src.orchestrator.mounts import is_live
+
     try:
         roster = await agents_json(cwd=launch_cwd)
     except (OSError, TimeoutError, ValueError):
         roster = []
     from_harness = next((r for r in roster
                          if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
-    from_mounts_row = await pool.fetchrow(
-        "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
-        "ORDER BY last_seen DESC NULLS LAST LIMIT 1", launch_cwd)
-    from src.orchestrator.mounts import is_live
     from_mounts = None
-    if from_mounts_row is not None and from_mounts_row["last_seen"] is not None:
-        if is_live(from_mounts_row["last_seen"]):
-            from_mounts = {"agent_id": from_mounts_row["agent_id"],
-                           "last_seen": from_mounts_row["last_seen"].isoformat()}
+    if seat_id is not None:
+        from src.orchestrator.seats import held_seat
+
+        candidates = await pool.fetch(
+            "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
+            "ORDER BY last_seen DESC NULLS LAST", launch_cwd)
+        for cand in candidates:
+            if cand["last_seen"] is None or not is_live(cand["last_seen"]):
+                continue
+            held = await held_seat(pool, cand["agent_id"])
+            # REJECT ONLY A POSITIVE MISMATCH (some OTHER seat's own holder), never an
+            # UNKNOWN one: a mind that holds no seat at all yet (no `holds` link ever
+            # recorded — the ordinary shape of a first-ever resume racing its own
+            # claim_name) is not evidence it belongs to anybody else, so it still
+            # counts as this seat's own body, exactly as before this fix. Only
+            # `held["seat_id"]` naming a DIFFERENT seat is the actual signal Dustin's
+            # specimen turns on.
+            if held is not None and held.get("seat_id") != seat_id:
+                continue
+            from_mounts = {"agent_id": cand["agent_id"],
+                           "last_seen": cand["last_seen"].isoformat()}
+            break
+    else:
+        from_mounts_row = await pool.fetchrow(
+            "SELECT agent_id, last_seen FROM agent_mounts WHERE cwd=$1 "
+            "ORDER BY last_seen DESC NULLS LAST LIMIT 1", launch_cwd)
+        if from_mounts_row is not None and from_mounts_row["last_seen"] is not None:
+            if is_live(from_mounts_row["last_seen"]):
+                from_mounts = {"agent_id": from_mounts_row["agent_id"],
+                               "last_seen": from_mounts_row["last_seen"].isoformat()}
     if seat_id and from_harness is None and from_mounts is None:
         from src.orchestrator.agents import _generation
         from src.orchestrator.seats import seat_receipt
