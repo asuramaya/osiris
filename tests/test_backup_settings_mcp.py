@@ -9,8 +9,20 @@ test_settle.py's own tools already use.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+import pytest
 from src.actions.core import Actions
+
+
+@pytest.fixture(autouse=True)
+def _vault_path_always_present_mount(monkeypatch: Any) -> None:
+    """Same reasoning as test_backup_settings.py's own identical fixture — this file
+    proves the MCP tool wrapper's own actor/routing, not the hot-path mount law
+    (test_backup_validation.py's own job)."""
+    from src.orchestrator import backup_validation
+
+    monkeypatch.setattr(backup_validation, "_is_always_present_mountpoint", lambda p: True)
 
 
 class _Ctx:
@@ -57,14 +69,16 @@ async def test_backup_settings_tool_operator_write_succeeds(
 
     saved_pool = srv._pool
     ctx = await _mounted_ctx(actions, tmp_path, "operator")
+    vault = tmp_path / "osiris-vault"
+    vault.mkdir()
     try:
         out = await srv.backup_settings(
-            action="write", vault_path="/mnt/nas/osiris-vault",
+            action="write", vault_path=str(vault),
             because="operator switching targets", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out["vault_path"] == "/mnt/nas/osiris-vault"
+    assert out["vault_path"] == str(vault)
 
 
 async def test_backup_settings_tool_worker_write_without_ruling_refused(

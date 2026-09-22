@@ -205,11 +205,15 @@ BACKUP_TIMER_UNITS: tuple[str, ...] = (
 
 
 def _validate_offbox_repositories(value: Any) -> str | None:
-    """Restores the exact required-field check `backup_settings.py`'s own bespoke
-    `_validate` used to run — the generic `records` validator (settings_service.py's
-    `_validate_value`) only type-checks a field when it's PRESENT, never requires one,
-    so a per-spec `validate` callable is where "url and enabled are mandatory" still
-    lives, same division of labor the registry's own docstring describes."""
+    """DEPRECATED shape (see `_validate_offload_targets` below, THE BACKUP TOPOLOGY /
+    INTERMITTENT TARGETS, Thoth mail 12812) — kept validating exactly as before so an
+    old caller/UI that still writes this key keeps its existing contract; new writes
+    belong on `backup.offload_targets` instead. Restores the exact required-field check
+    `backup_settings.py`'s own bespoke `_validate` used to run — the generic `records`
+    validator (settings_service.py's `_validate_value`) only type-checks a field when
+    it's PRESENT, never requires one, so a per-spec `validate` callable is where "url
+    and enabled are mandatory" still lives, same division of labor the registry's own
+    docstring describes."""
     if not isinstance(value, list):
         return None  # the generic type check already covers "must be a list"
     for i, r in enumerate(value):
@@ -219,6 +223,54 @@ def _validate_offbox_repositories(value: Any) -> str | None:
             return f"offbox_repositories[{i}] needs a non-empty string 'url'"
         if not isinstance(r.get("enabled"), bool):
             return f"offbox_repositories[{i}] needs a boolean 'enabled'"
+    return None
+
+
+def _validate_offload_targets(value: Any) -> str | None:
+    """THE BACKUP TOPOLOGY / INTERMITTENT TARGETS (Thoth mail 12812, operator ruling
+    be21384a): this box is a laptop — an 8 TB drive only when docked, a NAS only on
+    Tailscale/LAN — so a target models WHERE it lives, not just a URL. `name` is the
+    stable handle a runner/panel addresses it by (unique across the list); `kind` is
+    'local' (a filesystem path under a mountpoint that comes and goes) or 'restic' (a
+    restic repository URL, reachable or not regardless of anything mounted locally);
+    `expected_mountpoint` is REQUIRED for 'local' (the presence check's own anchor,
+    src/orchestrator/backup_validation.py) and must be absent/null for 'restic' (a
+    restic URL names its own reachability, no local mountpoint to check); `schedule`
+    is OnCalendar=-shaped, same convention as the five backup-lane timers;
+    `path_or_url`/`enabled` are required on every kind. Shape only here — whether a
+    'local' target's `expected_mountpoint` is ACTUALLY mounted right now, or a
+    'restic' target's `path_or_url` has valid restic syntax, is `backup_validation.py`'s
+    own job at write/read time, never this settings-shape gate's."""
+    if not isinstance(value, list):
+        return None  # the generic type check already covers "must be a list"
+    names: set[str] = set()
+    for i, t in enumerate(value):
+        if not isinstance(t, dict):
+            continue  # the generic check already covers "each item must be an object"
+        name = t.get("name")
+        if not isinstance(name, str) or not name:
+            return f"offload_targets[{i}] needs a non-empty string 'name'"
+        if name in names:
+            return f"offload_targets[{i}] has duplicate name {name!r} — names must be unique"
+        names.add(name)
+        kind = t.get("kind")
+        if kind not in ("local", "restic"):
+            return f"offload_targets[{i}] ({name!r}) needs kind='local' or 'restic', got {kind!r}"
+        if not isinstance(t.get("path_or_url"), str) or not t["path_or_url"]:
+            return f"offload_targets[{i}] ({name!r}) needs a non-empty string 'path_or_url'"
+        mountpoint = t.get("expected_mountpoint")
+        if kind == "local":
+            if not isinstance(mountpoint, str) or not mountpoint:
+                return (f"offload_targets[{i}] ({name!r}) is kind='local' and needs a "
+                        "non-empty string 'expected_mountpoint'")
+        elif mountpoint is not None:
+            return (f"offload_targets[{i}] ({name!r}) is kind='restic' — "
+                    "'expected_mountpoint' must be absent or null, restic names its own "
+                    "reachability")
+        if not isinstance(t.get("schedule"), str) or not t["schedule"]:
+            return f"offload_targets[{i}] ({name!r}) needs a non-empty string 'schedule'"
+        if not isinstance(t.get("enabled"), bool):
+            return f"offload_targets[{i}] ({name!r}) needs a boolean 'enabled'"
     return None
 
 
@@ -246,6 +298,18 @@ _BACKUP_SETTINGS: tuple[SettingSpec, ...] = (
                item_shape={"name": "str", "url": "str", "schedule": "schedule",
                           "enabled": "bool"},
                validate=_validate_offbox_repositories,
+               authority="operator_or_ruling", requires_because=True,
+               consequence="high", write_name="backup_settings"),
+    # REPLACES offbox_repositories (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, Thoth
+    # mail 12812) — offbox_repositories itself is left in the registry, unused by any
+    # new write path, so old rows stay readable (get_backup_settings synthesizes
+    # offload_targets from them on read when this key has never been set); dropping
+    # the old spec entirely is its own separate act this fold doesn't make.
+    SettingSpec("backup.offload_targets", "records", [], effect="next_deploy",
+               item_shape={"name": "str", "kind": "enum", "path_or_url": "str",
+                          "expected_mountpoint": "str", "schedule": "schedule",
+                          "enabled": "bool"},
+               validate=_validate_offload_targets,
                authority="operator_or_ruling", requires_because=True,
                consequence="high", write_name="backup_settings"),
 )

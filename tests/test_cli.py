@@ -4947,19 +4947,24 @@ async def test_cmd_backup_settings_get_reports_the_seeded_defaults(actions: Acti
     assert "timer_schedules" in buf.getvalue()
 
 
-async def test_cmd_backup_settings_write_the_operator_writes_freely(actions: Actions) -> None:
+async def test_cmd_backup_settings_write_the_operator_writes_freely(
+    actions: Actions, tmp_path: Path, monkeypatch: Any,
+) -> None:
     import io
     from contextlib import redirect_stdout
 
+    from src.orchestrator import backup_validation
+
+    monkeypatch.setattr(backup_validation, "_is_always_present_mountpoint", lambda p: True)
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_backup_settings(
-            "write", vault_path="/mnt/backup-vault", because="moved the vault",
+            "write", vault_path=str(tmp_path), because="moved the vault",
             actor="operator", pool=actions.pool)
     assert out == 0
     from src.orchestrator.backup_settings import get_backup_settings
 
-    assert (await get_backup_settings(actions.pool))["vault_path"] == "/mnt/backup-vault"
+    assert (await get_backup_settings(actions.pool))["vault_path"] == str(tmp_path)
 
 
 async def test_cmd_backup_settings_write_a_worker_with_no_ruling_is_refused(
