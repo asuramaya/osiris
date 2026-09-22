@@ -663,10 +663,13 @@ function settingsEffectProse(effect) {
   }
   return effect || '';
 }
-var SETTINGS_LIST = null;
-async function renderSettingsPanel() {
-  const container = $('result'); showPanel();
-  $('entity-taxonomy-bar').style.display = 'none';
+var SETTINGS_LIST = null, SETTINGS_CONTAINER_ID = 'result';
+// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section (REGISTRY) too — same
+// containerId-tracking pattern renderKeyInto/renderOffloadInto above already use.
+async function renderSettingsInto(containerId) {
+  SETTINGS_CONTAINER_ID = containerId;
+  var container = $(containerId);
+  if (!container) return;
   container.innerHTML = '<div class="o-empty" style="padding:40px">Loading settings…</div>';
   try {
     SETTINGS_LIST = (await fetch('/settings').then(r => r.json())).settings || [];
@@ -675,6 +678,11 @@ async function renderSettingsPanel() {
     return;
   }
   container.innerHTML = renderSettingsPanelHtml(SETTINGS_LIST);
+}
+async function renderSettingsPanel() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  await renderSettingsInto('result');
 }
 function settingsFieldInput(item) {
   var id = 'setting-val-' + item.key;
@@ -771,7 +779,7 @@ async function saveSetting(key) {
     return;
   }
   setStatus(key + ' saved' + (res.note ? ' — ' + res.note : '') + '.');
-  renderSettingsPanel();
+  renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
 // THE SECRETS ROTATE ACT's own confirm-then-POST door (thread f4498ab304e4's follow-up,
 // Thoth mail 10441) — deliberately NOT saveSetting's own shape: a secret_ref field has
@@ -803,7 +811,7 @@ async function rotateSecret(key) {
     return;
   }
   setStatus(key + ' rotated' + (res.note ? ' — ' + res.note : '') + '.');
-  renderSettingsPanel();
+  renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
 
 // ── Repairs Panel (thread c89a9873, wave 22, ruling 7be61879) ─────────────────────────
@@ -915,10 +923,17 @@ function keyAgeProse(seconds) {
   if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
   return Math.round(seconds / 86400) + 'd ago';
 }
-var KEY_STATUS = null;
-async function renderKeyPanel() {
-  const container = $('result'); showPanel();
-  $('entity-taxonomy-bar').style.display = 'none';
+var KEY_STATUS = null, KEY_CONTAINER_ID = 'result';
+// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section rather than re-implementing
+// it: renderKeyInto(containerId) is the shared fetch+render, tracking KEY_CONTAINER_ID
+// so every action handler's own "refresh after success" call (renderKeyInto(KEY_
+// CONTAINER_ID)) lands back in whichever container is currently showing it — the
+// standalone panel (#result) or the pane's own embedded section — without either
+// context needing its own copy of this logic.
+async function renderKeyInto(containerId) {
+  KEY_CONTAINER_ID = containerId;
+  var container = $(containerId);
+  if (!container) return;
   container.innerHTML = '<div class="o-empty" style="padding:40px">Loading key status…</div>';
   var res;
   try {
@@ -931,11 +946,16 @@ async function renderKeyPanel() {
     container.innerHTML = '<div style="padding:16px;max-width:700px;margin:0 auto">' +
       '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
       '<div class="o-empty" style="padding:40px">Key door not deployed yet — build lands once the ' +
-      'operator mints the credential. <button class="iconbtn" onclick="renderKeyPanel()">Check again</button></div></div>';
+      'operator mints the credential. <button class="iconbtn" onclick="renderKeyInto(KEY_CONTAINER_ID)">Check again</button></div></div>';
     return;
   }
   KEY_STATUS = await res.json();
   container.innerHTML = renderKeyPanelHtml(KEY_STATUS);
+}
+async function renderKeyPanel() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  await renderKeyInto('result');
 }
 function renderKeyPanelHtml(s) {
   var enrollBtn = (s.present && (s.recovery_paths_enrolled || []).length === 0)
@@ -983,7 +1003,7 @@ async function initKey() {
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) { setStatus('Init failed: ' + res.error); return; }
   setStatus('Key initialized (' + res.backend + ').');
-  renderKeyPanel();
+  renderKeyInto(KEY_CONTAINER_ID);
 }
 async function rotateKey() {
   if (!confirm('Rotate the soul key? Existing rows are re-wrapped under the new key; the ' +
@@ -996,7 +1016,7 @@ async function rotateKey() {
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) { setStatus('Rotate failed: ' + res.error); return; }
   setStatus('Rotation begun — re-wrap census above. Finish once legacy_plaintext_rows reads 0.');
-  renderKeyPanel();
+  renderKeyInto(KEY_CONTAINER_ID);
 }
 async function finishKeyRotate() {
   var out = $('key-out'); if (out) out.textContent = 'finishing…';
@@ -1010,7 +1030,7 @@ async function finishKeyRotate() {
     return;
   }
   setStatus('Rotation finished (' + res.backend + ').');
-  renderKeyPanel();
+  renderKeyInto(KEY_CONTAINER_ID);
 }
 async function restoreDrillKey() {
   var out = $('key-out'); if (out) out.textContent = 'drilling every offbox repository…';
@@ -1163,7 +1183,7 @@ async function enrollRecoveryBrowser() {
     if (out) out.textContent = JSON.stringify(res, null, 2);
     if (res.error) { setStatus('Enroll failed: ' + res.error); return; }
     setStatus('Recovery enrolled in this browser.');
-    renderKeyPanel();
+    renderKeyInto(KEY_CONTAINER_ID);
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
     setStatus('Enroll failed: ' + ((e && e.message) || e));
@@ -1217,7 +1237,7 @@ async function recoverKeyBrowser() {
     if (out) out.textContent = JSON.stringify(res, null, 2);
     if (res.error) { setStatus('Recover failed: ' + res.error); return; }
     setStatus('Key recovered and sealed (' + res.backend + ').');
-    renderKeyPanel();
+    renderKeyInto(KEY_CONTAINER_ID);
   } catch (e) {
     if (out) out.textContent = String((e && e.message) || e);
     setStatus('Recover failed: ' + ((e && e.message) || e));
@@ -1233,10 +1253,14 @@ async function recoverKeyBrowser() {
 // section already uses — no separate add/remove endpoint exists. vault_path stays
 // read-only here (its own editable field lives in Settings, one write door, never two).
 // Reached via CMD-K ("Offload Targets…").
-var OFFLOAD_ROWS = null, OFFLOAD_VAULT = null;
-async function renderOffloadPanel() {
-  const container = $('result'); showPanel();
-  $('entity-taxonomy-bar').style.display = 'none';
+var OFFLOAD_ROWS = null, OFFLOAD_VAULT = null, OFFLOAD_CONTAINER_ID = 'result';
+// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section too: renderOffloadInto
+// tracks OFFLOAD_CONTAINER_ID so the row-editing helpers below (which used to hard-
+// code #result) write back into whichever container currently shows this panel.
+async function renderOffloadInto(containerId) {
+  OFFLOAD_CONTAINER_ID = containerId;
+  var container = $(containerId);
+  if (!container) return;
   container.innerHTML = '<div class="o-empty" style="padding:40px">Loading offload targets…</div>';
   var settings;
   try {
@@ -1248,6 +1272,11 @@ async function renderOffloadPanel() {
   OFFLOAD_ROWS = (settings.offload_targets || []).map(function(t) { return Object.assign({}, t); });
   OFFLOAD_VAULT = settings.vault_path;
   container.innerHTML = renderOffloadPanelHtml();
+}
+async function renderOffloadPanel() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  await renderOffloadInto('result');
 }
 function offloadPresenceCell(t) {
   if (t.kind !== 'local') {
@@ -1284,7 +1313,7 @@ function renderOffloadPanel_refreshRow(i) {
   // kind flipped client-side only — re-render so the mountpoint field's disabled
   // state matches, without losing any other row's in-progress edits.
   syncOffloadRowsFromDom();
-  $('result').innerHTML = renderOffloadPanelHtml();
+  $(OFFLOAD_CONTAINER_ID).innerHTML = renderOffloadPanelHtml();
 }
 function syncOffloadRowsFromDom() {
   (OFFLOAD_ROWS || []).forEach(function(t, i) {
@@ -1302,12 +1331,12 @@ function addOffloadRow() {
   syncOffloadRowsFromDom();
   OFFLOAD_ROWS.push({ name: '', kind: 'local', path_or_url: '', expected_mountpoint: null,
                        schedule: '', enabled: false, presence: null });
-  $('result').innerHTML = renderOffloadPanelHtml();
+  $(OFFLOAD_CONTAINER_ID).innerHTML = renderOffloadPanelHtml();
 }
 function removeOffloadRow(i) {
   syncOffloadRowsFromDom();
   OFFLOAD_ROWS.splice(i, 1);
-  $('result').innerHTML = renderOffloadPanelHtml();
+  $(OFFLOAD_CONTAINER_ID).innerHTML = renderOffloadPanelHtml();
 }
 function renderOffloadPanelHtml() {
   var rows = (OFFLOAD_ROWS || []).map(function(t, i) { return offloadRowHtml(t, i); }).join('');
@@ -1338,7 +1367,276 @@ async function saveOffloadTargets() {
   }
   if (out) out.textContent = res.warnings ? 'Saved. Warnings: ' + JSON.stringify(res.warnings) : 'Saved.';
   setStatus('Offload targets saved.');
-  renderOffloadPanel();
+  renderOffloadInto(OFFLOAD_CONTAINER_ID);
+}
+
+// ── THE SETTINGS PANE (Thoth mail 13350) ────────────────────────────────────────────
+// ONE console pane, five embedded sections, replacing the three formerly-separate
+// palette panels (see POWER_TOOLS' own comment above). Every section reads through an
+// EXISTING REST door except four genuinely new thin ones this tip adds — no read door
+// existed for these facts at all before now: GET /restic-key/status, GET
+// /deploy-status, GET /operator/desk (JSON; the pre-existing /desk route only ever
+// served server-rendered HTML), POST /operator/desk/reply. Every section degrades
+// independently — one door's own failure/404 never blanks the rest of the pane, same
+// "unavailable, not silent" law compositions.py's own _fn_backup_status already holds
+// per-section. Reached via CMD-K ("Settings") and the header's own gear-icon link.
+async function renderSettingsPane() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  container.innerHTML =
+    '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Settings</h2>' +
+    settingsSectionShell('key', 'Key') +
+    settingsSectionShell('offload', 'Backup &amp; Offload') +
+    settingsSectionShell('registry', 'Registry') +
+    settingsSectionShell('desk', 'Operator Desk') +
+    settingsSectionShell('box', 'The Box') +
+    '</div>';
+  await Promise.all([
+    renderSettingsSectionKey(), renderSettingsSectionOffload(),
+    renderSettingsSectionRegistry(), renderSettingsSectionDesk(), renderSettingsSectionBox(),
+  ]);
+}
+function settingsSectionShell(id, title) {
+  return '<section style="margin-bottom:28px;border-top:1px solid var(--border);padding-top:16px">' +
+    '<h3 style="font-size:11px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);margin-bottom:8px">' +
+    title + '</h3><div id="settings-sec-' + id + '" class="o-faint">Loading…</div></section>';
+}
+
+// --- section 1: KEY — the existing Key panel, embedded not re-implemented -------------
+async function renderSettingsSectionKey() {
+  await renderKeyInto('settings-sec-key');
+}
+
+// --- section 2: BACKUP & OFFLOAD — the existing Offload panel + a read-only backup-
+// status view (timers set-vs-took-effect, per-target last offload) off the existing
+// backup_status Function (POST /compositions/run-spec, no new route needed) ----------
+async function renderSettingsSectionOffload() {
+  var container = $('settings-sec-offload');
+  if (!container) return;
+  container.innerHTML = '<div id="settings-offload-targets"></div>' +
+    '<div id="settings-backup-status" class="o-faint" style="margin-top:16px">Loading backup status…</div>';
+  await renderOffloadInto('settings-offload-targets');
+  var out = $('settings-backup-status');
+  if (!out) return;
+  var status;
+  try {
+    var res = await fetch('/compositions/run-spec', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ spec: { op: 'function', name: 'backup_status', args: {} },
+                             name: 'backup_status' }),
+    }).then(function(r){ return r.json(); });
+    status = res.error ? { error: res.error } : (res.items || {});
+  } catch (e) {
+    status = { error: 'backup status unavailable' };
+  }
+  if (status.error) { out.textContent = status.error; return; }
+  out.innerHTML = renderBackupStatusHtml(status);
+}
+function renderBackupStatusHtml(status) {
+  var timerRows = (status.timers || []).map(function(t) {
+    var mismatch = t.configured_schedule && t.configured_schedule !== t.schedule;
+    var configuredCell = t.configured_schedule
+      ? (mismatch
+         ? '<span style="color:#e5534b" title="configured but not taken effect yet — needs an osiris deploy">' +
+           esc(t.configured_schedule) + '</span>'
+         : esc(t.configured_schedule))
+      : '<span class="o-faint">(default)</span>';
+    return '<tr><td>' + esc(t.label || t.unit) + '</td>' +
+      '<td><code>' + esc(t.schedule || '(none)') + '</code></td>' +
+      '<td>' + configuredCell + '</td>' +
+      '<td class="o-faint">' + esc(t.active_state || '') + '</td></tr>';
+  }).join('');
+  var targets = (status.offbox && status.offbox.offload_targets) || [];
+  var targetRows = targets.map(function(t) {
+    var presence = t.kind === 'local'
+      ? (t.presence ? (t.presence.present ? '● present' : '○ absent') : '—')
+      : '<span class="o-faint" title="reachability is a network fact this door never checks by design">—</span>';
+    return '<tr><td>' + esc(t.name) + '</td><td>' + esc(t.kind) + '</td><td>' + presence + '</td>' +
+      '<td class="o-faint">' + esc(t.last_successful_offload || 'never') + '</td>' +
+      '<td class="o-faint">' + esc(t.last_error || '') + '</td></tr>';
+  }).join('');
+  return '<div class="o-faint" style="margin-bottom:4px">As of ' + esc(status.as_of || '') + '</div>' +
+    '<table class="ee-table"><thead><tr><th>Timer</th><th>Schedule (live)</th><th>Configured</th>' +
+    '<th>State</th></tr></thead><tbody>' + timerRows + '</tbody></table>' +
+    (targetRows ? '<table class="ee-table" style="margin-top:8px"><thead><tr><th>Target</th><th>Kind</th>' +
+     '<th>Presence</th><th>Last successful offload</th><th>Last error</th></tr></thead><tbody>' +
+     targetRows + '</tbody></table>' : '');
+}
+
+// --- section 3: REGISTRY — the existing Settings-registry panel, embedded -------------
+async function renderSettingsSectionRegistry() {
+  await renderSettingsInto('settings-sec-registry');
+}
+
+// --- section 4: OPERATOR DESK — inbox(project='operator') in bands, settle-able in
+// place (GET/POST /operator/desk, /desk/settle) + a fold sub-band over the EXISTING
+// merge-candidates tray (GET/POST /merge-candidates) — a copy-pasteable /merge line,
+// never an auto-executed merge (constitution #1: identity merges are review-gated,
+// always; "reject" is the only in-place write this sub-band offers). -----------------
+async function renderSettingsSectionDesk() {
+  var container = $('settings-sec-desk');
+  if (!container) return;
+  container.innerHTML = 'Loading…';
+  var desk, merges;
+  try { desk = await fetch('/operator/desk').then(function(r){ return r.json(); }); }
+  catch (e) { container.innerHTML = '<div class="o-empty">Could not load the operator desk.</div>'; return; }
+  try { merges = await fetch('/merge-candidates').then(function(r){ return r.json(); }); }
+  catch (e) { merges = []; }
+  container.innerHTML = renderDeskHtml(desk) + renderMergeCandidatesHtml(merges);
+}
+function deskCardHtml(c, band) {
+  var foldNote = c.thread_folded
+    ? '<div class="o-faint">+' + c.thread_folded.count + ' earlier in this thread (settles with this card)</div>'
+    : '';
+  var replyBox = band === 'decision'
+    ? '<div style="margin-top:6px"><input id="desk-reply-' + c.id + '" class="filter" ' +
+      'placeholder="Reply…" style="width:60%" /> <button class="iconbtn" ' +
+      'onclick="replyDeskCard(' + c.id + ')">Reply</button></div>'
+    : '';
+  var foldedIdsAttr = c.thread_folded ? ' data-folded="' + esc(JSON.stringify(c.thread_folded.ids)) + '"' : '';
+  return '<div style="border-bottom:1px solid var(--border);padding:8px 0">' +
+    '<div><strong>' + esc(c.from || '') + '</strong> <span class="o-faint">' + esc(c.when || '') + '</span></div>' +
+    '<div>' + esc((c.body || '').slice(0, 400)) + '</div>' + foldNote + replyBox +
+    '<button class="iconbtn" style="margin-top:6px" data-id="' + c.id + '"' + foldedIdsAttr +
+    ' onclick="ackDeskCard(this)">Ack</button></div>';
+}
+function deskBandHtml(title, cards, band) {
+  if (!cards || !cards.length) return '';
+  return '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
+    title + ' (' + cards.length + ')</h4>' +
+    cards.map(function(c) { return deskCardHtml(c, band); }).join('');
+}
+function renderDeskHtml(desk) {
+  if (desk.error) return '<div class="o-empty">' + esc(desk.error) + '</div>';
+  var dimmed = (desk.dimmed || []).map(function(d) {
+    return '<div class="o-faint">' + esc(d.headline) + ' — moot: ' + esc(d.moot) + '</div>';
+  }).join('');
+  var queue = desk.your_queue ? (desk.your_queue.threads || []).map(function(t) {
+    return '<div>' + esc(t.summary || t.id) + '</div>';
+  }).join('') : '';
+  return '<div class="o-faint" style="margin-bottom:8px">owed: ' + (desk.owed || 0) +
+    ' · letters: ' + (desk.letters || 0) + '</div>' +
+    deskBandHtml('Needs decision', desk.needs_decision, 'decision') +
+    deskBandHtml('Blocked on hands', desk.needs_hands, 'hands') +
+    deskBandHtml('FYI', desk.fyi, 'fyi') +
+    (queue ? '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
+     'Your queue</h4>' + queue : '') +
+    (dimmed ? '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:12px 0 4px">' +
+     'Dimmed</h4>' + dimmed : '');
+}
+async function ackDeskCard(btn) {
+  var id = parseInt(btn.getAttribute('data-id'), 10);
+  var folded = btn.getAttribute('data-folded');
+  var ids = [id].concat(folded ? JSON.parse(folded) : []);
+  var res = await fetch('/desk/settle', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ ids: ids }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) { setStatus('Ack failed: ' + res.error); return; }
+  setStatus('Settled ' + res.settled + '.');
+  renderSettingsSectionDesk();
+}
+async function replyDeskCard(id) {
+  var input = $('desk-reply-' + id);
+  if (!input) return;
+  var body = input.value.trim();
+  if (!body) return;
+  var res = await fetch('/operator/desk/reply', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ id: id, body: body }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) { setStatus('Reply failed: ' + res.error); return; }
+  setStatus('Reply sent.');
+  renderSettingsSectionDesk();
+}
+function mergeLine(c) {
+  return '/merge ' + c.a_id + ' ' + c.b_id + ' because: ' + c.a_label + ' / ' + c.b_label +
+    ' look like the same ' + c.a_type;
+}
+function renderMergeCandidatesHtml(list) {
+  if (!list || !list.length) return '';
+  var rows = list.map(function(c) {
+    var line = mergeLine(c);
+    return '<div style="border-bottom:1px solid var(--border);padding:8px 0">' +
+      '<div>' + esc(c.a_label) + ' <span class="o-faint">(' + esc(c.a_type) + ')</span> ↔ ' +
+      esc(c.b_label) + ' <span class="o-faint">(' + esc(c.b_type) + ')</span> — score ' +
+      c.score.toFixed(2) + '</div>' +
+      '<input readonly value="' + esc(line) + '" style="width:80%;font-family:monospace;font-size:11px" ' +
+      'onclick="this.select()" /> <button class="iconbtn" onclick="copyMergeLine(this)" ' +
+      'data-line="' + esc(line) + '">Copy</button> ' +
+      '<button class="iconbtn" data-id="' + c.id + '" onclick="rejectMergeCandidate(this)">Reject</button></div>';
+  }).join('');
+  return '<h4 style="font-size:11px;text-transform:uppercase;color:var(--muted);margin:16px 0 4px">' +
+    'Fold candidates — merges stay the operator’s own act</h4>' + rows;
+}
+function copyMergeLine(btn) {
+  var line = btn.getAttribute('data-line');
+  try { navigator.clipboard.writeText(line); setStatus('Copied.'); }
+  catch (e) { setStatus('Copy failed — select the line by hand.'); }
+}
+async function rejectMergeCandidate(btn) {
+  var id = btn.getAttribute('data-id');
+  var res = await fetch('/merge-candidates/' + id + '/resolve', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ decision: 'rejected' }),
+  }).then(function(r){ return r.json(); });
+  setStatus('Candidate ' + (res.resolved || 'updated') + '.');
+  renderSettingsSectionDesk();
+}
+
+// --- section 5: THE BOX — a hands-on-the-box checklist, read live off four existing
+// doors + the two new ones (restic-key status, deploy-status) --------------------------
+async function renderSettingsSectionBox() {
+  var container = $('settings-sec-box');
+  if (!container) return;
+  container.innerHTML = 'Loading…';
+  var soulKey, resticKey, backupSettings, deployStatus;
+  try {
+    var r1 = await fetch('/soul-key/status');
+    soulKey = r1.status === 404 ? { present: false, backend: 'missing (door not deployed)' } : await r1.json();
+  } catch (e) { soulKey = { error: 'unreachable' }; }
+  try { resticKey = await fetch('/restic-key/status').then(function(r){ return r.json(); }); }
+  catch (e) { resticKey = { error: 'unreachable' }; }
+  try { backupSettings = await fetch('/backup-settings').then(function(r){ return r.json(); }); }
+  catch (e) { backupSettings = { error: 'unreachable' }; }
+  try { deployStatus = await fetch('/deploy-status').then(function(r){ return r.json(); }); }
+  catch (e) { deployStatus = { error: 'unreachable' }; }
+  container.innerHTML = renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus);
+}
+function boxRow(label, ok, detail) {
+  var dot = ok === true ? '<span style="color:#2ea043">●</span>'
+    : (ok === false ? '<span class="o-faint">○</span>' : '<span style="color:#e5534b">?</span>');
+  return '<tr><td>' + dot + ' ' + esc(label) + '</td><td class="o-faint">' + (detail || '') + '</td></tr>';
+}
+function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {
+  var rows = '';
+  rows += boxRow('Soul key present', !!(soulKey && soulKey.present),
+    soulKey && soulKey.backend ? esc(soulKey.backend) : (soulKey && soulKey.error ? esc(soulKey.error) : ''));
+  rows += boxRow('Restic credential present', !!(resticKey && resticKey.present),
+    resticKey && resticKey.backend ? esc(resticKey.backend) : (resticKey && resticKey.error ? esc(resticKey.error) : ''));
+  var targets = (backupSettings && backupSettings.offload_targets) || [];
+  targets.filter(function(t) { return t.kind === 'local'; }).forEach(function(t) {
+    rows += boxRow('Local target "' + t.name + '" mounted', t.presence ? !!t.presence.present : null,
+      t.presence
+        ? (t.presence.present
+           ? (t.presence.free_bytes != null ? Math.round(t.presence.free_bytes / 1024 ** 3) + ' GB free' : '')
+           : 'not mounted now — expected for an intermittent target')
+        : 'no expected_mountpoint set');
+  });
+  targets.filter(function(t) { return t.kind === 'restic'; }).forEach(function(t) {
+    rows += boxRow('Restic target "' + t.name + '" reachable', null,
+      'reachability is never probed live by design — see Backup &amp; Offload above for its last successful offload');
+  });
+  if (!targets.length) rows += boxRow('Offload targets configured', false, 'none configured yet');
+  var inSync = deployStatus && deployStatus.in_sync;
+  rows += boxRow('Deploy snapshot matches running code',
+    deployStatus && deployStatus.running_sha ? !!inSync : null,
+    deployStatus && deployStatus.running_sha
+      ? ('running ' + deployStatus.running_sha.slice(0, 8) + ' · snapshot ' +
+         (deployStatus.deploy_snapshot_sha ? deployStatus.deploy_snapshot_sha.slice(0, 8) : 'never pinned'))
+      : (deployStatus && deployStatus.error ? esc(deployStatus.error) : ''));
+  return '<table class="ee-table"><tbody>' + rows + '</tbody></table>';
 }
 
 // ── Projects ────────────────────────────────────────────────────────────────
@@ -1534,10 +1832,16 @@ const POWER_TOOLS = [
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
-  { label: 'Settings…', hint: 'Every configuration knob, including backup', cat: 'Admin', run: () => renderSettingsPanel() },
   { label: 'Repairs…', hint: 'The seven backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
-  { label: 'Key…', hint: 'The soul key’s custody status, init/rotate/restore-drill', cat: 'Admin', run: () => renderKeyPanel() },
-  { label: 'Offload Targets…', hint: 'Intermittent backup targets — the 8TB drive, the NAS', cat: 'Admin', run: () => renderOffloadPanel() },
+  // THE SETTINGS PANE (Thoth mail 13350) consolidates the three formerly-separate
+  // "Key…"/"Offload Targets…"/"Settings…" palette entries into ONE destination —
+  // her own words: "Today Ctrl+K reaches Key…, Offload Targets… and Settings… as
+  // separate panels... Build ONE console pane." Each old panel's own renderer
+  // (renderKeyPanel/renderOffloadPanel/renderSettingsPanel) still exists and is
+  // still reachable directly (nothing deleted), just no longer surfaced as its own
+  // separate palette row — the pane below embeds each one's shared fetch+render
+  // (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
+  { label: 'Settings', hint: 'Key, backup & offload, registry, operator desk, the box', cat: 'Admin', run: () => renderSettingsPane() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean

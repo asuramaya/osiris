@@ -25,10 +25,15 @@ _CONSOLE_JS = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console
 # --- the key panel: status fetch degrades cleanly when the door isn't deployed --------
 
 def test_key_panel_degrades_to_a_plain_notice_on_404_not_an_error() -> None:
-    body = _CONSOLE_JS.split("async function renderKeyPanel()", 1)[1][:900]
+    # THE SETTINGS PANE (Thoth mail 13350) embeds this same fetch+render into more than
+    # one container, so the shared implementation lives in renderKeyInto now -- both the
+    # standalone renderKeyPanel() and a pane's own embedded section call it.
+    body = _CONSOLE_JS.split("async function renderKeyInto(containerId) {", 1)[1][:900]
     assert "res.status === 404" in body
     assert "Key door not deployed yet" in body
-    assert "renderKeyPanel()" in body  # the "Check again" button re-runs the same fetch
+    assert "renderKeyInto(KEY_CONTAINER_ID)" in body  # "Check again" re-runs the same fetch
+    assert "await renderKeyInto('result');" in _CONSOLE_JS.split(
+        "async function renderKeyPanel() {", 1)[1][:300]
 
 
 def test_key_panel_status_card_shows_backend_path_and_recovery_paths() -> None:
@@ -63,7 +68,7 @@ def test_init_key_posts_backend_only_no_invented_secret_reveal() -> None:
     body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:700]
     assert "'/soul-key/init'" in body
     assert "backend: backend" in body
-    assert "renderKeyPanel();" in body
+    assert "renderKeyInto(KEY_CONTAINER_ID);" in body
 
 
 def test_rotate_key_begins_without_finish_then_a_separate_finish_call() -> None:
@@ -84,9 +89,13 @@ def test_restore_drill_posts_and_reports_all_ok() -> None:
 # --- the offload targets panel: rows read from the deployed backup-settings shape -----
 
 def test_offload_panel_loads_rows_from_backup_settings() -> None:
-    body = _CONSOLE_JS.split("async function renderOffloadPanel()", 1)[1][:700]
+    # THE SETTINGS PANE (Thoth mail 13350) embeds this section too -- the shared
+    # fetch+render lives in renderOffloadInto(containerId) now.
+    body = _CONSOLE_JS.split("async function renderOffloadInto(containerId) {", 1)[1][:700]
     assert "fetch('/backup-settings')" in body
     assert "settings.offload_targets" in body
+    assert "await renderOffloadInto('result');" in _CONSOLE_JS.split(
+        "async function renderOffloadPanel() {", 1)[1][:300]
 
 
 def test_offload_presence_cell_never_probes_restic_reachability() -> None:
@@ -143,8 +152,13 @@ def test_offload_panel_shows_vault_path_read_only_not_a_second_write_path() -> N
 # --- both panels reachable from CMD-K -------------------------------------------------
 
 def test_both_panels_are_reachable_from_the_command_palette() -> None:
-    body = _CONSOLE_JS.split("const POWER_TOOLS = [", 1)[1][:2500]
-    assert "label: 'Key…'" in body
-    assert "run: () => renderKeyPanel()" in body
-    assert "label: 'Offload Targets…'" in body
-    assert "run: () => renderOffloadPanel()" in body
+    # THE SETTINGS PANE (Thoth mail 13350) consolidated the three formerly-separate
+    # palette rows (Key…/Offload Targets…/Settings…) into ONE "Settings" entry — both
+    # panels below are still reachable, now embedded as that pane's own sections
+    # (see tests/test_settings_pane_ui.py for the full consolidation proof) rather
+    # than each carrying its own standalone palette row.
+    body = _CONSOLE_JS.split("const POWER_TOOLS = [", 1)[1][:2600]
+    assert "label: 'Settings'," in body
+    assert "run: () => renderSettingsPane()" in body
+    assert "async function renderKeyPanel() {" in _CONSOLE_JS
+    assert "async function renderOffloadPanel() {" in _CONSOLE_JS
