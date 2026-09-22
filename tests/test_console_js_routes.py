@@ -327,7 +327,13 @@ def test_backup_panel_is_fully_retired_from_console_js() -> None:
     assert "saveBackupVaultPath" not in _JS
     assert "saveBackupTimerSchedules" not in _JS
     assert "'Backup settings…'" not in _JS
-    assert "fetch('/backup-settings')" not in _JS
+    # the RETIRED panel's own dedicated fetch call is gone -- but the door itself
+    # (GET /backup-settings) didn't move (backup_settings.py's own module docstring:
+    # "storage moved, the door didn't"), and a later, genuinely different caller
+    # legitimately reuses it: the Offload Targets panel (Thoth mail 12811/12814/12985,
+    # tests/test_key_offload_panels.py). This blanket string ban would collide with
+    # that legitimate reuse, so it narrows to the one retired call site's own shape.
+    assert "async function renderBackupPanel(" not in _JS
 
 
 # THE SETTINGS MENU (ruling be1b2e47, thread 7eb26f68 pieces 2+3): a generic view over

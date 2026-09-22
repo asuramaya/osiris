@@ -865,6 +865,249 @@ async function applyRepair(target) {
   setStatus(target + ' applied.');
 }
 
+// ── The Key Panel (Thoth mail 12811/12814/12838/12985, over Khnum's soul-key door) ────
+// Piece 1 only — status card + init/rotate/restore-drill over GET/POST /soul-key/*.
+// Recovery enrollment (piece 2, browser WebAuthn/PRF) is a SEPARATE later tip, gated
+// until Khnum's own key-door tip is deployed (mail 12838's explicit sequencing) — this
+// panel never renders an "enroll" button, only the CLI pointer his own mail (12979)
+// asked for. The routes are not deployed yet (checks-only gate w370c, mail 12964/12985);
+// GET /soul-key/status returning 404 (no route mounted) degrades to a plain notice
+// rather than an error, since "not deployed yet" is the expected common case today,
+// never a broken panel. Reached via CMD-K ("Key…").
+function keyBackendLabel(b) {
+  if (b === 'host-cred') return 'systemd host credential';
+  if (b === 'host+tpm2') return 'systemd host credential + TPM2';
+  if (b === 'file') return 'plain file (no hardware backing)';
+  if (b === 'missing') return 'no key';
+  return b || 'unknown';
+}
+function keyAgeProse(seconds) {
+  if (seconds == null) return '';
+  if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+  if (seconds < 86400) return Math.round(seconds / 3600) + 'h ago';
+  return Math.round(seconds / 86400) + 'd ago';
+}
+var KEY_STATUS = null;
+async function renderKeyPanel() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading key status…</div>';
+  var res;
+  try {
+    res = await fetch('/soul-key/status');
+  } catch (e) {
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not reach the key door.</div>';
+    return;
+  }
+  if (res.status === 404) {
+    container.innerHTML = '<div style="padding:16px;max-width:700px;margin:0 auto">' +
+      '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
+      '<div class="o-empty" style="padding:40px">Key door not deployed yet — build lands once the ' +
+      'operator mints the credential. <button class="iconbtn" onclick="renderKeyPanel()">Check again</button></div></div>';
+    return;
+  }
+  KEY_STATUS = await res.json();
+  container.innerHTML = renderKeyPanelHtml(KEY_STATUS);
+}
+function renderKeyPanelHtml(s) {
+  var warn = s.recovery_warning
+    ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + esc(s.recovery_warning) +
+      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal (hardware ' +
+      'touch required; there is no browser or MCP door for this act).</div>' : '';
+  var legacy = (s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0)
+    ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + s.legacy_plaintext_rows +
+      ' row(s) still under the old key — rotate is not finished until this reads 0.</div>' : '';
+  var rotating = s.rotation_in_flight
+    ? '<div style="margin:8px 0"><span title="a .legacy sibling exists">Rotation in progress.</span> ' +
+      '<button class="iconbtn" onclick="finishKeyRotate()">Finish rotation</button></div>' : '';
+  var actions = !s.present
+    ? '<button class="iconbtn" onclick="initKey()">Init…</button>'
+    : (s.rotation_in_flight ? '' :
+       '<button class="iconbtn" onclick="rotateKey()">Rotate…</button> ' +
+       '<button class="iconbtn" onclick="restoreDrillKey()">Restore drill</button>');
+  return '<div style="padding:16px;max-width:700px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Key</h2>' +
+    '<div class="o-faint" style="margin-bottom:8px">The soul key’s own custody status, over Khnum’s soul-key door.</div>' +
+    '<table class="ee-table"><tbody>' +
+    '<tr><td>Present</td><td>' + (s.present ? 'yes' : 'no') + '</td></tr>' +
+    '<tr><td>Backend</td><td>' + esc(keyBackendLabel(s.backend)) + '</td></tr>' +
+    '<tr><td>Path</td><td><code>' + esc(s.path || '') + '</code></td></tr>' +
+    '<tr><td>Created</td><td>' + esc(keyAgeProse(s.created_age_seconds)) + '</td></tr>' +
+    '<tr><td>Recovery paths enrolled</td><td>' +
+    esc((s.recovery_paths_enrolled || []).join(', ') || 'none') + '</td></tr>' +
+    '</tbody></table>' + warn + legacy + rotating +
+    '<div style="margin-top:12px">' + actions + '</div>' +
+    '<pre id="key-out" class="o-faint" style="white-space:pre-wrap;margin-top:12px"></pre></div>';
+}
+async function initKey() {
+  var backend = prompt('Backend (host-cred / host+tpm2 / file) — leave blank for the door’s own default:');
+  if (backend === null) return;
+  backend = backend.trim() || null;
+  var out = $('key-out'); if (out) out.textContent = 'initializing…';
+  var res = await fetch('/soul-key/init', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ backend: backend }),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+  if (res.error) { setStatus('Init failed: ' + res.error); return; }
+  setStatus('Key initialized (' + res.backend + ').');
+  renderKeyPanel();
+}
+async function rotateKey() {
+  if (!confirm('Rotate the soul key? Existing rows are re-wrapped under the new key; the ' +
+      'old key stays live as .legacy until Finish rotation confirms every row moved. Proceed?')) return;
+  var out = $('key-out'); if (out) out.textContent = 'rotating…';
+  var res = await fetch('/soul-key/rotate', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ finish: false }),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+  if (res.error) { setStatus('Rotate failed: ' + res.error); return; }
+  setStatus('Rotation begun — re-wrap census above. Finish once legacy_plaintext_rows reads 0.');
+  renderKeyPanel();
+}
+async function finishKeyRotate() {
+  var out = $('key-out'); if (out) out.textContent = 'finishing…';
+  var res = await fetch('/soul-key/rotate', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ finish: true }),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+  if (res.error) {
+    setStatus('Finish failed: ' + res.error + (res.census ? ' — rows still outstanding.' : ''));
+    return;
+  }
+  setStatus('Rotation finished (' + res.backend + ').');
+  renderKeyPanel();
+}
+async function restoreDrillKey() {
+  var out = $('key-out'); if (out) out.textContent = 'drilling every offbox repository…';
+  var res = await fetch('/soul-key/restore-drill', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({}),
+  }).then(function(r){ return r.json(); });
+  if (out) out.textContent = JSON.stringify(res, null, 2);
+  if (res.error) { setStatus('Restore drill failed: ' + res.error); return; }
+  setStatus(res.all_ok ? 'Restore drill: all repositories ok.' : 'Restore drill: at least one repository failed — see output.');
+}
+
+// ── The Offload Targets Panel (Thoth mail 12811/12814/12985, ruling be21384a) ─────────
+// One row per backup.offload_targets entry, live presence off GET /backup-settings
+// (local kind: real findmnt-backed present/writable/free_bytes; restic kind: presence
+// is always null by design — reachability is a network fact this door never checks,
+// backup_validation.py's own repeated law). Edits are a single full-array replace
+// through POST /backup-settings, the same write door the Settings panel's own backup
+// section already uses — no separate add/remove endpoint exists. vault_path stays
+// read-only here (its own editable field lives in Settings, one write door, never two).
+// Reached via CMD-K ("Offload Targets…").
+var OFFLOAD_ROWS = null, OFFLOAD_VAULT = null;
+async function renderOffloadPanel() {
+  const container = $('result'); showPanel();
+  $('entity-taxonomy-bar').style.display = 'none';
+  container.innerHTML = '<div class="o-empty" style="padding:40px">Loading offload targets…</div>';
+  var settings;
+  try {
+    settings = await fetch('/backup-settings').then(function(r) { return r.json(); });
+  } catch (e) {
+    container.innerHTML = '<div class="o-empty" style="padding:40px">Could not load backup settings.</div>';
+    return;
+  }
+  OFFLOAD_ROWS = (settings.offload_targets || []).map(function(t) { return Object.assign({}, t); });
+  OFFLOAD_VAULT = settings.vault_path;
+  container.innerHTML = renderOffloadPanelHtml();
+}
+function offloadPresenceCell(t) {
+  if (t.kind !== 'local') {
+    return '<span class="o-faint" title="restic reachability is a network fact this door never checks">—</span>';
+  }
+  var p = t.presence;
+  if (!p) return '<span class="o-faint" title="no expected_mountpoint set">—</span>';
+  var dot = p.present
+    ? '<span style="color:#2ea043" title="mounted now">● present</span>'
+    : '<span class="o-faint" title="not mounted right now — the expected common case for an intermittent target">○ absent</span>';
+  var extra = p.present
+    ? ' <span class="o-faint">' + (p.writable === false ? 'read-only' : 'writable') +
+      (p.free_bytes != null ? ', ' + Math.round(p.free_bytes / 1024 ** 3) + ' GB free' : '') + '</span>'
+    : '';
+  return dot + extra;
+}
+function offloadRowHtml(t, i) {
+  var kindOpts = ['local', 'restic'].map(function(k) {
+    return '<option value="' + k + '"' + (t.kind === k ? ' selected' : '') + '>' + k + '</option>';
+  }).join('');
+  return '<tr>' +
+    '<td><input id="off-name-' + i + '" value="' + esc(t.name || '') + '" style="width:120px" /></td>' +
+    '<td><select id="off-kind-' + i + '" onchange="renderOffloadPanel_refreshRow(' + i + ')">' + kindOpts + '</select></td>' +
+    '<td><input id="off-url-' + i + '" value="' + esc(t.path_or_url || '') + '" style="width:220px" ' +
+    'placeholder="local: abs fs path — restic: repo URL" /></td>' +
+    '<td><input id="off-mount-' + i + '" value="' + esc(t.expected_mountpoint || '') + '" style="width:160px" ' +
+    (t.kind === 'local' ? 'placeholder="expected mountpoint"' : 'placeholder="(local only)" disabled') + ' /></td>' +
+    '<td><input id="off-sched-' + i + '" value="' + esc(t.schedule || '') + '" style="width:140px" placeholder="OnCalendar=" /></td>' +
+    '<td><input type="checkbox" id="off-enabled-' + i + '"' + (t.enabled ? ' checked' : '') + ' /></td>' +
+    '<td>' + offloadPresenceCell(t) + '</td>' +
+    '<td><button class="iconbtn" onclick="removeOffloadRow(' + i + ')">Remove</button></td></tr>';
+}
+function renderOffloadPanel_refreshRow(i) {
+  // kind flipped client-side only — re-render so the mountpoint field's disabled
+  // state matches, without losing any other row's in-progress edits.
+  syncOffloadRowsFromDom();
+  $('result').innerHTML = renderOffloadPanelHtml();
+}
+function syncOffloadRowsFromDom() {
+  (OFFLOAD_ROWS || []).forEach(function(t, i) {
+    var nameEl = $('off-name-' + i);
+    if (!nameEl) return; // row was removed client-side already
+    t.name = nameEl.value;
+    t.kind = $('off-kind-' + i).value;
+    t.path_or_url = $('off-url-' + i).value;
+    t.expected_mountpoint = t.kind === 'local' ? ($('off-mount-' + i).value || null) : null;
+    t.schedule = $('off-sched-' + i).value;
+    t.enabled = $('off-enabled-' + i).checked;
+  });
+}
+function addOffloadRow() {
+  syncOffloadRowsFromDom();
+  OFFLOAD_ROWS.push({ name: '', kind: 'local', path_or_url: '', expected_mountpoint: null,
+                       schedule: '', enabled: false, presence: null });
+  $('result').innerHTML = renderOffloadPanelHtml();
+}
+function removeOffloadRow(i) {
+  syncOffloadRowsFromDom();
+  OFFLOAD_ROWS.splice(i, 1);
+  $('result').innerHTML = renderOffloadPanelHtml();
+}
+function renderOffloadPanelHtml() {
+  var rows = (OFFLOAD_ROWS || []).map(function(t, i) { return offloadRowHtml(t, i); }).join('');
+  return '<div style="padding:16px;max-width:1100px;margin:0 auto">' +
+    '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Offload Targets</h2>' +
+    '<div class="o-faint" style="margin-bottom:4px">Intermittent backup targets — present only when docked or on Tailscale/home LAN ' +
+    '(ruling be21384a). Vault path: <code>' + esc(OFFLOAD_VAULT || '(unset — see Settings)') + '</code></div>' +
+    '<div class="o-faint" style="margin-bottom:8px">The hot path never lives here — this is the ladder’s off-box copy only.</div>' +
+    '<table class="ee-table"><thead><tr><th>Name</th><th>Kind</th><th>Path / URL</th>' +
+    '<th>Expected mountpoint</th><th>Schedule</th><th>Enabled</th><th>Presence</th><th></th></tr></thead>' +
+    '<tbody>' + rows + '</tbody></table>' +
+    '<div style="margin-top:8px"><button class="iconbtn" onclick="addOffloadRow()">+ Add target</button> ' +
+    '<button class="iconbtn" onclick="saveOffloadTargets()">Save</button></div>' +
+    '<pre id="offload-out" class="o-faint" style="white-space:pre-wrap;margin-top:12px"></pre></div>';
+}
+async function saveOffloadTargets() {
+  syncOffloadRowsFromDom();
+  var because = prompt('Why this change? (required)'); if (!because) return;
+  var out = $('offload-out'); if (out) out.textContent = 'saving…';
+  var res = await fetch('/backup-settings', {
+    method: 'POST', headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ offload_targets: OFFLOAD_ROWS, because: because }),
+  }).then(function(r){ return r.json(); });
+  if (res.error) {
+    if (out) out.textContent = res.error;
+    setStatus('Save failed: ' + res.error);
+    return;
+  }
+  if (out) out.textContent = res.warnings ? 'Saved. Warnings: ' + JSON.stringify(res.warnings) : 'Saved.';
+  setStatus('Offload targets saved.');
+  renderOffloadPanel();
+}
+
 // ── Projects ────────────────────────────────────────────────────────────────
 // THE CONSOLE CHROME CLEANUP (thread 0be2f790's own operator-finding follow-up, Thoth DM
 // 10731 piece 1): the left-nav "Projects" surface (renderProjects() + its own status
@@ -1060,6 +1303,8 @@ const POWER_TOOLS = [
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Settings…', hint: 'Every configuration knob, including backup', cat: 'Admin', run: () => renderSettingsPanel() },
   { label: 'Repairs…', hint: 'The seven backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
+  { label: 'Key…', hint: 'The soul key’s custody status, init/rotate/restore-drill', cat: 'Admin', run: () => renderKeyPanel() },
+  { label: 'Offload Targets…', hint: 'Intermittent backup targets — the 8TB drive, the NAS', cat: 'Admin', run: () => renderOffloadPanel() },
 ];
 
 // THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
