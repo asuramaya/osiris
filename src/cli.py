@@ -8,9 +8,11 @@ EXISTING verb rather than re-deriving it:
                                      the operator was handed before this build)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
   osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
-  osiris soul-key-init [--owner]    mint the soul-store encryption key — the ONE
-                                     generator (Thoth DM 9245, wave 17); run once, by a
-                                     human, in their own terminal, before starting
+  osiris soul-key <status|init|     THE KEY DOOR (Thoth mail 12810/12830, wave 17):
+       rotate|restore-drill>        status/init/rotate the soul-store encryption key,
+                                     or drill an off-box backup's restorability —
+                                     init/rotate run once, by a human, in their own
+                                     terminal, before/after (re)starting
                                      osiris-worker/osiris-mcp
   osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
              [--debug]              following trigger.launch_seat's own flip, rulings
@@ -1023,28 +1025,70 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
     return 0
 
 
-# --- soul-key-init ----------------------------------------------------------------------------
+# --- soul-key ---------------------------------------------------------------------------------
 
-async def cmd_soul_key_init(*, owner: str | None = None, as_json: bool = False) -> int:
-    """osiris soul-key-init [--owner USER] — the ONE door that mints the soul-store
-    encryption key (Thoth DM 9245, wave 17): a thin wrapper over
-    `src.ingest.soul_crypto.soul_key_init`, unchanged, meant to be run ONCE by a human in
-    their own terminal — never by the worker or MCP server, which only ever READ an
-    existing key and fail loudly at their own boot when none exists (naming this exact
-    command in the error). No Postgres involved — this is pure filesystem/key
-    generation, no `pool` argument."""
-    from src.ingest.soul_crypto import soul_key_init
+async def cmd_soul_key(
+    action: str, *, owner: str | None = None, path: str | None = None,
+    finish: bool = False, repo_url: str | None = None, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris soul-key <status|init|rotate|restore-drill> — THE KEY DOOR (Thoth mail
+    12810, operator's word "keys and backup setup configurable from UI or CLI so a
+    user does not need an agent"). A thin console-script door, matching `osiris
+    composition <action>`'s own shape: init stays pool-free and calls `src.ingest.
+    soul_crypto.soul_key_init` directly; status/rotate/restore-drill compose a pool
+    and call `src.orchestrator.soul_key` — the SAME three functions the `/soul-key/*`
+    REST routes call, never a duplicated implementation between the two doors."""
+    from src import cli_render as render
+    from src.ingest import soul_crypto
 
-    out = soul_key_init(owner=owner)
-    if as_json:
-        from src import cli_render as render
-        render.emit(out, as_json=True)
-        return 1 if "error" in out else 0
-    if "error" in out:
-        print(f"osiris soul-key-init: refused — {out['error']}", file=sys.stderr)
+    if action == "init":
+        out = soul_crypto.soul_key_init(owner=owner, path=path)
+        if "error" in out:
+            print(f"osiris soul-key init: refused — {out['error']}", file=sys.stderr)
+            render.emit(out, as_json=as_json, title="soul-key init")
+            return 1
+        render.emit(out, as_json=as_json, title="soul-key init")
+        return 0
+    if action not in ("status", "rotate", "restore-drill"):
+        print(f"osiris soul-key: action must be 'status', 'init', 'rotate', or "
+              f"'restore-drill' (got {action!r})", file=sys.stderr)
         return 1
-    print(f"soul-store encryption key generated at {out['path']} (owner: {out['owner']})")
-    print(out["systemd_note"])
+
+    from src.orchestrator import soul_key as soul_key_orchestrator
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+
+        apply_dev_fallback()
+        settings = get_settings()
+        from src.db.pool import create_pool
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:soul-key")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris soul-key {action}: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  "dev instance.", file=sys.stderr)
+            return 1
+    try:
+        if action == "status":
+            out = await soul_key_orchestrator.soul_key_status(pool, path=path)
+        elif action == "rotate":
+            out = await soul_key_orchestrator.soul_key_rotate(pool, path=path, finish=finish)
+        else:  # restore-drill
+            out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title=f"soul-key {action}")
+        return 1
+    render.emit(out, as_json=as_json, title=f"soul-key {action}")
     return 0
 
 
@@ -7423,7 +7467,7 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, soul-key-init, bootstrap, retention,
+  operate               deploy, migrate, seed, soul-key, bootstrap, retention,
                         rematerialize, fleet-reconcile, fleet-prune, backfill,
                         graph-migrate, layout
 
@@ -7593,18 +7637,39 @@ def _build_parser() -> argparse.ArgumentParser:
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
-    p_soul_key_init = sub.add_parser("soul-key-init", description=_d(
-        "mint the soul-store encryption key — the ONE generator; run once, in your own "
-        "terminal, as whichever user the worker/MCP service actually runs as (or with "
-        "--owner as root)"),
-        epilog="example: osiris soul-key-init\nexample: sudo osiris soul-key-init "
-               "--owner osiris")
-    p_soul_key_init.add_argument("--owner", default=None,
-                                 help="chown the key file + directory to this user after "
-                                      "writing (for running as root, which has no "
-                                      "natural owner of its own to land the file as)")
-    p_soul_key_init.add_argument("--json", action="store_true", dest="as_json",
-                                 help="machine-readable: one compact JSON line")
+    p_soul_key = sub.add_parser("soul-key", description=_d(
+        "THE KEY DOOR: status/init/rotate the soul-store encryption key, or drill an "
+        "off-box backup's own restorability. status/init/rotate resolve the key path "
+        "automatically — the SAME path an installed osiris-mcp/osiris-worker --user "
+        "unit already uses — without exporting anything"),
+        epilog="example: osiris soul-key init\n"
+               "example: sudo env \"PATH=$PATH\" osiris soul-key init --owner osiris\n"
+               "example: osiris soul-key status\n"
+               "example: osiris soul-key rotate\n"
+               "example: osiris soul-key rotate --finish\n"
+               "example: osiris soul-key restore-drill")
+    p_soul_key.add_argument("action", choices=["status", "init", "rotate", "restore-drill"],
+                            help="status: filesystem + legacy-row facts, never key bytes. "
+                                 "init: mint the first key (refuses if one exists). "
+                                 "rotate: mint a new key and re-wrap every row onto it; "
+                                 "--finish once the receipt is clean. restore-drill: "
+                                 "prove an off-box backup repository actually restores")
+    p_soul_key.add_argument("--owner", default=None,
+                            help="init only: chown the key file + directory to this user "
+                                 "after writing (for running as root, which has no "
+                                 "natural owner of its own to land the file as)")
+    p_soul_key.add_argument("--path", default=None,
+                            help="init/status/rotate: an explicit key file path, "
+                                 "overriding the automatic --user-unit/XDG resolution")
+    p_soul_key.add_argument("--finish", action="store_true",
+                            help="rotate only: step 2 — remove the old key once the "
+                                 "receipt reports zero rows remain under it")
+    p_soul_key.add_argument("--repo-url", default=None,
+                            help="restore-drill only: one restic repository URL to "
+                                 "drill; defaults to every URL in "
+                                 "backup.offbox_repositories")
+    p_soul_key.add_argument("--json", action="store_true", dest="as_json",
+                            help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
         "body a seat with a fresh, persistent `claude --bg` process — always shows up "
@@ -9118,8 +9183,10 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_audit(args.name, as_json=args.as_json))
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
-    if args.command == "soul-key-init":
-        return asyncio.run(cmd_soul_key_init(owner=args.owner, as_json=args.as_json))
+    if args.command == "soul-key":
+        return asyncio.run(cmd_soul_key(
+            args.action, owner=args.owner, path=args.path, finish=args.finish,
+            repo_url=args.repo_url, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "resume":

@@ -79,7 +79,7 @@ from src.cli import (
     cmd_show,
     cmd_smoke_chaos,
     cmd_smoke_reboot,
-    cmd_soul_key_init,
+    cmd_soul_key,
     cmd_status,
     cmd_sweep_seat_trees,
     cmd_team,
@@ -437,7 +437,7 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
     assert seeded > 0
 
 
-# --- cmd_soul_key_init: no pool, pure filesystem/key generation --------------------------------
+# --- cmd_soul_key init: no pool, pure filesystem/key generation --------------------------------
 
 async def test_cmd_soul_key_init_writes_and_reports_the_path(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
@@ -446,7 +446,7 @@ async def test_cmd_soul_key_init_writes_and_reports_the_path(
     real, non-root uid is already a valid caller, no getuid/getuser mock needed."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    assert await cmd_soul_key_init() == 0
+    assert await cmd_soul_key("init") == 0
     assert key_file.is_file()
     out = capsys.readouterr().out
     assert str(key_file) in out
@@ -460,8 +460,98 @@ async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(
     key_file = tmp_path / "soul.key"
     key_file.write_bytes(Fernet.generate_key())
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
-    assert await cmd_soul_key_init() == 1
+    assert await cmd_soul_key("init") == 1
     assert "refused" in capsys.readouterr().err
+
+
+async def test_cmd_soul_key_invalid_action_refuses(capsys: pytest.CaptureFixture[str]) -> None:
+    assert await cmd_soul_key("bogus") == 1
+    assert "action must be" in capsys.readouterr().err
+
+
+# --- cmd_soul_key status/rotate/restore-drill: pool-backed actions -----------------------------
+
+async def test_cmd_soul_key_status_absent(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_soul_key(
+            "status", path=str(tmp_path / "no-such-file"), pool=actions.pool)
+    assert out == 0
+    assert "no" in buf.getvalue()  # present: no
+
+
+async def test_cmd_soul_key_status_present_reports_legacy_row_census(
+    tmp_path, actions: Actions,
+) -> None:
+    """THE KEY DOOR's status action composes `soul_crypto.soul_key_status` (filesystem
+    facts) with `soul_store.encrypt_existing_soul_lines(dry_run=True)` (the live
+    census) built against the EXPLICIT `--path` key, not whatever the process's own
+    default resolves to — the exact fix this action's own build surfaced."""
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    out = await cmd_soul_key("status", path=str(key_file), as_json=True, pool=actions.pool)
+    assert out == 0
+
+
+async def test_cmd_soul_key_rotate_and_finish_round_trip(
+    tmp_path, actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No soul_lines rows at all — the census legs of rotate/finish still run
+    (0 rewrapped, 0 broken), proving the plumbing without needing a real ingest."""
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+
+    # finish with nothing in flight refuses
+    assert await cmd_soul_key("rotate", path=str(key_file), finish=True, pool=actions.pool) == 1
+    assert "no rotation in flight" in capsys.readouterr().err
+
+    # begin
+    assert await cmd_soul_key("rotate", path=str(key_file), pool=actions.pool) == 0
+    legacy_path = tmp_path / "soul.key.legacy"
+    assert legacy_path.exists()
+
+    # finish, with zero rows anywhere, is immediately clean
+    assert await cmd_soul_key("rotate", path=str(key_file), finish=True, pool=actions.pool) == 0
+    assert not legacy_path.exists()
+
+
+async def test_cmd_soul_key_restore_drill_refuses_with_no_repo_configured(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert await cmd_soul_key("restore-drill", pool=actions.pool) == 1
+    assert "no offbox repository configured" in capsys.readouterr().err
+
+
+async def test_cmd_soul_key_restore_drill_calls_run_drill_per_url(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _fake_run_drill(repo_url: str, *, scratch=None) -> str | None:
+        calls.append(repo_url)
+        return None if repo_url == "repo-good" else "boom"
+
+    import scripts.osiris_offbox_restore_drill as drill_module
+    monkeypatch.setattr(drill_module, "run_drill", _fake_run_drill)
+
+    out = await cmd_soul_key(
+        "restore-drill", repo_url="repo-good", as_json=True, pool=actions.pool)
+    assert out == 0
+    assert calls == ["repo-good"]
+
+    out2 = await cmd_soul_key(
+        "restore-drill", repo_url="repo-bad", as_json=True, pool=actions.pool)
+    assert out2 == 1
 
 
 # --- cmd_launch: a real pool for seat facts, a fake manager so nothing is ever really spawned ---

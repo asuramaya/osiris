@@ -12532,7 +12532,7 @@ def main() -> None:
         # already holds (the persistent systemd osiris-mcp unit only, never a per-
         # session stdio subprocess): fail LOUDLY here, not on whatever tool call first
         # touches soul_store. A genuine refusal, not a soft alarm — left UNCAUGHT so a
-        # missing key (SoulKeyMissing, naming the exact `osiris soul-key-init` command)
+        # missing key (SoulKeyMissing, naming the exact `osiris soul-key init` command)
         # crashes the boot instead of serving a fleet that can't read its own transcripts.
         from src.ingest.soul_crypto import get_soul_fernet
 

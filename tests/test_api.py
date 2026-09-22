@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from src.actions.core import Actions
 from src.api.app import create_app
 from src.ontology.ingest import ingest_bundle
@@ -1222,6 +1224,72 @@ async def test_settings_route_rejects_a_bad_value_without_writing(
     listed = (await client.get("/settings")).json()["settings"]
     row = next(s for s in listed if s["key"] == "daemon.pit_watch.enabled")
     assert row["value"] is False  # untouched
+
+
+# --- soul-key (THE KEY DOOR, Thoth mail 12810/12830, wave 17) ---------------
+
+async def test_soul_key_status_route_absent(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "no-such-file"))
+    r = await client.get("/soul-key/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["present"] is False
+    assert body["legacy_plaintext_rows"] is None
+
+
+async def test_soul_key_init_route_writes_a_key(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert body["path"] == str(key_file)
+    assert key_file.is_file()
+
+
+async def test_soul_key_init_route_refuses_when_key_exists(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={})
+    body = r.json()
+    assert "error" in body
+    assert "already exists" in body["error"]
+
+
+async def test_soul_key_rotate_route_begin_then_finish(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+
+    r = await client.post("/soul-key/rotate", json={})
+    assert r.status_code == 200
+    assert "error" not in r.json()
+    legacy_path = tmp_path / "soul.key.legacy"
+    assert legacy_path.exists()
+
+    r2 = await client.post("/soul-key/rotate", json={"finish": True})
+    assert r2.status_code == 200
+    assert "error" not in r2.json()
+    assert not legacy_path.exists()
+
+
+async def test_soul_key_restore_drill_route_refuses_with_no_repo_configured(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/soul-key/restore-drill", json={})
+    body = r.json()
+    assert "error" in body
+    assert "no offbox repository configured" in body["error"]
 
 
 async def test_backfill_route_dry_run_reports_the_plan(

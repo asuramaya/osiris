@@ -69,7 +69,7 @@ READ_VERBS = frozenset({
 JSON_COMMANDS = frozenset({
     "stop", "fleet", "roster", "backlog", "threads", "inbox", "team", "status", "search",
     "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
-    "proposal", "soul-key-init", "settings", "lint", "audit", "backfill", "graph-migrate",
+    "proposal", "soul-key", "settings", "lint", "audit", "backfill", "graph-migrate",
     "graph-export",
     # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832)
     "dossier", "object-events", "succession-chain", "candidates", "composition",

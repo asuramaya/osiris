@@ -1518,6 +1518,44 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             p, body.key, body.value, actor="analyst:operator", because=body.because,
             scope_id=body.scope_id)
 
+    # THE KEY DOOR'S OWN REST ROUTES (Thoth mail 12810/12830, wave 17) — mirror
+    # `osiris soul-key <action>` one-for-one, both calling `src.orchestrator.
+    # soul_key`'s own three functions directly, never one wrapping the other (same
+    # split /backup-settings and /settings above already hold). OPERATOR-ONLY
+    # AUTHORITY LAW: the console is localhost and the operator's own hands (same
+    # reasoning /backup-settings's own comment gives) — there is deliberately no
+    # MCP tool for any of this (an agent minting/rotating the soul-store key, or
+    # reading its filesystem facts, is exactly the shape this whole door exists to
+    # refuse; see soul_crypto.py's own module docstring). `/soul-key/init` alone
+    # never touches Postgres (`soul_key_init` is pool-free by design).
+    @app.get("/soul-key/status")
+    async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        from src.orchestrator.soul_key import soul_key_status
+
+        return await soul_key_status(p)
+
+    @app.post("/soul-key/init")
+    async def soul_key_init_route(body: SoulKeyInitBody) -> dict[str, Any]:
+        from src.ingest.soul_crypto import soul_key_init
+
+        return soul_key_init(owner=body.owner, path=body.path)
+
+    @app.post("/soul-key/rotate")
+    async def soul_key_rotate_route(
+        body: SoulKeyRotateBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key import soul_key_rotate
+
+        return await soul_key_rotate(p, finish=body.finish)
+
+    @app.post("/soul-key/restore-drill")
+    async def soul_key_restore_drill_route(
+        body: SoulKeyRestoreDrillBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.soul_key import soul_key_restore_drill
+
+        return await soul_key_restore_drill(p, repo_url=body.repo_url)
+
     # THE REPAIRS PANEL'S OWN REST DOOR (thread c89a9873, wave 22) — mirrors the
     # `backfill` MCP tool and the `osiris backfill` CLI command one-for-one, all three
     # calling orchestrator.backfill.run_backfill, never one wrapping another. A dry-run
@@ -2224,6 +2262,28 @@ class BackfillBody(BaseModel):
     because: str = ""
     only_bases: list[str] | None = None
     ruling: str | None = None
+
+
+class SoulKeyInitBody(BaseModel):
+    """THE KEY DOOR's own init body (Thoth mail 12810) — both fields optional; the
+    console always runs as the operator's own login user, so `owner`/`path` are
+    rarely needed here (the same automatic --user-unit/XDG resolution the CLI's
+    own bare `osiris soul-key init` gets applies unchanged)."""
+    owner: str | None = None
+    path: str | None = None
+
+
+class SoulKeyRotateBody(BaseModel):
+    """THE KEY DOOR's own rotate body — `finish=False` (the default) mints a new
+    key and re-wraps every row right now; `finish=True` is step 2, removing the
+    old key once the receipt is clean."""
+    finish: bool = False
+
+
+class SoulKeyRestoreDrillBody(BaseModel):
+    """THE KEY DOOR's own restore-drill body — `repo_url` explicit, or every URL
+    in `backup.offbox_repositories` when omitted."""
+    repo_url: str | None = None
 
 
 class LayoutMigrateBody(BaseModel):

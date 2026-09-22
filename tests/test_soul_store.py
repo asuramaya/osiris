@@ -2264,3 +2264,133 @@ async def test_encrypt_existing_soul_lines_is_idempotent(
     second = await encrypt_existing_soul_lines(store.pool, dry_run=False)
     assert second["hot_migrated"] == 0
     assert second["hot_already_encrypted"] == 5
+
+
+async def test_encrypt_existing_soul_lines_accepts_an_explicit_fernet_override(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE KEY DOOR (`osiris soul-key status --path`): a caller may census against an
+    explicit key rather than whatever the process's own env/default resolves to."""
+    from cryptography.fernet import Fernet, MultiFernet
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "migrate-explicit")
+
+    # a DIFFERENT key than the live primary can never decrypt these rows -- every one
+    # reports as "would migrate" (the same shape a genuinely legacy-plaintext row
+    # reports, since this function's own ladder has no THIRD state)
+    wrong_fernet = MultiFernet([Fernet(Fernet.generate_key())])
+    out = await encrypt_existing_soul_lines(store.pool, dry_run=True, fernet=wrong_fernet)
+    assert out["hot_migrated"] == 3
+    # dry run: nothing written even under the wrong key
+    still = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate-explicit' AND line_idx=0")
+    assert get_soul_fernet().decrypt(bytes(still))  # still decrypts under the REAL key
+
+    # the real live primary reports everything already encrypted, as before
+    live = await encrypt_existing_soul_lines(store.pool, dry_run=True)
+    assert live["hot_migrated"] == 0
+    assert live["hot_already_encrypted"] == 3
+
+
+# --- rewrap_soul_lines_key: THE KEY DOOR's own re-wrap pass (osiris soul-key rotate) -----------
+
+async def test_rewrap_soul_lines_key_moves_rows_onto_the_new_primary(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.fernet import Fernet
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rotate01")
+    # the REAL primary key these rows were just encrypted under (conftest.py's own
+    # fixed test env, `OSIRIS_SOUL_KEY`) -- a single Fernet, matching what
+    # `soul_key_rotate_begin`'s own returned `old_key` bytes build in production
+    old_fernet = Fernet(os.environ["OSIRIS_SOUL_KEY"].encode())
+    new_key = Fernet.generate_key()
+    new_fernet = Fernet(new_key)
+
+    preview = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, batch_size=2)
+    assert preview["dry_run"] is True
+    assert preview["hot_rewrapped"] == 5
+    assert preview["hot_already_on_new_key"] == 0
+    assert preview["hot_broken_count"] == 0
+    # dry run wrote nothing -- still decrypts under the OLD key, not the new one
+    still_old = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate01' AND line_idx=0")
+    assert old_fernet.decrypt(bytes(still_old))
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, batch_size=2, dry_run=False)
+    assert out["hot_rewrapped"] == 5
+    rewrapped = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate01' AND line_idx=0")
+    assert new_fernet.decrypt(bytes(rewrapped))  # now reads under the NEW key alone
+
+    # verify_chain decrypts through the LIVE default (get_soul_fernet, env-resolved)
+    # -- simulating "the daemon restarted and picked up the new primary" the same
+    # way soul_key_rotate_begin's own systemd_note tells the operator to do, so the
+    # chain check proves the re-wrap preserved line_hash/prev_hash, not garbage
+    monkeypatch.setenv("OSIRIS_SOUL_KEY", new_key.decode())
+    assert await store.verify_chain("rotate01") is True  # chain untouched by the re-wrap
+
+    # idempotent: a second pass finds everything already on the new key
+    second = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, dry_run=False)
+    assert second["hot_rewrapped"] == 0
+    assert second["hot_already_on_new_key"] == 5
+
+
+async def test_rewrap_soul_lines_key_counts_broken_rows_without_writing_them(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A row that decrypts under NEITHER key (plaintext that predates encryption
+    entirely, corruption, or the wrong old key given) is counted, never silently
+    skipped and never crashes the whole pass — `osiris soul-key rotate --finish`
+    refuses while this count is nonzero."""
+    from cryptography.fernet import Fernet
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "rotate-broken")
+    # simulate one genuinely broken row: plaintext that predates encryption, decrypts
+    # under NEITHER the (wrong) old key below nor the new key
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='rotate-broken' AND line_idx=1",
+        b"not encrypted at all")
+    wrong_old_fernet = Fernet(Fernet.generate_key())  # NOT the key that encrypted the other 2
+    new_fernet = Fernet(Fernet.generate_key())
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=wrong_old_fernet, dry_run=True)
+    assert out["hot_broken_count"] == 3  # the wrong old key can decrypt none of them
+    assert len(out["hot_broken_sample"]) == 3
+    assert out["hot_rewrapped"] == 0
+    # dry run: the deliberately-corrupted row is untouched, not further mangled
+    still = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate-broken' AND line_idx=1")
+    assert bytes(still) == b"not encrypted at all"
+
+
+async def test_rewrap_soul_lines_key_broken_sample_is_capped(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE MEMORY BOUND: a genuinely wrong old key makes EVERY row broken -- the exact
+    shape that would balloon an unbounded list at real scale. `hot_broken_count` stays
+    exact; `hot_broken_sample` caps at `_REWRAP_BROKEN_SAMPLE_CAP`."""
+    from cryptography.fernet import Fernet
+    from src.ingest import soul_store as soul_store_module
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    monkeypatch.setattr(soul_store_module, "_REWRAP_BROKEN_SAMPLE_CAP", 2)
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rotate-capped")
+    wrong_old_fernet = Fernet(Fernet.generate_key())
+    new_fernet = Fernet(Fernet.generate_key())
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=wrong_old_fernet, dry_run=True)
+    assert out["hot_broken_count"] == 5
+    assert len(out["hot_broken_sample"]) == 2

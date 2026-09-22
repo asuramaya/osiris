@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
-from cryptography.fernet import InvalidToken
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
@@ -173,6 +173,8 @@ def _write_dest(path: Path, content: bytes) -> None:
 
 
 _REMATERIALIZE_PAGE_LINES = 2000  # rows fetched per soul_lines page during a streamed write
+_REWRAP_BROKEN_SAMPLE_CAP = 100  # rewrap_soul_lines_key's own bound on per-row broken
+                                 # samples -- see that function's own docstring
 
 
 def _open_tmp_writer(target: Path) -> tuple[Any, Path]:
@@ -2042,6 +2044,7 @@ class SoulStore:
 
 async def encrypt_existing_soul_lines(
     pool: asyncpg.Pool, *, batch_size: int = 2000, dry_run: bool = True,
+    fernet: MultiFernet | None = None,
 ) -> dict[str, Any]:
     """THE MIGRATION (Thoth mail 9134): encrypts every EXISTING soul_lines/soul_lines_
     cold row written before this build landed — every write from now on already
@@ -2064,8 +2067,14 @@ async def encrypt_existing_soul_lines(
     time, or by the next idempotent re-run if it doesn't; an OFFSET-based page would
     silently skip or duplicate rows under exactly that concurrent-write condition.
 
+    `fernet=` (THE KEY DOOR, `osiris soul-key status --path`) overrides the CURRENT
+    process's own `get_soul_fernet()` lookup — the seam `cmd_soul_key`'s status
+    action needs to census against an explicit, non-default key path rather than
+    whatever `OSIRIS_SOUL_KEY_FILE`/the installed unit resolves to; every other
+    caller leaves it None and gets the ordinary live-primary behavior, unchanged.
+
     `dry_run=True` (the default) counts what WOULD migrate without writing."""
-    fernet = get_soul_fernet()
+    fernet = fernet or get_soul_fernet()
     hot_migrated = 0
     hot_already = 0
     cursor: tuple[str, str, int] | None = None
@@ -2117,6 +2126,139 @@ async def encrypt_existing_soul_lines(
                     fernet.encrypt(blob), row["harness"], row["anchor_sid"])
     return {"dry_run": dry_run, "hot_migrated": hot_migrated, "hot_already_encrypted": hot_already,
            "cold_migrated": cold_migrated, "cold_already_encrypted": cold_already}
+
+
+async def rewrap_soul_lines_key(
+    pool: asyncpg.Pool, *, new_fernet: Fernet, old_fernet: Fernet,
+    batch_size: int = 2000, dry_run: bool = True,
+) -> dict[str, Any]:
+    """THE KEY DOOR's own re-wrap pass (Thoth mail 12810, `osiris soul-key rotate`):
+    a GENUINELY DIFFERENT operation from `encrypt_existing_soul_lines` above, which
+    this deliberately does not touch or extend. That function's own decrypt-or-encrypt
+    branch treats "decrypts under ANY key already" as done — correct for the
+    plaintext-to-encrypted migration it exists for, but WRONG here: a row still
+    encrypted under the OLD (about-to-be-retired) key decrypts FINE under a
+    `MultiFernet([old, ...])`, yet still needs re-writing onto the NEW primary before
+    the old key can ever be safely deleted. This function's own decrypt ladder is
+    exactly that distinction: `new_fernet.decrypt` alone (single-key, never Multi) —
+    success means already on the new primary, skip; failure falls to `old_fernet.
+    decrypt` — success means it's a legacy-key row, re-encrypt under `new_fernet` and
+    write back; failure under BOTH is a genuine break (plaintext that predates
+    encryption entirely, or corruption, or the wrong old key given) and is counted,
+    NEVER silently skipped or crashed on — `soul_key_rotate --finish` refuses to run
+    while `broken` is nonzero, the same "never a silent gap" law
+    `encrypt_existing_soul_lines` already holds for `dry_run`.
+
+    KEYSET-PAGINATED, never OFFSET — identical shape and identical reasoning to
+    `encrypt_existing_soul_lines`'s own docstring (a concurrent live write lands
+    after this migration's own moving cursor, picked up by this run if it arrives in
+    time or the next idempotent re-run if it doesn't).
+
+    IDEMPOTENT AND SAFE TO RE-RUN: a row already on `new_fernet` is always the first
+    branch checked and always skipped — running this twice after the daemons have
+    restarted (picking up the new primary and writing fresh rows under it already)
+    costs nothing beyond the scan itself.
+
+    `dry_run=True` (the default) counts what WOULD re-wrap without writing — the
+    exact receipt `osiris soul-key rotate --finish` checks is clean before it ever
+    calls `soul_crypto.soul_key_rotate_finish`.
+
+    BROKEN ROWS ARE COUNTED, NEVER ACCUMULATED WITHOUT BOUND: a genuinely wrong
+    `old_fernet` (a stale/corrupted `.legacy` file, or someone hand-editing it)
+    would make EVERY row in the table "broken" — a live population runs into the
+    millions, and a plain unbounded list of per-row dicts at that scale is exactly
+    the kind of unforced memory cost this house's own standing lesson on sampling
+    warns about. `*_broken_count` is the real, exact total; `*_broken_sample` caps
+    at `_REWRAP_BROKEN_SAMPLE_CAP` entries — enough for a human to recognize the
+    failure shape (one session's rows? every row?) without holding the whole
+    population in memory for a receipt nobody reads row-by-row."""
+    hot_rewrapped = 0
+    hot_already = 0
+    hot_broken_count = 0
+    hot_broken_sample: list[dict[str, Any]] = []
+    cursor: tuple[str, str, int] | None = None
+    while True:
+        if cursor is None:
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $1", batch_size)
+        else:
+            h, a, idx = cursor
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "WHERE (harness, anchor_sid, line_idx) > ($1, $2, $3) "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $4", h, a, idx, batch_size)
+        if not rows:
+            break
+        updates: list[tuple[bytes, str, str, int]] = []
+        for row in rows:
+            raw = bytes(row["raw_line"])
+            try:
+                new_fernet.decrypt(raw)
+                hot_already += 1
+                continue
+            except InvalidToken:
+                pass
+            try:
+                plaintext = old_fernet.decrypt(raw)
+            except InvalidToken:
+                hot_broken_count += 1
+                if len(hot_broken_sample) < _REWRAP_BROKEN_SAMPLE_CAP:
+                    hot_broken_sample.append({
+                        "harness": row["harness"], "anchor_sid": row["anchor_sid"],
+                        "line_idx": row["line_idx"],
+                    })
+                continue
+            updates.append(
+                (new_fernet.encrypt(plaintext), row["harness"], row["anchor_sid"],
+                 row["line_idx"]))
+        if updates and not dry_run:
+            async with pool.acquire() as conn:
+                await conn.executemany(
+                    "UPDATE soul_lines SET raw_line=$1 "
+                    "WHERE harness=$2 AND anchor_sid=$3 AND line_idx=$4", updates)
+        hot_rewrapped += len(updates)
+        last = rows[-1]
+        cursor = (last["harness"], last["anchor_sid"], last["line_idx"])
+        if len(rows) < batch_size:
+            break
+    cold_rewrapped = 0
+    cold_already = 0
+    cold_broken_count = 0
+    cold_broken_sample: list[dict[str, Any]] = []
+    for row in await pool.fetch("SELECT harness, anchor_sid, content_gzip FROM soul_lines_cold"):
+        blob = bytes(row["content_gzip"])
+        try:
+            new_fernet.decrypt(blob)
+            cold_already += 1
+            continue
+        except InvalidToken:
+            pass
+        try:
+            plaintext = old_fernet.decrypt(blob)
+        except InvalidToken:
+            cold_broken_count += 1
+            if len(cold_broken_sample) < _REWRAP_BROKEN_SAMPLE_CAP:
+                cold_broken_sample.append(
+                    {"harness": row["harness"], "anchor_sid": row["anchor_sid"]})
+            continue
+        cold_rewrapped += 1
+        if not dry_run:
+            await pool.execute(
+                "UPDATE soul_lines_cold SET content_gzip=$1 "
+                "WHERE harness=$2 AND anchor_sid=$3",
+                new_fernet.encrypt(plaintext), row["harness"], row["anchor_sid"])
+    # "clean to finish" (osiris soul-key rotate --finish's own gate) means a FRESH
+    # dry_run=True call finds nothing left on the old key and nothing broken --
+    # `cmd_soul_key` computes that directly off this receipt's own counts rather
+    # than this function guessing at the caller's own dry_run intent.
+    return {
+        "dry_run": dry_run,
+        "hot_rewrapped": hot_rewrapped, "hot_already_on_new_key": hot_already,
+        "hot_broken_count": hot_broken_count, "hot_broken_sample": hot_broken_sample,
+        "cold_rewrapped": cold_rewrapped, "cold_already_on_new_key": cold_already,
+        "cold_broken_count": cold_broken_count, "cold_broken_sample": cold_broken_sample,
+    }
 
 
 def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:

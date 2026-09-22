@@ -197,7 +197,7 @@ async def startup(ctx: dict[str, Any]) -> None:
         # it. UNLIKE that guard, this is a genuine refusal, not a soft alarm: a worker
         # with no soul key cannot correctly read or write soul_lines/soul_lines_cold at
         # all, so starting it anyway would only defer the failure to a worse moment.
-        # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key-init`
+        # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key init`
         # command) when neither OSIRIS_SOUL_KEY nor the key file is present — left
         # UNCAUGHT here on purpose, propagating out of startup() to crash the boot.
         from src.ingest.soul_crypto import get_soul_fernet

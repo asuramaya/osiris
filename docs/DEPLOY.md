@@ -142,6 +142,57 @@ The heartbeat's liveness is a **dead-man's-switch computed on read**: `pulse-dig
 a status row that re-derives staleness every time you look, so if the pulse unit dies the digest
 says *heartbeat DEAD since &lt;time&gt;* — the alarm can't die with the daemon that rings it.
 
+## Soul-store encryption (THE KEY DOOR, Thoth mail 9134/12810/12830)
+
+The soul store (`soul_lines`/`soul_lines_cold` — the byte-exact transcript archive) is
+encrypted at rest by Osiris itself, one tier above host-disk trust. `osiris-mcp` and
+`osiris-worker` both resolve the key **once at their own boot** and refuse to start without
+one — a missing key fails loudly at startup, naming the exact fix, rather than failing
+opaquely on whatever request happens to touch the store first.
+
+**First install (one time, before either unit's first start):**
+
+```bash
+osiris soul-key init
+```
+
+Run this in your own terminal, as whichever user the units actually run as — for the
+`--user` unit shape above, that's simply your own login user, no `sudo` involved. It:
+
+1. mints a fresh Fernet key,
+2. **prints the mandatory offline recovery secret exactly once** — copy it now to
+   OFFLINE custody (a password manager entry, a printed copy) kept OUTSIDE this box and
+   OUTSIDE any backup target; a backed-up copy sitting next to the ciphertext it protects
+   defeats the whole point,
+3. writes the key to `~/.config/osiris/soul.key` by default — the SAME path the installed
+   `--user` units already carry via their own `Environment=OSIRIS_SOUL_KEY_FILE=` line, so
+   nothing needs exporting. (System-unit deploys default to `/etc/osiris/soul.key`
+   instead, matching `EnvironmentFile=/etc/osiris/osiris.env`; an explicit `--path`
+   overrides either default.)
+
+Losing **both** the printed recovery secret and the live key file makes every stored
+transcript permanently, irrecoverably unreadable — there is no third copy anywhere.
+
+**Everyday operation** — `osiris soul-key <action>`:
+
+| Action | What it does |
+|--------|--------------|
+| `status` | filesystem facts (present, path, mode, key age, rotation-in-flight) plus the live legacy-plaintext row count — never the key bytes |
+| `init` | mint the first key (above); refuses if one already exists |
+| `rotate` | mint a new key, park the old one, and re-wrap every existing row onto the new primary in the same command; re-run (idempotent) after restarting both units to sweep up anything they wrote in the meantime; `--finish` once the receipt reports zero rows left under the old key |
+| `restore-drill` | prove an off-box backup repository actually restores (wraps `scripts/osiris_offbox_restore_drill.py`) — every URL in `backup.offbox_repositories`, or one via `--repo-url` |
+
+Every action takes `--json` for a machine-readable line. The console also exposes
+`GET /soul-key/status` and `POST /soul-key/init|rotate|restore-drill` — the operator's own
+surface (the console binds to localhost only), never an MCP tool: minting or rotating this
+key from an agent call is exactly the shape this door exists to refuse.
+
+**Migrating existing plaintext rows** (a box with data from before this build): `osiris
+soul-key status` reports the live legacy-plaintext row count; run the migration itself with
+`scripts/osiris_encrypt_soul_lines.py` (dry-run by default, `--apply` to write) — a thin
+wrapper over `src.ingest.soul_store.encrypt_existing_soul_lines`, batched and
+keyset-paginated, safe to re-run mid-deploy against a daemon still ingesting.
+
 ## Full topology as one stack (containers)
 
 The whole ring set — Postgres, Redis, a one-shot migration, the API, the worker, and
