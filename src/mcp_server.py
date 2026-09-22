@@ -6254,19 +6254,18 @@ async def inbox(project: str | None = None, peek: bool = False,
     # the operator desk, whose reader is the human ('operator'): an agent only peeks it, never
     # settles it as itself.
     reader = OPERATOR_ADDR if proj == OPERATOR_ADDR else (ident.agent_id if ident else proj)
-    # an ack ALWAYS answers with what it settled and what it skipped-and-why (Alfred's
-    # fixture, msg 666: a silent zero-settle was indistinguishable from success, so the
-    # same four DMs were acked three times and redelivered anyway)
-    ack_out = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else None
-    ack_keys: dict[str, Any] = {}
-    if ack_out is not None:
-        ack_keys["settled"] = ack_out["settled"]
-        if ack_out["skipped"]:
-            ack_keys["skipped"] = ack_out["skipped"]
     if proj == OPERATOR_ADDR:
         # THE ORGANIZED DESK (operator direction 2026-07-11): always peek-shaped — reading
         # the human's desk never leases; bands (needs_decision / needs_hands / fyi) ·
         # thread + same-story folds · dimmed moot annotations · the derived your_queue.
+        # Never gated by THE FIRST-BREATH READ LAW below — the desk settles at the human's
+        # own word (the mail skill's own distinction), not an agent's session_reads.
+        ack_out = await ack_messages(pool, proj, ack, reader_agent=reader) if ack else None
+        ack_keys: dict[str, Any] = {}
+        if ack_out is not None:
+            ack_keys["settled"] = ack_out["settled"]
+            if ack_out["skipped"]:
+                ack_keys["skipped"] = ack_out["skipped"]
         desk = await read_desk(pool)
         out = {"project": OPERATOR_ADDR, **desk, **ack_keys}
         if render == "text":
@@ -6277,6 +6276,19 @@ async def inbox(project: str | None = None, peek: bool = False,
                 backlog_rows, key=lambda r: (0 if r["past_window"] else 1, -r["open"])))
             return {"text": render_desk_text(out, backlog_text=backlog_text)}
         return out
+    # THE FIRST-BREATH READ LAW (thread afd27e1a's own reclassification, Thoth mail
+    # 13003): captured BEFORE this call's own read below — an id must have been
+    # returned in full through an EARLIER real inbox() call (peek or lease), never
+    # THIS SAME call's own concurrent read. Without that, a bare `inbox(ack=[id])`
+    # would always satisfy its own check trivially (read_inbox always runs, ack or
+    # not), which is exactly the un-read-then-settle shape this law exists to catch —
+    # the documented workflow (mail skill: peek, THEN a SEPARATE inbox(ack=...) or
+    # send(reply_to=...) call) already reads first in its own earlier call, so this
+    # costs that pattern nothing. `ident is None` (unmounted) and spawn_reader (ack
+    # already forced to None) skip trivially — no session_reads row to check for.
+    unread_ack_ids = (
+        await provenance.unread_message_ids(pool, ack, agent_id=ident.agent_id)
+        if ack and ident is not None and not spawn_reader else [])
     msgs = await read_inbox(pool, proj, reader_agent=reader, mark_read=not peek,
                             lease_secs=st.osiris_mail_lease_secs)
     if not want_prior_art:
@@ -6314,6 +6326,22 @@ async def inbox(project: str | None = None, peek: bool = False,
             if oid is not None:
                 msg_oids.append(oid)
         await _stamp_read_ids(pool, ident, "inbox-peek" if peek else "inbox-lease", msg_oids)
+    # THE FIRST-BREATH READ LAW's own enforcement: settle only the ids that were
+    # already read as of BEFORE this call (unread_ack_ids, captured above) — this
+    # call's own fresh read (just stamped) counts toward the NEXT call, never this one.
+    ack_keys = {}
+    if ack:
+        ack_now = [i for i in ack if i not in unread_ack_ids]
+        ack_out = await ack_messages(pool, proj, ack_now, reader_agent=reader) if ack_now else {
+            "settled": [], "skipped": {}}
+        for i in unread_ack_ids:
+            ack_out["skipped"][i] = ("not yet read in full — call inbox() (peek or lease) "
+                                     "in an earlier call before acking; the wake prompt's "
+                                     "own preview does not count, and reading it in this "
+                                     "same call does not retroactively satisfy its own ack")
+        ack_keys["settled"] = ack_out["settled"]
+        if ack_out["skipped"]:
+            ack_keys["skipped"] = ack_out["skipped"]
     if render == "text":
         from src.orchestrator.textrender import render_mail_text
         text = render_mail_text(msgs)
