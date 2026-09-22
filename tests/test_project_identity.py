@@ -1590,6 +1590,74 @@ async def test_rename_cascade_never_writes_or_infers_tree_binding(
     assert (await seat_facts(actions.pool, seat["seat_id"]))["tree_cwd"] == str(old_tree)
 
 
+async def test_rename_cascade_tree_tier_recognizes_an_already_renamed_tree_cwd(
+    actions: Actions, tmp_path,
+) -> None:
+    """Thread 7a3576df, Thoth mail 12880, live dtfb->lotstretcher specimen: a rename
+    that migrates ONLY the canonical (the project's display `name` was already
+    corrected under the old, name-only rename law, so old_name == new_name by the time
+    this call runs) must not misread a tree_cwd that already carries the new label as
+    stale — the detector was comparing against the wrong side. Two rename_project
+    calls, each proving one shape: a genuinely stale tree_cwd (old_name != new_name,
+    still names the old label) stays could-not exactly as before; an already-renamed
+    one, under the canonical-only-migration shape (old_name == new_name), now reads
+    already-correct instead of falsely flagging "references the old name"."""
+    # SHAPE 1 — genuinely stale: an ordinary rename, tree_cwd still names the old label.
+    stale_tree = tmp_path / "code" / "treeoldd"
+    stale_tree.mkdir(parents=True)
+    office = tmp_path / "office"
+    office.mkdir()
+    stale_seat = await ensure_seat(actions, house="osiris", handle="Staletreeseat",
+                                   anchor_cwd=str(office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     stale_seat["seat_id"])),
+        "tree_cwd", str(stale_tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:strd0001")
+    await bind_holder(actions, seat_id=stale_seat["seat_id"], agent_id="agent:strd0001")
+    proj1 = await _mk_project(actions, "treeoldd")
+    seat1_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", stale_seat["seat_id"])
+    await actions.create_link(seat1_oid, proj1, "governs", "test", datetime.now(UTC), 0.9)
+
+    out1 = await rename_project(actions, project="treeoldd", new_name="treenewd",
+                                because="x", actor="agent:test", dry_run=False)
+    tiers1 = out1["manifest"]["seats"][stale_seat["seat_id"]]
+    assert tiers1["tree"]["status"] == "could-not"
+    assert "treeoldd" in tiers1["tree"]["detail"]
+
+    # SHAPE 2 — already-renamed: the display name was already corrected under the old,
+    # name-only rename law (old_name == new_name by the time this call runs), and
+    # tree_cwd already carries the new label too.
+    renamed_tree = tmp_path / "code" / "treenewf"
+    renamed_tree.mkdir(parents=True)
+    renamed_office = tmp_path / "office2"
+    renamed_office.mkdir()
+    renamed_seat = await ensure_seat(actions, house="osiris", handle="Renamedtreeseat",
+                                     anchor_cwd=str(renamed_office), source="test")
+    await actions.assert_property(
+        (await actions.pool.fetchval("SELECT id FROM objects WHERE canonical=$1",
+                                     renamed_seat["seat_id"])),
+        "tree_cwd", str(renamed_tree), "test", datetime.now(UTC), 0.9,
+        evidence_class="self_declared")
+    await _mk_agent(actions, "agent:rntr0001")
+    await bind_holder(actions, seat_id=renamed_seat["seat_id"], agent_id="agent:rntr0001")
+    proj2 = await _mk_project(actions, "treeolde")
+    await actions.assert_property(proj2, "name", "treenewf", "test", datetime.now(UTC), 0.95,
+                                  evidence_class="self_declared")
+    seat2_oid = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE canonical=$1", renamed_seat["seat_id"])
+    await actions.create_link(seat2_oid, proj2, "governs", "test", datetime.now(UTC), 0.9)
+
+    out2 = await rename_project(actions, project="treeolde", new_name="treenewf",
+                                because="x", actor="agent:test", dry_run=False)
+    assert out2["canonical_migration"]["migrates"] is True
+    assert out2["old_name"] == "treenewf"  # the pre-existing, already-correct name
+    tiers2 = out2["manifest"]["seats"][renamed_seat["seat_id"]]
+    assert tiers2["tree"]["status"] == "already-correct"
+
+
 async def test_rename_cascade_writes_the_repo_root_osiris_pin(
     actions: Actions, tmp_path,
 ) -> None:

@@ -885,8 +885,22 @@ async def _cascade_governing_seats(
                 tiers["office"] = {"status": "could-not", "detail": str(exc)}
 
         # TREE BINDING — DETECT ONLY, never written (see docstring above).
+        #
+        # CHECK THE NEW NAME FIRST (thread 7a3576df, Thoth mail 12880, live dtfb->
+        # lotstretcher specimen): a rename that migrates ONLY the canonical — the exact
+        # shape THE CANONICAL MIGRATES TOO introduced (a project already renamed under
+        # the old, name-only law has old_name == new_name by the time this tier runs) —
+        # used to compare tree_cwd against old_name alone. When old_name == new_name
+        # (or old_name merely happens to be a substring the new label also carries),
+        # that comparison finds the label IN THE ALREADY-CORRECT PATH and misreports a
+        # fully up-to-date tree_cwd as "references the old name" — comparing against the
+        # wrong side of the rename. A path that already carries new_name is correct
+        # regardless of what old_name says, so that check runs first and short-circuits
+        # the rest of this tier.
         tree_cwd = facts.get("tree_cwd")
-        if tree_cwd and f"/{old_name}" in tree_cwd:
+        if not tree_cwd or f"/{new_name}" in tree_cwd:
+            tiers["tree"] = {"status": "already-correct"}
+        elif f"/{old_name}" in tree_cwd:
             candidate = tree_cwd.replace(f"/{old_name}", f"/{new_name}")
             if not _dir_exists(tree_cwd) and _dir_exists(candidate):
                 tiers["tree"] = {
