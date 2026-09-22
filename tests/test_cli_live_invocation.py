@@ -400,6 +400,14 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
                 "with no --owner given — this test process is never root), rotate "
                 "genuinely mints and re-wraps for real, no dry-run flag on either — "
                 "same operator-devops-bootstrap class as seed/bootstrap",
+    "restic-key": "requires a positional action (status/init); init genuinely writes a "
+                  "real credential to disk unconditionally (restic_key_init's own "
+                  "refusal is only 'a credential already exists', not reachable on a "
+                  "fresh no-write call) — same class as soul-key above",
+    "offload-runner": "requires a positional action (tick); tick genuinely runs real "
+                      "restic subprocess calls against configured offload_targets rows "
+                      "with no dry-run flag — same operator-devops-bootstrap class as "
+                      "smoke/deploy/seed",
     "mint-seat": "genuinely mints a seat; no confirmed refusal-only path — every "
                  "existing test mints for real",
     "new": "genuinely spawns/mints a seat for real; no confirmed refusal-only path",

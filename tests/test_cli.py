@@ -4404,17 +4404,19 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
     assert calls == []
 
 
-def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
+def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
     tmp_path: Path,
 ) -> None:
     """Wave 21 (thread f04cce36 piece 3) widened this from three to five; WAVE 22
-    (ruling 7be61879, thread 40d6eef3) widens it once more to six — osiris-pg-autotune
+    (ruling 7be61879, thread 40d6eef3) widened it once more to six — osiris-pg-autotune
     was the last hand-installed timer the census named (osiris-preflight was already
-    covered by piece 3). A config panel/registered schedule that silently does nothing
-    until a human hand-installs the unit is worse than no field. No `.venv` in this
-    synthetic repo, so render_units.py's own subprocess call fails and the script's
-    fallback (a verbatim copy) takes over — proving the UNIT LIST widened, independent
-    of the render step's own DB behavior (covered in test_render_units.py instead)."""
+    covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a) widens it
+    again to seven — osiris-offload. A config panel/registered schedule that silently
+    does nothing until a human hand-installs the unit is worse than no field. No
+    `.venv` in this synthetic repo, so render_units.py's own subprocess call fails and
+    the script's fallback (a verbatim copy) takes over — proving the UNIT LIST widened,
+    independent of the render step's own DB behavior (covered in test_render_units.py
+    instead)."""
     import os
     import subprocess
 
@@ -4427,7 +4429,8 @@ def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
     (repo / install_script).write_text(real_install)
     (repo / install_script).chmod(0o755)
     for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup",
-                "osiris-backup", "osiris-preflight", "osiris-pg-autotune"):
+                "osiris-backup", "osiris-preflight", "osiris-pg-autotune",
+                "osiris-offload"):
         (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
         (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
     target = tmp_path / "target"
@@ -4444,9 +4447,10 @@ def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
             os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
 
     assert result.returncode == 0, result.stderr
-    assert "12 installed/updated, 0 already current" in result.stdout
+    assert "14 installed/updated, 0 already current" in result.stdout
     assert (target / "osiris-backup.timer").read_text() == "# osiris-backup timer\n"
     assert (target / "osiris-pg-autotune.service").read_text() == "# osiris-pg-autotune service\n"
+    assert (target / "osiris-offload.timer").read_text() == "# osiris-offload timer\n"
 
 
 # --- boot-status -------------------------------------------------------------------------------

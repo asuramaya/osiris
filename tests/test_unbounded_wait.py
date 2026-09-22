@@ -130,7 +130,11 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     # Imhotep's own raise above — sum of both, not a replacement): one new dispatch
     # line, `asyncio.run(cmd_soul_key(...))`, same false-positive class as every
     # comment above — not a genuine new unbounded subprocess call.
-    "src/cli.py": 90,
+    # 90 -> 92 (2026-09-22, Khnum, THE OFFLOAD RUNNER, ruling be21384a): two new
+    # dispatch lines, `asyncio.run(cmd_restic_key(...))` and `asyncio.run(cmd_
+    # offload_runner(...))`, same false-positive class as every comment above — not
+    # genuine new unbounded subprocess calls.
+    "src/cli.py": 92,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new

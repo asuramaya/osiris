@@ -89,18 +89,22 @@ is exactly one store and `scope` does not vary the lookup at all.
 from __future__ import annotations
 
 import getpass
-import grp
 import json
 import os
 import pwd
-import shutil
-import subprocess
 from pathlib import Path
 from typing import Any
 
 from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+from src.ingest import systemd_credential
+
+_is_tss_member = systemd_credential.is_tss_member
+_systemd_creds_available = systemd_credential.systemd_creds_available
+_shared_encrypt_with_systemd_creds = systemd_credential.encrypt_with_systemd_creds
+_shared_decrypt_with_systemd_creds = systemd_credential.decrypt_with_systemd_creds
 
 _DEFAULT_KEY_FILE = "/etc/osiris/soul.key"
 _SERVICE_USER = "osiris"  # deploy/osiris-worker.service's and osiris-mcp.service's own User=
@@ -237,55 +241,23 @@ def _recovery_path(key_path: Path) -> Path:
     return key_path.with_name(key_path.name + ".recovery.json")
 
 
-def _is_tss_member() -> bool:
-    """Whether the CURRENT process's own user is a member of the `tss` group —
-    the group that owns `/dev/tpmrm0` on this box (measured live: `crw-rw----
-    tss tss`), gating whether `--with-key=host+tpm2` can ever succeed in `--user`
-    scope. Checks SUPPLEMENTARY membership only (`grp.getgrnam(...).gr_mem`) —
-    the realistic case (nobody's PRIMARY group is `tss`); a box with no `tss`
-    group at all (no TPM tooling installed) reads as False, never an exception."""
-    try:
-        tss = grp.getgrnam(_TSS_GROUP)
-    except KeyError:
-        return False
-    return getpass.getuser() in tss.gr_mem
-
-
-def _systemd_creds_available() -> bool:
-    """Whether `systemd-creds` is on PATH at all — the ONE guard that decides
-    whether `soul_key_init`'s own backend auto-selection ever proposes the
-    credential backend instead of falling back to `backend="file"` outright (a
-    non-systemd host, or a systemd too old to carry the binary)."""
-    return shutil.which("systemd-creds") is not None
-
-
-def _run_systemd_creds(args: list[str], *, input_bytes: bytes) -> bytes:
-    """The ONE subprocess boundary every systemd-creds call in this module routes
-    through — a bounded-nothing-fancy `subprocess.run` (this module is
-    deliberately sync/pool-free throughout; the CLI's own async callers wrap this
-    in `asyncio.to_thread` at THEIR boundary, never here) with stdin/stdout as
-    pipes (`-`/`-` in the caller's own `args`) so the plaintext key never touches
-    a temp file. Raises `RuntimeError` naming the real stderr on any nonzero exit
-    — never a silent empty-bytes return that could masquerade as an empty (still
-    technically valid-looking) credential."""
-    proc = subprocess.run(
-        ["systemd-creds", *args], input=input_bytes, capture_output=True, timeout=30)
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"systemd-creds {' '.join(args)} failed (exit {proc.returncode}): "
-            f"{proc.stderr.decode(errors='replace').strip()}")
-    return proc.stdout
-
-
+# `_is_tss_member`/`_systemd_creds_available` (imported above from
+# `src.ingest.systemd_credential`) and the two thin wrappers below are the ONLY
+# systemd-creds surface this module needs — the actual subprocess boundary lives
+# in that shared module now (KEY CUSTODY REWRITTEN's own follow-on, THE OFFLOAD
+# RUNNER, ruling e0b98ff2's "same shape for the restic repository password"),
+# so the soul-store key and the restic password never carry two independently-
+# maintained copies of the exact same systemd-creds invocation. Kept as
+# module-level names (not inlined at each call site) so existing tests that
+# monkeypatch `soul_crypto._is_tss_member`/`soul_crypto._systemd_creds_available`
+# keep working unchanged — patching a module attribute is agnostic to whether
+# that attribute is a `def` or an imported alias.
 def _encrypt_with_systemd_creds(plaintext: bytes, *, with_key: str) -> bytes:
-    return _run_systemd_creds(
-        ["encrypt", "--user", f"--with-key={with_key}", f"--name={_CRED_NAME}", "-", "-"],
-        input_bytes=plaintext)
+    return _shared_encrypt_with_systemd_creds(plaintext, name=_CRED_NAME, with_key=with_key)
 
 
 def _decrypt_with_systemd_creds(blob: bytes) -> bytes:
-    return _run_systemd_creds(
-        ["decrypt", "--user", f"--name={_CRED_NAME}", "-", "-"], input_bytes=blob)
+    return _shared_decrypt_with_systemd_creds(blob, name=_CRED_NAME)
 
 
 def read_key_bytes_at(resolved: Path) -> bytes:

@@ -14,6 +14,14 @@ EXISTING verb rather than re-deriving it:
                                      init/rotate run once, by a human, in their own
                                      terminal, before/after (re)starting
                                      osiris-worker/osiris-mcp
+  osiris restic-key <status|init>   the offload runner's own credential door (ruling
+                                     e0b98ff2's "same shape for the restic repository
+                                     password"), the same systemd-creds custody as
+                                     soul-key above
+  osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a):
+                                     one pass syncing the vault via restic to every
+                                     present, enabled offload target — meant as
+                                     osiris-offload.timer's own ExecStart
   osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
              [--debug]              following trigger.launch_seat's own flip, rulings
                                      0fe36e59 + 33d6a2eb clause 3) — every body lands in the
@@ -1110,6 +1118,92 @@ async def cmd_soul_key(
         render.emit(out, as_json=as_json, title=f"soul-key {action}")
         return 1
     render.emit(out, as_json=as_json, title=f"soul-key {action}")
+    return 0
+
+
+# --- restic-key --------------------------------------------------------------------------------
+
+_RESTIC_KEY_ACTIONS = ("status", "init")
+
+
+async def cmd_restic_key(
+    action: str, *, path: str | None = None, backend: str | None = None,
+    as_json: bool = False,
+) -> int:
+    """osiris restic-key <status|init> — THE OFFLOAD RUNNER's own credential door (Thoth
+    mail 12813, KEY CUSTODY REWRITTEN ruling e0b98ff2's "same shape for the restic
+    repository password"), mirroring `osiris soul-key`'s init/status shape. Pool-free
+    (the restic password never touches Postgres) — a smaller door than soul-key's:
+    no rotate/enroll-recovery/recover yet, a deliberate scope cut named in `src.
+    orchestrator.restic_credential`'s own module docstring, not an oversight."""
+    from src import cli_render as render
+    from src.orchestrator import restic_credential
+
+    if action not in _RESTIC_KEY_ACTIONS:
+        print(f"osiris restic-key: action must be one of {_RESTIC_KEY_ACTIONS} "
+              f"(got {action!r})", file=sys.stderr)
+        return 1
+    if action == "init":
+        out = restic_credential.restic_key_init(path=path, backend=backend)
+    else:
+        out = restic_credential.restic_key_status(path=path)
+    if "error" in out:
+        print(f"osiris restic-key {action}: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title=f"restic-key {action}")
+        return 1
+    render.emit(out, as_json=as_json, title=f"restic-key {action}")
+    return 0
+
+
+# --- offload-runner ------------------------------------------------------------------------
+
+async def cmd_offload_runner(
+    action: str, *, vault: str | None = None, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris offload-runner tick — ONE tick of THE OPPORTUNISTIC OFFLOAD RUNNER
+    (ruling be21384a, Thoth mail 12813), meant as `osiris-offload.timer`'s own
+    `ExecStart` but safe to run by hand any time (idempotent, never blocks on an
+    absent target). `action` stays a real parameter (matching `soul-key`'s own
+    shape) even though `tick` is the only one today — the natural slot for a
+    future `status`/`history` action reading `offload_runner.offload_receipts()`
+    directly, without a second CLI command to remember."""
+    from src import cli_render as render
+    from src.orchestrator.offload_runner import run_offload_tick
+
+    if action != "tick":
+        print(f"osiris offload-runner: action must be 'tick' (got {action!r})",
+              file=sys.stderr)
+        return 1
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+
+        apply_dev_fallback()
+        settings = get_settings()
+        from src.db.pool import create_pool
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:offload-runner")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris offload-runner tick: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  "dev instance.", file=sys.stderr)
+            return 1
+    try:
+        from pathlib import Path as _Path
+
+        out = await run_offload_tick(pool, vault=_Path(vault) if vault else None)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris offload-runner tick: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title="offload-runner tick")
+        return 1
+    render.emit(out, as_json=as_json, title="offload-runner tick")
     return 0
 
 
@@ -7488,9 +7582,9 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, soul-key, bootstrap, retention,
-                        rematerialize, fleet-reconcile, fleet-prune, backfill,
-                        graph-migrate, layout
+  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
+                        bootstrap, retention, rematerialize, fleet-reconcile,
+                        fleet-prune, backfill, graph-migrate, layout
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -7711,6 +7805,47 @@ def _build_parser() -> argparse.ArgumentParser:
                                  "backup.offbox_repositories")
     p_soul_key.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
+
+    p_restic_key = sub.add_parser("restic-key", description=_d(
+        "THE OFFLOAD RUNNER's own credential door (KEY CUSTODY REWRITTEN, ruling "
+        "e0b98ff2, 'same shape for the restic repository password'): status/init "
+        "the restic repository password — a systemd user credential by default, "
+        "never a plaintext file. No rotate/enroll-recovery/recover yet, a "
+        "deliberate scope cut for this first cut"),
+        epilog="example: osiris restic-key init\n"
+               "example: osiris restic-key status")
+    p_restic_key.add_argument("action", choices=_RESTIC_KEY_ACTIONS,
+                              help="status: backend/presence facts, never the password. "
+                                   "init: mint the password (refuses if one exists) — a "
+                                   "systemd-creds user credential by default, --backend "
+                                   "file for the old plaintext shape")
+    p_restic_key.add_argument("--path", default=None,
+                              help="an explicit password file path, overriding the "
+                                   "default ~/.config/osiris/restic.password")
+    p_restic_key.add_argument("--backend", default=None,
+                              choices=["host-cred", "host+tpm2", "file"],
+                              help="init only: the credential-at-rest shape — default "
+                                   "(omit this) auto-selects host+tpm2 once you've "
+                                   "joined the tss group, else host-cred, else file on "
+                                   "a non-systemd box")
+    p_restic_key.add_argument("--json", action="store_true", dest="as_json",
+                              help="machine-readable: one compact JSON line")
+
+    p_offload_runner = sub.add_parser("offload-runner", description=_d(
+        "THE OPPORTUNISTIC OFFLOAD RUNNER (operator ruling be21384a): one tick "
+        "checks every configured offload_targets[] row's presence and syncs the "
+        "vault via restic to every one that's present right now, recording a "
+        "receipt per target — meant as osiris-offload.timer's own ExecStart, safe "
+        "to run by hand any time"),
+        epilog="example: osiris offload-runner tick")
+    p_offload_runner.add_argument("action", choices=["tick"],
+                                  help="tick: one opportunistic pass over every "
+                                       "enabled, present offload target")
+    p_offload_runner.add_argument("--vault", default=None,
+                                  help="override the vault directory being synced "
+                                       "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
+    p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
+                                  help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
         "body a seat with a fresh, persistent `claude --bg` process — always shows up "
@@ -9229,6 +9364,12 @@ def main(argv: list[str] | None = None) -> int:
             args.action, owner=args.owner, path=args.path, backend=args.backend,
             finish=args.finish, print_recovery=args.print_recovery,
             repo_url=args.repo_url, as_json=args.as_json))
+    if args.command == "restic-key":
+        return asyncio.run(cmd_restic_key(
+            args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "offload-runner":
+        return asyncio.run(cmd_offload_runner(
+            args.action, vault=args.vault, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "resume":

@@ -1,15 +1,17 @@
 #!/bin/sh
-# Installs + enables the timer lane's SIX timer pairs — osiris-prune-manifest,
-# osiris-prune-apply, osiris-base-backup, osiris-backup, osiris-preflight, and (WAVE 22,
-# ruling 7be61879, thread 40d6eef3) osiris-pg-autotune — the SAME idempotent
-# copy-and-compare mechanism install_commands.sh already uses for the slash-command
-# surface (Thoth ruling msg 6949: "deploy is the one sanctioned hand that writes machine
-# files"). Thoth mail 8437: "have deploy install these three units the way it installs
-# slash commands, so a stranger's box gets them without a hand" — the original three were
+# Installs + enables the timer lane's SEVEN timer pairs — osiris-prune-manifest,
+# osiris-prune-apply, osiris-base-backup, osiris-backup, osiris-preflight, (WAVE 22,
+# ruling 7be61879, thread 40d6eef3) osiris-pg-autotune, and (THE OPPORTUNISTIC OFFLOAD
+# RUNNER, ruling be21384a) osiris-offload — the SAME idempotent copy-and-compare
+# mechanism install_commands.sh already uses for the slash-command surface (Thoth
+# ruling msg 6949: "deploy is the one sanctioned hand that writes machine files").
+# Thoth mail 8437: "have deploy install these three units the way it installs slash
+# commands, so a stranger's box gets them without a hand" — the original three were
 # hand-installed once already; widened to five (Wave 21, thread f04cce36 piece 3) then to
-# six (WAVE 22): osiris-pg-autotune was the last hand-installed timer census gap-list-1
-# #1 named — a panel field (or, now, a registered schedule) that silently does nothing
-# until a human hand-installs it is worse than no field.
+# six (WAVE 22) then to seven (THE OFFLOAD RUNNER): osiris-pg-autotune was the last
+# hand-installed timer census gap-list-1 #1 named — a panel field (or, now, a registered
+# schedule) that silently does nothing until a human hand-installs it is worse than no
+# field.
 #
 # RENDERED, NOT COPIED VERBATIM, since piece 3: each `.timer` passes through
 # scripts/render_units.py first (generalized past the backup lane alone, WAVE 22), which
@@ -34,7 +36,7 @@ TOPLEVEL="$(git rev-parse --show-toplevel)"
 REAL_TARGET_DIR="$HOME/.config/systemd/user"
 TARGET_DIR="${OSIRIS_SYSTEMD_USER_DIR:-$REAL_TARGET_DIR}"
 
-UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune"
+UNITS="osiris-prune-manifest osiris-prune-apply osiris-base-backup osiris-backup osiris-preflight osiris-pg-autotune osiris-offload"
 
 mkdir -p "$TARGET_DIR"
 
@@ -67,7 +69,8 @@ if [ "$TARGET_DIR" = "$REAL_TARGET_DIR" ]; then
     fi
     systemctl --user enable --now \
         osiris-prune-manifest.timer osiris-prune-apply.timer osiris-base-backup.timer \
-        osiris-backup.timer osiris-preflight.timer osiris-pg-autotune.timer
+        osiris-backup.timer osiris-preflight.timer osiris-pg-autotune.timer \
+        osiris-offload.timer
 fi
 
 echo "install_prune_timers: $installed installed/updated, $current already current — $TARGET_DIR"
