@@ -164,6 +164,47 @@ async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
         "fleet() must file the seated agent under its house, never '?'")
 
 
+async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_stranger(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIRST-BREATH SEAT RESCUE, end to end (thread 124732175759, Thoth mail 13096 —
+    the live Thoth/a93f82b4 specimen). Unlike the bare-seats-root test above, the seat's
+    real holder has a lineage id UNRELATED to the job_dir's own derived basename — the
+    exact shape that specimen's own job_dir/a93f82b4 vs. seat-holder agent:ad1a1cb0
+    mismatch had, and which the seat-first-before-mint law (checked only against the
+    FRESHLY-derived identity) cannot catch on its own. A fake agent_mounts wipe (the
+    real, audited sweep_ghost_doors, not a hand-rolled DELETE) releases the row; automount
+    must re-adopt the seat's current holder, never mint a stranger under the job_dir's
+    own derived name."""
+    seat = await ensure_seat(actions, house="osiris", handle="Rescueholder",
+                             anchor_cwd=str(tmp_path / "seats" / "rescueholder"),
+                             source="test")
+    assert seat.get("error") is None
+    holder = "agent:rescueholderseat"
+    await actions.create_or_find_object("Agent", holder, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=holder, source="test")
+
+    job_dir = str(tmp_path / "jobs" / "deadb33f")
+    live = tmp_path / "live"
+    live.mkdir()
+    await mounts_mod.save_mount(actions.pool, job_dir=job_dir, agent_id=holder,
+                                project="osiris", cwd=str(live), model=None, session_key=None)
+    await actions.pool.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir=$1", job_dir)
+    released = await mounts_mod.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    assert released == 1
+    assert await mounts_mod.find_mount(actions.pool, job_dir=job_dir) is None
+
+    out = await automount(actions, session_id=SID, cwd="/w/irrelevant-launch-cwd",
+                          actor="analyst:operator", job_dir=job_dir, jobs_home=tmp_path / "jobs")
+    assert out["agent"] == holder  # the SEAT's own holder, never a job_dir-derived stranger
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:deadb33f%'"
+    ) == 0
+
+
 async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
     actions: Actions, tmp_path: Path
 ) -> None:
