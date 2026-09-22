@@ -3703,7 +3703,8 @@ async def launch_seat(
     model: str | None = None, settings: Settings | None = None,
     manager: Any = None, windows: Any = None, substrate: str | None = None,
     spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
-    operator_authorized: bool = False,
+    operator_authorized: bool = False, sleep: Any = None,
+    brief_poll_attempts: int = 3, brief_poll_delay_secs: float = 2.0,
 ) -> dict[str, Any]:
     """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages) —
     UNLESS `operator_authorized=True` (WAVE 21 item 3, a793b01b, "UNIFY LAUNCH"). Idempotent: a
@@ -3743,6 +3744,8 @@ async def launch_seat(
     spawn = spawn or _spawn_claude_bg
     agents_json = agents_json or _claude_agents_json
     cost_reader = cost_reader or _bg_session_cost
+    if sleep is None:
+        sleep = asyncio.sleep
 
     setup = await _launch_target_setup(
         actions, caller=caller, target=target, agents_json=agents_json,
@@ -3767,6 +3770,13 @@ async def launch_seat(
                               await _governed_project_name(actions.pool, target_seat))
 
     out: dict[str, Any]
+    # LAW (b)'s own addressee (Nebbercracker's monsterhouse report, DM 13214/13218,
+    # finding ba304fe0): only the harness-native lane mints and binds a fresh heir
+    # (`_bind_before_spawn`, above) with a known agent id BEFORE the body exists — the
+    # PTY lane's identity emerges later, from the child's own env-based claim, so it has
+    # nothing yet to verify a first turn against. Stays None there; the brief-
+    # verification step below is skipped whenever it is None, never guessed at.
+    heir_agent_id: str | None = None
     if lane == "pty":
         # ═══ THE OSIRIS PTY-BROKER LANE — the ORIGINAL substrate, kept alive as an explicit,
         # vendor-neutral FALLBACK (rulings 0fe36e59 + 33d6a2eb clause 3) for an incident, or a
@@ -3961,6 +3971,28 @@ async def launch_seat(
             return {"status": "refused-spawn", "seat": target_seat,
                     "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
 
+        # LAW (a) — THE GRAPH HEAD IS THE RUNNING BODY, BEFORE ITS FIRST TURN
+        # (Nebbercracker's monsterhouse report, DM 13214/13218, finding ba304fe0):
+        # `_bind_before_spawn` above deliberately does NOT move the seat's own `holds`
+        # edge onto the fresh heir in the ancestor case (THE HOLDS-SANDWICH FIX, that
+        # function's own docstring) — a heir that has done no work yet and may never
+        # boot must not sandwich a phantom inside a real generation's continuous
+        # tenure. But once the OS-level spawn command has been ACCEPTED (no OSError —
+        # the harness took the process, whatever happens to it next), that risk is
+        # gone the other way: chowder's own holder was stopped, its `holds` edge stayed
+        # on the pre-stop generation (agent:7806f810-xi, since retired), and a genuinely
+        # live `claude --bg` body sat unaddressable while mail to the seat kept routing
+        # into a retired estate. `bind_holder` is idempotent (checks for an
+        # already-live identical link before writing) — a no-op in the no-ancestor
+        # case (heir_id was already bound), and the real promotion in the ancestor
+        # case, right here, deterministically, before the spawned body's own first turn
+        # can even begin.
+        from src.orchestrator.seats import bind_holder
+
+        await bind_holder(actions, seat_id=target_seat, agent_id=bound["agent"],
+                          source=caller)
+        heir_agent_id = bound["agent"]
+
         # RA'S RECEIPT (53ae1a87), same law as the PTY lane: body_exists is the spawn's own
         # word; can_receive is a SEPARATE, independent read — `claude --bg` returns as soon as
         # the harness's own background-agent daemon takes the session over, which can be
@@ -4021,6 +4053,19 @@ async def launch_seat(
             pool, from_agent=caller, from_project=await project_of(pool, caller),
             to_agent=target_seat, body=message, grade="ask")
         brief_id = sent.get("id")
+        # LAW (b) — "BRIEF CREATED" IS NOT "BRIEF DELIVERED AS A TURN" (Nebbercracker's
+        # monsterhouse report, DM 13214/13218, finding ba304fe0): chowder's own opening
+        # brief (brief_message_id 13199) never became the spawned body's first turn —
+        # its transcript held only the boot ritual, nothing after, for 20+ minutes,
+        # with nothing in the old receipt distinguishing "a mail row exists" from "the
+        # body actually turned on it". Only checked when the harness-native lane bound
+        # a known fresh heir above (`heir_agent_id`) — the PTY lane has no addressee
+        # yet to verify a turn against.
+        if heir_agent_id is not None and brief_id is not None:
+            out["brief_delivery"] = await _verify_brief_reached_a_turn(
+                pool, msg_id=brief_id, addressee=heir_agent_id, sender=caller,
+                settings=st, sleep=sleep, attempts=brief_poll_attempts,
+                delay_secs=brief_poll_delay_secs)
 
     stamped_model = facts.get("intended_model")
     if stamped_model and argv_model != stamped_model:
@@ -4030,6 +4075,45 @@ async def launch_seat(
     if brief_id is not None:
         out["brief_message_id"] = brief_id
     return out
+
+
+async def _verify_brief_reached_a_turn(
+    pool: asyncpg.Pool, *, msg_id: int, addressee: str, sender: str,
+    settings: Settings, sleep: Any, attempts: int = 3, delay_secs: float = 2.0,
+) -> dict[str, Any]:
+    """LAW (b) (Nebbercracker's monsterhouse report, DM 13214/13218, finding ba304fe0):
+    a launch's own opening brief used to ride the ordinary mail lane with no check that
+    it ever actually became the fresh body's first turn — a body can boot, run its own
+    mount() call, and then stall before ever reaching inbox() (chowder's own specimen,
+    the second witness of ec7167a7 that night), with the old receipt unable to tell
+    "a mail row exists" from "the body turned on it".
+
+    Polls a BOUNDED number of times (`attempts`, never unbounded — `sleep` is injected
+    so a test never waits in real time) for `msg_id`'s own read state — either
+    `fleet_messages.read_at` (the legacy single-reader shape) or a `message_recipients`
+    row's `read_at` (the modern per-recipient shape) — landing. inbox()'s own act on a
+    fresh body's genuine first turn is exactly what sets either. Returns
+    `{"delivered": True}` the moment either is seen.
+
+    Still unread after the window: nudges through the SAME mail ladder every other DM
+    escalation already uses (`dispatch_dm` — never a second, differently-shaped nudge
+    mechanism) addressed to `addressee` (the fresh heir `_bind_before_spawn`/LAW (a)
+    already bound this seat's `holds` edge to, so the ladder's own occupancy reads find
+    the right generation) and returns `{"delivered": False, "nudge": <dispatch_dm's own
+    receipt>}` — honest about what was tried and what it found, never a claim of
+    delivery this function never confirmed."""
+    for _ in range(attempts):
+        read = await pool.fetchval(
+            "SELECT (m.read_at IS NOT NULL) OR EXISTS ("
+            " SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
+            "   AND r.read_at IS NOT NULL) "
+            "FROM fleet_messages m WHERE m.id=$1", msg_id)
+        if read:
+            return {"delivered": True}
+        await sleep(delay_secs)
+    nudge_result = await dispatch_dm(
+        pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings)
+    return {"delivered": False, "nudge": nudge_result}
 
 
 async def resume_seat(
