@@ -3433,7 +3433,7 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
     )
 
 
-def _harness_row_is_live(row: dict[str, Any]) -> bool:
+def _harness_row_is_live(row: dict[str, Any], *, read_cmdline: Any = None) -> bool:
     """A `claude agents --json` row counts as a genuinely live body only when its own
     `state` is not failed/completed AND (when the row names one) its own `pid` is
     actually alive on THIS box — checked against `/proc`, never assumed from a static
@@ -3442,20 +3442,37 @@ def _harness_row_is_live(row: dict[str, Any]) -> bool:
     2025736 long dead, and NEVER left the harness's own roster — so `_launch_twin_check`
     kept refusing every relaunch as `already-live` forever, off a process that no
     longer existed. A row with no `pid` at all (a harness version that doesn't report
-    one) is trusted on `state` alone, never refused for a signal it never carried."""
+    one) is trusted on `state` alone, never refused for a signal it never carried.
+
+    A BG-SPARE IS NEVER A BODY, REGARDLESS OF STATE (the same report's own addendum,
+    DM 13240): chowder's own dead pid's argv turned out to be `claude bg-spare
+    --bg-spare <sock>` — a warm-spare claim process, real and exe-verified but never a
+    conversational body, THE LIVENESS CONVERGENCE FIX's own PIECE B2
+    (`census._is_bg_spare`) already refuses to count for `registry_census`. Reused
+    here verbatim — never a second classification rule — via the SAME `b"bg-spare" in
+    cmdline` probe over `/proc/<pid>/cmdline` (`census._proc_cmdline`, injectable as
+    `read_cmdline` exactly like `registry_census`'s own `read_exe`/`read_cwd` seam, so
+    no test here ever touches a real `/proc`)."""
     if row.get("state") in ("failed", "completed"):
         return False
     pid = row.get("pid")
     if pid is None:
         return True
     try:
-        return Path(f"/proc/{int(pid)}").exists()
+        pid_int = int(pid)
     except (TypeError, ValueError):
         return False
+    if not Path(f"/proc/{pid_int}").exists():
+        return False
+    from src.orchestrator.census import _is_bg_spare, _proc_cmdline
+
+    read_cmdline = read_cmdline or _proc_cmdline
+    return not _is_bg_spare(read_cmdline(pid_int))
 
 
 async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
+    read_cmdline: Any = None,
 ) -> dict[str, Any]:
     """THE SHARED TWIN GUARD, reused by BOTH launch doors (ruling 983ec87a, "two doors, one
     receipt") — the harness-native launch lane's own idempotency check used to consult ONLY
@@ -3526,7 +3543,7 @@ async def _launch_twin_check(
     stale_harness_row: dict[str, Any] | None = None
     cwd_match = next((r for r in roster
                       if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
-    if cwd_match is not None and _harness_row_is_live(cwd_match):
+    if cwd_match is not None and _harness_row_is_live(cwd_match, read_cmdline=read_cmdline):
         from_harness = cwd_match
     else:
         from_harness = None
@@ -3580,7 +3597,8 @@ async def _launch_twin_check(
                 (r for r in everywhere if isinstance(r, dict)
                  and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
                 None)
-            if session_match is not None and _harness_row_is_live(session_match):
+            if (session_match is not None
+                    and _harness_row_is_live(session_match, read_cmdline=read_cmdline)):
                 from_harness = session_match
             elif session_match is not None and stale_harness_row is None:
                 stale_harness_row = session_match
@@ -3744,7 +3762,7 @@ async def launch_seat(
     model: str | None = None, settings: Settings | None = None,
     manager: Any = None, windows: Any = None, substrate: str | None = None,
     spawn: Any = None, agents_json: Any = None, cost_reader: Any = None,
-    operator_authorized: bool = False, sleep: Any = None,
+    operator_authorized: bool = False, sleep: Any = None, read_cmdline: Any = None,
     brief_poll_attempts: int = 3, brief_poll_delay_secs: float = 2.0,
 ) -> dict[str, Any]:
     """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages) —
@@ -3914,7 +3932,8 @@ async def launch_seat(
         # process already sitting there IS its body, whatever session id the harness gave it.
         # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
         # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
-        twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat)
+        twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat,
+                                        read_cmdline=read_cmdline)
         stale_harness_row = twin.get("stale_harness_row")
         if twin["harness"] or twin["mounts"]:
             seen_via = [s for s in (
@@ -4423,6 +4442,7 @@ _OPERATOR_CALLER = "operator"
 
 async def _stop_orphan_harness_body(
     pool: asyncpg.Pool, *, target_seat: str, kill: Any, agents_json: Any,
+    read_cmdline: Any = None,
 ) -> dict[str, Any]:
     """THE ORPHAN PATH (Nebbercracker's monsterhouse report, DM 13214/13218/13239):
     `stop_seat`'s own graph-bound path above requires a `holds` edge to exist at all —
@@ -4461,7 +4481,8 @@ async def _stop_orphan_harness_body(
         roster = []
     orphan = next(
         (r for r in roster if isinstance(r, dict) and r.get("name") == expected_name
-         and r.get("cwd") in seat_cwds and _harness_row_is_live(r)), None)
+         and r.get("cwd") in seat_cwds
+         and _harness_row_is_live(r, read_cmdline=read_cmdline)), None)
     if orphan is None:
         return {"status": "no-live-body", "seat": target_seat,
                 "detail": "the seat has no current holder — nothing to stop"}
@@ -4487,6 +4508,7 @@ async def _stop_orphan_harness_body(
 async def stop_seat(
     actions: Actions, *, caller: str, target: str | None, reason: str = "",
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
+    read_cmdline: Any = None,
 ) -> dict[str, Any]:
     """STOP — the process-lifecycle inverse of launch_seat (#156's held half, ruling
     94c2e7e8 leg 2: "reachable and stoppable are the same lane's two directions"). Ends a
@@ -4602,7 +4624,8 @@ async def stop_seat(
     holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
     if not holder:
         return await _stop_orphan_harness_body(
-            pool, target_seat=target_seat, kill=kill, agents_json=agents_json)
+            pool, target_seat=target_seat, kill=kill, agents_json=agents_json,
+            read_cmdline=read_cmdline)
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)

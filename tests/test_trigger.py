@@ -5097,20 +5097,67 @@ async def test_launch_ignores_a_failed_dead_harness_row_and_reports_it_as_stale(
     assert d["stale_harness_row"] == stale_row
 
 
+async def test_launch_ignores_a_bg_spare_wearing_the_seats_own_window_name(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Nebbercracker's own addendum (DM 13240), the exact shape behind chowder's own
+    incident: the "failed" row's pid turned out to be `claude bg-spare --bg-spare
+    <sock>` — a warm-spare claim process, real and alive on `/proc`, but never a
+    conversational body. A `state: "running"` row whose cmdline names it a spare must
+    be ignored exactly like a failed/dead one — `state` alone is not the whole story."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:spare01", manager_agent="agent:sparem01",
+        worker_handle="Sparerow", house="monsterhouse")
+    launch_cwd = tmp_path / "sparerow"
+    launch_cwd.mkdir()
+    await _office(actions, worker_seat, str(launch_cwd))
+    real_pid = os.getpid()
+    spare_row = {"cwd": str(launch_cwd), "name": "[MO] Sparerow",
+                "sessionId": "faf79699", "status": "idle", "state": "running",
+                "pid": real_pid}
+
+    def _spare_cmdline(pid: int) -> bytes:
+        return b"claude\x00bg-spare\x00--bg-spare\x00/tmp/spare.sock"
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:sparem01", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[spare_row]]),
+        read_cmdline=_spare_cmdline)
+
+    assert d["status"] == "launched"  # never "already-live" — a spare is not a twin
+    assert spawned and spawned[0]["repo"] == str(launch_cwd)
+    assert d["stale_harness_row"] == spare_row
+
+
 async def test_harness_row_is_live_checks_state_then_a_real_proc_pid() -> None:
     """The predicate in isolation: `state` in failed/completed refuses outright (never
     even reaching the pid check); a live-looking state with a pid that does not exist
     on THIS box (checked against /proc, never assumed) also refuses; a row with no pid
     at all is trusted on `state` alone — a harness version that doesn't report one is
-    not treated as evidence of death it never actually carried."""
+    not treated as evidence of death it never actually carried. A live pid whose own
+    argv (`read_cmdline`, injected — never a real `/proc` read here) is a
+    `claude bg-spare` warm-spare refuses too, regardless of `state` (Nebbercracker's
+    own addendum, DM 13240) — a genuine `claude` body's cmdline is what makes it True."""
     from src.orchestrator.trigger import _harness_row_is_live
+
+    def _body_cmdline(pid: int) -> bytes:
+        return b"claude\x00--bg\x00-n\x00[MO] chowder"
+
+    def _bg_spare_cmdline(pid: int) -> bytes:
+        return b"claude\x00bg-spare\x00--bg-spare\x00/tmp/cc-daemon-1000/spare/faf79699.claim.sock"
 
     assert _harness_row_is_live({"state": "failed", "pid": os.getpid()}) is False
     assert _harness_row_is_live({"state": "completed"}) is False
     assert _harness_row_is_live({"state": "running", "pid": 999999999}) is False
-    assert _harness_row_is_live({"state": "running", "pid": os.getpid()}) is True
     assert _harness_row_is_live({"state": "running"}) is True
     assert _harness_row_is_live({}) is True
+    assert _harness_row_is_live(
+        {"state": "running", "pid": os.getpid()}, read_cmdline=_body_cmdline) is True
+    # THE ADDENDUM (DM 13240): "running" state, a genuinely alive pid — still refused,
+    # because the process behind it is a warm spare, never a conversational body.
+    assert _harness_row_is_live(
+        {"state": "running", "pid": os.getpid()}, read_cmdline=_bg_spare_cmdline) is False
 
 
 async def test_launch_binds_holds_to_the_fresh_heir_at_spawn_return_not_the_stale_ancestor(
@@ -6982,11 +7029,15 @@ async def test_stop_seat_kills_an_orphan_harness_body_the_graph_never_bound(
     await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
 
     expected_name = await _window_name(actions.pool, "monsterhouse", "Orphan", None)
-    row = {"name": expected_name, "cwd": office, "pid": 2025736, "id": "abc12345",
+    real_pid = os.getpid()  # a genuinely alive pid — /proc's own real state, never faked
+    row = {"name": expected_name, "cwd": office, "pid": real_pid, "id": "abc12345",
           "state": "running"}
 
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [row]
+
+    def _real_body_cmdline(pid: int) -> bytes:
+        return b"claude\x00--bg\x00-n\x00" + expected_name.encode()
 
     killed: list[tuple[int, str | None]] = []
 
@@ -6995,12 +7046,12 @@ async def test_stop_seat_kills_an_orphan_harness_body_the_graph_never_bound(
 
     d = await trigger_module.stop_seat(
         actions, caller="agent:orphm01", target=orphan_seat,
-        agents_json=_agents_json, kill=_kill)
+        agents_json=_agents_json, kill=_kill, read_cmdline=_real_body_cmdline)
 
     assert d["status"] == "stopped"
     assert d["orphan"] is True
-    assert d["pid"] == 2025736
-    assert killed == [(2025736, "abc12345")]
+    assert d["pid"] == real_pid
+    assert killed == [(real_pid, "abc12345")]
 
 
 async def test_stop_seat_refuses_an_orphan_row_whose_cwd_does_not_match_the_seat(
@@ -7039,6 +7090,51 @@ async def test_stop_seat_refuses_an_orphan_row_whose_cwd_does_not_match_the_seat
     d = await trigger_module.stop_seat(
         actions, caller="agent:orphm02", target=orphan_seat,
         agents_json=_agents_json, kill=_boom)
+
+    assert d["status"] == "no-live-body"
+
+
+async def test_stop_seat_never_kills_a_bg_spare_wearing_the_seats_own_window_name(
+    actions: Actions,
+) -> None:
+    """Nebbercracker's own addendum (DM 13240): a `claude bg-spare` warm-spare that
+    FAILED to claim can still be labelled with a seat's own window name (chowder's own
+    incident) — matching by name and cwd is not enough on its own; a spare is never a
+    body, and the orphan path must refuse it exactly as `_harness_row_is_live` now
+    does everywhere else."""
+    from src.orchestrator.trigger import _window_name
+
+    seat = await ensure_seat(actions, house="monsterhouse", handle="Orphan3",
+                             source="agent:orphm03")
+    orphan_seat = seat["seat_id"]
+    office = "/tmp/orphan3-office"
+    await _office(actions, orphan_seat, office)
+    manager = await ensure_seat(actions, house="monsterhouse", handle="Orphan3Mgr",
+                                source="agent:orphm03")
+    manager_seat = manager["seat_id"]
+    await bind_holder(actions, seat_id=manager_seat, agent_id="agent:orphm03",
+                      source="agent:orphm03")
+    w_oid = await actions.create_or_find_object("Seat", orphan_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+
+    expected_name = await _window_name(actions.pool, "monsterhouse", "Orphan3", None)
+    real_pid = os.getpid()  # genuinely alive — the spare-ness comes from cmdline alone
+    row = {"name": expected_name, "cwd": office, "pid": real_pid, "id": "spare123",
+          "state": "running"}
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [row]
+
+    def _spare_cmdline(pid: int) -> bytes:
+        return b"claude\x00bg-spare\x00--bg-spare\x00/tmp/spare.sock"
+
+    async def _boom(pid: int, job_dir_key: str | None) -> None:
+        raise AssertionError("a bg-spare must never reach kill()")
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:orphm03", target=orphan_seat,
+        agents_json=_agents_json, kill=_boom, read_cmdline=_spare_cmdline)
 
     assert d["status"] == "no-live-body"
 
