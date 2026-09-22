@@ -1813,14 +1813,29 @@ def _validate_repo_name(name: str, raw: str) -> None:
 
 
 async def _resolve_repo(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
-    """An active SoftwareProject by its `name` property or its `repo:<name>` canonical."""
-    return await pool.fetchval(  # type: ignore[no-any-return]
+    """An active SoftwareProject by its `name` property, its `repo:<name>` canonical, or —
+    last — a RETIRED canonical (object_aliases, appended when a rename migrated the
+    canonical; Thoth DM 12786): the alias names the same object, so a hand-typed old
+    spelling resolves instead of minting a stub."""
+    found = await pool.fetchval(
         "SELECT o.id FROM objects o WHERE o.type='SoftwareProject' AND o.status='active' AND ("
         "  o.canonical = $1 OR o.canonical = $2 OR EXISTS ("
         "    SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
         "    AND a.name='name' AND a.value #>> '{}' = $3)) LIMIT 1",
         name, f"repo:{name}", name,
     )
+    if found is not None:
+        return found  # type: ignore[no-any-return]
+    return await _resolve_repo_alias(pool, name)
+
+
+async def _resolve_repo_alias(pool: asyncpg.Pool, name: str) -> uuid.UUID | None:
+    """The ACTIVE SoftwareProject whose retired canonical is `repo:<name>` (object_aliases),
+    or None. The read half of "an alias is never a stub"; `_resolve_repo` falls back to it."""
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT o.id FROM object_aliases al JOIN objects o ON o.id=al.object_id "
+        "WHERE al.type='SoftwareProject' AND al.alias=$1 AND o.status='active'",
+        f"repo:{name.removeprefix('repo:')}")
 
 
 async def _resolve_repo_by_remote(pool: asyncpg.Pool, remote_url: str) -> list[uuid.UUID]:

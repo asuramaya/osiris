@@ -7,7 +7,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
-from src.actions.core import Actions
+import pytest
+from src.actions.core import ActionError, Actions
 from src.orchestrator.capture import record_decision
 from src.orchestrator.project_identity import (
     create_project,
@@ -453,12 +454,18 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
                                because="operator ruling: xxit renamed on its remote",
                                actor="agent:test", dry_run=False)
 
-    assert out["project"] == "repo:xxit"          # canonical id NEVER changes
+    assert out["project"] == "repo:handlingtheloop"   # the canonical MIGRATES (DM 12786)
+    assert out["old_canonical"] == "repo:xxit"
     assert out["old_name"] == "xxit" and out["new_name"] == "handlingtheloop"
     assert out["mounts_moved"] == 1
     row = await actions.pool.fetchrow("SELECT canonical, status FROM objects WHERE id=$1",
                                       proj)
-    assert row["canonical"] == "repo:xxit" and row["status"] == "active"
+    assert row["canonical"] == "repo:handlingtheloop" and row["status"] == "active"
+    assert await actions.resolve_alias("SoftwareProject", "repo:xxit") == proj
+    event = await actions.pool.fetchval(
+        "SELECT payload FROM object_events WHERE object_id=$1 "
+        "AND event_type='canonical_changed'", proj)
+    assert event["from"] == "repo:xxit" and event["to"] == "repo:handlingtheloop"
     current_name = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='name' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", proj)
@@ -513,6 +520,100 @@ async def test_rename_project_always_wins_a_cross_source_race_now(
                                dry_run=False)
     assert out["current_name_after_write"] == "readbackwins"
     assert out["rename_confirmed"] is True
+
+
+async def test_change_canonical_migrates_the_string_and_aliases_the_old_one(
+    actions: Actions,
+) -> None:
+    """Actions.change_canonical, the kernel primitive rename_project builds on
+    (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/b5663511,
+    Thoth DM 12786): the uuid never moves, a compensating `canonical_changed` event is
+    recorded, and the retired string becomes a resolvable alias."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:ccold", "test")
+
+    out = await actions.change_canonical(proj, "repo:ccnew", "test migration",
+                                         "agent:test")
+    assert out == {"changed": True, "from": "repo:ccold", "canonical": "repo:ccnew"}
+    row = await actions.pool.fetchrow("SELECT id, canonical FROM objects WHERE id=$1", proj)
+    assert row["id"] == proj and row["canonical"] == "repo:ccnew"
+    assert await actions.resolve_alias("SoftwareProject", "repo:ccold") == proj
+    event = await actions.pool.fetchval(
+        "SELECT payload FROM object_events WHERE object_id=$1 "
+        "AND event_type='canonical_changed'", proj)
+    assert event == {"from": "repo:ccold", "to": "repo:ccnew", "because": "test migration"}
+
+
+async def test_change_canonical_is_a_no_op_when_already_current(actions: Actions) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:ccsame", "test")
+    out = await actions.change_canonical(proj, "repo:ccsame", "x", "agent:test")
+    assert out == {"changed": False, "canonical": "repo:ccsame"}
+    assert await actions.resolve_alias("SoftwareProject", "repo:ccsame") is None
+
+
+async def test_change_canonical_refuses_a_live_holder(actions: Actions) -> None:
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:ccmover", "test")
+    await actions.create_or_find_object("SoftwareProject", "repo:cctaken", "test")
+    with pytest.raises(ActionError):
+        await actions.change_canonical(proj, "repo:cctaken", "x", "agent:test")
+
+
+async def test_create_or_find_object_never_mints_a_stub_under_an_alias(
+    actions: Actions,
+) -> None:
+    """The kernel choke point every mint door funnels through (item 1, Thoth DM 12786):
+    a caller passing the RETIRED canonical finds the migrated object, never a twin."""
+    proj = await actions.create_or_find_object("SoftwareProject", "repo:aliasedold", "test")
+    await actions.change_canonical(proj, "repo:aliasednew", "x", "agent:test")
+
+    again = await actions.create_or_find_object("SoftwareProject", "repo:aliasedold", "test")
+    assert again == proj
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical='repo:aliasedold'") == 0
+
+
+async def test_rename_project_refuses_when_object_aliases_is_missing(
+    actions: Actions,
+) -> None:
+    """Thoth's own addition (DM 12798): refuse rather than silently orphan the old
+    canonical on a box that has not yet run alembic 0072."""
+    await _mk_project(actions, "premigrate")
+    await actions.pool.execute("ALTER TABLE object_aliases RENAME TO object_aliases_hidden")
+    try:
+        out = await rename_project(actions, project="premigrate", new_name="postmigrate",
+                                   because="x", actor="agent:test", dry_run=False)
+        assert "error" in out
+        assert "object_aliases" in out["error"] and "0072" in out["error"]
+    finally:
+        await actions.pool.execute("ALTER TABLE object_aliases_hidden RENAME TO object_aliases")
+
+
+async def test_rename_project_migrates_off_graph_project_columns(actions: Actions) -> None:
+    """item 6/DM 12798: the six plain-text project columns outside objects/links/
+    assertions are re-addressed in the SAME door, receipt naming exactly what moved."""
+    from src.orchestrator.mounts import save_mount
+
+    await _mk_project(actions, "offgraphold")
+    await save_mount(actions.pool, job_dir="/j/offgraph", agent_id="agent:offgraph1",
+                     project="offgraphold", cwd="/w/offgraph", model=None, session_key=None)
+    await actions.pool.execute(
+        "INSERT INTO fleet_messages (from_agent, from_project, to_project, body) "
+        "VALUES ('agent:offgraph1','offgraphold','offgraphold','x')")
+
+    out = await rename_project(actions, project="offgraphold", new_name="offgraphnew",
+                               because="x", actor="agent:test", dry_run=False)
+
+    assert "error" not in out
+    moved = out["canonical_migration"]["off_graph_moved"]
+    assert moved["agent_mounts.project"] == 1
+    assert moved["fleet_messages.from_project"] == 1
+    assert moved["fleet_messages.to_project"] == 1
+    mount_row = await actions.pool.fetchval(
+        "SELECT project FROM agent_mounts WHERE job_dir='/j/offgraph'")
+    assert mount_row == "offgraphnew"
+    fm = await actions.pool.fetchrow(
+        "SELECT from_project, to_project FROM fleet_messages WHERE body='x'")
+    assert fm["from_project"] == "offgraphnew" and fm["to_project"] == "offgraphnew"
 
 
 async def test_rename_project_never_collides_with_a_merged_object(actions: Actions) -> None:
@@ -634,11 +735,20 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
         re-verify) resolves correctly for a pin declaring EITHER name.
     (4) re-running the rename with the same new_name is a clean, confirmed no-op.
     (5) a name-only stub (the exact live shape: one edge, no real content) folds
-        through merge() into the real object without any manual intervention."""
+        through merge() into the real object without any manual intervention.
+
+    EXTENDED (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/
+    b5663511, Thoth DM 12786/12798): the rename now migrates repo:dtfb's own canonical
+    to repo:lotstretcher — (6) the receipt's own `project` is the migrated canonical;
+    (7) the OLD canonical resolves (via object_aliases) to the SAME object, never a
+    stub, and dossier flags it `resolved_via_alias`; (8) project_identity_census
+    (`osiris lint --check project_identity`) reports no alias conflict for it."""
     from src.orchestrator.agents import register_agent, resolve_identity
     from src.orchestrator.charter import set_charter
+    from src.orchestrator.compositions import project_identity_census
     from src.orchestrator.dossier import entity_dossier
     from src.orchestrator.merge import merge
+    from src.orchestrator.projects import _resolve_software_project
 
     # SEED: repo:dtfb with a governing seat and a working agent, matching the real
     # specimen's own shape before the rename.
@@ -653,10 +763,21 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
                                because="operator: repo renamed on its remote",
                                actor="agent:renamer", dry_run=False)
     assert out["rename_confirmed"] is True
+    # (6) the receipt's own `project` IS the migrated canonical
+    assert out["project"] == "repo:lotstretcher"
+    assert out["old_canonical"] == "repo:dtfb"
 
     # (1) dossier
     d = await entity_dossier(actions.pool, proj)
     assert d["name"] == "lotstretcher"
+    assert d["canonical"] == "repo:lotstretcher"
+
+    # (7) the OLD canonical resolves through the alias to the SAME object, never a stub
+    old_via_alias = await _resolve_software_project(actions.pool, "dtfb")
+    assert old_via_alias is not None
+    assert old_via_alias["id"] == proj
+    assert old_via_alias["resolved_via_alias"] == "repo:dtfb"
+    assert await actions.resolve_alias("SoftwareProject", "repo:dtfb") == proj
 
     # (2) capture's repo= — both spellings, no stub, same object
     d_old = await record_decision(actions, "filed under the old spelling", repo="dtfb")
@@ -666,8 +787,11 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
             "SELECT p.id FROM links l JOIN objects p ON p.id=l.to_id "
             "WHERE l.from_id=$1 AND l.type='in_repo'", d_id)
         assert target == proj
-    assert not await actions.pool.fetchval(
-        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:lotstretcher'")
+    # exactly one SoftwareProject answers to the (now migrated) canonical — the object
+    # itself, never a second stub minted under it
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical='repo:lotstretcher'") == 1
 
     # (2)/(3) mount's own identity.project resolution + the stored Agent.project fact
     # get_status/orient actually read
@@ -679,8 +803,9 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
             "SELECT p.id FROM links l JOIN objects p ON p.id=l.to_id "
             "WHERE l.from_id=$1 AND l.type='works_in'", a)
         assert works_in_target == proj, f"pin={pin_name!r} landed on a different object"
-    assert not await actions.pool.fetchval(
-        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:lotstretcher'")
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
+        "AND canonical='repo:lotstretcher'") == 1
 
     # (4) re-running the rename is a clean, confirmed no-op
     again = await rename_project(actions, project="lotstretcher", new_name="lotstretcher",
@@ -689,8 +814,10 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
     assert "error" not in again
     assert again["rename_confirmed"] is True
     assert again["current_name_after_write"] == "lotstretcher"
+    assert again["project"] == "repo:lotstretcher"
 
-    # (5) a name-only stub folds through merge() without manual help
+    # (5) a name-only stub folds through merge() without manual help — `into` still
+    # names the OLD spelling, resolving through the alias to the same live object
     stub = await actions.create_or_find_object(
         "SoftwareProject", "repo:lotstretcher-stub", "agent:stray-mount")
     await actions.assert_property(stub, "name", "lotstretcher", "agent:stray-mount",
@@ -710,6 +837,10 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
     assert await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
         "AND (valid_until IS NULL OR valid_until > now())", other_thread, proj)
+
+    # (8) the lint reports no alias conflict for this object
+    census = await project_identity_census(actions.pool)
+    assert not [c for c in census["alias_conflicts"] if c["owner"] == "repo:lotstretcher"]
 
 
 async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion(
@@ -771,7 +902,7 @@ async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
                                because="tidying casing", actor="agent:test", dry_run=False)
     assert out["new_name"] == "ByeByte"  # the write still happened
     assert out["prior_art_flag"] == (
-        "a standing ruling (1db87191) may already cover repo:bytebye's 'name'")
+        "a standing ruling (1db87191) may already cover repo:ByeByte's 'name'")
 
 
 async def test_rename_project_refuses_blank_new_name_or_because(actions: Actions) -> None:
@@ -938,10 +1069,10 @@ async def test_rename_cascade_touches_pin_and_house_reports_charter_already_corr
     assert 'project = "cascadenew"' in (office / ".osiris").read_text()
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import seat_facts
-    # charter_of reports a CANONICAL-derived label, which never moves on a rename —
-    # "cascadeold" forever, by design (project_identity.rename_project's own contract).
+    # charter_of reports a CANONICAL-derived label, and the canonical now MIGRATES with
+    # the rename (DM 12786) — the governs edge keys on the uuid, so it follows for free.
     # What matters is exactly ONE live governs edge, never a duplicate or a dropped one.
-    assert await charter_of(actions.pool, seat["seat_id"]) == ["cascadeold"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["cascadenew"]
     assert (await seat_facts(actions.pool, seat["seat_id"]))["house"] == "cascadenew"
 
 
@@ -1032,7 +1163,8 @@ async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_li
     tiers = out["manifest"]["seats"][seat["seat_id"]]
     assert tiers["charter"]["status"] == "already-correct"  # plan and apply now agree
     assert "error" not in tiers["charter"]
-    assert await charter_of(actions.pool, seat["seat_id"]) == ["xxit"]  # genuinely unchanged
+    # follows the migrated canonical
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["flowrenamed"]
 
 
 async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_shape(
@@ -1060,11 +1192,12 @@ async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_
     out = await rename_project(actions, project="metroncurrent", new_name="metronfinal",
                                because="x", actor="agent:test", dry_run=False)
     tiers = out["manifest"]["seats"][seat["seat_id"]]
-    # mail 8749: charter can never actually change on a plain rename (canonical is
-    # immutable) — "already-correct" is the honest, verified answer, not "touched".
+    # mail 8749: the governs edge keys on the uuid, so the charter needs no write —
+    # "already-correct" is the honest, verified answer, not "touched". The label it
+    # reads back is the MIGRATED canonical (DM 12786).
     assert tiers["charter"]["status"] == "already-correct"
     assert "error" not in tiers["charter"]
-    assert await charter_of(actions.pool, seat["seat_id"]) == ["metronorig"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["metronfinal"]
 
 
 async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governing_seat(
@@ -1191,7 +1324,7 @@ async def test_rename_cascade_self_rename_reports_already_correct_never_a_phanto
     tiers = out["manifest"]["seats"][seat["seat_id"]]
     assert tiers["charter"]["status"] == "already-correct"  # plan and apply now agree
     assert "error" not in tiers["charter"]
-    assert await charter_of(actions.pool, seat["seat_id"]) == ["selfstaleorig"]
+    assert await charter_of(actions.pool, seat["seat_id"]) == ["selfstalecur"]
 
 
 async def test_rename_cascade_self_rename_with_no_stale_alias_stays_a_no_op(
@@ -2205,13 +2338,14 @@ async def test_rename_project_migrates_edges_never_orphans_them(
                                because="adversarial edge-migration test", actor="agent:test",
                                dry_run=False)
     assert out["new_name"] == "aftername"
-    assert out["project"] == old_canonical  # canonical is UNCHANGED — the receipt's own
-                                            # "project" key IS the canonical, by contract
+    assert out["old_canonical"] == old_canonical
+    assert out["project"] == "repo:aftername"  # the canonical MIGRATED (DM 12786)
 
-    # the object's own id and canonical are byte-identical to before the rename
+    # the object's id is unchanged; its canonical MIGRATED and the old string is an alias
     new_canonical = await actions.pool.fetchval(
         "SELECT canonical FROM objects WHERE id=$1", proj)
-    assert new_canonical == old_canonical
+    assert new_canonical == "repo:aftername"
+    assert await actions.resolve_alias("SoftwareProject", old_canonical) == proj
 
     # BOTH edges still resolve FROM THE SAME object id — nothing needed to migrate because
     # nothing ever pointed at name/canonical to begin with
@@ -2228,8 +2362,10 @@ async def test_rename_project_migrates_edges_never_orphans_them(
     # either the old or the new label
     count = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND canonical=$1",
-        old_canonical)
+        new_canonical)
     assert count == 1
+    assert not await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical=$1", old_canonical)
 
     # the NEW name resolves to the SAME object (never a twin) via the live name property
     from src.orchestrator.projects import _resolve_software_project

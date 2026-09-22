@@ -1338,7 +1338,9 @@ async def test_normalize_project_casing_folds_and_corrects_the_pin(
         seat_pin_paths=(seat_path,))
 
     assert out["folded"] == "repo:ramstein" and out["into"] == "repo:RAMstein"
-    assert out["renamed"] == "repo:RAMstein"
+    # the canonical MIGRATES to the corrected case too now (operator ruling, DM 12786) —
+    # rename_project's own receipt names the NEW, correctly-cased canonical
+    assert out["renamed"] == "repo:ramstein"
     assert out["old_name"] == "RAMstein" and out["new_name"] == "ramstein"
     assert out["edges_moved"] == {}  # the PHANTOM had nothing to move
     assert len(out["pins_written"]) == 1
@@ -1350,10 +1352,14 @@ async def test_normalize_project_casing_folds_and_corrects_the_pin(
     assert "pin_write_failed" not in out
 
     populated_row = await actions.pool.fetchrow(
-        "SELECT status FROM objects WHERE canonical='repo:RAMstein'")
+        "SELECT status, canonical FROM objects WHERE id=$1", populated_id)
     assert populated_row["status"] == "active", "the POPULATED object survives, never merged"
+    assert populated_row["canonical"] == "repo:ramstein"
+    assert await actions.resolve_alias("SoftwareProject", "repo:RAMstein") == populated_id
+    # the phantom's own merged canonical was moved aside to free 'repo:ramstein' for
+    # the populated survivor — it is no longer reachable at that string
     phantom_row = await actions.pool.fetchrow(
-        "SELECT status FROM objects WHERE canonical='repo:ramstein'")
+        "SELECT status, canonical FROM objects WHERE canonical LIKE 'repo:ramstein~merged-%'")
     assert phantom_row["status"] == "merged", "the empty PHANTOM is what gets retired"
     pin_text = (Path(seat_path) / ".osiris").read_text()
     assert 'project = "ramstein"' in pin_text
@@ -1414,7 +1420,8 @@ async def test_normalize_project_casing_works_with_no_pins_named(actions: Action
     out = await normalize_project_casing(
         actions, populated="NoPin", phantom="nopin", correct_case="nopin",
         evidence="op confirmed", actor="agent:test")
-    assert out["renamed"] == "repo:NoPin"
+    # the canonical migrates to the corrected case too (operator ruling, DM 12786)
+    assert out["renamed"] == "repo:nopin"
     assert out["pins_written"] == [] and out["pins_already_correct"] == []
 
 
@@ -1642,10 +1649,12 @@ async def test_casefold_auto_merge_executes_when_told_to(actions: Actions) -> No
     out = await casefold_auto_merge_candidates(
         actions, evidence="op confirmed", actor="agent:test", execute=True)
     assert out["executed"] is True
-    assert out["candidates"][0]["result"]["renamed"] == "repo:ExecTwin"
+    # the canonical migrates to the corrected (lowercase) case too now (DM 12786)
+    assert out["candidates"][0]["result"]["renamed"] == "repo:exectwin"
     row = await actions.pool.fetchrow(
-        "SELECT status, merged_into FROM objects WHERE canonical='repo:exectwin'")
-    assert row["status"] == "merged"
+        "SELECT status, merged_into FROM objects "
+        "WHERE canonical LIKE 'repo:exectwin~merged-%'")
+    assert row["status"] == "merged" and row["merged_into"] == populated_id
 
 
 async def test_casefold_auto_merge_never_folds_a_path_shaped_basename_collision(

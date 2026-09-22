@@ -639,14 +639,15 @@ async def test_filed_under_check_stays_incoherent_when_the_dead_name_names_nothi
 async def test_filed_under_check_shows_the_canonical_on_a_genuinely_split_rename(
     actions: Actions,
 ) -> None:
-    """Thread 8678/8687, Thoth relaying Metron's acceptance (8672): a project's own
-    `canonical` never changes on `rename_project` (only the mutable `name` property does —
-    see project_identity.rename_project's own docstring), so a session mounted under the
-    project's CURRENT display name post-rename always has `filed_under != went_to`'s literal
-    string on the first compare. This is the real (not merely display-name) specimen the
-    dead-name rescue above was built for: `filed_under` must come back naming the SAME
-    canonical `writes_went_to` does, never the post-rename display label the rescue had to
-    look past to get there."""
+    """Thread 8678/8687, Thoth relaying Metron's acceptance (8672), UPDATED for the
+    operator's later ruling "A RENAME MIGRATES THE CANONICAL TOO" (grounds 488ae750/
+    b5663511, Thoth DM 12786): a project's `canonical` now migrates WITH `rename_project`
+    (repo:<old> -> repo:<new_name>, in the same atomic block as the `name` write) — the
+    exact split this test was built to catch (a session mounted under the post-rename
+    display name while every write still lands `in_repo` of the frozen pre-rename
+    canonical) can no longer occur for a plain rename: `went_to` reads the object's own
+    LIVE canonical (now the migrated one), and `project` normalizes to the SAME live
+    label — both sides of the receipt agree on `fu12-newdisplay` with no rescue needed."""
     from src.orchestrator.project_identity import rename_project
 
     agent = "agent:fu12"
@@ -663,8 +664,8 @@ async def test_filed_under_check_shows_the_canonical_on_a_genuinely_split_rename
                                   project="fu12-newdisplay")
     assert out is not None
     assert out["coherent"] is True
-    assert out["writes_went_to"] == ["fu12-oldcanon"]
-    assert out["filed_under"] == "fu12-oldcanon"
+    assert out["writes_went_to"] == ["fu12-newdisplay"]
+    assert out["filed_under"] == "fu12-newdisplay"
 
 
 # ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO

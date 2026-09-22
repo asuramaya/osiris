@@ -1873,7 +1873,14 @@ async def dossier(object_ref: str, want_relationships: bool = False,
         return {"error": f"no object {object_ref!r}"}
     ident = await _ident_for(ctx)
     await _stamp_read_ids(pool, ident, "dossier", [oid])
-    return await entity_dossier(pool, oid, want_relationships=want_relationships)
+    out = await entity_dossier(pool, oid, want_relationships=want_relationships)
+    # RESOLVED VIA ALIAS, NEVER SILENT (a rename migrates the canonical, Thoth DM 12786):
+    # when the ref the caller typed is a RETIRED canonical, say so and name the live one.
+    if out and object_ref != out.get("canonical") and await pool.fetchval(
+            "SELECT 1 FROM object_aliases WHERE alias=$1 AND object_id=$2",
+            object_ref, oid):
+        out["resolved_via_alias"] = {"alias": object_ref, "canonical": out.get("canonical")}
+    return out
 
 
 @mcp.tool()
@@ -7096,9 +7103,10 @@ async def _project_impl(
             # already-mounted agent (any generation, not just the caller's own lineage —
             # a project rename is never lineage-scoped) reporting the pre-rename name
             # until its next full re-mount.
-            old_bare = out["project"].removeprefix("repo:")
+            old_bare = out["old_canonical"].removeprefix("repo:")
+            stale_labels = {old_bare, out.get("old_name")}
             for cached in _agents.values():
-                if cached.project == old_bare:
+                if cached.project in stale_labels:
                     cached.project = new_name
             # THE SEAT-BOUND HALF (mount-cache heal generalization, wave 6, dispatch
             # 7dfc38a5): the string-match above catches any cached entry whose `.project`

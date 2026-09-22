@@ -1267,6 +1267,14 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
         "SELECT id FROM objects WHERE canonical=$1 AND status='active' LIMIT 1", ref)
     if oid is not None:
         return uuid.UUID(str(oid))
+    # A RETIRED CANONICAL (object_aliases, a rename migrated it — Thoth DM 12786) names the
+    # SAME object: console/dossier/inspect resolve the old spelling forever. `alias_hit`
+    # is how a caller reports `resolved_via_alias`.
+    oid = await pool.fetchval(
+        "SELECT o.id FROM object_aliases al JOIN objects o ON o.id=al.object_id "
+        "WHERE al.alias=$1 AND o.status='active' AND o.canonical <> al.alias LIMIT 1", ref)
+    if oid is not None:
+        return uuid.UUID(str(oid))
     # A FLEET HANDLE ("sekhmet") must resolve to the REAL agent, never a harness sidechain
     # artifact that happens to share the substring (task #114, Seshat XIII, thread
     # 05a72d2c0af0 — found live: dossier("sekhmet") returned "sekhmet I.1", a spawned_by
@@ -1710,7 +1718,28 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
         "GROUP BY o.canonical HAVING count(DISTINCT a.value #>> '{}') > 1")
     not_singular = [{"canonical": r["canonical"], "names": sorted(r["names"])} for r in dupes]
 
-    return {"stub_collisions": stub_collisions, "not_singular": not_singular}
+    # ALIAS HYGIENE (a rename migrates the canonical, Thoth DM 12786): an alias is the
+    # RETIRED spelling of one object and must never be a second identity. Flagged when a
+    # retired canonical is (a) the LIVE canonical of a DIFFERENT active object (two
+    # objects answering to one string — the alias would shadow or be shadowed), or (b)
+    # the current `name` of a different active object (an alias posing as a second name).
+    alias_rows = await pool.fetch(
+        "SELECT al.alias, al.object_id, o.canonical AS owner FROM object_aliases al "
+        "JOIN objects o ON o.id=al.object_id WHERE al.type='SoftwareProject'")
+    alias_conflicts: list[dict[str, Any]] = []
+    for r in alias_rows:
+        bare = str(r["alias"]).removeprefix("repo:")
+        squat = await pool.fetchval(
+            "SELECT o.canonical FROM objects o WHERE o.type='SoftwareProject' "
+            "AND o.status='active' AND o.id<>$1 AND (o.canonical=$2 OR EXISTS ("
+            "  SELECT 1 FROM current_assertions a WHERE a.object_id=o.id AND a.name='name' "
+            "  AND a.value #>> '{}' = $3))", r["object_id"], r["alias"], bare)
+        if squat:
+            alias_conflicts.append({"alias": r["alias"], "owner": r["owner"],
+                                    "conflicts_with": squat})
+
+    return {"stub_collisions": stub_collisions, "not_singular": not_singular,
+            "alias_conflicts": alias_conflicts}
 
 
 async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -3165,7 +3194,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "detail": f"{len(r['names'])} competing current `name` values: "
                        f"{', '.join(r['names'])} — migrate_project_name_singular "
                        "collapses this, newest/highest-confidence wins"}
-            for r in identity_result["not_singular"]])
+            for r in identity_result["not_singular"]
+        ] + [
+            {"subject": r["alias"],
+             "detail": f"retired canonical of {r['owner']} is also live on "
+                       f"{r['conflicts_with']} — an alias must name exactly one object; "
+                       "fold or rename the squatter, never treat the alias as a second name"}
+            for r in identity_result["alias_conflicts"]])
     except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
         # other: a genuinely distinct could-not-evaluate state (ruling on thread
         # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call
