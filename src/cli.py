@@ -1435,7 +1435,7 @@ async def _resolve_and_guard_launch(
     # registry, which a resumed body's mid-turn mount() call DOES reach), same helper
     # launch_seat's own harness-native lane calls, so the two doors can never drift.
     twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"])
-    if twin is not None:
+    if twin["harness"] or twin["mounts"]:
         seen_via = [s for s in (
             f"claude agents --json ({twin['harness'].get('name')!r})"
             if twin["harness"] else None,
@@ -1458,6 +1458,16 @@ async def _resolve_and_guard_launch(
         print(f"already-live: {handle} — a body is already there, nothing started")
         print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
+    if twin["stale_harness_row"] is not None:
+        # A DEAD ROW THE TWIN GUARD SAW AND IGNORED (Nebbercracker's monsterhouse
+        # report, DM 13237/13239): `claude agents --json` still lists this seat's OLD
+        # body — failed state, dead pid — never trusted as a twin, but named here so a
+        # human running `osiris launch` by hand sees the harness's own roster hasn't
+        # reaped it, rather than wondering why a "stale" row keeps appearing.
+        row = twin["stale_harness_row"]
+        print(f"osiris {verb}: ignoring a stale claude agents --json row for "
+              f"{handle} ({row.get('name')!r}, state={row.get('state')!r}, "
+              f"pid={row.get('pid')!r}) — dead, not a twin", file=sys.stderr)
     return facts, launch_cwd
 
 
