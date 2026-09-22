@@ -28,6 +28,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
@@ -40,7 +41,46 @@ from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
-from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
+from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet, is_encrypted
+
+_log = logging.getLogger("osiris.soul_store")
+
+_soul_key_missing_warned = False  # process-lifetime, see _warn_soul_key_missing_once
+
+
+def _warn_soul_key_missing_once(exc: SoulKeyMissing) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): logs ONCE per
+    process, at WARNING, never per-call — an ingest loop can call `_encrypt_rows`
+    thousands of times a minute on a busy box, and a missing key is one fact, not
+    one log line per row."""
+    global _soul_key_missing_warned
+    if _soul_key_missing_warned:
+        return
+    _soul_key_missing_warned = True
+    _log.warning(
+        "no soul-store encryption key configured — new soul_lines/soul_lines_cold "
+        "rows are writing as LEGACY PLAINTEXT until this is fixed: %s", exc)
+
+
+class _LazyFernet:
+    """Defers `get_soul_fernet()` until `.decrypt()` is actually called (THE FIRST
+    KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065) — several read/verify
+    paths below fetch a fernet UNCONDITIONALLY up front but only ever use it on
+    content `is_encrypted()` says needs it; on a box with NO key configured at
+    all, every row on a fresh install is legacy plaintext and `.decrypt()` is
+    never actually reached, so constructing this must never raise
+    `SoulKeyMissing` on its own — only a REAL attempt to decrypt genuinely
+    encrypted content with no key available does."""
+
+    def __init__(self) -> None:
+        self._fernet: MultiFernet | None = None
+
+    def decrypt(self, blob: bytes) -> bytes:
+        if self._fernet is None:
+            self._fernet = get_soul_fernet()
+        result: bytes = self._fernet.decrypt(blob)
+        return result
+
 
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
@@ -297,8 +337,21 @@ def _encrypt_rows(
     (index 3) by `_hash_rows` itself, unchanged, and THIS function only re-wraps the
     already-hashed tuple's `raw_line` field in Fernet ciphertext right before it reaches
     an INSERT. A key rotation therefore never needs to re-derive any hash — only
-    re-encrypt the stored ciphertext column, in place, with the chain untouched."""
-    fernet = get_soul_fernet()
+    re-encrypt the stored ciphertext column, in place, with the chain untouched.
+
+    DEGRADES TO LEGACY PLAINTEXT WHEN NO KEY EXISTS (THE FIRST KEY MUST COME FROM
+    THE NORMAL CLI, Thoth mail 13065) — `get_soul_fernet()`'s own `SoulKeyMissing`
+    used to propagate straight out of here, crashing whatever ingest call reached
+    it first; now caught, warned ONCE per process (`_warn_soul_key_missing_once`,
+    never once per row/call — an ingest loop can hit this thousands of times a
+    minute on a busy box), and every row in THIS batch writes as plain `raw_line`
+    (`is_encrypted()`'s own prefix check already tells every reader apart from real
+    ciphertext, the same fallback legacy pre-encryption rows have always used)."""
+    try:
+        fernet = get_soul_fernet()
+    except SoulKeyMissing as exc:
+        _warn_soul_key_missing_once(exc)
+        return rows
     return [(harness, anchor_sid, idx, fernet.encrypt(raw_line), line_hash, prev_hash)
            for harness, anchor_sid, idx, raw_line, line_hash, prev_hash in rows]
 
@@ -1084,7 +1137,7 @@ class SoulStore:
         # `_iter_verified_lines` folds (this one measures, never verifies a chain or
         # returns content to a caller) — encryption still has to reach it, the same
         # way it reaches every other raw_line/content_gzip read in this file.
-        fernet = get_soul_fernet()
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
             cold_blob = bytes(cold["content_gzip"])
@@ -1175,7 +1228,7 @@ class SoulStore:
         `cryptography.fernet.InvalidToken` on decrypt — caught here and reported as a
         NAMED `_ChainBroken` receipt, the same honest shape a hash mismatch already
         gets, never a raw traceback surfacing three call sites deep."""
-        fernet = get_soul_fernet()
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
             cold_blob = bytes(cold["content_gzip"])
@@ -1370,7 +1423,7 @@ class SoulStore:
         reported as `False` — this function's own honest-boolean contract has no room
         for a third, separate "can't tell" outcome; `_iter_verified_lines`'s own
         `_ChainBroken` receipt is where that distinction actually lives."""
-        fernet = get_soul_fernet()
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
             cold_blob = bytes(cold["content_gzip"])
@@ -1718,7 +1771,18 @@ class SoulStore:
         already = await self._cold_row(harness, anchor_sid)
         if already is not None:
             return {"anchor_sid": anchor_sid, "folded": False, "note": "already cold"}
-        fernet = get_soul_fernet()
+        # NOT lazy, unlike the read-only sibling functions above — this one both
+        # decrypts every hot row unconditionally AND re-encrypts the folded cold
+        # blob, so it genuinely needs a working key to do anything at all (THE
+        # FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065): returns the
+        # SAME named-receipt shape ("folded": False, "error": ...) every other
+        # refusal in this function already uses, never an uncaught raise.
+        try:
+            fernet = get_soul_fernet()
+        except SoulKeyMissing as exc:
+            return {"anchor_sid": anchor_sid, "folded": False,
+                    "error": f"no soul-store encryption key configured — refusing to "
+                             f"fold without one (run `osiris soul-key init`): {exc}"}
         expected_prev: str | None = None
         i = 0
         total_bytes = 0

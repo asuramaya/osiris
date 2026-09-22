@@ -1417,6 +1417,73 @@ async def test_rotation_a_legacy_key_still_decrypts_old_rows(
     assert Fernet(new_key.encode()).decrypt(bytes(row))  # the new primary opens it fine
 
 
+@pytest.fixture
+def _no_soul_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulates a genuinely fresh box with NO soul-store key configured anywhere
+    (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065) — clears the
+    conftest-wide `OSIRIS_SOUL_KEY` this whole file otherwise relies on, stubs
+    `_installed_user_unit_env_value` (same reasoning test_soul_crypto.py's own
+    autouse fixture gives: this box's own REAL installed unit must never leak
+    into a test), and redirects `XDG_CONFIG_HOME` so the credstore/XDG fallback
+    can never find a real credential either."""
+    from src.ingest import soul_crypto, soul_store
+
+    monkeypatch.delenv("OSIRIS_SOUL_KEY", raising=False)
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_LEGACY", raising=False)
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    monkeypatch.setattr(soul_crypto, "_installed_user_unit_env_value", lambda _name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+    # reset the once-per-process warning flag so THIS test's own "warns exactly
+    # once" assertion is never a false pass/fail off some earlier test's state
+    monkeypatch.setattr(soul_store, "_soul_key_missing_warned", False)
+
+
+async def test_ingest_degrades_to_legacy_plaintext_with_no_key_and_warns_once(
+    store: SoulStore, tmp_path: Path, _no_soul_key: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): ingest no
+    longer crashes with no key configured — it writes legacy plaintext (`_encrypt_
+    rows`'s own new fallback) and logs ONE warning, not a raw `SoulKeyMissing`
+    propagating out of the ingest call. The rows are still fully readable back
+    (`is_encrypted()` correctly identifies them as plaintext, never attempts to
+    decrypt), and the hash chain still verifies — encryption is a confidentiality
+    layer on top of the chain, never a precondition for the chain itself."""
+    import logging
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    with caplog.at_level(logging.WARNING, logger="osiris.soul_store"):
+        await store.ingest_path(str(p), "nokey001")
+        # a second ingest call must NOT log a second warning (once per process)
+        p2 = _write_transcript(tmp_path / "t2.jsonl", _synthetic_lines(2))
+        await store.ingest_path(str(p2), "nokey002")
+    warnings = [r for r in caplog.records if "LEGACY PLAINTEXT" in r.message]
+    assert len(warnings) == 1
+
+    assert await store.verify_chain("nokey001") is True
+    lines = await store.raw_lines("nokey001")
+    assert lines is not None and len(lines) == 3
+
+
+async def test_resume_diagnostics_reads_legacy_plaintext_with_no_key_configured(
+    store: SoulStore, tmp_path: Path, _no_soul_key: None,
+) -> None:
+    """THE LAZY-FERNET FIX (Thoth mail 13065): a READ path (resume_diagnostics)
+    that only ever needs the fernet CONDITIONALLY (`is_encrypted()` gates every
+    actual `.decrypt()` call) must not raise `SoulKeyMissing` just for being
+    called on all-plaintext content with no key configured — before this fix,
+    the eager `fernet = get_soul_fernet()` at the top of the function raised
+    regardless of whether decryption was ever actually needed."""
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "nokey003")
+    out = await store.resume_diagnostics("nokey003")
+    assert out is not None
+    compactions, tail_bytes, tail_lines = out
+    assert compactions == 0
+    assert tail_lines == 4
+
+
 async def test_hot_read_falls_back_to_legacy_plaintext(
     store: SoulStore, tmp_path: Path,
 ) -> None:

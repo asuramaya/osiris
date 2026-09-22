@@ -19,14 +19,18 @@ WorkingDirectory=%h/code/osiris
 Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-offload
 Environment=REDIS_URL=redis://127.0.0.1:6396/0
 # THE RESTIC REPOSITORY PASSWORD (KEY CUSTODY REWRITTEN, ruling e0b98ff2, "same
-# shape for the restic repository password"): never a plaintext file by default —
-# `osiris restic-key init` writes a systemd-creds-encrypted blob to
-# %h/.config/osiris/restic.password.cred. systemd decrypts THIS for the process
-# before it ever starts, exposing the plaintext at
+# shape for the restic repository password"; THE FIRST KEY MUST COME FROM THE
+# NORMAL CLI, Thoth mail 13065, replacing an earlier `LoadCredentialEncrypted=
+# restic.password:<hard path>` draft — same bootstrap-deadlock reasoning
+# osiris-mcp.service's own identical comment gives): never a plaintext file by
+# default — `osiris restic-key init` writes a systemd-creds-encrypted blob to
+# `%h/.config/credstore.encrypted/restic.password`, systemd's own per-user
+# credential store search path. `ImportCredential=` tolerates a MISSING entry
+# there (confirmed live, same as soul.key's own test) — when present, systemd
+# decrypts it FOR this process before it ever starts, exposing the plaintext at
 # $CREDENTIALS_DIRECTORY/restic.password — get_restic_password() (restic_
 # credential.py) reads that directory first, no systemd-creds subprocess needed
-# at read time. Must exist BEFORE this unit ever runs (`osiris restic-key init`,
-# by hand, same law soul.key's own credential holds) — an absent credential
-# degrades one tick to a single named `error`, never a crash.
-LoadCredentialEncrypted=restic.password:%h/.config/osiris/restic.password.cred
+# at read time. When ABSENT, the unit still runs (a oneshot, not a persistent
+# daemon) and degrades one tick to a single named `error`, never a crash.
+ImportCredential=restic.password
 ExecStart=%h/code/osiris/.venv/bin/python -m src.cli offload-runner tick

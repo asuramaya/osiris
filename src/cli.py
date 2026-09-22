@@ -1049,10 +1049,13 @@ _SOUL_KEY_ACTIONS = (
     "status", "init", "rotate", "restore-drill", "enroll-recovery", "recover")
 
 
+_SOUL_KEY_RESTART_UNITS = ["osiris-mcp.service", "osiris-worker.service"]
+
+
 async def cmd_soul_key(
     action: str, *, owner: str | None = None, path: str | None = None,
     backend: str | None = None, finish: bool = False, print_recovery: bool = False,
-    repo_url: str | None = None, as_json: bool = False,
+    repo_url: str | None = None, restart: bool = False, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> —
@@ -1071,7 +1074,17 @@ async def cmd_soul_key(
 
     status/rotate/restore-drill compose a pool and call `src.orchestrator.
     soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
-    never a duplicated implementation between the two doors."""
+    never a duplicated implementation between the two doors.
+
+    `restart` (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065):
+    `init` only — both daemons start in a loudly-degraded state with no key
+    (mcp_server.py/arq_worker.py's own boot gates), so minting the key alone
+    changes nothing until they restart and pick it up. Without `--restart`, the
+    return dict's own `restart_units`/`restart_hint` name the exact `systemctl
+    --user restart ...` to run by hand; with it, this door runs that itself —
+    `_real_restart_services`, the SAME primitive `osiris deploy` already uses,
+    never a second restart implementation. `--restart` is a no-op on any other
+    action (only `init` ever needs a restart to take effect)."""
     from src import cli_render as render
     from src.ingest import soul_crypto
 
@@ -1082,6 +1095,18 @@ async def cmd_soul_key(
             print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
             render.emit(out, as_json=as_json, title=f"soul-key {action}")
             return 1
+        out["restart_units"] = _SOUL_KEY_RESTART_UNITS
+        restart_cmd = f"systemctl --user restart {' '.join(_SOUL_KEY_RESTART_UNITS)}"
+        if restart:
+            code, log = await _real_restart_services(_SOUL_KEY_RESTART_UNITS)
+            out["restarted"] = code == 0
+            out["restart_hint"] = (
+                f"`{restart_cmd}` -> exit {code}" + (f": {log.strip()}" if code else ""))
+        else:
+            out["restarted"] = False
+            out["restart_hint"] = (
+                f"the key is minted, but osiris-mcp/osiris-worker won't see it until "
+                f"restarted — run `{restart_cmd}` (or re-run with --restart)")
         render.emit(out, as_json=as_json, title=f"soul-key {action}")
         return 0
     if action not in _SOUL_KEY_ACTIONS:
@@ -7817,6 +7842,11 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="restore-drill only: one restic repository URL to "
                                  "drill; defaults to every URL in "
                                  "backup.offbox_repositories")
+    p_soul_key.add_argument("--restart", action="store_true",
+                            help="init only: restart osiris-mcp/osiris-worker right "
+                                 "after minting the key (systemctl --user restart, "
+                                 "no sudo) — without this, init prints the command "
+                                 "to run by hand instead")
     p_soul_key.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
 
@@ -9377,7 +9407,7 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_soul_key(
             args.action, owner=args.owner, path=args.path, backend=args.backend,
             finish=args.finish, print_recovery=args.print_recovery,
-            repo_url=args.repo_url, as_json=args.as_json))
+            repo_url=args.repo_url, restart=args.restart, as_json=args.as_json))
     if args.command == "restic-key":
         return asyncio.run(cmd_restic_key(
             args.action, path=args.path, backend=args.backend, as_json=args.as_json))

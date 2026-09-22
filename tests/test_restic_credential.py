@@ -10,6 +10,37 @@ import pytest
 from src.orchestrator import restic_credential
 
 
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Defense in depth, same reasoning as test_soul_crypto.py's own fixture of this
+    name: every test below passes an explicit `path=`, so the DEFAULT credstore
+    location is never actually exercised here today — but a future test that omits
+    `path=` must never be able to silently read/write this developer's own real
+    `~/.config/credstore.encrypted/`."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+
+
+def test_restic_key_init_default_no_path_writes_into_the_credstore(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): with NO
+    explicit `--path`, the credential lands in the per-user encrypted credstore
+    (redirected by the autouse fixture above to `tmp_path/xdgcfg/credstore.
+    encrypted/` — never the operator's real one), and a bare `get_restic_password()`
+    (also no path) reads it straight back — the SAME single-ladder agreement
+    `test_soul_crypto.py`'s own equivalent fixed test proves for soul.key."""
+    from src.ingest import systemd_credential
+
+    monkeypatch.delenv("OSIRIS_RESTIC_PASSWORD_FILE", raising=False)
+    out = restic_credential.restic_key_init()
+    assert "error" not in out
+    assert out["backend"] == "host-cred"
+    assert out["path"] == str(systemd_credential.user_credstore_encrypted_dir()
+                              / "restic.password")
+    password = restic_credential.get_restic_password()
+    assert isinstance(password, bytes) and len(password) > 20
+
+
 def test_restic_key_init_writes_a_host_cred_credential(tmp_path: Path) -> None:
     path = tmp_path / "restic.password"
     out = restic_credential.restic_key_init(path=str(path))

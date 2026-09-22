@@ -12528,15 +12528,29 @@ def main() -> None:
     if transport in ("streamable-http", "sse"):
         mcp.settings.host = s.osiris_mcp_host
         mcp.settings.port = s.osiris_mcp_port
-        # THE SOUL-KEY BOOT GATE (Thoth DM 9194/9245, wave 17), same scope _boot_check
-        # already holds (the persistent systemd osiris-mcp unit only, never a per-
-        # session stdio subprocess): fail LOUDLY here, not on whatever tool call first
-        # touches soul_store. A genuine refusal, not a soft alarm — left UNCAUGHT so a
-        # missing key (SoulKeyMissing, naming the exact `osiris soul-key init` command)
-        # crashes the boot instead of serving a fleet that can't read its own transcripts.
-        from src.ingest.soul_crypto import get_soul_fernet
+        # THE SOUL-KEY BOOT GATE, DEGRADED NOT FATAL (THE FIRST KEY MUST COME FROM THE
+        # NORMAL CLI, Thoth mail 13065 — supersedes this gate's own original "genuine
+        # refusal, not a soft alarm" law, same scope _boot_check already holds: the
+        # persistent systemd osiris-mcp unit only, never a per-session stdio
+        # subprocess): a hard `raise` here recreated the exact bootstrap deadlock the
+        # operator ruled against — a fresh box could never start this unit AT ALL
+        # until the key existed, but minting the key normally means running `osiris
+        # soul-key init` through the ALREADY-DEPLOYED CLI/console, which needs the
+        # MCP server running first. `get_soul_fernet()`'s `SoulKeyMissing` is now
+        # CAUGHT and logged loudly (never silent) rather than crashing the boot;
+        # `soul_store.py`'s own write/read paths already degrade to legacy plaintext
+        # on their own missing-key path, so the server is still fully usable meanwhile.
+        import logging
 
-        get_soul_fernet()
+        from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet
+
+        try:
+            get_soul_fernet()
+        except SoulKeyMissing as exc:
+            logging.getLogger("osiris.mcp").warning(
+                "osiris-mcp starting WITHOUT a soul-store encryption key — new "
+                "soul_lines/soul_lines_cold rows write as legacy plaintext until "
+                "this is fixed: %s", exc)
         asyncio.run(_boot_check())
         mcp.run(transport=transport)  # type: ignore[arg-type]
     else:

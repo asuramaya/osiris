@@ -33,19 +33,26 @@ scoped mode, refusing"); `/dev/tpmrm0` is `tss`-group-only and the operator is n
 member. So:
 
   (1) KEY AT REST is now a systemd USER CREDENTIAL, never a plaintext file by default:
-      `soul_key_init` mints the Fernet key in memory and writes ONLY
-      `<path>.cred` via `systemd-creds encrypt --user --with-key=host` (upgrading
+      `soul_key_init` mints the Fernet key in memory and writes ONLY the encrypted
+      blob via `systemd-creds encrypt --user --with-key=host` (upgrading
       automatically to `--with-key=host+tpm2` once `_is_tss_member()` says the
       operator has joined `tss` — never auto-joins it, only ever PRINTS the one-line
-      `usermod -aG tss <user>` hint). A `<path>.meta.json` sidecar (never secret,
+      `usermod -aG tss <user>` hint). A `.meta.json` sidecar (never secret,
       chmod 0600 anyway) records which backend was used, read back by `soul_key_status`.
       `backend="file"` stays available as an EXPLICIT, WARNED fallback — the shape
       this whole module used before this ruling, kept for a box with no systemd-creds
-      at all. Both units get `LoadCredentialEncrypted=soul.key:<path>.cred` (deploy/
-      user/*.service) — systemd decrypts it FOR them into `$CREDENTIALS_DIRECTORY/
-      soul.key` before the process ever starts, so `get_soul_key` reads that
-      directory first when present (the daemon path, no `systemd-creds` subprocess
-      needed at read time), then the `.cred` file directly (the CLI path, decrypted
+      at all. THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065,
+      correcting this original design): the DEFAULT blob location is the per-user
+      encrypted credstore (`_credential_path`, `~/.config/credstore.encrypted/
+      soul.key`), and both units get `ImportCredential=soul.key` (deploy/user/
+      *.service) — NOT `LoadCredentialEncrypted=...:<hard path>`, which failed a
+      unit's own start outright until the key existed, a bootstrap deadlock since
+      minting the key normally means running the CLI through that same
+      already-running unit. `ImportCredential=` tolerates a MISSING entry (confirmed
+      live); when present, systemd decrypts it FOR the process into
+      `$CREDENTIALS_DIRECTORY/soul.key` before it ever starts, so `get_soul_key`
+      reads that directory first (the daemon path, no `systemd-creds` subprocess
+      needed at read time), then the credstore file directly (the CLI path, decrypted
       on demand via `systemd-creds decrypt --user`), then a legacy plaintext file
       (the old `backend="file"` shape), in that order.
 
@@ -109,7 +116,7 @@ _shared_decrypt_with_systemd_creds = systemd_credential.decrypt_with_systemd_cre
 _DEFAULT_KEY_FILE = "/etc/osiris/soul.key"
 _SERVICE_USER = "osiris"  # deploy/osiris-worker.service's and osiris-mcp.service's own User=
 _CRED_NAME = "soul.key"  # the `--name=` systemd-creds is minted/read under, matching
-                         # deploy/user/*.service's own `LoadCredentialEncrypted=soul.key:...`
+                         # deploy/user/*.service's own `ImportCredential=soul.key`
 _TSS_GROUP = "tss"  # owns /dev/tpmrm0 on this box; membership gates --with-key=host+tpm2
 
 
@@ -206,11 +213,31 @@ def _key_file_path(*, explicit: str | None = None) -> Path:
     return Path(_DEFAULT_KEY_FILE)
 
 
-def _credential_path(key_path: Path) -> Path:
-    """Where the systemd-creds-encrypted blob for `key_path` actually lives on disk
-    — `<key_path>.cred`, the SAME suffix `deploy/user/*.service`'s own
-    `LoadCredentialEncrypted=soul.key:<this>` names literally."""
-    return key_path.with_name(key_path.name + ".cred")
+def _credential_path(key_path: Path, *, explicit: bool = False) -> Path:
+    """Where the systemd-creds-encrypted blob actually lives (THE FIRST KEY MUST
+    COME FROM THE NORMAL CLI, Thoth mail 13065): DEFAULT (`explicit=False`,
+    every ordinary caller with no `--path`/`path=` given) — the per-user
+    encrypted credstore directory (`~/.config/credstore.encrypted/soul.key`,
+    `systemd_credential.user_credstore_encrypted_dir()`), the location `deploy/
+    user/*.service`'s own `ImportCredential=soul.key` searches by default and
+    tolerates missing (confirmed live: a unit with no matching credstore entry
+    starts and finishes cleanly, unlike the old `LoadCredentialEncrypted=soul.
+    key:<hard path>` this replaces, which failed the unit outright if the file
+    wasn't there yet). EXPLICIT (`explicit=True`, a caller-given `--path`/
+    `path=`) — the OLD sibling-of-path shape (`<key_path>.cred`), kept as a
+    documented override for a non-standard layout (a test, a scratch
+    directory) that was never going through `ImportCredential=` anyway.
+
+    STRICTLY ONE OR THE OTHER, never both checked — the SAME single-ladder
+    discipline `_key_file_path` itself already holds for the logical name.
+    Every caller here threads `explicit=path is not None` off its OWN `path=`
+    parameter, so two calls that pass the same `path=` (or both omit it)
+    always agree on where the credential lives; mixing an explicit-path init
+    with a bare-path status/rotate/get (or the reverse) is a genuine user
+    error this door does not paper over."""
+    if explicit:
+        return key_path.with_name(key_path.name + ".cred")
+    return systemd_credential.user_credstore_encrypted_dir() / _CRED_NAME
 
 
 def _meta_path(key_path: Path) -> Path:
@@ -260,17 +287,20 @@ def _decrypt_with_systemd_creds(blob: bytes) -> bytes:
     return _shared_decrypt_with_systemd_creds(blob, name=_CRED_NAME)
 
 
-def read_key_bytes_at(resolved: Path) -> bytes:
+def read_key_bytes_at(resolved: Path, *, explicit: bool = False) -> bytes:
     """The raw Fernet key bytes actually backing the LOGICAL path `resolved`,
-    regardless of backend — the credential at `_credential_path(resolved)`,
-    decrypted, when it exists; the legacy plaintext file at `resolved` itself
-    otherwise. For a caller (`src.orchestrator.soul_key`'s own status census)
-    that already has an EXPLICIT resolved path in hand and needs its real bytes
-    — `get_soul_key()`'s own env-first resolution ladder is the wrong tool here,
-    it ignores any `path=` a caller resolved by hand. Raises `FileNotFoundError`
-    if neither exists; callers that already called `soul_key_status` first
-    (checking `present`) never hit that."""
-    cred_path = _credential_path(resolved)
+    regardless of backend — the credential at `_credential_path(resolved,
+    explicit=explicit)`, decrypted, when it exists; the legacy plaintext file at
+    `resolved` itself otherwise. For a caller (`src.orchestrator.soul_key`'s own
+    status census) that already has an EXPLICIT resolved path in hand and needs
+    its real bytes — `get_soul_key()`'s own env-first resolution ladder is the
+    wrong tool here, it ignores any `path=` a caller resolved by hand. `explicit`
+    must match whatever `path=` the caller's own resolution used to arrive at
+    `resolved` (`path is not None`) — same single-ladder discipline
+    `_credential_path` itself holds, never both locations checked. Raises
+    `FileNotFoundError` if neither exists; callers that already called
+    `soul_key_status` first (checking `present`) never hit that."""
+    cred_path = _credential_path(resolved, explicit=explicit)
     if cred_path.exists():
         return _decrypt_with_systemd_creds(cred_path.read_bytes())
     return resolved.read_bytes()
@@ -308,10 +338,10 @@ def _deploy_note(path: Path) -> str:
     `sudo osiris ...` — `sudo` strips PATH down to root's own restricted default,
     which does not include wherever this venv's `osiris` console-script actually
     lives, so that exact command would fail with 'command not found' regardless of
-    which shape is live. Unchanged by KEY CUSTODY REWRITTEN: the LOGICAL path
-    (`_key_file_path`'s own return) is what units name in their own
-    `LoadCredentialEncrypted=soul.key:<path>.cred` line, so this guidance is
-    identical whether the primary is a credential or a legacy plaintext file."""
+    which shape is live. Unchanged by KEY CUSTODY REWRITTEN or THE FIRST KEY MUST
+    COME FROM THE NORMAL CLI: this guidance is identical whether the primary is a
+    systemd-creds credential (wherever `_credential_path` puts it — the credstore
+    by default) or a legacy plaintext file at the LOGICAL path itself."""
     if os.getuid() == 0:
         if str(path) == _DEFAULT_KEY_FILE:
             return (
@@ -366,16 +396,17 @@ def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 — the looku
     """Resolve the PRIMARY Fernet key. NEVER GENERATES — raises `SoulKeyMissing`
     (naming the exact `soul-key init` command) when nothing below resolves.
 
-    ORDER (KEY CUSTODY REWRITTEN, ruling e0b98ff2): `OSIRIS_SOUL_KEY` env override
-    (tests, emergency operator override) always wins; else, when running UNDER a
-    unit that declares `LoadCredentialEncrypted=soul.key:...`, systemd has ALREADY
-    decrypted it for this process into `$CREDENTIALS_DIRECTORY/soul.key` before
-    the process ever started — a plain file read, no `systemd-creds` subprocess at
-    read time, the daemon's own fast path; else, for a caller with no
-    `$CREDENTIALS_DIRECTORY` (the CLI, which never runs under `LoadCredential`),
-    the `.cred` file at the resolved path if one exists, decrypted ON DEMAND via
-    `systemd-creds decrypt --user`; else a legacy plaintext file at the resolved
-    path itself (the explicit `backend="file"` shape `soul_key_init` still
+    ORDER (KEY CUSTODY REWRITTEN, ruling e0b98ff2; THE FIRST KEY MUST COME FROM THE
+    NORMAL CLI, Thoth mail 13065): `OSIRIS_SOUL_KEY` env override (tests, emergency
+    operator override) always wins; else, when running UNDER a unit that declares
+    `ImportCredential=soul.key`, systemd has ALREADY decrypted it for this process
+    into `$CREDENTIALS_DIRECTORY/soul.key` before the process ever started — a
+    plain file read, no `systemd-creds` subprocess at read time, the daemon's own
+    fast path; else, for a caller with no `$CREDENTIALS_DIRECTORY` (the CLI, which
+    never runs under `ImportCredential=`), the credstore file (`_credential_path`)
+    if one exists, decrypted ON DEMAND via `systemd-creds decrypt --user`; else a
+    legacy plaintext file at the resolved path itself (the explicit `backend="file"`
+    shape `soul_key_init` still
     supports). An existing key's bytes are read silently, never re-disclosed —
     only a freshly GENERATED key, and only when its own caller opts into
     `print_recovery=True`, ever prints."""
@@ -426,21 +457,26 @@ def _resolve_backend(requested: str | None) -> str:
 
 
 def _write_key_for_backend(
-    key: bytes, *, resolved: Path, backend: str,
+    key: bytes, *, resolved: Path, backend: str, explicit_path: bool = False,
 ) -> tuple[Path, str]:
-    """Writes `key` under `backend`'s own shape at `resolved`'s own logical name,
-    returning `(written_path, effective_backend)`. `file` writes the plaintext
-    directly (0600); `host-cred`/`host+tpm2` encrypt via `systemd-creds` into
-    `_credential_path(resolved)` and record the backend in `_meta_path(resolved)`
-    (never secret, chmod 0600 anyway) so `soul_key_status` can report it back
-    without decrypting anything."""
+    """Writes `key` under `backend`'s own shape, returning `(written_path,
+    effective_backend)`. `file` writes the plaintext directly (0600) at
+    `resolved`'s own logical name. `host-cred`/`host+tpm2` encrypt via
+    `systemd-creds` into `_credential_path(resolved, explicit=explicit_path)` —
+    the DEFAULT credstore location, or the OLD sibling-of-path shape when a
+    caller-given `--path`/`path=` was in play — and record the backend in
+    `_meta_path(resolved)` (never secret, chmod 0600 anyway) so `soul_key_
+    status` can report it back without decrypting anything. The credstore
+    directory may not exist yet on a fresh box (`mkdir(parents=True)` covers
+    both shapes)."""
     if backend == "file":
         resolved.write_bytes(key)
         resolved.chmod(0o600)
         return resolved, "file"
     with_key = "host+tpm2" if backend == "host+tpm2" else "host"
     blob = _encrypt_with_systemd_creds(key, with_key=with_key)
-    cred_path = _credential_path(resolved)
+    cred_path = _credential_path(resolved, explicit=explicit_path)
+    cred_path.parent.mkdir(parents=True, exist_ok=True)
     cred_path.write_bytes(blob)
     cred_path.chmod(0o600)
     meta_path = _meta_path(resolved)
@@ -483,7 +519,7 @@ def soul_key_init(
     ordinary caller leaves it None and gets the SAME path an installed --user
     unit already uses, resolved without exporting anything."""
     resolved = _key_file_path(explicit=path)
-    if resolved.exists() or _credential_path(resolved).exists():
+    if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
         return {"error": f"a key already exists at {resolved} — soul-key init never "
                          "overwrites an existing key in place; `osiris soul-key "
                          "rotate` is the door for replacing a live key"}
@@ -499,7 +535,7 @@ def soul_key_init(
     key = _generate_key()
     effective_backend = _resolve_backend(backend)
     written_path, effective_backend = _write_key_for_backend(
-        key, resolved=resolved, backend=effective_backend)
+        key, resolved=resolved, backend=effective_backend, explicit_path=path is not None)
     if print_recovery:
         _disclose_recovery_secret(key, str(written_path))
     chowned = False
@@ -544,7 +580,7 @@ def soul_key_status(*, path: str | None = None) -> dict[str, Any]:
     import time
 
     resolved = _key_file_path(explicit=path)
-    cred_path = _credential_path(resolved)
+    cred_path = _credential_path(resolved, explicit=path is not None)
     backend = "missing"
     present = False
     carrier: Path | None = None
@@ -618,7 +654,9 @@ def soul_key_rotate_begin(
                          "rows onto the key already generated, or `--finish` once "
                          "the receipt reports zero rows remain under the old key"}
     old_backend = status["backend"]
-    old_carrier = _credential_path(resolved) if old_backend != "file" else resolved
+    old_carrier = (
+        resolved if old_backend == "file"
+        else _credential_path(resolved, explicit=path is not None))
     if not old_carrier.exists():
         return {"error": f"the primary key at {resolved} is not backed by a file this "
                          "door can rotate (OSIRIS_SOUL_KEY set to a bare value with no "
@@ -645,7 +683,7 @@ def soul_key_rotate_begin(
         legacy_meta_path.write_text(old_meta.read_text())
         legacy_meta_path.chmod(0o600)
     written_path, effective_backend = _write_key_for_backend(
-        new_key, resolved=resolved, backend=old_backend)
+        new_key, resolved=resolved, backend=old_backend, explicit_path=path is not None)
     if print_recovery:
         _disclose_recovery_secret(new_key, str(written_path))
     return {
@@ -933,7 +971,7 @@ def soul_key_recover(
     not a rotation — `soul-key rotate` is the door once you already have a live
     key and just want a new one)."""
     resolved = _key_file_path(explicit=path)
-    if resolved.exists() or _credential_path(resolved).exists():
+    if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
         return {"error": f"a key already exists at {resolved} — soul-key recover is "
                          "for restoring onto a box with NO live key; `osiris soul-key "
                          "rotate` is the door once you already have one"}
@@ -973,7 +1011,7 @@ def soul_key_recover(
     resolved.parent.mkdir(parents=True, exist_ok=True)
     effective_backend = _resolve_backend(backend)
     written_path, effective_backend = _write_key_for_backend(
-        raw_key, resolved=resolved, backend=effective_backend)
+        raw_key, resolved=resolved, backend=effective_backend, explicit_path=path is not None)
     return {
         "path": str(written_path), "backend": effective_backend,
         "systemd_note": _deploy_note(resolved),

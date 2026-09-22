@@ -20,10 +20,16 @@ plaintext bytes (decrypted, if the backend is `host-cred`/`host+tpm2`) for the
 caller (`src.orchestrator.offload_runner`) to set directly as the `RESTIC_PASSWORD`
 subprocess env var — never a temp file, never a CLI argument (visible via `ps`),
 matching `osiris_offbox_backup.sh`'s own long-standing "never a script argument"
-law. Under `osiris-offload.service`'s own `LoadCredentialEncrypted=restic.password:
-%h/.config/osiris/restic.password.cred`, systemd has ALREADY decrypted it into
-`$CREDENTIALS_DIRECTORY/restic.password` before the process starts — the exact same
-daemon fast-path `soul_crypto.get_soul_key` uses, no subprocess at read time."""
+law. Under `osiris-offload.service`'s own `ImportCredential=restic.password` (THE
+FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065 — replacing an earlier
+`LoadCredentialEncrypted=restic.password:<hard path>` draft, which failed the
+unit's own start outright when the credential didn't exist yet), systemd has
+ALREADY decrypted it into `$CREDENTIALS_DIRECTORY/restic.password` before the
+process starts, when present — the exact same daemon fast-path `soul_crypto.
+get_soul_key` uses, no subprocess at read time; when ABSENT, the unit still starts
+(ImportCredential= tolerates a missing entry, confirmed live), and this module's
+own `get_restic_password` raises `ResticPasswordMissing` for the caller to log
+loudly rather than crash the whole runner."""
 from __future__ import annotations
 
 import json
@@ -34,9 +40,8 @@ from typing import Any
 
 from src.ingest import systemd_credential
 
-_DEFAULT_PASSWORD_FILE = "~/.config/osiris/restic.password"
 _CRED_NAME = "restic.password"  # matches osiris-offload.service's own
-                                # `LoadCredentialEncrypted=restic.password:...`
+                                # `ImportCredential=restic.password`
 
 
 class ResticPasswordMissing(RuntimeError):
@@ -48,21 +53,41 @@ class ResticPasswordMissing(RuntimeError):
 
 
 def _password_file_path(*, explicit: str | None = None) -> Path:
-    """`explicit` always wins; else `OSIRIS_RESTIC_PASSWORD_FILE` if set; else the
-    fixed default under `~/.config/osiris/` — this box only ever runs the
-    systemd --user deploy shape (Thoth DM 9435, the same fact `soul_crypto.py`'s
-    own resolution ladder was built against), so unlike `soul_crypto._key_file_path`
-    there is no root/system-unit branch to carry here."""
+    """`explicit` always wins; else `OSIRIS_RESTIC_PASSWORD_FILE` if set; else
+    `$XDG_CONFIG_HOME/osiris/restic.password` (or `~/.config/osiris/restic.
+    password`) — this box only ever runs the systemd --user deploy shape (Thoth
+    DM 9435, the same fact `soul_crypto.py`'s own resolution ladder was built
+    against), so unlike `soul_crypto._key_file_path` there is no root/
+    system-unit branch to carry here. XDG-aware (not a hard-coded `~/.config`)
+    so the SAME `XDG_CONFIG_HOME` redirect a test uses to keep the credstore
+    blob (`_credential_path`) off this developer's own real box also keeps
+    this logical path's own `.meta.json` sidecar off it — caught live during
+    this fix's own build (a stray sidecar was found sitting in this box's real
+    `~/.config/osiris/`, cleaned up by hand)."""
     if explicit:
         return Path(explicit).expanduser()
     env = os.environ.get("OSIRIS_RESTIC_PASSWORD_FILE")
     if env:
         return Path(env).expanduser()
-    return Path(_DEFAULT_PASSWORD_FILE).expanduser()
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "osiris" / "restic.password"
 
 
-def _credential_path(password_path: Path) -> Path:
-    return password_path.with_name(password_path.name + ".cred")
+def _credential_path(password_path: Path, *, explicit: bool = False) -> Path:
+    """DEFAULT (`explicit=False`): the per-user encrypted credstore directory
+    (`~/.config/credstore.encrypted/restic.password`) — the location `osiris-
+    offload.service`'s own `ImportCredential=restic.password` searches by
+    default (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065 —
+    same shape as `soul_crypto._credential_path`, see that function's own
+    docstring for the full live-measured reasoning). EXPLICIT (`explicit=True`,
+    a caller-given `--path`/`path=`): the old sibling-of-path shape
+    (`<password_path>.cred`), a documented override. Strictly one or the
+    other, never both checked — same single-ladder discipline `_password_file_
+    path` itself already holds."""
+    if explicit:
+        return password_path.with_name(password_path.name + ".cred")
+    return systemd_credential.user_credstore_encrypted_dir() / _CRED_NAME
 
 
 def _meta_path(password_path: Path) -> Path:
@@ -88,7 +113,7 @@ def _generate_password() -> bytes:
 
 
 def _write_password_for_backend(
-    password: bytes, *, resolved: Path, backend: str,
+    password: bytes, *, resolved: Path, backend: str, explicit_path: bool = False,
 ) -> tuple[Path, str]:
     if backend == "file":
         resolved.parent.mkdir(parents=True, exist_ok=True)
@@ -98,7 +123,7 @@ def _write_password_for_backend(
     with_key = "host+tpm2" if backend == "host+tpm2" else "host"
     blob = systemd_credential.encrypt_with_systemd_creds(
         password, name=_CRED_NAME, with_key=with_key)
-    cred_path = _credential_path(resolved)
+    cred_path = _credential_path(resolved, explicit=explicit_path)
     cred_path.parent.mkdir(parents=True, exist_ok=True)
     cred_path.write_bytes(blob)
     cred_path.chmod(0o600)
@@ -115,13 +140,14 @@ def restic_key_init(*, path: str | None = None, backend: str | None = None) -> d
     this box's only deploy shape is systemd --user, always the operator's own login
     user."""
     resolved = _password_file_path(explicit=path)
-    if resolved.exists() or _credential_path(resolved).exists():
+    if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
         return {"error": f"a restic password already exists at {resolved} — restic-key "
                          "init never overwrites one in place"}
+    resolved.parent.mkdir(parents=True, exist_ok=True)
     password = _generate_password()
     effective_backend = _resolve_backend(backend)
     written_path, effective_backend = _write_password_for_backend(
-        password, resolved=resolved, backend=effective_backend)
+        password, resolved=resolved, backend=effective_backend, explicit_path=path is not None)
     tss_hint = None
     if (effective_backend == "host-cred" and not systemd_credential.is_tss_member()
             and systemd_credential.systemd_creds_available()):
@@ -139,7 +165,7 @@ def restic_key_status(*, path: str | None = None) -> dict[str, Any]:
     import time
 
     resolved = _password_file_path(explicit=path)
-    cred_path = _credential_path(resolved)
+    cred_path = _credential_path(resolved, explicit=path is not None)
     backend = "missing"
     present = False
     carrier: Path | None = None
@@ -180,7 +206,7 @@ def get_restic_password(*, path: str | None = None) -> bytes:
         if daemon_path.exists():
             return daemon_path.read_bytes()
     resolved = _password_file_path(explicit=path)
-    cred_path = _credential_path(resolved)
+    cred_path = _credential_path(resolved, explicit=path is not None)
     if cred_path.exists():
         return systemd_credential.decrypt_with_systemd_creds(
             cred_path.read_bytes(), name=_CRED_NAME)

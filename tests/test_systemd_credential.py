@@ -5,12 +5,35 @@ subprocess boundary. Real round trips against the box's own genuine systemd-cred
 no fakes, same discipline test_soul_crypto.py's own systemd-creds tests already hold."""
 from __future__ import annotations
 
+import subprocess
+from pathlib import Path
+
 import pytest
 from src.ingest import systemd_credential
 
 
 def test_systemd_creds_available_is_true_on_this_box() -> None:
     assert systemd_credential.systemd_creds_available() is True
+
+
+def test_user_credstore_encrypted_dir_matches_systemd_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065) — proved
+    against the box's own real `systemd-path`, not just re-deriving the same
+    `$XDG_CONFIG_HOME`-or-`~/.config` logic a second time by hand."""
+    monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
+    live = subprocess.run(
+        ["systemd-path", "user-credential-store-encrypted"],
+        capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+    assert str(systemd_credential.user_credstore_encrypted_dir()) == live
+
+
+def test_user_credstore_encrypted_dir_respects_xdg_config_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    assert systemd_credential.user_credstore_encrypted_dir() == tmp_path / "credstore.encrypted"
 
 
 def test_encrypt_decrypt_round_trips_with_host_key() -> None:

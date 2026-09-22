@@ -12,7 +12,7 @@ from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
-from src.ingest import soul_crypto
+from src.ingest import soul_crypto, systemd_credential
 from src.ingest.soul_crypto import (
     SoulKeyMissing,
     get_soul_fernet,
@@ -44,6 +44,26 @@ def _clear_soul_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OSIRIS_SOUL_KEY", raising=False)
     monkeypatch.delenv("OSIRIS_SOUL_KEY_LEGACY", raising=False)
     monkeypatch.setattr(soul_crypto, "_installed_user_unit_env_value", lambda _name: None)
+
+
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    (no explicit `--path`) credential location is now the box's own REAL per-user
+    credstore (`~/.config/credstore.encrypted/`, `systemd_credential.
+    user_credstore_encrypted_dir()`) — a location this file never needed to isolate
+    before this ruling (every write used to land at a sibling of `resolved`, which
+    every test already redirects via `OSIRIS_SOUL_KEY_FILE`/`_DEFAULT_KEY_FILE`/
+    tmp_path). Without this, a test that mints a key with the auto-selected
+    host-cred/host+tpm2 backend and NO explicit `--path` (several already do,
+    testing owner/note mechanics unrelated to WHERE the credential lands) would
+    silently read/write THIS DEVELOPER'S OWN real credential store — caught live
+    during this fix's own build (a stray test-written key was found sitting in the
+    real `~/.config/credstore.encrypted/soul.key`, cleaned up by hand). Redirecting
+    `XDG_CONFIG_HOME` is the SAME env-var isolation `user_credstore_encrypted_dir`
+    itself reads, applied here the same way `_key_file_path`'s own XDG fallback is
+    already isolated by individual tests below."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
 
 
 def test_no_keyring_import_anywhere_in_the_module() -> None:
@@ -471,26 +491,35 @@ def test_resolve_backend_explicit_always_wins(monkeypatch: pytest.MonkeyPatch) -
     assert soul_crypto._resolve_backend("host+tpm2") == "host+tpm2"
 
 
-def test_soul_key_init_host_cred_tss_hint_names_the_group(tmp_path) -> None:
+def test_soul_key_init_host_cred_tss_hint_names_the_group(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A real live systemd-creds encrypt/decrypt round trip (no fakes) -- this box
     genuinely has systemd-creds but the operator is genuinely not in `tss`, so
-    this exercises the real command, not a mock of it."""
+    this exercises the real command, not a mock of it.
+
+    Resolves the key path via `OSIRIS_SOUL_KEY_FILE` for BOTH `init` and the
+    later `get_soul_key()` read (never an explicit `--path` for one and the env
+    var for the other) — THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail
+    13065): `init`'s DEFAULT credential location is now the real per-user
+    credstore, keyed off `_CRED_NAME` alone, never a sibling of the resolved
+    path — a caller that writes via an explicit `--path` and reads via `env`
+    (two DIFFERENT resolution ladders that only happened to agree by accident
+    before this ruling) is a genuine mismatch this door no longer papers over,
+    matching production's own real shape (osiris-mcp/osiris-worker always
+    resolve via env/installed-unit, never a CLI `--path` flag)."""
     key_file = tmp_path / "soul.key"
-    out = soul_key_init(path=str(key_file))
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    out = soul_key_init()
     assert "error" not in out
     assert out["backend"] == "host-cred"
-    assert out["path"] == str(key_file) + ".cred"
+    assert out["path"] == str(systemd_credential.user_credstore_encrypted_dir() / "soul.key")
     assert Path(out["path"]).exists()
     assert (tmp_path / "soul.key.meta.json").exists()
     assert out["tss_hint"] is not None and "usermod -aG tss" in out["tss_hint"]
     # the real round trip: get_soul_key decrypts the credential correctly
-    import os as _os
-    _os.environ["OSIRIS_SOUL_KEY_FILE"] = str(key_file)
-    try:
-        key = get_soul_key()
-        assert Fernet(key)  # a real, usable Fernet key
-    finally:
-        del _os.environ["OSIRIS_SOUL_KEY_FILE"]
+    key = get_soul_key()
+    assert Fernet(key)  # a real, usable Fernet key
 
 
 def test_get_soul_key_reads_credentials_directory_first(

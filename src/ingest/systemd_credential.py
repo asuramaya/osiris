@@ -22,10 +22,34 @@ from __future__ import annotations
 
 import getpass
 import grp
+import os
 import shutil
 import subprocess
+from pathlib import Path
 
 _TSS_GROUP = "tss"  # owns /dev/tpmrm0 on this box; membership gates --with-key=host+tpm2
+
+
+def user_credstore_encrypted_dir() -> Path:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI OR THE CONSOLE (operator's word,
+    Thoth mail 13065): the per-user service manager's own encrypted credential
+    store directory — `$XDG_CONFIG_HOME/credstore.encrypted/` (confirmed live on
+    this box via `systemd-path user-credential-store-encrypted`, matching
+    systemd.exec(5)'s own documented per-user search path). A unit's
+    `ImportCredential=<name>` searches this directory (among others) for a file
+    literally named `<name>` and — unlike `LoadCredentialEncrypted=<name>:<hard
+    path>`, which this replaces — treats a missing file there as NOT fatal to
+    unit start (confirmed live: a throwaway --user oneshot unit with
+    `ImportCredential=` against an absent credstore entry started and finished
+    cleanly, `$CREDENTIALS_DIRECTORY/<name>` simply didn't exist). This is what
+    makes THE FIRST KEY possible: the operator can deploy the code, start the
+    units in a loudly-degraded state, THEN run `osiris soul-key init` (or the
+    console's Init button) through the NORMAL, already-deployed CLI — never a
+    special pinned scratch worktree required just to mint the very first key
+    before anything could start at all."""
+    xdg = os.environ.get("XDG_CONFIG_HOME")
+    base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+    return base / "credstore.encrypted"
 
 
 def is_tss_member() -> bool:

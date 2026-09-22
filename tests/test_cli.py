@@ -439,6 +439,24 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
 
 # --- cmd_soul_key init: no pool, pure filesystem/key generation --------------------------------
 
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir_for_soul_key_tests(
+    request: pytest.FixtureRequest, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every test
+    below sets `OSIRIS_SOUL_KEY_FILE` (the LOGICAL path) but none pass an explicit
+    `--path`, so the credential blob's own DEFAULT location is now the real
+    per-user credstore (`~/.config/credstore.encrypted/`) — a real, SHARED,
+    machine-wide location that WOULD collide across these tests (and with this
+    developer's own real credential) under xdist parallelism without this
+    redirect. Scoped to just this file's own soul-key/restic-key tests
+    (`autouse=True` at module scope would be too broad for a file this large)
+    via `request.node`'s own test name — same shape test_api.py's own identical
+    fixture uses."""
+    if request.node.name.startswith(("test_cmd_soul_key_", "test_cmd_restic_key_")):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+
+
 async def test_cmd_soul_key_init_writes_and_reports_the_path(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -461,10 +479,64 @@ async def test_cmd_soul_key_init_writes_and_reports_the_path(
 async def test_cmd_soul_key_init_default_backend_is_systemd_creds(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from src.ingest import systemd_credential
+
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     assert await cmd_soul_key("init") == 0
-    assert (tmp_path / "soul.key.cred").is_file()
+    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    # (no --path) credential blob lands in the per-user credstore, NOT sibling to
+    # the logical OSIRIS_SOUL_KEY_FILE path — the autouse fixture above redirects
+    # XDG_CONFIG_HOME so this is tmp_path-scoped, never the real credstore.
+    assert (systemd_credential.user_credstore_encrypted_dir() / "soul.key").is_file()
+
+
+async def test_cmd_soul_key_init_without_restart_names_the_command_never_runs_it(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): without
+    `--restart`, init must never actually touch systemd — proved by monkeypatching
+    `_real_restart_services` to raise if called at all, not just by asserting the
+    hint text."""
+    from src import cli
+
+    def _must_not_be_called(units: list[str]) -> None:
+        raise AssertionError(f"_real_restart_services must not run without --restart: {units}")
+
+    monkeypatch.setattr(cli, "_real_restart_services", _must_not_be_called)
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init", backend="file", as_json=True) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["restarted"] is False
+    assert out["restart_units"] == ["osiris-mcp.service", "osiris-worker.service"]
+    assert "systemctl --user restart" in out["restart_hint"]
+
+
+async def test_cmd_soul_key_init_with_restart_calls_the_shared_restart_primitive(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--restart` reuses `_real_restart_services` — the SAME primitive `osiris
+    deploy` already uses, never a second restart implementation — proved by
+    monkeypatching it and checking it was actually called with the right units,
+    never shelling out to a real `systemctl` in this test."""
+    from src import cli
+
+    calls = []
+
+    async def _fake_restart(units: list[str]) -> tuple[int, str]:
+        calls.append(units)
+        return 0, "ok"
+
+    monkeypatch.setattr(cli, "_real_restart_services", _fake_restart)
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key(
+        "init", backend="file", restart=True, as_json=True) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert calls == [["osiris-mcp.service", "osiris-worker.service"]]
+    assert out["restarted"] is True
+    assert "exit 0" in out["restart_hint"]
 
 
 async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(

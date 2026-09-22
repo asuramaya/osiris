@@ -1536,11 +1536,27 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.post("/soul-key/init")
     async def soul_key_init_route(body: SoulKeyInitBody) -> dict[str, Any]:
+        from src.cli import _SOUL_KEY_RESTART_UNITS, _real_restart_services
         from src.ingest.soul_crypto import soul_key_init
 
-        return soul_key_init(
+        out = soul_key_init(
             owner=body.owner, path=body.path, backend=body.backend,
             print_recovery=body.print_recovery)
+        if "error" in out:
+            return out
+        out["restart_units"] = _SOUL_KEY_RESTART_UNITS
+        restart_cmd = f"systemctl --user restart {' '.join(_SOUL_KEY_RESTART_UNITS)}"
+        if body.restart:
+            code, log = await _real_restart_services(_SOUL_KEY_RESTART_UNITS)
+            out["restarted"] = code == 0
+            out["restart_hint"] = (
+                f"`{restart_cmd}` -> exit {code}" + (f": {log.strip()}" if code else ""))
+        else:
+            out["restarted"] = False
+            out["restart_hint"] = (
+                f"the key is minted, but osiris-mcp/osiris-worker won't see it until "
+                f"restarted — run `{restart_cmd}` (or re-run with restart: true)")
+        return out
 
     @app.post("/soul-key/rotate")
     async def soul_key_rotate_route(
@@ -2274,11 +2290,16 @@ class SoulKeyInitBody(BaseModel):
     resolution the CLI's own bare `osiris soul-key init` gets applies
     unchanged). `backend` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): None
     auto-selects (host+tpm2/host-cred/file); an explicit value is the same
-    escape hatch the CLI's own `--backend` carries."""
+    escape hatch the CLI's own `--backend` carries. `restart` (THE FIRST KEY
+    MUST COME FROM THE NORMAL CLI, Thoth mail 13065): the SAME `osiris soul-key
+    init --restart` escape hatch, so the console's own Init button can restart
+    osiris-mcp/osiris-worker in one click instead of leaving the operator to
+    run `systemctl --user restart` by hand after."""
     owner: str | None = None
     path: str | None = None
     backend: str | None = None
     print_recovery: bool = False
+    restart: bool = False
 
 
 class SoulKeyRotateBody(BaseModel):
