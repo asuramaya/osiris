@@ -865,12 +865,40 @@ async function applyRepair(target) {
   setStatus(target + ' applied.');
 }
 
-// ── The Key Panel (Thoth mail 12811/12814/12838/12985, over Khnum's soul-key door) ────
-// Piece 1 only — status card + init/rotate/restore-drill over GET/POST /soul-key/*.
-// Recovery enrollment (piece 2, browser WebAuthn/PRF) is a SEPARATE later tip, gated
-// until Khnum's own key-door tip is deployed (mail 12838's explicit sequencing) — this
-// panel never renders an "enroll" button, only the CLI pointer his own mail (12979)
-// asked for. The routes are not deployed yet (checks-only gate w370c, mail 12964/12985);
+// ── The Key Panel (Thoth mail 12811/12814/12838/12985/13002, over Khnum's soul-key door) ──
+// Piece 1: status card + init/rotate/restore-drill over GET/POST /soul-key/*. Piece 2
+// (this tip, mail 13002): browser WebAuthn PRF recovery enrollment + recovery, over
+// Seshat's own NEW routes (POST /soul-key/recovery-material[/complete], GET /soul-key/
+// recovery-blob, POST /soul-key/recover-from-browser — see
+// src/orchestrator/soul_key_recovery_material.py) rather than Khnum's own CLI-only
+// enroll-recovery/recover, which stay CLI-only exactly as his own mail (12979) says —
+// this is a SEPARATE, ADDITIONAL enrollment path, the CLI one is never removed.
+//
+// RP ID — RULED (decision ff21aed514bc, Thoth mail 13005), not hard-coded: the console
+// is served at 127.0.0.1:8011/localhost:8011 over plain http, a WebAuthn secure context
+// ONLY for the literal hostname "localhost" — "osiris.local" (soul_crypto.py's own
+// pre-ruling constant) could never interoperate with a real browser. rp_id is now a
+// settings-registry knob (`soul_key.rp_id`, default "localhost") BOTH the CLI enrollment
+// and this page read live — GET /soul-key/status returns it as `rp_id`, so this page
+// never hard-codes it (Khnum patches his own constant separately, his file, his commit).
+// Both buttons below fetch status first and pre-check document.location.hostname against
+// THAT value before ever touching WebAuthn, showing a clear error instead of letting the
+// browser throw an opaque SecurityError — the operator opens the console as
+// http://localhost:8011, not 127.0.0.1, when enrolling (ruling's own explicit note).
+//
+// FERNET-COMPATIBLE WRAP FORMAT, CROSS-VERIFIED (not just spec-followed): the HKDF
+// params and the hand-rolled Fernet token format below (fernetEncryptBytes/
+// fernetDecryptBytes) were checked byte-for-byte against Python's own
+// cryptography.fernet.Fernet + HKDF (soul_crypto.py's own _hkdf_wrap_key) via a
+// throwaway Node+Python cross-check before landing — both directions round-tripped
+// (JS-wrapped token decrypts correctly under Python's Fernet, and vice versa). What
+// COULD NOT be verified without real hardware: the actual navigator.credentials
+// create/get PRF ceremony itself (no FIDO2 device, no real browser session in this
+// build environment) — flagged explicitly here, matching the same honesty
+// soul_crypto.py's own FIDO2 section states about its CLI counterpart. One real
+// enroll+recover cycle against the operator's own Security Key, from an actual
+// browser, is owed before this is trusted as a live recovery path.
+//
 // GET /soul-key/status returning 404 (no route mounted) degrades to a plain notice
 // rather than an error, since "not deployed yet" is the expected common case today,
 // never a broken panel. Reached via CMD-K ("Key…").
@@ -910,10 +938,13 @@ async function renderKeyPanel() {
   container.innerHTML = renderKeyPanelHtml(KEY_STATUS);
 }
 function renderKeyPanelHtml(s) {
+  var enrollBtn = (s.present && (s.recovery_paths_enrolled || []).length === 0)
+    ? ' <button class="iconbtn" onclick="enrollRecoveryBrowser()">Enroll recovery (this browser)…</button>'
+    : '';
   var warn = s.recovery_warning
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + esc(s.recovery_warning) +
-      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal (hardware ' +
-      'touch required; there is no browser or MCP door for this act).</div>' : '';
+      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal, or' + enrollBtn +
+      '</div>' : '';
   var legacy = (s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0)
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + s.legacy_plaintext_rows +
       ' row(s) still under the old key — rotate is not finished until this reads 0.</div>' : '';
@@ -921,7 +952,8 @@ function renderKeyPanelHtml(s) {
     ? '<div style="margin:8px 0"><span title="a .legacy sibling exists">Rotation in progress.</span> ' +
       '<button class="iconbtn" onclick="finishKeyRotate()">Finish rotation</button></div>' : '';
   var actions = !s.present
-    ? '<button class="iconbtn" onclick="initKey()">Init…</button>'
+    ? '<button class="iconbtn" onclick="initKey()">Init…</button> ' +
+      '<button class="iconbtn" onclick="recoverKeyBrowser()">Recover (this browser)…</button>'
     : (s.rotation_in_flight ? '' :
        '<button class="iconbtn" onclick="rotateKey()">Rotate…</button> ' +
        '<button class="iconbtn" onclick="restoreDrillKey()">Restore drill</button>');
@@ -989,6 +1021,207 @@ async function restoreDrillKey() {
   if (out) out.textContent = JSON.stringify(res, null, 2);
   if (res.error) { setStatus('Restore drill failed: ' + res.error); return; }
   setStatus(res.all_ok ? 'Restore drill: all repositories ok.' : 'Restore drill: at least one repository failed — see output.');
+}
+
+// ── Browser recovery crypto (Thoth mail 13002, THE KEY PANEL piece 2) ──────────────────
+// Cross-verified against src/ingest/soul_crypto.py's own HKDF params and Python's
+// cryptography.fernet.Fernet wire format — see this section's own header comment above.
+function b64urlEncodeBytes(bytes) {
+  var bin = '';
+  for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+function b64urlDecodeToBytes(str) {
+  str = str.replace(/-/g, '+').replace(/_/g, '/');
+  while (str.length % 4) str += '=';
+  var bin = atob(str);
+  var out = new Uint8Array(bin.length);
+  for (var i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
+async function hkdfWrapKeyMaterial(prfOutputBytes) {
+  // Matches soul_crypto.py's own _hkdf_wrap_key exactly: HKDF-SHA256, length=32,
+  // salt=None, info=b"osiris-soul-key-recovery-wrap". Python's cryptography HKDF
+  // treats salt=None as zero-padded-to-blocksize -- equivalent to an EMPTY salt
+  // here, since HMAC's own key-padding rule makes a 0-byte key and a 32-zero-byte
+  // key identical once padded to SHA-256's 64-byte block size (verified, not just
+  // asserted -- see this section's own header comment).
+  var hkdfKey = await crypto.subtle.importKey('raw', prfOutputBytes, 'HKDF', false, ['deriveBits']);
+  var info = new TextEncoder().encode('osiris-soul-key-recovery-wrap');
+  var bits = await crypto.subtle.deriveBits(
+    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(0), info: info }, hkdfKey, 256);
+  return new Uint8Array(bits);
+}
+function _u64be(n) {
+  var out = new Uint8Array(8), big = BigInt(n);
+  for (var i = 7; i >= 0; i--) { out[i] = Number(big & 0xffn); big >>= 8n; }
+  return out;
+}
+function _concatBytes() {
+  var arrs = Array.prototype.slice.call(arguments);
+  var total = arrs.reduce(function(n, a) { return n + a.length; }, 0);
+  var out = new Uint8Array(total), off = 0;
+  arrs.forEach(function(a) { out.set(a, off); off += a.length; });
+  return out;
+}
+async function fernetEncryptBytes(derivedKey32, plaintextBytes) {
+  // Fernet's own key split (cryptography.fernet.Fernet.__init__): first 16 bytes
+  // of the derived key = HMAC signing key, last 16 = AES-128 encryption key. Token
+  // wire format: version(1) || timestamp(8, big-endian) || iv(16) || ciphertext
+  // (PKCS7-padded, which AES-CBC's own encrypt op applies automatically) || hmac(32).
+  var signingKey = derivedKey32.slice(0, 16), encKey = derivedKey32.slice(16, 32);
+  var iv = crypto.getRandomValues(new Uint8Array(16));
+  var aesKey = await crypto.subtle.importKey('raw', encKey, 'AES-CBC', false, ['encrypt']);
+  var ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-CBC', iv: iv }, aesKey, plaintextBytes));
+  var version = new Uint8Array([0x80]);
+  var ts = _u64be(Math.floor(Date.now() / 1000));
+  var signingInput = _concatBytes(version, ts, iv, ciphertext);
+  var hmacKey = await crypto.subtle.importKey('raw', signingKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  var hmac = new Uint8Array(await crypto.subtle.sign('HMAC', hmacKey, signingInput));
+  return b64urlEncodeBytes(_concatBytes(signingInput, hmac));
+}
+async function fernetDecryptBytes(derivedKey32, token) {
+  var signingKey = derivedKey32.slice(0, 16), encKey = derivedKey32.slice(16, 32);
+  var raw = b64urlDecodeToBytes(token);
+  var iv = raw.slice(9, 25);
+  var ciphertext = raw.slice(25, raw.length - 32);
+  var hmacTag = raw.slice(raw.length - 32);
+  var signingInput = raw.slice(0, raw.length - 32);
+  var hmacKey = await crypto.subtle.importKey('raw', signingKey, { name: 'HMAC', hash: 'SHA-256' }, false, ['verify']);
+  var ok = await crypto.subtle.verify('HMAC', hmacKey, hmacTag, signingInput);
+  if (!ok) throw new Error('recovery blob failed to decrypt — wrong Security Key, or the blob is corrupted');
+  var aesKey = await crypto.subtle.importKey('raw', encKey, 'AES-CBC', false, ['decrypt']);
+  return new Uint8Array(await crypto.subtle.decrypt({ name: 'AES-CBC', iv: iv }, aesKey, ciphertext));
+}
+async function _sha256FingerprintHex16(bytes) {
+  var digest = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  return Array.from(digest.slice(0, 8)).map(function(b) { return b.toString(16).padStart(2, '0'); }).join('');
+}
+function _webauthnPrfAvailable() {
+  return !!(window.PublicKeyCredential && navigator.credentials && crypto.subtle);
+}
+function _rpOriginOk(rpId) {
+  return document.location.hostname === rpId;
+}
+
+// ── Browser recovery enrollment (piece 2, enroll direction) ────────────────────────────
+async function enrollRecoveryBrowser() {
+  var out = $('key-out');
+  if (!_webauthnPrfAvailable()) { setStatus('This browser has no WebAuthn/PRF support.'); return; }
+  if (out) out.textContent = 'checking the key door’s own rp_id setting…';
+  var status = await fetch('/soul-key/status').then(function(r){ return r.json(); });
+  var rpId = status.rp_id;
+  if (!rpId) { setStatus('GET /soul-key/status carries no rp_id yet — cannot enroll safely.'); return; }
+  if (!_rpOriginOk(rpId)) {
+    setStatus('This console is served from "' + document.location.hostname + '", not "' +
+      rpId + '" — the browser will refuse to create a credential for a domain this page ' +
+      'is not actually served from. Open the console as http://' + rpId + ':8011 to enroll.');
+    return;
+  }
+  if (out) out.textContent = 'requesting key material…';
+  var issued = await fetch('/soul-key/recovery-material', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+  }).then(function(r){ return r.json(); });
+  if (issued.error) { if (out) out.textContent = issued.error; setStatus('Enroll failed: ' + issued.error); return; }
+  try {
+    if (out) out.textContent = 'touch your Security Key now…';
+    var rawKey = b64urlDecodeToBytes(issued.raw_key);
+    var credential = await navigator.credentials.create({ publicKey: {
+      rp: { id: rpId, name: 'Osiris soul-store key' },
+      user: { id: crypto.getRandomValues(new Uint8Array(16)), name: 'soul-key', displayName: 'Osiris soul-store key' },
+      challenge: crypto.getRandomValues(new Uint8Array(32)),
+      pubKeyCredParams: [{ type: 'public-key', alg: -7 }],
+      authenticatorSelection: { residentKey: 'required', userVerification: 'required' },
+      extensions: { prf: {} },
+    }});
+    var salt = crypto.getRandomValues(new Uint8Array(32));
+    if (out) out.textContent = 'touch your Security Key again to derive the wrap…';
+    var assertion = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: rpId,
+      allowCredentials: [{ type: 'public-key', id: credential.rawId }],
+      userVerification: 'required',
+      extensions: { prf: { eval: { first: salt } } },
+    }});
+    var prfResults = assertion.getClientExtensionResults().prf;
+    if (!prfResults || !prfResults.results || !prfResults.results.first) {
+      throw new Error('this Security Key did not return a PRF/hmac-secret output — it may not support the extension');
+    }
+    var prfOutput = new Uint8Array(prfResults.results.first);
+    var wrapKey = await hkdfWrapKeyMaterial(prfOutput);
+    var wrappedToken = await fernetEncryptBytes(wrapKey, rawKey);
+    var fingerprint = await _sha256FingerprintHex16(rawKey);
+    if (out) out.textContent = 'persisting the enrollment…';
+    var res = await fetch('/soul-key/recovery-material/complete', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        token: issued.token,
+        credential_id: b64urlEncodeBytes(new Uint8Array(credential.rawId)),
+        salt: b64urlEncodeBytes(salt), wrapped_key: wrappedToken,
+        key_fingerprint: fingerprint, rp_id: rpId,
+      }),
+    }).then(function(r){ return r.json(); });
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    if (res.error) { setStatus('Enroll failed: ' + res.error); return; }
+    setStatus('Recovery enrolled in this browser.');
+    renderKeyPanel();
+  } catch (e) {
+    if (out) out.textContent = String((e && e.message) || e);
+    setStatus('Enroll failed: ' + ((e && e.message) || e));
+  }
+}
+
+// ── Browser recovery (piece 2, recover direction — a box with no live key) ─────────────
+async function recoverKeyBrowser() {
+  var out = $('key-out');
+  if (!_webauthnPrfAvailable()) { setStatus('This browser has no WebAuthn/PRF support.'); return; }
+  if (out) out.textContent = 'reading the recovery enrollment…';
+  var blob = await fetch('/soul-key/recovery-blob').then(function(r){ return r.json(); });
+  if (blob.error) { if (out) out.textContent = blob.error; setStatus('Recover failed: ' + blob.error); return; }
+  // the credential was enrolled against blob's OWN rp_id (Thoth's ruling, decision
+  // ff21aed514bc) -- that value, not a guess, is what the ceremony must present.
+  if (!_rpOriginOk(blob.rp_id)) {
+    setStatus('This console is served from "' + document.location.hostname + '", not "' +
+      blob.rp_id + '" — open the console as http://' + blob.rp_id + ':8011 to recover.');
+    return;
+  }
+  var status = await fetch('/soul-key/status').then(function(r){ return r.json(); });
+  try {
+    var credentialId = b64urlDecodeToBytes(blob.credential_id);
+    var salt = b64urlDecodeToBytes(blob.salt);
+    if (out) out.textContent = 'touch your Security Key now…';
+    var assertion = await navigator.credentials.get({ publicKey: {
+      challenge: crypto.getRandomValues(new Uint8Array(32)), rpId: blob.rp_id,
+      allowCredentials: [{ type: 'public-key', id: credentialId }],
+      userVerification: 'required',
+      extensions: { prf: { eval: { first: salt } } },
+    }});
+    var prfResults = assertion.getClientExtensionResults().prf;
+    if (!prfResults || !prfResults.results || !prfResults.results.first) {
+      throw new Error('this Security Key did not return a PRF/hmac-secret output for the enrolled credential — wrong key plugged in?');
+    }
+    var prfOutput = new Uint8Array(prfResults.results.first);
+    var wrapKey = await hkdfWrapKeyMaterial(prfOutput);
+    var rawKey = await fernetDecryptBytes(wrapKey, blob.wrapped_key);
+    var fingerprint = await _sha256FingerprintHex16(rawKey);
+    if (fingerprint !== blob.key_fingerprint) {
+      throw new Error('recovered key’s own fingerprint does not match the recovery blob’s recorded one — refusing to seal a possibly-tampered key');
+    }
+    if (out) out.textContent = 'sealing the recovered key…';
+    var res = await fetch('/soul-key/recover-from-browser', {
+      method: 'POST', headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        raw_key: b64urlEncodeBytes(rawKey), key_fingerprint: fingerprint,
+        resolved_path: status.path,
+      }),
+    }).then(function(r){ return r.json(); });
+    if (out) out.textContent = JSON.stringify(res, null, 2);
+    if (res.error) { setStatus('Recover failed: ' + res.error); return; }
+    setStatus('Key recovered and sealed (' + res.backend + ').');
+    renderKeyPanel();
+  } catch (e) {
+    if (out) out.textContent = String((e && e.message) || e);
+    setStatus('Recover failed: ' + ((e && e.message) || e));
+  }
 }
 
 // ── The Offload Targets Panel (Thoth mail 12811/12814/12985, ruling be21384a) ─────────
