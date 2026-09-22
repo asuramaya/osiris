@@ -70,6 +70,7 @@ from src.orchestrator.agents import (
     AgentIdentity,
     _generation,
     cap_handoff_text,
+    is_live_handoff,
     lineage_root,
     misfiled_by_lineage,
     nearest_handoff_ancestor,
@@ -11209,17 +11210,17 @@ async def ack_handoff(
     ref: str, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """The READ RECEIPT — the only thing that retires a live `is_handoff` marker.
-    orient() delivers a handoff unconditionally; this acknowledges it, a separate act
-    naming the id. `ref` is the id orient()'s succession_note or recall() gave you,
-    resolved strictly (never a free-text guess). Tries Thread then Decision.
+    """The READ RECEIPT — the only thing that retires a live `is_handoff` marker, or a
+    legacy record with none, matched by prose alone. orient() delivers a handoff
+    unconditionally; this acknowledges it, a separate act naming the id. `ref` is the id
+    orient()'s succession_note or recall() gave you, resolved strictly (never a
+    free-text guess). Tries Thread then Decision.
 
     Refuses rather than guesses: unresolvable ref, already-acknowledged/not-a-handoff,
-    or caller outside the handoff author's own lineage (a mistaken ack from another
-    lineage would permanently retire someone else's live handoff). Per-object not
-    per-reader (first ack wins, retires for everyone); final, not a lease. Never
-    deleted — recall()/search() still see it. Also resolves a Thread-shaped handoff's
-    `status`; always False for a Decision (no status to resolve)."""
+    or a caller outside the author's own lineage (a mistaken ack from elsewhere would
+    permanently retire someone else's live handoff). Per-object, not per-reader (first
+    ack wins); final, not a lease. Never deleted — recall()/search() still see it.
+    Resolves a Thread's own `status` too; always False for a Decision."""
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -11244,7 +11245,14 @@ async def ack_handoff(
         " AND a2.name='summary' AND a2.evidence_class='self_declared' "
         " ORDER BY a2.confidence DESC, a2.observed_at DESC LIMIT 1) AS author "
         "FROM objects o WHERE o.id=$1", oid)
-    if row is None or row["is_handoff"] != "true":
+    if row is None:
+        return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
+    if row["is_handoff"] != "true" and not await is_live_handoff(pool, oid):
+        # #cd101070: an object with NO is_handoff property at all can still be a LIVE
+        # handoff via the legacy prose fallback (nearest_handoff_ancestor/get_status's
+        # own HANDOFF_LIVE_PREDICATE_SQL) -- checked here too so the ack door recognizes
+        # exactly what the pointer surfaced, never refusing a real pending handoff just
+        # because it predates the structured property.
         return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
     if row["author"] is None:
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
