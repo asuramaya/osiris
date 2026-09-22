@@ -9,6 +9,7 @@ woken (it has no repo — the human reads it, membrane #6's upward lane).
 from __future__ import annotations
 
 import json
+import os
 from datetime import UTC, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -5065,6 +5066,53 @@ async def test_launch_never_treats_a_different_seats_live_mount_as_its_own_twin(
     assert spawned and spawned[0]["repo"] == str(shared_tree)
 
 
+async def test_launch_ignores_a_failed_dead_harness_row_and_reports_it_as_stale(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """Nebbercracker's monsterhouse report, DM 13237/13239, the follow-up to the
+    mounts-side fix above: `claude agents --json` kept listing chowder's OLD session
+    (state='failed', a long-dead pid) forever — the harness never reaps a failed row on
+    its own — so `_launch_twin_check`'s cwd match kept refusing every relaunch as
+    already-live off a process that no longer existed. A failed/pid-dead row must never
+    be trusted as a twin, and must be named on the receipt rather than silently
+    swallowed."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:deadrow01", manager_agent="agent:deadrowm01",
+        worker_handle="Deadrow", house="monsterhouse")
+    launch_cwd = tmp_path / "deadrow"
+    launch_cwd.mkdir()
+    await _office(actions, worker_seat, str(launch_cwd))
+    # the seat's own holder never mounted at all — `_launch_target_setup`'s liveness
+    # gate finds nobody live and falls through to `_launch_twin_check`, whose ONLY
+    # signal here is the harness's own stale roster row.
+    stale_row = {"cwd": str(launch_cwd), "name": "[MO] Deadrow", "sessionId": "aa64c831",
+                 "status": "idle", "state": "failed", "pid": 2025736}
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:deadrowm01", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[stale_row]]))
+
+    assert d["status"] == "launched"  # never "already-live" — a dead row is not a twin
+    assert spawned and spawned[0]["repo"] == str(launch_cwd)
+    assert d["stale_harness_row"] == stale_row
+
+
+async def test_harness_row_is_live_checks_state_then_a_real_proc_pid() -> None:
+    """The predicate in isolation: `state` in failed/completed refuses outright (never
+    even reaching the pid check); a live-looking state with a pid that does not exist
+    on THIS box (checked against /proc, never assumed) also refuses; a row with no pid
+    at all is trusted on `state` alone — a harness version that doesn't report one is
+    not treated as evidence of death it never actually carried."""
+    from src.orchestrator.trigger import _harness_row_is_live
+
+    assert _harness_row_is_live({"state": "failed", "pid": os.getpid()}) is False
+    assert _harness_row_is_live({"state": "completed"}) is False
+    assert _harness_row_is_live({"state": "running", "pid": 999999999}) is False
+    assert _harness_row_is_live({"state": "running", "pid": os.getpid()}) is True
+    assert _harness_row_is_live({"state": "running"}) is True
+    assert _harness_row_is_live({}) is True
+
+
 async def test_launch_binds_holds_to_the_fresh_heir_at_spawn_return_not_the_stale_ancestor(
     actions: Actions,
 ) -> None:
@@ -6906,6 +6954,93 @@ async def test_stop_seat_passes_the_census_job_dir_key_to_kill(actions: Actions)
 
     assert d["status"] == "stopped"
     assert seen == [(6161, "wgjobkey")]
+
+
+# --- THE ORPHAN PATH (Nebbercracker's monsterhouse report, DM 13214/13218/13239): a body
+# the graph never bound a holder for, still stoppable via the harness's own roster. -------
+
+async def test_stop_seat_kills_an_orphan_harness_body_the_graph_never_bound(
+    actions: Actions,
+) -> None:
+    """chowder's own graph holder was never bound at all, but a real body still ran
+    under its own window name at its own office cwd — stop_seat must be able to reach
+    it, never refuse outright just because there's no `holds` edge to walk."""
+    from src.orchestrator.trigger import _window_name
+
+    seat = await ensure_seat(actions, house="monsterhouse", handle="Orphan",
+                             source="agent:orphm01")
+    orphan_seat = seat["seat_id"]
+    office = "/tmp/orphan-office"
+    await _office(actions, orphan_seat, office)
+    manager = await ensure_seat(actions, house="monsterhouse", handle="OrphanMgr",
+                                source="agent:orphm01")
+    manager_seat = manager["seat_id"]
+    await bind_holder(actions, seat_id=manager_seat, agent_id="agent:orphm01",
+                      source="agent:orphm01")
+    w_oid = await actions.create_or_find_object("Seat", orphan_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+
+    expected_name = await _window_name(actions.pool, "monsterhouse", "Orphan", None)
+    row = {"name": expected_name, "cwd": office, "pid": 2025736, "id": "abc12345",
+          "state": "running"}
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [row]
+
+    killed: list[tuple[int, str | None]] = []
+
+    async def _kill(pid: int, job_dir_key: str | None) -> None:
+        killed.append((pid, job_dir_key))
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:orphm01", target=orphan_seat,
+        agents_json=_agents_json, kill=_kill)
+
+    assert d["status"] == "stopped"
+    assert d["orphan"] is True
+    assert d["pid"] == 2025736
+    assert killed == [(2025736, "abc12345")]
+
+
+async def test_stop_seat_refuses_an_orphan_row_whose_cwd_does_not_match_the_seat(
+    actions: Actions,
+) -> None:
+    """A NAME COLLISION IS NOT ENOUGH EVIDENCE TO KILL SOMEONE ELSE'S PROCESS: two seats
+    can share a handle across different houses/projects. A harness row that matches by
+    NAME but sits at a DIFFERENT cwd than this seat's own tree_cwd/office must never be
+    killed — the exact 'pattern match, not identity' hazard the law explicitly refuses."""
+    from src.orchestrator.trigger import _window_name
+
+    seat = await ensure_seat(actions, house="monsterhouse", handle="Orphan2",
+                             source="agent:orphm02")
+    orphan_seat = seat["seat_id"]
+    await _office(actions, orphan_seat, "/tmp/orphan2-office")
+    manager = await ensure_seat(actions, house="monsterhouse", handle="Orphan2Mgr",
+                                source="agent:orphm02")
+    manager_seat = manager["seat_id"]
+    await bind_holder(actions, seat_id=manager_seat, agent_id="agent:orphm02",
+                      source="agent:orphm02")
+    w_oid = await actions.create_or_find_object("Seat", orphan_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+
+    expected_name = await _window_name(actions.pool, "monsterhouse", "Orphan2", None)
+    # SAME name, WRONG cwd — a different seat's own body, wearing a colliding label.
+    row = {"name": expected_name, "cwd": "/somewhere/unrelated", "pid": 4242,
+          "id": "def67890", "state": "running"}
+
+    async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return [row]
+
+    async def _boom(pid: int, job_dir_key: str | None) -> None:
+        raise AssertionError("a cwd mismatch must never reach kill()")
+
+    d = await trigger_module.stop_seat(
+        actions, caller="agent:orphm02", target=orphan_seat,
+        agents_json=_agents_json, kill=_boom)
+
+    assert d["status"] == "no-live-body"
 
 
 # --- _real_kill_pid (thread 6002, live-reproduced Wave 6): prefer the harness's own

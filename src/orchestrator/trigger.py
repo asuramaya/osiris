@@ -3433,9 +3433,30 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
     )
 
 
+def _harness_row_is_live(row: dict[str, Any]) -> bool:
+    """A `claude agents --json` row counts as a genuinely live body only when its own
+    `state` is not failed/completed AND (when the row names one) its own `pid` is
+    actually alive on THIS box — checked against `/proc`, never assumed from a static
+    roster line (Nebbercracker's monsterhouse report, DM 13237/13239): chowder's own
+    row for session aa64c831 kept naming `"status": "idle", "state": "failed"`, pid
+    2025736 long dead, and NEVER left the harness's own roster — so `_launch_twin_check`
+    kept refusing every relaunch as `already-live` forever, off a process that no
+    longer existed. A row with no `pid` at all (a harness version that doesn't report
+    one) is trusted on `state` alone, never refused for a signal it never carried."""
+    if row.get("state") in ("failed", "completed"):
+        return False
+    pid = row.get("pid")
+    if pid is None:
+        return True
+    try:
+        return Path(f"/proc/{int(pid)}").exists()
+    except (TypeError, ValueError):
+        return False
+
+
 async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
-) -> dict[str, Any] | None:
+) -> dict[str, Any]:
     """THE SHARED TWIN GUARD, reused by BOTH launch doors (ruling 983ec87a, "two doors, one
     receipt") — the harness-native launch lane's own idempotency check used to consult ONLY
     `claude agents --json`, the harness's own `--bg` roster, which is INVISIBLE TO A RESUMED
@@ -3447,15 +3468,25 @@ async def _launch_twin_check(
     resumed body's mid-turn mount() call DOES reach). NEVER FIXES the harness roster's own
     incompleteness (that is THEIRS, per #148's ruling) — only stops trusting it ALONE.
 
-    Returns None when neither source sees a live body at `launch_cwd` (safe to proceed).
-    Otherwise a dict naming EXACTLY which source(s) fired (577988ed: a guard that wrongly
-    blocks a legitimate launch is worse than the disease it prevents — a caller must be able
-    to see and judge WHY this refused, never just that it did) — `harness` (the matching
+    ALWAYS RETURNS A DICT NOW (never bare None — Nebbercracker's monsterhouse report, DM
+    13237/13239, the follow-up to the mounts-side fix above): `harness` (the matching
     `claude agents --json` row, or None) and `mounts` (the matching agent_mounts row, or
-    None). Both present is not treated as more ambiguous than either alone: two live-looking
-    signals for the same cwd both mean the same thing (don't mint), so both are reported and
-    both refuse the same way — there is no genuinely ambiguous case here to invent a third
-    verdict for, only ONE OR THE OTHER OR NEITHER, and this reports exactly which.
+    None) name EXACTLY which source(s) fired (577988ed: a guard that wrongly blocks a
+    legitimate launch is worse than the disease it prevents — a caller must be able to see
+    and judge WHY this refused, never just that it did); a caller refuses on EITHER being
+    non-None, exactly as it did on a non-None return before this. Both present is not
+    treated as more ambiguous than either alone: two live-looking signals for the same cwd
+    both mean the same thing (don't mint), so both are reported and both refuse the same
+    way — there is no genuinely ambiguous case here to invent a third verdict for, only
+    ONE OR THE OTHER OR NEITHER, and this reports exactly which. A THIRD key,
+    `stale_harness_row`, is independent of whether a real twin was found: a cwd/session
+    match against `claude agents --json` is filtered through `_harness_row_is_live`
+    before it can ever become `harness` — chowder's own row for session aa64c831 kept
+    naming `state: "failed"`, pid 2025736 long dead, and never left the harness's own
+    roster, so this guard kept refusing every relaunch as already-live forever off a
+    process that no longer existed. A filtered-out row lands in `stale_harness_row`
+    (None when none was seen) so a caller can report it rather than silently discard the
+    evidence — present whether or not `harness`/`mounts` ALSO found a genuine twin.
 
     BY LINEAGE TOO, NOT ONLY BY CWD (operator, 2026-09-03 — the office ruling's own
     hazard): the moment a seat's spawn location moves (tree_cwd rebound off a fabricated
@@ -3492,8 +3523,15 @@ async def _launch_twin_check(
         roster = await agents_json(cwd=launch_cwd)
     except (OSError, TimeoutError, ValueError):
         roster = []
-    from_harness = next((r for r in roster
-                         if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
+    stale_harness_row: dict[str, Any] | None = None
+    cwd_match = next((r for r in roster
+                      if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
+    if cwd_match is not None and _harness_row_is_live(cwd_match):
+        from_harness = cwd_match
+    else:
+        from_harness = None
+        if cwd_match is not None:
+            stale_harness_row = cwd_match
     from_mounts = None
     if seat_id is not None:
         from src.orchestrator.seats import held_seat
@@ -3538,10 +3576,14 @@ async def _launch_twin_check(
                 everywhere = await agents_json()
             except (OSError, TimeoutError, ValueError):
                 everywhere = []
-            from_harness = next(
+            session_match = next(
                 (r for r in everywhere if isinstance(r, dict)
                  and any(str(r.get("sessionId") or "").startswith(sid) for sid in sessions)),
                 None)
+            if session_match is not None and _harness_row_is_live(session_match):
+                from_harness = session_match
+            elif session_match is not None and stale_harness_row is None:
+                stale_harness_row = session_match
             lineage_row = await pool.fetchrow(
                 "SELECT agent_id, last_seen, cwd FROM agent_mounts "
                 "WHERE agent_id=$1 OR agent_id LIKE $1 || '-%' "
@@ -3551,9 +3593,8 @@ async def _launch_twin_check(
                 from_mounts = {"agent_id": lineage_row["agent_id"],
                                "last_seen": lineage_row["last_seen"].isoformat(),
                                "cwd": lineage_row["cwd"]}
-    if from_harness is None and from_mounts is None:
-        return None
-    return {"harness": from_harness, "mounts": from_mounts}
+    return {"harness": from_harness, "mounts": from_mounts,
+            "stale_harness_row": stale_harness_row}
 
 
 async def _launch_target_setup(
@@ -3874,7 +3915,8 @@ async def launch_seat(
         # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
         # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
         twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat)
-        if twin is not None:
+        stale_harness_row = twin.get("stale_harness_row")
+        if twin["harness"] or twin["mounts"]:
             seen_via = [s for s in (
                 f"claude agents --json ({twin['harness'].get('name')!r})"
                 if twin["harness"] else None,
@@ -4019,6 +4061,12 @@ async def launch_seat(
         }
         if dormant is not None:
             out["dormant_history"] = dormant
+        if stale_harness_row is not None:
+            # A DEAD ROW THE TWIN GUARD SAW AND IGNORED (Nebbercracker's monsterhouse
+            # report, DM 13237/13239) — surfaced, never silently discarded, so a caller
+            # can see the harness's own roster still hasn't reaped it even though this
+            # launch proceeded correctly around it.
+            out["stale_harness_row"] = stale_harness_row
         # THE CEILING'S READ PATH (task #8, unblocked by the binding leg): a --bg body is a
         # real billed session on a metered backend, same as any other one — recorded into
         # llm_usage or the ceiling never learns it happened (the ghost-farm disease,
@@ -4373,6 +4421,69 @@ async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
 _OPERATOR_CALLER = "operator"
 
 
+async def _stop_orphan_harness_body(
+    pool: asyncpg.Pool, *, target_seat: str, kill: Any, agents_json: Any,
+) -> dict[str, Any]:
+    """THE ORPHAN PATH (Nebbercracker's monsterhouse report, DM 13214/13218/13239):
+    `stop_seat`'s own graph-bound path above requires a `holds` edge to exist at all —
+    but the harness's own roster can still be running a real body under this seat's
+    own window name (chowder's own "[MO] chowder") that the graph never bound a holder
+    for (LAW (a)'s own fix promotes `holds` to a fresh heir at spawn-return, but a body
+    launched some other way, or whose binding write was lost, has no such edge to walk
+    at all). A manager needs to be able to stop THAT, not just a graph-bound one — this
+    is the one place `stop_seat` consults the harness roster BY NAME instead of by
+    lineage, and only as a fallback, never in place of the graph-bound path.
+
+    NAMED, NOT PATTERN-KILLED: matches on the row's own `name` against
+    `_window_name`'s own construction (the SAME function launch_seat builds a spawn's
+    window name with — never a second, differently-shaped name-building rule), then
+    REFUSES unless the row's own `cwd` is genuinely this seat's own tree_cwd or
+    anchor_cwd — a name collision across houses/handles (two seats both named
+    "Chowder" in different projects) is not evidence enough to kill someone else's
+    process. Kills by PID (`_real_kill_pid`'s own job_dir_key-preferring, harness-
+    aware shape — never a raw pattern match against `pkill`/`ps` output, which could
+    as easily hit an unrelated process sharing a substring of the name)."""
+    from src.orchestrator.seats import seat_facts
+
+    facts = await seat_facts(pool, target_seat)
+    if not facts.get("handle"):
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": "the seat has no current holder and no handle to search the "
+                          "harness roster by — nothing to stop"}
+    expected_name = await _window_name(
+        pool, facts.get("house"), facts.get("handle"),
+        await _governed_project_name(pool, target_seat))
+    seat_cwds = {c for c in (facts.get("tree_cwd"), facts.get("anchor_cwd")) if c}
+    read_roster = agents_json or _claude_agents_json
+    try:
+        roster = await read_roster()
+    except (OSError, TimeoutError, ValueError):
+        roster = []
+    orphan = next(
+        (r for r in roster if isinstance(r, dict) and r.get("name") == expected_name
+         and r.get("cwd") in seat_cwds and _harness_row_is_live(r)), None)
+    if orphan is None:
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": "the seat has no current holder — nothing to stop"}
+    pid = orphan.get("pid")
+    if pid is None:
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": f"a harness row named {expected_name!r} matches this seat's own "
+                          "cwd but carries no pid — nothing safe to kill"}
+    try:
+        pid_int = int(pid)
+    except (TypeError, ValueError):
+        return {"status": "no-live-body", "seat": target_seat,
+                "detail": f"a harness row named {expected_name!r} carries a non-integer "
+                          f"pid ({pid!r}) — refusing to guess what to kill"}
+    await kill(pid_int, orphan.get("id"))
+    return {"status": "stopped", "seat": target_seat, "orphan": True,
+            "window": orphan.get("name"), "pid": pid_int,
+            "detail": f"killed an orphan body ({expected_name!r}, pid {pid_int}) the "
+                      "graph never bound a holder for — unaddressable via the graph's "
+                      "own holder path until now"}
+
+
 async def stop_seat(
     actions: Actions, *, caller: str, target: str | None, reason: str = "",
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
@@ -4435,7 +4546,13 @@ async def stop_seat(
     a plain SIGTERM used to leave resume() nothing to find (`refused-nothing-to-resume`
     even though the body just died). Calls `handshake.record_session_anchor` on the
     census-matched session id, ambient (never blocks or fails the kill on a ledger-write
-    error) — `session_anchor_recorded` on the receipt names whether it actually landed."""
+    error) — `session_anchor_recorded` on the receipt names whether it actually landed.
+
+    NO HOLDER AT ALL falls to `_stop_orphan_harness_body` (Nebbercracker's monsterhouse
+    report, DM 13214/13218/13239) instead of refusing outright — a body the graph never
+    bound a holder for is still stoppable if the harness's own roster names a live row
+    under this seat's own window name at this seat's own cwd (`orphan: true` on the
+    receipt, never silent about which path fired)."""
     pool = actions.pool
     from src.orchestrator.mounts import registry_census
     from src.orchestrator.seats import held_seat, seat_receipt
@@ -4484,8 +4601,8 @@ async def stop_seat(
                               "(78e3734e): a worker may never stop its own manager's body"}
     holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
     if not holder:
-        return {"status": "no-live-body", "seat": target_seat,
-                "detail": "the seat has no current holder — nothing to stop"}
+        return await _stop_orphan_harness_body(
+            pool, target_seat=target_seat, kill=kill, agents_json=agents_json)
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
