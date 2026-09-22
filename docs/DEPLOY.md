@@ -24,6 +24,32 @@ half-written edit, which is exactly the failure the by-hand `systemctl --user re
 osiris-mcp osiris-worker osiris-console && python scripts/osiris_smoke.py` protocol this
 replaces once caught only by a manager's own well-timed `git status`.
 
+## The deploy snapshot: `~/.local/bin/osiris` never runs a gate's candidate tree
+
+`~/.local/bin/osiris` is a symlink, but it does **not** point at `~/code/osiris/.venv/bin/
+osiris` (the main checkout's own editable install) — it points into a SEPARATE worktree,
+`~/.local/share/osiris/deployed`, pinned at whatever sha `osiris deploy` last recorded as
+successfully deployed. `osiris deploy` itself is always run from the checkout; only the
+operator-facing shim moves.
+
+**Why this exists** (thread `e29b260c`, a live incident): the three long-running services
+(`osiris-mcp`, `osiris-worker`, `osiris-console`) run in-process, surviving a gate
+untouched — they're only ever restarted by a green `osiris deploy`. The CLI used to be a
+plain editable-install symlink into the main checkout, which has no equivalent protection:
+a gate merges a candidate branch into that checkout for the duration of its test run, and
+anything invoking `~/.local/bin/osiris` in that window — including the operator, by hand —
+ran the CANDIDATE's code, not the deployed one. The exact specimen: `osiris resume` died
+with `SoulKeyMissing` mid-gate, because the checkout momentarily carried an in-flight
+encryption change the operator's own session predated.
+
+**The fix, on every green deploy only** (never on smoke failure — a broken deploy must not
+become the operator's next CLI): `scripts/update_deploy_snapshot.sh` moves (or creates, on
+a fresh box) `~/.local/share/osiris/deployed` to the deployed sha via `git worktree add
+--detach` / `git checkout --detach`, runs `uv sync` inside that worktree (a genuinely
+separate `.venv`, its own editable install rooted at the snapshot, not the checkout), and
+atomically retargets `~/.local/bin/osiris` at the snapshot's own `.venv/bin/osiris`. See
+[`CLI.md`](CLI.md#osiris-deploy) for where this sits in the deploy ritual's own step order.
+
 ## The discipline: nothing heavy runs in a request path
 
 The API **enqueues** heavy work onto the worker and returns immediately; it never runs

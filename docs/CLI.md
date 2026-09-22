@@ -238,6 +238,12 @@ Five steps, always in this order:
 5. **The composition seeder gap, named by comparison, never assumed.** The DB's actual
    composition count against `DEFAULT_COMPOSITIONS`'s own length — a shortfall prints exactly
    what to run (`osiris seed`) rather than leaving you to guess whether it happened.
+6. **The deploy snapshot** (thread `e29b260c`) — ONLY on a green deploy (smoke came back
+   clean, a real HEAD was recorded): pins `~/.local/bin/osiris` at a worktree checked out to
+   the deployed sha (`scripts/update_deploy_snapshot.sh`), separate from the main checkout —
+   see [`DEPLOY.md`](DEPLOY.md#the-deploy-snapshot-localbinosiris-never-runs-a-gates-candidate-tree)
+   for why. Never runs on a smoke failure; the checkout keeps running `osiris deploy` itself
+   either way, only the operator-facing shim moves.
 
 ### The deploy taxonomy: two classes of surface
 

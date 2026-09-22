@@ -24,6 +24,7 @@ from src.cli import (
     _placeholder_unit_reason,
     _port_open_probe,
     _real_install_user_units,
+    _real_update_deploy_snapshot,
     _real_wait_for_pg_dump,
     _run_install_script,
     _synthetic_automount_probe,
@@ -4029,6 +4030,245 @@ async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
     assert "6 installed/updated, 0 already current" in out
     assert (target / "osiris-prune-manifest.timer").read_text() == "# osiris-prune-manifest timer\n"
     assert (target / "osiris-base-backup.service").read_text() == "# osiris-base-backup service\n"
+
+
+# --- deploy snapshot (thread e29b260c, Thoth mail 12947) --------------------------------------
+
+def _git_init_and_commit(repo: Path) -> str:
+    """Same shape as `_git_init` above, but returns the resulting commit sha — needed here
+    (unlike every other install-script test) because `update_deploy_snapshot.sh` actually
+    pins a *worktree* at a real sha, not just files present on disk."""
+    import subprocess
+
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True, timeout=10)
+    return _git_commit_all(repo, "init")
+
+
+def _git_commit_all(repo: Path, message: str) -> str:
+    """Stage everything and commit, returning the new HEAD sha — a plain (never async) sync
+    helper, deliberately: ruff's ASYNC221 flags a blocking subprocess.run written directly
+    inside an `async def` test body, so every such call in this section goes through a
+    helper like this one instead, same as `_git_init` already does above. Every call carries
+    its own `timeout=` (the unbounded-wait ratchet's own law, tests/test_unbounded_wait.py) —
+    a plain local `git` op against a tiny synthetic repo, 10s is generous, never expected."""
+    import subprocess
+
+    subprocess.run(["git", "add", "-A"], cwd=repo, check=True, capture_output=True, timeout=10)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "-m", message],
+        cwd=repo, check=True, capture_output=True, timeout=10)
+    out = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True,
+        timeout=10)
+    return out.stdout.strip()
+
+
+def _run_shim(shim: Path) -> str:
+    """Actually invoke a pinned snapshot's `osiris` shim and return its stdout — a sync
+    helper for the same ASYNC221 reason as `_git_commit_all` above."""
+    import subprocess
+
+    result = subprocess.run([str(shim)], capture_output=True, text=True, timeout=30, check=True)
+    return result.stdout.strip()
+
+
+def _git_head(repo: Path) -> str:
+    """Sync helper, same ASYNC221 reason as above."""
+    import subprocess
+
+    return subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
+        capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def _synthetic_deployable_repo(root: Path) -> Path:
+    """A tiny, real git repo with its own `[project.scripts] osiris = ...` entry point and
+    a copy of the REAL scripts/update_deploy_snapshot.sh — everything the script needs to
+    actually run `git worktree add` + `uv sync` end to end, deliberately NOT this repo
+    itself (a worktree pinned inside a worktree-isolated test session would be exactly the
+    git operation the harness's own worktree guard refuses)."""
+    repo = root / "repo"
+    (repo / "mini_pkg").mkdir(parents=True)
+    (repo / "scripts").mkdir()
+    (repo / "pyproject.toml").write_text(
+        "[project]\n"
+        'name = "mini-osiris-stub"\n'
+        'version = "0.0.1"\n'
+        'requires-python = ">=3.12"\n'
+        "dependencies = []\n\n"
+        "[project.scripts]\n"
+        'osiris = "mini_pkg.main:main"\n\n'
+        "[build-system]\n"
+        'requires = ["hatchling"]\n'
+        'build-backend = "hatchling.build"\n\n'
+        "[tool.hatch.build.targets.wheel]\n"
+        'packages = ["mini_pkg"]\n')
+    (repo / "mini_pkg" / "__init__.py").write_text("")
+    (repo / "mini_pkg" / "main.py").write_text(
+        'def main() -> None:\n    print("mini osiris stub")\n')
+    real_script = (Path(__file__).resolve().parent.parent
+                   / "scripts" / "update_deploy_snapshot.sh").read_text()
+    (repo / "scripts" / "update_deploy_snapshot.sh").write_text(real_script)
+    (repo / "scripts" / "update_deploy_snapshot.sh").chmod(0o755)
+    return repo
+
+
+async def test_update_deploy_snapshot_reports_source_missing_when_script_absent(
+    tmp_path: Path,
+) -> None:
+    """A repo predating this feature (or a synthetic tmp_path repo_root elsewhere in this
+    suite, none of which ship scripts/update_deploy_snapshot.sh) is reported, never crashes
+    the rest of cmd_deploy's own report."""
+    out = await _real_update_deploy_snapshot(tmp_path, "deadbeef")
+    assert "SOURCE MISSING" in out
+    assert "update_deploy_snapshot.sh" in out
+
+
+async def test_update_deploy_snapshot_pins_the_shim_end_to_end(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The real script, actually run: `git worktree add --detach` a synthetic repo at its
+    own HEAD, `uv sync` it, and retarget the shim symlink — proof this isn't just read, it
+    executes and produces a genuinely runnable `osiris`. OSIRIS_DEPLOY_SNAPSHOT_DIR/_LINK
+    redirect both the worktree and the shim into tmp_path, so this never touches the real
+    box's ~/.local/share/osiris or ~/.local/bin/osiris."""
+    repo = _synthetic_deployable_repo(tmp_path)
+    sha = _git_init_and_commit(repo)
+    snapshot_dir = tmp_path / "snapshot"
+    link_path = tmp_path / "bin" / "osiris"
+    monkeypatch.setenv("OSIRIS_DEPLOY_SNAPSHOT_DIR", str(snapshot_dir))
+    monkeypatch.setenv("OSIRIS_DEPLOY_SNAPSHOT_LINK", str(link_path))
+
+    out = await _real_update_deploy_snapshot(repo, sha)
+
+    assert f"pinned at {sha}" in out
+    assert link_path.is_symlink()
+    shim = snapshot_dir / ".venv" / "bin" / "osiris"
+    assert link_path.resolve() == shim.resolve()
+    assert _run_shim(shim) == "mini osiris stub"
+
+
+async def test_update_deploy_snapshot_moves_an_existing_worktree_to_a_new_sha(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A SECOND deploy, a NEW sha: the worktree already exists from a prior pin (the common
+    case in production — the box already has one deployed) and must move to the new commit
+    in place, never re-run `git worktree add` against an occupied path."""
+    repo = _synthetic_deployable_repo(tmp_path)
+    sha1 = _git_init_and_commit(repo)
+    (repo / "mini_pkg" / "main.py").write_text(
+        'def main() -> None:\n    print("mini osiris stub v2")\n')
+    sha2 = _git_commit_all(repo, "v2")
+    assert sha1 != sha2
+
+    snapshot_dir = tmp_path / "snapshot"
+    link_path = tmp_path / "bin" / "osiris"
+    monkeypatch.setenv("OSIRIS_DEPLOY_SNAPSHOT_DIR", str(snapshot_dir))
+    monkeypatch.setenv("OSIRIS_DEPLOY_SNAPSHOT_LINK", str(link_path))
+
+    out1 = await _real_update_deploy_snapshot(repo, sha1)
+    assert f"pinned at {sha1}" in out1
+    shim = snapshot_dir / ".venv" / "bin" / "osiris"
+    assert _run_shim(shim) == "mini osiris stub"
+
+    out2 = await _real_update_deploy_snapshot(repo, sha2)
+    assert f"pinned at {sha2}" in out2
+    assert _run_shim(shim) == "mini osiris stub v2"
+    assert _git_head(snapshot_dir) == sha2
+
+
+async def test_cmd_deploy_pins_the_snapshot_only_on_a_green_smoke(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The wiring, not the mechanism (that's `_real_update_deploy_snapshot`'s own tests
+    above): cmd_deploy calls its injected `update_deploy_snapshot` with the recorded HEAD,
+    exactly once, only after smoke came back clean."""
+    calls: list[tuple[Path, str]] = []
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        return "deadbeef"
+
+    async def _snapshot(root: Path, sha: str) -> str:
+        calls.append((root, sha))
+        return f"deploy snapshot: pinned at {sha}"
+
+    import io
+    from contextlib import redirect_stdout
+
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                               pool=actions.pool, record_deploy=_record_deploy,
+                               wait_for_health=_fake_wait_for_health,
+                               wait_for_smoke=_fake_wait_for_smoke,
+                               check_whisper_probe=_fake_check_whisper_ok,
+                               update_deploy_snapshot=_snapshot)
+    assert out == 0
+    assert calls == [(tmp_path, "deadbeef")]
+    assert "deploy snapshot: pinned at deadbeef" in buf.getvalue()
+
+
+async def test_cmd_deploy_skips_the_snapshot_when_smoke_fails(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A broken deploy must never become the operator's next CLI — the exact failure mode
+    this whole lane exists to prevent, just aimed at smoke instead of a gate's candidate
+    tree. If this ever fires, `deployed_head` is real but the restart it names didn't
+    actually come up clean."""
+    calls: list[tuple[Path, str]] = []
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        return "deadbeef"
+
+    async def _failing_smoke() -> tuple[list[str], float]:
+        return (["osiris-mcp: /health returned 503"], 5.0)
+
+    async def _snapshot(root: Path, sha: str) -> str:
+        calls.append((root, sha))
+        raise AssertionError("must never be called — smoke did not come back clean")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, record_deploy=_record_deploy,
+                           wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_failing_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok,
+                           update_deploy_snapshot=_snapshot)
+    assert out == 1
+    assert calls == []
+
+
+async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A non-git repo_root (or any other reason record_deploy returns None) has no sha to
+    pin a worktree at — the snapshot step must be skipped, not called with a garbage
+    value."""
+    calls: list[tuple[Path, str]] = []
+
+    async def _restart(units: list[str]) -> tuple[int, str]:
+        return 0, "done"
+
+    async def _record_deploy(pool: Any, repo_root: Path) -> str | None:
+        return None
+
+    async def _snapshot(root: Path, sha: str) -> str:
+        calls.append((root, sha))
+        raise AssertionError("must never be called — deployed_head is unknown")
+
+    out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
+                           pool=actions.pool, record_deploy=_record_deploy,
+                           wait_for_health=_fake_wait_for_health,
+                           wait_for_smoke=_fake_wait_for_smoke,
+                           check_whisper_probe=_fake_check_whisper_ok,
+                           update_deploy_snapshot=_snapshot)
+    assert out == 0
+    assert calls == []
 
 
 def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
