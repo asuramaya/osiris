@@ -458,6 +458,39 @@ async def _dms_with_unread(
     return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
 
 
+async def _stuck_wake_in_flight_asks(
+    pool: asyncpg.Pool, grace_secs: int
+) -> list[tuple[str, int, str | None]]:
+    """(addressee, message id, sender) for every ASK DM last dispatched
+    'queued-wake-in-flight' whose own grace window has since elapsed (thread 33749ffc,
+    Thoth mail 12907) — the sibling `_dms_with_unread`'s own per-addressee DISTINCT ON
+    can never reach these: a message that already spent its one-time wake (wall #4's
+    own once-per-message brake) but stays `read_at IS NULL` forever (push delivery —
+    nudge/poke — never marks it, never rows message_recipients either) permanently
+    occupies the head of that query's per-addressee slot, so anything queued behind it
+    for the SAME addressee — including a genuinely-still-pending ask riding an unrelated
+    wake — never gets re-examined by the sweep again. This query goes straight at
+    `dispatch_mode` instead, no per-addressee throttle, so it can reach every one of
+    them regardless of queue position.
+
+    `grade='ask'` only — an ungraded or fyi message never blocks anyone by design
+    (dispatch_dm's own queued-fyi terminator), so there is nothing here worth escalating
+    for those grades. `dispatch_mode_at < now() - grace_secs` avoids re-poking a message
+    whose in-flight window (whatever wake it is honestly still riding) has not yet had a
+    chance to resolve — the same window `_seat_wakes` itself uses to decide 'in flight',
+    so a plain re-dispatch is the correct next check, never a separate probe."""
+    rows = await pool.fetch(
+        "SELECT to_agent, id, from_agent FROM fleet_messages "
+        "WHERE to_agent IS NOT NULL AND to_agent <> $1 AND read_at IS NULL "
+        "AND grade='ask' AND dispatch_mode='queued-wake-in-flight' "
+        "AND dispatch_mode_at IS NOT NULL "
+        "AND dispatch_mode_at < now() - make_interval(secs => $2) "
+        "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=fleet_messages.id "
+        "  AND r.agent_id=fleet_messages.to_agent AND r.read_at IS NOT NULL) "
+        "ORDER BY created_at", OPERATOR_ADDR, grace_secs)
+    return [(r["to_agent"], r["id"], r["from_agent"]) for r in rows]
+
+
 async def _agent_resumable(
     pool: asyncpg.Pool, agent_id: str, st: Settings
 ) -> tuple[str, str, float, str] | None:
@@ -5064,4 +5097,48 @@ async def trigger_mail_tick(
             report["poke_only_held"] += 1  # the resume arm is dark: held, same book
         else:  # skipped-*, braked, pull-only, refused
             report["skipped"] += 1
+
+    # THE QUEUED-WAKE-IN-FLIGHT LANE (thread 33749ffc, Thoth mail 12907): the DM lane
+    # above (_dms_with_unread) surfaces only the SINGLE OLDEST unread DM per addressee
+    # (its own DISTINCT ON) — a message that already spent its one-time wake (wall #4's
+    # own once-per-message brake, `skipped-once-per-message`, by design "never loops")
+    # but still reads `read_at IS NULL` (a push delivery — nudge/poke — never marks
+    # fleet_messages.read_at, and never rows message_recipients either) sits at the head
+    # of that per-addressee queue FOREVER, silently starving every genuinely-still-
+    # pending message behind it from ever reaching the sweep at all. Sekhmet's own live
+    # specimen (DM 12079, mail 12079/12190): dispatched 'queued-wake-in-flight' once, on
+    # arrival, riding an unrelated wake that landed on an OLDER, already-exhausted
+    # message (12070) — from then on the sweep kept re-selecting 12070 (a one-line,
+    # already-settled no-op) and never saw 12079 again for 2h55m, until a BRAND NEW
+    # message arrived and was dispatched fresh by send()'s own immediate leg (which
+    # never goes through _dms_with_unread's per-addressee gate at all).
+    #
+    # This lane queries `dispatch_mode` DIRECTLY — no DISTINCT ON, no per-addressee
+    # throttle — so it can reach every such message regardless of queue position.
+    # `dispatch_mode_at < now() - grace` is the "wake no longer live" test operationalized:
+    # the SAME window `_seat_wakes` itself uses to decide "in flight" — once it has
+    # elapsed, a plain re-dispatch naturally either escalates to a real nudge (the wake
+    # it rode has aged out, `_seat_wakes` now reads 0) or, honestly, reports still-in-
+    # flight again (a genuinely fresh wake landed since) — no separate liveness probe
+    # needed; dispatch_dm's own ladder (jobs/nudge/poke/resume) already answers "is
+    # there a live listener" the same way every other lane's dispatch does.
+    grace = st.osiris_trigger_grace_secs
+    for agent_id, msg_id, sender in await _stuck_wake_in_flight_asks(pool, grace):
+        if not st.osiris_trigger_enabled:
+            report["skipped"] += 1
+            continue
+        d = await dispatch_dm(pool, addressee=agent_id, msg_id=msg_id, sender=sender,
+                              settings=st, spawn=spawn, windows=windows, poke=poke)
+        mode = d["mode"]
+        report["wake_in_flight_reevaluated"] = report.get(
+            "wake_in_flight_reevaluated", 0) + 1
+        if mode in ("resumed", "nudged", "poked"):
+            report["wake_in_flight_escalated"] = report.get(
+                "wake_in_flight_escalated", 0) + 1
+            report["woke"] += 1
+        elif mode == "queued-wake-in-flight":
+            report["wake_in_flight_still_riding"] = report.get(
+                "wake_in_flight_still_riding", 0) + 1
+        else:
+            report["wake_in_flight_other"] = report.get("wake_in_flight_other", 0) + 1
     return report

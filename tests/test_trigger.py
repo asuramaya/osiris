@@ -23,6 +23,7 @@ from src.orchestrator.seats import bind_holder, ensure_seat, set_seat_attended
 from src.orchestrator.trigger import (
     _WAKE_PROMPT,
     _marker_landed_sync,
+    _stuck_wake_in_flight_asks,
     _wake_marker,
     dispatch_broadcast,
     dispatch_dm,
@@ -2239,6 +2240,85 @@ async def test_the_grace_collapses_a_burst(actions: Actions, tmp_path: Path) -> 
                            spawn=_spawn, windows=_no_windows)
     assert d1["mode"] == "resumed" and d2["mode"] == "queued-wake-in-flight"
     assert len(calls) == 1
+
+
+async def test_stuck_wake_in_flight_asks_finds_what_the_dm_lane_cannot_reach(
+    actions: Actions,
+) -> None:
+    """Thread 33749ffc (Thoth mail 12907), Sekhmet's own live specimen (DM 12079/12190):
+    `_dms_with_unread`'s DISTINCT ON returns only the SINGLE oldest unread DM per
+    addressee — a message that already spent its one-time wake (an EARLIER, unrelated
+    DM to the same addressee, dispatched 'resumed'/'nudged'/'poked', still reads
+    `read_at IS NULL` forever, since a push delivery never marks it or rows
+    message_recipients) permanently occupies that slot, so a genuinely-still-pending
+    'queued-wake-in-flight' ask queued BEHIND it is never reachable by the ordinary DM
+    lane again. This query goes at `dispatch_mode` directly and finds it anyway, once
+    its own grace window has elapsed."""
+    m_blocker = await send_message(actions.pool, from_agent="agent:sender",
+                                   from_project="other", to_agent="agent:abcd1234",
+                                   body="already spent its one wake")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode='resumed', dispatch_mode_at=now() "
+        "WHERE id=$1", int(m_blocker["id"]))
+    m_stuck = await send_message(actions.pool, from_agent="agent:third",
+                                 from_project="other", to_agent="agent:abcd1234",
+                                 grade="ask", body="rode a wake that never woke it")
+    stuck_id = int(m_stuck["id"])
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode='queued-wake-in-flight', "
+        "dispatch_mode_at=now() - interval '10 minutes' WHERE id=$1", stuck_id)
+
+    # too soon (grace hasn't elapsed): not yet a candidate
+    assert await _stuck_wake_in_flight_asks(actions.pool, grace_secs=3600) == []
+    # grace elapsed: found, by exact id — the blocker (dispatch_mode='resumed', not
+    # 'queued-wake-in-flight') is never a candidate at all, whatever its own age
+    found = await _stuck_wake_in_flight_asks(actions.pool, grace_secs=300)
+    assert found == [("agent:abcd1234", stuck_id, "agent:third")]
+
+
+async def test_trigger_mail_tick_escalates_a_stuck_wake_in_flight_ask(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """End to end, with a fake daemon state (Thoth's own instruction): a resumable owner
+    whose wake-in-flight ask has aged past grace gets escalated to a real wake by the
+    sweep's new lane, and the escalation is reported and the new verdict persisted."""
+    sense = await _stale_resumable_owner(actions, tmp_path)
+    m1 = await _dm_to_owner(actions)
+    m2 = await send_message(actions.pool, from_agent="agent:third", from_project="other",
+                            to_agent="agent:abcd1234", grade="ask",
+                            body="rode m1's wake, never got its own turn")
+    m2_id = int(m2["id"])
+    calls: list[dict[str, Any]] = []
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        calls.append(kw)
+
+    st = _settings(enabled=True, sense=str(sense), grace=300)
+    d1 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=m1,
+                           sender="agent:sender", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    d2 = await dispatch_dm(actions.pool, addressee="agent:abcd1234", msg_id=m2_id,
+                           sender="agent:third", settings=st, spawn=_spawn,
+                           windows=_no_windows)
+    assert d1["mode"] == "resumed" and d2["mode"] == "queued-wake-in-flight"
+    assert len(calls) == 1  # only m1 actually spawned so far
+
+    # simulate time passing: m1's own wake (the thing m2 was riding) and m2's own
+    # verdict both age past the 300s grace window — nothing else changes
+    await actions.pool.execute(
+        "UPDATE agent_wakes SET woke_at = now() - interval '10 minutes'")
+    await actions.pool.execute(
+        "UPDATE fleet_messages SET dispatch_mode_at = now() - interval '10 minutes' "
+        "WHERE id=$1", m2_id)
+
+    report = await trigger_mail_tick(actions, settings=st, spawn=_spawn,
+                                     windows=_no_windows)
+    assert report["wake_in_flight_reevaluated"] == 1
+    assert report["wake_in_flight_escalated"] == 1
+    assert len(calls) == 2  # m2 now genuinely spawned its own turn
+    persisted = await actions.pool.fetchval(
+        "SELECT dispatch_mode FROM fleet_messages WHERE id=$1", m2_id)
+    assert persisted != "queued-wake-in-flight"
 
 
 async def test_a_dm_resume_never_pins_the_triage_model(
