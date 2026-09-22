@@ -5065,6 +5065,132 @@ async def test_launch_never_treats_a_different_seats_live_mount_as_its_own_twin(
     assert spawned and spawned[0]["repo"] == str(shared_tree)
 
 
+async def test_launch_binds_holds_to_the_fresh_heir_at_spawn_return_not_the_stale_ancestor(
+    actions: Actions,
+) -> None:
+    """LAW (a) (Nebbercracker's monsterhouse report, DM 13214/13218, finding ba304fe0):
+    chowder's own holder was stopped, launch minted and bound a fresh heir's IDENTITY
+    (`_bind_before_spawn`) but left the seat's own `holds` edge on the pre-stop
+    generation (THE HOLDS-SANDWICH FIX's own deliberate ancestor-case behavior) — so
+    the live spawned body sat unaddressable while mail to the seat routed into the old
+    (soon retired) generation. Once the OS-level spawn is accepted, that gap must
+    close: the seat's own `holds` edge names the fresh heir immediately, before the
+    body's first turn."""
+    from src.orchestrator.seats import bind_holder, ensure_seat, held_seat
+
+    # NOT `_managed_pair` (its own `ensure_seat(..., source="test")` makes the literal
+    # string "test" the seat's own handle-assertion source, which `_seat_lineage_
+    # ancestor` would then trust as "the ancestor" instead of agent:anc01 — a test-
+    # fixture artifact no production caller ever hits, since a real launch's source is
+    # always a real agent id). Built by hand so agent:anc01 is genuinely the lineage
+    # `_bind_before_spawn` resolves and binds ancestor-side, the actual shape this law
+    # fixes.
+    worker = await ensure_seat(actions, house="monsterhouse", handle="Ancestral2",
+                               source="agent:anc01")
+    worker_seat = worker["seat_id"]
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:anc01",
+                      source="agent:anc01")
+    manager = await ensure_seat(actions, house="monsterhouse", handle="AncMgr2",
+                                source="agent:ancm01")
+    manager_seat = manager["seat_id"]
+    await bind_holder(actions, seat_id=manager_seat, agent_id="agent:ancm01",
+                      source="agent:ancm01")
+    w_oid = await actions.create_or_find_object("Seat", worker_seat, "test")
+    m_oid = await actions.create_or_find_object("Seat", manager_seat, "test")
+    await actions.create_link(w_oid, m_oid, "managed_by", "test", NOW, 0.9)
+    await _office(actions, worker_seat, "/tmp/ancestral")
+    # the ancestor's own holder is long dead — no live mount row for it at all, so
+    # `_launch_target_setup`'s liveness gate falls through to a fresh mint.
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:ancm01", target=worker_seat,
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "launched"
+    held = await held_seat(actions.pool, "agent:anc01")
+    # the ANCESTOR no longer holds — held_seat resolves lineage-wide, so this also
+    # proves the fresh heir (not agent:anc01 itself) is the seat's own current holder.
+    assert held is not None and held["seat_id"] == worker_seat
+    fresh_holder = await actions.pool.fetchval(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_seat)
+    assert fresh_holder != "agent:anc01"  # promoted past the stale ancestor generation
+
+
+async def test_launch_reports_the_brief_delivered_once_inbox_reads_it(
+    actions: Actions,
+) -> None:
+    """LAW (b), the happy path: the fresh body's own `inbox()` call sets the brief's
+    read state — `_verify_brief_reached_a_turn` polls for exactly that and reports
+    `delivered: True` the moment it lands, never waiting out the full window once it
+    has its answer."""
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:brief01", manager_agent="agent:briefm01",
+        worker_handle="Briefed", house="monsterhouse")
+    await _office(actions, worker_seat, "/tmp/briefed")
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+        # simulate the fresh body's own inbox() call landing between polls
+        await actions.pool.execute(
+            "UPDATE fleet_messages SET read_at=now() WHERE to_agent=$1 "
+            "AND read_at IS NULL", worker_seat)
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:briefm01", target=worker_seat, message="welcome aboard",
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        sleep=_fake_sleep, brief_poll_attempts=3, brief_poll_delay_secs=0.0)
+
+    assert d["status"] == "launched"
+    assert d["brief_delivery"] == {"delivered": True}
+    assert len(sleep_calls) == 1  # returned on the SECOND check, never waited out the rest
+
+
+async def test_launch_nudges_and_reports_when_the_brief_never_reaches_a_turn(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LAW (b), the incident's own shape: chowder's opening brief (brief_message_id
+    13199) never became the body's first turn — its transcript held only the boot
+    ritual for 20+ minutes. Exhausting the bounded poll with nothing read must nudge
+    through the SAME mail ladder every other DM escalation uses (`dispatch_dm`), never
+    a second nudge mechanism, and report exactly what happened rather than silently
+    calling this "launched" with no further signal."""
+    from src.orchestrator import trigger as trigger_mod
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:stall01", manager_agent="agent:stallm01",
+        worker_handle="Stalled", house="monsterhouse")
+    await _office(actions, worker_seat, "/tmp/stalled")
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)  # never marks the message read — it just never arrives
+
+    nudge_calls: list[dict[str, Any]] = []
+
+    async def _fake_dispatch_dm(pool: Any, **kw: Any) -> dict[str, Any]:
+        nudge_calls.append(kw)
+        return {"mode": "nudged"}
+
+    monkeypatch.setattr(trigger_mod, "dispatch_dm", _fake_dispatch_dm)
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:stallm01", target=worker_seat, message="welcome aboard",
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        sleep=_fake_sleep, brief_poll_attempts=2, brief_poll_delay_secs=0.0)
+
+    assert d["status"] == "launched"
+    assert len(sleep_calls) == 2  # the full bounded window, never fewer, never more
+    assert d["brief_delivery"]["delivered"] is False
+    assert d["brief_delivery"]["nudge"] == {"mode": "nudged"}
+    assert len(nudge_calls) == 1
+    assert nudge_calls[0]["msg_id"] == d["brief_message_id"]
+
+
 async def test_launch_harness_lane_refuses_an_over_budget_mint(
     actions: Actions,
 ) -> None:
