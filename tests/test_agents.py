@@ -5732,6 +5732,77 @@ async def test_fold_zero_turn_ancestors_still_folds_the_same_shape_when_unoccupi
     assert await _false_mint(actions, phantom) == "true"
 
 
+async def test_fold_zero_turn_ancestors_carries_settled_mail_memory_to_the_grandancestor(
+    actions: Actions,
+) -> None:
+    """Thread afd27e1a (Thoth mail 12877, 'MAIL TRUNCATED ACROSS SUCCESSION'): mint_heir's
+    own estate transfer carries forward a GENUINELY SETTLED message_recipients row
+    (WAVE 27 BUG 4) — until this fix, _fold_zero_turn_ancestors was a second, sibling
+    mail-reassignment site (it already moves fleet_messages.to_agent on a fold) that
+    never carried the same memory: a phantom folded here with a settled row on its own
+    id left that memory orphaned on the now-retired phantom, invisible to the
+    grandancestor it was folded into. Same law now applies to both doors."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+    from src.orchestrator.mailbox import send_message
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0020", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0020", root, because="compaction",
+                                           succession=None)
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent=phantom, body="settled before the fold")
+    msg_id = int(out["id"])
+    # A row settled AT OR BEFORE the phantom's own mint (never AFTER — agent_has_acted's
+    # own `read_at > settled_after` check would otherwise count it as a real act and
+    # correctly refuse to fold a mind that genuinely settled mail): inherited memory
+    # from before the mint, carried onto the phantom by mint_heir's own BUG-4-compliant
+    # transfer — exactly the shape that needs a SECOND carry when the phantom itself
+    # is later folded, since it now lives only on the phantom's own id.
+    await actions.pool.execute(
+        "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at) "
+        "VALUES ($1,$2,now() - interval '1 hour',now() - interval '1 hour')", msg_id, phantom)
+
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now)
+    assert restored_id == "agent:zt0020" and restored_oid == root
+
+    carried = await actions.pool.fetchval(
+        "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg_id, "agent:zt0020")
+    assert carried is not None
+
+
+async def test_fold_zero_turn_ancestors_never_carries_a_leased_but_unread_message(
+    actions: Actions,
+) -> None:
+    """The other half stays true, same law as mint_heir's own BUG 4 fix: a bare LEASE
+    (delivered but never settled) on the phantom's own id carries NOTHING forward — the
+    grandancestor's own next inbox() finds that message fresh, never falsely
+    pre-delivered by an inherited lease window."""
+    from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
+    from src.orchestrator.mailbox import read_inbox, send_message
+
+    root = await actions.create_or_find_object("Agent", "agent:zt0021", "test")
+    phantom, phantom_oid = await mint_heir(actions, "agent:zt0021", root, because="compaction",
+                                           succession=None)
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent=phantom, body="an ask the phantom only leased")
+    msg_id = int(out["id"])
+    leased = await read_inbox(actions.pool, "osiris", reader_agent=phantom)
+    assert [r["id"] for r in leased] == [msg_id]
+
+    now = datetime.now(UTC)
+    restored_id, restored_oid = await _fold_zero_turn_ancestors(
+        actions, phantom, phantom_oid, now)
+    assert restored_id == "agent:zt0021" and restored_oid == root
+
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
+        msg_id, "agent:zt0021") is None
+    rediscovered = await read_inbox(actions.pool, "osiris", reader_agent="agent:zt0021")
+    assert [r["id"] for r in rediscovered] == [msg_id]
+
+
 async def test_fold_zero_turn_ancestors_walks_a_chain_of_phantoms(actions: Actions) -> None:
     """root -> A (compaction, silent) -> B (live-swap, silent): folding from B walks BOTH
     phantoms and lands on root, not just the nearest one."""
