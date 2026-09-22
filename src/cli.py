@@ -8,6 +8,20 @@ EXISTING verb rather than re-deriving it:
                                      the operator was handed before this build)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
   osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
+  osiris soul-key <status|init|     THE KEY DOOR (Thoth mail 12810/12830, wave 17):
+       rotate|restore-drill>        status/init/rotate the soul-store encryption key,
+                                     or drill an off-box backup's restorability —
+                                     init/rotate run once, by a human, in their own
+                                     terminal, before/after (re)starting
+                                     osiris-worker/osiris-mcp
+  osiris restic-key <status|init>   the offload runner's own credential door (ruling
+                                     e0b98ff2's "same shape for the restic repository
+                                     password"), the same systemd-creds custody as
+                                     soul-key above
+  osiris offload-runner tick        THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a):
+                                     one pass syncing the vault via restic to every
+                                     present, enabled offload target — meant as
+                                     osiris-offload.timer's own ExecStart
   osiris launch <handle> [--model]  body a seat via `claude --bg` by default (task #72,
              [--debug]              following trigger.launch_seat's own flip, rulings
                                      0fe36e59 + 33d6a2eb clause 3) — every body lands in the
@@ -1016,6 +1030,219 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
         if owns_pool:
             await pool.close()
     _print_next_steps(result)
+    return 0
+
+
+# --- soul-key ---------------------------------------------------------------------------------
+
+# THE ONE genuinely pool-free action — `init` never needs a live setting, just the
+# filesystem. `enroll-recovery`/`recover` moved OUT of this bucket (Thoth mail 13006):
+# both now need `soul_key.rp_id` off the settings table (the WebAuthn RP id must match
+# the console's own origin, "localhost", to interoperate with a future browser
+# enrollment — see settings_registry.py's own comment) before calling into
+# `soul_crypto`, so both compose a short-lived pool JUST for that one read, same as
+# status/rotate/restore-drill below, even though the underlying `soul_crypto`
+# functions themselves remain pool-free (never touch Postgres for anything but that
+# one setting fetch, done here in the CLI layer, not inside soul_crypto.py itself).
+_SOUL_KEY_POOL_FREE_ACTIONS = ("init",)
+_SOUL_KEY_ACTIONS = (
+    "status", "init", "rotate", "restore-drill", "enroll-recovery", "recover")
+
+
+_SOUL_KEY_RESTART_UNITS = ["osiris-mcp.service", "osiris-worker.service"]
+
+
+async def cmd_soul_key(
+    action: str, *, owner: str | None = None, path: str | None = None,
+    backend: str | None = None, finish: bool = False, print_recovery: bool = False,
+    repo_url: str | None = None, restart: bool = False, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> —
+    THE KEY DOOR (Thoth mail 12810/12836, operator's word "keys and backup setup
+    configurable from UI or CLI so a user does not need an agent"; KEY CUSTODY
+    REWRITTEN, ruling e0b98ff2). A thin console-script door, matching `osiris
+    composition <action>`'s own shape.
+
+    `init` stays POOL-FREE and calls `src.ingest.soul_crypto` directly.
+    `enroll-recovery`/`recover` ALSO call `src.ingest.soul_crypto` directly (both stay
+    CLI-ONLY — never REST, see `src.orchestrator.soul_key`'s own module docstring:
+    minting or unwrapping a recovery blob from a non-interactive HTTP call makes no
+    sense, both need a human's own PIN and touch right there in the terminal) but DO
+    compose a short-lived pool now, solely to read `soul_key.rp_id` (Thoth mail 13006)
+    before the FIDO2 ceremony.
+
+    status/rotate/restore-drill compose a pool and call `src.orchestrator.
+    soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
+    never a duplicated implementation between the two doors.
+
+    `restart` (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065):
+    `init` only — both daemons start in a loudly-degraded state with no key
+    (mcp_server.py/arq_worker.py's own boot gates), so minting the key alone
+    changes nothing until they restart and pick it up. Without `--restart`, the
+    return dict's own `restart_units`/`restart_hint` name the exact `systemctl
+    --user restart ...` to run by hand; with it, this door runs that itself —
+    `_real_restart_services`, the SAME primitive `osiris deploy` already uses,
+    never a second restart implementation. `--restart` is a no-op on any other
+    action (only `init` ever needs a restart to take effect)."""
+    from src import cli_render as render
+    from src.ingest import soul_crypto
+
+    if action in _SOUL_KEY_POOL_FREE_ACTIONS:
+        out = soul_crypto.soul_key_init(
+            owner=owner, path=path, backend=backend, print_recovery=print_recovery)
+        if "error" in out:
+            print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+            render.emit(out, as_json=as_json, title=f"soul-key {action}")
+            return 1
+        out["restart_units"] = _SOUL_KEY_RESTART_UNITS
+        restart_cmd = f"systemctl --user restart {' '.join(_SOUL_KEY_RESTART_UNITS)}"
+        if restart:
+            code, log = await _real_restart_services(_SOUL_KEY_RESTART_UNITS)
+            out["restarted"] = code == 0
+            out["restart_hint"] = (
+                f"`{restart_cmd}` -> exit {code}" + (f": {log.strip()}" if code else ""))
+        else:
+            out["restarted"] = False
+            out["restart_hint"] = (
+                f"the key is minted, but osiris-mcp/osiris-worker won't see it until "
+                f"restarted — run `{restart_cmd}` (or re-run with --restart)")
+        render.emit(out, as_json=as_json, title=f"soul-key {action}")
+        return 0
+    if action not in _SOUL_KEY_ACTIONS:
+        print(f"osiris soul-key: action must be one of {_SOUL_KEY_ACTIONS} "
+              f"(got {action!r})", file=sys.stderr)
+        return 1
+
+    from src.orchestrator import soul_key as soul_key_orchestrator
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+
+        apply_dev_fallback()
+        settings = get_settings()
+        from src.db.pool import create_pool
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:soul-key")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris soul-key {action}: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  "dev instance.", file=sys.stderr)
+            return 1
+    try:
+        if action == "status":
+            out = await soul_key_orchestrator.soul_key_status(pool, path=path)
+        elif action == "rotate":
+            out = await soul_key_orchestrator.soul_key_rotate(
+                pool, path=path, finish=finish, print_recovery=print_recovery)
+        elif action == "restore-drill":
+            out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
+        else:  # enroll-recovery / recover — pool-free soul_crypto calls, rp_id off settings
+            from src.orchestrator.settings_service import get_setting
+
+            rp_id = (await get_setting(pool, "soul_key.rp_id"))["value"]
+            if action == "enroll-recovery":
+                out = soul_crypto.soul_key_enroll_recovery(path=path, rp_id=rp_id)
+            else:  # recover
+                out = soul_crypto.soul_key_recover(path=path, backend=backend, rp_id=rp_id)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title=f"soul-key {action}")
+        return 1
+    render.emit(out, as_json=as_json, title=f"soul-key {action}")
+    return 0
+
+
+# --- restic-key --------------------------------------------------------------------------------
+
+_RESTIC_KEY_ACTIONS = ("status", "init")
+
+
+async def cmd_restic_key(
+    action: str, *, path: str | None = None, backend: str | None = None,
+    as_json: bool = False,
+) -> int:
+    """osiris restic-key <status|init> — THE OFFLOAD RUNNER's own credential door (Thoth
+    mail 12813, KEY CUSTODY REWRITTEN ruling e0b98ff2's "same shape for the restic
+    repository password"), mirroring `osiris soul-key`'s init/status shape. Pool-free
+    (the restic password never touches Postgres) — a smaller door than soul-key's:
+    no rotate/enroll-recovery/recover yet, a deliberate scope cut named in `src.
+    orchestrator.restic_credential`'s own module docstring, not an oversight."""
+    from src import cli_render as render
+    from src.orchestrator import restic_credential
+
+    if action not in _RESTIC_KEY_ACTIONS:
+        print(f"osiris restic-key: action must be one of {_RESTIC_KEY_ACTIONS} "
+              f"(got {action!r})", file=sys.stderr)
+        return 1
+    if action == "init":
+        out = restic_credential.restic_key_init(path=path, backend=backend)
+    else:
+        out = restic_credential.restic_key_status(path=path)
+    if "error" in out:
+        print(f"osiris restic-key {action}: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title=f"restic-key {action}")
+        return 1
+    render.emit(out, as_json=as_json, title=f"restic-key {action}")
+    return 0
+
+
+# --- offload-runner ------------------------------------------------------------------------
+
+async def cmd_offload_runner(
+    action: str, *, vault: str | None = None, as_json: bool = False,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris offload-runner tick — ONE tick of THE OPPORTUNISTIC OFFLOAD RUNNER
+    (ruling be21384a, Thoth mail 12813), meant as `osiris-offload.timer`'s own
+    `ExecStart` but safe to run by hand any time (idempotent, never blocks on an
+    absent target). `action` stays a real parameter (matching `soul-key`'s own
+    shape) even though `tick` is the only one today — the natural slot for a
+    future `status`/`history` action reading `offload_runner.offload_receipts()`
+    directly, without a second CLI command to remember."""
+    from src import cli_render as render
+    from src.orchestrator.offload_runner import run_offload_tick
+
+    if action != "tick":
+        print(f"osiris offload-runner: action must be 'tick' (got {action!r})",
+              file=sys.stderr)
+        return 1
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+
+        apply_dev_fallback()
+        settings = get_settings()
+        from src.db.pool import create_pool
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=2,
+                application_name="osiris-cli:offload-runner")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris offload-runner tick: could not reach postgres at "
+                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  "dev instance.", file=sys.stderr)
+            return 1
+    try:
+        from pathlib import Path as _Path
+
+        out = await run_offload_tick(pool, vault=_Path(vault) if vault else None)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris offload-runner tick: refused — {out['error']}", file=sys.stderr)
+        render.emit(out, as_json=as_json, title="offload-runner tick")
+        return 1
+    render.emit(out, as_json=as_json, title="offload-runner tick")
     return 0
 
 
@@ -7394,8 +7621,9 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         retire-assertion, retire-link, retire-object, cite,
                         declare-machine-identity, correct-agent-house (deprecated alias
                         for correct-agent-project, one release only)
-  operate               deploy, migrate, seed, bootstrap, retention, rematerialize,
-                        fleet-reconcile, fleet-prune, backfill, graph-migrate, layout
+  operate               deploy, migrate, seed, soul-key, restic-key, offload-runner,
+                        bootstrap, retention, rematerialize, fleet-reconcile,
+                        fleet-prune, backfill, graph-migrate, layout
 
 Every read verb takes --json: one compact line for a script or an agent, instead of the
 human view. Run `osiris <command> --help` for that command's own flags and a worked example.
@@ -7562,6 +7790,106 @@ def _build_parser() -> argparse.ArgumentParser:
                                    "--compositions-only")
     p_seed.add_argument("--compositions-only", action="store_true",
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
+
+    p_soul_key = sub.add_parser("soul-key", description=_d(
+        "THE KEY DOOR (KEY CUSTODY REWRITTEN, ruling e0b98ff2): status/init/rotate "
+        "the soul-store encryption key (a systemd user credential by default, never "
+        "a plaintext file), enroll or use FIDO2 recovery on a Security Key, or drill "
+        "an off-box backup's own restorability. status/init/rotate resolve the key "
+        "path automatically — the SAME path an installed osiris-mcp/osiris-worker "
+        "--user unit already uses — without exporting anything"),
+        epilog="example: osiris soul-key init\n"
+               "example: sudo env \"PATH=$PATH\" osiris soul-key init --owner osiris\n"
+               "example: osiris soul-key init --backend file --print-recovery\n"
+               "example: osiris soul-key status\n"
+               "example: osiris soul-key enroll-recovery\n"
+               "example: osiris soul-key rotate\n"
+               "example: osiris soul-key rotate --finish\n"
+               "example: osiris soul-key recover\n"
+               "example: osiris soul-key restore-drill")
+    p_soul_key.add_argument(
+        "action",
+        choices=["status", "init", "rotate", "restore-drill", "enroll-recovery", "recover"],
+        help="status: backend/recovery/legacy-row facts, never key bytes. "
+             "init: mint the first key (refuses if one exists) — a systemd-creds "
+             "user credential by default, --backend file for the old plaintext "
+             "shape. rotate: mint a new key and re-wrap every row onto it; "
+             "--finish once the receipt is clean. enroll-recovery: wrap the "
+             "current key with a FIDO2 Security Key (PIN + touch). recover: "
+             "restore a key from a FIDO2 recovery enrollment onto a box with no "
+             "live key yet. restore-drill: prove an off-box backup repository "
+             "actually restores")
+    p_soul_key.add_argument("--owner", default=None,
+                            help="init only: chown the key file + directory to this user "
+                                 "after writing (for running as root, which has no "
+                                 "natural owner of its own to land the file as)")
+    p_soul_key.add_argument("--path", default=None,
+                            help="an explicit key file path, overriding the automatic "
+                                 "--user-unit/XDG resolution")
+    p_soul_key.add_argument("--backend", default=None, choices=["host-cred", "host+tpm2", "file"],
+                            help="init/recover only: the key-at-rest shape — default "
+                                 "(omit this) auto-selects host+tpm2 once you've "
+                                 "joined the tss group, else host-cred, else file on "
+                                 "a non-systemd box")
+    p_soul_key.add_argument("--finish", action="store_true",
+                            help="rotate only: step 2 — remove the old key once the "
+                                 "receipt reports zero rows remain under it")
+    p_soul_key.add_argument("--print-recovery", action="store_true", dest="print_recovery",
+                            help="init/rotate: print the mandatory-offline-recovery "
+                                 "secret banner (the OLD default) — off by default "
+                                 "now that FIDO2 enroll-recovery is the primary path")
+    p_soul_key.add_argument("--repo-url", default=None,
+                            help="restore-drill only: one restic repository URL to "
+                                 "drill; defaults to every URL in "
+                                 "backup.offbox_repositories")
+    p_soul_key.add_argument("--restart", action="store_true",
+                            help="init only: restart osiris-mcp/osiris-worker right "
+                                 "after minting the key (systemctl --user restart, "
+                                 "no sudo) — without this, init prints the command "
+                                 "to run by hand instead")
+    p_soul_key.add_argument("--json", action="store_true", dest="as_json",
+                            help="machine-readable: one compact JSON line")
+
+    p_restic_key = sub.add_parser("restic-key", description=_d(
+        "THE OFFLOAD RUNNER's own credential door (KEY CUSTODY REWRITTEN, ruling "
+        "e0b98ff2, 'same shape for the restic repository password'): status/init "
+        "the restic repository password — a systemd user credential by default, "
+        "never a plaintext file. No rotate/enroll-recovery/recover yet, a "
+        "deliberate scope cut for this first cut"),
+        epilog="example: osiris restic-key init\n"
+               "example: osiris restic-key status")
+    p_restic_key.add_argument("action", choices=_RESTIC_KEY_ACTIONS,
+                              help="status: backend/presence facts, never the password. "
+                                   "init: mint the password (refuses if one exists) — a "
+                                   "systemd-creds user credential by default, --backend "
+                                   "file for the old plaintext shape")
+    p_restic_key.add_argument("--path", default=None,
+                              help="an explicit password file path, overriding the "
+                                   "default ~/.config/osiris/restic.password")
+    p_restic_key.add_argument("--backend", default=None,
+                              choices=["host-cred", "host+tpm2", "file"],
+                              help="init only: the credential-at-rest shape — default "
+                                   "(omit this) auto-selects host+tpm2 once you've "
+                                   "joined the tss group, else host-cred, else file on "
+                                   "a non-systemd box")
+    p_restic_key.add_argument("--json", action="store_true", dest="as_json",
+                              help="machine-readable: one compact JSON line")
+
+    p_offload_runner = sub.add_parser("offload-runner", description=_d(
+        "THE OPPORTUNISTIC OFFLOAD RUNNER (operator ruling be21384a): one tick "
+        "checks every configured offload_targets[] row's presence and syncs the "
+        "vault via restic to every one that's present right now, recording a "
+        "receipt per target — meant as osiris-offload.timer's own ExecStart, safe "
+        "to run by hand any time"),
+        epilog="example: osiris offload-runner tick")
+    p_offload_runner.add_argument("action", choices=["tick"],
+                                  help="tick: one opportunistic pass over every "
+                                       "enabled, present offload target")
+    p_offload_runner.add_argument("--vault", default=None,
+                                  help="override the vault directory being synced "
+                                       "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
+    p_offload_runner.add_argument("--json", action="store_true", dest="as_json",
+                                  help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
         "body a seat with a fresh, persistent `claude --bg` process — always shows up "
@@ -9075,6 +9403,17 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_audit(args.name, as_json=args.as_json))
     if args.command == "seed":
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
+    if args.command == "soul-key":
+        return asyncio.run(cmd_soul_key(
+            args.action, owner=args.owner, path=args.path, backend=args.backend,
+            finish=args.finish, print_recovery=args.print_recovery,
+            repo_url=args.repo_url, restart=args.restart, as_json=args.as_json))
+    if args.command == "restic-key":
+        return asyncio.run(cmd_restic_key(
+            args.action, path=args.path, backend=args.backend, as_json=args.as_json))
+    if args.command == "offload-runner":
+        return asyncio.run(cmd_offload_runner(
+            args.action, vault=args.vault, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))
     if args.command == "resume":

@@ -1631,6 +1631,7 @@ async def _lineage_resume_candidate(
     requirement), so a caller's receipt can read one line instead of a human re-running
     succession_chain by hand."""
     from src.ingest.sessions import _occupancy_ceiling_verdict, _verdict_from_diagnostics
+    from src.ingest.soul_crypto import SoulKeyMissing, _key_file_path
     from src.ingest.soul_store import SoulStore
     from src.ingest.transcript_store import TranscriptStore
     from src.orchestrator.context_lens import _usage_from_store
@@ -1680,7 +1681,17 @@ async def _lineage_resume_candidate(
             log.append(f"gen {gen} (session {session[:8]}): only a truncated/synthetic "
                        "transcript on disk — no genuine full session id to resume into")
             continue
-        diagnostics = await store.resume_diagnostics(anchor_sid)
+        try:
+            diagnostics = await store.resume_diagnostics(anchor_sid)
+        except SoulKeyMissing:
+            # THE KEY DOOR, defect 2 (operator's own live hit, Thoth mail 12830): a
+            # missing soul-store key is a WRITE-time refusal for the worker/MCP boot
+            # (ruled, unchanged) but this is a READ path -- `osiris resume` degrades
+            # to naming the fix and keeps walking the rest of the chain, never aborts
+            # the whole resume over one hop's diagnostics being unreadable.
+            log.append(f"gen {gen} (session {session[:8]}): soul store locked, key "
+                       f"missing at {_key_file_path()}; run osiris soul-key init")
+            continue
         if diagnostics is None:
             log.append(f"gen {gen} (session {session[:8]}): no transcript found on disk "
                        "or in the store")

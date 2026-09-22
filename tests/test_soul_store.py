@@ -19,6 +19,7 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 from src.actions.core import Actions
+from src.ingest.soul_crypto import get_soul_fernet
 from src.ingest.soul_store import (
     SoulStore,
     _addressable_entries,
@@ -68,8 +69,12 @@ async def test_ingest_stores_every_line_verbatim(store: SoulStore, tmp_path: Pat
     rows = await store.pool.fetch(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
         "AND anchor_sid='deadbeef' ORDER BY line_idx")
-    assert [bytes(r["raw_line"]).decode() for r in rows] == lines
+    fernet = get_soul_fernet()
+    assert [fernet.decrypt(bytes(r["raw_line"])).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(5))
+    # ENCRYPTED AT REST (Thoth mail 9134): the stored bytes are never the plaintext —
+    # confirms this isn't accidentally a no-op Fernet passthrough.
+    assert bytes(rows[0]["raw_line"]).decode(errors="replace") != lines[0]
 
 
 async def test_ingest_is_idempotent(store: SoulStore, tmp_path: Path) -> None:
@@ -1050,7 +1055,8 @@ async def test_splice_sources_chains_two_files_into_one(
     rows = await store.pool.fetch(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='claude-code' "
         "AND anchor_sid='splicedsid' ORDER BY line_idx")
-    assert [bytes(r["raw_line"]).decode() for r in rows] == lines
+    fernet = get_soul_fernet()
+    assert [fernet.decrypt(bytes(r["raw_line"])).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(10))
     assert await store.verify_chain("splicedsid") is True
 
@@ -1335,6 +1341,220 @@ async def test_fold_to_cold_tier_moves_content_and_shrinks_storage(
     assert cold_row["total_bytes"] == result["total_bytes"]
 
 
+async def test_fold_to_cold_tier_encrypts_the_gzip_blob(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """ENCRYPTION AT REST (Thoth mail 9134): encrypt-AFTER-gzip, one Fernet call per
+    fold — the stored `content_gzip` is Fernet(gzip(plaintext)), never a bare gzip
+    stream a caller could decompress without the key."""
+    import gzip
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(10))
+    await store.ingest_path(str(p), "c01denc1")
+    await store.fold_to_cold_tier("c01denc1")
+
+    stored = await store.pool.fetchval(
+        "SELECT content_gzip FROM soul_lines_cold WHERE anchor_sid='c01denc1'")
+    with pytest.raises(Exception):  # noqa: B017,PT011 — not valid gzip without decrypting first
+        gzip.decompress(bytes(stored))
+    decrypted = get_soul_fernet().decrypt(bytes(stored))
+    assert gzip.decompress(decrypted)  # a real gzip stream once decrypted
+
+
+async def test_a_wrong_key_reports_as_a_named_chain_break_not_a_raw_traceback(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ENCRYPTION AT REST (Thoth mail 9134): `raw_lines`/`re_materialize`/`verify_chain`
+    all funnel decryption through `_iter_verified_lines` (or its own inline copy in
+    `verify_chain`) — a key that can't open the stored ciphertext is caught and mapped
+    onto each function's own pre-existing "can't verify" contract (None / False), never
+    an unhandled `InvalidToken` surfacing three call sites deep."""
+    from cryptography.fernet import Fernet
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "wrongkey1")
+
+    monkeypatch.setenv("OSIRIS_SOUL_KEY", Fernet.generate_key().decode())
+    assert await store.raw_lines("wrongkey1") is None
+    assert await store.re_materialize("wrongkey1") is None
+    assert await store.verify_chain("wrongkey1") is False
+
+    dest = tmp_path / "should-not-exist.jsonl"
+    receipt = await store.rematerialize_to_disk("wrongkey1", dest=str(dest), force=True)
+    assert "error" in receipt and "decryption failed" in receipt["error"]
+    assert not dest.exists()
+
+
+async def test_rotation_a_legacy_key_still_decrypts_old_rows(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ROTATION (Thoth mail 9134): `MultiFernet` lets the NEW primary key take over new
+    writes while OLD ciphertext, written under a retired key, keeps reading — the
+    background-migration window this whole scheme exists to make possible, never a
+    stop-the-world re-encrypt."""
+    from cryptography.fernet import Fernet
+
+    old_key = os.environ["OSIRIS_SOUL_KEY"]
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rotate001")
+
+    new_key = Fernet.generate_key().decode()
+    monkeypatch.setenv("OSIRIS_SOUL_KEY", new_key)
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_LEGACY", old_key)
+
+    # old ciphertext (written under old_key) still reads via the legacy key
+    assert await store.verify_chain("rotate001") is True
+    lines = await store.raw_lines("rotate001")
+    assert lines is not None and len(lines) == 5
+
+    # a NEW write under the rotated-in primary key is stored under new_key alone
+    p2 = _write_transcript(tmp_path / "t2.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p2), "rotate002")
+    row = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate002' AND line_idx=0")
+    with pytest.raises(Exception):  # noqa: B017,PT011 — the OLD key alone cannot open this
+        Fernet(old_key.encode()).decrypt(bytes(row))
+    assert Fernet(new_key.encode()).decrypt(bytes(row))  # the new primary opens it fine
+
+
+@pytest.fixture
+def _no_soul_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Simulates a genuinely fresh box with NO soul-store key configured anywhere
+    (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065) — clears the
+    conftest-wide `OSIRIS_SOUL_KEY` this whole file otherwise relies on, stubs
+    `_installed_user_unit_env_value` (same reasoning test_soul_crypto.py's own
+    autouse fixture gives: this box's own REAL installed unit must never leak
+    into a test), and redirects `XDG_CONFIG_HOME` so the credstore/XDG fallback
+    can never find a real credential either."""
+    from src.ingest import soul_crypto, soul_store
+
+    monkeypatch.delenv("OSIRIS_SOUL_KEY", raising=False)
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_LEGACY", raising=False)
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
+    monkeypatch.delenv("CREDENTIALS_DIRECTORY", raising=False)
+    monkeypatch.setattr(soul_crypto, "_installed_user_unit_env_value", lambda _name: None)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+    # reset the once-per-process warning flag so THIS test's own "warns exactly
+    # once" assertion is never a false pass/fail off some earlier test's state
+    monkeypatch.setattr(soul_store, "_soul_key_missing_warned", False)
+
+
+async def test_ingest_degrades_to_legacy_plaintext_with_no_key_and_warns_once(
+    store: SoulStore, tmp_path: Path, _no_soul_key: None,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): ingest no
+    longer crashes with no key configured — it writes legacy plaintext (`_encrypt_
+    rows`'s own new fallback) and logs ONE warning, not a raw `SoulKeyMissing`
+    propagating out of the ingest call. The rows are still fully readable back
+    (`is_encrypted()` correctly identifies them as plaintext, never attempts to
+    decrypt), and the hash chain still verifies — encryption is a confidentiality
+    layer on top of the chain, never a precondition for the chain itself."""
+    import logging
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    with caplog.at_level(logging.WARNING, logger="osiris.soul_store"):
+        await store.ingest_path(str(p), "nokey001")
+        # a second ingest call must NOT log a second warning (once per process)
+        p2 = _write_transcript(tmp_path / "t2.jsonl", _synthetic_lines(2))
+        await store.ingest_path(str(p2), "nokey002")
+    warnings = [r for r in caplog.records if "LEGACY PLAINTEXT" in r.message]
+    assert len(warnings) == 1
+
+    assert await store.verify_chain("nokey001") is True
+    lines = await store.raw_lines("nokey001")
+    assert lines is not None and len(lines) == 3
+
+
+async def test_resume_diagnostics_reads_legacy_plaintext_with_no_key_configured(
+    store: SoulStore, tmp_path: Path, _no_soul_key: None,
+) -> None:
+    """THE LAZY-FERNET FIX (Thoth mail 13065): a READ path (resume_diagnostics)
+    that only ever needs the fernet CONDITIONALLY (`is_encrypted()` gates every
+    actual `.decrypt()` call) must not raise `SoulKeyMissing` just for being
+    called on all-plaintext content with no key configured — before this fix,
+    the eager `fernet = get_soul_fernet()` at the top of the function raised
+    regardless of whether decryption was ever actually needed."""
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "nokey003")
+    out = await store.resume_diagnostics("nokey003")
+    assert out is not None
+    compactions, tail_bytes, tail_lines = out
+    assert compactions == 0
+    assert tail_lines == 4
+
+
+async def test_hot_read_falls_back_to_legacy_plaintext(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """LEGACY-PLAINTEXT READ FALLBACK (Thoth DM 9194/9245, wave 17): a row written
+    before encrypt_existing_soul_lines ever ran must still read — the SAME simulate
+    used by test_encrypt_existing_soul_lines_migrates_plaintext_rows (decrypt one real
+    row, write its own plaintext straight back — the hash chain was always computed
+    over plaintext, so this stays chain-valid), but here proving the READ side, not
+    the migration."""
+    fernet = get_soul_fernet()
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "legacyhot1")
+    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyhot1' AND line_idx=2"))
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyhot1' AND line_idx=2",
+        plaintext_line)
+
+    assert await store.verify_chain("legacyhot1") is True
+    raw = await store.raw_lines("legacyhot1")
+    assert raw is not None and len(raw) == 5
+    assert raw[2] == plaintext_line.decode("utf-8")
+    materialized = await store.re_materialize("legacyhot1")
+    assert materialized is not None
+    assert plaintext_line.decode("utf-8") in materialized
+
+
+async def test_cold_read_falls_back_to_legacy_plaintext(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE COLD TIER'S OWN VERSION: a session folded BEFORE encryption ever existed has
+    a `content_gzip` blob that is plain gzip, never Fernet-wrapped — simulated here by
+    folding normally, then decrypting the blob back to its own pre-encryption bytes and
+    writing those straight back (encrypt-after-gzip in reverse)."""
+    fernet = get_soul_fernet()
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
+    await store.ingest_path(str(p), "legacycold1")
+    await store.fold_to_cold_tier("legacycold1")
+    encrypted_blob = await store.pool.fetchval(
+        "SELECT content_gzip FROM soul_lines_cold WHERE anchor_sid='legacycold1'")
+    plain_gzip_blob = fernet.decrypt(bytes(encrypted_blob))  # still gzip-compressed
+    await store.pool.execute(
+        "UPDATE soul_lines_cold SET content_gzip=$1 WHERE anchor_sid='legacycold1'",
+        plain_gzip_blob)
+
+    assert await store.verify_chain("legacycold1") is True
+    raw = await store.raw_lines("legacycold1")
+    assert raw is not None and len(raw) == 4
+
+
+async def test_verify_round_trip_sample_reports_the_legacy_count(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """verify_round_trip_sample reports HOW MANY of its own sample were still legacy
+    plaintext (Thoth DM 9194) — the round trip itself stays clean (fallback-tolerant),
+    so legacy_count is the only signal a caller has that the migration isn't done."""
+    fernet = get_soul_fernet()
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "legacyrt01")
+    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='legacyrt01' AND line_idx=0"))
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='legacyrt01' AND line_idx=0",
+        plaintext_line)
+
+    report = await store.verify_round_trip_sample(n=1)
+    assert report.legacy_count == 1
+    assert not report  # still a clean pass — the fallback verified it fine
+
+
 async def test_fold_to_cold_tier_refuses_a_broken_chain(
     store: SoulStore, tmp_path: Path,
 ) -> None:
@@ -1510,16 +1730,18 @@ async def test_verify_chain_true_after_a_fold(store: SoulStore, tmp_path: Path) 
 async def test_verify_chain_false_on_a_corrupted_cold_blob(
     store: SoulStore, tmp_path: Path,
 ) -> None:
+    """ENCRYPTION AT REST (Thoth mail 9134): `content_gzip` is now Fernet-wrapped, so
+    garbage bytes here fail to DECRYPT before they'd ever reach gzip — `verify_chain`
+    catches that `InvalidToken` and returns `False` the same honest way a hash mismatch
+    already does, never a raw traceback (this used to assert a raised exception; a
+    controlled `False` is the better contract, not a regression)."""
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
     await store.ingest_path(str(p), "rtc0crpt0")
     await store.fold_to_cold_tier("rtc0crpt0")
     await store.pool.execute(
         "UPDATE soul_lines_cold SET content_gzip=E'\\\\x00'::bytea "
         "WHERE anchor_sid='rtc0crpt0'")
-    with pytest.raises(Exception):  # noqa: B017,PT011 — a corrupted gzip stream must not
-        # be silently swallowed into a false "verified" result; any decompress failure is
-        # an honest failure here, never treated as a clean chain.
-        await store.verify_chain("rtc0crpt0")
+    assert await store.verify_chain("rtc0crpt0") is False
 
 
 async def test_resume_diagnostics_matches_before_and_after_a_fold(
@@ -1737,7 +1959,7 @@ async def test_ingest_crush_session_stores_every_message_verbatim(
         "SELECT line_idx, raw_line FROM soul_lines WHERE harness='crush' "
         "AND anchor_sid='sessa000' ORDER BY line_idx")
     assert [r["line_idx"] for r in rows] == list(range(5))
-    decoded = json.loads(bytes(rows[0]["raw_line"]))
+    decoded = json.loads(get_soul_fernet().decrypt(bytes(rows[0]["raw_line"])))
     assert decoded["session_id"] == "sess-a"
     assert decoded["id"] == "msg-0"
     assert decoded["parts"] == '[{"type":"text","data":{"text":"line 0"}}]'
@@ -2055,3 +2277,187 @@ async def test_forget_and_reingest_reports_nothing_to_reconcile_when_never_inges
     assert out == {"reingested": False,
                    "reason": "never soul-stored — nothing to reconcile"}
     assert await store.raw_lines("notyetseen1") is None  # never invented anything
+
+
+# --- encrypt_existing_soul_lines: THE MIGRATION (Thoth mail 9134) ------------------
+
+
+async def test_encrypt_existing_soul_lines_migrates_plaintext_rows(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    lines = _synthetic_lines(5)
+    p = _write_transcript(tmp_path / "t.jsonl", lines)
+    await store.ingest_path(str(p), "migrate01")
+    fernet = get_soul_fernet()
+    # simulate a LEGACY plaintext row (written before this build ever existed) by
+    # overwriting one already-encrypted row with the bare plaintext it decrypts to
+    plaintext_line = fernet.decrypt(await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate01' AND line_idx=2"))
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='migrate01' AND line_idx=2",
+        plaintext_line)
+
+    preview = await encrypt_existing_soul_lines(store.pool, batch_size=2)
+    assert preview["dry_run"] is True
+    assert preview["hot_migrated"] == 1
+    assert preview["hot_already_encrypted"] == 4
+    # dry run wrote nothing
+    still_plain = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate01' AND line_idx=2")
+    assert bytes(still_plain) == plaintext_line
+
+    out = await encrypt_existing_soul_lines(store.pool, batch_size=2, dry_run=False)
+    assert out["hot_migrated"] == 1
+    migrated = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate01' AND line_idx=2")
+    assert fernet.decrypt(bytes(migrated)) == plaintext_line  # now real ciphertext
+    # the chain still verifies — the migration never touched line_hash/prev_hash
+    assert await store.verify_chain("migrate01") is True
+
+
+async def test_encrypt_existing_soul_lines_is_idempotent(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "migrate02")
+
+    first = await encrypt_existing_soul_lines(store.pool, dry_run=False)
+    assert first["hot_migrated"] == 0  # already encrypted at write time
+    assert first["hot_already_encrypted"] == 5
+    second = await encrypt_existing_soul_lines(store.pool, dry_run=False)
+    assert second["hot_migrated"] == 0
+    assert second["hot_already_encrypted"] == 5
+
+
+async def test_encrypt_existing_soul_lines_accepts_an_explicit_fernet_override(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """THE KEY DOOR (`osiris soul-key status --path`): a caller may census against an
+    explicit key rather than whatever the process's own env/default resolves to."""
+    from cryptography.fernet import Fernet, MultiFernet
+    from src.ingest.soul_store import encrypt_existing_soul_lines
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "migrate-explicit")
+
+    # a DIFFERENT key than the live primary can never decrypt these rows -- every one
+    # reports as "would migrate" (the same shape a genuinely legacy-plaintext row
+    # reports, since this function's own ladder has no THIRD state)
+    wrong_fernet = MultiFernet([Fernet(Fernet.generate_key())])
+    out = await encrypt_existing_soul_lines(store.pool, dry_run=True, fernet=wrong_fernet)
+    assert out["hot_migrated"] == 3
+    # dry run: nothing written even under the wrong key
+    still = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate-explicit' AND line_idx=0")
+    assert get_soul_fernet().decrypt(bytes(still))  # still decrypts under the REAL key
+
+    # the real live primary reports everything already encrypted, as before
+    live = await encrypt_existing_soul_lines(store.pool, dry_run=True)
+    assert live["hot_migrated"] == 0
+    assert live["hot_already_encrypted"] == 3
+
+
+# --- rewrap_soul_lines_key: THE KEY DOOR's own re-wrap pass (osiris soul-key rotate) -----------
+
+async def test_rewrap_soul_lines_key_moves_rows_onto_the_new_primary(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from cryptography.fernet import Fernet
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rotate01")
+    # the REAL primary key these rows were just encrypted under (conftest.py's own
+    # fixed test env, `OSIRIS_SOUL_KEY`) -- a single Fernet, matching what
+    # `soul_key_rotate_begin`'s own returned `old_key` bytes build in production
+    old_fernet = Fernet(os.environ["OSIRIS_SOUL_KEY"].encode())
+    new_key = Fernet.generate_key()
+    new_fernet = Fernet(new_key)
+
+    preview = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, batch_size=2)
+    assert preview["dry_run"] is True
+    assert preview["hot_rewrapped"] == 5
+    assert preview["hot_already_on_new_key"] == 0
+    assert preview["hot_broken_count"] == 0
+    # dry run wrote nothing -- still decrypts under the OLD key, not the new one
+    still_old = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate01' AND line_idx=0")
+    assert old_fernet.decrypt(bytes(still_old))
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, batch_size=2, dry_run=False)
+    assert out["hot_rewrapped"] == 5
+    rewrapped = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate01' AND line_idx=0")
+    assert new_fernet.decrypt(bytes(rewrapped))  # now reads under the NEW key alone
+
+    # verify_chain decrypts through the LIVE default (get_soul_fernet, env-resolved)
+    # -- simulating "the daemon restarted and picked up the new primary" the same
+    # way soul_key_rotate_begin's own systemd_note tells the operator to do, so the
+    # chain check proves the re-wrap preserved line_hash/prev_hash, not garbage
+    monkeypatch.setenv("OSIRIS_SOUL_KEY", new_key.decode())
+    assert await store.verify_chain("rotate01") is True  # chain untouched by the re-wrap
+
+    # idempotent: a second pass finds everything already on the new key
+    second = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=old_fernet, dry_run=False)
+    assert second["hot_rewrapped"] == 0
+    assert second["hot_already_on_new_key"] == 5
+
+
+async def test_rewrap_soul_lines_key_counts_broken_rows_without_writing_them(
+    store: SoulStore, tmp_path: Path,
+) -> None:
+    """A row that decrypts under NEITHER key (plaintext that predates encryption
+    entirely, corruption, or the wrong old key given) is counted, never silently
+    skipped and never crashes the whole pass — `osiris soul-key rotate --finish`
+    refuses while this count is nonzero."""
+    from cryptography.fernet import Fernet
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
+    await store.ingest_path(str(p), "rotate-broken")
+    # simulate one genuinely broken row: plaintext that predates encryption, decrypts
+    # under NEITHER the (wrong) old key below nor the new key
+    await store.pool.execute(
+        "UPDATE soul_lines SET raw_line=$1 WHERE anchor_sid='rotate-broken' AND line_idx=1",
+        b"not encrypted at all")
+    wrong_old_fernet = Fernet(Fernet.generate_key())  # NOT the key that encrypted the other 2
+    new_fernet = Fernet(Fernet.generate_key())
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=wrong_old_fernet, dry_run=True)
+    assert out["hot_broken_count"] == 3  # the wrong old key can decrypt none of them
+    assert len(out["hot_broken_sample"]) == 3
+    assert out["hot_rewrapped"] == 0
+    # dry run: the deliberately-corrupted row is untouched, not further mangled
+    still = await store.pool.fetchval(
+        "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate-broken' AND line_idx=1")
+    assert bytes(still) == b"not encrypted at all"
+
+
+async def test_rewrap_soul_lines_key_broken_sample_is_capped(
+    store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE MEMORY BOUND: a genuinely wrong old key makes EVERY row broken -- the exact
+    shape that would balloon an unbounded list at real scale. `hot_broken_count` stays
+    exact; `hot_broken_sample` caps at `_REWRAP_BROKEN_SAMPLE_CAP`."""
+    from cryptography.fernet import Fernet
+    from src.ingest import soul_store as soul_store_module
+    from src.ingest.soul_store import rewrap_soul_lines_key
+
+    monkeypatch.setattr(soul_store_module, "_REWRAP_BROKEN_SAMPLE_CAP", 2)
+    p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
+    await store.ingest_path(str(p), "rotate-capped")
+    wrong_old_fernet = Fernet(Fernet.generate_key())
+    new_fernet = Fernet(Fernet.generate_key())
+
+    out = await rewrap_soul_lines_key(
+        store.pool, new_fernet=new_fernet, old_fernet=wrong_old_fernet, dry_run=True)
+    assert out["hot_broken_count"] == 5
+    assert len(out["hot_broken_sample"]) == 2

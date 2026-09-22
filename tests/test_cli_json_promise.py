@@ -69,7 +69,8 @@ READ_VERBS = frozenset({
 JSON_COMMANDS = frozenset({
     "stop", "fleet", "roster", "backlog", "threads", "inbox", "team", "status", "search",
     "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
-    "proposal", "settings", "lint", "audit", "backfill", "graph-migrate", "graph-export",
+    "proposal", "soul-key", "settings", "lint", "audit", "backfill", "graph-migrate",
+    "graph-export",
     # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832)
     "dossier", "object-events", "succession-chain", "candidates", "composition",
     "retire-assertion", "retire-link", "cite", "citation",
@@ -88,6 +89,10 @@ JSON_COMMANDS = frozenset({
     # now — needed so the PreCompact fallback (stdlib-only, no MCP client) can mint a
     # machine-handoff decision through it.
     "settle",
+    # KEY CUSTODY REWRITTEN's own follow-on, THE OFFLOAD RUNNER (ruling be21384a, Thoth
+    # mail 12813): restic-key mirrors soul-key's own status/init shape; offload-runner
+    # is the timer's own ExecStart, safe to run by hand.
+    "restic-key", "offload-runner",
 })
 
 

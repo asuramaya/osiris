@@ -28,6 +28,7 @@ from __future__ import annotations
 import gzip
 import hashlib
 import json
+import logging
 import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
@@ -36,9 +37,50 @@ from pathlib import Path
 from typing import Any
 
 import asyncpg
+from cryptography.fernet import Fernet, InvalidToken, MultiFernet
 
 from src.ingest.harness import HarnessAdapter
 from src.ingest.sessions import _COMPACT_BOUNDARY_MARKERS
+from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet, is_encrypted
+
+_log = logging.getLogger("osiris.soul_store")
+
+_soul_key_missing_warned = False  # process-lifetime, see _warn_soul_key_missing_once
+
+
+def _warn_soul_key_missing_once(exc: SoulKeyMissing) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): logs ONCE per
+    process, at WARNING, never per-call — an ingest loop can call `_encrypt_rows`
+    thousands of times a minute on a busy box, and a missing key is one fact, not
+    one log line per row."""
+    global _soul_key_missing_warned
+    if _soul_key_missing_warned:
+        return
+    _soul_key_missing_warned = True
+    _log.warning(
+        "no soul-store encryption key configured — new soul_lines/soul_lines_cold "
+        "rows are writing as LEGACY PLAINTEXT until this is fixed: %s", exc)
+
+
+class _LazyFernet:
+    """Defers `get_soul_fernet()` until `.decrypt()` is actually called (THE FIRST
+    KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065) — several read/verify
+    paths below fetch a fernet UNCONDITIONALLY up front but only ever use it on
+    content `is_encrypted()` says needs it; on a box with NO key configured at
+    all, every row on a fresh install is legacy plaintext and `.decrypt()` is
+    never actually reached, so constructing this must never raise
+    `SoulKeyMissing` on its own — only a REAL attempt to decrypt genuinely
+    encrypted content with no key available does."""
+
+    def __init__(self) -> None:
+        self._fernet: MultiFernet | None = None
+
+    def decrypt(self, blob: bytes) -> bytes:
+        if self._fernet is None:
+            self._fernet = get_soul_fernet()
+        result: bytes = self._fernet.decrypt(blob)
+        return result
+
 
 _HARNESS = "claude-code"
 _CRUSH_HARNESS = "crush"
@@ -171,6 +213,8 @@ def _write_dest(path: Path, content: bytes) -> None:
 
 
 _REMATERIALIZE_PAGE_LINES = 2000  # rows fetched per soul_lines page during a streamed write
+_REWRAP_BROKEN_SAMPLE_CAP = 100  # rewrap_soul_lines_key's own bound on per-row broken
+                                 # samples -- see that function's own docstring
 
 
 def _open_tmp_writer(target: Path) -> tuple[Any, Path]:
@@ -280,6 +324,36 @@ def _hash_rows(
         prev_hash = line_hash
         idx += 1
     return rows, idx, prev_hash
+
+
+def _encrypt_rows(
+    rows: list[tuple[str, str, int, bytes, str, str | None]],
+) -> list[tuple[str, str, int, bytes, str, str | None]]:
+    """ENCRYPTION AT REST (Thoth mail 9134, operator ruling on thread 773d633a): applied
+    to `_hash_rows`'s own OUTPUT, never inside it — `_hash_rows` is dual-purpose (row
+    construction for a write, AND `_iter_verified_lines`'s cold-tier re-verification,
+    which recomputes the chain over ALREADY-DECRYPTED plaintext and must never see
+    ciphertext) — so `line_hash` (index 4) stays computed over PLAINTEXT `raw_line`
+    (index 3) by `_hash_rows` itself, unchanged, and THIS function only re-wraps the
+    already-hashed tuple's `raw_line` field in Fernet ciphertext right before it reaches
+    an INSERT. A key rotation therefore never needs to re-derive any hash — only
+    re-encrypt the stored ciphertext column, in place, with the chain untouched.
+
+    DEGRADES TO LEGACY PLAINTEXT WHEN NO KEY EXISTS (THE FIRST KEY MUST COME FROM
+    THE NORMAL CLI, Thoth mail 13065) — `get_soul_fernet()`'s own `SoulKeyMissing`
+    used to propagate straight out of here, crashing whatever ingest call reached
+    it first; now caught, warned ONCE per process (`_warn_soul_key_missing_once`,
+    never once per row/call — an ingest loop can hit this thousands of times a
+    minute on a busy box), and every row in THIS batch writes as plain `raw_line`
+    (`is_encrypted()`'s own prefix check already tells every reader apart from real
+    ciphertext, the same fallback legacy pre-encryption rows have always used)."""
+    try:
+        fernet = get_soul_fernet()
+    except SoulKeyMissing as exc:
+        _warn_soul_key_missing_once(exc)
+        return rows
+    return [(harness, anchor_sid, idx, fernet.encrypt(raw_line), line_hash, prev_hash)
+           for harness, anchor_sid, idx, raw_line, line_hash, prev_hash in rows]
 
 
 def _cold_content_bytes(harness: str, anchor_sid: str, lines: list[bytes]) -> bytes:
@@ -490,11 +564,18 @@ class RoundTripReport:
     each line's own `cwd` field, deliberately preserving mtime (so `skipped_live`'s own
     guard never catches it) — a byte mismatch that STILL matches once every `cwd` field
     is normalized out is this named, benign class, never folded into `failures` (a real
-    corruption/tamper alarm) or silently into a clean pass either."""
+    corruption/tamper alarm) or silently into a clean pass either.
+
+    `legacy_count` (Thoth DM 9194): how many of THIS sample's sessions were still legacy
+    plaintext — the round-trip check itself is fallback-tolerant, so a legacy row
+    verifies clean same as an encrypted one; this count is the ONLY signal in this
+    receipt that the migration (`encrypt_existing_soul_lines`) still has work left, so a
+    caller never reads a clean pass as "fully encrypted" when it isn't yet."""
 
     failures: list[dict[str, str]] = field(default_factory=list)
     skipped_live: int = 0
     cwd_rewrites: int = 0
+    legacy_count: int = 0
 
     def __bool__(self) -> bool:
         """Truthy iff there are real failures — lets a caller write `if report:` for
@@ -623,6 +704,7 @@ class SoulStore:
                 rows.append((harness, anchor_sid, idx, raw_line, line_hash, prev_hash))
                 prev_hash = line_hash
                 idx += 1
+            rows = _encrypt_rows(rows)
             async with self.pool.acquire() as conn:
                 async with conn.transaction():
                     await conn.executemany(
@@ -773,6 +855,7 @@ class SoulStore:
         lines = [_crush_line_bytes(_crush_row_dict(r)) for r in new_rows]
         hashed, next_idx, next_prev = _hash_rows(
             _CRUSH_HARNESS, anchor_sid, lines, idx, prev_hash)
+        hashed = _encrypt_rows(hashed)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.executemany(
@@ -961,6 +1044,7 @@ class SoulStore:
             all_rows.extend(rows)
         if not all_rows:
             return 0
+        all_rows = _encrypt_rows(all_rows)
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.executemany(
@@ -1046,9 +1130,19 @@ class SoulStore:
         decompressed content is measured in one pass instead (`_accumulate_resume_
         diagnostics`, the SAME accounting the hot loop below uses per page, so a folded
         session's diagnostics are identical to what they were the day before the fold)."""
+        # DECRYPTS BEFORE MEASURING (Thoth mail 9134): this counts BYTES of the real
+        # transcript content — a plaintext byte count, never ciphertext's own length
+        # (Fernet's fixed per-token overhead would silently inflate every measurement
+        # here if this read the stored bytes as-is). Not one of the three functions
+        # `_iter_verified_lines` folds (this one measures, never verifies a chain or
+        # returns content to a caller) — encryption still has to reach it, the same
+        # way it reaches every other raw_line/content_gzip read in this file.
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            lines = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+            cold_blob = bytes(cold["content_gzip"])
+            plaintext_blob = fernet.decrypt(cold_blob) if is_encrypted(cold_blob) else cold_blob
+            lines = _split_cold_content(gzip.decompress(plaintext_blob))
             if not lines:
                 return None
             total, count, lines_total, lb, ll = _accumulate_resume_diagnostics(
@@ -1071,7 +1165,8 @@ class SoulStore:
             if not rows:
                 break
             seen_any = True
-            raws = [bytes(row["raw_line"]) for row in rows]
+            raws = [(fernet.decrypt(rl) if is_encrypted(rl) else rl)
+                    for rl in (bytes(row["raw_line"]) for row in rows)]
             total, count, lines_total, last_boundary_bytes, last_boundary_lines = (
                 _accumulate_resume_diagnostics(
                     raws, total, count, lines_total, last_boundary_bytes, last_boundary_lines))
@@ -1109,21 +1204,55 @@ class SoulStore:
         and maps it onto its own pre-existing external contract, so nothing downstream
         learns a new error shape.
 
-        COLD: decompress once, recompute the whole chain via `_hash_rows` and compare
-        against `last_hash` (the cold tier's own single-comparison law `verify_chain`
-        already established) before yielding anything — `_all_raw_lines`'s own COLD
-        branch never did this verification before this change (it trusted the stored
-        blob outright); this is the one place this consolidation deliberately widens
-        behavior beyond "identical on every path" — disclosed here, not silent, and
-        only observable on an already-corrupt blob, the case nothing before this ever
-        exercised in practice or in this file's own tests.
+        COLD: DECRYPT the whole blob first, THEN decompress (encrypt-after-gzip at
+        fold time — compression works far better on plaintext than on ciphertext, so
+        `fold_to_cold_tier` compresses first and wraps the compressed result in ONE
+        Fernet call; this mirrors that in reverse), recompute the whole chain via
+        `_hash_rows` over the plaintext and compare against `last_hash` (the cold
+        tier's own single-comparison law `verify_chain` already established) before
+        yielding anything — `_all_raw_lines`'s own COLD branch never did this
+        verification before this change (it trusted the stored blob outright); this is
+        the one place this consolidation deliberately widens behavior beyond
+        "identical on every path" — disclosed here, not silent, and only observable on
+        an already-corrupt blob, the case nothing before this ever exercised in
+        practice or in this file's own tests.
 
         HOT: pages through `soul_lines` at `_REMATERIALIZE_PAGE_LINES` a page — the
         same page size `_stream_verified_write` already used — so a caller that also
-        streams rather than collects pays no new memory cost from this fold."""
+        streams rather than collects pays no new memory cost from this fold. Each
+        row's `raw_line` is DECRYPTED before the chain-hash check (`line_hash` was
+        computed over PLAINTEXT at write time — `_encrypt_rows`'s own docstring) and
+        before yielding.
+
+        ENCRYPTION AT REST (Thoth mail 9134): a wrong or rotated-out key raises
+        `cryptography.fernet.InvalidToken` on decrypt — caught here and reported as a
+        NAMED `_ChainBroken` receipt, the same honest shape a hash mismatch already
+        gets, never a raw traceback surfacing three call sites deep."""
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            content = gzip.decompress(bytes(cold["content_gzip"]))
+            cold_blob = bytes(cold["content_gzip"])
+            if is_encrypted(cold_blob):
+                try:
+                    content = gzip.decompress(fernet.decrypt(cold_blob))
+                except InvalidToken:
+                    raise _ChainBroken({
+                        "error": "cold tier decryption failed — no configured key opens "
+                                 "this blob (wrong or rotated-out key)",
+                        "verified_through": -1}) from None
+            else:
+                try:
+                    content = gzip.decompress(cold_blob)  # legacy plaintext, pre-migration
+                except (OSError, EOFError):
+                    # NEITHER a Fernet token NOR valid gzip — genuinely corrupted, not a
+                    # legacy row this fallback was ever meant to explain away (the gAAAA
+                    # check, Thoth DM 9194, is a heuristic, not proof); the same honest
+                    # _ChainBroken every other corruption already gets, never an
+                    # unhandled gzip traceback.
+                    raise _ChainBroken({
+                        "error": "cold tier chain broken — the stored blob is neither a "
+                                 "valid Fernet token nor valid gzip (corrupted)",
+                        "verified_through": -1}) from None
             lines_cold = _split_cold_content(content)
             if not lines_cold:
                 return
@@ -1157,13 +1286,24 @@ class SoulStore:
                         "error": f"chain broken at line {i} — prev_hash does not "
                                  "match the prior line's own hash",
                         "verified_through": i - 1})
-                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                raw = bytes(row["raw_line"])
+                if is_encrypted(raw):
+                    try:
+                        plaintext = fernet.decrypt(raw)
+                    except InvalidToken:
+                        raise _ChainBroken({
+                            "error": f"decryption failed at line {i} — no configured key "
+                                     "opens this row (wrong or rotated-out key)",
+                            "verified_through": i - 1}) from None
+                else:
+                    plaintext = raw  # legacy plaintext, pre-migration
+                if _chain_hash(row["prev_hash"], plaintext) != row["line_hash"]:
                     raise _ChainBroken({
                         "error": f"chain broken at line {i} — stored hash does not "
                                  "match its own content (tampered or corrupted)",
                         "verified_through": i - 1})
                 expected_prev = row["line_hash"]
-                yield bytes(row["raw_line"])
+                yield plaintext
                 i += 1
 
     async def _all_raw_lines(self, harness: str, anchor_sid: str) -> list[bytes] | None:
@@ -1274,10 +1414,30 @@ class SoulStore:
         per-line hashes left to re-walk — `last_hash` (the chain's own final link,
         captured before the fold) is the one thing left to check the RECOMPUTED chain
         against. Same "never trust a stored hash in isolation" discipline, collapsed to a
-        single comparison since there is only one hash left to compare."""
+        single comparison since there is only one hash left to compare.
+
+        DECRYPTS BEFORE COMPARING (Thoth mail 9134): `line_hash`/`last_hash` were always
+        computed over PLAINTEXT — without decrypting first this would report `False` for
+        every session, encrypted correctly or not, not one of the two DISTINCT true
+        failures it exists to catch. A decrypt failure (wrong/rotated-out key) is itself
+        reported as `False` — this function's own honest-boolean contract has no room
+        for a third, separate "can't tell" outcome; `_iter_verified_lines`'s own
+        `_ChainBroken` receipt is where that distinction actually lives."""
+        fernet = _LazyFernet()
         cold = await self._cold_row(harness, anchor_sid)
         if cold is not None:
-            lines = _split_cold_content(gzip.decompress(bytes(cold["content_gzip"])))
+            cold_blob = bytes(cold["content_gzip"])
+            if is_encrypted(cold_blob):
+                try:
+                    decrypted = fernet.decrypt(cold_blob)
+                except InvalidToken:
+                    return False
+            else:
+                decrypted = cold_blob  # legacy plaintext, pre-migration
+            try:
+                lines = _split_cold_content(gzip.decompress(decrypted))
+            except (OSError, EOFError):
+                return False  # neither a Fernet token nor valid gzip — corrupted
             if not lines:
                 return True  # vacuous, same as the hot path's zero-rows case
             _, _, final_hash = _hash_rows(harness, anchor_sid, lines, 0, None)
@@ -1297,7 +1457,15 @@ class SoulStore:
                     return False  # a gap in the sequence
                 if row["prev_hash"] != expected_prev:
                     return False
-                if _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]:
+                raw = bytes(row["raw_line"])
+                if is_encrypted(raw):
+                    try:
+                        plaintext = fernet.decrypt(raw)
+                    except InvalidToken:
+                        return False
+                else:
+                    plaintext = raw  # legacy plaintext, pre-migration
+                if _chain_hash(row["prev_hash"], plaintext) != row["line_hash"]:
                     return False
                 expected_prev = row["line_hash"]
                 i += 1
@@ -1603,6 +1771,18 @@ class SoulStore:
         already = await self._cold_row(harness, anchor_sid)
         if already is not None:
             return {"anchor_sid": anchor_sid, "folded": False, "note": "already cold"}
+        # NOT lazy, unlike the read-only sibling functions above — this one both
+        # decrypts every hot row unconditionally AND re-encrypts the folded cold
+        # blob, so it genuinely needs a working key to do anything at all (THE
+        # FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065): returns the
+        # SAME named-receipt shape ("folded": False, "error": ...) every other
+        # refusal in this function already uses, never an uncaught raise.
+        try:
+            fernet = get_soul_fernet()
+        except SoulKeyMissing as exc:
+            return {"anchor_sid": anchor_sid, "folded": False,
+                    "error": f"no soul-store encryption key configured — refusing to "
+                             f"fold without one (run `osiris soul-key init`): {exc}"}
         expected_prev: str | None = None
         i = 0
         total_bytes = 0
@@ -1616,13 +1796,24 @@ class SoulStore:
             if not rows:
                 break
             for row in rows:
-                if (row["line_idx"] != i or row["prev_hash"] != expected_prev
-                        or _chain_hash(row["prev_hash"], row["raw_line"]) != row["line_hash"]):
+                if row["line_idx"] != i or row["prev_hash"] != expected_prev:
                     return {"anchor_sid": anchor_sid, "folded": False,
                             "error": f"chain broken at line {i} — refusing to fold "
                                      "content that cannot be verified",
                             "verified_through": i - 1}
-                raw = bytes(row["raw_line"])
+                try:
+                    raw = fernet.decrypt(bytes(row["raw_line"]))
+                except InvalidToken:
+                    return {"anchor_sid": anchor_sid, "folded": False,
+                            "error": f"decryption failed at line {i} — no configured "
+                                     "key opens this row (wrong or rotated-out key) — "
+                                     "refusing to fold content that cannot be verified",
+                            "verified_through": i - 1}
+                if _chain_hash(row["prev_hash"], raw) != row["line_hash"]:
+                    return {"anchor_sid": anchor_sid, "folded": False,
+                            "error": f"chain broken at line {i} — refusing to fold "
+                                     "content that cannot be verified",
+                            "verified_through": i - 1}
                 parts.append(raw + b"\n")
                 total_bytes += len(raw) + 1
                 expected_prev = row["line_hash"]
@@ -1630,7 +1821,12 @@ class SoulStore:
         if i == 0:
             return {"anchor_sid": anchor_sid, "folded": False, "note": "nothing ingested"}
         content = b"".join(parts)
-        compressed = gzip.compress(content)
+        # ENCRYPT-AFTER-GZIP (Thoth mail 9134): compression works far better on
+        # plaintext than on ciphertext, so the whole session compresses first, and the
+        # RESULT is wrapped in ONE Fernet call — one cipher operation per fold, not per
+        # line, since a cold row is already a single unit. `_iter_verified_lines`'s own
+        # cold branch reverses this exact order on read (decrypt, then decompress).
+        compressed = fernet.encrypt(gzip.compress(content))
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -1746,6 +1942,7 @@ class SoulStore:
         failures: list[dict[str, str]] = []
         skipped_live = 0
         cwd_rewrites = 0
+        legacy_count = 0
         for row in rows:
             anchor_sid, source_path = row["anchor_sid"], row["source_path"]
             src = Path(source_path)
@@ -1755,6 +1952,21 @@ class SoulStore:
             if mtime > row["last_ingested_at"]:
                 skipped_live += 1  # still being appended to — a moving target, not a defect
                 continue
+            # LEGACY-PLAINTEXT COUNT (Thoth DM 9194): a cheap peek at whichever tier
+            # holds this session — this round-trip check is fallback-tolerant (a legacy
+            # row verifies byte-identical same as an encrypted one), so this count is
+            # the ONLY place this receipt surfaces that the migration still has work
+            # left on the sessions it happened to sample.
+            cold_peek = await self._cold_row(harness, anchor_sid)
+            if cold_peek is not None:
+                if not is_encrypted(bytes(cold_peek["content_gzip"])):
+                    legacy_count += 1
+            else:
+                first = await self.pool.fetchval(
+                    "SELECT raw_line FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
+                    "ORDER BY line_idx ASC LIMIT 1", harness, anchor_sid)
+                if first is not None and not is_encrypted(bytes(first)):
+                    legacy_count += 1
             with tempfile.TemporaryDirectory() as tmpdir:
                 scratch = Path(tmpdir) / f"{anchor_sid}.roundtrip"
                 result = await self.rematerialize_to_disk(
@@ -1774,7 +1986,8 @@ class SoulStore:
                                  f"{src_hash[:12]}…",
                     })
         return RoundTripReport(
-            failures=failures, skipped_live=skipped_live, cwd_rewrites=cwd_rewrites)
+            failures=failures, skipped_live=skipped_live, cwd_rewrites=cwd_rewrites,
+            legacy_count=legacy_count)
 
     async def verify_crush_round_trip_sample(self, *, n: int = 20) -> RoundTripReport:
         """THE ROUND-TRIP PROOF, CRUSH'S OWN VERSION (wave 13 item 2): `verify_round_
@@ -1891,6 +2104,225 @@ class SoulStore:
                              f"{len(live_lines)} live, content diverges",
                 })
         return RoundTripReport(failures=failures, skipped_live=0)
+
+
+async def encrypt_existing_soul_lines(
+    pool: asyncpg.Pool, *, batch_size: int = 2000, dry_run: bool = True,
+    fernet: MultiFernet | None = None,
+) -> dict[str, Any]:
+    """THE MIGRATION (Thoth mail 9134): encrypts every EXISTING soul_lines/soul_lines_
+    cold row written before this build landed — every write from now on already
+    encrypts itself (`_encrypt_rows`/`fold_to_cold_tier`); this is the one-time backward
+    pass over what's already in the table (measured live 2026-09-10: 1,255,671
+    soul_lines rows, 0 soul_lines_cold rows — a fresh install may find nothing to do).
+
+    IDEMPOTENT AND SAFE TO RE-RUN, including mid-deploy against a daemon still
+    ingesting: each row is DECRYPTED FIRST under the CURRENT primary key
+    (`get_soul_fernet`) — success means it is already migrated (skipped, counted, never
+    re-written); `InvalidToken` means it is still legacy plaintext, encrypted in place.
+    A row a live `ingest_path` call writes DURING this migration's own run is already
+    ciphertext by the time this function ever sees it (the write path landed first),
+    so it is correctly skipped, never double-encrypted.
+
+    KEYSET-PAGINATED, never `OFFSET` (msg 6583's own 307MB-question discipline,
+    generalized): `(harness, anchor_sid, line_idx)` — `soul_lines`' own primary key —
+    orders every page, so a row appended by a concurrent live ingest lands AFTER this
+    migration's own moving cursor and is picked up by this same run if it arrives in
+    time, or by the next idempotent re-run if it doesn't; an OFFSET-based page would
+    silently skip or duplicate rows under exactly that concurrent-write condition.
+
+    `fernet=` (THE KEY DOOR, `osiris soul-key status --path`) overrides the CURRENT
+    process's own `get_soul_fernet()` lookup — the seam `cmd_soul_key`'s status
+    action needs to census against an explicit, non-default key path rather than
+    whatever `OSIRIS_SOUL_KEY_FILE`/the installed unit resolves to; every other
+    caller leaves it None and gets the ordinary live-primary behavior, unchanged.
+
+    `dry_run=True` (the default) counts what WOULD migrate without writing."""
+    fernet = fernet or get_soul_fernet()
+    hot_migrated = 0
+    hot_already = 0
+    cursor: tuple[str, str, int] | None = None
+    while True:
+        if cursor is None:
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $1", batch_size)
+        else:
+            h, a, idx = cursor
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "WHERE (harness, anchor_sid, line_idx) > ($1, $2, $3) "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $4", h, a, idx, batch_size)
+        if not rows:
+            break
+        updates: list[tuple[bytes, str, str, int]] = []
+        for row in rows:
+            raw = bytes(row["raw_line"])
+            try:
+                fernet.decrypt(raw)
+                hot_already += 1
+            except InvalidToken:
+                updates.append(
+                    (fernet.encrypt(raw), row["harness"], row["anchor_sid"], row["line_idx"]))
+        if updates and not dry_run:
+            async with pool.acquire() as conn:
+                await conn.executemany(
+                    "UPDATE soul_lines SET raw_line=$1 "
+                    "WHERE harness=$2 AND anchor_sid=$3 AND line_idx=$4", updates)
+        hot_migrated += len(updates)
+        last = rows[-1]
+        cursor = (last["harness"], last["anchor_sid"], last["line_idx"])
+        if len(rows) < batch_size:
+            break
+    cold_migrated = 0
+    cold_already = 0
+    for row in await pool.fetch("SELECT harness, anchor_sid, content_gzip FROM soul_lines_cold"):
+        blob = bytes(row["content_gzip"])
+        try:
+            fernet.decrypt(blob)
+            cold_already += 1
+        except InvalidToken:
+            cold_migrated += 1
+            if not dry_run:
+                await pool.execute(
+                    "UPDATE soul_lines_cold SET content_gzip=$1 "
+                    "WHERE harness=$2 AND anchor_sid=$3",
+                    fernet.encrypt(blob), row["harness"], row["anchor_sid"])
+    return {"dry_run": dry_run, "hot_migrated": hot_migrated, "hot_already_encrypted": hot_already,
+           "cold_migrated": cold_migrated, "cold_already_encrypted": cold_already}
+
+
+async def rewrap_soul_lines_key(
+    pool: asyncpg.Pool, *, new_fernet: Fernet, old_fernet: Fernet,
+    batch_size: int = 2000, dry_run: bool = True,
+) -> dict[str, Any]:
+    """THE KEY DOOR's own re-wrap pass (Thoth mail 12810, `osiris soul-key rotate`):
+    a GENUINELY DIFFERENT operation from `encrypt_existing_soul_lines` above, which
+    this deliberately does not touch or extend. That function's own decrypt-or-encrypt
+    branch treats "decrypts under ANY key already" as done — correct for the
+    plaintext-to-encrypted migration it exists for, but WRONG here: a row still
+    encrypted under the OLD (about-to-be-retired) key decrypts FINE under a
+    `MultiFernet([old, ...])`, yet still needs re-writing onto the NEW primary before
+    the old key can ever be safely deleted. This function's own decrypt ladder is
+    exactly that distinction: `new_fernet.decrypt` alone (single-key, never Multi) —
+    success means already on the new primary, skip; failure falls to `old_fernet.
+    decrypt` — success means it's a legacy-key row, re-encrypt under `new_fernet` and
+    write back; failure under BOTH is a genuine break (plaintext that predates
+    encryption entirely, or corruption, or the wrong old key given) and is counted,
+    NEVER silently skipped or crashed on — `soul_key_rotate --finish` refuses to run
+    while `broken` is nonzero, the same "never a silent gap" law
+    `encrypt_existing_soul_lines` already holds for `dry_run`.
+
+    KEYSET-PAGINATED, never OFFSET — identical shape and identical reasoning to
+    `encrypt_existing_soul_lines`'s own docstring (a concurrent live write lands
+    after this migration's own moving cursor, picked up by this run if it arrives in
+    time or the next idempotent re-run if it doesn't).
+
+    IDEMPOTENT AND SAFE TO RE-RUN: a row already on `new_fernet` is always the first
+    branch checked and always skipped — running this twice after the daemons have
+    restarted (picking up the new primary and writing fresh rows under it already)
+    costs nothing beyond the scan itself.
+
+    `dry_run=True` (the default) counts what WOULD re-wrap without writing — the
+    exact receipt `osiris soul-key rotate --finish` checks is clean before it ever
+    calls `soul_crypto.soul_key_rotate_finish`.
+
+    BROKEN ROWS ARE COUNTED, NEVER ACCUMULATED WITHOUT BOUND: a genuinely wrong
+    `old_fernet` (a stale/corrupted `.legacy` file, or someone hand-editing it)
+    would make EVERY row in the table "broken" — a live population runs into the
+    millions, and a plain unbounded list of per-row dicts at that scale is exactly
+    the kind of unforced memory cost this house's own standing lesson on sampling
+    warns about. `*_broken_count` is the real, exact total; `*_broken_sample` caps
+    at `_REWRAP_BROKEN_SAMPLE_CAP` entries — enough for a human to recognize the
+    failure shape (one session's rows? every row?) without holding the whole
+    population in memory for a receipt nobody reads row-by-row."""
+    hot_rewrapped = 0
+    hot_already = 0
+    hot_broken_count = 0
+    hot_broken_sample: list[dict[str, Any]] = []
+    cursor: tuple[str, str, int] | None = None
+    while True:
+        if cursor is None:
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $1", batch_size)
+        else:
+            h, a, idx = cursor
+            rows = await pool.fetch(
+                "SELECT harness, anchor_sid, line_idx, raw_line FROM soul_lines "
+                "WHERE (harness, anchor_sid, line_idx) > ($1, $2, $3) "
+                "ORDER BY harness, anchor_sid, line_idx LIMIT $4", h, a, idx, batch_size)
+        if not rows:
+            break
+        updates: list[tuple[bytes, str, str, int]] = []
+        for row in rows:
+            raw = bytes(row["raw_line"])
+            try:
+                new_fernet.decrypt(raw)
+                hot_already += 1
+                continue
+            except InvalidToken:
+                pass
+            try:
+                plaintext = old_fernet.decrypt(raw)
+            except InvalidToken:
+                hot_broken_count += 1
+                if len(hot_broken_sample) < _REWRAP_BROKEN_SAMPLE_CAP:
+                    hot_broken_sample.append({
+                        "harness": row["harness"], "anchor_sid": row["anchor_sid"],
+                        "line_idx": row["line_idx"],
+                    })
+                continue
+            updates.append(
+                (new_fernet.encrypt(plaintext), row["harness"], row["anchor_sid"],
+                 row["line_idx"]))
+        if updates and not dry_run:
+            async with pool.acquire() as conn:
+                await conn.executemany(
+                    "UPDATE soul_lines SET raw_line=$1 "
+                    "WHERE harness=$2 AND anchor_sid=$3 AND line_idx=$4", updates)
+        hot_rewrapped += len(updates)
+        last = rows[-1]
+        cursor = (last["harness"], last["anchor_sid"], last["line_idx"])
+        if len(rows) < batch_size:
+            break
+    cold_rewrapped = 0
+    cold_already = 0
+    cold_broken_count = 0
+    cold_broken_sample: list[dict[str, Any]] = []
+    for row in await pool.fetch("SELECT harness, anchor_sid, content_gzip FROM soul_lines_cold"):
+        blob = bytes(row["content_gzip"])
+        try:
+            new_fernet.decrypt(blob)
+            cold_already += 1
+            continue
+        except InvalidToken:
+            pass
+        try:
+            plaintext = old_fernet.decrypt(blob)
+        except InvalidToken:
+            cold_broken_count += 1
+            if len(cold_broken_sample) < _REWRAP_BROKEN_SAMPLE_CAP:
+                cold_broken_sample.append(
+                    {"harness": row["harness"], "anchor_sid": row["anchor_sid"]})
+            continue
+        cold_rewrapped += 1
+        if not dry_run:
+            await pool.execute(
+                "UPDATE soul_lines_cold SET content_gzip=$1 "
+                "WHERE harness=$2 AND anchor_sid=$3",
+                new_fernet.encrypt(plaintext), row["harness"], row["anchor_sid"])
+    # "clean to finish" (osiris soul-key rotate --finish's own gate) means a FRESH
+    # dry_run=True call finds nothing left on the old key and nothing broken --
+    # `cmd_soul_key` computes that directly off this receipt's own counts rather
+    # than this function guessing at the caller's own dry_run intent.
+    return {
+        "dry_run": dry_run,
+        "hot_rewrapped": hot_rewrapped, "hot_already_on_new_key": hot_already,
+        "hot_broken_count": hot_broken_count, "hot_broken_sample": hot_broken_sample,
+        "cold_rewrapped": cold_rewrapped, "cold_already_on_new_key": cold_already,
+        "cold_broken_count": cold_broken_count, "cold_broken_sample": cold_broken_sample,
+    }
 
 
 def _hash_file_streamed(path: Path, chunk_size: int = 1 << 20) -> str:

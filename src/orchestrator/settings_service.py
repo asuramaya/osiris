@@ -10,7 +10,7 @@ OPT-IN PER FIELD: it only ever overrides a `Settings` attribute named by some
 its 250+ existing call sites is untouched and behaves exactly as before unless a caller
 explicitly switches to this function). One DB read per short TTL (`_OVERLAY_TTL_SECS`),
 fails open to the env/pydantic default on ANY error (a DB hiccup must never sink a cron),
-and is never consulted on paths that run before a DB exists (migrations, soul-key-init,
+and is never consulted on paths that run before a DB exists (migrations, soul-key init,
 deploy's own preflight — those keep calling bare `get_settings()`, unchanged)."""
 from __future__ import annotations
 

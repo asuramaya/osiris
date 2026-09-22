@@ -1,0 +1,36 @@
+# THE OPPORTUNISTIC OFFLOAD RUNNER (operator ruling be21384a, THE BACKUP TOPOLOGY /
+# INTERMITTENT TARGETS; Thoth mail 12813) — one tick checks every configured
+# offload_targets[] row's presence (an 8TB drive only when docked, a NAS only on
+# Tailscale/LAN) and syncs the vault via restic to every one that's present right
+# now, recording a receipt per target (`osiris backup-status` reads it back).
+# DEPLOY-MANAGED (scripts/install_prune_timers.sh, same mechanism as the five
+# backup-lane timers beside this one) — every `osiris deploy` keeps this installed,
+# current, and enabled without a hand.
+[Unit]
+Description=Osiris opportunistic offload runner (docked drive / NAS, one tick)
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/code/osiris
+# Same dev-instance DSN osiris-mcp.service/osiris-worker.service carry inline —
+# this unit needs the DB pool (backup_settings.get_backup_settings reads
+# offload_targets), unlike the manifest/prune-apply oneshots beside it which never
+# touch Postgres at all.
+Environment=DATABASE_URL=postgresql://osiris:osiris@127.0.0.1:5601/osiris?application_name=osiris-offload
+Environment=REDIS_URL=redis://127.0.0.1:6396/0
+# THE RESTIC REPOSITORY PASSWORD (KEY CUSTODY REWRITTEN, ruling e0b98ff2, "same
+# shape for the restic repository password"; THE FIRST KEY MUST COME FROM THE
+# NORMAL CLI, Thoth mail 13065, replacing an earlier `LoadCredentialEncrypted=
+# restic.password:<hard path>` draft — same bootstrap-deadlock reasoning
+# osiris-mcp.service's own identical comment gives): never a plaintext file by
+# default — `osiris restic-key init` writes a systemd-creds-encrypted blob to
+# `%h/.config/credstore.encrypted/restic.password`, systemd's own per-user
+# credential store search path. `ImportCredential=` tolerates a MISSING entry
+# there (confirmed live, same as soul.key's own test) — when present, systemd
+# decrypts it FOR this process before it ever starts, exposing the plaintext at
+# $CREDENTIALS_DIRECTORY/restic.password — get_restic_password() (restic_
+# credential.py) reads that directory first, no systemd-creds subprocess needed
+# at read time. When ABSENT, the unit still runs (a oneshot, not a persistent
+# daemon) and degrades one tick to a single named `error`, never a crash.
+ImportCredential=restic.password
+ExecStart=%h/code/osiris/.venv/bin/python -m src.cli offload-runner tick

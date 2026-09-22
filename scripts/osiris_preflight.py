@@ -433,7 +433,9 @@ def drill(newest_dump: str) -> str | None:
         n = int(out.stdout.strip() or 0)
         if n < 1:
             return f"drill restored ZERO objects from {newest_dump}"
-        return None
+        from scripts.osiris_pitr_drill import _soul_round_trip_check
+
+        return _soul_round_trip_check(name)
     except Exception as e:  # noqa: BLE001
         return f"restore drill failed: {e}"
     finally:

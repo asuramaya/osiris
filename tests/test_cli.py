@@ -79,6 +79,7 @@ from src.cli import (
     cmd_show,
     cmd_smoke_chaos,
     cmd_smoke_reboot,
+    cmd_soul_key,
     cmd_status,
     cmd_sweep_seat_trees,
     cmd_team,
@@ -434,6 +435,210 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
     assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
     seeded = await actions.pool.fetchval("SELECT count(*) FROM compositions")
     assert seeded > 0
+
+
+# --- cmd_soul_key init: no pool, pure filesystem/key generation --------------------------------
+
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir_for_soul_key_tests(
+    request: pytest.FixtureRequest, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every test
+    below sets `OSIRIS_SOUL_KEY_FILE` (the LOGICAL path) but none pass an explicit
+    `--path`, so the credential blob's own DEFAULT location is now the real
+    per-user credstore (`~/.config/credstore.encrypted/`) — a real, SHARED,
+    machine-wide location that WOULD collide across these tests (and with this
+    developer's own real credential) under xdist parallelism without this
+    redirect. Scoped to just this file's own soul-key/restic-key tests
+    (`autouse=True` at module scope would be too broad for a file this large)
+    via `request.node`'s own test name — same shape test_api.py's own identical
+    fixture uses."""
+    if request.node.name.startswith(("test_cmd_soul_key_", "test_cmd_restic_key_")):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+
+
+async def test_cmd_soul_key_init_writes_and_reports_the_path(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No dedicated service account is assumed (Thoth DM 9435) — the test process's own
+    real, non-root uid is already a valid caller, no getuid/getuser mock needed.
+    `backend="file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default systemd-creds
+    backend gets its OWN dedicated CLI test below; this one is about the CLI plumbing."""
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init", backend="file", as_json=True) == 0
+    assert key_file.is_file()
+    # --json is the reliable read here -- the table renderer truncates long
+    # values (a real, pre-existing behavior, not something this backend change
+    # introduced) so asserting the full path against the printed TABLE text is
+    # fragile the moment tmp_path runs deep (pytest-xdist worker directories).
+    out = json.loads(capsys.readouterr().out)
+    assert out["path"] == str(key_file)
+
+
+async def test_cmd_soul_key_init_default_backend_is_systemd_creds(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import systemd_credential
+
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init") == 0
+    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    # (no --path) credential blob lands in the per-user credstore, NOT sibling to
+    # the logical OSIRIS_SOUL_KEY_FILE path — the autouse fixture above redirects
+    # XDG_CONFIG_HOME so this is tmp_path-scoped, never the real credstore.
+    assert (systemd_credential.user_credstore_encrypted_dir() / "soul.key").is_file()
+
+
+async def test_cmd_soul_key_init_without_restart_names_the_command_never_runs_it(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): without
+    `--restart`, init must never actually touch systemd — proved by monkeypatching
+    `_real_restart_services` to raise if called at all, not just by asserting the
+    hint text."""
+    from src import cli
+
+    def _must_not_be_called(units: list[str]) -> None:
+        raise AssertionError(f"_real_restart_services must not run without --restart: {units}")
+
+    monkeypatch.setattr(cli, "_real_restart_services", _must_not_be_called)
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init", backend="file", as_json=True) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["restarted"] is False
+    assert out["restart_units"] == ["osiris-mcp.service", "osiris-worker.service"]
+    assert "systemctl --user restart" in out["restart_hint"]
+
+
+async def test_cmd_soul_key_init_with_restart_calls_the_shared_restart_primitive(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """`--restart` reuses `_real_restart_services` — the SAME primitive `osiris
+    deploy` already uses, never a second restart implementation — proved by
+    monkeypatching it and checking it was actually called with the right units,
+    never shelling out to a real `systemctl` in this test."""
+    from src import cli
+
+    calls = []
+
+    async def _fake_restart(units: list[str]) -> tuple[int, str]:
+        calls.append(units)
+        return 0, "ok"
+
+    monkeypatch.setattr(cli, "_real_restart_services", _fake_restart)
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key(
+        "init", backend="file", restart=True, as_json=True) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert calls == [["osiris-mcp.service", "osiris-worker.service"]]
+    assert out["restarted"] is True
+    assert "exit 0" in out["restart_hint"]
+
+
+async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+) -> None:
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init") == 1
+    assert "refused" in capsys.readouterr().err
+
+
+async def test_cmd_soul_key_invalid_action_refuses(capsys: pytest.CaptureFixture[str]) -> None:
+    assert await cmd_soul_key("bogus") == 1
+    assert "action must be" in capsys.readouterr().err
+
+
+# --- cmd_soul_key status/rotate/restore-drill: pool-backed actions -----------------------------
+
+async def test_cmd_soul_key_status_absent(
+    tmp_path, monkeypatch: pytest.MonkeyPatch, actions: Actions,
+) -> None:
+    import io
+    from contextlib import redirect_stdout
+
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        out = await cmd_soul_key(
+            "status", path=str(tmp_path / "no-such-file"), pool=actions.pool)
+    assert out == 0
+    assert "no" in buf.getvalue()  # present: no
+
+
+async def test_cmd_soul_key_status_present_reports_legacy_row_census(
+    tmp_path, actions: Actions,
+) -> None:
+    """THE KEY DOOR's status action composes `soul_crypto.soul_key_status` (filesystem
+    facts) with `soul_store.encrypt_existing_soul_lines(dry_run=True)` (the live
+    census) built against the EXPLICIT `--path` key, not whatever the process's own
+    default resolves to — the exact fix this action's own build surfaced."""
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    out = await cmd_soul_key("status", path=str(key_file), as_json=True, pool=actions.pool)
+    assert out == 0
+
+
+async def test_cmd_soul_key_rotate_and_finish_round_trip(
+    tmp_path, actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    """No soul_lines rows at all — the census legs of rotate/finish still run
+    (0 rewrapped, 0 broken), proving the plumbing without needing a real ingest."""
+    from cryptography.fernet import Fernet
+
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+
+    # finish with nothing in flight refuses
+    assert await cmd_soul_key("rotate", path=str(key_file), finish=True, pool=actions.pool) == 1
+    assert "no rotation in flight" in capsys.readouterr().err
+
+    # begin
+    assert await cmd_soul_key("rotate", path=str(key_file), pool=actions.pool) == 0
+    legacy_path = tmp_path / "soul.key.legacy"
+    assert legacy_path.exists()
+
+    # finish, with zero rows anywhere, is immediately clean
+    assert await cmd_soul_key("rotate", path=str(key_file), finish=True, pool=actions.pool) == 0
+    assert not legacy_path.exists()
+
+
+async def test_cmd_soul_key_restore_drill_refuses_with_no_repo_configured(
+    actions: Actions, capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert await cmd_soul_key("restore-drill", pool=actions.pool) == 1
+    assert "no offbox repository configured" in capsys.readouterr().err
+
+
+async def test_cmd_soul_key_restore_drill_calls_run_drill_per_url(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+
+    def _fake_run_drill(repo_url: str, *, scratch=None) -> str | None:
+        calls.append(repo_url)
+        return None if repo_url == "repo-good" else "boom"
+
+    import scripts.osiris_offbox_restore_drill as drill_module
+    monkeypatch.setattr(drill_module, "run_drill", _fake_run_drill)
+
+    out = await cmd_soul_key(
+        "restore-drill", repo_url="repo-good", as_json=True, pool=actions.pool)
+    assert out == 0
+    assert calls == ["repo-good"]
+
+    out2 = await cmd_soul_key(
+        "restore-drill", repo_url="repo-bad", as_json=True, pool=actions.pool)
+    assert out2 == 1
 
 
 # --- cmd_launch: a real pool for seat facts, a fake manager so nothing is ever really spawned ---
@@ -4271,17 +4476,19 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
     assert calls == []
 
 
-def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
+def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
     tmp_path: Path,
 ) -> None:
     """Wave 21 (thread f04cce36 piece 3) widened this from three to five; WAVE 22
-    (ruling 7be61879, thread 40d6eef3) widens it once more to six — osiris-pg-autotune
+    (ruling 7be61879, thread 40d6eef3) widened it once more to six — osiris-pg-autotune
     was the last hand-installed timer the census named (osiris-preflight was already
-    covered by piece 3). A config panel/registered schedule that silently does nothing
-    until a human hand-installs the unit is worse than no field. No `.venv` in this
-    synthetic repo, so render_units.py's own subprocess call fails and the script's
-    fallback (a verbatim copy) takes over — proving the UNIT LIST widened, independent
-    of the render step's own DB behavior (covered in test_render_units.py instead)."""
+    covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a) widens it
+    again to seven — osiris-offload. A config panel/registered schedule that silently
+    does nothing until a human hand-installs the unit is worse than no field. No
+    `.venv` in this synthetic repo, so render_units.py's own subprocess call fails and
+    the script's fallback (a verbatim copy) takes over — proving the UNIT LIST widened,
+    independent of the render step's own DB behavior (covered in test_render_units.py
+    instead)."""
     import os
     import subprocess
 
@@ -4294,7 +4501,8 @@ def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
     (repo / install_script).write_text(real_install)
     (repo / install_script).chmod(0o755)
     for name in ("osiris-prune-manifest", "osiris-prune-apply", "osiris-base-backup",
-                "osiris-backup", "osiris-preflight", "osiris-pg-autotune"):
+                "osiris-backup", "osiris-preflight", "osiris-pg-autotune",
+                "osiris-offload"):
         (repo / "deploy" / f"{name}.service").write_text(f"# {name} service\n")
         (repo / "deploy" / f"{name}.timer").write_text(f"# {name} timer\n")
     target = tmp_path / "target"
@@ -4311,9 +4519,10 @@ def test_install_prune_timers_sh_now_covers_all_six_timer_lane_units(
             os.environ["OSIRIS_SYSTEMD_USER_DIR"] = old_env
 
     assert result.returncode == 0, result.stderr
-    assert "12 installed/updated, 0 already current" in result.stdout
+    assert "14 installed/updated, 0 already current" in result.stdout
     assert (target / "osiris-backup.timer").read_text() == "# osiris-backup timer\n"
     assert (target / "osiris-pg-autotune.service").read_text() == "# osiris-pg-autotune service\n"
+    assert (target / "osiris-offload.timer").read_text() == "# osiris-offload timer\n"
 
 
 # --- boot-status -------------------------------------------------------------------------------

@@ -532,7 +532,12 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
     # every OTHER section still renders — a missing vault dir doesn't blank the panel
     assert len(data["timers"]) == 5
     assert "prune_manifest" in data and "error" not in data["prune_manifest"]
-    assert data["offbox"]["wired"] is False
+    # THE OPPORTUNISTIC OFFLOAD RUNNER wired this section up for real (offload_runner.py,
+    # ruling be21384a) — a missing vault degrades `vault`/`disk`, never this section (no
+    # dependency between the two: offbox reads settings + a local receipt file, neither
+    # touches the vault directory at all).
+    assert data["offbox"]["wired"] is True
+    assert data["offbox"]["offload_targets"] == []  # no rows written in this test's own DB
     assert data["pitr_drill"]["wired_to_a_timer"] is False
 
 

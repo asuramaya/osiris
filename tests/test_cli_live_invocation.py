@@ -394,6 +394,20 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
               "by raising SystemExit from this CLI door's own pre-call UUID validation "
               "(_uuids()), not by returning a clean int — the wrong shape for this file's "
               "own thunk contract, so still no usable no-write invocation",
+    "soul-key": "requires a positional action (status/init/rotate/restore-drill); "
+                "init genuinely writes a real key file to disk for any non-root caller "
+                "(soul_key_init's own refusal gate fires ONLY when running as root "
+                "with no --owner given — this test process is never root), rotate "
+                "genuinely mints and re-wraps for real, no dry-run flag on either — "
+                "same operator-devops-bootstrap class as seed/bootstrap",
+    "restic-key": "requires a positional action (status/init); init genuinely writes a "
+                  "real credential to disk unconditionally (restic_key_init's own "
+                  "refusal is only 'a credential already exists', not reachable on a "
+                  "fresh no-write call) — same class as soul-key above",
+    "offload-runner": "requires a positional action (tick); tick genuinely runs real "
+                      "restic subprocess calls against configured offload_targets rows "
+                      "with no dry-run flag — same operator-devops-bootstrap class as "
+                      "smoke/deploy/seed",
     "mint-seat": "genuinely mints a seat; no confirmed refusal-only path — every "
                  "existing test mints for real",
     "new": "genuinely spawns/mints a seat for real; no confirmed refusal-only path",

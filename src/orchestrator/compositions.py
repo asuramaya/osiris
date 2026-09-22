@@ -5155,13 +5155,28 @@ async def _fn_backup_status(
     except Exception:  # noqa: BLE001 — a DB hiccup here must not blank the rest of the panel
         manifest_section = {"error": "manifest state unavailable"}
 
+    # THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a, Thoth mail 12813) wired this
+    # up for real: `offload_targets` (backup_settings.py, presence already computed
+    # per-target above) merged with `offload_runner.offload_receipts()`'s own local
+    # receipt file (last_successful_offload/last_attempt_at/last_error per target
+    # name) — a live filesystem read, same as every other section of this Function,
+    # never a settings-door write. `offbox_repositories` stays for one release
+    # (backup_settings.py's own deprecation note) but is no longer this section's
+    # primary field.
+    try:
+        from src.orchestrator.offload_runner import offload_receipts
+
+        receipts = offload_receipts()
+    except Exception:  # noqa: BLE001 — see vault_section above: unavailable, never a crash
+        receipts = {}
+    offload_targets = list((settings or {}).get("offload_targets", []) or [])
+    for t in offload_targets:
+        if isinstance(t, dict) and isinstance(t.get("name"), str):
+            t.update(receipts.get(t["name"], {}))
     offbox_section = {
-        "wired": False,
-        "script_exists": True,
+        "wired": True,
+        "offload_targets": offload_targets,
         "repositories": (settings or {}).get("offbox_repositories", []) or [],
-        "note": "design held for the operator's ruling — see thread cf134938; any "
-                "configured repositories above are stored but inert until off-box "
-                "is ruled on and wired to a timer",
     }
     pitr_section = {
         "wired_to_a_timer": False,

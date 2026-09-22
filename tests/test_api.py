@@ -9,7 +9,9 @@ from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 import pytest_asyncio
+from cryptography.fernet import Fernet
 from src.actions.core import Actions
 from src.api.app import create_app
 from src.ontology.ingest import ingest_bundle
@@ -1222,6 +1224,139 @@ async def test_settings_route_rejects_a_bad_value_without_writing(
     listed = (await client.get("/settings")).json()["settings"]
     row = next(s for s in listed if s["key"] == "daemon.pit_watch.enabled")
     assert row["value"] is False  # untouched
+
+
+# --- soul-key (THE KEY DOOR, Thoth mail 12810/12830, wave 17) ---------------
+
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir_for_soul_key_tests(
+    request: pytest.FixtureRequest, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every test
+    below sets `OSIRIS_SOUL_KEY_FILE` (the LOGICAL path) but none pass an explicit
+    `--path`, so the credential blob's own DEFAULT location is now the real
+    per-user credstore (`~/.config/credstore.encrypted/`) — a real, SHARED,
+    machine-wide location that WOULD collide across these tests (and with this
+    developer's own real credential) under xdist parallelism without this
+    redirect. Scoped to just this file's own soul-key section (`autouse=True` at
+    module scope would be too broad for a file this large) via `request.node`'s
+    own test name."""
+    if request.node.name.startswith(("test_soul_key_", "test_restic_key_")):
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+
+
+async def test_soul_key_status_route_absent(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "no-such-file"))
+    r = await client.get("/soul-key/status")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["present"] is False
+    assert body["legacy_plaintext_rows"] is None
+
+
+async def test_soul_key_init_route_writes_a_key(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`backend: "file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default
+    systemd-creds backend gets its own dedicated test below; this one is about
+    the route's own plumbing (body -> soul_crypto.soul_key_init)."""
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={"backend": "file"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert body["path"] == str(key_file)
+    assert key_file.is_file()
+
+
+async def test_soul_key_init_route_default_backend_is_systemd_creds(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from src.ingest import systemd_credential
+
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={})
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert body["backend"] == "host-cred"
+    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    # (no path) credential blob lands in the per-user credstore, NOT sibling to
+    # the logical OSIRIS_SOUL_KEY_FILE path — the autouse fixture above redirects
+    # XDG_CONFIG_HOME so this is tmp_path-scoped, never the real credstore.
+    assert (systemd_credential.user_credstore_encrypted_dir() / "soul.key").is_file()
+    assert body["restart_units"] == ["osiris-mcp.service", "osiris-worker.service"]
+    assert body["restarted"] is False
+
+
+async def test_soul_key_init_route_restart_true_calls_the_shared_restart_primitive(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`restart: true` on the console's own Init button reuses `_real_restart_
+    services` — the SAME primitive `osiris deploy` and the CLI's own `--restart`
+    both use — proved by monkeypatching it, never shelling out to a real
+    `systemctl` in this test."""
+    from src import cli
+
+    calls = []
+
+    async def _fake_restart(units: list[str]) -> tuple[int, str]:
+        calls.append(units)
+        return 0, "ok"
+
+    monkeypatch.setattr(cli, "_real_restart_services", _fake_restart)
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={"backend": "file", "restart": True})
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert calls == [["osiris-mcp.service", "osiris-worker.service"]]
+    assert body["restarted"] is True
+
+
+async def test_soul_key_init_route_refuses_when_key_exists(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={})
+    body = r.json()
+    assert "error" in body
+    assert "already exists" in body["error"]
+
+
+async def test_soul_key_rotate_route_begin_then_finish(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    key_file.write_bytes(Fernet.generate_key())
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+
+    r = await client.post("/soul-key/rotate", json={})
+    assert r.status_code == 200
+    assert "error" not in r.json()
+    legacy_path = tmp_path / "soul.key.legacy"
+    assert legacy_path.exists()
+
+    r2 = await client.post("/soul-key/rotate", json={"finish": True})
+    assert r2.status_code == 200
+    assert "error" not in r2.json()
+    assert not legacy_path.exists()
+
+
+async def test_soul_key_restore_drill_route_refuses_with_no_repo_configured(
+    client: httpx.AsyncClient,
+) -> None:
+    r = await client.post("/soul-key/restore-drill", json={})
+    body = r.json()
+    assert "error" in body
+    assert "no offbox repository configured" in body["error"]
 
 
 async def test_backfill_route_dry_run_reports_the_plan(

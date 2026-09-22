@@ -41,6 +41,36 @@ Environment=OSIRIS_MCP_PORT=8790
 # operator override there is substituted in here by render_units.py on the next deploy
 # or boot-heal pass; this line is only the SHIPPED default.
 Environment=OSIRIS_TRANSCRIPTS=%h/.claude/projects
+# Soul-store encryption (Thoth mail 9134/9194/9245/9435, wave 17; KEY CUSTODY
+# REWRITTEN, operator ruling e0b98ff2, 2026-09-22): this shape carries no
+# EnvironmentFile= at all, so unlike the system-unit deploy (/etc/osiris/osiris.env) this
+# var lives here, directly, in both this unit and osiris-worker.service. /etc/osiris is
+# root-owned and unreachable from a --user unit regardless of any default this module
+# assumes — %h/.config/osiris/soul.key is the operator's own LOGICAL key name
+# (soul_crypto.py's own `_key_file_path` default), used for its `.meta.json`/
+# `.recovery.json` siblings, NEVER the secret's own location any more (see
+# ImportCredential= below for that). OSIRIS_SOUL_KEY_FILE names that logical path
+# for CLI-side resolution (`osiris soul-key status`/`rotate` run in the operator's
+# own terminal, which never inherits ImportCredential= below).
+Environment=OSIRIS_SOUL_KEY_FILE=%h/.config/osiris/soul.key
+# THE ACTUAL SECRET, sealed at rest (KEY CUSTODY REWRITTEN, ruling e0b98ff2; THE
+# FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065, replacing an earlier
+# `LoadCredentialEncrypted=soul.key:<hard path>` draft that failed this unit's own
+# start outright until the key existed — a bootstrap deadlock, since minting the
+# key normally means running `osiris soul-key init` through this ALREADY-RUNNING
+# unit's own CLI/console): `osiris soul-key init` writes a systemd-creds-encrypted
+# blob to `%h/.config/credstore.encrypted/soul.key` (`systemd-creds encrypt --user
+# --with-key=host` or `host+tpm2`, measured working without root on this box) — the
+# location systemd's own per-user credential store search path already covers
+# (`systemd-path user-credential-store-encrypted`). `ImportCredential=` tolerates a
+# MISSING entry there (confirmed live: a unit with none starts and finishes
+# cleanly) — when present, systemd decrypts it FOR this process before it ever
+# starts, exposing the plaintext at $CREDENTIALS_DIRECTORY/soul.key; get_soul_key()
+# (soul_crypto.py) reads that directory first, no systemd-creds subprocess needed
+# at read time. When ABSENT, the process starts anyway in a loudly-logged degraded
+# state (mcp_server.py's own boot gate) — soul_store.py falls back to legacy
+# plaintext until `osiris soul-key init` runs.
+ImportCredential=soul.key
 # The LLM provider is resolved with shutil.which('claude') at RUN time, and a user
 # unit does not inherit a login shell's PATH — so the session-miner's provider was a
 # coin flip on whatever PATH the user manager happened to carry. It lost silently for

@@ -189,6 +189,29 @@ async def startup(ctx: dict[str, Any]) -> None:
     # service, and the live hand-installed dev unit once updated) — never inferred from
     # cwd or branch ancestry, which is exactly the guessing #113 was refused for tonight.
     if settings.osiris_worker_role == "primary":
+        # THE SOUL-KEY BOOT GATE, DEGRADED NOT FATAL (THE FIRST KEY MUST COME FROM THE
+        # NORMAL CLI, Thoth mail 13065 — supersedes this gate's own original "genuine
+        # refusal, not a soft alarm" law): a hard `raise` here recreated the exact
+        # bootstrap deadlock the operator ruled against — a fresh box could never start
+        # this worker AT ALL until the key existed, but minting the key normally means
+        # running `osiris soul-key init` through the ALREADY-DEPLOYED CLI/console, which
+        # needs the worker/MCP units running first. Scoped to the real primary worker
+        # only, same reasoning as the deploy-ordering guard just below — an ad hoc dev
+        # `arq` invocation never carries this role and is never blocked by it either way.
+        # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key
+        # init` command) when neither OSIRIS_SOUL_KEY nor the key file is present — now
+        # CAUGHT and logged loudly (never silent) rather than crashing the boot; every
+        # soul_store write already degrades to legacy-plaintext on its own missing-key
+        # path (soul_store.py), so the worker itself is still fully usable meanwhile.
+        from src.ingest.soul_crypto import SoulKeyMissing, get_soul_fernet
+
+        try:
+            get_soul_fernet()
+        except SoulKeyMissing as exc:
+            _log.warning(
+                "osiris-worker starting WITHOUT a soul-store encryption key — new "
+                "soul_lines/soul_lines_cold rows write as legacy plaintext until this "
+                "is fixed: %s", exc)
         # THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
         # deploy_guard's own module docstring for why. Wrapped defensively here too, on top
         # of check_schema_drift's own internal fail-open: nothing here may ever block a boot.

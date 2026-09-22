@@ -128,6 +128,15 @@ _RESET_TABLES = (
     # ran FIRST in a session permanently owns that anchor_sid's stored content for
     # every OTHER test reusing the same id, silently, for the rest of the run.
     "soul_lines", "soul_sessions",
+    # soul_lines_cold (migration 0063, the cold tier): the THIRD instance of this
+    # exact omission class, caught live building THE KEY DOOR (Thoth mail 12810) --
+    # rewrap_soul_lines_key's own dry-run census, run against the shared suite-wide
+    # DB, found OTHER tests' cold-tier rows (encrypted under the real conftest
+    # OSIRIS_SOUL_KEY, undecryptable under a fresh per-test key never used to write
+    # them) counted as "broken", failing a test that only ever touched its own rows.
+    # FK-free by construction (0063 declares none), same unordered position as its
+    # hot-tier sibling above.
+    "soul_lines_cold",
     "sweep_ledger", "triggers", "watermarks",
     # these four must come LAST, in this order — each is the PARENT side of an
     # internal FK from a table above it in this tuple (alerts->compositions,
@@ -339,6 +348,18 @@ def _install_tool_contract_ceiling_merge_driver() -> None:
 # box — another worktree's own run — never share, or race over, one directory.
 _TEST_OFFICE_ROOT = Path(tempfile.mkdtemp(prefix=f"osiris-test-seats-{os.getpid()}-"))
 os.environ["OSIRIS_OFFICE_ROOT"] = str(_TEST_OFFICE_ROOT)
+
+# SOUL-STORE ENCRYPTION TEST KEY, FIXED (Thoth mail 9134): every soul_store write/read
+# now goes through src.ingest.soul_crypto.get_soul_key(), whose real fallback ladder (OS
+# keyring, then a 0600 file at /etc/osiris/soul.key) is wrong for a test run in every
+# way — no permission to write /etc/osiris, and (the load-bearing reason for a FIXED
+# key rather than one generated fresh here) xdist runs each test worker as its own OS
+# process with its own `os.environ`, so a key minted per-process would make one worker's
+# encrypted rows unreadable by any assertion running in another. `OSIRIS_SOUL_KEY` (the
+# env override get_soul_key's own docstring names for exactly this) is pinned to one
+# constant every worker agrees on — same discipline `LeaseStore`'s own tests already use
+# a fixed `KEY` constant for, adapted for a module with no per-call key param.
+os.environ.setdefault("OSIRIS_SOUL_KEY", "nq4cGwKz9TMd_Nl8ZV8rrhonPw_P_KR7HqCZN_V6qVQ=")
 
 
 def _default_basetemp() -> str:

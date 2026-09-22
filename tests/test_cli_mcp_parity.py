@@ -95,6 +95,23 @@ NO_MCP_EQUIVALENT = {
                  "default and the act is deliberately kept off the agent-callable surface, "
                  "same class as deploy/migrate",
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
+    "soul-key": "operator devops bootstrap act (Thoth DM 9194/9245 wave 17; THE KEY "
+        "DOOR, mail 12810/12830) — init/rotate mint or re-wrap the soul-store "
+        "encryption key, meant to be run by a human in their own terminal so the "
+        "mandatory offline recovery secret prints in front of a person, never inside "
+        "a daemon's log; an MCP tool would put key generation behind an agent call, "
+        "exactly the shape this door exists to refuse. status/rotate/restore-drill "
+        "DO touch Postgres/restic (unlike the original init-only door), but stay off "
+        "the agent-callable surface for the same human-hands-only reason, matching "
+        "THE KEY DOOR's own REST layer (operator-only authority, never an MCP tool).",
+    "restic-key": "THE OFFLOAD RUNNER's own credential door (ruling e0b98ff2's 'same "
+        "shape for the restic repository password'), same reasoning as soul-key above "
+        "— init mints a credential, meant to be run by a human in their own terminal, "
+        "never behind an agent call.",
+    "offload-runner": "operator devops act, same class as deploy/migrate/retention above "
+        "— one tick runs real restic subprocess backups against real infrastructure "
+        "(the docked drive, the NAS over sftp), meant as osiris-offload.timer's own "
+        "ExecStart or a human's own by-hand run, not an ordinary agent-callable verb.",
     "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
     "correct-agent-house": "NOT actually MCP-less — correct_agent_house is hidden from "

@@ -5712,6 +5712,43 @@ async def test_lineage_resume_candidate_hop_still_zero_for_an_ordinary_single_li
     assert candidate[4] is not None  # materialized_at — succeeded this time
 
 
+async def test_lineage_resume_candidate_degrades_gracefully_when_soul_key_missing(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE KEY DOOR, defect 2 (operator's own live hit, Thoth mail 12830): a missing
+    soul-store key used to surface as a raw `SoulKeyMissing` traceback straight out of
+    `osiris resume` — a READ path, which must degrade to a one-line log entry and keep
+    walking the rest of the chain, never abort the whole resume. Boot refusal for the
+    worker/MCP itself stays exactly as ruled elsewhere; only this read path changed."""
+    from src.ingest.soul_crypto import SoulKeyMissing
+    from src.ingest.soul_store import SoulStore
+
+    sense = await _lineage_holder_with_session(actions, tmp_path, agent_id="agent:keymiss1")
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:keymiss1", manager_agent="agent:hm-keymiss1",
+        worker_handle="KeyMiss-Test", house="osiris")
+    await _office(actions, worker_seat, "/tmp/keymiss-test")
+
+    async def _raise_missing(self: SoulStore, anchor_sid: str, harness: str = "claude-code",
+                             ) -> tuple[int, int, int] | None:
+        raise SoulKeyMissing(
+            "no soul-store encryption key found at /fake/soul.key — run "
+            "`osiris soul-key init` ONCE")
+
+    monkeypatch.setattr(SoulStore, "resume_diagnostics", _raise_missing)
+
+    st = _settings(enabled=True, sense=str(sense))
+    outcome = await trigger_module._lineage_resume_candidate(
+        actions.pool, "agent:keymiss1", st, repo="/tmp/keymiss-test", seat_id=worker_seat)
+
+    # no candidate cleared both gates (the one hop's own diagnostics were unreadable),
+    # but the walk finished — never an uncaught SoulKeyMissing propagating out
+    assert isinstance(outcome, list)
+    assert any(
+        "soul store locked" in line and "run osiris soul-key init" in line
+        for line in outcome), outcome
+
+
 async def _lineage_holder_with_truncated_session(
     actions: Actions, tmp_path: Path, *, agent_id: str, full_sid: str = FULL_SID,
 ) -> tuple[Path, str]:
