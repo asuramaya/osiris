@@ -60,6 +60,25 @@ def test_build_manifest_body_names_legacy_tarballs_and_session_files() -> None:
     assert "/tmp/sid-1.jsonl" in body
 
 
+def test_build_manifest_body_names_dormant_seat_transcripts_when_given() -> None:
+    """Thoth mail 13353 item 2 — a rollup OF session_plan, its own section, omitted
+    entirely (not just empty) when the caller never computed it (a manifest built before
+    this feature existed, or a test that predates it)."""
+    empty_plan: dict[str, list[DumpFile]] = {"keep": [], "remove": []}
+    plans = {"backups/": empty_plan, "vault": empty_plan, "vault/basebackups": empty_plan}
+    chain_plan: dict[str, list[TranscriptChain]] = {"keep": [], "remove": []}
+    session_plan = [SessionRow("sid-1", "/tmp/seats/chowder/sid-1.jsonl", NOW, NOW)]
+    seat_groups = {"chowder": session_plan}
+
+    with_groups = build_manifest_body(
+        plans, chain_plan, session_plan=session_plan, seat_transcript_groups=seat_groups)
+    assert "dormant seat transcripts" in with_groups
+    assert "chowder" in with_groups
+
+    without_groups = build_manifest_body(plans, chain_plan, session_plan=session_plan)
+    assert "dormant seat transcripts" not in without_groups
+
+
 @pytest.fixture(autouse=True)
 def _use_test_dsn(pg_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ladder, "DSN", pg_dsn)
