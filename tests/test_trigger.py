@@ -4717,6 +4717,53 @@ async def test_bind_before_spawn_never_confesses_a_post_fix_founder_source(
     assert out["agent"] == f"agent:seat-{seat_id.removeprefix('seat:')}"
 
 
+async def test_bind_before_spawn_never_adopts_another_agents_live_job_dir_as_an_ancestor(
+    actions: Actions,
+) -> None:
+    """THE JENNY/DUSTIN SPECIMEN, REPRODUCED DIRECTLY (Nebbercracker findings ab59c731/
+    a0fd7e5b): jenny's seat had no lineage-side handle assertion to resolve (this
+    test's own `_seat_lineage_ancestor` returns None, same as the no-handle-assertion
+    case above), so `current_holder` — the seat's own `holds` edge, whatever it names —
+    became the ancestor fallback. Live, that edge named `agent:9c9a534f`: not a real
+    identity at all, but DUSTIN's own harness session id, borrowed. Dustin's REAL
+    agent (a different canonical, `agent:dustinreal-xv` here) is genuinely mounted
+    under job_dir `.../jobs/9c9a534f` at the moment this fires — the exact collision
+    this door must catch and refuse, falling through to a genuinely fresh, seat-
+    derived root instead of inheriting a lineage that was never actually jenny's own,
+    or anyone's."""
+    from src.orchestrator import mounts as mounts_module
+
+    seat_id = (await ensure_seat(actions, house="monsterhouse", handle="Jennytest",
+                                 source="console"))["seat_id"]  # no lineage-side source
+    await bind_holder(actions, seat_id=seat_id, agent_id="agent:9c9a534f")
+    # DUSTIN'S OWN, genuinely different agent — live under the exact job_dir slug
+    # jenny's seat's holds edge happens to name.
+    await actions.create_or_find_object("Agent", "agent:dustinreal-xv", "test")
+    await mounts_module.save_mount(
+        actions.pool, job_dir="/home/asuramaya/.claude/jobs/9c9a534f",
+        agent_id="agent:dustinreal-xv", project="monsterhouse",
+        cwd="/home/asuramaya/code/monsterhouse", model=None, session_key=None)
+
+    out = await trigger_module._bind_before_spawn(
+        actions, target_seat=seat_id, handle="Jennytest", house="monsterhouse",
+        current_holder="agent:9c9a534f", office="/tmp/jennytest",
+        anchor="/tmp/anchors/jennytest", source="agent:thoth01")
+
+    # a genuinely fresh, seat-derived root — never an heir of the borrowed session id
+    assert out["agent"] == f"agent:seat-{seat_id.removeprefix('seat:')}"
+    assert "9c9a534f" not in out["agent"]
+    row = await actions.pool.fetchrow(
+        "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
+        "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
+        "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id)
+    # the seat's own holds edge is corrected too — never left pointing at the borrowed id
+    assert row["canonical"] == out["agent"]
+    # dustin's own live mount is entirely untouched by this
+    dustin_row = await mounts_module.find_mount(
+        actions.pool, job_dir="/home/asuramaya/.claude/jobs/9c9a534f")
+    assert dustin_row is not None and dustin_row.agent_id == "agent:dustinreal-xv"
+
+
 async def test_bind_before_spawn_resolves_from_the_lineage_never_the_stale_holds_edge(
     actions: Actions,
 ) -> None:
