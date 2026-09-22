@@ -32,6 +32,9 @@ dependencies = [
     "scipy>=1.18.1",       # THE DECLUMP REWRITE (operator's word 2026-09-18) — cKDTree
                            # pair search replaces graph_layout._declump's own spatial-hash
                            # grid; installed version 1.18.1
+    "fido2>=2.2.1",        # KEY CUSTODY REWRITTEN (operator ruling e0b98ff2, 2026-09-22)
+                           # — the soul-store key's own FIDO2 hmac-secret/PRF recovery
+                           # enrollment (soul_crypto.py); installed version 2.2.1
 ]
 
 [dependency-groups]

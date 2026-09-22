@@ -1027,32 +1027,52 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
 
 # --- soul-key ---------------------------------------------------------------------------------
 
+_SOUL_KEY_POOL_FREE_ACTIONS = ("init", "enroll-recovery", "recover")
+_SOUL_KEY_ACTIONS = (
+    "status", "init", "rotate", "restore-drill", "enroll-recovery", "recover")
+
+
 async def cmd_soul_key(
     action: str, *, owner: str | None = None, path: str | None = None,
-    finish: bool = False, repo_url: str | None = None, as_json: bool = False,
+    backend: str | None = None, finish: bool = False, print_recovery: bool = False,
+    repo_url: str | None = None, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris soul-key <status|init|rotate|restore-drill> — THE KEY DOOR (Thoth mail
-    12810, operator's word "keys and backup setup configurable from UI or CLI so a
-    user does not need an agent"). A thin console-script door, matching `osiris
-    composition <action>`'s own shape: init stays pool-free and calls `src.ingest.
-    soul_crypto.soul_key_init` directly; status/rotate/restore-drill compose a pool
-    and call `src.orchestrator.soul_key` — the SAME three functions the `/soul-key/*`
-    REST routes call, never a duplicated implementation between the two doors."""
+    """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> —
+    THE KEY DOOR (Thoth mail 12810/12836, operator's word "keys and backup setup
+    configurable from UI or CLI so a user does not need an agent"; KEY CUSTODY
+    REWRITTEN, ruling e0b98ff2). A thin console-script door, matching `osiris
+    composition <action>`'s own shape.
+
+    init/enroll-recovery/recover stay POOL-FREE and call `src.ingest.soul_crypto`
+    directly — enroll-recovery/recover ALSO stay CLI-ONLY (never REST, see
+    `src.orchestrator.soul_key`'s own module docstring: minting or unwrapping a
+    recovery blob from a non-interactive HTTP call makes no sense — both need a
+    human's own PIN and touch right there in the terminal).
+
+    status/rotate/restore-drill compose a pool and call `src.orchestrator.
+    soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
+    never a duplicated implementation between the two doors."""
     from src import cli_render as render
     from src.ingest import soul_crypto
 
-    if action == "init":
-        out = soul_crypto.soul_key_init(owner=owner, path=path)
+    if action in _SOUL_KEY_POOL_FREE_ACTIONS:
+        if action == "init":
+            out = soul_crypto.soul_key_init(
+                owner=owner, path=path, backend=backend, print_recovery=print_recovery)
+        elif action == "enroll-recovery":
+            out = soul_crypto.soul_key_enroll_recovery(path=path)
+        else:  # recover
+            out = soul_crypto.soul_key_recover(path=path, backend=backend)
         if "error" in out:
-            print(f"osiris soul-key init: refused — {out['error']}", file=sys.stderr)
-            render.emit(out, as_json=as_json, title="soul-key init")
+            print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+            render.emit(out, as_json=as_json, title=f"soul-key {action}")
             return 1
-        render.emit(out, as_json=as_json, title="soul-key init")
+        render.emit(out, as_json=as_json, title=f"soul-key {action}")
         return 0
-    if action not in ("status", "rotate", "restore-drill"):
-        print(f"osiris soul-key: action must be 'status', 'init', 'rotate', or "
-              f"'restore-drill' (got {action!r})", file=sys.stderr)
+    if action not in _SOUL_KEY_ACTIONS:
+        print(f"osiris soul-key: action must be one of {_SOUL_KEY_ACTIONS} "
+              f"(got {action!r})", file=sys.stderr)
         return 1
 
     from src.orchestrator import soul_key as soul_key_orchestrator
@@ -1078,7 +1098,8 @@ async def cmd_soul_key(
         if action == "status":
             out = await soul_key_orchestrator.soul_key_status(pool, path=path)
         elif action == "rotate":
-            out = await soul_key_orchestrator.soul_key_rotate(pool, path=path, finish=finish)
+            out = await soul_key_orchestrator.soul_key_rotate(
+                pool, path=path, finish=finish, print_recovery=print_recovery)
         else:  # restore-drill
             out = await soul_key_orchestrator.soul_key_restore_drill(pool, repo_url=repo_url)
     finally:
@@ -7638,32 +7659,52 @@ def _build_parser() -> argparse.ArgumentParser:
                         help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
 
     p_soul_key = sub.add_parser("soul-key", description=_d(
-        "THE KEY DOOR: status/init/rotate the soul-store encryption key, or drill an "
-        "off-box backup's own restorability. status/init/rotate resolve the key path "
-        "automatically — the SAME path an installed osiris-mcp/osiris-worker --user "
-        "unit already uses — without exporting anything"),
+        "THE KEY DOOR (KEY CUSTODY REWRITTEN, ruling e0b98ff2): status/init/rotate "
+        "the soul-store encryption key (a systemd user credential by default, never "
+        "a plaintext file), enroll or use FIDO2 recovery on a Security Key, or drill "
+        "an off-box backup's own restorability. status/init/rotate resolve the key "
+        "path automatically — the SAME path an installed osiris-mcp/osiris-worker "
+        "--user unit already uses — without exporting anything"),
         epilog="example: osiris soul-key init\n"
                "example: sudo env \"PATH=$PATH\" osiris soul-key init --owner osiris\n"
+               "example: osiris soul-key init --backend file --print-recovery\n"
                "example: osiris soul-key status\n"
+               "example: osiris soul-key enroll-recovery\n"
                "example: osiris soul-key rotate\n"
                "example: osiris soul-key rotate --finish\n"
+               "example: osiris soul-key recover\n"
                "example: osiris soul-key restore-drill")
-    p_soul_key.add_argument("action", choices=["status", "init", "rotate", "restore-drill"],
-                            help="status: filesystem + legacy-row facts, never key bytes. "
-                                 "init: mint the first key (refuses if one exists). "
-                                 "rotate: mint a new key and re-wrap every row onto it; "
-                                 "--finish once the receipt is clean. restore-drill: "
-                                 "prove an off-box backup repository actually restores")
+    p_soul_key.add_argument(
+        "action",
+        choices=["status", "init", "rotate", "restore-drill", "enroll-recovery", "recover"],
+        help="status: backend/recovery/legacy-row facts, never key bytes. "
+             "init: mint the first key (refuses if one exists) — a systemd-creds "
+             "user credential by default, --backend file for the old plaintext "
+             "shape. rotate: mint a new key and re-wrap every row onto it; "
+             "--finish once the receipt is clean. enroll-recovery: wrap the "
+             "current key with a FIDO2 Security Key (PIN + touch). recover: "
+             "restore a key from a FIDO2 recovery enrollment onto a box with no "
+             "live key yet. restore-drill: prove an off-box backup repository "
+             "actually restores")
     p_soul_key.add_argument("--owner", default=None,
                             help="init only: chown the key file + directory to this user "
                                  "after writing (for running as root, which has no "
                                  "natural owner of its own to land the file as)")
     p_soul_key.add_argument("--path", default=None,
-                            help="init/status/rotate: an explicit key file path, "
-                                 "overriding the automatic --user-unit/XDG resolution")
+                            help="an explicit key file path, overriding the automatic "
+                                 "--user-unit/XDG resolution")
+    p_soul_key.add_argument("--backend", default=None, choices=["host-cred", "host+tpm2", "file"],
+                            help="init/recover only: the key-at-rest shape — default "
+                                 "(omit this) auto-selects host+tpm2 once you've "
+                                 "joined the tss group, else host-cred, else file on "
+                                 "a non-systemd box")
     p_soul_key.add_argument("--finish", action="store_true",
                             help="rotate only: step 2 — remove the old key once the "
                                  "receipt reports zero rows remain under it")
+    p_soul_key.add_argument("--print-recovery", action="store_true", dest="print_recovery",
+                            help="init/rotate: print the mandatory-offline-recovery "
+                                 "secret banner (the OLD default) — off by default "
+                                 "now that FIDO2 enroll-recovery is the primary path")
     p_soul_key.add_argument("--repo-url", default=None,
                             help="restore-drill only: one restic repository URL to "
                                  "drill; defaults to every URL in "
@@ -9185,7 +9226,8 @@ def main(argv: list[str] | None = None) -> int:
         return asyncio.run(cmd_seed(compositions_only=args.compositions_only))
     if args.command == "soul-key":
         return asyncio.run(cmd_soul_key(
-            args.action, owner=args.owner, path=args.path, finish=args.finish,
+            args.action, owner=args.owner, path=args.path, backend=args.backend,
+            finish=args.finish, print_recovery=args.print_recovery,
             repo_url=args.repo_url, as_json=args.as_json))
     if args.command == "launch":
         return asyncio.run(cmd_launch(args.handle, model=args.model, debug=args.debug))

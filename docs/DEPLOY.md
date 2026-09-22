@@ -142,7 +142,8 @@ The heartbeat's liveness is a **dead-man's-switch computed on read**: `pulse-dig
 a status row that re-derives staleness every time you look, so if the pulse unit dies the digest
 says *heartbeat DEAD since &lt;time&gt;* — the alarm can't die with the daemon that rings it.
 
-## Soul-store encryption (THE KEY DOOR, Thoth mail 9134/12810/12830)
+## Soul-store encryption (THE KEY DOOR, Thoth mail 9134/12810/12830/12836; KEY CUSTODY
+## REWRITTEN, operator ruling e0b98ff2, 2026-09-22)
 
 The soul store (`soul_lines`/`soul_lines_cold` — the byte-exact transcript archive) is
 encrypted at rest by Osiris itself, one tier above host-disk trust. `osiris-mcp` and
@@ -150,42 +151,69 @@ encrypted at rest by Osiris itself, one tier above host-disk trust. `osiris-mcp`
 one — a missing key fails loudly at startup, naming the exact fix, rather than failing
 opaquely on whatever request happens to touch the store first.
 
+**The key itself is never a plaintext file by default.** It's a `systemd-creds`-sealed
+USER credential — measured working on this box without root
+(`systemd-creds encrypt --user --with-key=host`), automatically upgraded to
+`--with-key=host+tpm2` once the operator joins the `tss` group. **Recovery is a FIDO2
+hmac-secret ("PRF") enrollment on a Security Key**, not a printed secret by default — the
+old printed-key banner survives as an explicit `--print-recovery` opt-in, never the only
+path any more.
+
 **First install (one time, before either unit's first start):**
 
 ```bash
 osiris soul-key init
+osiris soul-key enroll-recovery
 ```
 
-Run this in your own terminal, as whichever user the units actually run as — for the
-`--user` unit shape above, that's simply your own login user, no `sudo` involved. It:
+Run both in your own terminal, as whichever user the units actually run as — for the
+`--user` unit shape above, that's simply your own login user, no `sudo` involved.
 
+`init`:
 1. mints a fresh Fernet key,
-2. **prints the mandatory offline recovery secret exactly once** — copy it now to
-   OFFLINE custody (a password manager entry, a printed copy) kept OUTSIDE this box and
-   OUTSIDE any backup target; a backed-up copy sitting next to the ciphertext it protects
-   defeats the whole point,
-3. writes the key to `~/.config/osiris/soul.key` by default — the SAME path the installed
-   `--user` units already carry via their own `Environment=OSIRIS_SOUL_KEY_FILE=` line, so
-   nothing needs exporting. (System-unit deploys default to `/etc/osiris/soul.key`
-   instead, matching `EnvironmentFile=/etc/osiris/osiris.env`; an explicit `--path`
-   overrides either default.)
+2. seals it via `systemd-creds` into `~/.config/osiris/soul.key.cred` (the default
+   `--backend`; `--backend file` is the explicit, warned plaintext fallback for a
+   non-systemd host), the SAME logical name the installed `--user` units already carry
+   via their own `Environment=OSIRIS_SOUL_KEY_FILE=` line — nothing needs exporting.
+   (System-unit deploys default to `/etc/osiris/soul.key` instead, matching
+   `EnvironmentFile=/etc/osiris/osiris.env`; an explicit `--path` overrides either
+   default.)
+3. names a `usermod -aG tss <you>` hint if a stronger TPM2-bound key is available but
+   you haven't joined that group yet — printed only, never run for you.
 
-Losing **both** the printed recovery secret and the live key file makes every stored
-transcript permanently, irrecoverably unreadable — there is no third copy anywhere.
+`enroll-recovery` mints a discoverable FIDO2 credential on your plugged-in Security Key
+(PIN + touch), wraps the live key with a secret derived from it, and writes
+`~/.config/osiris/soul.key.recovery.json` — safe to keep on the NAS and in the backup
+vault, since reading it needs the physical key AND its PIN. `osiris soul-key status`
+warns whenever 1 or fewer recovery paths are enrolled.
+
+Both units need `LoadCredentialEncrypted=soul.key:%h/.config/osiris/soul.key.cred` in
+their own unit file (already shipped in `deploy/user/osiris-mcp.service`/
+`osiris-worker.service` — `osiris deploy` installs it, nothing to hand-edit) — systemd
+decrypts the credential for the process before it ever starts.
+
+**Recovering onto a new machine:** `osiris soul-key recover` (PIN + touch, the SAME
+Security Key) reads the recovery blob, unwraps the key, confirms it against the blob's
+own recorded fingerprint before trusting it, and re-seals it under a fresh host
+credential on the new box.
 
 **Everyday operation** — `osiris soul-key <action>`:
 
 | Action | What it does |
 |--------|--------------|
-| `status` | filesystem facts (present, path, mode, key age, rotation-in-flight) plus the live legacy-plaintext row count — never the key bytes |
+| `status` | backend (`host-cred`/`host+tpm2`/`file`/`missing`), key age, rotation-in-flight, enrolled recovery paths (warns at ≤1), plus the live legacy-plaintext row count — never the key bytes |
 | `init` | mint the first key (above); refuses if one already exists |
-| `rotate` | mint a new key, park the old one, and re-wrap every existing row onto the new primary in the same command; re-run (idempotent) after restarting both units to sweep up anything they wrote in the meantime; `--finish` once the receipt reports zero rows left under the old key |
+| `enroll-recovery` | wrap the live key with a FIDO2 Security Key (PIN + touch); CLI-only, never REST |
+| `recover` | restore a key from a FIDO2 recovery enrollment onto a box with no live key yet; CLI-only, never REST |
+| `rotate` | mint a new key (same backend as the old one), park the old one, and re-wrap every existing row onto the new primary in the same command; re-run (idempotent) after restarting both units to sweep up anything they wrote in the meantime; `--finish` once the receipt reports zero rows left under the old key; re-run `enroll-recovery` afterward too — the old recovery blob still wraps the old key |
 | `restore-drill` | prove an off-box backup repository actually restores (wraps `scripts/osiris_offbox_restore_drill.py`) — every URL in `backup.offbox_repositories`, or one via `--repo-url` |
 
 Every action takes `--json` for a machine-readable line. The console also exposes
 `GET /soul-key/status` and `POST /soul-key/init|rotate|restore-drill` — the operator's own
-surface (the console binds to localhost only), never an MCP tool: minting or rotating this
-key from an agent call is exactly the shape this door exists to refuse.
+surface (the console binds to localhost only). `enroll-recovery`/`recover` stay CLI-only
+by design (both need a human's own PIN and touch right there in the terminal); no
+action here is ever an MCP tool — minting, rotating, or recovering this key from an
+agent call is exactly the shape this door exists to refuse.
 
 **Migrating existing plaintext rows** (a box with data from before this build): `osiris
 soul-key status` reports the live legacy-plaintext row count; run the migration itself with

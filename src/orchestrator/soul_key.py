@@ -32,8 +32,13 @@ async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dic
 
         from src.ingest.soul_store import encrypt_existing_soul_lines
 
-        fernet = MultiFernet(
-            [Fernet(Path(out["path"]).read_bytes())])  # noqa: ASYNC240 — 44-byte key
+        # `out["path"]` is the LOGICAL key name (soul_key_status's own contract),
+        # never the credential blob path directly -- read_key_bytes_at resolves
+        # the real bytes for EITHER backend (systemd-creds or legacy plaintext),
+        # unlike get_soul_key()'s own env-first ladder, which ignores this
+        # explicit path entirely. noqa: ASYNC240 -- a 44-byte key, negligible.
+        key_bytes = soul_crypto.read_key_bytes_at(Path(out["path"]))  # noqa: ASYNC240
+        fernet = MultiFernet([Fernet(key_bytes)])
         census = await encrypt_existing_soul_lines(pool, dry_run=True, fernet=fernet)
         out["legacy_plaintext_rows"] = census["hot_migrated"] + census["cold_migrated"]
     else:
@@ -43,6 +48,7 @@ async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dic
 
 async def soul_key_rotate(
     pool: asyncpg.Pool, *, path: str | None = None, finish: bool = False,
+    print_recovery: bool = False,
 ) -> dict[str, Any]:
     """Two steps. Without `finish`: `soul_crypto.soul_key_rotate_begin` mints a new
     key and parks the old one, then this runs `soul_store.rewrap_soul_lines_key` for
@@ -62,9 +68,13 @@ async def soul_key_rotate(
         if not status["rotation_in_flight"]:
             return {"error": "no rotation in flight — nothing to finish"}
         resolved = Path(status["path"])
-        legacy_path = resolved.with_name(resolved.name + ".legacy")
-        new_fernet = Fernet(resolved.read_bytes())  # noqa: ASYNC240 — tiny key files
-        old_fernet = Fernet(legacy_path.read_bytes())  # noqa: ASYNC240
+        # read_key_bytes_at/read_legacy_key_bytes decode EITHER backend
+        # (systemd-creds or legacy plaintext) -- a raw .read_bytes() here would
+        # hand MultiFernet an still-encrypted systemd-creds blob instead of the
+        # actual key, the exact defect this census surfaced during this door's
+        # own build. noqa: ASYNC240 -- tiny key files/subprocess, negligible.
+        new_fernet = Fernet(soul_crypto.read_key_bytes_at(resolved))  # noqa: ASYNC240
+        old_fernet = Fernet(soul_crypto.read_legacy_key_bytes(resolved))  # noqa: ASYNC240
         census = await rewrap_soul_lines_key(
             pool, new_fernet=new_fernet, old_fernet=old_fernet, dry_run=True)
         remaining = census["hot_rewrapped"] + census["cold_rewrapped"]
@@ -75,7 +85,7 @@ async def soul_key_rotate(
                              "soul-key rotate` (without --finish) to sweep them "
                              "before finishing", "census": census}
         return soul_crypto.soul_key_rotate_finish(path=path)
-    begin = soul_crypto.soul_key_rotate_begin(path=path)
+    begin = soul_crypto.soul_key_rotate_begin(path=path, print_recovery=print_recovery)
     if "error" in begin:
         return begin
     new_fernet = Fernet(begin["new_key"])

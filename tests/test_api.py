@@ -1242,14 +1242,30 @@ async def test_soul_key_status_route_absent(
 async def test_soul_key_init_route_writes_a_key(
     client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """`backend: "file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default
+    systemd-creds backend gets its own dedicated test below; this one is about
+    the route's own plumbing (body -> soul_crypto.soul_key_init)."""
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    r = await client.post("/soul-key/init", json={"backend": "file"})
+    assert r.status_code == 200
+    body = r.json()
+    assert "error" not in body
+    assert body["path"] == str(key_file)
+    assert key_file.is_file()
+
+
+async def test_soul_key_init_route_default_backend_is_systemd_creds(
+    client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     r = await client.post("/soul-key/init", json={})
     assert r.status_code == 200
     body = r.json()
     assert "error" not in body
-    assert body["path"] == str(key_file)
-    assert key_file.is_file()
+    assert body["backend"] == "host-cred"
+    assert (tmp_path / "soul.key.cred").is_file()
 
 
 async def test_soul_key_init_route_refuses_when_key_exists(

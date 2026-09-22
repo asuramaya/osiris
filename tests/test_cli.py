@@ -443,13 +443,28 @@ async def test_cmd_soul_key_init_writes_and_reports_the_path(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """No dedicated service account is assumed (Thoth DM 9435) — the test process's own
-    real, non-root uid is already a valid caller, no getuid/getuser mock needed."""
+    real, non-root uid is already a valid caller, no getuid/getuser mock needed.
+    `backend="file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default systemd-creds
+    backend gets its OWN dedicated CLI test below; this one is about the CLI plumbing."""
+    key_file = tmp_path / "soul.key"
+    monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
+    assert await cmd_soul_key("init", backend="file", as_json=True) == 0
+    assert key_file.is_file()
+    # --json is the reliable read here -- the table renderer truncates long
+    # values (a real, pre-existing behavior, not something this backend change
+    # introduced) so asserting the full path against the printed TABLE text is
+    # fragile the moment tmp_path runs deep (pytest-xdist worker directories).
+    out = json.loads(capsys.readouterr().out)
+    assert out["path"] == str(key_file)
+
+
+async def test_cmd_soul_key_init_default_backend_is_systemd_creds(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     assert await cmd_soul_key("init") == 0
-    assert key_file.is_file()
-    out = capsys.readouterr().out
-    assert str(key_file) in out
+    assert (tmp_path / "soul.key.cred").is_file()
 
 
 async def test_cmd_soul_key_init_refuses_and_prints_to_stderr_when_key_exists(

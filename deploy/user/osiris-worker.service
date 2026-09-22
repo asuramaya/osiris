@@ -44,10 +44,12 @@ Environment=OSIRIS_TREE_INGEST_ALARM_ENABLED=1
 # its tray fresh every tick, 15-min cron. Cold-by-default in source; armed here.
 Environment=OSIRIS_PHANTOM_FOLD_REAP_ENABLED=1
 Environment=OSIRIS_SENSE_SESSIONS=%h/.claude/projects
-# Soul-store encryption (Thoth mail 9134/9194/9245/9435, wave 17) — see osiris-mcp.
-# service's own identical comment; this shape carries no EnvironmentFile= at all, so
-# this var lives here, directly, in both units.
+# Soul-store encryption (Thoth mail 9134/9194/9245/9435, wave 17; KEY CUSTODY
+# REWRITTEN, ruling e0b98ff2) — see osiris-mcp.service's own identical comment for
+# the full story; this shape carries no EnvironmentFile= at all, so both lines below
+# live here directly, in both units.
 Environment=OSIRIS_SOUL_KEY_FILE=%h/.config/osiris/soul.key
+LoadCredentialEncrypted=soul.key:%h/.config/osiris/soul.key.cred
 # thread 5cd49217: embed_pass has timed out on its FIRST attempt after every worker restart
 # visible in journalctl, then latches closed for that process's whole life (task #149's own
 # deliberate sticky fail-closed design — correct behavior for a genuine failure, but this one

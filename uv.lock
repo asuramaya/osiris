@@ -275,6 +275,18 @@ wheels = [
 ]
 
 [[package]]
+name = "fido2"
+version = "2.2.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cryptography" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ba/ea/6f08c354b7aeb8019249d46a86c2153f8218499cced4d21bf16b6d49fc16/fido2-2.2.1.tar.gz", hash = "sha256:85787428a94c3f8eaf72f0ff30afba983b559a1b1b795c93318c81b4ad4062c4", size = 327147, upload-time = "2026-06-29T17:41:11.927Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/71/84/198d99c3312557ef6121cf78c38281efe9b3bc88cba0e2c05446f38a024d/fido2-2.2.1-py3-none-any.whl", hash = "sha256:ed397da981b9ab133da6ead7309e41f924b566b749956129efe286fae097749f", size = 238354, upload-time = "2026-06-29T17:41:09.921Z" },
+]
+
+[[package]]
 name = "filelock"
 version = "3.29.7"
 source = { registry = "https://pypi.org/simple" }
@@ -760,6 +772,7 @@ dependencies = [
     { name = "cryptography" },
     { name = "datastar-py" },
     { name = "fastapi" },
+    { name = "fido2" },
     { name = "httpx" },
     { name = "jinja2" },
     { name = "keyring" },
@@ -801,6 +814,7 @@ requires-dist = [
     { name = "cryptography", specifier = ">=48.0.0" },
     { name = "datastar-py", specifier = ">=1.0.2" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "fido2", specifier = ">=2.2.1" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "jinja2", specifier = ">=3.1.6" },
     { name = "keyring", specifier = ">=25.7.0" },

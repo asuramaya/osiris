@@ -6,7 +6,9 @@ key is a named, loud refusal (`SoulKeyMissing`), never a silent auto-generate.
 from __future__ import annotations
 
 import getpass
+import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
@@ -194,17 +196,21 @@ def test_soul_key_init_writes_when_running_as_a_normal_user(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Thoth DM 9435: no dedicated service account is assumed — any non-root caller
-    (the operator's own login user, for a systemd --user deploy) proceeds directly."""
+    (the operator's own login user, for a systemd --user deploy) proceeds directly.
+    `backend="file", print_recovery=True` here (KEY CUSTODY REWRITTEN, ruling
+    e0b98ff2): this test is about the owner/print mechanics, not backend
+    selection — the systemd-creds backend gets its OWN dedicated tests below."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
-    out = soul_key_init()
+    out = soul_key_init(backend="file", print_recovery=True)
     assert "error" not in out
     assert key_file.is_file()
     assert out["path"] == str(key_file)
     assert out["chowned"] is False
     # THE MANDATORY DISCLOSURE (Thoth DM 9245): printed exactly once, to stdout, where a
-    # human running this in their own terminal actually sees it.
+    # human running this in their own terminal actually sees it -- now opt-in only
+    # (`print_recovery=True` above), see KEY CUSTODY REWRITTEN.
     captured = capsys.readouterr()
     assert "THIS IS THE ONLY TIME THIS KEY PRINTS" in captured.out
     # a fresh key is a real, usable Fernet key — round-trips
@@ -238,7 +244,7 @@ def test_soul_key_init_matches_installed_user_unit_note_says_no_change_needed(
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
     monkeypatch.setattr(
         soul_crypto, "_installed_user_unit_env_value", lambda _name: str(key_file))
-    out = soul_key_init()
+    out = soul_key_init(backend="file")
     assert "error" not in out
     assert out["path"] == str(key_file)
     assert "already matches the installed" in out["systemd_note"]
@@ -307,7 +313,7 @@ def test_soul_key_init_with_owner_chowns_when_a_pwd_entry_exists(
     monkeypatch.setattr(
         soul_crypto.os, "chown",
         lambda path, uid, gid: calls.append((str(path), uid, gid)))
-    out = soul_key_init(owner=soul_crypto._SERVICE_USER)
+    out = soul_key_init(owner=soul_crypto._SERVICE_USER, backend="file")
     assert "error" not in out
     assert out["chowned"] is True
     assert len(calls) == 2  # the key file AND its parent directory
@@ -321,7 +327,7 @@ def test_soul_key_init_explicit_path_overrides_resolution(
     ladder including any env var already set."""
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "env-path" / "soul.key"))
     explicit = tmp_path / "explicit" / "soul.key"
-    out = soul_key_init(path=str(explicit))
+    out = soul_key_init(path=str(explicit), backend="file")
     assert "error" not in out
     assert out["path"] == str(explicit)
     assert explicit.exists()
@@ -333,22 +339,37 @@ def test_soul_key_status_absent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     out = soul_crypto.soul_key_status(path=str(tmp_path / "no-such-file"))
     assert out["present"] is False
-    assert out["mode"] is None
+    assert out["backend"] == "missing"
     assert out["created_age_seconds"] is None
     assert out["rotation_in_flight"] is False
+    assert out["recovery_paths_enrolled"] == []
 
 
 def test_soul_key_status_present_reports_facts_never_key_bytes(tmp_path) -> None:
+    """KEY CUSTODY REWRITTEN (ruling e0b98ff2): a legacy plaintext file at the
+    LOGICAL path (no `.cred` sibling) reads as backend `"file"` — the shape
+    `soul_key_init(backend="file")` itself would have written."""
     key_file = tmp_path / "soul.key"
     key_bytes = Fernet.generate_key()
     key_file.write_bytes(key_bytes)
     key_file.chmod(0o600)
     out = soul_crypto.soul_key_status(path=str(key_file))
     assert out["present"] is True
-    assert out["mode"] == "0o600"
+    assert out["backend"] == "file"
     assert out["created_age_seconds"] is not None and out["created_age_seconds"] >= 0
     assert out["rotation_in_flight"] is False
     assert key_bytes.decode() not in str(out)
+
+
+def test_soul_key_status_reports_credential_backend(tmp_path) -> None:
+    """KEY CUSTODY REWRITTEN: a systemd-creds credential (`.cred` + `.meta.json`)
+    reads its own `backend` back from the meta sidecar, never guesses."""
+    key_file = tmp_path / "soul.key"
+    out = soul_key_init(path=str(key_file))
+    assert "error" not in out
+    status = soul_crypto.soul_key_status(path=str(key_file))
+    assert status["present"] is True
+    assert status["backend"] == out["backend"]  # "host-cred" on this box (no tss membership)
 
 
 def test_soul_key_status_rotation_in_flight_when_legacy_file_exists(tmp_path) -> None:
@@ -373,15 +394,17 @@ def test_soul_key_rotate_begin_parks_old_key_and_writes_new(
     key_file = tmp_path / "soul.key"
     old_key = Fernet.generate_key()
     key_file.write_bytes(old_key)
-    out = soul_crypto.soul_key_rotate_begin(path=str(key_file))
+    out = soul_crypto.soul_key_rotate_begin(path=str(key_file), print_recovery=True)
     assert "error" not in out
+    assert out["backend"] == "file"  # preserved from the old key's own shape, plaintext
     assert out["old_key"] == old_key
     assert out["new_key"] != old_key
     assert key_file.read_bytes() == out["new_key"]
     legacy_path = Path(out["legacy_path"])
     assert legacy_path.read_bytes() == old_key
     assert "restart osiris-mcp and osiris-worker" in out["systemd_note"]
-    # THE MANDATORY DISCLOSURE holds for rotation too, not just first init
+    # THE MANDATORY DISCLOSURE holds for rotation too, not just first init (now
+    # opt-in via print_recovery=True above, see KEY CUSTODY REWRITTEN)
     captured = capsys.readouterr()
     assert "THIS IS THE ONLY TIME THIS KEY PRINTS" in captured.out
 
@@ -418,3 +441,240 @@ def test_soul_key_rotate_finish_removes_the_legacy_key(tmp_path) -> None:
     # a second finish, with nothing left in flight, refuses cleanly
     second = soul_crypto.soul_key_rotate_finish(path=str(key_file))
     assert "error" in second
+
+
+# --- KEY CUSTODY REWRITTEN (ruling e0b98ff2): systemd-creds backend selection/rotation ---------
+
+def test_resolve_backend_prefers_host_tpm2_when_tss_member(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(soul_crypto, "_systemd_creds_available", lambda: True)
+    monkeypatch.setattr(soul_crypto, "_is_tss_member", lambda: True)
+    assert soul_crypto._resolve_backend(None) == "host+tpm2"
+
+
+def test_resolve_backend_falls_back_to_host_cred_without_tss(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(soul_crypto, "_systemd_creds_available", lambda: True)
+    monkeypatch.setattr(soul_crypto, "_is_tss_member", lambda: False)
+    assert soul_crypto._resolve_backend(None) == "host-cred"
+
+
+def test_resolve_backend_falls_back_to_file_with_no_systemd_creds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(soul_crypto, "_systemd_creds_available", lambda: False)
+    assert soul_crypto._resolve_backend(None) == "file"
+
+
+def test_resolve_backend_explicit_always_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(soul_crypto, "_systemd_creds_available", lambda: False)
+    assert soul_crypto._resolve_backend("host+tpm2") == "host+tpm2"
+
+
+def test_soul_key_init_host_cred_tss_hint_names_the_group(tmp_path) -> None:
+    """A real live systemd-creds encrypt/decrypt round trip (no fakes) -- this box
+    genuinely has systemd-creds but the operator is genuinely not in `tss`, so
+    this exercises the real command, not a mock of it."""
+    key_file = tmp_path / "soul.key"
+    out = soul_key_init(path=str(key_file))
+    assert "error" not in out
+    assert out["backend"] == "host-cred"
+    assert out["path"] == str(key_file) + ".cred"
+    assert Path(out["path"]).exists()
+    assert (tmp_path / "soul.key.meta.json").exists()
+    assert out["tss_hint"] is not None and "usermod -aG tss" in out["tss_hint"]
+    # the real round trip: get_soul_key decrypts the credential correctly
+    import os as _os
+    _os.environ["OSIRIS_SOUL_KEY_FILE"] = str(key_file)
+    try:
+        key = get_soul_key()
+        assert Fernet(key)  # a real, usable Fernet key
+    finally:
+        del _os.environ["OSIRIS_SOUL_KEY_FILE"]
+
+
+def test_get_soul_key_reads_credentials_directory_first(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The DAEMON path (LoadCredentialEncrypted) -- systemd has ALREADY decrypted
+    the credential into $CREDENTIALS_DIRECTORY before this process starts, so
+    this is a plain file read, no systemd-creds subprocess involved at all."""
+    cred_dir = tmp_path / "creds"
+    cred_dir.mkdir()
+    real_key = Fernet.generate_key()
+    (cred_dir / "soul.key").write_bytes(real_key)
+    monkeypatch.setenv("CREDENTIALS_DIRECTORY", str(cred_dir))
+    monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
+    assert get_soul_key() == real_key
+
+
+def test_soul_key_rotate_preserves_host_cred_backend(tmp_path) -> None:
+    key_file = tmp_path / "soul.key"
+    init_out = soul_key_init(path=str(key_file))
+    assert init_out["backend"] == "host-cred"
+    begin = soul_crypto.soul_key_rotate_begin(path=str(key_file))
+    assert "error" not in begin
+    assert begin["backend"] == "host-cred"
+    assert Path(begin["path"]).exists()
+    assert Path(begin["legacy_path"]).exists()
+    # the new credential decrypts correctly under systemd-creds
+    new_blob = Path(begin["path"]).read_bytes()
+    assert soul_crypto._decrypt_with_systemd_creds(new_blob) == begin["new_key"]
+    finish = soul_crypto.soul_key_rotate_finish(path=str(key_file))
+    assert "error" not in finish
+    assert not Path(begin["legacy_path"]).exists()
+
+
+# --- FIDO2 hmac-secret ("prf") recovery: fake device/client, no physical hardware ---------------
+
+class _FakeCredentialData:
+    def __init__(self, credential_id: bytes) -> None:
+        self.credential_id = credential_id
+
+
+class _FakeAuthData:
+    def __init__(self, credential_id: bytes) -> None:
+        self.credential_data = _FakeCredentialData(credential_id)
+
+
+class _FakeAttestationObject:
+    def __init__(self, credential_id: bytes) -> None:
+        self.auth_data = _FakeAuthData(credential_id)
+
+
+class _FakeRegistration:
+    def __init__(self, credential_id: bytes) -> None:
+        self.raw_id = credential_id
+        self.attestation_object = _FakeAttestationObject(credential_id)
+
+
+class _FakeExtensionResults:
+    def __init__(self, prf_output: bytes | None) -> None:
+        self.prf = {"results": {"first": prf_output}} if prf_output is not None else None
+
+
+class _FakeAssertion:
+    def __init__(self, prf_output: bytes | None) -> None:
+        self.client_extension_results = _FakeExtensionResults(prf_output)
+
+
+class _FakeAssertionSelection:
+    def __init__(self, prf_output: bytes | None) -> None:
+        self._prf_output = prf_output
+
+    def get_response(self, index: int) -> _FakeAssertion:
+        return _FakeAssertion(self._prf_output)
+
+
+class _FakeFido2Client:
+    """A fake standing in for `fido2.client.Fido2Client` — the PRF output is
+    DETERMINISTIC per fake credential+salt (an HMAC over the salt, keyed by a
+    fixed per-instance secret), matching the real extension's own contract
+    (same credential, same salt, same output, every time) closely enough to
+    prove `soul_key_enroll_recovery`/`soul_key_recover`'s own plumbing without
+    a real Security Key."""
+
+    def __init__(self, device_secret: bytes = b"fake-device-secret") -> None:
+        self._device_secret = device_secret
+        self._credential_id = b"fake-credential-id-0123456789ab"
+
+    def make_credential(self, options: Any) -> _FakeRegistration:
+        return _FakeRegistration(self._credential_id)
+
+    def get_assertion(self, options: Any) -> _FakeAssertionSelection:
+        import hashlib
+        import hmac
+
+        salt = options.extensions["prf"]["eval"]["first"]
+        prf_output = hmac.new(self._device_secret, salt, hashlib.sha256).digest()
+        return _FakeAssertionSelection(prf_output)
+
+
+def test_soul_key_enroll_recovery_refuses_when_no_key_exists(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    out = soul_crypto.soul_key_enroll_recovery(path=str(tmp_path / "soul.key"))
+    assert "error" in out
+    assert "soul-key init" in out["error"]
+
+
+def test_soul_key_enroll_recovery_refuses_with_no_device(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    soul_key_init(path=str(key_file), backend="file")
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: None)
+    out = soul_crypto.soul_key_enroll_recovery(path=str(key_file))
+    assert "error" in out
+    assert "no FIDO2 security key detected" in out["error"]
+
+
+def test_soul_key_enroll_recovery_and_recover_round_trip_with_a_fake_device(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE KEY DOOR's own FIDO2 plumbing, proved with a fake device/client — the
+    live touch+PIN ceremony against real hardware is NOT exercised here (see
+    this module's own docstring: the agent that wrote this has no hands, no
+    eyes on a physical Security Key) — this proves the wrap/unwrap/fingerprint
+    logic around that ceremony is wired correctly."""
+    key_file = tmp_path / "soul.key"
+    init_out = soul_key_init(path=str(key_file), backend="file")
+    original_key = key_file.read_bytes()
+
+    fake_client = _FakeFido2Client()
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device: fake_client)
+
+    enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file))
+    assert "error" not in enrolled
+    recovery_path = Path(enrolled["path"])
+    assert recovery_path.exists()
+    blob = json.loads(recovery_path.read_text())
+    assert set(blob) == {"credential_id", "salt", "wrapped_key", "key_fingerprint", "rp_id"}
+
+    status = soul_crypto.soul_key_status(path=str(key_file))
+    assert status["recovery_paths_enrolled"] == ["fido2"]
+    assert status["recovery_warning"] is not None  # still only 1 path
+
+    # simulate recovering onto a fresh box: remove the live key, keep the blob
+    key_file.unlink()
+    recovered = soul_crypto.soul_key_recover(path=str(key_file), backend="file")
+    assert "error" not in recovered
+    assert key_file.read_bytes() == original_key
+    assert init_out["backend"] == recovered["backend"] == "file"
+
+
+def test_soul_key_recover_refuses_when_a_key_already_exists(tmp_path) -> None:
+    key_file = tmp_path / "soul.key"
+    soul_key_init(path=str(key_file), backend="file")
+    out = soul_crypto.soul_key_recover(path=str(key_file))
+    assert "error" in out
+    assert "already exists" in out["error"]
+
+
+def test_soul_key_recover_refuses_with_no_recovery_enrollment(tmp_path) -> None:
+    out = soul_crypto.soul_key_recover(path=str(tmp_path / "soul.key"))
+    assert "error" in out
+    assert "no recovery enrollment found" in out["error"]
+
+
+def test_soul_key_recover_refuses_a_tampered_blob(
+    tmp_path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key_file = tmp_path / "soul.key"
+    soul_key_init(path=str(key_file), backend="file")
+    fake_client = _FakeFido2Client()
+    monkeypatch.setattr(soul_crypto, "_find_fido2_device", lambda: object())
+    monkeypatch.setattr(soul_crypto, "_fido2_client", lambda device: fake_client)
+    enrolled = soul_crypto.soul_key_enroll_recovery(path=str(key_file))
+    recovery_path = Path(enrolled["path"])
+    blob = json.loads(recovery_path.read_text())
+    blob["key_fingerprint"] = "0" * 16  # tamper
+    recovery_path.write_text(json.dumps(blob))
+
+    key_file.unlink()
+    out = soul_crypto.soul_key_recover(path=str(key_file), backend="file")
+    assert "error" in out
+    assert "fingerprint" in out["error"]
+    assert not key_file.exists()  # refused BEFORE writing anything

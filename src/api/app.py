@@ -1538,7 +1538,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_init_route(body: SoulKeyInitBody) -> dict[str, Any]:
         from src.ingest.soul_crypto import soul_key_init
 
-        return soul_key_init(owner=body.owner, path=body.path)
+        return soul_key_init(
+            owner=body.owner, path=body.path, backend=body.backend,
+            print_recovery=body.print_recovery)
 
     @app.post("/soul-key/rotate")
     async def soul_key_rotate_route(
@@ -1546,7 +1548,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> dict[str, Any]:
         from src.orchestrator.soul_key import soul_key_rotate
 
-        return await soul_key_rotate(p, finish=body.finish)
+        return await soul_key_rotate(
+            p, finish=body.finish, print_recovery=body.print_recovery)
 
     @app.post("/soul-key/restore-drill")
     async def soul_key_restore_drill_route(
@@ -2265,19 +2268,27 @@ class BackfillBody(BaseModel):
 
 
 class SoulKeyInitBody(BaseModel):
-    """THE KEY DOOR's own init body (Thoth mail 12810) — both fields optional; the
-    console always runs as the operator's own login user, so `owner`/`path` are
-    rarely needed here (the same automatic --user-unit/XDG resolution the CLI's
-    own bare `osiris soul-key init` gets applies unchanged)."""
+    """THE KEY DOOR's own init body (Thoth mail 12810/12836) — every field
+    optional; the console always runs as the operator's own login user, so
+    `owner`/`path` are rarely needed here (the same automatic --user-unit/XDG
+    resolution the CLI's own bare `osiris soul-key init` gets applies
+    unchanged). `backend` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): None
+    auto-selects (host+tpm2/host-cred/file); an explicit value is the same
+    escape hatch the CLI's own `--backend` carries."""
     owner: str | None = None
     path: str | None = None
+    backend: str | None = None
+    print_recovery: bool = False
 
 
 class SoulKeyRotateBody(BaseModel):
     """THE KEY DOOR's own rotate body — `finish=False` (the default) mints a new
     key and re-wraps every row right now; `finish=True` is step 2, removing the
-    old key once the receipt is clean."""
+    old key once the receipt is clean. `print_recovery` (KEY CUSTODY REWRITTEN):
+    the old printed-banner opt-in, off by default now that FIDO2 enroll-recovery
+    is the primary path."""
     finish: bool = False
+    print_recovery: bool = False
 
 
 class SoulKeyRestoreDrillBody(BaseModel):
