@@ -2160,6 +2160,117 @@ async def test_sweep_stale_doors_writes_no_witness_when_nothing_is_doomed(
         "SELECT count(*) FROM audit_log WHERE action='sweep_stale_doors'") == 0
 
 
+async def _seated_holder(actions: Actions, *, handle: str, anchor_cwd: str, house: str) -> str:
+    """A minimal live seat holder: a Seat with anchor_cwd/house, and an Agent that
+    actively `holds` it — the shape rescue_seat_holder_mount's own `holds` check reads."""
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    agent_id = f"agent:{handle.lower()}"
+    await actions.create_or_find_object("Agent", agent_id, "test")
+    out = await ensure_seat(actions, house=house, handle=handle, anchor_cwd=anchor_cwd,
+                            source="test")
+    await bind_holder(actions, seat_id=out["seat_id"], agent_id=agent_id, source="test")
+    return out["seat_id"]
+
+
+async def test_rescue_seat_holder_mount_re_adopts_after_a_ghost_sweep(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE FIRST-BREATH SEAT RESCUE (thread 124732175759, Thoth mail 13096) — the exact
+    specimen: a live seat holder's own mount row is ghost-swept (a fake agent_mounts
+    wipe, per Thoth's own ask), and the rescue finds it via the sweep's own audit
+    witness, re-adopting the CURRENT holder rather than leaving the caller to mint a
+    stranger."""
+    p = actions.pool
+    await _seated_holder(
+        actions, handle="Rescueseat1", anchor_cwd="/home/asuramaya/.osiris/seats/rescueseat1",
+        house="osiris")
+    holder = "agent:rescueseat1"
+    live = tmp_path / "live"
+    live.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit1", agent_id=holder,
+                            project="osiris", cwd=str(live), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/rescuewit1'")
+    # THE WIPE: exactly the mechanism that actually fired live — a ghost sweep with no
+    # live /proc body at this cwd/project, releasing the row (audited, reversible).
+    released = await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    assert released == 1
+    assert await mounts.find_mount(p, job_dir="/x/jobs/rescuewit1") is None
+
+    rescued = await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit1")
+    assert rescued is not None
+    assert rescued.agent_id == holder
+    assert rescued.cwd == "/home/asuramaya/.osiris/seats/rescueseat1"
+    assert rescued.project == "osiris"
+
+
+async def test_rescue_seat_holder_mount_adopts_the_current_generation(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """The swept row can name an OLDER generation — the seat may have since passed to a
+    successor. The rescue must adopt whoever holds the seat NOW, never the stale name
+    the dropped row happened to carry."""
+    p = actions.pool
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    old_gen = "agent:rescuegen1x"
+    new_gen = "agent:rescuegen1x-ii"
+    await actions.create_or_find_object("Agent", old_gen, "test")
+    await actions.create_or_find_object("Agent", new_gen, "test")
+    out = await ensure_seat(actions, house="osiris", handle="Rescuegen1",
+                            anchor_cwd="/home/asuramaya/.osiris/seats/rescuegen1",
+                            source="test")
+    await bind_holder(actions, seat_id=out["seat_id"], agent_id=old_gen, source="test")
+    await bind_holder(actions, seat_id=out["seat_id"], agent_id=new_gen, source="test")
+
+    dead = tmp_path / "dead"
+    dead.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit2", agent_id=old_gen,
+                            project="osiris", cwd=str(dead), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/rescuewit2'")
+    await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+
+    rescued = await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit2")
+    assert rescued is not None
+    assert rescued.agent_id == new_gen  # the CURRENT holder, never the dropped generation
+
+
+async def test_rescue_seat_holder_mount_never_fires_for_a_genuine_stranger(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """A dropped row for an agent that never held any seat (or has since released it) is
+    a real stranger/retirement, not a ghost-sweep-over-a-live-holder — no rescue."""
+    p = actions.pool
+    stranger = "agent:strangerwit1"
+    await actions.create_or_find_object("Agent", stranger, "test")
+    dead = tmp_path / "dead2"
+    dead.mkdir()
+    await mounts.save_mount(p, job_dir="/x/jobs/rescuewit3", agent_id=stranger,
+                            project="osiris", cwd=str(dead), model=None, session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/rescuewit3'")
+    await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+
+    assert await mounts.rescue_seat_holder_mount(p, job_dir="/x/jobs/rescuewit3") is None
+
+
+async def test_rescue_seat_holder_mount_finds_nothing_for_a_job_dir_never_swept(
+    actions: Actions,
+) -> None:
+    """No audit history at all for this job_dir — never mounted, or a genuinely fresh
+    launch. No witness, no guess."""
+    assert await mounts.rescue_seat_holder_mount(
+        actions.pool, job_dir="/x/jobs/never-existed-at-all") is None
+
+
 async def test_drop_dead_project_mount_releases_the_matched_row(actions: Actions) -> None:
     p = actions.pool
     await mounts.save_mount(p, job_dir="/x/jobs/deadstub1", agent_id="agent:deadstub1",
@@ -2589,6 +2700,12 @@ async def test_mount_archives_a_different_lineages_memory_and_records_it(
     # shape test_mount_tool_honors_a_bound_seat above already relies on.
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:custodytest-vii",
                             project="osiris", cwd=cwd, model=None, session_key="k:custody")
+    # THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759): custody's own ARCHIVE
+    # action only runs once the graph confirms this identity predates the call — so this
+    # test's own object must genuinely predate it too, not merely be minted by the same
+    # register_agent call this mount() is about to make (that shape is the DEFERRED test,
+    # below — this one proves the archive still fires for a genuinely established mind).
+    await actions.create_or_find_object("Agent", "agent:custodytest-vii", "test")
 
     fake_result = lineage_memory.MemoryCustodyResult(
         action="archived", path=str(tmp_path / "memory.archived-agent_oldlineage-x"),
@@ -2623,6 +2740,66 @@ async def test_mount_archives_a_different_lineages_memory_and_records_it(
     assert recorded["path"] == fake_result.path
 
 
+async def test_mount_defers_custody_for_an_identity_minted_this_same_call(
+    actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759, Thoth mail 13096): the
+    exact mechanism behind Thoth's own corrupted memory — a `lived=True` mount (a bound
+    job_dir row, same shape the archive test above uses) whose Agent object does NOT yet
+    exist in the graph gets minted fresh by THIS call's own `register_agent`. Even though
+    `ensure_lineage_memory_custody` reports "archived" (this test forces it to, exactly
+    as a real different-lineage memory dir would), mount() must never let the rename
+    happen, never write the archived_memory assertion, and must say so plainly instead —
+    an identity this call just invented is not yet a fact the graph can vouch for."""
+    from src import mcp_server as srv
+    from src.orchestrator import lineage_memory
+
+    cwd = str(tmp_path / "o2")
+    job_dir = str(tmp_path / "jobs" / "custody04")
+    await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:samecalltest-vii",
+                            project="osiris", cwd=cwd, model=None, session_key="k:custody4")
+    # deliberately NO create_or_find_object here — the object does not exist yet; this
+    # mount() call's own register_agent is what will mint it.
+    assert await actions.pool.fetchval(
+        "SELECT 1 FROM objects WHERE type='Agent' AND canonical='agent:samecalltest-vii'"
+    ) is None
+
+    called = False
+
+    def _spy(cwd: str, root: str) -> lineage_memory.MemoryCustodyResult:
+        nonlocal called
+        called = True  # must never even be reached under the deferred gate
+        return lineage_memory.MemoryCustodyResult(
+            action="archived", path=str(tmp_path / "memory.archived-agent_oldlineage-y"),
+            prior_lineage="agent:oldlineage")
+
+    monkeypatch.setattr(lineage_memory, "ensure_lineage_memory_custody", _spy)
+    stamped: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        lineage_memory, "stamp_lineage_sentinel",
+        lambda cwd, root: stamped.append((cwd, root)))
+
+    saved_pool = srv._pool
+    srv._pool = actions.pool
+    try:
+        out = await srv.mount(cwd=cwd, job_dir=job_dir)
+    finally:
+        srv._pool = saved_pool
+
+    assert called is False  # the filesystem rename never even gets a chance to run
+    assert "prior_lineage_memory_archived" not in out
+    assert "memory_custody_deferred" in out
+    assert stamped == []  # no sentinel write either — nothing here is confirmed yet
+
+    obj_id = await actions.pool.fetchval(
+        "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", "agent:samecalltest-vii")
+    assert obj_id is not None  # the mint itself still happens — only custody is deferred
+    row = await actions.pool.fetchrow(
+        "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name='archived_memory'",
+        obj_id)
+    assert row is None  # never recorded — nothing was actually archived
+
+
 async def test_mount_surfaces_migration_needed_without_touching_anything(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2633,6 +2810,9 @@ async def test_mount_surfaces_migration_needed_without_touching_anything(
     job_dir = str(tmp_path / "jobs" / "custody02")
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:custodytest2-vii",
                             project="osiris", cwd=cwd, model=None, session_key="k:custody2")
+    # THE CONFIRMED-IDENTITY GATE (law 2): same reasoning as the archive test above —
+    # this object must genuinely predate the mount() call under test.
+    await actions.create_or_find_object("Agent", "agent:custodytest2-vii", "test")
 
     fake_result = lineage_memory.MemoryCustodyResult(
         action="migration_needed", path=str(tmp_path / "memory"))

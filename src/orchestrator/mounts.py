@@ -774,6 +774,65 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
                        cwd=r["cwd"], model=r["model"])
 
 
+async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
+    """THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096, the
+    Thoth/a93f82b4 specimen): `find_mount`'s own row can vanish for reasons that have
+    NOTHING to do with the lineage dying — a ghost/stale-door sweep (this module's own
+    `_MOUNT_DROP_ACTIONS`) fires on staleness or a bodyless `/proc` census, never on
+    whether the lineage still HOLDS a seat. Measured live: `sweep_ghost_doors` released
+    Thoth's own job_dir/a93f82b4 row repeatedly across six weeks (2026-08-09 through
+    tonight), every prior time absorbed silently by some OTHER re-attach door — until
+    the one restart where nothing else caught it, and automount fell all the way through
+    to a job_dir-derived stranger identity that happened to already exist in the graph
+    (a July artifact of this exact same chronic gap), minting ITS heir instead of
+    Thoth's.
+
+    Every sweep drop is already reversible and audited — the SAME `_mount_snapshot`
+    shape `undrop_dead_project_mount` replays verbatim. This reads the MOST RECENT drop
+    for this exact job_dir and, ONLY when that snapshot's own `agent_id`'s lineage still
+    holds an ACTIVE seat right now (a `holds` link nothing has released since), re-
+    adopts that lineage's CURRENT generation — never a fresh mint, never the dropped
+    generation itself (a lineage moves on; the seat's PRESENT holder is the fact that
+    matters). Never fires for a lineage that never held a seat, or one that genuinely
+    released it since: those are real strangers or real retirements, not the ghost-sweep-
+    over-a-live-holder this exists to catch — the `holds` link check is what tells the
+    two apart, not merely "this job_dir used to name someone."
+
+    A synthetic MountRecord, built from the SEAT's own durable `anchor_cwd`/`house`
+    (facts the seat carries regardless of any one mount row's own history) — this never
+    writes anything itself; the caller's own registration path does that, exactly as it
+    would for a genuine `find_mount` hit."""
+    from src.orchestrator.agents import _generation
+
+    last = await pool.fetchrow(
+        "SELECT payload FROM audit_log WHERE action = ANY($1::text[]) "
+        "AND payload->>'job_dir' = $2 ORDER BY created_at DESC LIMIT 1",
+        list(_MOUNT_DROP_ACTIONS), job_dir)
+    if last is None or not last["payload"]:
+        return None
+    dropped_agent = last["payload"].get("agent_id")
+    if not dropped_agent:
+        return None
+    base = _generation(dropped_agent)[0]
+    row = await pool.fetchrow(
+        "SELECT hf.canonical AS holder, ht.canonical AS seat_id "
+        "FROM links hl JOIN objects hf ON hf.id=hl.from_id "
+        "  AND hf.type='Agent' AND hf.status='active' "
+        "JOIN objects ht ON ht.id=hl.to_id AND ht.type='Seat' "
+        "WHERE hl.type='holds' AND (hf.canonical=$1 OR hf.canonical LIKE $1 || '-%') "
+        "AND (hl.valid_until IS NULL OR hl.valid_until > now()) "
+        "ORDER BY hl.created_at DESC LIMIT 1", base)
+    if row is None:
+        return None  # this lineage holds no seat (or never did) — a real stranger, no rescue
+    seat_props = await pool.fetch(
+        "SELECT a.name, a.value #>> '{}' AS val FROM current_assertions a "
+        "JOIN objects o ON o.id=a.object_id "
+        "WHERE o.canonical=$1 AND a.name IN ('anchor_cwd','house')", row["seat_id"])
+    props = {p["name"]: p["val"] for p in seat_props}
+    return MountRecord(job_dir=job_dir, agent_id=row["holder"], project=props.get("house"),
+                       cwd=props.get("anchor_cwd") or "", model=None)
+
+
 async def resolve_dirty_tree_owner(
     pool: asyncpg.Pool, repo_dir: str | None,
 ) -> dict[str, Any] | None:

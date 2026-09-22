@@ -1219,6 +1219,13 @@ async def _reattach(
     if job is None:
         return None
     rec = await mounts.find_mount(pool, job_dir=job)
+    # THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096):
+    # checked before every other fallback below — a ghost/stale-door sweep can release
+    # this exact job_dir's row for reasons that have nothing to do with the lineage
+    # dying (mounts.rescue_seat_holder_mount's own docstring has the full specimen). A
+    # lineage that still holds a seat right now is never treated as unmounted.
+    if rec is None:
+        rec = await mounts.rescue_seat_holder_mount(pool, job_dir=job)
     adopted_from = None
     self_restored = False
     if rec is None:
@@ -2532,6 +2539,15 @@ async def mount(
     and reported as `prior_lineage_memory_archived` (a pointer to read, never auto-
     copied); pre-existing content with no sentinel at all reports
     `memory_migration_needed` instead of being silently moved."""
+    # THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759, Thoth mail 13096): custody
+    # never runs its own ARCHIVE action against an Agent object this SAME call just
+    # minted — `mount_call_started_at` here, checked below against the object's own
+    # `created_at`, is the check ("confirmed by the graph" means the object predates
+    # this call, not merely that one now exists). A same-call mint that turns out to be
+    # wrong (a stray job_dir-derived stranger, the exact a93f82b4 specimen) must never
+    # get to rename another lineage's real memory out from under it before anyone has
+    # had a chance to notice the mint itself was wrong.
+    mount_call_started_at = datetime.now(UTC)
     pool = await _pool_get()
     settings = get_settings()
     lease = settings.osiris_mail_lease_secs
@@ -2607,6 +2623,14 @@ async def mount(
         claimed = await mounts.live_claimed_sids(
             pool, exclude_session_key=key, within_secs=settings.osiris_owner_live_secs)
     bound = await mounts.find_mount(pool, job_dir=job_dir) if job_dir else None
+    # THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096): a
+    # ghost/stale-door sweep can release this exact job_dir's row for reasons that have
+    # nothing to do with the lineage dying (mounts.rescue_seat_holder_mount's own
+    # docstring has the full specimen — Thoth's own job_dir, swept repeatedly for six
+    # weeks, silently absorbed by some other door every time until this one restart).
+    # This never mints a stranger over a lineage that still holds a seat right now.
+    if bound is None and job_dir:
+        bound = await mounts.rescue_seat_holder_mount(pool, job_dir=job_dir)
     # THE RECOLLECTION GUARD (90f0cb3a): a resumed mind re-mounting after a bounce quotes
     # its own history for `cwd` — and an address is exactly what a move makes stale (alfred
     # re-mounted himself at the demolished husk this way, re-pointing his seated row). When
@@ -3034,33 +3058,53 @@ async def mount(
         )
         try:
             lineage_root = _generation(ident.agent_id)[0]
-            custody = ensure_lineage_memory_custody(cwd, lineage_root)
-            if custody.action == "archived":
-                out["prior_lineage_memory_archived"] = {
-                    "path": custody.path, "prior_lineage": custody.prior_lineage,
-                    "note": ("a different lineage's memory files were found in this cwd's "
-                             "harness-native memory dir and moved sideways, never deleted — "
-                             "read the archived path if its context is useful; nothing was "
-                             "copied into your own, empty, memory store")}
-                try:
-                    actions = Actions(pool)
-                    obj_id = await actions.create_or_find_object(
-                        "Agent", ident.agent_id, settings.osiris_actor)
-                    await actions.assert_property(
-                        obj_id, "archived_memory",
-                        {"prior_lineage": custody.prior_lineage, "path": custody.path,
-                         "archived_at": datetime.now(UTC).isoformat()},
-                        settings.osiris_actor, datetime.now(UTC), 0.9)
-                except Exception:  # noqa: BLE001 — the durable record is a bonus, not a gate
-                    pass
-                stamp_lineage_sentinel(cwd, lineage_root)
-            elif custody.action == "migration_needed":
-                out["memory_migration_needed"] = (
-                    f"{custody.path} has pre-existing memory content with no osiris "
-                    "lineage sentinel — predates this system, not auto-archived; a human "
-                    "should review and seed it by hand")
-            else:  # noop — already owned, or nothing there yet
-                stamp_lineage_sentinel(cwd, lineage_root)
+            # THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759, Thoth mail 13096):
+            # an Agent object `created_at >= mount_call_started_at` is one THIS call just
+            # minted — never graph-confirmed, only graph-fresh. Archiving another
+            # lineage's real memory under a same-call mint's own name is destructive and
+            # irreversible-in-spirit (a rename sideways is recoverable in theory, but the
+            # WRONG lineage's name is what gets stamped as the new owner going forward) —
+            # deferred entirely, not merely unwritten, so `ensure_lineage_memory_custody`
+            # (which performs its own rename as part of computing "archived", not after)
+            # never even runs against an unconfirmed identity.
+            created_at = await pool.fetchval(
+                "SELECT created_at FROM objects WHERE id=$1", agent_uuid)
+            identity_confirmed = (
+                created_at is not None and created_at < mount_call_started_at)
+            if not identity_confirmed:
+                out["memory_custody_deferred"] = (
+                    f"{ident.agent_id} was minted in this same call — memory custody "
+                    "(which can rename another lineage's real memory sideways) only "
+                    "runs once the graph confirms this identity predates the call that "
+                    "resolved it, on a later mount()")
+            else:
+                custody = ensure_lineage_memory_custody(cwd, lineage_root)
+                if custody.action == "archived":
+                    out["prior_lineage_memory_archived"] = {
+                        "path": custody.path, "prior_lineage": custody.prior_lineage,
+                        "note": ("a different lineage's memory files were found in this cwd's "
+                                 "harness-native memory dir and moved sideways, never deleted — "
+                                 "read the archived path if its context is useful; nothing was "
+                                 "copied into your own, empty, memory store")}
+                    try:
+                        actions = Actions(pool)
+                        obj_id = await actions.create_or_find_object(
+                            "Agent", ident.agent_id, settings.osiris_actor)
+                        await actions.assert_property(
+                            obj_id, "archived_memory",
+                            {"prior_lineage": custody.prior_lineage, "path": custody.path,
+                             "archived_at": datetime.now(UTC).isoformat()},
+                            settings.osiris_actor, datetime.now(UTC), 0.9)
+                    except Exception:  # noqa: BLE001 — the durable record is a bonus, not a gate
+                        pass
+                    stamp_lineage_sentinel(cwd, lineage_root)
+                elif custody.action == "migration_needed":
+                    out["memory_migration_needed"] = (
+                        f"{custody.path} has pre-existing memory content with no osiris "
+                        "lineage sentinel — predates this system, not auto-archived; a human "
+                        "should review and seed it by hand")
+                else:  # noop — already owned, or nothing there yet
+                    stamp_lineage_sentinel(cwd, lineage_root)
         except Exception:  # noqa: BLE001 — memory custody must never break a mount
             pass
     # TERSE BY DEFAULT (task #55): the stale-cwd explanation (declared/kept already have

@@ -836,6 +836,14 @@ async def automount(
     job_dir = job_dir or _derive_job_dir(session_id, jobs_home=jobs_home)
     mint_reason = None
     bound = await mounts.find_mount(actions.pool, job_dir=job_dir) if job_dir else None
+    # THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096): a
+    # ghost/stale-door sweep can release this exact job_dir's row for reasons that have
+    # nothing to do with the lineage dying (mounts.py's own docstring on the rescue
+    # itself has the full specimen). Before treating a missing row as "never mounted",
+    # ask whether the row's own history names a lineage that still HOLDS a seat right
+    # now — never a fresh mint over a live holder.
+    if bound is None and job_dir:
+        bound = await mounts.rescue_seat_holder_mount(actions.pool, job_dir=job_dir)
     # THE INHERITED-JOB_DIR LEAK (Thoth's ruling on Chad/aad6603a, msg 6852 item (a)): a
     # hand-run `claude --resume` from ANOTHER agent's own shell carries THAT agent's
     # CLAUDE_JOB_DIR — `bound` above then finds the LEAKER's own registry row, not this
