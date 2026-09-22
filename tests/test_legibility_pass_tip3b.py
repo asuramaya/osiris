@@ -40,11 +40,11 @@ def test_omnibox_agent_scan_runs_unconditionally_not_gated_on_empty_hits() -> No
 
 
 def test_omnibox_agent_scan_dedupes_against_server_hits() -> None:
-    body = _CONSOLE_JS.split("OMNI_SEARCH_TIMER = setTimeout(async () => {", 1)[1][:2800]
+    body = _CONSOLE_JS.split("OMNI_SEARCH_TIMER = setTimeout(async () => {", 1)[1][:3100]
     assert "const seenIds = new Set(hits.filter(h => h && h.id).map(h => h.id));" in body
     assert "n.type === 'Agent' && !seenIds.has(n.id)" in body
 
 
 def test_omnibox_agent_scan_still_reads_the_fallback_safe_label() -> None:
-    body = _CONSOLE_JS.split("OMNI_SEARCH_TIMER = setTimeout(async () => {", 1)[1][:2800]
+    body = _CONSOLE_JS.split("OMNI_SEARCH_TIMER = setTimeout(async () => {", 1)[1][:3100]
     assert "n.label || `${n.type} ${n.id.slice(0, 8)}`" in body

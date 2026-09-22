@@ -152,16 +152,19 @@ async def test_run_spec_is_ephemeral_and_echoes_spec(
     assert not any(c["spec"] == filtered for c in (await client.get("/compositions")).json())
 
 
-async def test_rooms_scope_artifacts_not_the_graph(
+async def test_rooms_never_scope_compositions_cases_or_the_graph(
     client: httpx.AsyncClient, actions: Actions
 ) -> None:
-    """W2: a Room scopes the WORK (cases + compositions) to a stance, but never the graph.
-    Switching rooms re-scopes /compositions and /cases; the objects stay global.
-
-    GET/POST /rooms are gone (WAVE 28, Thoth dispatch 12310) -- rooms are minted here
-    through orchestrator.compositions.create_room/list_rooms directly, the same
-    underlying functions the retired REST routes used to call, per ruling 70c001ec/
-    decision a47a0c7f's own "the rooms table stays as read-only history" law."""
+    """W2's own room-scoping was retired outright (WAVE 28, Thoth dispatch 12310/12807,
+    ruling 70c001ec/decision a47a0c7f): "end to end" turned out to mean the still-live
+    `?room=` READ filter on /compositions and /cases too, not just the mint/list doors
+    retired earlier this wave. GET/POST /rooms are gone; rooms are minted here through
+    orchestrator.compositions.create_room/list_rooms directly, the same underlying
+    functions the retired REST routes used to call, per the same ruling's own "the rooms
+    table stays as read-only history" law -- room_id columns and values are UNTOUCHED, a
+    room_id on a POST body still lands in the row; the route just never filters a GET by
+    it any more, and `?room=` is no longer even a bound parameter (silently ignored, not
+    a 422 -- FastAPI's own default for an unrecognized query key)."""
     from src.orchestrator.compositions import create_room, list_rooms
 
     eng = str(await create_room(actions.pool, "engineer"))
@@ -175,23 +178,19 @@ async def test_rooms_scope_artifacts_not_the_graph(
     # a GLOBAL object exists regardless of room
     await actions.create_or_find_object("Commit", "commit:z", "git")
 
-    # /compositions scopes to the stance
-    eng_comps = {c["name"] for c in (await client.get(f"/compositions?room={eng}")).json()}
-    assert eng_comps == {"commits"}  # not the journalist's
-    jour_comps = {c["name"] for c in (await client.get(f"/compositions?room={jour}")).json()}
-    assert jour_comps == {"screen"}
-    # the All view (no room) sees both
-    assert {"commits", "screen"} <= {c["name"] for c in (await client.get("/compositions")).json()}
+    # /compositions is never scoped -- both rooms' own saves show up together, `?room=`
+    # or not, since the route no longer binds it to anything.
+    all_comps = {c["name"] for c in (await client.get("/compositions")).json()}
+    assert {"commits", "screen"} <= all_comps
+    ignored_query = {c["name"] for c in (await client.get(f"/compositions?room={eng}")).json()}
+    assert ignored_query == all_comps  # the query string changed nothing
 
-    # /cases scopes too. The per-room compositions/cases COUNT enrichment lived only in
-    # the now-retired GET /rooms handler (a presentation join, not orchestrator logic) --
-    # list_rooms itself just names the rooms; the counts are already proven above via
-    # eng_comps/jour_comps and the /cases assertions themselves.
-    assert [c["name"] for c in (await client.get(f"/cases?room={eng}")).json()] == ["self-track"]
-    assert (await client.get(f"/cases?room={jour}")).json() == []
+    # /cases likewise -- list_rooms itself just names the rooms; the rooms table stays
+    # real, only the REST-level filtering over it is gone.
+    assert [c["name"] for c in (await client.get("/cases")).json()] == ["self-track"]
     assert {"engineer", "journalist"} <= {r["name"] for r in await list_rooms(actions.pool)}
 
-    # the GRAPH is never room-scoped: a global search sees the object from any stance
+    # the GRAPH was never room-scoped, before or after this tip
     found = (await client.get("/objects", params={"q": "commit:z"})).json()
     assert any(o["canonical"] == "commit:z" for o in found)
 

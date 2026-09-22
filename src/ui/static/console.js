@@ -6,14 +6,14 @@
 const $ = id => document.getElementById(id);
 const esc = s => (s == null ? "" : String(s)).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 
-// ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792): the operator's
-// own word — "scope really died and made itself obsolete... gotta remove that too." ROOM
-// is now a plain global constant, never reassigned (switchRoom/newRoom/loadRooms, the
-// workspace pill and its dropdown are gone) — every existing reader that still checks it
-// (loadCompositions' own room-scoped fetch, authorComposition/forkComposition's own
-// room_id, watchConsole's other sync fields) keeps working unchanged, always taking its
-// own "no room" branch, rather than needing every call site individually scrubbed.
-const ROOM = '';
+// ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792/12807): the
+// operator's own word — "scope really died and made itself obsolete... gotta remove that
+// too." The ROOM constant this file used to carry (a plain '', never reassigned — switch
+// Room/newRoom/loadRooms, the workspace pill and its dropdown, were already gone) is fully
+// scrubbed now: loadCompositions' own ?room= url building, and the room_id: null literal
+// authorComposition/forkComposition's own POST bodies carried, are gone -- both were a
+// provable no-op (ROOM was always '', room_id: null and omitting the key entirely reach
+// save_composition identically), never a live behavior change.
 let FOCUS = null, SET = [], PROJECTS = [], ACTIVE_SURFACE = 'browse';
 let SELECTED_ENTITY_TYPES = new Set(), ENTITY_SEARCH_QUERY = '', ENTITY_VIEW_MODE = 'table';
 let TABLE_SORT_COL = 'date', TABLE_SORT_DIR = 'desc', EXPANDED_ROWS = new Set();
@@ -1121,7 +1121,7 @@ async function authorComposition() {
     const preview = await fetch('/compositions/run-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: spec, subject: FOCUS, name: name }) }).then(r => r.json());
     if (preview.error) { setStatus('Spec failed: ' + preview.error); return; }
   } catch(e) { setStatus('Could not preview spec.'); return; }
-  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: spec, room_id: ROOM || null }) }).then(r => r.json());
+  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: spec }) }).then(r => r.json());
   await loadCompositions();
   setStatus('Saved composition: ' + (saved.name || name));
   await runComposition(name, {}, FOCUS);
@@ -1132,22 +1132,20 @@ async function authorComposition() {
 async function forkComposition() {
   if (!LAST_COMPOSITION_RUN) return;
   const name = prompt('Fork "' + LAST_COMPOSITION_RUN.name + '" as:'); if (!name) return;
-  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: LAST_COMPOSITION_RUN.spec, room_id: ROOM || null }) }).then(r => r.json());
+  const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: LAST_COMPOSITION_RUN.spec }) }).then(r => r.json());
   await loadCompositions();
   setStatus('Forked as: ' + (saved.name || name));
   await runComposition(name, {}, FOCUS);
 }
 
-// PICK \u2014 every saved composition, room-scoped exactly like the object set already is
-// (switchRoom's own filter), loaded once per room switch rather than per keystroke: unlike
+// PICK \u2014 every saved composition, loaded once at boot rather than per keystroke: unlike
 // /search (piece #196's addition to the palette, debounced because the graph is too large to
-// hold client-side) a room's saved compositions are few and already local, same shape POWER_
-// TOOLS has always been.
+// hold client-side) the full saved-composition set is few and already local, same shape
+// POWER_TOOLS has always been.
 let SAVED_COMPOSITIONS = [];
 async function loadCompositions() {
   try {
-    const url = '/compositions' + (ROOM ? ('?room=' + encodeURIComponent(ROOM)) : '');
-    SAVED_COMPOSITIONS = await fetch(url).then(r => r.json());
+    SAVED_COMPOSITIONS = await fetch('/compositions').then(r => r.json());
   } catch(e) { SAVED_COMPOSITIONS = []; }
 }
 
@@ -1202,7 +1200,12 @@ function runOmniSearch(q) {
     // the canvas's own single-click-is-focus (select-vs-focus is retired outright).
     const seenIds = new Set(hits.filter(h => h && h.id).map(h => h.id));
     const graphHits = hits.filter(h => h && h.id).map(h => ({
-      label: h.display_label || h.label || h.name || h.canonical || h.id,
+      // THE NAME, NEVER THE SLUG (operator ruling a1cde8a3): /search's own display_label
+      // has no SoftwareProject-specific rule the way graph_stream.py's _short_label does
+      // for the space canvas, so a repo hit here reads its raw canonical -- Osiris.
+      // objectDisplayLabel strips the repo: scheme the same way every other palette/
+      // table surface now does.
+      label: Osiris.objectDisplayLabel(h) || h.name || h.canonical || h.id,
       hint: h.type || '', cat: 'Graph',
       run: () => { switchSurface('browse'); focus(h.id); },
     }));
@@ -1253,7 +1256,7 @@ function closePeek() { const o = $('peek'); o.className = 'peek-overlay'; o.inne
 // ── Boot ─────────────────────────────────────────────────────────────────────
 // ROOM RETIREMENT (thread 96f09d48): boot no longer fetches /console for a room_id to
 // restore (switchRoom, its own loadCompositions() call included, is gone) —
-// loadCompositions() runs directly here instead, unscoped (ROOM is always '' now).
+// loadCompositions() runs directly here instead, unscoped.
 Osiris.loadSchema().then(async function() {
   await Promise.all([loadProjects(), loadObjectSet(), loadCompositions()]);
   switchSurface('browse');

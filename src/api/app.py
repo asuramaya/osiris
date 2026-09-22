@@ -275,28 +275,26 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return dict(row)
 
     @app.get("/cases")
-    async def list_cases(
-        room: uuid.UUID | None = None, p: asyncpg.Pool = Depends(get_pool)
-    ) -> list[dict[str, Any]]:
-        """Analyses, optionally scoped to a Room (the stance). `room` omitted = all."""
+    async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """Analyses (never room-scoped — see the ROOM'S REST SURFACE note below)."""
         rows = await p.fetch(
             "SELECT c.id, c.name, c.owner, count(DISTINCT co.object_id) AS object_count "
             "FROM cases c LEFT JOIN case_objects co ON co.case_id = c.id "
-            "WHERE c.archived_at IS NULL AND ($1::uuid IS NULL OR c.room_id = $1) "
-            "GROUP BY c.id ORDER BY c.created_at DESC",
-            room,
+            "WHERE c.archived_at IS NULL "
+            "GROUP BY c.id ORDER BY c.created_at DESC"
         )
         return [dict(r) for r in rows]
 
     # ROOM'S REST SURFACE IS DELETED, NOT RENAMED (WAVE 28, ruling 70c001ec/decision
-    # a47a0c7f, Thoth dispatch 12310): GET/POST /rooms are gone, matching the MCP tools
-    # (create_room/list_rooms) and the composition() dispatcher's own `room` save-time
-    # parameter, both removed earlier this wave. UNTOUCHED, per the same ruling: the
-    # underlying orchestrator.compositions.create_room/list_rooms functions, the `rooms`
-    # table itself (migration 0070_room_retirement's own law — "REVERSIBLE, NOT A
-    # DELETE... stays as read-only history"), room_id columns, and the still-live
-    # `?room=` scoping on /cases and /compositions below (a READ filter over existing
-    # data, never a mint/list door — a different surface from the one retired here).
+    # a47a0c7f, Thoth dispatch 12310/12807): GET/POST /rooms, the `?room=` READ filter on
+    # /cases and /compositions, and every last piece of JS plumbing that built one are all
+    # gone now — "end to end" turned out to mean this too, not just the mint/list doors
+    # removed earlier this wave. UNTOUCHED, per the same ruling: the underlying
+    # orchestrator.compositions.create_room/list_rooms functions, the `rooms` table itself
+    # (migration 0070_room_retirement's own law — "REVERSIBLE, NOT A DELETE... stays as
+    # read-only history"), room_id columns, and save_composition's own room_id fallback-
+    # assignment machinery (ruling 89e67c49) on the WRITE side — a separate, deeper piece
+    # this dispatch's own "read-scope on ?room=" wording never named.
 
     @app.get("/search")
     async def knowledge_search(
@@ -1158,7 +1156,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                     state = "dead"
                 agent_state[r["agent_id"]] = state
         nodes = [
-            {"id": str(r["id"]), "type": r["type"],
+            {"id": str(r["id"]), "type": r["type"], "canonical": r["canonical"],
              "label": resolve_label(r["type"], node_props.get(r["id"], {}),
                                     r["canonical"]).label,
              **({"agent_state": agent_state.get(r["canonical"], "dead")}
@@ -1380,11 +1378,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     # --- compositions: the composer's primitive (lenses + watches as one) ----
     @app.get("/compositions")
-    async def list_compositions_route(
-        room: uuid.UUID | None = None, p: asyncpg.Pool = Depends(get_pool)
-    ) -> list[dict[str, Any]]:
-        """Saved compositions (lens + watch), optionally scoped to a Room. `room` omitted = all."""
-        return await list_compositions(p, room)
+    async def list_compositions_route(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
+        """Saved compositions (lens + watch) — never room-scoped on read any more (see the
+        ROOM'S REST SURFACE note near /cases). list_compositions's own room_id parameter
+        is untouched (still a real, general-purpose filter no caller happens to use with a
+        real value today) — this route just never binds a query param to it any more."""
+        return await list_compositions(p)
 
     @app.post("/compositions")
     async def save_composition_route(

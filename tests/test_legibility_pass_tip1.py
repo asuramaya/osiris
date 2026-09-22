@@ -125,7 +125,7 @@ def test_the_in_canvas_find_a_node_box_is_gone() -> None:
 def test_header_omnibox_graph_hits_always_focus() -> None:
     # SUPERSEDED by THE LEGIBILITY PASS TIP 1's own amendment (mail 10726): select-vs-focus
     # (click selects, Enter focuses) is retired -- a Graph hit focuses either way now.
-    body = _CONSOLE_JS.split("const graphHits = hits.filter", 1)[1][:400]
+    body = _CONSOLE_JS.split("const graphHits = hits.filter", 1)[1][:700]
     assert "run: () => { switchSurface('browse'); focus(h.id); }" in body
     assert "selectFromOmni" not in _CONSOLE_JS
     assert "runFocus" not in _CONSOLE_JS

@@ -224,17 +224,23 @@ async function fetchStreamSnapshot() {
   // as exactly the project geometry it needs (a real centroid + exact member-distance-
   // bound radius per project, already computed server-side from the same positions) --
   // resolve its numeric project code back to a name off the same `projects` table
-  // node.project already reads, rather than re-deriving anything.
+  // node.project already reads, rather than re-deriving anything. THE NAME, NEVER THE
+  // SLUG (operator ruling a1cde8a3): `projects[]` is the wire's own canonical string
+  // (repo:<name>) -- `canonical` keeps the full thing for hover/identity, `name` is the
+  // reader-facing text this pseudo-node's own label actually shows.
   const projectAggregates = (snap.project_aggregates || []).map((a) => ({
-    name: snap.projects[a.project], count: a.count, cx: a.cx, cy: a.cy, radius: a.radius,
+    name: Osiris.projectDisplayName(snap.projects[a.project]), canonical: snap.projects[a.project],
+    count: a.count, cx: a.cx, cy: a.cy, radius: a.radius,
   }));
   // WAVE 26, COMMUNITY REGIONS (mail 11592): `communities` is Khnum's own header table,
   // the SAME shape as project_aggregates/type_aggregates -- one row per real (non-zero)
   // community code, project resolved back to a name off the same `projects` table
   // projects already use, so a community's own project membership is a plain string
-  // comparison, never a second id space to reconcile.
+  // comparison, never a second id space to reconcile. `projectName` is reader-facing
+  // (THE NAME, NEVER THE SLUG, ruling a1cde8a3) the same way projectAggregates' own
+  // `name` above is.
   const communityAggregates = (snap.communities || []).map((c) => ({
-    code: c.community, projectName: snap.projects[c.project],
+    code: c.community, projectName: Osiris.projectDisplayName(snap.projects[c.project]),
     count: c.count, cx: c.cx, cy: c.cy, radius: c.radius,
   }));
   return { nodes, edges, edgeClassByType, projectAggregates, communityAggregates };
@@ -2648,7 +2654,8 @@ export async function initSpace(container) {
       const div = document.createElement("div");
       div.className = "lod-glyph-label ego-drill-label";
       div.style.cursor = "pointer";
-      div.textContent = `+${entry.count} in ${entry.hiddenProject}`;
+      div.textContent = `+${entry.count} in ${Osiris.projectDisplayName(entry.hiddenProject)}`;
+      div.title = entry.hiddenProject; // THE NAME, NEVER THE SLUG (ruling a1cde8a3): full canonical on hover
       div.addEventListener("click", (ev) => { ev.stopPropagation(); revealProjectStub(entry); });
       labelsEl.appendChild(div);
       entry.div = div;
@@ -3053,7 +3060,8 @@ export async function initSpace(container) {
   function updateHoverCard(nd) {
     const generation = computeGeneration(nd);
     hoverEl.innerHTML = `<div class="hover-label">${labelTextFor(nd)}</div>` +
-      `<div class="hover-meta">${nd.type}${nd.project ? " · " + nd.project : ""}` +
+      `<div class="hover-meta" title="${nd.project ? Osiris.esc(nd.project) : ""}">${nd.type}` +
+      `${nd.project ? " · " + Osiris.esc(Osiris.projectDisplayName(nd.project)) : ""}` +
       `${generation != null ? " · chain depth " + generation : ""}</div>`;
   }
   function positionHoverCard(clientX, clientY) {
@@ -3309,7 +3317,7 @@ export async function initSpace(container) {
     projectLabelCandidates = projectFills
       .filter((d) => d.count >= PROJECT_LABEL_MIN_COUNT)
       .map((d) => ({
-        __isProjectFill: true, id: `project:${d.name}`, name: d.name,
+        __isProjectFill: true, id: `project:${d.name}`, name: d.name, canonical: d.canonical,
         x: d.cx, y: d.cy, degree: d.count,
       }));
   }
@@ -3357,6 +3365,8 @@ export async function initSpace(container) {
       // fallback text now, swapped for the real name async (real nodes only)
       div.textContent = (nd.__isProjectFill || nd.__isCommunity)
         ? `${nd.name} (${nd.degree})` : labelTextFor(nd);
+      // THE NAME, NEVER THE SLUG (ruling a1cde8a3): the full canonical on hover, secondary
+      if (nd.__isProjectFill) div.title = nd.canonical || "";
       labelsEl.appendChild(div);
       labelDivs.set(nd, div);
       // THE REAL-WIDTH DECLUTTER FIX (live-verification finding, mail 11471's own "overlap

@@ -28,9 +28,10 @@ def test_community_code_is_parsed_onto_every_node_off_the_wire() -> None:
 
 
 def test_community_aggregates_resolve_the_project_name_off_the_same_table_projects_use() -> None:
-    body = _SPACE_JS.split("const projectAggregates = ", 1)[1][:900]
+    body = _SPACE_JS.split("const projectAggregates = ", 1)[1][:950]
     assert "const communityAggregates = (snap.communities || []).map((c) => ({" in body
-    assert "code: c.community, projectName: snap.projects[c.project]," in body
+    assert "code: c.community, projectName: Osiris.projectDisplayName(snap.projects[c.project])," \
+        in body
 
 
 def test_fetch_stream_snapshot_returns_community_aggregates_alongside_project_ones() -> None:

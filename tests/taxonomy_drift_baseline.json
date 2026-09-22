@@ -15,6 +15,5 @@
   "src/orchestrator/graph_migrations.py": 25,
   "src/orchestrator/graph_physics.py": 42,
   "src/orchestrator/graph_stream.py": 2,
-  "src/orchestrator/textrender.py": 10,
-  "src/ui/static/console.js": 6
+  "src/orchestrator/textrender.py": 10
 }
