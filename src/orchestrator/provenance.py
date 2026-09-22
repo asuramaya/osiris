@@ -82,6 +82,42 @@ async def message_object_id(pool: asyncpg.Pool, message_id: int, from_agent: str
     return uuid.UUID(str(row)) if row is not None else None
 
 
+async def unread_message_ids(
+    pool: asyncpg.Pool, message_ids: list[int], *, agent_id: str,
+) -> list[int]:
+    """THE FIRST-BREATH READ LAW (thread afd27e1a, Thoth mail 13003): which of
+    `message_ids` has `agent_id` — THIS exact generation, never an ancestor's — never
+    returned in full through a real inbox() call (`inbox-lease` or `inbox-peek`, both
+    already stamped at the door above). mcp_server.py's inbox() calls this to refuse
+    settling an id still in the returned list — an heir minted mid-flight starts with
+    an EMPTY read-set of its own, so acking straight from the wake prompt's own
+    headline preview (never an inbox() call, stamps nothing) is exactly what this
+    catches; a genuine peek OR lease satisfies it, in this call or an earlier one.
+
+    FAILS OPEN, not closed, on what it cannot observe: a message whose own Message
+    object never landed at send time, or one the operator sent (`message_object_id`'s
+    own documented no-stamp-ever rule), returns no `object_id` to check session_reads
+    against at all — reported as read (not flagged), the same fail-open posture every
+    other reader of this table already holds itself to. This law gates what the graph
+    can actually see, it does not invent evidence it doesn't have."""
+    if not message_ids:
+        return []
+    rows = await pool.fetch(
+        "SELECT m.id, m.from_agent FROM fleet_messages m WHERE m.id = ANY($1::bigint[])",
+        message_ids)
+    unread: list[int] = []
+    for r in rows:
+        oid = await message_object_id(pool, r["id"], r["from_agent"])
+        if oid is None:
+            continue
+        seen = await pool.fetchval(
+            "SELECT 1 FROM session_reads WHERE agent_id=$1 AND object_id=$2 "
+            "AND door IN ('inbox-lease','inbox-peek') LIMIT 1", agent_id, oid)
+        if not seen:
+            unread.append(int(r["id"]))
+    return unread
+
+
 async def stamp_possible_upstream(
     actions: Actions, *, written_object_id: uuid.UUID, source_id: str,
     observed_at: datetime | None = None,

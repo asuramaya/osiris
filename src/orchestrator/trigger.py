@@ -1756,7 +1756,15 @@ def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
     record — it carries full attribution (who, to whom, which message, what grade) so a log
     reader, the miner, or the operator scrolling a window sees the hop's provenance without
     leaving the line. The envelope is the KNOCK, never the letter's authority: the addressee
-    still reads and settles through the box."""
+    still reads and settles through the box.
+
+    THE FIRST-BREATH READ LAW'S OWN DISCLOSURE (thread afd27e1a, Thoth mail 13003, item
+    2): `« preview »` below is exactly that — a preview, never a substitute for reading
+    it. Said explicitly, not left implicit, because it's now also enforced: `inbox`
+    itself refuses `ack=[id]` for an id this generation has never returned through a
+    real inbox() call (provenance.unread_message_ids) — an heir acking straight off
+    this envelope, never having read the message itself, is refused, not silently
+    accepted."""
     g = {"ask": "ask — needs your reply or act",
          "fyi": "fyi — an ack settles it"}.get(grade or "", grade or "ungraded")
     return (
@@ -1764,7 +1772,7 @@ def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
         f"│ from : {sender_label}\n"
         f"│ to   : {addressee_label}\n"
         f"│ grade: {g}\n"
-        f"│ « {preview} »\n"
+        f"│ « {preview} » — preview, read inbox() before settling\n"
         f"└─ inbox() reads it whole; settle with send(reply_to={msg_id}) or "
         f"inbox(ack=[{msg_id}]). Reply only with NEW information."
     )

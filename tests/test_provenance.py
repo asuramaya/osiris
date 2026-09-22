@@ -16,6 +16,7 @@ from src.orchestrator.provenance import (
     message_object_id,
     stamp_possible_upstream,
     stamp_read,
+    unread_message_ids,
 )
 from src.parsers.base import EvidenceClass
 
@@ -59,6 +60,51 @@ async def test_message_object_id_returns_none_when_no_message_object_exists(
     # a message whose Message object never landed is skipped, never a fresh mint from
     # the read side (the same existence-checked law mailbox.py holds itself to).
     assert await message_object_id(actions.pool, 55555, "agent:sender") is None
+
+
+async def test_unread_message_ids_flags_an_id_never_read_through_inbox(
+    actions: Actions,
+) -> None:
+    """THE FIRST-BREATH READ LAW (thread afd27e1a, Thoth mail 13003): a message this
+    agent has never returned through a real inbox() call (inbox-lease or inbox-peek)
+    comes back as unread — the exact check `inbox(ack=...)` gates on."""
+    from src.orchestrator.mailbox import send_message
+
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent="agent:reader3", body="an ask")
+    msg_id = int(out["id"])
+    assert await unread_message_ids(actions.pool, [msg_id], agent_id="agent:reader3") == [
+        msg_id]
+
+
+async def test_unread_message_ids_clears_once_a_real_inbox_read_is_stamped(
+    actions: Actions,
+) -> None:
+    """A door OTHER than inbox-lease/inbox-peek (e.g. a search hit surfacing the same
+    Message object) does NOT satisfy the law — only a genuine inbox() call, peek or
+    lease, does."""
+    from src.orchestrator.mailbox import send_message
+
+    out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
+                             to_agent="agent:reader4", body="an ask")
+    msg_id = int(out["id"])
+    msg_oid = await message_object_id(actions.pool, msg_id, "agent:sender")
+    assert msg_oid is not None
+
+    await stamp_read(actions.pool, agent_id="agent:reader4", door="search", object_id=msg_oid)
+    assert await unread_message_ids(actions.pool, [msg_id], agent_id="agent:reader4") == [
+        msg_id]
+
+    await stamp_read(actions.pool, agent_id="agent:reader4", door="inbox-peek",
+                     object_id=msg_oid)
+    assert await unread_message_ids(actions.pool, [msg_id], agent_id="agent:reader4") == []
+
+
+async def test_unread_message_ids_fails_open_with_no_message_object(actions: Actions) -> None:
+    # an id fleet_messages has never heard of (or whose Message object never landed)
+    # cannot be checked against session_reads at all — this law gates what it can
+    # actually observe, it never invents evidence it doesn't have.
+    assert await unread_message_ids(actions.pool, [999999], agent_id="agent:reader5") == []
 
 
 async def test_stamp_possible_upstream_only_reaches_reads_before_the_write(
