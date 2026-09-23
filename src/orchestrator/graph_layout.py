@@ -1,11 +1,11 @@
-"""THE GRAPH VISUALIZER (wave B item 1, thread 8839) -- extended for NAVIGABLE SPACE, THE
-SERVER, piece A (rulings f832c3a4 + 0a3d6719, operator 2026-09-14, thread b6cb1d7c0b36):
-server-side placement over the WHOLE graph, run incrementally by the heartbeat -- positions
+"""THE GRAPH VISUALIZER: extended for NAVIGABLE SPACE, THE
+SERVER, piece A: server-side placement over the WHOLE graph, run incrementally by the
+heartbeat -- positions
 stored as current_assertions (graph_x/graph_y), never computed live in the browser or the
 renderer. This module feeds the /graph endpoints (supernodes/clusters/viewport) and the
 whole-graph typed-array stream (graph_stream.py).
 
-DECLUMP FIX (Thoth mail 10582, PRIORITY -- the operator's own screenshot of the deployed
+DECLUMP FIX (the operator's own screenshot of the deployed
 space showed stacked nodes, collapsed rings, thick edge bundles instead of a spread cloud):
 the FIRST version of this placement rule put every object of one type in one project on a
 SINGLE fixed-radius circle at a random hash angle -- fine for a handful of objects, but this
@@ -34,7 +34,7 @@ against an immutable ORDER instead of an immutable VALUE.
     within that exact group, offset outward from the type's existing base radius (still
     schema.py's declared type order, unchanged) -- so small groups still read as a tight
     ring near that base radius, and only a group large enough to need it spirals outward
-    past it (Thoth's own "beyond one ring's capacity" framing, expressed here as a single
+    past it ("beyond one ring's capacity", expressed here as a single
     formula rather than a two-tier ring-then-disc special case).
 
 A bounded intra-project relax pass still nudges each tick's batch toward already-placed
@@ -54,15 +54,15 @@ WRITE PATH: unchanged -- graph_x/graph_y/graph_layout_v land as ordinary propert
 assertions via one multi-row UPDATE+INSERT per property per tick, safe only because
 GRAPH_LAYOUT_SOURCE is this triple's sole writer.
 
-THE READING LAYER (Thoth mail 10595, ruling c5953bb1 -- the operator's own second
+THE READING LAYER (the operator's own second
 screenshot: clusters far apart, huge cross-cluster bundles). Live measurement: repo:osiris
 degree 20,352, principal:analyst:operator degree 18,472, dev:asuramaya 9,462 -- membership
 edges (in_repo, acts_for, works_in, spawned_by, authored_by...) draw a spoke from nearly
 every object to one of a handful of shared hubs, and the old intra-project relax pulled on
 EVERY same-project edge including those, turning each spoke into a literal spring dragging
 distant objects toward the hub. Two changes fix this:
-  - STRUCTURAL vs SEMANTIC (src.ontology.link_classes, agreed with Seshat by DM before
-    either side committed): relax now pulls ONLY on semantic edges (an actual claim about
+  - STRUCTURAL vs SEMANTIC (src.ontology.link_classes): relax now pulls ONLY on
+    semantic edges (an actual claim about
     content -- cites, follows, possible_upstream...); a structural/membership edge still
     exists as a real fact, it just never exerts a spring force in this layout.
   - PROJECT CENTERS are no longer a sunflower-by-rank: a weighted force layout over the
@@ -77,15 +77,15 @@ distant objects toward the hub. Two changes fix this:
     (this house's own measured population: 11 objects over 1,000, 84 over 100 -- the
     principal Persons and the biggest projects) is pinned to rank 0 within its own
     (project, type) group -- dead center of its own cluster, never spiraled outward by an
-    ordinary creation-order rank, matching the ruling's own "the hub's cluster contains
-    the hub" acceptance line.
+    ordinary creation-order rank, matching the acceptance line that the hub's cluster
+    contains the hub.
 
 graph_layout_v bumped again (3 -> 4) to force the one-time migration this change needs.
 
-THE LEGIBILITY PASS, Khnum tip 2 (operator ruling e1cb9e3b, 2026-09-14 evening, on
-screenshots and Thoth's own live measurement -- median nearest-neighbour 19 units at
-the fitted zoom, "the pink giant is the osiris project's 19,035-agent sunflower disc
-drawn solid, the purple onions are type rings"). Piece (h): TYPE RINGS ARE GONE.
+THE LEGIBILITY PASS (based on operator feedback on
+screenshots and a live measurement -- median nearest-neighbour 19 units at
+the fitted zoom: the osiris project's own 19,035-agent sunflower disc was drawn solid,
+with visible per-type rings inside it). TYPE RINGS ARE GONE.
 Placement within a project is now by SEMANTIC ADJACENCY alone: an object carrying ANY
 live semantic edge (globally, not just within this project -- the same reading
 `_hub_ids`'s own structural-degree check already uses) is CONNECTED and seeds inside
@@ -103,9 +103,9 @@ ordinary creation-order rank.
 
 graph_layout_v bumped again (4 -> 5) to force the one-time migration this change needs.
 
-DENSITY NOT DISCS (ruling 6f866d9d, operator 2026-09-15 morning, "lets try that" -- the
+DENSITY NOT DISCS (per operator feedback: the
 near view is a green fan because cluster spacing was radii-plus-a-fixed-gutter with the
-halo ring between clusters and every edge drawing at full alpha). Server-side tips (f)
+halo ring between clusters and every edge drawing at full alpha). Server-side fixes (f)
 and (g):
   (f) CLUSTER SPACING, NOT TWO RADII PLUS 300: `_relax_projects`'s old minimum
       inter-project distance summed two independently sunflower-derived "radii"
@@ -126,7 +126,7 @@ and (g):
       tightening around each cluster's own real content instead of a shared worst case.
 graph_layout_v bumped again (5 -> 6) to force the one-time migration this change needs.
 
-THE PHYSICS LAYOUT (operator ruling d7d55257, Thoth mail 11047): the sunflower/
+THE PHYSICS LAYOUT (per operator ruling): the sunflower/
 declump scheme above is retired as the WHOLE-GRAPH placement rule -- see
 src.orchestrator.graph_physics for the real force simulation that replaces it
 (springs for semantic edges, weak container-gravity, nested communities, run once
@@ -145,7 +145,7 @@ already-placed semantic neighbours and live container objects (`_live_containers
 container centroid)" -- then the SAME bounded local relax as before nudges it from
 that seed, with every already-placed object still pinned.
 
-THE DEAD SUNFLOWER CODE REMOVAL (bbox compactness follow-up, decision cc2f2ea7):
+THE DEAD SUNFLOWER CODE REMOVAL (bbox compactness follow-up):
 the ADJACENCY/HALO band scheme this section replaced (`_adjacency_ranks`,
 `adjacency_position`, `_project_halo_base`, `_project_connected_counts`, plus the
 `_INNER_BASE`/`_HALO_BASE`/`_HALO_MARGIN`/`_HALO_MIN`/`_UNFILED_KEY` constants that
@@ -153,7 +153,7 @@ existed only to feed it) genuinely had zero callers anywhere and has been remove
 `_place_projects`, `_relax_projects` and `project_center` were WRONGLY grouped with
 that dead scheme by an earlier version of this same paragraph -- a stale claim,
 caught before it caused a live deletion: all three are THE READING LAYER's own
-(ruling c5953bb1) still-live machinery, called directly by `layout_batch` below for
+still-live machinery, called directly by `layout_batch` below for
 every newly-arriving SoftwareProject and the unfiled sentinel's own center. A
 comment naming its own dead siblings is exactly the kind of claim that needs a real
 grep before it's trusted, not just re-quoted forward.
@@ -236,7 +236,7 @@ _MEMBERSHIP_CONTAINER_LINK_TYPES = frozenset({"in_repo", "works_in", "holds", "m
 
 
 LAST_DECLUMP_WORK: dict[str, int] = {"pairs_resolved": 0, "iterations_run": 0}
-# THE DECLUMP REWRITE (operator's word 2026-09-18): `_declump` has no timing
+# THE DECLUMP REWRITE (per operator direction): `_declump` has no timing
 # assertion of its own (a shared box's load is never a correctness signal) -- this
 # is the real, measured DETERMINISTIC work its most recent call actually did
 # (pairs the KD-tree search resolved across every iteration, and how many
@@ -319,11 +319,11 @@ async def _project_and_type(
     a rare multi-project membership still yields exactly one (deterministic: the lowest
     link id) rather than fanning an id out into two placement candidates. The project's
     own ID (not its canonical) is what a caller needs to look up ITS stored center via
-    `positions_for` -- THE READING LAYER, ruling c5953bb1: a project's position is no
+    `positions_for` -- THE READING LAYER: a project's position is no
     longer derivable from a rank alone, it has to be read back from wherever
     `_place_projects` actually put it.
 
-    THE MEMBERSHIP UNION FIX (ruling d7d55257, Thoth mail 11221): `project_id` is
+    THE MEMBERSHIP UNION FIX: `project_id` is
     now `COALESCE(<in_repo target>, <project assertion mapped to its repo object
     by canonical 'repo:'||name>)` -- in_repo still wins when an object somehow
     carries both, the assertion is only ever a fallback for an object with NO live
@@ -351,7 +351,7 @@ async def _project_and_type(
 async def _neighbors_of(
     actions: Actions, ids: list[uuid.UUID], *, semantic_only: bool = False,
 ) -> dict[uuid.UUID, set[uuid.UUID]]:
-    """`semantic_only` (THE READING LAYER, ruling c5953bb1): drop every structural/
+    """`semantic_only` (THE READING LAYER): drop every structural/
     membership edge before it can ever reach the relax pass -- a spoke to a shared
     hub (in_repo, acts_for, works_in...) is a real fact, it just never gets to act as
     a spring in this layout, which is exactly the fix for the "huge cross-cluster
@@ -378,7 +378,7 @@ async def _neighbors_of(
 async def _live_containers_of(
     actions: Actions, ids: list[uuid.UUID],
 ) -> dict[uuid.UUID, list[uuid.UUID]]:
-    """THE PHYSICS LAYOUT (Thoth mail 11047), item 6: every live CONTAINER_LINK_TYPES
+    """THE PHYSICS LAYOUT, item 6: every live CONTAINER_LINK_TYPES
     target FROM each id -- an object can genuinely have several (its own project via
     in_repo, an Agent's own works_in project, acts_for principal, spawned_by parent,
     holds seat, member_of organization), all real candidates for the new-object
@@ -430,7 +430,7 @@ def _centroid_seed(
 
 
 def _grid_cells(pos: np.ndarray, cell_size: float) -> dict[tuple[int, int], list[int]]:
-    """THE PHYSICS LAYOUT OOM FIX (Thoth mail 11097): a spatial-hash structure built
+    """THE PHYSICS LAYOUT OOM FIX: a spatial-hash structure built
     to replace a full (n,n,2) pairwise array -- the old form of that array-building
     code built exactly that array over the WHOLE population every iteration, 40 GB
     at n=50,087 (kernel-confirmed OOM kill, anon-rss 26.3 GB before it died).
@@ -442,7 +442,7 @@ def _grid_cells(pos: np.ndarray, cell_size: float) -> dict[tuple[int, int], list
     a 1000x1000 array (16 MB) is nothing; the physics migration's 50,087x50,087 one
     was 40 GB.
 
-    `graph_layout._declump` (THE DECLUMP REWRITE, operator's word 2026-09-18) no
+    `graph_layout._declump` (THE DECLUMP REWRITE) no
     longer uses this -- it moved to a `scipy.spatial.cKDTree` pair search instead,
     see that function's own docstring. This spatial-hash structure is still real,
     live code: `graph_physics.py`'s own whole-graph hard-minimum-distance clamp
@@ -542,7 +542,7 @@ def _declump(
     pos: np.ndarray, anchor_pos: np.ndarray, ids: list[uuid.UUID], *,
     min_sep: float = _MIN_SEPARATION, iterations: int = 30,
 ) -> np.ndarray:
-    """The HARD MINIMUM-SEPARATION pass (Thoth mail 10582, PRIORITY): a direct,
+    """The HARD MINIMUM-SEPARATION pass: a direct,
     deterministic correction, never another force-simulation step -- `relax()`'s own
     repulsion approaches but does not GUARANTEE a floor within a bounded iteration
     count, so strong attraction could still leave two connected nodes (or a node and
@@ -553,7 +553,7 @@ def _declump(
     times since separating one pair can nudge another pair together, and stops the
     moment a full pass finds nothing left to fix.
 
-    KD-TREE PAIR SEARCH (THE DECLUMP REWRITE, operator's word 2026-09-18, superseding
+    KD-TREE PAIR SEARCH (THE DECLUMP REWRITE, superseding
     the spatial-hash-grid version this function held before): `scipy.spatial.cKDTree`
     replaces the grid-hash's own cell bucketing entirely. Movable-movable pairs come
     from `cKDTree(pos).query_pairs(min_sep)` -- a single C-level call over the whole
@@ -629,7 +629,7 @@ def relax(
     doesn't pass one (this module's own pure-function unit tests keep working
     unchanged).
 
-    Ends with `_declump`'s hard minimum-separation pass (Thoth mail 10582) -- see its
+    Ends with `_declump`'s hard minimum-separation pass -- see its
     own docstring; this is what actually guarantees two connected nodes never end up
     stacked, since the FR iterations above only ever approach that floor.
 
@@ -648,7 +648,7 @@ def relax(
         pos = rng.uniform(-50, 50, size=(n, 2))
 
     # the edge list as index pairs INTO `pos` (unplaced-unplaced) and a separate
-    # unplaced-index/anchor-position list (unplaced-anchor) — built once, outside the
+    # unplaced-index/anchor-position list (unplaced-anchor), built once, outside the
     # iteration loop, since the topology never changes across iterations.
     uu_pairs: list[tuple[int, int]] = []
     seen_pairs: set[tuple[int, int]] = set()
@@ -678,7 +678,7 @@ def relax(
         repel = (_IDEAL_EDGE_LEN ** 2) / dist                           # (n, n)
         disp = (delta / dist[:, :, None] * repel[:, :, None]).sum(axis=1)  # (n, 2)
 
-        # attraction along edges — unplaced-unplaced (both ends move, opposite signs) and
+        # attraction along edges: unplaced-unplaced (both ends move, opposite signs) and
         # unplaced-anchor (only the unplaced end moves), each a single vectorized pass.
         if len(uu):
             a, b = uu[:, 0], uu[:, 1]
@@ -711,7 +711,7 @@ def _intra_project_neighbors(
     attraction within a project": a cross-project edge never pulls either endpoint,
     regardless of how it would have pulled under the old whole-graph relax. `neighbors`
     itself is expected to already be SEMANTIC-only (see `_neighbors_of`'s own
-    `semantic_only` -- THE READING LAYER, ruling c5953bb1: a structural/membership edge
+    `semantic_only` -- THE READING LAYER: a structural/membership edge
     never pulls here, project-mate or not)."""
     out: dict[uuid.UUID, set[uuid.UUID]] = {}
     for nid in unplaced:
@@ -727,12 +727,12 @@ async def _hub_ids(actions: Actions, ids: list[uuid.UUID]) -> set[uuid.UUID]:
     """Objects whose STRUCTURAL-edge degree meets `_HUB_DEGREE_THRESHOLD` -- these get
     pinned to rank 0 within their own (project, type) group (dead center of that
     group's own sunflower disc) rather than an ordinary creation-order rank, per THE
-    READING LAYER's own "the hub's cluster contains the hub" acceptance line.
+    READING LAYER's own acceptance line that the hub's cluster contains the hub.
 
-    THE LONG EDGES RULING tip (d) (operator, grounds d7d55257): a MEMBERSHIP
+    THE LONG EDGES RULING, tip (d): a MEMBERSHIP
     container (any object that is the TARGET of a live in_repo/works_in/holds/
     member_of link -- a SoftwareProject, a Seat) is NEVER a hub-zone candidate,
-    however high its own structural degree measures -- ruling d7d55257 already
+    however high its own structural degree measures -- the ruling already
     says "the container node is placed AT the centroid it earns", and
     `graph_physics`'s own level-2 machinery (or, for a non-project container,
     `_place_unfiled`'s now-widened neighbour-mean) already gives it exactly that
@@ -827,7 +827,7 @@ def _relax_projects(
     *, iterations: int = _PROJECT_RELAX_ITERATIONS, gutter: float = _PROJECT_GUTTER,
     spacing_k: float = _PROJECT_SPACING_K,
 ) -> dict[uuid.UUID, tuple[float, float]]:
-    """THE READING LAYER's own project-center layout (ruling c5953bb1): plain Python,
+    """THE READING LAYER's own project-center layout: plain Python,
     never vectorized -- N is a few dozen projects, not thousands, so the clarity of a
     direct pairwise loop matters more than the constant-factor speedup `relax()`
     needs at object scale. Two differences from `relax()`'s own model: the minimum
@@ -920,7 +920,7 @@ def _relax_projects(
 async def _place_projects(
     actions: Actions, unplaced_ids: list[uuid.UUID],
 ) -> dict[uuid.UUID, tuple[float, float]]:
-    """THE READING LAYER (ruling c5953bb1): project centers via a weighted force
+    """THE READING LAYER: project centers via a weighted force
     layout over the CONTRACTED project graph instead of a rank-based sunflower --
     two projects that actually reference each other's own objects end up closer than
     two unrelated projects of similar size, never a hash and never independent of the
@@ -974,7 +974,7 @@ async def layout_batch(actions: Actions, *, limit: int | None = None) -> int:
     force-layout placement (`_place_projects`) and are written FIRST, so every other
     object placed in the SAME tick can look up its own project's real stored center
     rather than a placeholder. Every other object gets a deterministic CENTROID base
-    position (THE PHYSICS LAYOUT, Thoth mail 11047, item 6: the mean of its already-
+    position (THE PHYSICS LAYOUT, item 6: the mean of its already-
     placed semantic neighbours' and live containers' own positions -- `_centroid_seed`/
     `_live_containers_of` -- falling back to the unfiled origin only when genuinely
     isolated), nudged by a few iterations of intra-project SEMANTIC-only edge
@@ -991,7 +991,7 @@ async def layout_batch(actions: Actions, *, limit: int | None = None) -> int:
     the other).
 
     `limit=None` (every real caller -- the cron heartbeat and `run_layout_migrate`)
-    reads `layout.batch_size` off the LIVE settings table (Thoth mail 10609, product
+    reads `layout.batch_size` off the LIVE settings table (product
     law: every action has an entry point) via `current_stored_value` -- effect='next_tick' is
     genuine here, not the env-overlay path that only covers effect='immediate' keys --
     falling back to `_BATCH_SIZE` when the key has never been written. Passing an
@@ -1075,7 +1075,7 @@ async def _release_layout_lock(conn: asyncpg.Connection) -> None:
 async def run_layout_migrate(
     actions: Actions, *, limit: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """THE MIGRATION ENTRY POINT (Thoth mail 10609): loop `layout_batch` until
+    """THE MIGRATION ENTRY POINT: loop `layout_batch` until
     `unplaced_batch` runs dry, yielding one receipt per batch as it happens rather
     than collecting a final report -- a `graph_layout_v` bump otherwise waits on the
     cron heartbeat's own 1000-objects/5-minute pace (hours for a real migration).

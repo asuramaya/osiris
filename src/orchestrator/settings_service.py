@@ -1,17 +1,16 @@
-"""THE SETTINGS REGISTRY's own SERVICE layer (THE SETTINGS MENU, ruling be1b2e47, thread
-f4498ab304e4 piece 1, Thoth's GO mail 10040) — the VALUES half over `src/config/
-settings_registry.py`'s own DECLARATIONS, generalizing `backup_settings.py`'s singleton-
-table + charter_for-shaped entry point into the one `settings` table (migration 0067) every
-future knob writes into without its own migration.
+"""The settings registry's own service layer (the settings menu): the VALUES half over
+`src/config/settings_registry.py`'s own DECLARATIONS, generalizing `backup_settings.py`'s
+singleton-table + charter_for-shaped entry point into the one `settings` table (migration
+0067) every future knob writes into without its own migration.
 
-THE OVERLAY IS THE RISK (Thoth's own words, mail 10040) — `settings_with_overlay` is
+THE OVERLAY IS THE RISK: `settings_with_overlay` is
 OPT-IN PER FIELD: it only ever overrides a `Settings` attribute named by some
 `SettingSpec.env_field`, never a blanket rewrite of `get_settings()` itself (every one of
 its 250+ existing call sites is untouched and behaves exactly as before unless a caller
 explicitly switches to this function). One DB read per short TTL (`_OVERLAY_TTL_SECS`),
 fails open to the env/pydantic default on ANY error (a DB hiccup must never sink a cron),
 and is never consulted on paths that run before a DB exists (migrations, soul-key init,
-deploy's own preflight — those keep calling bare `get_settings()`, unchanged)."""
+deploy's own preflight, those keep calling bare `get_settings()`, unchanged)."""
 from __future__ import annotations
 
 import json
@@ -29,12 +28,12 @@ _overlay_cache: dict[str, tuple[float, dict[str, Any]]] = {}
 
 def _row_value(raw: Any) -> Any:
     """jsonb round-trips as text via this driver setup (backup_settings.py's own
-    `_row` helper carries the identical cast) — never assume the wire type."""
+    `_row` helper carries the identical cast); never assume the wire type."""
     return json.loads(raw) if isinstance(raw, str) else raw
 
 
 async def _overlay_map(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Every box-scope `settings` row, cached for `_OVERLAY_TTL_SECS` — ONE query no
+    """Every box-scope `settings` row, cached for `_OVERLAY_TTL_SECS`: ONE query no
     matter how many registered keys have `effect='immediate'`, not one query per key.
     Fails open (empty map, meaning "nothing overridden") on any read error."""
     now = time.monotonic()
@@ -43,7 +42,7 @@ async def _overlay_map(pool: asyncpg.Pool) -> dict[str, Any]:
         return cached[1]
     try:
         rows = await pool.fetch("SELECT key, value FROM settings WHERE scope='box' AND scope_id=''")
-    except Exception:  # noqa: BLE001 — fails open, never blocks a caller on a DB hiccup
+    except Exception:  # noqa: BLE001, fails open, never blocks a caller on a DB hiccup
         return {}
     m = {r["key"]: _row_value(r["value"]) for r in rows}
     _overlay_cache["box"] = (now, m)
@@ -52,12 +51,12 @@ async def _overlay_map(pool: asyncpg.Pool) -> dict[str, Any]:
 
 async def settings_with_overlay(pool: asyncpg.Pool) -> Settings:
     """`get_settings()`, with every REGISTERED `effect='immediate'` key's own current
-    `settings` value substituted in when one has been written — env/pydantic default
+    `settings` value substituted in when one has been written, env/pydantic default
     otherwise. Callers that want a registered daemon switch to be genuinely live (no
     restart) call this instead of bare `get_settings()`; every other call site is
     unaffected, by construction (opt-in per field).
 
-    CALL-TIME IMPORT, DELIBERATE (this codebase's own established convention — see any
+    CALL-TIME IMPORT, DELIBERATE (this codebase's own established convention, see any
     arq_worker.py heartbeat): a module-level `from ... import get_settings` binds the
     name ONCE at import time, permanently immune to a test's own
     `monkeypatch.setattr(settings_mod, "get_settings", ...)` on the SOURCE module's
@@ -72,11 +71,11 @@ async def settings_with_overlay(pool: asyncpg.Pool) -> Settings:
     overrides = {
         spec.env_field: overlay[spec.key]
         for spec in SETTINGS
-        # secret_ref excluded on purpose (SECRETS ROTATE ACT, thread f4498ab304e4's own
-        # follow-up): its stored `settings` row is a bare {"rotated": true} MARKER, never
-        # the real value (rotate_secret writes the real value to spec.backing_file
-        # instead) — substituting that marker onto a str-typed Settings field would
-        # silently corrupt it, so this filter is load-bearing, not defensive dead code.
+        # secret_ref excluded on purpose (the secrets rotate act): its stored `settings`
+        # row is a bare {"rotated": true} MARKER, never the real value (rotate_secret
+        # writes the real value to spec.backing_file instead); substituting that marker
+        # onto a str-typed Settings field would silently corrupt it, so this filter is
+        # load-bearing, not defensive dead code.
         if spec.effect == "immediate" and spec.env_field and spec.key in overlay
         and spec.type != "secret_ref"
     }
@@ -85,24 +84,25 @@ async def settings_with_overlay(pool: asyncpg.Pool) -> Settings:
 
 async def current_stored_value(pool: asyncpg.Pool, key: str) -> Any | None:
     """THE CURRENT `settings` TABLE VALUE for ONE registered key, regardless of its own
-    `effect` classification (thread bc6a5d455da2, REBOOT SURVIVAL's fleet half) —
-    deliberately NOT routed through `settings_with_overlay`'s own opt-in-per-field
-    'immediate' filter, which this module's own docstring names as A DELIBERATE RISK
-    BOUNDARY (Thoth mail 10040: "THE OVERLAY IS THE RISK"), not an oversight to widen.
+    `effect` classification (reboot survival's fleet half): deliberately NOT routed
+    through `settings_with_overlay`'s own opt-in-per-field 'immediate' filter, which
+    this module's own docstring names as A DELIBERATE RISK BOUNDARY ("the overlay is
+    the risk"), not an oversight to widen.
 
     The live specimen this exists for: `wake.trigger.enabled` is registered `effect=
     'next_tick'` (settings_registry.py), so `settings_with_overlay` never substitutes
-    it — correct for that filter's own stated purpose, but it leaves NO caller any way
-    to read the operator's actual CURRENT stored toggle across a process boundary that
-    lacks the worker's own environment drop-in (a bare CLI invocation run from an
-    interactive shell, during an MCP outage — exactly the trigger-dark false-negative
-    Thoth's mail 10225 diagnosed). This function is that narrow escape hatch: ONE named
-    key, read straight from the stored overlay map, no `effect` filtering at all — never
-    call it in a loop over many keys (use `settings_with_overlay` for that; this pays
-    the same `_overlay_map` cache, just skips its own field-selection step for callers
-    that already know exactly which one key they need). Returns None when nothing has
-    been written for `key` (the caller's own job to fall back to the env/pydantic
-    default), or when `key` is not a registered spec at all."""
+    it. That is correct for that filter's own stated purpose, but it leaves NO caller
+    any way to read the operator's actual CURRENT stored toggle across a process
+    boundary that lacks the worker's own environment drop-in (a bare CLI invocation
+    run from an interactive shell, during an MCP outage: exactly the trigger-dark
+    false-negative this function was built to fix). This function is that narrow
+    escape hatch: ONE named key, read straight from the stored overlay map, no
+    `effect` filtering at all. Never call it in a loop over many keys (use
+    `settings_with_overlay` for that; this pays the same `_overlay_map` cache, just
+    skips its own field-selection step for callers that already know exactly which
+    one key they need). Returns None when nothing has been written for `key` (the
+    caller's own job to fall back to the env/pydantic default), or when `key` is not
+    a registered spec at all."""
     if spec_by_key(key) is None:
         return None
     overlay = await _overlay_map(pool)
@@ -111,7 +111,7 @@ async def current_stored_value(pool: asyncpg.Pool, key: str) -> Any | None:
 
 def _invalidate_overlay_cache() -> None:
     """Called by `write_setting` so a write is visible on the very next read, never
-    stale for up to `_OVERLAY_TTL_SECS`; also the test-fixture reset — a module-level
+    stale for up to `_OVERLAY_TTL_SECS`; also the test-fixture reset. A module-level
     cache would otherwise leak a value written by one test into another sharing the
     same xdist worker within the TTL window."""
     _overlay_cache.clear()
@@ -125,7 +125,7 @@ def _current_value(spec: SettingSpec, stored: Any) -> Any:
 
 async def _restart_unit_env_value(unit: str, env_field: str, spec_type: str) -> Any:
     """Best-effort LIVE value off the RUNNING unit's own environment (`systemctl --user
-    show ... -p Environment`) — 'unavailable, not fabricated' the moment this isn't
+    show ... -p Environment`): 'unavailable, not fabricated' the moment this isn't
     running on a box with that unit installed (CI, a dev worktree, systemd absent
     entirely), the same law compositions.py's own `_backup_timer_live_state` holds.
     Bounded subprocess timeout; any error at all degrades to None, never raises."""
@@ -164,10 +164,10 @@ async def _restart_unit_env_value(unit: str, env_field: str, spec_type: str) -> 
 
 
 def _rendered_backup_timer_value(key: str) -> Any:
-    """The actually-shipped `deploy/<unit>` file's own `OnCalendar=` line — generalizing
+    """The actually-shipped `deploy/<unit>` file's own `OnCalendar=` line, generalizing
     compositions.py's own `_backup_timer_calendar` (same read, same file) for the
     registry's `backup.timer_schedule.<unit>` keys. None when the key names anything
-    else (no rendered-file counterpart exists at all, e.g. `backup.vault_path` — never
+    else (no rendered-file counterpart exists at all, e.g. `backup.vault_path`, never
     a guess) or the file doesn't carry that line."""
     prefix = "backup.timer_schedule."
     if not key.startswith(prefix):
@@ -178,9 +178,8 @@ def _rendered_backup_timer_value(key: str) -> Any:
 
 
 async def live_value(pool: asyncpg.Pool, spec: SettingSpec) -> Any:
-    """THE RUNNING/SHIPPED value beside the STORED one (Thoth's mail 10111, thread
-    c5ba8681) — null whenever a cheap read doesn't exist, never fabricated. See the
-    scope note annotated on c5ba8681 for the full per-effect rationale:
+    """THE RUNNING/SHIPPED value beside the STORED one: null whenever a cheap read
+    doesn't exist, never fabricated. The full per-effect rationale:
     'immediate' reads the same cached overlay list/get already pays for; 'restart:<unit>'
     polls the running unit's own environment; 'next_deploy' reads the shipped file;
     anything else (a secret, or 'next_tick') has no cheap live source and stays null."""
@@ -191,7 +190,7 @@ async def live_value(pool: asyncpg.Pool, spec: SettingSpec) -> Any:
             return None
         try:
             base = await settings_with_overlay(pool)
-        except Exception:  # noqa: BLE001 — a live extra is a nice-to-have, never a crash
+        except Exception:  # noqa: BLE001, a live extra is a nice-to-have, never a crash
             return None
         return getattr(base, spec.env_field, None)
     if spec.effect.startswith("restart:"):
@@ -206,14 +205,14 @@ async def live_value(pool: asyncpg.Pool, spec: SettingSpec) -> Any:
 
 async def list_settings(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every declared SettingSpec's own metadata plus its current stored value (falling
-    back to the spec's default when unset) — what a menu renders from, so a new knob
+    back to the spec's default when unset): what a menu renders from, so a new knob
     added to SETTINGS appears with zero frontend change. Secrets never carry a real
     value here, only presence. `live` (null when not cheap to compute) is the
-    running/shipped counterpart — see `live_value`'s own docstring."""
+    running/shipped counterpart, see `live_value`'s own docstring."""
     try:
         rows = await pool.fetch("SELECT key, value FROM settings WHERE scope='box' AND scope_id=''")
         stored = {r["key"]: _row_value(r["value"]) for r in rows}
-    except Exception:  # noqa: BLE001 — a list read degrades to defaults, never crashes
+    except Exception:  # noqa: BLE001, a list read degrades to defaults, never crashes
         stored = {}
     return [
         {
@@ -229,12 +228,12 @@ async def list_settings(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 
 async def get_setting(pool: asyncpg.Pool, key: str) -> dict[str, Any]:
-    """One key's own current value plus its `live` counterpart (null when not cheap —
-    see `live_value`). `{"error": ...}` when the key is not registered — this call only
+    """One key's own current value plus its `live` counterpart (null when not cheap,
+    see `live_value`). `{"error": ...}` when the key is not registered: this call only
     ever answers for a declared knob, never an arbitrary string."""
     spec = spec_by_key(key)
     if spec is None:
-        return {"error": f"unknown setting key: {key!r} — not in the registry"}
+        return {"error": f"unknown setting key: {key!r}, not in the registry"}
     row = await pool.fetchrow(
         "SELECT value FROM settings WHERE key=$1 AND scope='box' AND scope_id=''", key)
     stored = _row_value(row["value"]) if row is not None else None
@@ -242,7 +241,7 @@ async def get_setting(pool: asyncpg.Pool, key: str) -> dict[str, Any]:
 
 
 def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
-    """Generic, type-driven validation — one function for every knob's own shape,
+    """Generic, type-driven validation: one function for every knob's own shape,
     never a bespoke per-key check (backup_settings.py's own `_validate` is exactly the
     per-feature duplication this generalizes away). Returns a structured
     {field, message} error, or None when the value is well-shaped for its type."""
@@ -256,7 +255,7 @@ def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
     if t == "str" and not isinstance(value, str):
         return {"field": spec.key, "message": "must be a string"}
     # 'path'/'schedule' both accept None meaning "no override, use the shipped default"
-    # (THE SETTINGS MENU piece 3, thread 7eb26f68) — the only way to CLEAR a real infra
+    # (the settings menu): the only way to CLEAR a real infra
     # path or schedule back off, not just overwrite it with another one.
     if t == "path" and value is not None and not isinstance(value, str):
         return {"field": spec.key, "message": "must be a string, or null to unset"}
@@ -284,7 +283,7 @@ def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
                 fval = item[fname]
                 if ftype == "bool" and not isinstance(fval, bool):
                     return {"field": f"{spec.key}[{i}].{fname}", "message": "must be a boolean"}
-                # BUG FOUND AND FIXED IN PASSING (thread dd11ab34, GUI PARITY): a `None`
+                # BUG FOUND AND FIXED IN PASSING: a `None`
                 # value used to be rejected here unconditionally for EVERY "str"-typed
                 # record field, even one a spec's own custom `validate` callback treats
                 # as legitimately nullable (backup.offload_targets' own
@@ -310,11 +309,11 @@ def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
 
 
 def _write_env_file_line(path: str, key: str, value: str) -> None:
-    """Rewrite (or append) one KEY=value line in a flat EnvironmentFile= — the exact
+    """Rewrite (or append) one KEY=value line in a flat EnvironmentFile=: the exact
     shape systemd's own EnvironmentFile= consumes (deploy/osiris.env.example), never a
     full re-serialization that could reorder or clobber unrelated lines/comments.
-    Creates the file (and its parent directory) with 0600 perms if it doesn't exist yet
-    — a secret, never world- or group-readable."""
+    Creates the file (and its parent directory) with 0600 perms if it doesn't exist yet,
+    a secret, never world- or group-readable."""
     import os
     from pathlib import Path
 
@@ -337,20 +336,20 @@ async def _rotate_secret(
     pool: asyncpg.Pool, spec: SettingSpec, value: Any, *, actor: str, because: str,
     scope_id: str,
 ) -> dict[str, Any]:
-    """THE SECRETS ROTATE ACT (thread f4498ab304e4's own follow-up, Thoth mail 10441):
-    `write_setting`'s own secret_ref branch — a write on a secret_ref key IS a rotate,
-    the same call, no second action to learn. The real value goes into `spec`'s own
-    `backing_file` (0600, a KEY=value line, `env_field.upper()` as the key) — NEVER the
-    `settings` table and NEVER echoed back in the receipt. Only a bare `{"rotated":
-    true}` marker lands in the table (rev-bumped the same way every other write is),
-    preserving `list_settings`/`get_setting`'s own pre-existing `{"set": stored is not
+    """THE SECRETS ROTATE ACT: `write_setting`'s own secret_ref branch. A write on a
+    secret_ref key IS a rotate, the same call, no second action to learn. The real
+    value goes into `spec`'s own `backing_file` (0600, a KEY=value line,
+    `env_field.upper()` as the key), NEVER the `settings` table and NEVER echoed back
+    in the receipt. Only a bare `{"rotated": true}` marker lands in the table
+    (rev-bumped the same way every other write is), preserving
+    `list_settings`/`get_setting`'s own pre-existing `{"set": stored is not
     None}` bookkeeping (`_current_value`) without the table ever holding the real
     value."""
     if not isinstance(value, str) or not value.strip():
         return {"error": "must be a non-empty string",
                 "errors": [{"field": spec.key, "message": "must be a non-empty string"}]}
     if not spec.backing_file or not spec.env_field:
-        return {"error": f"{spec.key!r} has no backing_file/env_field declared — "
+        return {"error": f"{spec.key!r} has no backing_file/env_field declared, "
                          "cannot rotate"}
     try:
         _write_env_file_line(spec.backing_file, spec.env_field.upper(), value)
@@ -381,7 +380,7 @@ async def _authorized(
     pool: asyncpg.Pool, spec: SettingSpec, *, actor: str, scope_id: str, ruling: str | None,
 ) -> str | None:
     """The authority ENUM's own three branches, each reusing an EXISTING check
-    (`charter_for`'s own shape, charter.py) — never a new mechanism per knob. Returns an
+    (`charter_for`'s own shape, charter.py), never a new mechanism per knob. Returns an
     error string, or None when authorized."""
     from src.orchestrator.seats import _OPERATOR_ACTORS
 
@@ -399,7 +398,7 @@ async def _authorized(
         check = await verify_ruling(pool, ruling, write_name=spec.write_name or spec.key)
         return None if check["ok"] else check["error"]
     hint = ("a manager of the target seat, " if spec.authority == "operator_or_manager" else "")
-    return (f"{actor!r} is not an operator actor — this setting requires {hint}"
+    return (f"{actor!r} is not an operator actor, this setting requires {hint}"
             "citing a standing ruling via `ruling=`, or the operator making this "
             "change directly")
 
@@ -408,20 +407,20 @@ async def write_setting(
     pool: asyncpg.Pool, key: str, value: Any, *, actor: str, because: str = "",
     scope_id: str = "", ruling: str | None = None,
 ) -> dict[str, Any]:
-    """THE WRITE PATH — `backup_settings.write_backup_settings`'s own authority shape,
+    """THE WRITE PATH: `backup_settings.write_backup_settings`'s own authority shape,
     generalized over the registry rather than one hardcoded field set. Returns
-    `{"error": ..., "errors": [{"field","message"}, ...]}` on any refusal (structured,
-    Seshat's fold 5, never one bare string for a menu to show per-field), or
-    `{"key","value","rev"}` on success — EXCEPT a `type='secret_ref'` key, where a
-    write IS a rotate (`_rotate_secret`, SECRETS ROTATE ACT, thread f4498ab304e4's own
-    follow-up): `{"key","rotated":true,"rev",...}`, never `value` — the real secret
+    `{"error": ..., "errors": [{"field","message"}, ...]}` on any refusal (a
+    structured error, never one bare string for a menu to show per-field), or
+    `{"key","value","rev"}` on success, EXCEPT a `type='secret_ref'` key, where a
+    write IS a rotate (`_rotate_secret`, the secrets rotate act):
+    `{"key","rotated":true,"rev",...}`, never `value`. The real secret
     goes into the spec's own backing file, never this table, never echoed back."""
     spec = spec_by_key(key)
     if spec is None:
-        return {"error": f"unknown setting key: {key!r} — not in the registry"}
+        return {"error": f"unknown setting key: {key!r}, not in the registry"}
     because = (because or "").strip()
     if spec.requires_because and not because:
-        return {"error": "because is required — changing this setting is testimony, "
+        return {"error": "because is required, changing this setting is testimony, "
                          "same discipline every operator-authority write in this house runs"}
     auth_error = await _authorized(pool, spec, actor=actor, scope_id=scope_id, ruling=ruling)
     if auth_error:
