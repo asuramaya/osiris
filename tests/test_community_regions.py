@@ -97,7 +97,7 @@ def test_community_ribbon_lines_never_draw_below_mid_zoom() -> None:
     assert "const unresolved = communityRegionsVisible" in body
     assert "? communityRibbons.filter((r) => !communityRibbonsResolvedKeys.has(ribbonKey(r)))" \
         in body
-    assert ": []; // never drawn at all below mid zoom -- the plain same-project line " \
+    assert ": []; // never drawn at all below mid zoom: the plain same-project line " \
         "covers it" in body
 
 

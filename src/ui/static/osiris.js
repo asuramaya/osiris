@@ -1,10 +1,10 @@
-/* Osiris UI library — the shared rendering atoms.
+/* Osiris UI library: the shared rendering atoms.
  *
- * P4 of the composer: the surfaces stop owning their own renderers. A composition Result
- * (objects / values / rows / data) renders through ONE function here, reusing the same
- * graph, card, table and provenance atoms. The shell (the composer) composes these; it
- * does not redefine them. The type catalog is the SEMANTIC LAYER, read from /schema —
- * never hardcoded. The UI is an application over the ontology; it reads, never defines.
+ * The surfaces do not own their own renderers. A composition Result (objects / values /
+ * rows / data) renders through ONE function here, reusing the same graph, card, table and
+ * provenance atoms. The shell (the composer) composes these; it does not redefine them.
+ * The type catalog is the SEMANTIC LAYER, read from /schema, never hardcoded. The UI is an
+ * application over the ontology; it reads, never defines.
  */
 const Osiris = (() => {
   const $ = (id) => document.getElementById(id);
@@ -26,7 +26,7 @@ const Osiris = (() => {
   const pct = (v) => (v != null ? Math.round(v * 100) + "%" : "-");
   const OPSYM = { eq: "=", contains: "~", lt: "<", gt: ">" };
 
-  // an op-tree -> a readable pipeline (innermost → outermost) — the lineage breadcrumb (W4).
+  // an op-tree -> a readable pipeline (innermost → outermost), the lineage breadcrumb.
   // Makes a composition self-documenting: `select Organization → aggregate by sector → order ↓`.
   function lineage(spec) {
     if (!spec || typeof spec !== "object") return [];
@@ -61,13 +61,13 @@ const Osiris = (() => {
 
   // ---- atoms ---------------------------------------------------------------
   // a graded property row: value + WHERE IT CAME FROM (source · how · confidence). A long
-  // value (a commit rationale, a doc body) is CLAMPED to a few lines — click to expand —
-  // so the inspector stays scannable instead of a 400-word wall in a narrow column.
-  // PROVENANCE PIECE 3(b) (thread b4477e9e): agreement/distinct_upstreams/disputed ride
-  // beside the existing grade line — absent (an old cached fetch, or a route that hasn't
-  // picked them up) renders nothing extra, never an error; agreement === "single" is the
-  // common case and stays silent (nothing to mark). `upstream_ids` (may be empty) drives
-  // the "who else read this" click-through against the upstream_readers Function.
+  // value (a commit rationale, a doc body) is CLAMPED to a few lines; click to expand, so
+  // the inspector stays scannable instead of a 400-word wall in a narrow column.
+  // agreement/distinct_upstreams/disputed ride beside the existing grade line. Absent (an
+  // old cached fetch, or a route that hasn't picked them up), it renders nothing extra,
+  // never an error; agreement === "single" is the common case and stays silent (nothing to
+  // mark). `upstream_ids` (may be empty) drives the "who else read this" click-through
+  // against the upstream_readers Function.
   function provenanceSignals(p) {
     const bits = [];
     if (p.agreement === "contradicting") bits.push('<span class="o-faint" style="color:#e5534b" title="sources disagree on this value">contradicting</span>');
@@ -94,22 +94,22 @@ const Osiris = (() => {
       <div class="o-upstream-expansion" data-for="${esc(p.name)}" style="display:none;grid-column:1/4"></div>`;
   }
 
-  // THE NAME, NEVER THE SLUG (operator ruling a1cde8a3): a rename migrates the canonical
-  // too (repo:<new_name>) -- so a project's own reader-facing name is simply its
-  // canonical with the `repo:` scheme stripped, a pure display transform, never a
-  // resolve. graph_stream.py's own _short_label already does this for an ordinary
-  // SoftwareProject node's label on the space canvas ("SoftwareProject by repo name");
-  // resolve_label (ontology/labels.py, every OTHER surface -- /objects, /objects/{id},
-  // /search, /objects/{id}/graph) has no such SoftwareProject-specific rule and falls
-  // straight to the raw canonical when no `name` property is asserted, which is the
-  // normal case for a repo. This is that same rule, client-side, for every one of those
-  // surfaces at once instead of teaching each one Python's own special case.
+  // THE NAME, NEVER THE SLUG: a rename migrates the canonical too (repo:<new_name>), so a
+  // project's own reader-facing name is simply its canonical with the `repo:` scheme
+  // stripped, a pure display transform, never a resolve. graph_stream.py's own
+  // _short_label already does this for an ordinary SoftwareProject node's label on the
+  // space canvas ("SoftwareProject by repo name"); resolve_label (ontology/labels.py,
+  // every OTHER surface: /objects, /objects/{id}, /search, /objects/{id}/graph) has no
+  // such SoftwareProject-specific rule and falls straight to the raw canonical when no
+  // `name` property is asserted, which is the normal case for a repo. This is that same
+  // rule, client-side, for every one of those surfaces at once instead of teaching each
+  // one Python's own special case.
   function projectDisplayName(canonical) {
     return typeof canonical === "string" && canonical.startsWith("repo:")
       ? canonical.slice(5) : canonical;
   }
   // the generic "what text represents this object" a table Name column, a board card's
-  // own title, and a search hit's own label all want -- SoftwareProject routed through
+  // own title, and a search hit's own label all want: SoftwareProject routed through
   // projectDisplayName above, everything else trusting the server's own resolve_label
   // output (display_label/label) unchanged.
   function objectDisplayLabel(o) {
@@ -120,14 +120,14 @@ const Osiris = (() => {
     return o.display_label || o.label || "";
   }
 
-  // the object detail (the one noun) — type chip, title, provenance box, graded facts, slots for rels.
+  // the object detail (the one noun): type chip, title, provenance box, graded facts, slots for rels.
   // `acts` is HTML for action buttons the shell injects (search-around, dossier, …).
   function objectDetail(o, acts = "") {
     const demo = o.properties.some((p) => p.name === "demo" && String(p.value).toLowerCase() === "true");
     const title = o.name || (o.type === "SoftwareProject" ? projectDisplayName(o.canonical) : o.canonical);
     const m = ty(o.type);
-    // WAVE 27, THE INSPECTOR: supersedes/superseded_by render as relationship rows now
-    // (loadRels, below), not a bare unclickable uuid string in the property grid.
+    // supersedes/superseded_by render as relationship rows now (loadRels, below), not a
+    // bare unclickable uuid string in the property grid.
     const facts = o.properties.filter((p) =>
       !["name", "demo", "tag", "supersedes", "superseded_by"].includes(p.name));
     const pv = facts.map(propRow).join("") || `<div class="o-muted" style="grid-column:1/4">No properties.</div>`;
@@ -165,24 +165,22 @@ const Osiris = (() => {
       <div class="o-sect"><h3>Relationships (1-Hop)</h3><div data-rels class="o-muted">…</div></div>`;
   }
 
-  // walk the 1-hop focus, GROUPED by (direction, link type) with counts (W3).
-  // The flat 80-row dump becomes `→ authored_by (80) ▸` — collapsed, expand on demand, and
+  // walk the 1-hop focus, GROUPED by (direction, link type) with counts.
+  // The flat 80-row dump becomes `→ authored_by (80) ▸`, collapsed, expand on demand, and
   // "open as set" promotes the group into the center as a result set (a typed pivot).
   // `onOpenSet(type, dir, label)` renders that set; `onPick(id)` inspects one neighbour.
   // `obj` (optional, the SAME object objectDetail() already rendered) carries the property-
-  // pair relationships below -- omitted, this degrades to the pre-WAVE-27 link-only walk.
+  // pair relationships below; omitted, this degrades to a link-only walk.
   //
-  // WAVE 27, THE INSPECTOR (Thoth mail 11754/11874): every new relationship type
-  // (recorded_by, owned_by, admitted_by, vendor_of, and committed_by once Sekhmet's lane
-  // lands) is a REAL link and already flows through the walk above unchanged -- no code
-  // needed there, by construction (driven by whatever edges actually exist on the wire,
-  // never a hardcoded type list, so committed_by appears the moment it starts being
-  // minted). `supersedes`/`superseded_by` are the one exception: declared as a LinkType at
-  // birth but never actually instantiated as a link row (ruling dd04d7dd, decision
-  // 5dea28e5, 0 rows ever) -- shipped 11 days later as a PROPERTY PAIR on the Decision
-  // objects themselves instead (record_decision(supersedes=...)). The graph walk above can
-  // never surface a property value, so it needs its own synthetic group, resolved by a
-  // second fetch (the pointer is a bare object id, no label attached).
+  // Every new relationship type (recorded_by, owned_by, admitted_by, vendor_of, committed_by,
+  // etc.) is a REAL link and already flows through the walk above unchanged, no code needed
+  // there, by construction (driven by whatever edges actually exist on the wire, never a
+  // hardcoded type list, so a new link type appears the moment it starts being minted).
+  // `supersedes`/`superseded_by` are the one exception: declared as a LinkType at birth but
+  // never actually instantiated as a link row (0 rows ever), shipped later as a PROPERTY
+  // PAIR on the Decision objects themselves instead (record_decision(supersedes=...)). The
+  // graph walk above can never surface a property value, so it needs its own synthetic
+  // group, resolved by a second fetch (the pointer is a bare object id, no label attached).
   const PROPERTY_REL_NAMES = ["supersedes", "superseded_by"];
   async function loadRels(el, id, onPick, onOpenSet, obj) {
     const g = await fetch(`/objects/${id}/graph?hops=1`).then((r) => r.json());
@@ -194,7 +192,7 @@ const Osiris = (() => {
       (groups[k] = groups[k] || { dir, type: e.type, members: [] }).members.push(lab[other] || { id: other, label: other, type: "?" });
     });
     // live-caught duplicate (the LinkType's own "0 rows ever" comment has since gone stale
-    // for at least one real Decision -- a genuine `supersedes` link now coexists with the
+    // for at least one real Decision: a genuine `supersedes` link now coexists with the
     // property pair, both naming the SAME target, "drawn twice"): a type real links already
     // cover for this object is trusted fully instead, never duplicated by the synthetic row
     // below.
@@ -263,21 +261,21 @@ const Osiris = (() => {
     }
   }
 
-  // ---- THE GENERIC RENDERER (P4/W1) ----------------------------------------
-  // A composition Result -> the right atom, in the chosen VIEW (Notion's switchable views
-  // × Palantir's multi-modal object set). `mounts` = {board, panel}. An OBJECTS set renders
-  // as a clean Graph OR a Table; values/rows/data render into the panel. `onPick(id)` focuses
-  // a clicked row. Returns the mode the center should show ("graph" | "panel").
+  // ---- THE GENERIC RENDERER --------------------------------------------------
+  // A composition Result -> the right atom, in the chosen VIEW: switchable views over a
+  // multi-modal object set. `mounts` = {board, panel}. An OBJECTS set renders as a clean
+  // Graph OR a Table; values/rows/data render into the panel. `onPick(id)` focuses a
+  // clicked row. Returns the mode the center should show ("graph" | "panel").
   // a composition that ranks/sequences (order / take) or rolls up (aggregate) is a LIST, not
-  // a graph — rendering it on the board throws away the very ordering it computed. So intent
-  // wins over count (this is the Notion lesson: the view follows the data's shape).
+  // a graph: rendering it on the board throws away the very ordering it computed. So intent
+  // wins over count (the view follows the data's shape).
   function isRanked(spec) {
     for (let s = spec; s && typeof s === "object"; s = s.from)
       if (s.op === "order" || s.op === "take" || s.op === "aggregate") return true;
     return false;
   }
-  // the views an objects result supports — a ranked/sequenced set earns a Timeline (the order
-  // it computed is the point); everything keeps Graph + Table. The shell builds the switcher
+  // the views an objects result supports: a ranked/sequenced set earns a Timeline (the order
+  // it computed is the point); everything keeps Graph + Table. The shell builds the switcher.
   // Universal 3-way view engine: [ Table ] [ Board ] [ Graph ]
   function viewsFor(result) {
     if (result.kind !== "objects") return [];
@@ -288,13 +286,13 @@ const Osiris = (() => {
     if (isRanked(result.spec)) return "table";
     return result.items.length > 35 ? "table" : "graph";
   }
-  // THE CANONICAL-RESOLVE DOOR, client half (Thoth mail 12120/12231): every `[data-canon]`
-  // span table()'s own cell() just emitted starts showing the bare canonical (already a
-  // correct, if unfriendly, fallback) -- this batches them into ONE POST and patches each
-  // span's own text once the answer comes back, same "starts as a bare id, resolves async,
-  // never blocks the rest of the panel" convention loadRels' own property-pair resolution
-  // already established (above). A canonical the door couldn't resolve (deleted, mistyped)
-  // is left showing itself -- already the most honest thing to show.
+  // THE CANONICAL-RESOLVE LOOKUP, client half: every `[data-canon]` span table()'s own
+  // cell() just emitted starts showing the bare canonical (already a correct, if
+  // unfriendly, fallback). This batches them into ONE POST and patches each span's own
+  // text once the answer comes back, same "starts as a bare id, resolves async, never
+  // blocks the rest of the panel" convention loadRels' own property-pair resolution
+  // already established (above). A canonical the endpoint couldn't resolve (deleted,
+  // mistyped) is left showing itself, already the most honest thing to show.
   async function resolveCanonRefs(el) {
     const spans = [...el.querySelectorAll("[data-canon]")];
     if (!spans.length) return;
@@ -311,7 +309,7 @@ const Osiris = (() => {
         const hit = byCanon.get(s.dataset.canon);
         if (hit && hit.handle_or_name) s.textContent = hit.handle_or_name;
       }
-    } catch { /* left showing the canonical -- no worse than before this door existed */ }
+    } catch { /* left showing the canonical -- no worse than before this lookup existed */ }
   }
 
   async function renderResult(result, mounts, view, onPick, onDrill, onCtx) {
@@ -340,13 +338,13 @@ const Osiris = (() => {
     return "panel";
   }
 
-  // an ORDERED objects set as a Timeline — the concise read the operator asked for: a date +
-  // the one salient summary per item, in the order the composition computed. NOT a column dump
-  // of every property (which buried 'recent work' under full commit rationale).
-  // pick the salient DATE / SUMMARY property for a timeline row — domain-NEUTRAL: a couple of
+  // an ORDERED objects set as a Timeline: a concise read, a date plus the one salient
+  // summary per item, in the order the composition computed. NOT a column dump of every
+  // property (which buried recent work under full commit rationale).
+  // pick the salient DATE / SUMMARY property for a timeline row, domain-NEUTRAL: a couple of
   // common preferred names, then any date-shaped property by pattern (…_date / …_at / date / time)
-  // or an ISO-dated value. No hardcoded domain keys (was a mix of git/real-estate/…). The shell
-  // reads the object's shape; it doesn't know what domain it is.
+  // or an ISO-dated value. No hardcoded domain keys. The shell reads the object's shape; it
+  // doesn't know what domain it is.
   const _ISO = /^\d{4}-\d{2}-\d{2}/;
   function _pickDate(p) {
     for (const k of ["authored_date", "observed_at", "created_at", "date"]) if (p && p[k]) return p[k];
@@ -360,8 +358,8 @@ const Osiris = (() => {
   function timelineList(panel, items, onPick, onCtx) {
     if (!items.length) { panel.innerHTML = `<div class="o-empty">Empty result.</div>`; return; }
     // NO SILENT CAPS (the same law _capped's own SECTION_CAP/_more enforce for "data" mode,
-    // below): "objects" mode used to render every item verbatim — 305 threads, full-paragraph
-    // summaries, one unbroken scroll — while "data" mode next to it capped at 12 and SAID what
+    // below): "objects" mode used to render every item verbatim, 305 threads, full-paragraph
+    // summaries, one unbroken scroll, while "data" mode next to it capped at 12 and SAID what
     // it withheld. Two renderers of the same law reading differently is itself the bug; reusing
     // SECTION_CAP/_more (never a second number, never a second idiom) is what makes them read
     // the same again.
@@ -380,27 +378,27 @@ const Osiris = (() => {
     _wireRows(panel, onPick, onCtx);
   }
 
-  // an objects set as a TABLE — Type · Name · the most-common property columns. The fix for
+  // an objects set as a TABLE: Type · Name · the most-common property columns. The fix for
   // the 80-node hairball: a scannable set, each row clickable into the inspector.
   // wire a result panel's [data-pick] rows: click = select (inspect), right-click = the
-  // object's contextual action menu. onCtx(id, type, mouseEvent) — same menu as the set list.
+  // object's contextual action menu. onCtx(id, type, mouseEvent), same menu as the set list.
   function _wireRows(panel, onPick, onCtx) {
     panel.querySelectorAll("[data-pick]").forEach((el) => {
       el.onclick = () => onPick && onPick(el.dataset.pick);
       el.oncontextmenu = (e) => { if (onCtx) { e.preventDefault(); onCtx(el.dataset.pick, el.dataset.type, e); } };
     });
   }
-  // CONTEXTUAL COLUMNS (operator, 2026-07-11, screenshotting his own composer: "contextual
-  // chrome?"). The old table chose its columns by FREQUENCY — and frequency is exactly
-  // backwards: a property that is present on EVERY row with the SAME value scores highest and
-  // is worth nothing. Running `open threads` produced six columns of which four were void:
-  // TYPE ('Thread' ×974), STATUS ('open' ×974 — it was the FILTER), SOURCE_MODEL (empty on
-  // every row), and SUMMARY (byte-identical to NAME). Half the width was a mirror of itself.
+  // CONTEXTUAL COLUMNS. The old table chose its columns by FREQUENCY, and frequency is
+  // exactly backwards: a property that is present on EVERY row with the SAME value scores
+  // highest and is worth nothing. Running `open threads` produced six columns of which four
+  // were void: TYPE ('Thread' ×974), STATUS ('open' ×974, it was the FILTER), SOURCE_MODEL
+  // (empty on every row), and SUMMARY (byte-identical to NAME). Half the width was a mirror
+  // of itself.
   //
-  // A column now earns its place by VARYING. Constant-across-every-row → it isn't a column,
-  // it's a fact about the whole set: it moves to a chip in the header. Empty everywhere →
-  // gone. A mirror of Name → gone. What's left is the part of the result that differs, which
-  // is the only part anyone reads.
+  // A column now earns its place by VARYING. Constant-across-every-row means it isn't a
+  // column, it's a fact about the whole set: it moves to a chip in the header. Empty
+  // everywhere means gone. A mirror of Name means gone. What's left is the part of the
+  // result that differs, which is the only part anyone reads.
   function _tableShape(items) {
     const skip = new Set(["name", "demo", "tag"]);
     const seen = {}, filled = {};
@@ -506,7 +504,7 @@ const Osiris = (() => {
 
   function objectsTable(panel, items, onPick, onCtx) {
     // same NO-SILENT-CAPS treatment as timelineList above, and the same reused SECTION_CAP/
-    // _more — column shape is computed from the SHOWN slice, matching _capped's own
+    // _more: column shape is computed from the SHOWN slice, matching _capped's own
     // table(shown) precedent, not the full set a reader never sees past row 12 anyway.
     const shown = items.slice(0, SECTION_CAP);
     const { cols, chips, showType } = _tableShape(shown);
@@ -529,14 +527,15 @@ const Osiris = (() => {
   }
 
   // aggregate rows: [{group:{prop:val,...}, metric:N}] -> a ranked table where each row DRILLS
-  // INTO the objects it counts (the missing interactive primitive — 'changelog by area' was a
+  // INTO the objects it counts (the missing interactive primitive: 'changelog by area' was a
   // dead list; now clicking 'composer · 6' opens those 6 commits). onDrill(group, spec) is the
   // shell's hook back to a select filtered by the group.
   function renderRows(panel, rows, spec, onDrill) {
     if (!rows || !rows.length) { panel.innerHTML = `<div class="o-empty">No rows.</div>`; return; }
     // TWO row shapes share the "rows" kind: an `aggregate` yields {group, metric} (a ranked,
-    // drill-able table); a `table` op yields a FLAT column dict per object. Render each as itself
-    // — the flat table through the generic column renderer, so any `table` composition just works.
+    // drill-able table); a `table` op yields a FLAT column dict per object. Render each as
+    // itself: the flat table through the generic column renderer, so any `table` composition
+    // just works.
     const agg = Object.prototype.hasOwnProperty.call(rows[0], "group")
       && Object.prototype.hasOwnProperty.call(rows[0], "metric");
     if (!agg) {
@@ -559,16 +558,15 @@ const Osiris = (() => {
 
   // a Function's output, rendered generically by shape (no per-Function knowledge).
   //
-  // TWO BUGS THIS FIXES, both visible in one 4K screenshot of `briefing` (operator, 2026-07-11,
-  // "feng sui"):
-  //  (1) THE SILENTLY DROPPED SECTION. The old grouper kept only ARRAY-valued keys — so the
+  // TWO BUGS THIS FIXES, both visible in one 4K screenshot of `briefing`:
+  //  (1) THE SILENTLY DROPPED SECTION. The old grouper kept only ARRAY-valued keys, so the
   //      wall, whose section is a DICT (totals + projects + top_of_wall), was filtered out and
   //      never drawn. The briefing announced "3 sections" and rendered two, and the one it ate
   //      was the most important one. A renderer must never discard a shape it doesn't expect;
   //      it must render it AS ITSELF (scalars → chips, lists → tables, dicts → recurse).
-  //  (2) THE UNBOUNDED DUMP. "Resolved — self-healed by later commits" printed all 794 rows
-  //      inline, forever. Same law as his desk and the garden: LAND ON COUNTS, WALK IN. Every
-  //      section is capped, and — per the no-silent-caps ruling — it SAYS what it withheld.
+  //  (2) THE UNBOUNDED DUMP. "Resolved, self-healed by later commits" printed all 794 rows
+  //      inline, forever. Same rule everywhere else in this UI: LAND ON COUNTS, WALK IN. Every
+  //      section is capped, and, per the no-silent-caps rule, it SAYS what it withheld.
   const SECTION_CAP = 12;
 
   function _more(n) {
@@ -584,8 +582,8 @@ const Osiris = (() => {
     if (Array.isArray(data)) return data.length ? _capped(data) : `<div class="o-empty">No results.</div>`;
     if (typeof data === "object") {
       const ent = Object.entries(data);
-      // a scalar leaf is a FACT ABOUT THE SECTION (974 open · 302 obligations), not a row —
-      // it belongs on the header as a chip, the same law the object table now follows.
+      // a scalar leaf is a FACT ABOUT THE SECTION (974 open · 302 obligations), not a row:
+      // it belongs on the header as a chip, the same rule the object table now follows.
       const facts = ent.filter(([, v]) => v == null || typeof v !== "object");
       const blocks = ent.filter(([, v]) => v && typeof v === "object");
       const long = facts.filter(([, v]) => typeof v === "string" && String(v).length > 60);
@@ -615,42 +613,41 @@ const Osiris = (() => {
   }
 
   // a list of dicts -> a table (columns = union of keys; arrays/objects flattened).
-  // Same two laws the object table follows, because they are laws and not special cases:
-  //   · a column earns its place by VARYING — an empty column is gone, a constant one becomes
+  // Same two rules the object table follows, because they are rules and not special cases:
+  //   · a column earns its place by VARYING: an empty column is gone, a constant one becomes
   //     a chip above the table (it is a fact about the SET, not about any row);
-  //   · width is decided by CONTENT, never position — a column whose longest value is short is
+  //   · width is decided by CONTENT, never position: a column whose longest value is short is
   //     marked .r-tight and shrinks to fit, so the prose column takes the width it needs
   //     instead of splitting a 4K panel evenly with a one-word `scope`.
-  // NESTED CELL VALUES (task #109's tail, Thoth DM 2145; compositions.py:2216's own
-  // documented gap — "neither render_composition nor osiris.js's table() recurse into a
-  // nested list/dict CELL value"): a raw JSON.stringify blob or an "[object Object]"-joined
-  // mush is worse than not showing it at all. Flattened into the SAME compact
+  // NESTED CELL VALUES: neither render_composition nor osiris.js's table() used to recurse
+  // into a nested list/dict CELL value; a raw JSON.stringify blob or an "[object Object]"-
+  // joined mush is worse than not showing it at all. Flattened into the SAME compact
   // "key=value, key=value" prose _fleet_doors_summary/_fleet_ancestors_summary already
-  // hand-roll per-Function server-side (compositions.py) — generalized here so no Function
+  // hand-roll per-Function server-side (compositions.py), generalized here so no Function
   // needs its own summarizer just to keep a nested field out of the generic table's way.
   // Capped at 2 levels deep (a 3rd level collapses to a count or "{…}", never recurses
-  // forever) and a few items per list — a genuinely deep structure degrades to a number
-  // rather than an unreadable wall, same economy _fleet_doors_summary's own 4-item cap
+  // forever) and a few items per list: a genuinely deep structure degrades to a number
+  // rather than an unreadable wall, the same economy _fleet_doors_summary's own 4-item cap
   // already established. Lands inside cell()'s EXISTING clamp+tooltip once it runs long
-  // (below) — nothing new needed there, only the text itself had to stop lying.
+  // (below), nothing new needed there, only the text itself had to stop lying.
   const NEST_ITEMS_CAP = 4;
-  // THE RESERVED UNAVAILABLE MARKER (thread 04c651ce item 2, Thoth dispatch msg 9123):
-  // compositions.py's `_unavailable(reason)` nests {"_unavailable": reason} on a field that
-  // genuinely could not be computed (a PARTIAL failure — real data sits right beside it in
-  // the same row/result) — a reserved leading-underscore key, checked by KEY same as this
-  // file's own `_action`/`_actions` row-control convention, never by sniffing text content
-  // for the word "unavailable" (which a real value could legitimately contain). table()'s
-  // cell() strips it to a distinct dimmed marker instead of flattening it as if it were
-  // real nested JSON; a programmatic reader checks the raw JSON's own `_unavailable` key.
+  // THE RESERVED UNAVAILABLE MARKER: compositions.py's `_unavailable(reason)` nests
+  // {"_unavailable": reason} on a field that genuinely could not be computed (a PARTIAL
+  // failure: real data sits right beside it in the same row/result), a reserved leading-
+  // underscore key, checked by KEY same as this file's own `_action`/`_actions` row-control
+  // convention, never by sniffing text content for the word "unavailable" (which a real
+  // value could legitimately contain). table()'s cell() strips it to a distinct dimmed
+  // marker instead of flattening it as if it were real nested JSON; a programmatic reader
+  // checks the raw JSON's own `_unavailable` key.
   const UNAVAILABLE_KEY = "_unavailable";
   const isUnavailable = (v) =>
     !!(v && typeof v === "object" && !Array.isArray(v) && UNAVAILABLE_KEY in v);
-  // THE CANONICAL-RESOLVE DOOR (Thoth mail 12120/12231): a raw canonical (seat:xxxx,
-  // agent:xxxx, repo:xxxx, ...) in a table cell is an id, not a name -- table()'s own
-  // generic cell() has no per-Function knowledge to know a value is one, so it detects the
-  // SHAPE instead (a lowercase-starting prefix, a colon, no whitespace) rather than a
-  // hardcoded prefix list that drifts every time a new ObjectType lands. Deliberately
-  // excludes http(s): -- those already read fine as urls and are never an object identity.
+  // THE CANONICAL-RESOLVE LOOKUP: a raw canonical (seat:xxxx, agent:xxxx, repo:xxxx, ...)
+  // in a table cell is an id, not a name. table()'s own generic cell() has no per-Function
+  // knowledge to know a value is one, so it detects the SHAPE instead (a lowercase-starting
+  // prefix, a colon, no whitespace) rather than a hardcoded prefix list that drifts every
+  // time a new ObjectType lands. Deliberately excludes http(s): those already read fine as
+  // urls and are never an object identity.
   const CANON_REF_RE = /^[a-z][a-z0-9_-]*:\S+$/;
   const isCanonicalRef = (v) =>
     typeof v === "string" && CANON_REF_RE.test(v) && !/^https?:/i.test(v);
@@ -685,49 +682,48 @@ const Osiris = (() => {
   };
   const TIGHT = 24;                                // a column whose widest value fits in a glance
 
-  // row_action's CLIENT half (ruling c5b184cd, thread e5d1eb6d) — the server half
-  // (compositions._table/`function` op) has attached `_action:{action,args}` to a row since
-  // #44/89df464; table() must treat it as a CONTROL, never a column, or it renders as its own
-  // JSON.stringify'd blob (the exact bug live-desk shipped with — nobody clicked resolve on
-  // /ui, so nobody noticed). Label map mirrors chrome.py's _ACTION_LABELS verbatim — same
-  // registry, same cosmetic names, one less thing to keep in sync by hand than it looks: any
-  // action.js can't render for whatever reason falls back to its own verb name unlabeled.
+  // row_action's CLIENT half: the server half (compositions._table/`function` op) has
+  // attached `_action:{action,args}` to a row; table() must treat it as a CONTROL, never a
+  // column, or it renders as its own JSON.stringify'd blob. Label map mirrors chrome.py's
+  // _ACTION_LABELS verbatim, same registry, same cosmetic names, one less thing to keep in
+  // sync by hand than it looks: anything that can't render for whatever reason falls back
+  // to its own verb name unlabeled.
   const ACTION_LABELS = { resolve_thread: "resolve", assign_thread: "not mine",
     defer_thread: "later", reclassify_thread: "reclassify", settle: "settle" };
-  // esc() alone is not attribute-safe — it never escapes '"', and every value here lands
+  // esc() alone is not attribute-safe: it never escapes '"', and every value here lands
   // inside a double-quoted data-args attribute carrying raw JSON.stringify output (which is
   // built almost entirely OF '"' characters). The browser decodes &quot; back to '"' when it
   // parses the attribute, so JSON.parse(el.dataset.args) still sees the original string.
   const escAttr = (s) => esc(s).replace(/"/g, "&quot;");
-  // A "run:<function>" action is NAVIGATION, not a verb — no fixed cosmetic name belongs in
+  // A "run:<function>" action is NAVIGATION, not a verb: no fixed cosmetic name belongs in
   // ACTION_LABELS for it (that would mean hardcoding a function name into the frozen module,
   // exactly the per-page special-casing this architecture refuses). Generic instead: strip
-  // the prefix, underscores to spaces — "run:mail_threads" reads as "mail threads".
+  // the prefix, underscores to spaces, so "run:mail_threads" reads as "mail threads".
   function _actionLabel(name) {
     if (name.startsWith("run:")) return name.slice(4).replace(/_/g, " ");
     return ACTION_LABELS[name] || name;
   }
   function _actionButton(action, label) {
     const name = action.action || "";
-    // `subject` (Thoth dispatch 9676/9690, 588148bb piece 4) — the row's OWN object as a
-    // "run:" target's bound subject, mutually exclusive with `args` (an op-tree target has
-    // no Function to drill into via run-spec's {"op":"function"} wrapping; see compositions.
-    // py's `bind_subject` docstring). Carried as its own data attribute, never folded into
-    // data-args, so the click delegate can tell the two navigation modes apart.
+    // `subject` carries the row's OWN object as a "run:" target's bound subject, mutually
+    // exclusive with `args` (an op-tree target has no Function to drill into via run-spec's
+    // {"op":"function"} wrapping; see compositions.py's `bind_subject` docstring). Carried
+    // as its own data attribute, never folded into data-args, so the click delegate can
+    // tell the two navigation modes apart.
     const subjAttr = action.subject ? ` data-subject="${escAttr(action.subject)}"` : "";
     return `<button class="r-act-btn" data-action="${escAttr(name)}" ` +
       `data-args="${escAttr(JSON.stringify(action.args || {}))}"${subjAttr}>` +
       `${esc(label || _actionLabel(name))}</button>`;
   }
-  // `_actions` (plural, Thoth msg 1976/2029) — a row that affords MORE than one verb (chrome's
-  // /desk: done/not mine/later on one debt). Same click delegate, same POST /act, same button
-  // markup as the singular form — this is N of the same control, not a new mechanism, so no
-  // second delegate and no DOM event: unlike "run:" (navigation, page-state, had to hand off),
-  // a write stays entirely inside what the click delegate already does per button.
+  // `_actions` (plural): a row that affords MORE than one verb (chrome's /desk: done/not
+  // mine/later on one debt). Same click delegate, same POST /act, same button markup as
+  // the singular form: this is N of the same control, not a new mechanism, so no second
+  // delegate and no DOM event; unlike "run:" (navigation, page-state, had to hand off), a
+  // write stays entirely inside what the click delegate already does per button.
   function _actionsButtons(actions) {
     return actions.map((a) => _actionButton(a, a.label)).join("");
   }
-  // a lightweight, self-built toast — this library has no host page to ask for one (osiris.js
+  // a lightweight, self-built toast: this library has no host page to ask for one (osiris.js
   // is the frozen surface the composer just calls into), so it mounts its own corner and cleans
   // up after itself rather than assuming index.html has somewhere to put a message.
   function toast(msg, isError) {
@@ -743,11 +739,11 @@ const Osiris = (() => {
     box.appendChild(item);
     setTimeout(() => item.remove(), 3000);
   }
-  // THE CLICK DELEGATE — mirrors chrome.py's _ACTIONS script exactly (same POST /act shape,
+  // THE CLICK DELEGATE: mirrors chrome.py's _ACTIONS script exactly (same POST /act shape,
   // same disable-on-click guard against a double-fire before the request resolves). Installed
   // ONCE at module load on `document`, never re-wired per render: every composition run
-  // replaces `panel.innerHTML` wholesale, and a delegate on `document` survives that for free
-  // — no rebind after each render, no risk of a listener stacking on a node about to be thrown
+  // replaces `panel.innerHTML` wholesale, and a delegate on `document` survives that for free,
+  // no rebind after each render, no risk of a listener stacking on a node about to be thrown
   // away.
   document.addEventListener("click", async (e) => {
     const b = e.target.closest("button[data-action]");
@@ -755,12 +751,12 @@ const Osiris = (() => {
     e.preventDefault();
     let args;
     try { args = JSON.parse(b.dataset.args || "{}"); } catch { args = {}; }
-    // NAVIGATION, not a mutation (task #90, Thoth msg 1976/2005) — a "run:<function>" action
-    // invokes-and-SHOWS a Result rather than writing through /act: a materially different
-    // response shape (a whole new board, not a toast + row removal). This module has no
-    // access to RESULT/WORKING/renderCurrent — those are page (index.html) state, same
-    // boundary renderResult's own inspectOnly/drillInto callback params already respect — so
-    // it only recognizes the prefix and hands off via a DOM event; the shell does the run.
+    // NAVIGATION, not a mutation: a "run:<function>" action invokes-and-SHOWS a Result
+    // rather than writing through /act, a materially different response shape (a whole new
+    // board, not a toast + row removal). This module has no access to RESULT/WORKING/
+    // renderCurrent, those are page (index.html) state, same boundary renderResult's own
+    // inspectOnly/drillInto callback params already respect, so it only recognizes the
+    // prefix and hands off via a DOM event; the shell does the run.
     if (b.dataset.action.startsWith("run:")) {
       document.dispatchEvent(new CustomEvent("osiris:run",
         { detail: { name: b.dataset.action.slice(4), args, subject: b.dataset.subject || null } }));
@@ -776,8 +772,8 @@ const Osiris = (() => {
       }).then((res) => res.json());
       if (r && r.error) { toast(r.error, true); b.disabled = false; b.textContent = was; return; }
       toast(`${_actionLabel(b.dataset.action)}: done`);
-      // the row's own fact no longer holds (the graph write already landed, server-confirmed)
-      // — remove it now rather than wait on a poll this composition may not even be running.
+      // the row's own fact no longer holds (the graph write already landed, server-confirmed),
+      // so remove it now rather than wait on a poll this composition may not even be running.
       b.closest("tr")?.remove();
     } catch (err) {
       toast("Action failed: " + err, true);
@@ -807,13 +803,13 @@ const Osiris = (() => {
       return true;
     });
     if (!cols.length) return `<div class="o-empty">-</div>`;
-    // .r-table td .clamp (osiris.css) is a proper 2-line clamp+ellipsis, word-wrapped — built
-    // 2026-07-11 for objectsTable's own cells, but table() never applied it, so a MEDIUM string
+    // .r-table td .clamp (osiris.css) is a proper 2-line clamp+ellipsis, word-wrapped, built
+    // for objectsTable's own cells, but table() never applied it, so a MEDIUM string
     // (short of the >160 "wall of text" bar below) sailed through untouched. In a many-column
     // table, table-layout:auto starves a non-tight column thin, and overflow-wrap:anywhere +
-    // word-break:break-word then break it mid-word with nowhere else to go — "1 door (session
-    // 82d04858 2s ago)" towering into ten near-single-character lines. TIGHT (24, above) is
-    // already this file's own line for "short enough to trust at a glance, never wraps" — a
+    // word-break:break-word then break it mid-word with nowhere else to go: a short label with
+    // a timestamp towering into ten near-single-character lines. TIGHT (24, above) is
+    // already this file's own line for "short enough to trust at a glance, never wraps": a
     // .r-tight COLUMN's cells are by definition all <= TIGHT chars, so they never cross this
     // same bar and the clamp's own `white-space` never fights a tight column's `nowrap`. Reusing
     // it here (rather than a fresh magic number) means anything past "glanceable" gets two real,

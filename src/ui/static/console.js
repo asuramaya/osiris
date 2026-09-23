@@ -1,4 +1,4 @@
-/* Osiris Console — three-surface operator interface.
+/* Osiris Console: three-surface operator interface.
  * Surfaces: Browse (entity explorer), Mailbox (fleet messages), Fleet (live agents).
  * Power tools via Ctrl+K palette. Depends on: osiris.js (Osiris namespace).
  */
@@ -6,19 +6,16 @@
 const $ = id => document.getElementById(id);
 const esc = s => (s == null ? "" : String(s)).replace(/[<>&]/g, c => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]));
 
-// ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792/12807): the
-// operator's own word — "scope really died and made itself obsolete... gotta remove that
-// too." The ROOM constant this file used to carry (a plain '', never reassigned — switch
-// Room/newRoom/loadRooms, the workspace pill and its dropdown, were already gone) is fully
-// scrubbed now: loadCompositions' own ?room= url building, and the room_id: null literal
-// authorComposition/forkComposition's own POST bodies carried, are gone -- both were a
-// provable no-op (ROOM was always '', room_id: null and omitting the key entirely reach
-// save_composition identically), never a live behavior change.
+// The workspace/room scoping concept is retired. The ROOM constant this file used to carry
+// (a plain '', never reassigned) is fully scrubbed: loadCompositions' own ?room= url building,
+// and the room_id: null literal authorComposition/forkComposition's own POST bodies carried,
+// are gone. Both were a provable no-op (ROOM was always '', room_id: null and omitting the
+// key entirely reach save_composition identically), never a live behavior change.
 let FOCUS = null, SET = [], PROJECTS = [], ACTIVE_SURFACE = 'browse';
 let SELECTED_ENTITY_TYPES = new Set(), ENTITY_SEARCH_QUERY = '', ENTITY_VIEW_MODE = 'table';
 let TABLE_SORT_COL = 'date', TABLE_SORT_DIR = 'desc', EXPANDED_ROWS = new Set();
 let SYNCING = false, CONSOLE_REV = 0, SHOW_AGENTS = false, SCOPE_FILTER = '';
-let TRUE_COUNTS = null; // uncapped per-type census from /objects/counts (#196) — null until loaded
+let TRUE_COUNTS = null; // uncapped per-type census from /objects/counts, null until loaded
 let OBJECTS_LIMIT = 1500, OBJECTS_HAS_MORE = false, OBJECTS_LOADING_MORE = false;
 
 function setStatus(s) { $("status").textContent = s; }
@@ -34,7 +31,7 @@ async function switchSurface(surface) {
   if (surface === 'browse') {
     $('entity-taxonomy-bar').style.display = 'flex';
     showBoard(); // the space canvas (#cy) + browse's own table drawer, never the shared #result panel
-    if (window.OsirisSpace) window.OsirisSpace.resume(); // render-on-demand (mail 10581): don't render an invisible canvas
+    if (window.OsirisSpace) window.OsirisSpace.resume(); // render-on-demand: don't render an invisible canvas
     if (!SET.length) await loadObjectSet(); renderEntityExplorer();
   } else {
     $('entity-taxonomy-bar').style.display = 'none';
@@ -45,12 +42,11 @@ async function switchSurface(surface) {
   }
 }
 
-// ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792): the workspace
-// pill, its dropdown, and the switchRoom/newRoom/loadRooms/selectWorkspace/
+// The workspace pill, its dropdown, and the switchRoom/newRoom/loadRooms/selectWorkspace/
 // updateWorkspaceScopeUI/toggleWorkspaceDropdown/renderWorkspaceDropdown functions that
-// drove it are gone -- "one scope" (the header repo selector, console chrome cleanup
-// part 2) replaces the room dimension. closeAllDropdowns() drops its own
-// workspace-dropdown/workspace-pill lines since neither element exists anymore.
+// drove it are gone. One scope (the header repo selector) replaces the room dimension.
+// closeAllDropdowns() drops its own workspace-dropdown/workspace-pill lines since neither
+// element exists anymore.
 function closeAllDropdowns() {
   var rd = document.getElementById('repo-dropdown'); if(rd) rd.style.display='none';
   var od = document.getElementById('omni-dropdown'); if(od) od.style.display='none';
@@ -89,7 +85,7 @@ function renderRepoDropdown() {
   c.innerHTML = names.map(function(n){
     var sel = SELECTED_REPOS.indexOf(n) !== -1;
     // data-repo was written as `data-repo="" + esc(n) + ""` INSIDE a single-quoted JS
-    // string — so the `+ esc(n) +` was literal HTML text, never concatenation, and every
+    // string, so the `+ esc(n) +` was literal HTML text, never concatenation, and every
     // item rendered data-repo="". toggleRepo('') then pushed an empty string that matched
     // no project, so the scope pill accepted clicks and filtered nothing.
     return '<div class="dd-item' + (sel ? ' sel' : '') + '" data-repo="' + esc(n) + '" onclick="toggleRepo(this.dataset.repo)"><div class="dd-item-main"><span class="dd-item-name">' + esc(n) + '</span></div>' + (sel ? '<span class="dd-item-check">' + String.fromCharCode(10003) + '</span>' : '') + '</div>';
@@ -102,10 +98,10 @@ function toggleRepo(name) {
   else SELECTED_REPOS.splice(idx, 1);
   applyRepoFilter();
   updateRepoPill();
-  // THE LAST RENDERER (Thoth mail 11066/11087): "the header dropdown closes on pick" --
-  // it used to stay open and re-render itself in place (renderRepoDropdown), which read
-  // as a pick doing nothing. A pick is a real commit to the selection now, same as every
-  // other single-gesture commit in this console; re-open the dropdown for a second pick.
+  // The header dropdown closes on pick. It used to stay open and re-render itself in
+  // place (renderRepoDropdown), which read as a pick doing nothing. A pick is a real
+  // commit to the selection now, same as every other single-gesture commit in this
+  // console; re-open the dropdown for a second pick.
   closeAllDropdowns();
 }
 function selectRepos(list) {
@@ -120,14 +116,13 @@ function applyRepoFilter() {
   SET = []; loadObjectSet().then(function(){ renderEntityExplorer(); });
   syncSpaceProjectFilter();
 }
-// CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7): the header's repo selector drives
-// the canvas through the SAME per-instance visibility flag syncSpaceTypeFilter already
-// uses for the type pills (space.js's setHiddenProjects, sibling to setHiddenTypes) —
-// SELECTED_REPOS is an ALLOWLIST of stripped repo names (empty = show all, "All Repos"),
-// translated to a hidden-set of RAW nd.project values (space.js's own project field
-// carries the "repo:" canonical prefix, or the literal "unfiled") before handing it to
-// the graph, which speaks "hidden" not "allowed" — same translation shape
-// syncSpaceTypeFilter already does for types.
+// The header's repo selector drives the canvas through the SAME per-instance visibility
+// flag syncSpaceTypeFilter already uses for the type pills (space.js's setHiddenProjects,
+// sibling to setHiddenTypes). SELECTED_REPOS is an ALLOWLIST of stripped repo names
+// (empty = show all, "All Repos"), translated to a hidden-set of RAW nd.project values
+// (space.js's own project field carries the "repo:" canonical prefix, or the literal
+// "unfiled") before handing it to the graph, which speaks "hidden" not "allowed": the
+// same translation shape syncSpaceTypeFilter already does for types.
 function syncSpaceProjectFilter() {
   const space = window.OsirisSpace; if (!space || !space.setHiddenProjects) return;
   if (SELECTED_REPOS.length === 0) { space.setHiddenProjects(new Set()); return; }
@@ -144,28 +139,27 @@ function updateRepoPill() {
 }
 
 function objectScopeParams() {
-  // The scope bits browseScope() and objectCountsUrl() both need — split out so the
-  // counts fetch (#196, Thoth msg 5600) reads the exact same scope the entity set's own
-  // load would, never a second, drifting copy of the same three branches.
+  // The scope bits browseScope() and objectCountsUrl() both need, split out so the
+  // counts fetch (#196) reads the exact same scope the entity set's own load would,
+  // never a second, drifting copy of the same three branches.
   //
-  // ROOM RETIREMENT (thread 96f09d48): the room-subject leg (a room's own config could
-  // bind a repo:/case: subject, narrowing this before the repo pill's own SCOPE_FILTER
-  // ever got read) is gone along with the room concept itself — the repo pill is now the
-  // ONE scoping lever.
+  // The room-subject leg (a room's own config could bind a repo:/case: subject,
+  // narrowing this before the repo pill's own SCOPE_FILTER ever got read) is gone
+  // along with the room concept itself. The repo pill is now the ONE scoping lever.
   var ex = SHOW_AGENTS ? '' : '&exclude_types=Agent';
   var repos = SCOPE_FILTER ? SCOPE_FILTER.split(',').filter(Boolean) : [];
   return { extra: ex, project: repos, case_id: null };
 }
-// THE BROWSE-TAB CUTOVER (Thoth dispatch 9838/9855, 588148bb): the entity set's own load
-// used to GET /objects directly; it now runs an EPHEMERAL {"op":"select","scope":{...}}
-// op-tree through /compositions/run-spec — the exact same `scope` opt-in (and, since it's
-// the SAME extraction, the exact same list_objects_scoped SQL) /objects itself calls, so
-// there is truly one definition, not a REST caller and a composition caller drifting apart.
-// Type pills/search/sort stay client-side residue (unchanged, over whatever SET holds) —
-// per Thoth's own dispatch shape, same discipline the Projects swap used.
-// THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up, Thoth DM
-// 10711): shared by browseScope() (drives the server query) and getFilteredEntities() (the
-// client-side re-check kept for defense in depth — see browseScope's own comment below).
+// THE BROWSE-TAB CUTOVER: the entity set's own load used to GET /objects directly; it now
+// runs an EPHEMERAL {"op":"select","scope":{...}} op-tree through /compositions/run-spec,
+// the exact same `scope` opt-in (and, since it's the SAME extraction, the exact same
+// list_objects_scoped SQL) /objects itself calls, so there is truly one definition, not a
+// REST caller and a composition caller drifting apart. Type pills/search/sort stay
+// client-side residue (unchanged, over whatever SET holds), same discipline the Projects
+// swap used.
+// THE TABLE FILTER QUERY SHAPE: shared by browseScope() (drives the server query) and
+// getFilteredEntities() (the client-side re-check kept for defense in depth, see
+// browseScope's own comment below).
 // Only the `status:`/free-text portions are parsed here; a typed `type:` tag stays a
 // client-only substring convenience over whatever the pill bar already scoped server-side
 // (pills are the exact-match multi-select; the inline tag was always a fuzzy refinement, and
@@ -187,7 +181,7 @@ function browseScope(cursor) {
   if (s.project.length) scope.project = s.project;
   // THE TABLE FILTER QUERY SHAPE: the type-filter pill bar and the omnibox's own free-text/
   // status: portion now drive the SERVER-side scope, not just an in-memory re-filter over
-  // whatever page happened to already be loaded — the fix for the operator paging through
+  // whatever page happened to already be loaded: the fix for the operator paging through
   // 26,351 of 30,290 rows to find 5 matches. getFilteredEntities() still re-applies the same
   // predicates client-side: a no-op once the server has already scoped SET to them, but
   // still load-bearing for the props/free-text match nuance and for the reachable-set
@@ -197,10 +191,10 @@ function browseScope(cursor) {
   var parsed = parseEntitySearchQuery(ENTITY_SEARCH_QUERY);
   if (parsed.status) scope.status = parsed.status;
   if (parsed.text) scope.q = parsed.text;
-  // KEYSET continuation (#93 step 3, Thoth msg 5668) — the cursor #196 built and proved
-  // (before_created_at/before_id, migration 0054's objects_type_created_idx). Omitted for
-  // the initial load (unchanged behavior); passed here only by loadMoreObjects() below —
-  // the composition's own `scope.cursor` is the SAME shape select's scope arg accepts.
+  // KEYSET continuation (#93 step 3): the cursor #196 built and proved (before_created_at/
+  // before_id, migration 0054's objects_type_created_idx). Omitted for the initial load
+  // (unchanged behavior); passed here only by loadMoreObjects() below. The composition's
+  // own `scope.cursor` is the SAME shape select's scope arg accepts.
   if (cursor) scope.cursor = { before_created_at: cursor.created_at, before_id: cursor.id };
   return scope;
 }
@@ -214,8 +208,8 @@ async function runBrowseSelect(cursor) {
   // Bridge the composition's generic packaged shape ({label,display_label} plus the
   // opt-in status/created_at that ride along with `scope`) onto the exact object shape
   // the entity explorer's rendering/search/sort/footer always consumed (name/
-  // display_label/status/created_at/props) — a client-side adapter, not a backend
-  // change: object_items' own shape stays generic for every OTHER composition.
+  // display_label/status/created_at/props): a client-side adapter, not a backend
+  // change. object_items' own shape stays generic for every OTHER composition.
   return items.map(function(it) {
     return { id: it.id, type: it.type, canonical: it.canonical, status: it.status,
              created_at: it.created_at, props: it.props || {},
@@ -232,25 +226,24 @@ function objectCountsUrl() {
 async function loadObjectSet() {
   SET = await runBrowseSelect();
   // A full-length page is the only signal the scope gives that there might be more (no
-  // total/has_more field) — a heuristic, not a promise, same honesty rule as everywhere
-  // else this reign: never assert a conclusion the data can't support. A short page is
-  // certain (fewer than asked for = nothing left); a full page MIGHT mean more, or might
-  // land exactly on the boundary — "Load More" staying clickable in that rare case costs
-  // one empty click, never a silent truncation.
+  // total/has_more field): a heuristic, not a promise, never asserting a conclusion the
+  // data can't support. A short page is certain (fewer than asked for = nothing left); a
+  // full page MIGHT mean more, or might land exactly on the boundary. "Load More" staying
+  // clickable in that rare case costs one empty click, never a silent truncation.
   OBJECTS_HAS_MORE = SET.length >= OBJECTS_LIMIT;
-  // TRUE_COUNTS is the uncapped census (#196) — the taxonomy bar prefers it over
+  // TRUE_COUNTS is the uncapped census (#196). The taxonomy bar prefers it over
   // SET-derived counts, which silently understate the moment a type/scope exceeds the
-  // /objects cap (measured: 31,189 objects fleet-wide, Agent alone 10,617 — the cap is
+  // /objects cap (measured: 31,189 objects fleet-wide, Agent alone 10,617; the cap is
   // 2000). A failed/slow counts fetch degrades to null, and the toolbar falls back to
   // the old SET-derived count rather than showing nothing.
   TRUE_COUNTS = await fetch(objectCountsUrl()).then(r => r.json()).catch(() => null);
   loadEdgeCounts(SET.map(function(o){ return o.id; }));
 }
-// WAVE A item 7 (thread 8839): Browse tiles carry an edge-count badge — fetched separately
-// from the object list itself (a per-row COUNT joined into that already-complex query would
-// cost every one of its many callers, not just Browse), batched in chunks small enough to
-// stay a sane query-string length, and rendered as soon as each chunk lands rather than
-// blocking the table/board's own first paint on it.
+// Browse tiles carry an edge-count badge, fetched separately from the object list itself
+// (a per-row COUNT joined into that already-complex query would cost every one of its many
+// callers, not just Browse), batched in chunks small enough to stay a sane query-string
+// length, and rendered as soon as each chunk lands rather than blocking the table/board's
+// own first paint on it.
 var EDGE_COUNTS = {};
 async function loadEdgeCounts(ids) {
   var CHUNK = 150;
@@ -269,7 +262,7 @@ function edgeCountBadge(id) {
 }
 async function loadMoreObjects() {
   if (OBJECTS_LOADING_MORE || !OBJECTS_HAS_MORE || !SET.length) return;
-  var last = SET[SET.length - 1];  // SET is created_at DESC — the last row is the oldest loaded
+  var last = SET[SET.length - 1];  // SET is created_at DESC, the last row is the oldest loaded
   if (!last || !last.created_at) { OBJECTS_HAS_MORE = false; renderEntityExplorerStage(); return; }
   OBJECTS_LOADING_MORE = true;
   renderEntityExplorerStage();  // shows the loading state on the button immediately
@@ -301,22 +294,22 @@ function getFilteredEntities() {
 function renderEntityToolbar() {
   $('entity-taxonomy-bar').style.display = 'flex';
   // TRUE_COUNTS (#196) is the uncapped census over the same scope; SET-derived counts
-  // are a fallback for when it hasn't loaded (or failed) — never the primary source,
+  // are a fallback for when it hasn't loaded (or failed), never the primary source,
   // since SET is capped at 1500 and silently understates any type/scope past that.
   //
-  // THE TABLE FILTER QUERY SHAPE (Thoth DM 10711): TRUE_COUNTS itself is never scoped by
-  // type/status/q (it stays the honest, uncapped census across ALL types, so every pill's
-  // own count keeps showing the full landscape regardless of what's currently selected) —
-  // once a type/status/text filter is active, SET *is* the scoped population (browseScope()
+  // THE TABLE FILTER QUERY SHAPE: TRUE_COUNTS itself is never scoped by type/status/q
+  // (it stays the honest, uncapped census across ALL types, so every pill's own count
+  // keeps showing the full landscape regardless of what's currently selected). Once a
+  // type/status/text filter is active, SET *is* the scoped population (browseScope()
   // now fetches exactly that from the server), so the big total badge reads SET.length
   // instead of the unscoped global total. Same honesty caveat as SET-derived counts
   // generally: if the scoped population itself exceeds OBJECTS_LIMIT (OBJECTS_HAS_MORE),
-  // this undercounts — no uncapped *scoped* census endpoint exists yet, disclosed rather
+  // this undercounts; no uncapped *scoped* census endpoint exists yet, disclosed rather
   // than silently wrong.
-  // review flaw #5 (TIP 1c, Thoth mail 10891): "the count follows the lens or says
-  // nothing" -- while a real focus is on, the header's own total tracked an unrelated
-  // global/filtered count (measured: 1,076 during a 3-node focus) instead of the actual
-  // reachable set the canvas and table were both scoped to.
+  // The count follows the lens or says nothing: while a real focus is on, the header's
+  // own total used to track an unrelated global/filtered count (measured: 1,076 during a
+  // 3-node focus) instead of the actual reachable set the canvas and table were both
+  // scoped to.
   const space = window.OsirisSpace;
   const focused = space && space.pathFocusId;
   const filterActive = SELECTED_ENTITY_TYPES.size > 0 || !!(ENTITY_SEARCH_QUERY || '').trim();
@@ -335,12 +328,11 @@ function renderEntityToolbar() {
     return '<button class="tax-tab' + sel + '" onclick="toggleEntityType(\'' + t + '\')"><span class="tax-title">' + esc(dl) + '</span><span class="tax-count">' + count.toLocaleString() + '</span></button>';
   }).join('');
 }
-// THE TABLE FILTER QUERY SHAPE (Thoth DM 10711) + THE LEGIBILITY PASS TIP 1(e) (ruling
-// e1cb9e3b), merged: a pill toggle now does THREE things — re-render locally for
-// immediate pill/search-box feedback, sync the canvas's own hidden-type set
-// (syncSpaceTypeFilter, landed w268), and re-fetch the scoped row set from the server
-// (refetchFilteredObjectSet, this tip) rather than only re-filtering whatever page was
-// already loaded. All three read the SAME SELECTED_ENTITY_TYPES — one selection, three
+// THE TABLE FILTER QUERY SHAPE and THE LEGIBILITY PASS, merged: a pill toggle now does
+// THREE things: re-render locally for immediate pill/search-box feedback, sync the
+// canvas's own hidden-type set (syncSpaceTypeFilter), and re-fetch the scoped row set
+// from the server (refetchFilteredObjectSet) rather than only re-filtering whatever page
+// was already loaded. All three read the SAME SELECTED_ENTITY_TYPES: one selection, three
 // consumers, never a second notion of "what's currently filtered."
 let ENTITY_FILTER_DEBOUNCE = null;
 async function refetchFilteredObjectSet() {
@@ -355,9 +347,9 @@ function toggleEntityType(t) {
   syncSpaceTypeFilter();
   refetchFilteredObjectSet();
 }
-// THE LEGIBILITY PASS, TIP 1(e) (ruling e1cb9e3b): the header taxonomy pills drive the
-// canvas through the same per-instance visibility flag the legend's own node-type
-// checkboxes use (space.js's setHiddenTypes) -- SELECTED_ENTITY_TYPES is an ALLOWLIST
+// THE LEGIBILITY PASS: the header taxonomy pills drive the canvas through the same
+// per-instance visibility flag the legend's own node-type checkboxes use
+// (space.js's setHiddenTypes). SELECTED_ENTITY_TYPES is an ALLOWLIST
 // (empty = show all) so it's translated to a hidden-set (everything present, minus the
 // allowlist) before handing it to the graph, which speaks "hidden" not "allowed".
 function syncSpaceTypeFilter() {
@@ -371,10 +363,10 @@ function filterEntitySearch(q) {
   ENTITY_SEARCH_QUERY = q;
   renderEntityExplorer();
   // Debounced (250ms): the omnibox drives this on every keystroke (handleOmniSearchInput),
-  // and status:/free-text now hits list_objects_scoped's real query — a refetch per
+  // and status:/free-text now hits list_objects_scoped's real query, so a refetch per
   // keystroke would hammer the DB for no benefit while the operator is still typing. Free
-  // text/status: don't touch the canvas — only the type-pill allowlist drives
-  // syncSpaceTypeFilter, unchanged from w268.
+  // text/status don't touch the canvas; only the type-pill allowlist drives
+  // syncSpaceTypeFilter.
   clearTimeout(ENTITY_FILTER_DEBOUNCE);
   ENTITY_FILTER_DEBOUNCE = setTimeout(refetchFilteredObjectSet, 250);
 }
@@ -382,23 +374,23 @@ function toggleTableSort(col) { TABLE_SORT_DIR = TABLE_SORT_COL === col ? (TABLE
 function inspectAndToggleRow(id) { inspectOnly(id); EXPANDED_ROWS.has(id) ? EXPANDED_ROWS.delete(id) : EXPANDED_ROWS.add(id); renderEntityExplorerStage(); }
 function sortIcon(col) { return TABLE_SORT_COL === col ? (TABLE_SORT_DIR === 'asc' ? ' \u25b4' : ' \u25be') : ''; }
 async function renderEntityExplorer() { $('entity-taxonomy-bar').style.display = 'flex'; renderEntityToolbar(); renderEntityExplorerStage(); }
-// NAVIGABLE SPACE, INTEGRATION (mail 10550): "graph and table COEXIST in the middle — your
-// default: the graph canvas fills the section with the table as a collapsible drawer beneath
-// it, the Table/Graph switch becomes 'show table'". Table/Board/Graph's old three-way
-// view-tab switcher (renderSwitcher, ENTITY_VIEW_MODE) is superseded by this one boolean;
-// #viewsw and Board itself are gone for real now (piece 3, ruling c5953bb1).
+// NAVIGABLE SPACE, INTEGRATION: graph and table coexist in the middle by default. The
+// graph canvas fills the section with the table as a collapsible drawer beneath it; the
+// Table/Graph switch becomes "show table". Table/Board/Graph's old three-way view-tab
+// switcher (renderSwitcher, ENTITY_VIEW_MODE) is superseded by this one boolean; #viewsw
+// and Board itself are gone for real now.
 let TABLE_DRAWER_OPEN = false;
 function toggleTableDrawer() {
   TABLE_DRAWER_OPEN = !TABLE_DRAWER_OPEN;
   const el = $('browse-drawer'); if (el) el.classList.toggle('open', TABLE_DRAWER_OPEN);
 }
-// THE TABLE-DRAWER-READS-0 FIX (Thoth mail 11241, live review of w299): SET is a
-// paginated, created_at-DESC page of RECENT objects (loadObjectSet/runBrowseSelect) —
-// architecturally unrelated to a focus walk's own reachable ids, so a real focus (an
-// ordinary ego walk, and especially a container drill's expanded page) almost always lit
-// rows the table had never loaded, reading as "No matching entities" even though the
-// canvas showed plenty. Hydrated by id from the server instead of requiring SET to already
-// carry them — bounded by the walk's own cap (MAX_EGO_NODES = 300), never unbounded.
+// THE TABLE-DRAWER-READS-0 FIX: SET is a paginated, created_at-DESC page of RECENT
+// objects (loadObjectSet/runBrowseSelect), architecturally unrelated to a focus walk's
+// own reachable ids, so a real focus (an ordinary ego walk, and especially a container
+// drill's expanded page) almost always lit rows the table had never loaded, reading as
+// "No matching entities" even though the canvas showed plenty. Hydrated by id from the
+// server instead of requiring SET to already carry them, bounded by the walk's own cap
+// (MAX_EGO_NODES = 300), never unbounded.
 const FOCUS_HYDRATED_OBJECTS = new Map(); // id -> object, cleared whenever the focus changes
 let FOCUS_HYDRATE_FOR = null; // the pathFocusId this cache's own in-flight fetch belongs to
 async function hydrateFocusReachable(reachable, focusId) {
@@ -419,9 +411,9 @@ async function hydrateFocusReachable(reachable, focusId) {
 }
 function renderEntityExplorerStage() {
   let filtered = getFilteredEntities();
-  // THE READING LAYER, part C ("harmony", ruling c5953bb1): "the table filters to the
-  // reachable set while a focus is on" — a real path focus (not a plain select) narrows
-  // the table to exactly what the canvas is showing lit.
+  // THE READING LAYER: the table filters to the reachable set while a focus is on. A real
+  // path focus (not a plain select) narrows the table to exactly what the canvas is
+  // showing lit.
   var space = window.OsirisSpace;
   if (space && space.pathFocusId) {
     var reachable = space.pathReachable;
@@ -437,10 +429,10 @@ function renderEntityExplorerStage() {
   const countEl = $('browse-drawer-count'); if (countEl) countEl.textContent = filtered.length.toLocaleString();
   renderTableProjection($('browse-table'), filtered);
 }
-// shares the selection between the space canvas and the table drawer (mail 10550's own
-// "the two share the selection") — space.js calls this via its onFocus hook (index.html's
-// module script wires window.onSpaceFocus through), console.js's own inspectOnly/focus
-// reach FOCUS directly and call it too so a table click paints the same way.
+// Shares the selection between the space canvas and the table drawer. space.js calls
+// this via its onFocus hook (index.html's module script wires window.onSpaceFocus
+// through); console.js's own inspectOnly/focus reach FOCUS directly and call it too so a
+// table click paints the same way.
 function onSpaceFocus(id) {
   FOCUS = id;
   if (ACTIVE_SURFACE === 'browse') {
@@ -463,7 +455,7 @@ function keyLabel(o) {
   return raw;
 }
 function isOpaqueKey(k) {
-  // uuid, bare sha, or any long unbroken hex run — nothing a human reads as a word.
+  // uuid, bare sha, or any long unbroken hex run: nothing a human reads as a word.
   return /^[0-9a-f-]{12,}$/i.test(k) || /[0-9a-f]{16,}/i.test(k);
 }
 function abbrevKey(k, head, tail) {
@@ -482,12 +474,11 @@ function renderKey(o) {
 
 // ── Table Projection ─────────────────────────────────────────────────────────
 // The old footer here claimed "Showing first 300 of X" while actually rendering EVERY
-// row in `shown`, unsliced — a granular sharpening (#93 item 2, Thoth msg 5668): a
-// footer that asserts a conclusion the render doesn't support is exactly the fact-vs-
-// conclusion distinction this whole reign kept landing on for the project index's own
-// flag copy. Replaced with what's actually true — how many are loaded, out of the real
-// total when known (#196's /objects/counts), plus Load More when the server signaled
-// there might be more (loadObjectSet's own heuristic, not a promise).
+// row in `shown`, unsliced (#93 item 2): a footer that asserts a conclusion the render
+// doesn't support is exactly the fact-vs-conclusion distinction the project index's own
+// flag copy needed too. Replaced with what's actually true: how many are loaded, out of
+// the real total when known (#196's /objects/counts), plus Load More when the server
+// signaled there might be more (loadObjectSet's own heuristic, not a promise).
 function objectSetFooterHtml() {
   var total = TRUE_COUNTS ? TRUE_COUNTS.total : null;
   var loadedText = 'Loaded ' + SET.length.toLocaleString() + (total != null ? ' of ' + total.toLocaleString() : '') + ' objects in scope';
@@ -521,14 +512,14 @@ function renderTableRow(o) {
 }
 
 // ── Mailbox ──────────────────────────────────────────────────────────────────
-// Ported off /pulse (which never carried a `messages` array — src/api/app.py's pulse_route
-// only ever returned {line, live, owed, briefs, wakes, spend}; the old code silently rendered
-// "No messages" even when mail was waiting) onto the REAL mail read: the "mail" saved
-// composition (MAIL_OVERVIEW, compositions.py) wraps chrome.mail_overview — the same fold-
-// aware room/soul read /mail's own HTML view uses. #92's own drill-in (task #90, Thoth msg
-// 1976/2005): each row's `row_action` is "run:mail_threads" — the click delegate in osiris.js
-// dispatches an `osiris:run` DOM event rather than POSTing, and this is the page shell that
-// event was always meant to be caught by (never wired to any listener until now).
+// Ported off /pulse (which never carried a `messages` array; src/api/app.py's pulse_route
+// only ever returned {line, live, owed, briefs, wakes, spend}, and the old code silently
+// rendered "No messages" even when mail was waiting) onto the REAL mail read: the "mail"
+// saved composition (MAIL_OVERVIEW, compositions.py) wraps chrome.mail_overview, the same
+// fold-aware room/soul read /mail's own HTML view uses. #92's own drill-in (task #90):
+// each row's `row_action` is "run:mail_threads"; the click delegate in osiris.js
+// dispatches an `osiris:run` DOM event rather than POSTing, and this is the page shell
+// that event was always meant to be caught by (never wired to any listener until now).
 async function renderMailbox() { await runMailboxComposition('mail', {}); }
 
 async function runMailboxComposition(name, args) {
@@ -567,19 +558,19 @@ async function runMailboxComposition(name, args) {
   }
 }
 
-// osiris.js's click delegate dispatches this for any `"run:<function>"` row action (built for
-// exactly this case — see its own comment); scoped to the mailbox surface so a future consumer
-// of the same event elsewhere in the shell (the composer, piece 2) isn't shadowed by this one.
+// osiris.js's click delegate dispatches this for any `"run:<function>"` row action (built
+// for exactly this case, see its own comment). Scoped to the mailbox surface so a future
+// consumer of the same event elsewhere in the shell (the composer) isn't shadowed by this one.
 document.addEventListener('osiris:run', function(e) {
   if (ACTIVE_SURFACE !== 'mailbox') return;
   runMailboxComposition(e.detail.name, e.detail.args || {});
 });
 
-// ── Pane (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d) ───────────────
-// THE READ-ONLY PANE: pick a live seat, watch its transcript stream live — no writes, no
+// ── Pane ─────────────────────────────────────────────────────────────────────
+// THE READ-ONLY PANE: pick a live seat, watch its transcript stream live, no writes, no
 // spawn. PICK is /pane/live (a lean slice of the same live/seated fold /fleet already
 // computes); the stream is /pane/{agent_id}/stream (SSE), text already role-tagged
-// OPERATOR:/CLAUDE: server-side by sessions.py's own distill() — this surface only appends
+// OPERATOR:/CLAUDE: server-side by sessions.py's own distill(); this surface only appends
 // what arrives, never re-derives or re-parses it.
 var PANE_SOURCE = null;
 function closePaneStream() { if (PANE_SOURCE) { PANE_SOURCE.close(); PANE_SOURCE = null; } }
@@ -617,11 +608,10 @@ function openPaneStream(agentId) {
   };
   PANE_SOURCE.onerror = function() { /* EventSource auto-retries; nothing to do here */ };
 }
-// THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): posts through the seat's own
-// harness-agnostic adapter (/pane/{agent}/reply) — a one-shot turn against the seat's
-// ALREADY-RUNNING session, never a new spawn. The reply itself lands in the same
-// transcript file the stream above is already tailing, so it needs no separate render
-// path — it just shows up.
+// THE REPLY ENDPOINT: posts through the seat's own harness-agnostic adapter
+// (/pane/{agent}/reply), a one-shot turn against the seat's ALREADY-RUNNING session,
+// never a new spawn. The reply itself lands in the same transcript file the stream above
+// is already tailing, so it needs no separate render path; it just shows up.
 async function sendPaneReply() {
   var input = $('pane-reply-input');
   if (!input || !PANE_AGENT) return;
@@ -641,19 +631,18 @@ async function sendPaneReply() {
   }
 }
 
-// ── Settings Menu (THE SETTINGS MENU, ruling be1b2e47, thread 7eb26f68 pieces 2+3) ────
+// ── Settings Menu ──────────────────────────────────────────────────────────
 // One generic view over src/config/settings_registry.py's own SETTINGS tuple, rendered
-// from settings(action='list') — a new knob needs a new registry entry, never a new
+// from settings(action='list'). A new knob needs a new registry entry, never a new
 // renderer, unless it introduces a genuinely new `type` this switch doesn't yet cover.
-// Piece 3 folded the old dedicated "Backup settings…" panel's own 3 fields
+// This section folded the old dedicated "Backup settings…" panel's own 3 fields
 // (backup.vault_path, one backup.timer_schedule.<unit> per timer, backup.offbox_
-// repositories) into this same tuple — they render here, grouped under one "backup"
+// repositories) into this same tuple; they render here, grouped under one "backup"
 // section (key-prefix grouping, see renderSettingsPanelHtml below), no separate panel or
 // CMD-K entry anymore.
-// `live` (thread c5ba8681, Imhotep's own follow-up, not yet built) is read defensively
-// here — when a future list_settings response carries a non-null `live` per item, it
-// just appears beside `value`; no UI change needed when it arrives. Reached via CMD-K
-// ("Settings…") — no standing-lens case for a tab.
+// `live` (not yet built) is read defensively here: when a future list_settings response
+// carries a non-null `live` per item, it just appears beside `value`; no UI change needed
+// when it arrives. Reached via CMD-K ("Settings…"); no standing-lens case for a tab.
 function settingsEffectProse(effect) {
   if (effect === 'immediate') return 'Takes effect immediately';
   if (effect === 'next_tick') return 'Takes effect within a few seconds';
@@ -664,8 +653,8 @@ function settingsEffectProse(effect) {
   return effect || '';
 }
 var SETTINGS_LIST = null, SETTINGS_CONTAINER_ID = 'result';
-// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section (REGISTRY) too — same
-// containerId-tracking pattern renderKeyInto/renderOffloadInto above already use.
+// THE SETTINGS PANE embeds this section (Registry) too: same containerId-tracking
+// pattern renderKeyInto/renderOffloadInto above already use.
 async function renderSettingsInto(containerId) {
   SETTINGS_CONTAINER_ID = containerId;
   var container = $(containerId);
@@ -709,8 +698,8 @@ function settingsFieldInput(item) {
     return '<textarea id="' + id + '" rows="3" style="width:360px;font-family:monospace">' +
       esc(JSON.stringify(v, null, 2)) + '</textarea>';
   }
-  // str / path / schedule — plain text; path/schedule may be null (no override, uses
-  // the shipped default) — an empty box round-trips to null on save (settingsFieldValue).
+  // str / path / schedule: plain text; path/schedule may be null (no override, uses
+  // the shipped default). An empty box round-trips to null on save (settingsFieldValue).
   var ph = (item.type === 'path' || item.type === 'schedule')
     ? ' placeholder="(not set, uses the default)"' : '';
   return '<input type="text" id="' + id + '" value="' + esc(v == null ? '' : v) + '"' +
@@ -824,13 +813,13 @@ async function saveSetting(key) {
   setStatus(key + ' saved.' + (res.note ? ' ' + res.note : ''));
   renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
-// THE SECRETS REPLACE ACT (thread f4498ab304e4's follow-up, product form: an inline
-// password field plus a required confirm checkbox, never a browser dialog) -- the
-// confirm is UNCONDITIONAL (never gated on item.consequence -- replacing a secret
-// always replaces the live credential, no low-stakes case the way an ordinary knob
-// has one). The write door is the SAME /settings POST saveSetting already uses
-// (settings_service.write_setting's own secret_ref branch IS the replace -- no second
-// endpoint to learn); res.note (which service must restart) surfaces the same way.
+// THE SECRETS REPLACE ACT (a product form: an inline password field plus a required
+// confirm checkbox, never a browser dialog). The confirm is UNCONDITIONAL (never gated on
+// item.consequence: replacing a secret always replaces the live credential, no low-stakes
+// case the way an ordinary knob has one). The write endpoint is the SAME /settings POST
+// saveSetting already uses (settings_service.write_setting's own secret_ref branch IS the
+// replace, no second endpoint to learn); res.note (which service must restart) surfaces
+// the same way.
 async function rotateSecret(key) {
   var item = (SETTINGS_LIST || []).filter(function(it) { return it.key === key; })[0];
   if (!item) return;
@@ -859,14 +848,14 @@ async function rotateSecret(key) {
   renderSettingsInto(SETTINGS_CONTAINER_ID);
 }
 
-// ── Repairs Panel (thread c89a9873, wave 22, ruling 7be61879) ─────────────────────────
-// The seven backfill repair targets, one dry-run/apply door each — all through POST
+// ── Repairs Panel ──────────────────────────────────────────────────────────
+// The seven backfill repair targets, one dry-run/apply endpoint each, all through POST
 // /backfill, which itself calls orchestrator.backfill.run_backfill, the SAME function
-// the MCP tool and the CLI's `osiris backfill` command call. operator_charter's own
-// apply control is DELIBERATELY OMITTED here (thread c89a9873's own scope note: its
-// blast radius — fleet-wide operator authority — needs a deliberate terminal act, not a
-// browser click; /backfill itself refuses dry_run=False for this target regardless, so
-// this is belt-and-suspenders, never the only guard). Reached via CMD-K ("Repairs…").
+// the MCP tool and the CLI's `osiris backfill` command call. operator_charter's own apply
+// control is DELIBERATELY OMITTED here: its blast radius (fleet-wide operator authority)
+// needs a deliberate terminal act, not a browser click; /backfill itself refuses
+// dry_run=False for this target regardless, so this is belt-and-suspenders, never the
+// only guard. Reached via CMD-K ("Repairs…").
 var REPAIRS_TARGETS = [
   { key: 'bootstrap_orphan_references', hint: 'Link an orphaned ref:osiris Reference to the SoftwareProject its own canonical names.' },
   { key: 'boot_alarm_commit_links', hint: 'Link a zero-link boot-alarm Thread to the Commit its summary cites.' },
@@ -880,13 +869,18 @@ function renderRepairsPanel() {
   const container = $('result'); showPanel();
   $('entity-taxonomy-bar').style.display = 'none';
   var rows = REPAIRS_TARGETS.map(function(t) {
-    var applyBtn = t.cliOnly
+    var applyCell = t.cliOnly
       ? '<span class="o-faint" title="' + esc(t.hint) + '">CLI-only</span>'
-      : '<button class="iconbtn" onclick="applyRepair(\'' + esc(t.key) + '\')">Apply</button>';
+      : '<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">' +
+        '<input id="repair-because-' + esc(t.key) + '" class="filter" style="width:150px;margin:0" ' +
+        'placeholder="Reason for this change" oninput="repairUpdateButtonState(\'' + esc(t.key) + '\')" /> ' +
+        '<label style="font-size:11px;white-space:nowrap"><input type="checkbox" id="repair-confirm-' + esc(t.key) +
+        '" onchange="repairUpdateButtonState(\'' + esc(t.key) + '\')" /> Confirm</label> ' +
+        '<button class="iconbtn" id="repair-btn-' + esc(t.key) + '" disabled onclick="applyRepair(\'' + esc(t.key) + '\')">Apply</button></div>';
     return '<tr><td style="vertical-align:top"><code>' + esc(t.key) + '</code></td>' +
       '<td class="o-faint" style="vertical-align:top">' + esc(t.hint) + '</td>' +
       '<td style="vertical-align:top"><button class="iconbtn" onclick="dryRunRepair(\'' + esc(t.key) + '\')">Dry run</button></td>' +
-      '<td style="vertical-align:top">' + applyBtn + '</td></tr>' +
+      '<td style="vertical-align:top">' + applyCell + '</td></tr>' +
       '<tr><td colspan="4"><pre id="repair-out-' + esc(t.key) + '" class="o-faint" style="white-space:pre-wrap;margin:0 0 12px"></pre></td></tr>';
   }).join('');
   container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
@@ -894,6 +888,11 @@ function renderRepairsPanel() {
     '<div class="o-faint" style="margin-bottom:8px">The seven backfill repair verbs. Dry run always writes nothing.</div>' +
     '<table class="ee-table"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
     rows + '</tbody></table></div>';
+}
+function repairUpdateButtonState(target) {
+  var because = $('repair-because-' + target); var confirmBox = $('repair-confirm-' + target);
+  var btn = $('repair-btn-' + target);
+  if (btn) btn.disabled = !(because && because.value.trim() && confirmBox && confirmBox.checked);
 }
 async function dryRunRepair(target) {
   var out = $('repair-out-' + target);
@@ -905,8 +904,7 @@ async function dryRunRepair(target) {
   if (out) out.textContent = JSON.stringify(res, null, 2);
 }
 async function applyRepair(target) {
-  if (!confirm('This is a high-consequence write (' + target + '). Proceed?')) return;
-  var because = prompt('Why this change? (required)'); if (!because) return;
+  var because = $('repair-because-' + target).value.trim(); if (!because) return;
   var out = $('repair-out-' + target);
   if (out) out.textContent = 'applying…';
   var res = await fetch('/backfill', {
@@ -918,36 +916,34 @@ async function applyRepair(target) {
   setStatus(target + ' applied.');
 }
 
-// ── The Key Panel (Thoth mail 12811/12814/12838/12985/13002, over Khnum's soul-key door) ──
-// Piece 1: status card + init/rotate/restore-drill over GET/POST /soul-key/*. Piece 2
-// (this tip, mail 13002): browser WebAuthn PRF recovery enrollment + recovery, over
-// Seshat's own NEW routes (POST /soul-key/recovery-material[/complete], GET /soul-key/
-// recovery-blob, POST /soul-key/recover-from-browser — see
-// src/orchestrator/soul_key_recovery_material.py) rather than Khnum's own CLI-only
-// enroll-recovery/recover, which stay CLI-only exactly as his own mail (12979) says —
-// this is a SEPARATE, ADDITIONAL enrollment path, the CLI one is never removed.
+// ── The Key Panel (over the soul-key encryption-key lifecycle) ───────────────────────
+// Status card + init/rotate/restore-drill over GET/POST /soul-key/*, plus browser
+// WebAuthn PRF recovery enrollment and recovery, over its own routes (POST /soul-key/
+// recovery-material[/complete], GET /soul-key/recovery-blob, POST /soul-key/
+// recover-from-browser; see src/orchestrator/soul_key_recovery_material.py) alongside the
+// CLI's own enroll-recovery/recover, which stay CLI-only. This browser path is SEPARATE
+// and ADDITIONAL; the CLI one is never removed.
 //
-// RP ID — RULED (decision ff21aed514bc, Thoth mail 13005), not hard-coded: the console
-// is served at 127.0.0.1:8011/localhost:8011 over plain http, a WebAuthn secure context
-// ONLY for the literal hostname "localhost" — "osiris.local" (soul_crypto.py's own
-// pre-ruling constant) could never interoperate with a real browser. rp_id is now a
-// settings-registry knob (`soul_key.rp_id`, default "localhost") BOTH the CLI enrollment
-// and this page read live — GET /soul-key/status returns it as `rp_id`, so this page
-// never hard-codes it (Khnum patches his own constant separately, his file, his commit).
-// Both buttons below fetch status first and pre-check document.location.hostname against
-// THAT value before ever touching WebAuthn, showing a clear error instead of letting the
-// browser throw an opaque SecurityError — the operator opens the console as
-// http://localhost:8011, not 127.0.0.1, when enrolling (ruling's own explicit note).
+// RP ID is read live, not hard-coded: the console is served at 127.0.0.1:8011/
+// localhost:8011 over plain http, a WebAuthn secure context ONLY for the literal hostname
+// "localhost" ("osiris.local", an earlier fixed constant, could never interoperate with a
+// real browser). rp_id is now a settings-registry knob (`soul_key.rp_id`, default
+// "localhost") BOTH the CLI enrollment and this page read live; GET /soul-key/status
+// returns it as `rp_id`, so this page never hard-codes it. Both buttons below fetch
+// status first and pre-check document.location.hostname against THAT value before ever
+// touching WebAuthn, showing a clear error instead of letting the browser throw an opaque
+// SecurityError; the operator opens the console as http://localhost:8011, not 127.0.0.1,
+// when enrolling.
 //
 // FERNET-COMPATIBLE WRAP FORMAT, CROSS-VERIFIED (not just spec-followed): the HKDF
 // params and the hand-rolled Fernet token format below (fernetEncryptBytes/
 // fernetDecryptBytes) were checked byte-for-byte against Python's own
 // cryptography.fernet.Fernet + HKDF (soul_crypto.py's own _hkdf_wrap_key) via a
-// throwaway Node+Python cross-check before landing — both directions round-tripped
+// throwaway Node+Python cross-check before landing: both directions round-tripped
 // (JS-wrapped token decrypts correctly under Python's Fernet, and vice versa). What
 // COULD NOT be verified without real hardware: the actual navigator.credentials
-// create/get PRF ceremony itself (no FIDO2 device, no real browser session in this
-// build environment) — flagged explicitly here, matching the same honesty
+// create/get PRF exchange itself (no FIDO2 device, no real browser session in this
+// build environment), flagged explicitly here, matching the same honesty
 // soul_crypto.py's own FIDO2 section states about its CLI counterpart. One real
 // enroll+recover cycle against the operator's own Security Key, from an actual
 // browser, is owed before this is trusted as a live recovery path.
@@ -969,11 +965,11 @@ function keyAgeProse(seconds) {
   return Math.round(seconds / 86400) + 'd ago';
 }
 var KEY_STATUS = null, KEY_CONTAINER_ID = 'result';
-// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section rather than re-implementing
-// it: renderKeyInto(containerId) is the shared fetch+render, tracking KEY_CONTAINER_ID
-// so every action handler's own "refresh after success" call (renderKeyInto(KEY_
-// CONTAINER_ID)) lands back in whichever container is currently showing it — the
-// standalone panel (#result) or the pane's own embedded section — without either
+// THE SETTINGS PANE EMBEDS this section rather than re-implementing it:
+// renderKeyInto(containerId) is the shared fetch+render, tracking KEY_CONTAINER_ID so
+// every action handler's own "refresh after success" call (renderKeyInto(KEY_
+// CONTAINER_ID)) lands back in whichever container is currently showing it, the
+// standalone panel (#result) or the pane's own embedded section, without either
 // context needing its own copy of this logic.
 async function renderKeyInto(containerId) {
   KEY_CONTAINER_ID = containerId;
@@ -1099,9 +1095,9 @@ async function restoreDrillKey() {
   setStatus(res.all_ok ? 'Test restore: every copy is readable.' : 'Test restore: at least one copy failed. See the results above.');
 }
 
-// ── Browser recovery crypto (Thoth mail 13002, THE KEY PANEL piece 2) ──────────────────
+// ── Browser recovery crypto ────────────────────────────────────────────────────────────
 // Cross-verified against src/ingest/soul_crypto.py's own HKDF params and Python's
-// cryptography.fernet.Fernet wire format — see this section's own header comment above.
+// cryptography.fernet.Fernet wire format; see this section's own header comment above.
 function b64urlEncodeBytes(bytes) {
   var bin = '';
   for (var i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
@@ -1246,7 +1242,7 @@ async function enrollRecoveryBrowser() {
   }
 }
 
-// ── Browser recovery (piece 2, recover direction — a box with no live key) ─────────────
+// ── Browser recovery (recover direction: a box with no live key) ──────────────────────
 async function recoverKeyBrowser() {
   var out = $('key-out');
   if (!_webauthnPrfAvailable()) { setStatus('This browser has no WebAuthn/PRF support.'); return; }
@@ -1300,19 +1296,19 @@ async function recoverKeyBrowser() {
   }
 }
 
-// ── The Offload Targets Panel (Thoth mail 12811/12814/12985, ruling be21384a) ─────────
+// ── The Offload Targets Panel ──────────────────────────────────────────────────────────
 // One row per backup.offload_targets entry, live presence off GET /backup-settings
 // (local kind: real findmnt-backed present/writable/free_bytes; restic kind: presence
-// is always null by design — reachability is a network fact this door never checks,
+// is always null by design, reachability is a network fact this endpoint never checks,
 // backup_validation.py's own repeated law). Edits are a single full-array replace
-// through POST /backup-settings, the same write door the Settings panel's own backup
-// section already uses — no separate add/remove endpoint exists. vault_path stays
-// read-only here (its own editable field lives in Settings, one write door, never two).
+// through POST /backup-settings, the same write endpoint the Settings panel's own backup
+// section already uses; no separate add/remove endpoint exists. vault_path stays
+// read-only here (its own editable field lives in Settings, one write endpoint, never two).
 // Reached via CMD-K ("Offload Targets…").
 var OFFLOAD_ROWS = null, OFFLOAD_VAULT = null, OFFLOAD_CONTAINER_ID = 'result';
-// THE SETTINGS PANE (Thoth mail 13350) EMBEDS this section too: renderOffloadInto
-// tracks OFFLOAD_CONTAINER_ID so the row-editing helpers below (which used to hard-
-// code #result) write back into whichever container currently shows this panel.
+// THE SETTINGS PANE EMBEDS this section too: renderOffloadInto tracks
+// OFFLOAD_CONTAINER_ID so the row-editing helpers below (which used to hard-code
+// #result) write back into whichever container currently shows this panel.
 async function renderOffloadInto(containerId) {
   OFFLOAD_CONTAINER_ID = containerId;
   var container = $(containerId);
@@ -1432,16 +1428,16 @@ async function saveOffloadTargets() {
   renderOffloadInto(OFFLOAD_CONTAINER_ID);
 }
 
-// ── THE SETTINGS PANE (Thoth mail 13350) ────────────────────────────────────────────
+// ── THE SETTINGS PANE ──────────────────────────────────────────────────────────────
 // ONE console pane, five embedded sections, replacing the three formerly-separate
 // palette panels (see POWER_TOOLS' own comment above). Every section reads through an
-// EXISTING REST door except four genuinely new thin ones this tip adds — no read door
-// existed for these facts at all before now: GET /restic-key/status, GET
-// /deploy-status, GET /operator/desk (JSON; the pre-existing /desk route only ever
-// served server-rendered HTML), POST /operator/desk/reply. Every section degrades
-// independently — one door's own failure/404 never blanks the rest of the pane, same
-// "unavailable, not silent" law compositions.py's own _fn_backup_status already holds
-// per-section. Reached via CMD-K ("Settings") and the header's own gear-icon link.
+// EXISTING REST endpoint except four genuinely new thin ones: GET /restic-key/status,
+// GET /deploy-status, GET /operator/desk (JSON; the pre-existing /desk route only ever
+// served server-rendered HTML), POST /operator/desk/reply. No read endpoint existed for
+// these facts at all before now. Every section degrades independently: one endpoint's
+// own failure/404 never blanks the rest of the pane, same "unavailable, not silent" law
+// compositions.py's own _fn_backup_status already holds per-section. Reached via CMD-K
+// ("Settings") and the header's own gear-icon link.
 async function renderSettingsPane() {
   const container = $('result'); showPanel();
   $('entity-taxonomy-bar').style.display = 'none';
@@ -1465,14 +1461,14 @@ function settingsSectionShell(id, title) {
     title + '</h3><div id="settings-sec-' + id + '" class="o-faint">Loading…</div></section>';
 }
 
-// --- section 1: KEY — the existing Key panel, embedded not re-implemented -------------
+// --- section 1: KEY, the existing Key panel, embedded not re-implemented ---------------
 async function renderSettingsSectionKey() {
   await renderKeyInto('settings-sec-key');
 }
 
-// --- section 2: BACKUP & OFFLOAD — the existing Offload panel + a read-only backup-
+// --- section 2: BACKUP & OFFLOAD, the existing Offload panel + a read-only backup-
 // status view (timers set-vs-took-effect, per-target last offload) off the existing
-// backup_status Function (POST /compositions/run-spec, no new route needed) ----------
+// backup_status Function (POST /compositions/run-spec, no new route needed) -----------
 async function renderSettingsSectionOffload() {
   var container = $('settings-sec-offload');
   if (!container) return;
@@ -1486,8 +1482,7 @@ async function renderSettingsSectionOffload() {
     renderBackupStatusSection(),
   ]);
 }
-// GUI PARITY (thread dd11ab34, item 1): setting up the remote backup password had no
-// route or button.
+// Setting up the remote backup password used to have no route or button.
 async function renderResticCredentialWidget() {
   var el = $('settings-restic-credential');
   if (!el) return;
@@ -1520,7 +1515,7 @@ async function initResticKey() {
   setStatus('Remote backup password set up (' + res.backend + ').');
   renderResticCredentialWidget();
 }
-// GUI PARITY (thread dd11ab34, item 2): no on-demand offload tick.
+// There used to be no on-demand offload tick.
 async function runOffloadTick() {
   var out = $('settings-backup-status');
   if (out) out.textContent = 'Running the offload now…';
@@ -1592,14 +1587,14 @@ function renderBackupStatusHtml(status) {
      targetRows + '</tbody></table>' : '');
 }
 
-// --- section 3: REGISTRY — the existing Settings-registry panel, embedded -------------
+// --- section 3: REGISTRY, the existing Settings-registry panel, embedded --------------
 async function renderSettingsSectionRegistry() {
   await renderSettingsInto('settings-sec-registry');
 }
 
-// --- section 4: OPERATOR DESK — inbox(project='operator') in bands, settle-able in
-// place (GET/POST /operator/desk, /desk/settle) + a fold sub-band over the EXISTING
-// merge-candidates tray (GET/POST /merge-candidates) — a copy-pasteable /merge line,
+// --- section 4: OPERATOR DESK, inbox(project='operator') in bands, settle-able in
+// place (GET/POST /operator/desk, /desk/settle) plus a fold sub-band over the EXISTING
+// merge-candidates tray (GET/POST /merge-candidates): a copy-pasteable /merge line,
 // never an auto-executed merge (constitution #1: identity merges are review-gated,
 // always; "reject" is the only in-place write this sub-band offers). -----------------
 async function renderSettingsSectionDesk() {
@@ -1715,7 +1710,7 @@ async function rejectMergeCandidate(btn) {
   renderSettingsSectionDesk();
 }
 
-// --- section 5: READINESS — a checklist of what is set up and connected, read live
+// --- section 5: READINESS, a checklist of what is set up and connected, read live
 // off four existing status routes plus the two newer ones (remote backup password,
 // running-version status) --------------------------------------------------------------
 async function renderSettingsSectionBox() {
@@ -1771,24 +1766,22 @@ function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {
 }
 
 // ── Projects ────────────────────────────────────────────────────────────────
-// THE CONSOLE CHROME CLEANUP (thread 0be2f790's own operator-finding follow-up, Thoth DM
-// 10731 piece 1): the left-nav "Projects" surface (renderProjects() + its own status
-// toggle, formerly wired here) is retired — redundant with the header's own repo
-// selector, per the operator's own word. The underlying "projects" saved composition is
-// UNTOUCHED and stays reachable exactly as every other saved composition is: the omnibox
-// (type "projects" in the header search) or the CLI/MCP composition-run door directly —
-// this removes only the bespoke surface/status-toggle chrome around it, never the data
-// access itself. loadProjects()/the PROJECTS array below stay — the repo pill still
-// depends on them.
+// THE CONSOLE CHROME CLEANUP: the left-nav "Projects" surface (renderProjects() + its
+// own status toggle, formerly wired here) is retired, redundant with the header's own
+// repo selector. The underlying "projects" saved composition is UNTOUCHED and stays
+// reachable exactly as every other saved composition is: the omnibox (type "projects" in
+// the header search) or the CLI/MCP composition-run endpoint directly. This removes only
+// the bespoke surface/status-toggle chrome around it, never the data access itself.
+// loadProjects()/the PROJECTS array below stay; the repo pill still depends on them.
 
 // ── Fleet ────────────────────────────────────────────────────────────────────
 
 
 // ── Focus / Inspect ──────────────────────────────────────────────────────────
-// WAVE A item 6 (thread 8839): the breadcrumb trail behind focus()'s own navigation —
-// every node a click/search/dbltap brought into focus, in order, deduped only when it
-// repeats the CURRENT tail (revisiting an older crumb truncates forward, browser-history
-// style, rather than growing a trail that loops on itself).
+// The breadcrumb trail behind focus()'s own navigation: every node a click/search/dbltap
+// brought into focus, in order, deduped only when it repeats the CURRENT tail (revisiting
+// an older crumb truncates forward, browser-history style, rather than growing a trail
+// that loops on itself).
 let BREADCRUMBS = [];
 function pushBreadcrumb(id, label) {
   if (BREADCRUMBS.length && BREADCRUMBS[BREADCRUMBS.length - 1].id === id) return;
@@ -1810,9 +1803,9 @@ function jumpToBreadcrumb(i) {
   BREADCRUMBS = BREADCRUMBS.slice(0, i + 1);
   focus(target.id, true);
 }
-// NAVIGABLE SPACE, INTEGRATION (mail 10550): focus() used to fetch a fresh one-hop
-// neighborhood and merge it into the cytoscape board — now the whole graph is already
-// loaded client-side in space.js, so "focus a node" is exactly space's own focusObject:
+// NAVIGABLE SPACE, INTEGRATION: focus() used to fetch a fresh one-hop neighborhood and
+// merge it into the cytoscape board. Now the whole graph is already loaded client-side in
+// space.js, so "focus a node" is exactly space's own focusObject:
 // walk upstream, hide the rest, zoom-to-fit, open the inspector. No REST round-trip, no
 // board to clear. Falls back to the plain inspector fetch if space hasn't finished
 // mounting yet (a cold click right at page load).
@@ -1823,12 +1816,11 @@ async function focus(id, fromBreadcrumb) {
   if (space) await space.focusObject(id); else await inspect(id);
   if (!fromBreadcrumb) pushBreadcrumb(id, id.slice(0, 8));
 }
-// TIP 1 AMENDMENT (operator via Thoth mail 10726, ruling amending e1cb9e3b): select-vs-focus
-// is retired -- "select, inspector, hide, fit, one gesture." The old select-only helper and
-// space's own selectObject primitive are both gone; every click-through (omnibox, table
-// row, canvas) now calls focus()/focusObject directly. The graph's own in-canvas
-// "Find a node" box stays gone (TIP 1(e)) -- the header omnibox is the only search, and a
-// hit always focuses regardless of click vs Enter.
+// Select-vs-focus is retired: select, inspector, hide, fit, one gesture. The old
+// select-only helper and space's own selectObject primitive are both gone; every
+// click-through (omnibox, table row, canvas) now calls focus()/focusObject directly. The
+// graph's own in-canvas "Find a node" box stays gone; the header omnibox is the only
+// search, and a hit always focuses regardless of click vs Enter.
 async function inspect(id) {
   FOCUS = id;
   var obj = await fetch('/objects/' + id).then(function(r){return r.json();}).catch(function(){return null;});
@@ -1840,15 +1832,15 @@ async function inspect(id) {
   if (relsEl) await Osiris.loadRels(relsEl, id, inspectOnly, openAsSet, obj);
   bindUpstreamExpansions(right);
 }
-// PROVENANCE PIECE 3(b) (thread b4477e9e): "who else read this upstream" — a property
-// row's own upstream_ids[0] drives one call to the upstream_readers Function (via the
-// existing generic composition door, not a bespoke route) so the reader sees every OTHER
-// object whose writer also plausibly traces to the same upstream read, without leaving
-// the inspector. Toggles closed on a second click rather than re-fetching.
+// "Who else read this upstream": a property row's own upstream_ids[0] drives one call to
+// the upstream_readers Function (via the existing generic composition endpoint, not a
+// bespoke route) so the reader sees every OTHER object whose writer also plausibly traces
+// to the same upstream read, without leaving the inspector. Toggles closed on a second
+// click rather than re-fetching.
 function bindUpstreamExpansions(scope) {
   scope.querySelectorAll('.o-upstream-link').forEach(function(link) {
     link.onclick = async function() {
-      // propRow emits k/val/pv/signals/expansion as flat grid children in order — the
+      // propRow emits k/val/pv/signals/expansion as flat grid children in order: the
       // expansion div this link controls is always its own parent's next sibling.
       var signalsDiv = link.parentElement;
       var exp = signalsDiv && signalsDiv.nextElementSibling;
@@ -1888,11 +1880,10 @@ function inspectOnly(id) {
     badge.style.display = "inline";
     badge.textContent = "Inspect: " + id.slice(0, 8) + "";
   }
-  // a table-drawer row click "shares the selection" with the space canvas (mail 10550) —
-  // focusObject also opens the inspector, so this replaces the plain inspect(id) call
-  // whenever the canvas is actually mounted and visible (browse). TIP 1 AMENDMENT (mail
-  // 10726): select-vs-focus is retired -- a row click is the same one gesture a canvas
-  // click is now, always a real focus.
+  // A table-drawer row click "shares the selection" with the space canvas: focusObject
+  // also opens the inspector, so this replaces the plain inspect(id) call whenever the
+  // canvas is actually mounted and visible (browse). Select-vs-focus is retired: a row
+  // click is the same one gesture a canvas click is now, always a real focus.
   var space = ACTIVE_SURFACE === 'browse' ? window.OsirisSpace : null;
   if (space) space.focusObject(id);
   else inspect(id);
@@ -1911,7 +1902,16 @@ const _CONTENT_TYPES = new Set(['Commit','Reference','SoftwareProject']);
 function actionsFor(type) { const a = []; if (_CONTENT_TYPES.has(type)) a.push({ label: 'Read \u25b8', run: viewContent }); a.push({ label: 'Search around', run: focus }); a.push({ label: 'Tag\u2026', run: tagIt }); return a; }
 function primaryAction(id, type) { const a = actionsFor(type)[0]; if (a) a.run(id); }
 async function viewContent(id) { inspect(id); }
-async function tagIt(id) { const t = prompt('Tag:'); if (!t) return; await fetch('/objects/' + id + '/tags', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tag: t }) }); }
+function tagIt(id) {
+  openPeek('Tag', '<input id="peek-tag-input" placeholder="Tag" style="width:100%" oninput="$(\'peek-tag-btn\').disabled = !this.value.trim()">' +
+    '<div style="margin-top:10px;text-align:right"><button class="iconbtn" id="peek-tag-btn" disabled onclick="submitTag(\'' + id + '\')">Save</button></div>');
+  $('peek-tag-input').focus();
+}
+async function submitTag(id) {
+  const t = $('peek-tag-input').value.trim(); if (!t) return;
+  closePeek();
+  await fetch('/objects/' + id + '/tags', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tag: t }) });
+}
 
 // ── Intake ───────────────────────────────────────────────────────────────────
 async function addSeed() { const raw = $('seed')?.value.trim(); if (!raw) return; try { const cases = await fetch('/cases').then(r => r.json()); const cid = cases.length ? cases[0].id : null; if (!cid) return; const r = await fetch('/cases/' + cid + '/intake', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ raw }) }).then(r => r.json()); if (r) { $('seedmsg').textContent = 'Added: ' + r.type; $('seed').value = ''; } } catch(e) {} }
@@ -1919,9 +1919,9 @@ async function addSeed() { const raw = $('seed')?.value.trim(); if (!raw) return
 // ── Console Sync ─────────────────────────────────────────────────────────────
 function postConsole(fields) { fetch('/console', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(fields) }).then(r => r.json()).then(j => { CONSOLE_REV = j.rev; }).catch(() => {}); }
 function setSyncBadge(by) { $('syncbadge').textContent = by === 'claude' ? '\u25cf agent' : ''; }
-// ROOM RETIREMENT (thread 96f09d48): the room_id leg of cross-client sync is gone
-// (switchRoom no longer exists) — every OTHER field (focused_object_id, and surface via
-// the caller's own postConsole({surface}) elsewhere) keeps syncing unchanged.
+// The room_id leg of cross-client sync is gone (switchRoom no longer exists); every
+// OTHER field (focused_object_id, and surface via the caller's own postConsole({surface})
+// elsewhere) keeps syncing unchanged.
 function watchConsole() { const es = new EventSource('/console/stream'); es.onmessage = async ev => { const s = JSON.parse(ev.data); if (s.rev == null || s.rev <= CONSOLE_REV) return; CONSOLE_REV = s.rev; if (s.updated_by !== 'human') { SYNCING = true; try { setSyncBadge(s.updated_by); if (s.focused_object_id && s.focused_object_id !== FOCUS) inspectOnly(s.focused_object_id); } finally { SYNCING = false; } } }; }
 
 // ── Pulse ────────────────────────────────────────────────────────────────────
@@ -1937,8 +1937,8 @@ async function updatePulse() {
 const PANE = { l: { var: '--lw', min: 180, max: 640, def: 274 }, r: { var: '--rw', min: 220, max: 760, def: 350 } };
 function loadPanes() { for (const k of ['l','r']) { const v = localStorage.getItem('osiris.pane.' + k); if (v) $('main').style.setProperty(PANE[k].var, v + 'px'); } }
 function wireGrips() { const main = $('main'); document.querySelectorAll('[data-grip]').forEach(g => { g.onmousedown = e => { e.preventDefault(); const k = g.dataset.grip, cfg = PANE[k], rail = $(k === 'l' ? 'left' : 'right'); const start = e.clientX, w0 = rail.getBoundingClientRect().width; g.classList.add('on'); main.classList.add('dragging'); const move = ev => { const dw = (ev.clientX - start) * (k === 'l' ? 1 : -1); main.style.setProperty(cfg.var, Math.min(cfg.max, Math.max(cfg.min, w0 + dw)) + 'px'); }; const up = () => { g.classList.remove('on'); main.classList.remove('dragging'); localStorage.setItem('osiris.pane.' + k, parseFloat(main.style.getPropertyValue(cfg.var)) + ''); document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); _afterResize(); }; document.addEventListener('mousemove', move); document.addEventListener('mouseup', up); }; }); }
-// was the cytoscape board's own resizeFit — retired with the board itself (piece 3); the
-// space canvas already resizes itself via its own window "resize" listener.
+// was the cytoscape board's own resizeFit, retired with the board itself; the space
+// canvas already resizes itself via its own window "resize" listener.
 function _afterResize() {}
 function toggleLeft() { $('main').classList.toggle('lefthidden'); _afterResize(); }
 function toggleRight() { $('main').classList.toggle('righthidden'); _afterResize(); }
@@ -1964,24 +1964,23 @@ const POWER_TOOLS = [
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
   { label: 'Repairs…', hint: 'The seven backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
-  // THE SETTINGS PANE (Thoth mail 13350) consolidates the three formerly-separate
-  // "Key…"/"Offload Targets…"/"Settings…" palette entries into ONE destination —
-  // her own words: "Today Ctrl+K reaches Key…, Offload Targets… and Settings… as
-  // separate panels... Build ONE console pane." Each old panel's own renderer
-  // (renderKeyPanel/renderOffloadPanel/renderSettingsPanel) still exists and is
-  // still reachable directly (nothing deleted), just no longer surfaced as its own
-  // separate palette row — the pane below embeds each one's shared fetch+render
-  // (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
+  // THE SETTINGS PANE consolidates the three formerly-separate "Key…"/"Offload
+  // Targets…"/"Settings…" palette entries into ONE destination: Ctrl+K used to reach
+  // Key…, Offload Targets… and Settings… as separate panels, now built as one console
+  // pane. Each old panel's own renderer (renderKeyPanel/renderOffloadPanel/
+  // renderSettingsPanel) still exists and is still reachable directly (nothing deleted),
+  // just no longer surfaced as its own separate palette row; the pane below embeds each
+  // one's shared fetch+render (renderKeyInto/renderOffloadInto/renderSettingsInto) instead.
   { label: 'Settings', hint: 'Encryption key, backup, readiness, configuration, and the operator desk', cat: 'Admin', run: () => renderSettingsPane() },
 ];
 
-// THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "run" used to mean
-// "POST /compositions/{name}/run and dump the raw JSON in a <pre>" \u2014 every saved composition
-// paid for osiris.js's generic renderer (P4, commit 9c5e923) without ever reaching it. Now it
-// runs through Osiris.renderResult exactly like piece 1's mailbox did, so a table composition
-// gets a real table, an objects composition gets the board, row_action buttons work, and
-// "run:<function>" drill-ins dispatch through the same scoped listener pattern.
-let LAST_COMPOSITION_RUN = null; // {name, spec} of whatever's on screen \u2014 Fork's own source
+// THE COMPOSER SHELL: "run" used to mean "POST /compositions/{name}/run and dump the raw
+// JSON in a <pre>", every saved composition paid for osiris.js's generic renderer (P4,
+// commit 9c5e923) without ever reaching it. Now it runs through Osiris.renderResult
+// exactly like the mailbox did, so a table composition gets a real table, an objects
+// composition gets the board, row_action buttons work, and "run:<function>" drill-ins
+// dispatch through the same scoped listener pattern.
+let LAST_COMPOSITION_RUN = null; // {name, spec} of whatever's on screen, Fork's own source
 async function runTool(name) { await runComposition(name, {}, FOCUS); }
 
 async function runComposition(name, args, subject) {
@@ -2002,34 +2001,45 @@ async function runComposition(name, args, subject) {
       (LAST_COMPOSITION_RUN ? '<button class="iconbtn" onclick="forkComposition()">\u2942 Fork (save as)\u2026</button>' : '') +
       '</div>';
     container.appendChild(panel);
-    setStatus('Ran ' + name + ' \u2014 ' + res.count + (res.count === 1 ? ' item' : ' items') + '.');
+    setStatus('Ran ' + name + ': ' + res.count + (res.count === 1 ? ' item' : ' items') + '.');
   } catch(e) { console.error('runComposition failed', name, args, e); setStatus('Could not run: ' + name); container.innerHTML = '<div class="o-empty" style="padding:40px">Could not run: ' + esc(name) + '</div>'; }
 }
 
 // osiris.js's click delegate dispatches this for any row's "run:<function>" action (built for
-// exactly this navigation, task #90/#91 \u2014 see osiris.js's own comment on the click delegate).
+// exactly this navigation, task #90/#91; see osiris.js's own comment on the click delegate).
 // The mailbox surface has its own narrower-scoped listener (piece 1); this one is the general
 // composer-shell catch-all for every OTHER surface, so a "run:" button on any saved
 // composition's row (not just mail's) has somewhere to land.
 document.addEventListener('osiris:run', function(e) {
   if (ACTIVE_SURFACE === 'mailbox') return; // owned by renderMailbox's own listener
-  // e.detail.subject (Thoth dispatch 9676/9690, 588148bb piece 4) — a `bind_subject`
-  // row_action's own target: THIS row's object, not whatever the shell was last focused
-  // on. Falls back to FOCUS for every other "run:" button (args-drill or no subject at
-  // all), unchanged from piece 2's own behavior.
+  // e.detail.subject: a `bind_subject` row_action's own target, THIS row's object, not
+  // whatever the shell was last focused on. Falls back to FOCUS for every other "run:"
+  // button (args-drill or no subject at all).
   runComposition(e.detail.name, e.detail.args || {}, e.detail.subject || FOCUS);
 });
 
-// AUTHOR (the channel Claude composes over MCP already has; this is the human's own door,
-// same "friendly form OR raw spec" split P5's original design called for \u2014 kept to the raw
-// spec half, since a friendly builder is its own real UI and not what this piece needs to
-// prove: that a human can put a saved composition on the graph at all, room-scoped, from the
-// shell, without touching MCP).
-async function authorComposition() {
-  const name = prompt('Name this composition:'); if (!name) return;
-  const specText = prompt('Op-tree spec (JSON) \u2014 e.g. {"op":"function","name":"mail_overview"}:');
-  if (!specText) return;
+// AUTHOR (the channel Claude composes over MCP already has; this is the human's own
+// endpoint, same "friendly form OR raw spec" split P5's original design called for, kept
+// to the raw spec half, since a friendly builder is its own real UI and not what this
+// piece needs to prove: that a human can put a saved composition on the graph at all,
+// from the shell, without touching MCP).
+function authorComposition() {
+  openPeek('Author composition',
+    '<div style="font-size:11px;color:var(--muted);margin-bottom:8px">Name</div>' +
+    '<input id="peek-author-name" style="width:100%" oninput="updateAuthorPeekState()">' +
+    '<div style="font-size:11px;color:var(--muted);margin:10px 0 4px">Op-tree spec (JSON), e.g. {"op":"function","name":"mail_overview"}</div>' +
+    '<textarea id="peek-author-spec" rows="6" style="width:100%;font-family:var(--font-mono)" oninput="updateAuthorPeekState()"></textarea>' +
+    '<div style="margin-top:10px;text-align:right"><button class="iconbtn" id="peek-author-btn" disabled onclick="submitAuthorComposition()">Save</button></div>');
+  $('peek-author-name').focus();
+}
+function updateAuthorPeekState() {
+  $('peek-author-btn').disabled = !$('peek-author-name').value.trim() || !$('peek-author-spec').value.trim();
+}
+async function submitAuthorComposition() {
+  const name = $('peek-author-name').value.trim(); if (!name) return;
+  const specText = $('peek-author-spec').value.trim(); if (!specText) return;
   let spec; try { spec = JSON.parse(specText); } catch(e) { setStatus('Invalid JSON spec.'); return; }
+  closePeek();
   try {
     const preview = await fetch('/compositions/run-spec', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ spec: spec, subject: FOCUS, name: name }) }).then(r => r.json());
     if (preview.error) { setStatus('Spec failed: ' + preview.error); return; }
@@ -2040,18 +2050,26 @@ async function authorComposition() {
   await runComposition(name, {}, FOCUS);
 }
 
-// FORK \u2014 save the composition currently on screen under a new name (a real fork: the spec
+// FORK: save the composition currently on screen under a new name (a real fork: the spec
 // copies, the two compositions diverge independently from here on, same as `git branch`).
-async function forkComposition() {
+function forkComposition() {
   if (!LAST_COMPOSITION_RUN) return;
-  const name = prompt('Fork "' + LAST_COMPOSITION_RUN.name + '" as:'); if (!name) return;
+  openPeek('Fork "' + esc(LAST_COMPOSITION_RUN.name) + '" as',
+    '<input id="peek-fork-name" style="width:100%" oninput="$(\'peek-fork-btn\').disabled = !this.value.trim()">' +
+    '<div style="margin-top:10px;text-align:right"><button class="iconbtn" id="peek-fork-btn" disabled onclick="submitForkComposition()">Save</button></div>');
+  $('peek-fork-name').focus();
+}
+async function submitForkComposition() {
+  if (!LAST_COMPOSITION_RUN) return;
+  const name = $('peek-fork-name').value.trim(); if (!name) return;
+  closePeek();
   const saved = await fetch('/compositions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: name, spec: LAST_COMPOSITION_RUN.spec }) }).then(r => r.json());
   await loadCompositions();
   setStatus('Forked as: ' + (saved.name || name));
   await runComposition(name, {}, FOCUS);
 }
 
-// PICK \u2014 every saved composition, loaded once at boot rather than per keystroke: unlike
+// PICK: every saved composition, loaded once at boot rather than per keystroke: unlike
 // /search (piece #196's addition to the palette, debounced because the graph is too large to
 // hold client-side) the full saved-composition set is few and already local, same shape
 // POWER_TOOLS has always been.
@@ -2073,28 +2091,28 @@ function runOmniSearch(q) {
   dd.style.display = 'flex';
   const ql = q.toLowerCase();
   const toolHits = POWER_TOOLS.filter(t => t.label.toLowerCase().includes(ql) || (t.hint || '').toLowerCase().includes(ql)).slice(0, 8);
-  // saved compositions — the room-scoped PICK half of "pick a room, run/author/fork
-  // compositions" (Thoth dispatch 9257 piece 2). Already loaded client-side (loadCompositions,
-  // called on boot and on every room switch), so this filters synchronously same as POWER_
-  // TOOLS rather than round-tripping per keystroke the way /search's graph hits do below.
+  // saved compositions: the PICK half of "run/author/fork compositions". Already loaded
+  // client-side (loadCompositions, called on boot and refreshed after author/fork), so
+  // this filters synchronously same as POWER_TOOLS rather than round-tripping per
+  // keystroke the way /search's graph hits do below.
   const compHits = SAVED_COMPOSITIONS.filter(c => c.name.toLowerCase().includes(ql)).slice(0, 8)
     .map(c => ({ label: c.name, hint: c.description || c.kind, cat: 'Compositions', run: () => runTool(c.name) }));
   OMNI_ITEMS = toolHits.concat(compHits);
   OMNI_SEL = Math.min(OMNI_SEL, OMNI_ITEMS.length - 1);
   renderOmniList(q);
-  // Search is an ADDITION to enumeration, never a replacement (ruling 7a1a5517) — this
-  // palette used to match ONLY the hardcoded POWER_TOOLS list, never the graph itself, so
-  // "find a known thing by name" had no path here at all (#196, Thoth msg 5600). Debounced
-  // (200ms) and token-guarded so a fast typist's stale response never clobbers a newer one.
+  // Search is an ADDITION to enumeration, never a replacement: this palette used to
+  // match ONLY the hardcoded POWER_TOOLS list, never the graph itself, so "find a known
+  // thing by name" had no path here at all (#196). Debounced (200ms) and token-guarded
+  // so a fast typist's stale response never clobbers a newer one.
   const myToken = ++OMNI_SEARCH_TOKEN;
   clearTimeout(OMNI_SEARCH_TIMER);
   OMNI_SEARCH_TIMER = setTimeout(async () => {
-    // TIP 3b review (Thoth mail 10953): the fallback used to be gated on `hits.length ===
-    // 0`, computed only AFTER the /search fetch's own await -- a second, sequential await
-    // (window.__spaceReady) then followed, with its own token re-check. Two sequential
-    // awaits, two chances for a race, and a gate that skipped the client scan entirely on
-    // any response shape that didn't trip that one condition -- the live page kept saying
-    // "No matches" regardless, the exact contributing bug never pinned down with certainty.
+    // The fallback used to be gated on `hits.length === 0`, computed only AFTER the
+    // /search fetch's own await. A second, sequential await (window.__spaceReady) then
+    // followed, with its own token re-check. Two sequential awaits, two chances for a
+    // race, and a gate that skipped the client scan entirely on any response shape that
+    // didn't trip that one condition; the live page kept saying "No matches" regardless,
+    // the exact contributing bug never pinned down with certainty.
     // Rather than patch one more edge case onto a fragile gate, the gate is gone: both
     // requests run together (one await, one token check), and the client-side agent scan is
     // UNCONDITIONAL once the graph is loaded, deduped against whatever the server found
@@ -2107,25 +2125,24 @@ function runOmniSearch(q) {
     const hits = searchResult
       ? (Array.isArray(searchResult.hits) ? searchResult.hits : (Array.isArray(searchResult) ? searchResult : []))
       : [];
-    // THE LEGIBILITY PASS, TIP 1(e) (ruling e1cb9e3b): ONE search -- the graph's own
-    // in-canvas "Find a node" box is gone, this omnibox drives it directly. TIP 1 AMENDMENT
-    // (mail 10726): "one gesture" -- a Graph hit always focuses now, click or Enter, matching
-    // the canvas's own single-click-is-focus (select-vs-focus is retired outright).
+    // THE LEGIBILITY PASS: ONE search. The graph's own in-canvas "Find a node" box is
+    // gone, this omnibox drives it directly. One gesture: a Graph hit always focuses now,
+    // click or Enter, matching the canvas's own single-click-is-focus (select-vs-focus is
+    // retired outright).
     const seenIds = new Set(hits.filter(h => h && h.id).map(h => h.id));
     const graphHits = hits.filter(h => h && h.id).map(h => ({
-      // THE NAME, NEVER THE SLUG (operator ruling a1cde8a3): /search's own display_label
-      // has no SoftwareProject-specific rule the way graph_stream.py's _short_label does
-      // for the space canvas, so a repo hit here reads its raw canonical -- Osiris.
-      // objectDisplayLabel strips the repo: scheme the same way every other palette/
-      // table surface now does.
+      // THE NAME, NEVER THE SLUG: /search's own display_label has no SoftwareProject-
+      // specific rule the way graph_stream.py's _short_label does for the space canvas,
+      // so a repo hit here reads its raw canonical. Osiris.objectDisplayLabel strips the
+      // repo: scheme the same way every other palette/table surface now does.
       label: Osiris.objectDisplayLabel(h) || h.name || h.canonical || h.id,
       hint: h.type || '', cat: 'Graph',
       run: () => { switchSurface('browse'); focus(h.id); },
     }));
     let agentHits = [];
     if (space && space.idToNode) {
-      // TIP 3 review carry-over (Thoth mail 10930): read the label the same fallback-safe
-      // way space.js's own pickLabels/labelTextFor do (nd.label, else
+      // Read the label the same fallback-safe way space.js's own pickLabels/labelTextFor
+      // do (nd.label, else
       // `${type} ${id.slice(0,8)}`), so the scan always has real text to search; skip any
       // id the server already returned so the same agent never appears twice.
       agentHits = space.idToNode
@@ -2152,12 +2169,11 @@ async function openOmniSearch(val) { runOmniSearch(val); }
 
 // ── Keyboard Shortcuts ───────────────────────────────────────────────────────
 document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement?.tagName); if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); openPalette(); } else if (e.key === '/' && !inField) { e.preventDefault(); openPalette(); } else if (e.key === 'Escape') {
-  // review flaw #2 (TIP 1c, Thoth mail 10891): "Escape must clear the focus" (the
-  // amendment's own ruling, mail 10726/b96fc93e: "Escape clears, Back walks the stack") --
-  // this handler used to step back one BREADCRUMB instead (WAVE A item 6, predating the
-  // path-lens focus feature entirely), which never actually cleared anything. Escape now
-  // clears space's own focus outright when nothing more local already consumed it (a
-  // dropdown, the peek overlay, or the search box's own Escape handler above).
+  // Escape must clear the focus. This handler used to step back one BREADCRUMB instead,
+  // predating the path-lens focus feature entirely, which never actually cleared
+  // anything. Escape clears, Back walks the stack: Escape now clears space's own focus
+  // outright when nothing more local already consumed it (a dropdown, the peek overlay,
+  // or the search box's own Escape handler above).
   const hadDropdown = !!document.querySelector('.dd-item') && ['workspace-dropdown','repo-dropdown','omni-dropdown'].some(id => { const el = $(id); return el && el.style.display && el.style.display !== 'none'; });
   closeAllDropdowns();
   const hadPeek = $('peek').className.includes('on');
@@ -2165,11 +2181,20 @@ document.addEventListener('keydown', e => { const inField = /^(INPUT|TEXTAREA|SE
   if (!hadDropdown && !hadPeek && ACTIVE_SURFACE === 'browse' && window.OsirisSpace) window.OsirisSpace.clearFocus();
 } else if (e.key === '[' && !inField) { e.preventDefault(); toggleLeft(); } else if (e.key === ']' && !inField) { e.preventDefault(); toggleRight(); } });
 function closePeek() { const o = $('peek'); o.className = 'peek-overlay'; o.innerHTML = ''; }
+// A small floating form, reused by every place that used to open a browser prompt()/confirm()
+// dialog (a product form never opens one: inline fields, a Save button disabled until filled).
+function openPeek(title, bodyHtml) {
+  const o = $('peek');
+  o.innerHTML = '<div class="peek"><div class="peek-head">' + esc(title) +
+    '<span class="peek-x" onclick="closePeek()">✕</span></div>' +
+    '<div class="peek-body">' + bodyHtml + '</div></div>';
+  o.className = 'peek-overlay on';
+}
 
 // ── Boot ─────────────────────────────────────────────────────────────────────
-// ROOM RETIREMENT (thread 96f09d48): boot no longer fetches /console for a room_id to
-// restore (switchRoom, its own loadCompositions() call included, is gone) —
-// loadCompositions() runs directly here instead, unscoped.
+// Boot no longer fetches /console for a room_id to restore (switchRoom, its own
+// loadCompositions() call included, is gone). loadCompositions() runs directly here
+// instead, unscoped.
 Osiris.loadSchema().then(async function() {
   await Promise.all([loadProjects(), loadObjectSet(), loadCompositions()]);
   switchSurface('browse');
