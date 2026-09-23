@@ -1,7 +1,7 @@
 {
   "docs": 2,
   "scripts": 194,
-  "src/cli.py": 941,
+  "src/cli.py": 69,
   "src/config": 2,
   "src/ingest": 134,
   "src/mcp_server.py": 34,
