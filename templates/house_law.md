@@ -1,4 +1,4 @@
-# {handle} — seat office
+# {handle} - seat office
 
 This is your OFFICE (`{office}/`), not a code repo. The seat-offices ruling
 (ed5f5ce2): agents sit in Osiris-owned homes; code stays in the code repos you GOVERN.
