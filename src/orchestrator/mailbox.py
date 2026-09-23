@@ -1,28 +1,30 @@
-"""The fleet mailbox — group-chat + DM over the shared memory graph (thread 6fa9791d).
+"""The fleet mailbox: group broadcast and direct messages over the shared memory graph.
 
-The fleet co-writes MEMORY; this is the directed CHANNEL. Two shapes:
-  * a BROADCAST to a project (to_agent NULL) — the group chat: every agent working that project
-    sees it and settles it INDEPENDENTLY (per-recipient read state), so two co-located agents
-    (handlingtheloop ux + engine, one dir) both see the conversation;
-  * a DM to a specific agent (to_agent set) — only that agent sees it.
+The fleet co-writes shared memory; this is the directed channel. Two shapes:
+  * a broadcast to a project (to_agent NULL): the group chat. Every agent working that
+    project sees it and settles it independently (per-recipient read state), so two
+    agents working the same project each see the conversation;
+  * a DM to a specific agent (to_agent set): only that agent sees it.
 
-PULL, never push (Osiris has no hands): a recipient reads its inbox when it next mounts/orients.
-Messages are ephemeral coordination, not durable memory, so they live in their own table —
+Pull, never push (there is no push channel): a recipient reads its inbox when it next
+mounts/orients.
+Messages are ephemeral coordination, not durable memory, so they live in their own table:
 for durable knowledge, agents use record_decision/open_thread. `fleet_messages` stays the
-system of record either way: since 6a1dd99, `send_message` ALSO writes a best-effort Message
-object + sent_by/addressed_to/broadcast_to/replies_to edges (send()'s "THE READ-SIDE PRIOR-ART
-HOP" depends on it) so mail is search()/orient()-traversable, but that graph write can fail
-independently of the relational one (the receipt says `graphed: False` when it does) — the
-event-sourced graph is a traversability LENS onto mail here, never mail's own source of truth.
+system of record either way: `send_message` also writes a best-effort Message
+object plus sent_by/addressed_to/broadcast_to/replies_to edges so mail is
+search()/orient()-traversable, but that graph write can fail independently of the
+relational one (the result reports `graphed: False` when it does). The
+event-sourced graph is a traversability lens onto mail here, never mail's own source of truth.
 
-Delivery is AT-LEAST-ONCE per recipient (decision 56f6a0d6): reading LEASES a message FOR THAT
-READER (a row in message_recipients) rather than consuming it; an ACK settles it. Settling three
-ways — replying (send(reply_to=id): replying proves perception), an explicit inbox(ack=[ids]), or
+Delivery is at-least-once per recipient: reading leases a message for that
+reader (a row in message_recipients) rather than consuming it; an ack settles it. Settling
+happens three ways: replying (send(reply_to=id): replying proves perception), an explicit
+inbox(ack=[ids]), or
 never (it redelivers after the lease, flagged `redelivered`). Each reader's lease/settle is its
 own; the message itself is never consumed, so a broadcast survives being read by one agent.
 
-`operator` is a reserved reader — the human's desk (no repo, never woken), just another agent_id
-in message_recipients. reply_to/thread_id are the request→reply lane: a reply to a DM routes back
+`operator` is a reserved reader: the human's desk (no repo, never woken), just another agent_id
+in message_recipients. reply_to/thread_id are the request-reply lane: a reply to a DM routes back
 to the sender as a DM; a reply to a broadcast routes to the thread's project.
 """
 from __future__ import annotations
@@ -39,32 +41,34 @@ _log = logging.getLogger("osiris.mailbox")
 # The human's desk. Not a repo (the trigger never wakes it); read via inbox(project='operator').
 OPERATOR_ADDR = "operator"
 
-# THE LIVE-HOLDER EXTENSION (grievance survey 2026-07-11, two witnesses — Anubis VIII
-# msg 236, Soundwave msg 244: a message redelivered while the analysis it minted was still
-# computing). A lease held by a reader whose mount is LIVE stretches to the hold-grace hour
-# — the holder is demonstrably present, at-least-once needs no duplicate yet. A holder gone
-# stale (died, idled out) redelivers at the plain lease exactly as before. MUST match the
-# stop hook's STOP_GRACE_SECS (scripts/osiris_stophook.py): if the two windows disagree,
-# the hook nags about mail the inbox refuses to show.
+# THE LIVE-HOLDER EXTENSION: observed in practice as a message redelivered while the
+# analysis it minted was still computing. A lease held by a reader whose mount is live
+# stretches to the hold-grace hour: the holder is demonstrably present, at-least-once
+# needs no duplicate yet. A holder gone stale (died, idled out) redelivers at the plain
+# lease exactly as before. Must match the stop hook's STOP_GRACE_SECS
+# (scripts/osiris_stophook.py): if the two windows disagree, the hook nags about mail
+# the inbox refuses to show.
 _HOLD_GRACE_SECS = 3600
 
-# Deliverable TO A GIVEN READER: addressed to it (a DM to_agent=me, or a broadcast to my project
-# THAT I DID NOT WRITE), not settled by me, and not under MY live lease (live = my mount
-# breathes; see the live-holder extension above). `r` is my message_recipients row (LEFT JOINed).
-# `m.read_at IS NULL` honors the LEGACY per-message settle: messages settled under the old
-# single-reader model (pre-0021) carry fleet_messages.read_at and are globally suppressed so
-# history doesn't resurface; new messages never set it (per-recipient state only).
-# THE SELF-ECHO (Metron V, msgs 444/446, six blocked turns in one night): a project broadcast
-# fanned out to its own author, so every send() came back as unread mail, the blocking stop
-# hook fired on it, and the author paid a full read to discover its own voice. Worse than
-# noise: the author's reflexive self-ack marked the broadcast SETTLED, which silenced the
-# wake for the real recipient. An agent's outbox is not its mail — the author is excluded
-# from its own broadcast's fan-out (the DM path always had this predicate).
-# A SEAT ADDRESS IS READ BY ITS CURRENT HOLDER (Phase B2, ruling 5cef856b): mail stored
-# with to_agent='seat:<id>' is deliverable to whichever mind ACTIVELY holds that Seat at
-# read time — the address never dies with a mind, so mint_heir's estate-transfer UPDATE is
-# simply unnecessary for it (the heir holds the seat, therefore the heir matches; nothing
-# to re-address). Agent-id DMs keep the exact-id match and the estate transfer, unchanged.
+# Deliverable to a given reader: addressed to it (a DM to_agent=me, or a broadcast to
+# my project that I did not write), not settled by me, and not under my live lease
+# (live = my mount is active; see the live-holder extension above). `r` is my
+# message_recipients row (LEFT JOINed).
+# `m.read_at IS NULL` honors the legacy per-message settle: messages settled under the
+# old single-reader model (before per-recipient tracking was added) carry
+# fleet_messages.read_at and are globally suppressed so history doesn't resurface; new
+# messages never set it (per-recipient state only).
+# THE SELF-ECHO: a project broadcast once fanned out to its own author, so every
+# send() came back as unread mail, a blocking stop hook fired on it, and the author
+# paid a full read to discover its own message. Worse than noise: the author's
+# reflexive self-ack marked the broadcast settled, which silenced the wake for the
+# real recipient. An agent's outbox is not its mail: the author is excluded from its
+# own broadcast's fan-out (the DM path always had this predicate).
+# A SEAT ADDRESS IS READ BY ITS CURRENT HOLDER: mail stored with to_agent='seat:<id>'
+# is deliverable to whichever agent actively holds that seat at read time. The address
+# never dies with an agent, so a succession's estate-transfer update is simply
+# unnecessary for it (the heir holds the seat, therefore the heir matches; nothing to
+# re-address). Agent-id DMs keep the exact-id match and the estate transfer, unchanged.
 _READER_HOLDS_ADDR = (
     "(m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
     "  JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
@@ -72,34 +76,35 @@ _READER_HOLDS_ADDR = (
     "  AND (hl.valid_until IS NULL OR hl.valid_until > now())))"
 )
 
-# THE ROLLUP (operator, 2026-07-17: 'mail addressed to dead agents should roll up to the
-# current live agent'): a reader drains its whole LINEAGE's lanes — an exact-id DM parked
-# on any generation of the reader's own base is deliverable to whoever wears the name at
-# read time. Estate transfers and sweeps still converge the lanes; the read no longer
-# WAITS for them (Atlas's split: the statusline counted a DM on -ii while the freshly
-# minted -iii read an empty inbox — one soul, two answers).
+# THE ROLLUP: mail addressed to a retired agent should roll up to that agent's
+# current lineage head. A reader drains its whole lineage's lanes: an exact-id DM
+# parked on any generation of the reader's own base is deliverable to whoever wears
+# the name at read time. Estate transfers and sweeps still converge the lanes; the
+# read no longer waits for them (observed once: the statusline counted a DM on an
+# older generation while the freshly minted new generation read an empty inbox: one
+# agent, two answers).
 #
-# THE SETTLE-STATE ROLLUP (threads af911f47/00378259, "A FORK MINTS A FRESH INBOX",
-# Thoth's word 2026-07-29, DM 1856 — Option A): delivery already rolls up the whole
-# lineage (above); settle-state used to check ONLY the exact reader's own message_
-# recipients row (`r.read_at`, `r` LEFT JOINed on `r.agent_id = $agent`). mint_heir
-# (agents.py's estate transfer) already copies message_recipients rows forward on every
-# TRUE succession — this only closes the gap for an identity that reaches a shared
-# lineage base-prefix WITHOUT going through mint_heir (a true fork, or a fresh body
-# landing on an existing handle): the NOT EXISTS below asks "has ANY generation of MY
-# OWN lineage already settled this", the same base-prefix pattern delivery already
-# trusts to decide WHOSE mail this is — restoring symmetry (delivery already has a
-# proactive copy AND a live-query fallback; settle-state had only the first). This is a
-# CONSCIOUSLY ACCEPTED trust boundary, not a new one: a coincidental base-prefix match
-# with no real succession behind it would inherit settled-state it never earned, exactly
-# as it already inherits DELIVERY it never earned via the clause above — same risk,
-# already live, now made consistent rather than introduced. Scoped to lineage-matched
-# mail ONLY: the broadcast/project-wide clause (to_project=$project) is untouched, so a
-# genuinely new seat in an old project still sees every broadcast nobody in ITS OWN
-# lineage has settled — standing debt stays standing for a reader who never inherited
-# any history to begin with. `r` (the exact-agent LEFT JOIN) still governs the
-# delivered_at/lease/grace bookkeeping below UNCHANGED — only the read/settled
-# determination rolls up; per-reader delivery tracking stays per-reader on purpose.
+# THE SETTLE-STATE ROLLUP ("a fork mints a fresh inbox"): delivery already rolls up
+# the whole lineage (above); settle-state used to check only the exact reader's own
+# message_recipients row (`r.read_at`, `r` LEFT JOINed on `r.agent_id = $agent`). The
+# succession machinery already copies message_recipients rows forward on every true
+# succession: this only closes the gap for an identity that reaches a shared lineage
+# base-prefix without going through that copy (a true fork, or a fresh session landing
+# on an existing handle): the NOT EXISTS below asks "has any generation of my own
+# lineage already settled this", the same base-prefix pattern delivery already trusts
+# to decide whose mail this is: restoring symmetry (delivery already has a proactive
+# copy and a live-query fallback; settle-state had only the first). This is a
+# consciously accepted trust boundary, not a new one: a coincidental base-prefix match
+# with no real succession behind it would inherit settled-state it never earned,
+# exactly as it already inherits delivery it never earned via the clause above: same
+# risk, already live, now made consistent rather than introduced. Scoped to
+# lineage-matched mail only: the broadcast/project-wide clause (to_project=$project)
+# is untouched, so a genuinely new seat in an old project still sees every broadcast
+# nobody in its own lineage has settled: standing debt stays standing for a reader who
+# never inherited any history to begin with. `r` (the exact-agent LEFT JOIN) still
+# governs the delivered_at/lease/grace bookkeeping below unchanged: only the
+# read/settled determination rolls up; per-reader delivery tracking stays per-reader
+# on purpose.
 _DELIVERABLE_TO_READER = (
     "((m.to_agent = $agent) "
     " OR (m.to_agent = $lineage OR m.to_agent LIKE $lineage || '-%') "
@@ -119,8 +124,9 @@ _DELIVERABLE_TO_READER = (
 
 
 async def _addressed_to_me(pool: asyncpg.Pool, to_agent: str | None, me: str) -> bool:
-    """Was a DM address MINE — my exact id, or a seat I actively hold? The Python-side twin
-    of the SQL predicate above, for reply routing and the reply-settles-the-referenced rule."""
+    """Was a DM address mine: my exact id, or a seat I actively hold? The Python-side
+    counterpart of the SQL predicate above, for reply routing and the
+    reply-settles-the-referenced rule."""
     if to_agent is None:
         return False
     if to_agent == me:
@@ -128,7 +134,7 @@ async def _addressed_to_me(pool: asyncpg.Pool, to_agent: str | None, me: str) ->
     if to_agent.startswith("seat:"):
         from src.orchestrator.seats import holds
         return await holds(pool, me, to_agent)
-    # the rollup's twin: an address anywhere in MY lineage is mine
+    # the rollup's counterpart: an address anywhere in my lineage is mine
     from src.orchestrator.agents import _generation
     base = _generation(me)[0]
     return to_agent == base or to_agent.startswith(base + "-")
@@ -139,16 +145,16 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
-# THE SEND-DOOR ADDRESSING GUARD's OWN VOCABULARY (thread f4209591, operator 2026-09-06,
-# specimen msg 7873): a LEADING VOCATIVE ('cupid — spin down…', 'cupid: …', 'cupid, …') or
-# an @HANDLE anywhere in the body — the two shapes a human types when they mean a specific
-# seat, not the room at large. This is intentionally narrow (a leading word immediately
-# followed by one of these four punctuation marks, or an explicit @-sigil) rather than any
-# capitalized word: ordinary prose ("The build is done") never matches either shape, and a
-# candidate that DOESN'T also resolve through binding_of_handle's own authoritative check
-# (see send_message) is left untouched either way — this never infers MEANING from body,
-# only ever a NAME worth checking, the same distinction the `threads=` NO-PROSE-INFERENCE
-# law draws for ownership (send_message's own docstring).
+# THE SEND-DOOR ADDRESSING GUARD'S OWN VOCABULARY: a leading vocative (e.g.
+# 'name: spin down...', 'name, spin down...') or an @handle anywhere in the body: the
+# two shapes a human types when they mean a specific seat, not the room at large. This
+# is intentionally narrow (a leading word immediately followed by one of these four
+# punctuation marks, or an explicit @-sigil) rather than any capitalized word: ordinary
+# prose ("The build is done") never matches either shape, and a candidate that doesn't
+# also resolve through binding_of_handle's own authoritative check (see send_message)
+# is left untouched either way: this never infers meaning from the body, only ever a
+# name worth checking, the same distinction the `threads=` no-prose-inference rule
+# draws for ownership (send_message's own docstring).
 _LEADING_VOCATIVE_RE = re.compile(r"^\s*([A-Za-z][\w-]*)\s*[—:,-]")
 _AT_HANDLE_RE = re.compile(r"@([A-Za-z][\w-]*)")
 
@@ -166,11 +172,11 @@ def _addressee_in_body(body: str) -> str | None:
 
 
 async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """WHY may this id not receive a DM — or None if it may. The resolver-eligibility law
-    (thread 21596481): a retired or false-mint agent is never a DM target — mail parked
-    on a phantom lane is a loss wearing a delivery receipt. 'unknown' = no active Agent
-    object (ineligible for the RESOLVER lanes, but a direct DM to an id the graph merely
-    hasn't met yet stays deliverable — registration can lag a living mind)."""
+    """Why may this id not receive a DM, or None if it may. The resolver-eligibility
+    rule: a retired or false-mint agent is never a DM target: mail parked on a
+    phantom lane is a loss wearing a delivery receipt. 'unknown' = no active Agent
+    object (ineligible for the resolver lanes, but a direct DM to an id the graph
+    merely hasn't met yet stays deliverable: registration can lag a living agent)."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -192,7 +198,7 @@ async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
 
 async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
     """The boolean face of _dm_ineligibility, for the resolver lanes (reply routing):
-    there, an id the graph doesn't know IS ineligible — a resolver must never park mail
+    there, an id the graph doesn't know is ineligible: a resolver must never park mail
     on a lane it cannot vouch for."""
     return await _dm_ineligibility(pool, agent_id) is None
 
@@ -200,13 +206,14 @@ async def _dm_eligible(pool: asyncpg.Pool, agent_id: str) -> bool:
 async def settle_history_at_join(
     pool: asyncpg.Pool, project: str | None, agent_id: str
 ) -> int:
-    """A JOINER inherits the project's collective settle-state (the zombie-count fix,
-    2026-07-09: a wake-minted osiris tab counted 5 broadcasts its sibling had already
-    settled). Joining a group chat does not make the room's handled history your unread:
-    any broadcast some OTHER reader already settled is stamped read for the newcomer at
-    join. Broadcasts NOBODY settled stay deliverable — mail-at-birth still greets a fresh
-    session and the wake pipeline still finds its cause. Live members are untouched: their
-    per-reader unread keeps working message by message. Returns rows stamped."""
+    """A joiner inherits the project's collective settle-state (a fix for a case where a
+    freshly mounted session counted broadcasts a sibling session had already settled).
+    Joining a group chat does not make the room's handled history your unread: any
+    broadcast some other reader already settled is stamped read for the newcomer at
+    join. Broadcasts nobody settled stay deliverable: mail-at-birth still greets a
+    fresh session and the wake pipeline still finds its cause. Live members are
+    untouched: their per-reader unread keeps working message by message. Returns rows
+    stamped."""
     if not project:
         return 0
     res = await pool.execute(
@@ -229,89 +236,91 @@ async def send_message(
     desk_kind: str | None = None, grade: str | None = None,
     require_seat: bool = False, threads: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Post a BROADCAST (to_project) or a DM (to_agent). An EXPLICIT `to_project` must name a
-    project SOMEONE HAS ACTUALLY MOUNTED UNDER (`agent_mounts.project`) or the reserved
-    `OPERATOR_ADDR` — refuses otherwise, naming the string tried, with a courtesy hint if it
-    happens to match a live seat/agent name ("did you mean to_agent=?"), never auto-
-    substituting the parameter. Without this, any string reached `to_project` unchecked —
-    including a seat handle typed into `to=` by mistake — and filed mail into a "project" no
-    inbox() call would ever scope to, silently, reported as sent (shape 3 of #117; obligation
-    45e52530).
-    With `reply_to` and no explicit address,
-    it routes by channel: a reply to a DM goes back to that sender as a DM; a reply to YOUR OWN
-    outgoing DM continues that same DM with its original recipient (thread 7d670c74); a reply to
-    a broadcast routes to the referenced message's project (replying to YOUR OWN broadcast routes
-    ONWARD to its recipient — the desk supersession lane), joining the thread and settling the
-    referenced message for the replier (replying proves perception). An identical (sender,
-    recipient, body) within the dedup window returns the EXISTING id. Raises ValueError on an
-    unknown reply_to or
-    an unroutable message. `desk_kind` is the sender's own triage of an operator brief
-    ('decision' | 'hands' | 'fyi') — which band of the desk it belongs to. `grade` is the
-    SENDER'S OWN triage of what this message wants from its reader (thread f9449d8d):
-    'ask' (needs a reply or an act) | 'fyi' (a notice; an ack settles it). None is honest
-    ignorance — ungraded mail renders exactly as before, never guessed into a band.
+    """Post a broadcast (to_project) or a DM (to_agent). An explicit `to_project` must
+    name a project someone has actually mounted under (`agent_mounts.project`) or the
+    reserved `OPERATOR_ADDR`; refuses otherwise, naming the string tried, with a
+    courtesy hint if it happens to match a live seat/agent name ("did you mean
+    to_agent=?"), never auto-substituting the parameter. Without this, any string
+    reached `to_project` unchecked, including a seat handle typed into `to=` by
+    mistake, and filed mail into a "project" no inbox() call would ever scope to,
+    silently, reported as sent.
 
-    THE ECHO (ruling dd47c1da: "a build order resolved silently to an id, unverified"). A DM
-    addressed by RAW agent id skips resolve_handle's live-seat resolution entirely — the exact
-    gap alfred's dispatch fell into. So every DM's result now carries `seat` (the addressee's
-    claimed handle, e.g. "Soundwave XI", or None for an anonymous agent) and `lineage_head`
-    (where the addressed id's OWN succession chain currently ends) — a dispatcher reading the
-    receipt can see whether the id it named is still who it thinks it is, without this
-    function ever silently redirecting the address (an explicit id remains an act of intent,
-    same as resolve_seat's grave rule). `require_seat=True` refuses to send at all when the
-    resolved target carries no claimed handle — no message row is written; the ValueError
-    names what was tried and what it resolved to.
+    With `reply_to` and no explicit address, it routes by channel: a reply to a DM
+    goes back to that sender as a DM; a reply to your own outgoing DM continues that
+    same DM with its original recipient; a reply to a broadcast routes to the
+    referenced message's project (replying to your own broadcast routes onward to its
+    recipient, the desk supersession lane), joining the thread and settling the
+    referenced message for the replier (replying proves perception). An identical
+    (sender, recipient, body) within the dedup window returns the existing id. Raises
+    ValueError on an unknown reply_to or an unroutable message. `desk_kind` is the
+    sender's own triage of an operator brief ('decision' | 'hands' | 'fyi'): which
+    band of the desk it belongs to. `grade` is the sender's own triage of what this
+    message wants from its reader: 'ask' (needs a reply or an act) | 'fyi' (a notice;
+    an ack settles it). None is honest ignorance: ungraded mail renders exactly as
+    before, never guessed into a band.
 
-    REPLY ROUTING FOLLOWS THE LINEAGE (Thoth msg 3880/3882, 2026-08-09): an IMPLICIT
-    reply_to address (no explicit to_agent=/to=) resolves to the referenced message's
-    sender's/recipient's current LINEAGE HEAD, not the raw id stamped on that older
-    message — measured live, 90 of 1727 reply DMs across a month had already been
-    superseded by the time the reply was sent. `redirected_from` names the pre-redirect id
-    when this fires, never silent. This does NOT apply to explicit to_agent=<raw id>
-    addressing, which keeps the grave rule above unchanged — naming a specific generation's
+    THE ECHO: a build order once resolved silently to an id, unverified. A DM
+    addressed by raw agent id skips the live-seat resolution entirely. So every DM's
+    result now carries `seat` (the addressee's claimed handle, e.g. "Agent XI", or
+    None for an anonymous agent) and `lineage_head` (where the addressed id's own
+    succession chain currently ends): a dispatcher reading the result can see whether
+    the id it named is still who it thinks it is, without this function ever silently
+    redirecting the address (an explicit id remains an act of intent, same as
+    resolve_seat's rule about not redirecting addresses). `require_seat=True` refuses
+    to send at all when the resolved target carries no claimed handle: no message row
+    is written; the ValueError names what was tried and what it resolved to.
+
+    REPLY ROUTING FOLLOWS THE LINEAGE: an implicit reply_to address (no explicit
+    to_agent=/to=) resolves to the referenced message's sender's/recipient's current
+    lineage head, not the raw id stamped on that older message: measured live, about
+    5% of reply DMs across a month-long sample had already been superseded by the
+    time the reply was sent. `redirected_from` names the pre-redirect id when this
+    fires, never silent. This does not apply to explicit to_agent=<raw id>
+    addressing, which keeps the rule above unchanged: naming a specific generation's
     id by hand remains an act of intent reply_to's implicit routing never has.
 
-    THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI, resolved
-    live): a DM addressed by NAME whose unique Seat exists but whose only active holder is
-    marked retired/false_mint used to fall through resolve_seat's own un-seated-lineage
-    fallback and land on a DIFFERENT Agent object's stale `handle` assertion — a dead
-    generation, addressed with the same confidence as a real resolution (both `dm_to` and
-    `lineage_head` agreed, wrongly, since both came from the same broken walk — no
-    receipt-side check catches this). `seat_holder_ineligible` (seats.py) is checked BEFORE
-    resolve_seat runs and refuses outright when it fires — no message row is written, same
-    as `require_seat`'s refusal above.
+    THE ADDRESSING REFUSAL: a DM addressed by name whose unique Seat exists but whose
+    only active holder is marked retired/false_mint used to fall through
+    resolve_seat's own un-seated-lineage fallback and land on a different Agent
+    object's stale `handle` assertion: a dead generation, addressed with the same
+    confidence as a real resolution (both `dm_to` and `lineage_head` agreed, wrongly,
+    since both came from the same broken walk: no result-side check catches this).
+    `seat_holder_ineligible` (seats.py) is checked before resolve_seat runs and
+    refuses outright when it fires: no message row is written, same as
+    `require_seat`'s refusal above.
 
-    OWNERSHIP STAMPED AT DISPATCH, NOT REMEMBERED (Phase 1c, decision 79533336): `threads`
-    names EXISTING Thread objects (uuid / `thread:<12hex>` / short-id prefix) this DM
-    ASSIGNS to its addressee — a TRANSFER, re-pointing each Thread's `owner` assertion to
-    the resolved `to_agent`, using the exact mechanism `reclassify_thread` already exposes
-    for the human-triaged case. NO PROSE INFERENCE, EVER (cb38d922 already measured that
-    channel and found it unreliable: 232 decision-prose thread mentions, 25 edged, a
-    three-way ambiguity no query can separate) — only a ref named HERE, explicitly, by the
-    sender, is ever touched; nothing is scraped from `body`. Each ref must resolve to
-    EXACTLY ONE Thread or this call refuses outright (RefAmbiguous propagates as a
-    ValueError) — named-enough-to-identify and named-enough-to-auto-stamp are different
-    bars (the live specimen: `resolves="28842543"` matched 2 Thread objects by short-id
-    prefix the same night this shipped). Requires a resolved single addressee (`to_agent`
-    or a name that resolves to one) — ownership transfer has nowhere to land on a
-    broadcast. New work with no prior thread needs nothing here: open_thread(assignee=...)
-    already covers dispatch-time minting on the RECIPIENT's own end.
+    OWNERSHIP STAMPED AT DISPATCH, NOT REMEMBERED: `threads` names existing Thread
+    objects (uuid / `thread:<12hex>` / short-id prefix) this DM assigns to its
+    addressee: a transfer, re-pointing each Thread's `owner` assertion to the resolved
+    `to_agent`, using the exact mechanism `reclassify_thread` already exposes for the
+    human-triaged case. No prose inference, ever (a prior measurement of that channel
+    found it unreliable: several hundred decision-prose thread mentions, a meaningful
+    fraction edge cases, a three-way ambiguity no query can separate): only a ref
+    named here, explicitly, by the sender, is ever touched; nothing is scraped from
+    `body`. Each ref must resolve to exactly one Thread or this call refuses outright
+    (RefAmbiguous propagates as a ValueError): named-enough-to-identify and
+    named-enough-to-auto-stamp are different bars (a short-id prefix has matched more
+    than one Thread object in practice). Requires a resolved single addressee
+    (`to_agent` or a name that resolves to one): ownership transfer has nowhere to
+    land on a broadcast. New work with no prior thread needs nothing here:
+    open_thread(assignee=...) already covers dispatch-time minting on the recipient's
+    own end.
 
-    THE SEND DOOR ADDRESSING GUARD (thread f4209591, operator 2026-09-06, specimen msg
-    7873): a broadcast (`to_project` set, `to_agent` absent) whose body opens with a
-    leading vocative ('cupid — …', 'cupid: …') or names an @handle is checked against
-    `binding_of_handle`'s own authoritative Seat resolution (never the wider assertion
-    fallback — a coincidence must never trigger this) purely to catch the mismatch
-    nebbercracker's specimen made: addressing a real seat's name in the body while
-    broadcasting to a room that seat's current holder never mounted under. When it
-    resolves to a holder in a DIFFERENT room, this refuses outright, naming the correct
-    address (`to_agent=<name>`) — never silently delivers to the wrong room. When it
-    resolves and agrees, the receipt's `addressee_resolved` field still names what was
-    found, so a caller sees the match rather than having to infer it. A candidate that
-    doesn't resolve through this authoritative binding at all is left untouched — this
-    is NOT a second instance of the `threads=` NO-PROSE-INFERENCE ban above (that ban
-    is against ACTING on an inferred meaning); this door only ever refuses or
-    annotates, never silently sends anywhere the caller didn't explicitly ask."""
+    THE SEND DOOR ADDRESSING GUARD: a broadcast (`to_project` set, `to_agent` absent)
+    whose body opens with a leading vocative (e.g. 'name: ...', 'name, ...') or names
+    an @handle is checked against `binding_of_handle`'s own authoritative Seat
+    resolution (never the wider assertion fallback: a coincidence must never trigger
+    this), purely to catch a mismatch seen in practice: addressing a real seat's name
+    in the body while broadcasting to a room that seat's current holder never mounted
+    under. When it resolves to a holder in a different room, this refuses outright,
+    naming the correct address (`to_agent=<name>`): never silently delivers to the
+    wrong room. When it resolves and agrees, the result's `addressee_resolved` field
+    still names what was found, so a caller sees the match rather than having to
+    infer it. A candidate that doesn't resolve through this authoritative binding at
+    all is left untouched: this is not a second instance of the `threads=`
+    no-prose-inference rule above (that rule is against acting on an inferred
+    meaning); this guard only ever refuses or annotates, never silently sends
+    anywhere the caller didn't explicitly ask."""
     if desk_kind is not None and desk_kind not in DESK_KINDS:
         raise ValueError(f"desk_kind must be one of {DESK_KINDS}")
     if grade is not None and grade not in MAIL_GRADES:
@@ -325,32 +334,33 @@ async def send_message(
         if ref is None:
             raise ValueError(f"reply_to message {reply_to} does not exist")
     if to_agent and to_agent.startswith("seat:"):
-        # a DM addressed to a RAW SEAT id — an act of intent, accepted only for a living Seat
-        # (never invented; a typo'd seat address must fail loudly, not park mail in a void)
+        # a DM addressed to a raw seat id: an act of intent, accepted only for a
+        # living Seat (never invented; a typo'd seat address must fail loudly, not
+        # park mail in a void)
         exists = await pool.fetchval(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
             to_agent)
         if not exists:
             raise ValueError(f"no such seat: '{to_agent}' — check fleet() or address by name")
     elif to_agent and not to_agent.startswith("agent:"):
-        # a DM addressed by HUMAN NAME: when the name resolves through a BINDING (Phase B2,
-        # 5cef856b), the SEAT is the stored address — it survives every succession, so the
-        # mail reaches whoever holds the seat at READ time, not whoever held it at send time
-        # (the old snapshot semantics' documented in-flight edge, now closed for bound
-        # seats). An unbound name keeps the snapshot: the live holder's id, exactly as
-        # before (ruling 1e02e069).
+        # a DM addressed by human name: when the name resolves through a binding, the
+        # seat is the stored address: it survives every succession, so the mail
+        # reaches whoever holds the seat at read time, not whoever held it at send
+        # time (the old snapshot semantics' documented in-flight edge, now closed for
+        # bound seats). An unbound name keeps the snapshot: the live holder's id,
+        # exactly as before.
         from src.orchestrator.seats import seat_holder_ineligible
         ineligible = await seat_holder_ineligible(pool, to_agent)
         if ineligible is not None:
-            # THE REFUSAL BELONGS HERE, IN THE RESOLUTION (rulings 1a64ae9a/aee67e6d, DM
-            # 2360): resolve_seat's own un-seated-lineage fallback cannot tell "no seat at
-            # all" apart from "a seat exists but its only holder is marked" — it treats both
-            # as license to search EVERY Agent object's raw handle assertion instead, which
-            # can and did find a dead generation (John XV) and address it with the same
-            # confidence as a real resolution. Checking BEFORE calling resolve_seat, not
-            # after, is the only place a fix here can land: both dm_to and lineage_head are
-            # computed from that same fallback walk once it has run, so they agree with each
-            # other while being wrong together — no post-hoc receipt check can catch this.
+            # THE REFUSAL BELONGS HERE, IN THE RESOLUTION: resolve_seat's own
+            # un-seated-lineage fallback cannot tell "no seat at all" apart from "a
+            # seat exists but its only holder is marked": it treats both as license to
+            # search every Agent object's raw handle assertion instead, which can and
+            # did find a dead generation and address it with the same confidence as a
+            # real resolution. Checking before calling resolve_seat, not after, is the
+            # only place a fix here can land: both dm_to and lineage_head are computed
+            # from that same fallback walk once it has run, so they agree with each
+            # other while being wrong together: no post-hoc result check can catch this.
             raise ValueError(f"undeliverable: {ineligible} — refusing rather than guessing; "
                              "check fleet() for who actually holds the seat now, or address "
                              "the seat directly (to_agent='seat:<id>') once a new holder "
@@ -361,7 +371,7 @@ async def send_message(
         if resolved["agent"] is None:
             raise ValueError(f"no agent named '{to_agent}' — check the name or DM by agent id")
         to_agent = resolved.get("seat_id") or resolved["agent"]
-    via_reply_routing = False  # set True only where `to_a` is copied from `ref`, below —
+    via_reply_routing = False  # set True only where `to_a` is copied from `ref`, below:
     # never for explicit to_agent=/to=, whose staleness stays an act of intent (see the
     # REPLY ROUTING FOLLOWS THE LINEAGE comment further down)
     addressee_resolved: dict[str, Any] | None = None
@@ -369,15 +379,16 @@ async def send_message(
         to_a = to_agent
         to_p = _norm(to_project) if to_project else None
         if to_p and to_a is None and to_p != OPERATOR_ADDR:
-            # THE PHANTOM BROADCAST (obligation 45e52530, shape 3 of #117 — Thoth's own
-            # three dispatches vanished 15 minutes this way): to_project reached here with
-            # NO existence check at all, so ANY string could be written — including a seat
-            # handle typed into `to=` by mistake — filing mail into a "project" no inbox()
-            # call will ever scope to. `agent_mounts.project` is the operational truth of
-            # "someone has actually been here" (the same surface fleet() reads); the Agent
-            # object's own `project` property is a different question (a claim about
-            # identity, not operational history) and can drift from it — using that instead
-            # would let mail land where no inbox() scopes to, today's bug with a longer fuse.
+            # THE PHANTOM BROADCAST: to_project reached here with no existence check at
+            # all, so any string could be written, including a seat handle typed into
+            # `to=` by mistake, filing mail into a "project" no inbox() call will ever
+            # scope to (three dispatches from one sender once vanished this way in a
+            # 15-minute window). `agent_mounts.project` is the operational truth of
+            # "someone has actually been here" (the same surface fleet() reads); the
+            # Agent object's own `project` property is a different question (a claim
+            # about identity, not operational history) and can drift from it: using
+            # that instead would let mail land where no inbox() scopes to, today's bug
+            # with a longer fuse.
             known = await pool.fetchval(
                 "SELECT 1 FROM agent_mounts WHERE project = $1 LIMIT 1", to_p)
             if not known:
@@ -386,10 +397,11 @@ async def send_message(
                 from src.actions.core import Actions
                 from src.orchestrator.agents import resolve_seat
                 from src.orchestrator.seats import seat_holder_ineligible
-                # Don't suggest a hint that's guaranteed to hit the SAME refusal: if
-                # to_project's unique seat has only ineligible holders, addressing it as
-                # to_agent=<name> below would refuse via this exact guard (task #142 punch-
-                # list item 3) — no point pointing the caller at a door that won't open.
+                # Don't suggest a hint that's guaranteed to hit the same refusal: if
+                # to_project's unique seat has only ineligible holders, addressing it
+                # as to_agent=<name> below would refuse via this exact guard: no point
+                # pointing the caller at an address that won't accept the message
+                # either.
                 if await seat_holder_ineligible(pool, to_project) is None:
                     maybe = await resolve_seat(Actions(pool), to_project)
                     if maybe["agent"] is not None:
@@ -398,26 +410,25 @@ async def send_message(
                     f"no such project: {to_project!r} — nobody has ever mounted there, so "
                     f"no inbox() call would ever see this broadcast{hint}")
             else:
-                # THE SEND DOOR ADDRESSING GUARD (thread f4209591, operator 2026-09-06,
-                # specimen msg 7873): nebbercracker (project monsterhouse) sent `send(
-                # to='monsterhouse', body='cupid — spin down the demo…')`. cupid holds
-                # seat:76c1ff57 in project network — nobody in monsterhouse is cupid —
-                # and the door filed it as an ordinary room broadcast anyway, delivered
-                # to nebbercracker's own room, and cupid never saw it: "there is no
-                # mechanism to catch it or stop it from making that mistake
-                # mechanically, the messaging system runs partly on prior knowledge and
-                # faith which is dangerous" (the operator). A leading vocative or an
-                # @handle in `body` names a SPECIFIC seat the sender believes they're
-                # reaching; when it resolves through the SAME authoritative binding an
-                # explicit to_agent=<name> itself trusts (binding_of_handle, Phase B1 —
-                # a unique living Seat with an eligible holder, never the wider
-                # assertion-fallback that could also find a coincidence) to a holder
-                # whose OWN current room disagrees with the room being broadcast into,
-                # this is never a guess worth risking silently: refuse, naming the
-                # correct address, exactly as an explicit to_agent=<bad-name> already
-                # refuses rather than parking mail nowhere readable. A candidate that
-                # doesn't resolve this way is left untouched — just prose, per the
-                # NO-PROSE-INFERENCE law above.
+                # THE SEND DOOR ADDRESSING GUARD: a sender in one project once sent
+                # `send(to='<that project>', body='<name>: spin down the demo...')`
+                # where <name> held a seat in a different project: nobody in the
+                # sending project was <name>, and the guard-less code filed it as an
+                # ordinary room broadcast anyway, delivered to the sender's own room,
+                # and the intended addressee never saw it. There was no mechanism to
+                # catch the mismatch mechanically; the messaging system ran partly on
+                # prior knowledge alone. A leading vocative or an @handle in `body`
+                # names a specific seat the sender believes they're reaching; when it
+                # resolves through the same authoritative binding an explicit
+                # to_agent=<name> itself trusts (binding_of_handle: a unique living
+                # Seat with an eligible holder, never the wider assertion-fallback
+                # that could also find a coincidence) to a holder whose own current
+                # room disagrees with the room being broadcast into, this is never a
+                # guess worth risking silently: refuse, naming the correct address,
+                # exactly as an explicit to_agent=<bad-name> already refuses rather
+                # than parking mail nowhere readable. A candidate that doesn't resolve
+                # this way is left untouched: just prose, per the no-prose-inference
+                # rule above.
                 candidate = _addressee_in_body(body)
                 if candidate:
                     from src.orchestrator.seats import binding_of_handle
@@ -440,17 +451,18 @@ async def send_message(
         via_reply_routing = True
     elif (ref is not None and ref["to_agent"] is not None
           and await _addressed_to_me(pool, ref["from_agent"], from_agent)):
-        # REPLYING TO MY OWN DM CONTINUES THAT SAME DM (thread 7d670c74, 2026-08-03): `ref`
-        # here is a message I SENT, not one sent to me — the case below (the "own message"
-        # branch) was built for replying to my own BROADCAST, the desk supersession lane,
-        # where to_project names where it should route onward. A DM's to_project is normally
-        # NULL, so falling into that branch either raised a misleading "no recipient" error
-        # or — if the original send had also carried an explicit to_project alongside
-        # to_agent — silently rebroadcast the reply to that project instead of continuing the
-        # conversation with the person actually being talked to (live specimen: a DM to Thoth,
-        # replied-to via its own id, landed as a stalled project broadcast nobody was
-        # watching). Continuing the SAME DM is the only sensible reading of "replying to my
-        # own outgoing message" when that message was itself a DM.
+        # REPLYING TO MY OWN DM CONTINUES THAT SAME DM: `ref` here is a message I
+        # sent, not one sent to me. The case below (the "own message" branch) was
+        # built for replying to my own broadcast, the desk supersession lane, where
+        # to_project names where it should route onward. A DM's to_project is
+        # normally NULL, so falling into that branch either raised a misleading "no
+        # recipient" error, or, if the original send had also carried an explicit
+        # to_project alongside to_agent, silently rebroadcast the reply to that
+        # project instead of continuing the conversation with the person actually
+        # being talked to (observed once: a DM to a specific agent, replied to via
+        # its own id, landed as a stalled project broadcast nobody was watching).
+        # Continuing the same DM is the only sensible reading of "replying to my own
+        # outgoing message" when that message was itself a DM.
         to_a, to_p = ref["to_agent"], ref["to_project"]
         via_reply_routing = True
     elif ref is not None:  # a broadcast/own message → project routing (supersession lane)
@@ -458,29 +470,29 @@ async def send_message(
         if own:
             to_a, to_p = None, _norm(ref["to_project"] or "")
         else:
-            # THE CROSS-PROJECT RETURN GOES TO THE SEAT (Werner's leak, 2026-07-16): a reply
-            # to a FOREIGN project's broadcast used to return to that project's whole ROOM —
-            # gestalt's audit reports, addressed to 'whoever commissioned this', broadcast
-            # into every bytebye reader's inbox because the commissioner's house was the only
-            # return address the pre-seat mailbox had. The seat IS the address now (B2,
-            # 5cef856b): a seat-bound asker gets the reply as a seat DM — durable across
-            # succession, invisible to housemates. An unbound asker keeps the room return
-            # (a DM to a transient dead id would strand the mail; the room at least reaches
-            # the house — exactly the old law, unchanged).
+            # THE CROSS-PROJECT RETURN GOES TO THE SEAT: a reply to a foreign
+            # project's broadcast used to return to that project's whole room: audit
+            # reports addressed to 'whoever commissioned this' broadcast into every
+            # reader's inbox in the commissioner's project, because that project was
+            # the only return address the pre-seat mailbox had. The seat is the
+            # address now: a seat-bound asker gets the reply as a seat DM, durable
+            # across succession, invisible to housemates. An unbound asker keeps the
+            # room return (a DM to a transient dead id would strand the mail; the
+            # room at least reaches the project, exactly the old behavior, unchanged).
             from src.orchestrator.seats import held_seat
             bound = await held_seat(pool, ref["from_agent"])
             if bound:
                 to_a, to_p = bound["seat_id"], None
             else:
-                # MAIL FOLLOWS THE MIND, NOT THE ROOM (operator ruling 2026-07-19, thread
-                # 07d64473: Atlas IV asked from the xxit room he was visiting; the reply
-                # landed on Metron, the room's resident — 'metron got the mail that was
-                # for you, thats a bug'). An unbound asker the GRAPH KNOWS gets the reply
-                # as a DM to their living head — since the lineage rollup (one soul, one
-                # inbox) a head DM is deliverable at read time across successions, so the
-                # old stranding fear only holds for ids the graph never registered. Those
-                # keep the room return (it at least reaches the house), as does a head the
-                # eligibility law refuses (retired/false_mint — never a DM target).
+                # MAIL FOLLOWS THE AGENT, NOT THE ROOM: an asker who asked from a
+                # project room they were only visiting once had their reply land on
+                # that room's resident instead of them, which was a bug. An unbound
+                # asker the graph knows gets the reply as a DM to their living head:
+                # since the lineage rollup (one agent, one inbox) a head DM is
+                # deliverable at read time across successions, so the old stranding
+                # fear only holds for ids the graph never registered. Those keep the
+                # room return (it at least reaches the project), as does a head the
+                # eligibility rule refuses (retired/false_mint: never a DM target).
                 from src.orchestrator.folds import living_head
                 head: str | None = None
                 if str(ref["from_agent"] or "").startswith("agent:"):
@@ -496,84 +508,87 @@ async def send_message(
     if not to_a and not to_p:
         raise ValueError("no recipient: pass to=<project>, to_agent=<agent>, or reply_to a "
                          "message whose sender is addressable")
-    # A FOLDED LABEL IS A FORWARDING ORDER, NOT A GRAVE (the reconciliation primitive,
-    # thread b975851b): a DM to an agent id whose object is status='merged' can never be
-    # read under that label — parking mail there re-creates the orphan machine the fold
-    # exists to end. This is NOT the silent redirection the grave rule forbids: the fold
-    # was review-gated (the operator signed it), and the receipt confesses the forward.
+    # A FOLDED LABEL IS A FORWARDING ORDER, NOT A DEAD END: a DM to an agent id
+    # whose object is status='merged' can never be read under that label: parking
+    # mail there re-creates the orphan problem the fold exists to end. This is not
+    # the silent redirection the addressing rule forbids elsewhere: the fold was
+    # review-gated (an operator approved it), and the result confesses the forward.
     folded_from: str | None = None
     if to_a and to_a.startswith("agent:"):
         from src.orchestrator.folds import canonical_agent, living_head
         canon = await canonical_agent(pool, to_a)
         if canon != to_a:
             folded_from, to_a = to_a, await living_head(pool, canon)
-    # REPLY ROUTING FOLLOWS THE LINEAGE, NOT THE STAMP (Thoth msg 3880/3882, 2026-08-09):
-    # the two `via_reply_routing` branches above used to copy ref["from_agent"]/
-    # ref["to_agent"] VERBATIM — the raw id stamped on the REFERENCED message at ITS send
-    # time. That id can be superseded (mint_heir / a compaction succession) between the
-    # original message and this reply — measured live against fleet_messages: 90 of 1727
-    # reply DMs (5.2%, msg 188 through msg 3884, spanning the whole month, not a papercut)
-    # landed on a `to_agent` already superseded before the reply was even sent.
-    # `lineage_head` is computed a few lines below for every agent-id `to_a` regardless —
-    # it was ALWAYS being fetched, for the eligibility gate and the receipt echo, just
-    # never fed back into what actually got WRITTEN as the delivery target. Scoped to
-    # `via_reply_routing` ONLY: explicit to_agent=<raw id> addressing keeps its existing,
-    # deliberately-unredirected law (test_a_raw_id_send_reveals_a_stale_generation_via_
-    # lineage_head, tests/test_mailbox.py) — a human who names a specific ancestor id may
-    # mean THAT generation, an act of intent this function must never second-guess.
-    # reply_to has no such excuse: nobody CHOOSES who a reply goes back to, so "back to
-    # whoever I'm actually talking to now" is the only sensible reading — the same reading
-    # `_addressed_to_me`'s own lineage rollup already gives the PERCEPTION side of this
-    # exact question. The receipt NAMES the redirect (`redirected_from`) rather than
-    # silently rerouting, same discipline `folded_from` above already keeps for a merge.
-    # A dead/retired/false_mint head is NOT a new case to handle here — the eligibility
-    # gate just below already runs on `lineage_head(to_a)` regardless of how `to_a` was
-    # set, so it already refused delivery to a since-retired head before this change (the
-    # stale `to_agent` this fix corrects was never what protected against that grave; it
-    # only ever protected the receipt's `lineage_head` echo, which was already computed
-    # correctly). This redirect and that gate are independent fixes for independent halves
-    # of the same underlying gap.
+    # REPLY ROUTING FOLLOWS THE LINEAGE, NOT THE STAMP: the two `via_reply_routing`
+    # branches above used to copy ref["from_agent"]/ref["to_agent"] verbatim: the raw
+    # id stamped on the referenced message at its send time. That id can be
+    # superseded (a succession or a compaction) between the original message and this
+    # reply: measured live against fleet_messages, about 5% of reply DMs across a
+    # month-long sample landed on a `to_agent` already superseded before the reply
+    # was even sent. `lineage_head` is computed a few lines below for every agent-id
+    # `to_a` regardless: it was always being fetched, for the eligibility gate and
+    # the result echo, just never fed back into what actually got written as the
+    # delivery target. Scoped to `via_reply_routing` only: explicit to_agent=<raw id>
+    # addressing keeps its existing, deliberately unredirected behavior
+    # (test_a_raw_id_send_reveals_a_stale_generation_via_lineage_head,
+    # tests/test_mailbox.py): a human who names a specific ancestor id may mean that
+    # generation, an act of intent this function must never second-guess. reply_to
+    # has no such excuse: nobody chooses who a reply goes back to, so "back to
+    # whoever I'm actually talking to now" is the only sensible reading, the same
+    # reading `_addressed_to_me`'s own lineage rollup already gives the perception
+    # side of this exact question. The result names the redirect
+    # (`redirected_from`) rather than silently rerouting, same discipline
+    # `folded_from` above already keeps for a merge. A dead/retired/false_mint head
+    # is not a new case to handle here: the eligibility gate just below already runs
+    # on `lineage_head(to_a)` regardless of how `to_a` was set, so it already
+    # refused delivery to a since-retired head before this change (the stale
+    # `to_agent` this fix corrects was never what protected against that case; it
+    # only ever protected the result's `lineage_head` echo, which was already
+    # computed correctly). This redirect and that gate are independent fixes for
+    # independent halves of the same underlying gap.
     redirected_from: str | None = None
     if via_reply_routing and to_a and to_a.startswith("agent:"):
         from src.orchestrator.agents import lineage_head
         head = await lineage_head(pool, to_a)
         if head != to_a:
             redirected_from, to_a = to_a, head
-    # THE ECHO + THE GATE (dd47c1da) — resolved BEFORE any write, so a require_seat refusal
-    # never leaves a row behind. `to_a` may be a name already resolved above, OR a raw agent id
-    # that skipped resolution entirely (alfred's gap): either way, lineage_head reveals whether
-    # this id is still its lineage's newest generation, and agent_seat reveals whether it is a
-    # claimed seat at all — a dispatcher gets the truth, this function never guesses for it.
+    # THE ECHO + THE GATE: resolved before any write, so a require_seat refusal
+    # never leaves a row behind. `to_a` may be a name already resolved above, or a
+    # raw agent id that skipped resolution entirely: either way, lineage_head
+    # reveals whether this id is still its lineage's newest generation, and
+    # agent_seat reveals whether it is a claimed seat at all: a dispatcher gets the
+    # truth, this function never guesses for it.
     seat: str | None = None
     lineage: str | None = None
     holder: str | None = None
     redirect: dict[str, Any] | None = None
-    # THE SEAT'S OWN PLACEHOLDER IS NOT A MIND (thread 24f52959, nebbercracker's live
-    # specimen 8106/8172/8201): launch_seat's no-ancestor mint (trigger.py's `agent:seat-
-    # <seatid>` heir) stamps a REAL Agent object at a seat's very first launch — but
-    # succession afterward moves the seat's own `holds` edge forward without requiring the
-    # new heir's succeeded_from chain to trace back through it (mint_heir's own documented
-    # gap). Left unresolved here, that id is an ordinary dead-end canonical to lineage_head
-    # (no succeeded_by ever asserted on it) — a DM addressed to it echoed a "cold-mounted-
-    # before... queues and reads at its own next natural turn" receipt while the live
-    # holder never saw it, because the wake path's own liveness check ran on the
-    # PLACEHOLDER's `agent_mounts` history (real, from mint time), never on the seat's
-    # actual live occupant. roster() hands this id out meaning "whoever holds the seat" —
-    # so it is rewritten to the equivalent `seat:` address BEFORE any resolution runs,
-    # reusing that address's own proven holder lookup rather than a second copy of it.
+    # THE SEAT'S OWN PLACEHOLDER IS NOT AN AGENT: launching a seat's no-ancestor mint
+    # (the `agent:seat-<seatid>` heir) stamps a real Agent object at a seat's very
+    # first launch, but succession afterward moves the seat's own `holds` edge
+    # forward without requiring the new heir's succeeded_from chain to trace back
+    # through it (a documented gap in the succession machinery). Left unresolved
+    # here, that id is an ordinary dead-end as far as lineage_head is concerned (no
+    # succeeded_by ever asserted on it): a DM addressed to it once produced a
+    # queued-but-unread result while the live holder never saw it, because the wake
+    # path's own liveness check ran on the placeholder's `agent_mounts` history
+    # (real, from mint time), never on the seat's actual live occupant. roster()
+    # hands this id out meaning "whoever holds the seat", so it is rewritten to the
+    # equivalent `seat:` address before any resolution runs, reusing that address's
+    # own proven holder lookup rather than a second copy of it.
     seat_placeholder_redirect = False
     if to_a and re.fullmatch(r"agent:seat-[0-9a-f]+", to_a):
         seat_placeholder_redirect = True
         to_a = "seat:" + to_a.removeprefix("agent:seat-")
     if to_a and to_a.startswith("seat:"):
-        # a SEAT address: the receipt names the seat's handle and its CURRENT holder (whose
-        # lineage head is the live truth a dispatcher wants); a vacant seat is not a grave —
-        # the mail waits for the next holder, and the receipt says holder=None honestly.
-        # EXCEPT via the placeholder redirect above: a caller who typed `agent:seat-<id>`
-        # believed they were naming a specific mind, not a role that might sit empty — a
-        # vacant seat there must refuse loudly (never a queued-forever receipt) regardless
-        # of `require_seat`, the same law a caller who explicitly names a real `seat:<id>`
-        # does NOT get, on purpose (they know they're addressing a role).
+        # a seat address: the result names the seat's handle and its current holder
+        # (whose lineage head is the live truth a dispatcher wants); a vacant seat is
+        # not a dead end: the mail waits for the next holder, and the result says
+        # holder=None honestly. Except via the placeholder redirect above: a caller
+        # who typed `agent:seat-<id>` believed they were naming a specific agent, not
+        # a role that might sit empty: a vacant seat there must refuse loudly (never
+        # a queued-forever result) regardless of `require_seat`, the same rule a
+        # caller who explicitly names a real `seat:<id>` does not get, on purpose
+        # (they know they're addressing a role).
         from src.orchestrator.agents import lineage_head
         from src.orchestrator.seats import seat_receipt
         sr = await seat_receipt(pool, to_a)
@@ -592,23 +607,24 @@ async def send_message(
     elif to_a:
         from src.orchestrator.agents import agent_seat, lineage_head
         lineage = await lineage_head(pool, to_a)
-        # THE ELIGIBILITY LAW ON THE DIRECT LANE (thread 21596481; the msg-192 fixture —
-        # a DM routed to a retired phantom lane): when the lineage's newest generation is
-        # KNOWN-dead (retired / false_mint), the mail can never be read under any of its
-        # addresses — fail LOUDLY, naming who was found and why, instead of parking it.
-        # An id the graph merely hasn't met stays deliverable (registration can lag).
+        # THE ELIGIBILITY RULE ON THE DIRECT LANE: when the lineage's newest
+        # generation is known-dead (retired / false_mint), the mail can never be
+        # read under any of its addresses: fail loudly, naming who was found and
+        # why, instead of parking it (a DM once routed to a retired, unreadable
+        # lane this way). An id the graph merely hasn't met stays deliverable
+        # (registration can lag).
         occupied_despite_flag: str | None = None
         if lineage:
             why = await _dm_ineligibility(pool, lineage)
             if why in ("retired", "false_mint"):
-                # THE HALCYON ESCAPE HATCH (obligation 6b1efacb, 2026-08-18): a
-                # retired/false_mint STAMP is a belief, not a pulse — the exact zero-turn
-                # fold blindness this obligation's other half fixes can leave a
-                # GENUINELY LIVE, harness-confirmed body wearing a flagged-dead id. A DM
-                # to that body must still reach it (or at minimum name the occupancy in
-                # the receipt), never hard-refuse solely on a stale/wrong stamp when the
-                # OS itself can be asked directly. Refuse only when NO living head exists
-                # anywhere — occupancy is checked BEFORE the refusal, never instead of it.
+                # THE LIVE-OCCUPANCY ESCAPE HATCH: a retired/false_mint stamp is a
+                # belief, not a live check: a related edge case can leave a
+                # genuinely live, harness-confirmed session wearing a flagged-dead
+                # id. A DM to that session must still reach it (or at minimum name
+                # the occupancy in the result), never hard-refuse solely on a
+                # stale/wrong stamp when the host itself can be asked directly.
+                # Refuse only when no living head exists anywhere: occupancy is
+                # checked before the refusal, never instead of it.
                 from src.orchestrator.agents import is_occupied_by_a_live_body
                 if await is_occupied_by_a_live_body(pool, lineage):
                     occupied_despite_flag = why
@@ -626,15 +642,15 @@ async def send_message(
                 "CLAIMED seat (no handle asserted) — refusing to dispatch blind. Check "
                 "fleet() for who actually holds a seat, or pass require_seat=False to send "
                 "anyway.")
-        # THE RECEIPT'S OWN SEAT FIELD (ruling 7d6815bb, Ra XXXVI's specimen thread
-        # e93c2470): a DM to a stale/retired ancestor id used to echo THAT ancestor's own
-        # claimed handle ("Ptah VI") beside a `listener` reading the HEAD's liveness (via
-        # agent_liveness's own lineage walk) — one receipt composing an identity fact about
-        # one generation with a liveness fact about another. `seat` here is now ALWAYS
-        # derived from `lineage` (the delivering head) when one resolves — `gate_seat`
-        # above stays the require_seat gate's own question ("does the id AS ADDRESSED hold
-        # a claimed seat", legitimately about to_a, untouched). A divergence is surfaced
-        # EXPLICITLY as `redirect`, never silently substituted.
+        # THE RESULT'S OWN SEAT FIELD: a DM to a stale/retired ancestor id used to
+        # echo that ancestor's own claimed handle beside a `listener` reading the
+        # head's liveness (via agent_liveness's own lineage walk): one result
+        # composing an identity fact about one generation with a liveness fact about
+        # another. `seat` here is now always derived from `lineage` (the delivering
+        # head) when one resolves: `gate_seat` above stays the require_seat gate's
+        # own question ("does the id as addressed hold a claimed seat", legitimately
+        # about to_a, untouched). A divergence is surfaced explicitly as `redirect`,
+        # never silently substituted.
         seat = await agent_seat(pool, lineage) if lineage else gate_seat
         if lineage and lineage != to_a:
             redirect = {"addressed": to_a, "addressed_seat": gate_seat,
@@ -646,9 +662,9 @@ async def send_message(
                                                         "occupies this id — delivered "
                                                         "anyway rather than parked on a "
                                                         "belief the OS itself contradicts"}
-    # OWNERSHIP STAMPED AT DISPATCH (Phase 1c): resolved BEFORE any write, same law as the
-    # require_seat gate just above — an ambiguous or unknown thread ref must refuse loudly,
-    # never park a message whose ownership claim silently didn't land.
+    # OWNERSHIP STAMPED AT DISPATCH: resolved before any write, same rule as the
+    # require_seat gate just above: an ambiguous or unknown thread ref must refuse
+    # loudly, never park a message whose ownership claim silently didn't land.
     resolved_threads: list[Any] = []
     if threads:
         if not to_a:
@@ -667,8 +683,8 @@ async def send_message(
                                  "id, or open it first")
             resolved_threads.append(tid)
     thread = (ref["thread_id"] or ref["id"]) if ref is not None else None
-    # the reply IS the ack — settle the referenced message for the replier, if it was addressed
-    # to them (a DM to me, or a broadcast to my project)
+    # the reply is the ack: settle the referenced message for the replier, if it was
+    # addressed to them (a DM to me, or a broadcast to my project)
     if ref is not None and (
         await _addressed_to_me(pool, ref["to_agent"], from_agent)
         or (ref["to_agent"] is None and from_project
@@ -679,7 +695,7 @@ async def send_message(
             "ON CONFLICT (message_id, agent_id) DO UPDATE SET read_at=COALESCE("
             "message_recipients.read_at, now())", ref["id"], from_agent)
     async def _stamp_threads() -> list[str]:
-        """The transfer itself — re-point each resolved Thread's `owner` to the resolved
+        """The transfer itself: re-point each resolved Thread's `owner` to the resolved
         addressee, same mechanism `reclassify_thread` uses (assert_property, self-declared,
         the sender's own act). Idempotent by construction (within-source supersession), so
         a dedup'd retry re-stamping the same value is harmless, never a second fact."""
@@ -722,16 +738,16 @@ async def send_message(
         from_agent, from_project, to_p, to_a, body, reply_to, thread, desk_kind, grade)
     stamped = await _stamp_threads()
     # GRAPH EDGES: write Message object + links so mail is traversable in the graph.
-    # STRUCTURALLY GUARDED (Thoth DM 5493, ruling 7d6815bb: fix the mechanism, not the
-    # symptom — this block produced FIVE regressions from FIVE unguarded raw
-    # create_or_find_object calls, found by five different people one at a time: the
-    # datetime shadow, prior-art going dark, the watermark, adoption_share, and a bare
-    # Agent minted for every sender that silently made every sender DM-eligible). The
-    # law now: EVERY edge target here is EXISTENCE-CHECKED, never minted, except the
-    # Message object this function alone owns and is always creating fresh. Minting an
-    # Agent/Seat/SoftwareProject as a side effect of a mail write is exactly the
-    # unguarded-seventh-door class #139 enumerated six doors to prevent — sending mail
-    # must never be how an identity or a project first enters the graph.
+    # STRUCTURALLY GUARDED: fix the mechanism, not the symptom. This block once
+    # produced five regressions from five unguarded raw create_or_find_object calls,
+    # found one at a time: a datetime shadow, prior-art going dark, a watermark bug,
+    # an adoption-share bug, and a bare Agent minted for every sender that silently
+    # made every sender DM-eligible. The rule now: every edge target here is
+    # existence-checked, never minted, except the Message object this function alone
+    # owns and is always creating fresh. Minting an Agent/Seat/SoftwareProject as a
+    # side effect of a mail write is exactly the class of unguarded write a prior
+    # audit enumerated several such cases to prevent: sending mail must never be how
+    # an identity or a project first enters the graph.
     graphed = True
     try:
         from src.actions.core import Actions as _Actions
@@ -748,24 +764,25 @@ async def send_message(
             return await pool.fetchval(
                 "SELECT id FROM objects WHERE canonical=$1 AND type=$2", canon, type_)
 
-        # THE SENDER (thread reply-routing-6a1dd99 regression): `_dm_ineligibility`'s
-        # whole contract is "no Agent object = the graph has never met this mind"
-        # (mailbox.py's own docstring, "registration can lag a living mind") — reply
-        # routing's "an unbound asker keeps the room" law (thread 21596481) depends on
-        # that staying true for a transient id that has only ever SENT mail, never been
-        # mounted/addressed. A mint here silently satisfied that existence check one
-        # send later, collapsing "known mind" into "has sent one message ever".
+        # THE SENDER: `_dm_ineligibility`'s whole contract is "no Agent object = the
+        # graph has never met this agent" (mailbox.py's own docstring, "registration
+        # can lag a living agent"): reply routing's "an unbound asker keeps the room"
+        # rule depends on that staying true for a transient id that has only ever
+        # sent mail, never been mounted/addressed. A mint here once silently
+        # satisfied that existence check one send later, collapsing "known agent"
+        # into "has sent one message ever".
         from_row = await _existing(from_agent, "Agent")
         if from_row is not None:
             await acts.create_link(msg_oid, from_row, "sent_by", from_agent, now, 1.0)
 
-        # THE ADDRESSEE / BROADCAST TARGET: the SAME existence-only law, not a second
-        # shape invented for it. `send_message` already refuses a `to_project` nobody
-        # has ever mounted under and a `to_agent`/seat that doesn't resolve — by the
-        # time this block runs, a real target (mint-worthy in its own right, through
-        # its OWN door: mount()/claim_name/create_project) either already exists or the
-        # call would have refused earlier. If it's somehow still missing, the edge is
-        # skipped, never patched over with a phantom mint.
+        # THE ADDRESSEE / BROADCAST TARGET: the same existence-only rule, not a
+        # second shape invented for it. `send_message` already refuses a
+        # `to_project` nobody has ever mounted under and a `to_agent`/seat that
+        # doesn't resolve: by the time this block runs, a real target (mint-worthy
+        # in its own right, through its own path: mount()/claim_name/create_project)
+        # either already exists or the call would have refused earlier. If it's
+        # somehow still missing, the edge is skipped, never patched over with a
+        # phantom mint.
         if to_a:
             target_type = "Seat" if to_a.startswith("seat:") else "Agent"
             to_row = await _existing(to_a, target_type)
@@ -776,8 +793,8 @@ async def send_message(
             if proj_row is not None:
                 await acts.create_link(msg_oid, proj_row, "broadcast_to", from_agent, now, 1.0)
 
-        # THE REPLY PARENT: if ITS OWN graph write failed at send-time (this same
-        # try/except, one message earlier), its Message object never landed — link to
+        # THE REPLY PARENT: if its own graph write failed at send-time (this same
+        # try/except, one message earlier), its Message object never landed: link to
         # it if it's there, never mint a stub to paper over an earlier partial failure.
         if reply_to is not None:
             parent_row = await _existing(f"message:{reply_to}", "Message")
@@ -786,17 +803,17 @@ async def send_message(
 
         # NO `in_thread` EDGE (dropped, not guarded): `thread` here is fleet_messages'
         # own internal reply-chain grouping (an integer, `ref["thread_id"] or ref["id"]`
-        # a few lines up) — a DIFFERENT thing from the graph's `Thread` object type
-        # (open_thread()'s owner/kind/status-bearing obligation). Minting a `Thread`
-        # object from that bare int was a fourth unguarded door AND a category error —
-        # nothing else in this house treats a mailbox reply-chain id as ontology-worthy.
-        # `replies_to` (above) already makes a conversation walkable Message-to-Message;
-        # no fabricated container node is needed on top of it.
-    except Exception as exc:  # noqa: BLE001 — the relational row already landed; a
-                              # graph-write failure must be CONFESSED (the #139 shape:
-                              # a skip that says nothing is indistinguishable from a
-                              # clean pass), never silently swallowed — the swallow here
-                              # once hid the very NameError this class of bug produced.
+        # a few lines up), a different thing from the graph's `Thread` object type
+        # (open_thread()'s owner/kind/status-bearing structure). Minting a `Thread`
+        # object from that bare int was both an unguarded write and a category
+        # error: nothing else in this codebase treats a mailbox reply-chain id as
+        # ontology-worthy. `replies_to` (above) already makes a conversation walkable
+        # Message-to-Message; no fabricated container node is needed on top of it.
+    except Exception as exc:  # noqa: BLE001 - the relational row already landed; a
+                              # graph-write failure must be confessed (a skip that
+                              # says nothing is indistinguishable from a clean pass),
+                              # never silently swallowed: a swallow here once hid the
+                              # very NameError this class of bug produced.
         graphed = False
         _log.warning("send_message(%s): graph edge write failed, relational row %s "
                     "already committed — %s", from_agent, mid, exc)
@@ -817,10 +834,10 @@ async def unread_count(
     pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900,
     grade: str | None = None,
 ) -> int:
-    """How many DELIVERABLE messages await this reader — broadcasts to its project + DMs to it,
+    """How many DELIVERABLE messages await this reader: broadcasts to its project plus DMs to it,
     unsettled and not under its own live lease. The number mount()/orient() surface.
-    `grade` narrows to one band ('ask' | 'fyi') — the count that leads with what is ACTIONABLE
-    (thread f9449d8d: a mailbox that cries wolf gets skimmed, and a skimmed mailbox is lost)."""
+    `grade` narrows to one band ('ask' | 'fyi'), the count that leads with what is ACTIONABLE
+    (a mailbox that cries wolf gets skimmed, and a skimmed mailbox is lost)."""
     from src.orchestrator.agents import _generation
 
     q = ("SELECT count(*) FROM fleet_messages m "
@@ -838,13 +855,13 @@ async def unread_count(
 async def unread_counts(
     pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, lease_secs: int = 900,
 ) -> dict[str, int]:
-    """{"total", "ask"} in ONE scan — thread 72e45258's own residual, measured (~640ms of
+    """{"total", "ask"} in ONE scan, replacing a measured cost (~640ms of
     two sequential `unread_count` calls against `fleet_messages` in orient()'s own profile,
     the largest remaining cost after the CTE fix). mount()/orient()/automount() all ran the
     SAME `_DELIVERABLE_TO_READER` predicate TWICE, back to back, differing only in an added
-    `AND m.grade='ask'` — the same rows evaluated twice for no reason a caller couldn't get
+    `AND m.grade='ask'`: the same rows evaluated twice for no reason a caller couldn't get
     from one pass. `_DELIVERABLE_TO_READER` itself (correlated EXISTS/NOT EXISTS, the
-    lineage rollup, the lease/grace clause) is untouched — this changes NOTHING about which
+    lineage rollup, the lease/grace clause) is untouched: this changes NOTHING about which
     messages count, only how many times the predicate runs. Conditional aggregation
     (`FILTER (WHERE ...)`) computes both counts from the same table pass."""
     from src.orchestrator.agents import _generation
@@ -867,15 +884,15 @@ async def unread_split(
     pool: asyncpg.Pool, reader_project: str | None, *, reader_agent: str | None,
     lease_secs: int = 900,
 ) -> dict[str, int]:
-    """{mail, dm} — unread_count's number SPLIT by lane (broadcasts to the project vs DMs
+    """{mail, dm}: unread_count's number split by lane (broadcasts to the project vs DMs
     to the reader), same `_DELIVERABLE_TO_READER` predicate, so the statusline's two
-    segments always sum to what mount()/orient() report (operator ruling 2026-07-19: the
-    statusline carried its own stale COPY of this predicate — no lineage rollup, no hold
-    grace — and its mail number quietly diverged from orient's).
+    segments always sum to what mount()/orient() report (previously the
+    statusline carried its own stale copy of this predicate, with no lineage rollup and no
+    hold grace, so its mail number quietly diverged from orient's).
 
-    An IDENTITY-LESS reader (no mount row yet) has no receipts, so per-reader semantics
-    would re-count the project's whole settled history; it falls back to PROJECT-OPEN
-    semantics — broadcasts NOBODY settled, dm 0 — exactly the statusline's old honest
+    An identity-less reader (no mount row yet) has no receipts, so per-reader semantics
+    would re-count the project's whole settled history; it falls back to project-open
+    semantics: broadcasts nobody settled, dm 0, exactly the statusline's old honest
     fallback, now housed with the authority."""
     from src.orchestrator.agents import _generation
 
@@ -888,9 +905,9 @@ async def unread_split(
             "AND NOT EXISTS (SELECT 1 FROM message_recipients r2 WHERE r2.message_id=m.id "
             "  AND r2.read_at IS NOT NULL)", _norm(reader_project))
         return {"mail": int(n or 0), "dm": 0}
-    # `needs` is the CHROME's number (operator 2026-09-06, "just ✉ 3 is enough"): what is
-    # unread AND asks something of this reader — direct mail of any grade, plus room
-    # broadcasts that are not graded fyi. An fyi broadcast never wakes anyone and an ack
+    # `needs` is the number shown in the UI: what is
+    # unread and asks something of this reader (direct mail of any grade, plus room
+    # broadcasts that are not graded fyi). An fyi broadcast never wakes anyone and an ack
     # settles it, so nine deploy notices must not light every worker's bar as "9 for you".
     q = ("SELECT count(*) FILTER (WHERE m.to_agent IS NULL) AS mail, "
          "       count(*) FILTER (WHERE m.to_agent IS NOT NULL) AS dm, "
@@ -908,9 +925,9 @@ async def unread_split(
             "needs": int(row["needs"] or 0)}
 
 
-# A BRIEF THE DESK STILL SHOWS — the one predicate behind every briefs number (operator
-# ruling 2026-07-19, the chrome/harness disagreement): an unread, un-dismissed operator
-# brief that is NOT moot-dimmed and IS its thread's lead (the desk thread-folds — an
+# A brief the desk still shows: the one predicate behind every briefs number (resolving a
+# past display/backend disagreement): an unread, un-dismissed operator
+# brief that is NOT moot-dimmed and IS its thread's lead (the desk thread-folds: an
 # earlier brief superseded by a newer one in its thread rides under it and is not a
 # second debt; the count must fold exactly as the page folds). Placeholders $op / the
 # alias m are fixed; callers add their own scoping clauses.
@@ -928,7 +945,7 @@ _DESK_BRIEF_ROW = (
 
 
 async def desk_briefs_total(pool: asyncpg.Pool) -> int:
-    """The whole desk's undismissed briefs — the fleet pulse's number, counted with the
+    """The whole desk's undismissed briefs: the fleet pulse's number, counted with the
     SAME fold the desk page renders (lead-per-thread, moot-dimmed excluded)."""
     q = ("SELECT count(*) FROM fleet_messages m WHERE "
          + _DESK_BRIEF_ROW).replace("$op", "$1")
@@ -936,11 +953,11 @@ async def desk_briefs_total(pool: asyncpg.Pool) -> int:
 
 
 async def desk_briefs_from(pool: asyncpg.Pool, agent_id: str | None) -> int:
-    """The DESK, scoped to ONE seat (operator ruling, 2026-07-16: 'desk should not be
-    globally scoped... only scope what is for or from the agent'): unread operator-desk
-    briefs sent by THIS agent's lineage — the agent's own words still awaiting the human's
-    eye, never the fleet-wide backlog (a number identical in every chrome informs nobody).
-    An identity-less or non-lineage caller scores 0 — nothing of theirs can be waiting.
+    """The DESK, scoped to ONE seat (previous guidance: the desk should not be globally
+    scoped, only scoped to what is for or from the agent): unread operator-desk
+    briefs sent by THIS agent's lineage: the agent's own words still awaiting the human's
+    eye, never the fleet-wide backlog (a number identical in every display informs nobody).
+    An identity-less or non-lineage caller scores 0: nothing of theirs can be waiting.
     Same fold as the page and the pulse (_DESK_BRIEF_ROW), plus the lineage scope."""
     mt = re.match(r"^agent:[0-9a-f]{8}", agent_id or "")
     if not mt:
@@ -955,11 +972,11 @@ async def read_inbox(
     pool: asyncpg.Pool, reader_project: str, *, reader_agent: str, mark_read: bool = True,
     limit: int = 50, lease_secs: int = 900,
 ) -> list[dict[str, Any]]:
-    """This reader's deliverable messages, oldest first (broadcasts to its project + DMs to it).
-    Reading LEASES them FOR THIS READER (a message_recipients row) — settle each by replying or
-    acking; an unsettled message redelivers after the lease, flagged `redelivered`. mark_read=
-    False is a pure peek. A broadcast read by one agent stays visible to the others — each has
-    its own lease/settle."""
+    """This reader's deliverable messages, oldest first (broadcasts to its project plus DMs to
+    it). Reading LEASES them FOR THIS READER (a message_recipients row): settle each by
+    replying or acking; an unsettled message redelivers after the lease, flagged
+    `redelivered`. mark_read=False is a pure peek. A broadcast read by one agent stays visible
+    to the others, each has its own lease/settle."""
     proj = _norm(reader_project)
     from src.orchestrator.agents import _generation
 
@@ -980,15 +997,14 @@ async def read_inbox(
             "VALUES ($1,$2,now(),1) ON CONFLICT (message_id, agent_id) DO UPDATE SET "
             "delivered_at=now(), deliveries=message_recipients.deliveries+1",
             [(r["id"], reader_agent) for r in rows])
-    # THE SENDER'S OWN is_sidechain/patronym (obligation 706c27dc, msg 6029, Thoth
-    # LXXXVIII): the graph already models a fork correctly (agent_type=fork, is_sidechain,
-    # patronym, spawned_by) — the mail layer's only is_sidechain read site checked the
-    # ADDRESSEE (mcp_server.py's send(), "it cannot be woken and may never read this") and
-    # never the SENDER, so a fork DMing in its parent's voice with a fork's own full
-    # inherited context read as a bare unfamiliar id, indistinguishable from impersonation
-    # to a reader who hadn't independently caught it. Disclosure, not prohibition: a fork
-    # doing real work and reporting it is legitimate, it just needs to say so. Batched, one
-    # query for the whole page — never a per-row lookup.
+    # THE SENDER'S OWN is_sidechain/patronym: the graph already models a fork correctly
+    # (agent_type=fork, is_sidechain, patronym, spawned_by). The mail layer's only
+    # is_sidechain read site checked the ADDRESSEE (mcp_server.py's send(), "it cannot be
+    # woken and may never read this") and never the SENDER, so a fork DMing in its parent's
+    # voice with a fork's own full inherited context read as a bare unfamiliar id,
+    # indistinguishable from impersonation to a reader who hadn't independently caught it.
+    # Disclosure, not prohibition: a fork doing real work and reporting it is legitimate, it
+    # just needs to say so. Batched, one query for the whole page, never a per-row lookup.
     from_ids = list({r["from_agent"] for r in rows if r["from_agent"]})
     sender_meta: dict[str, dict[str, Any]] = {}
     if from_ids:
@@ -1012,8 +1028,8 @@ async def read_inbox(
          **({"grade": r["grade"]} if r["grade"] else {}),
          **({"reply_to": r["reply_to"]} if r["reply_to"] is not None else {}),
          **({"redelivered": True} if r["deliveries"] > 0 else {}),
-         # THE READ-SIDE PRIOR-ART HOP (obligation a6198075): computed ONCE at send()
-         # time (see mcp_server.py's send()), never re-run here — a reader sees the same
+         # THE READ-SIDE PRIOR-ART HOP: computed ONCE at send()
+         # time (see mcp_server.py's send()), never re-run here: a reader sees the same
          # hits the sender already saw, no second search on the read path.
          **({"prior_art": r["prior_art"]} if r["prior_art"] else {}),
          **({"from_sidechain": True,
@@ -1027,22 +1043,22 @@ async def read_inbox(
 async def read_seat_mail(
     pool: asyncpg.Pool, *, target_agent: str, include_settled: bool = True, limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """MAIL IS UNSURFACEABLE, read-only half (9dc3ce8b/c56f3d94): every DM addressed to
-    `target_agent` — its exact id, its whole lineage, or any seat it currently holds —
+    """MAIL IS UNSURFACEABLE, read-only half: every DM addressed to
+    `target_agent` (its exact id, its whole lineage, or any seat it currently holds)
     for a CHARTER-GATED coordinator to read. NEVER a broadcast: a project's shared mail
     is already visible to anyone reading that project's own inbox, so the genuinely
     unsurfaceable half is DMs, the only thing this widens. NEVER writes message_
-    recipients — no lease, no settlement, purely observational, unlike `read_inbox`
+    recipients: no lease, no settlement, purely observational, unlike `read_inbox`
     above (which this deliberately does not share a query with, despite the
     overlapping deliverability shape, precisely BECAUSE that shape always leases).
 
     `include_settled=True` (the default) also surfaces mail the target has ALREADY
-    dealt with, marked `settled` per row — the whole reason a coordinator reads
+    dealt with, marked `settled` per row: the whole reason a coordinator reads
     another seat's mail is auditing what happened, not queuing new work for
     themselves; `settled=False` narrows to only what the target has never marked read.
 
     Authorization (does the caller govern this seat's project) is the MCP tool's own
-    job, not this function's — a pure read, trusting the caller already checked."""
+    job, not this function's: a pure read, trusting the caller already checked."""
     from src.orchestrator.agents import _generation
 
     base = _generation(target_agent)[0]
@@ -1080,7 +1096,7 @@ async def in_flight(
 ) -> list[dict[str, Any]]:
     """The group's in-flight view: shared BROADCAST mail to this reader's project that ANOTHER
     agent currently holds under a live lease (unsettled). 'mail 0' must never silently mean 'a
-    sibling is answering the group thread right now' (msg-78 lesson)."""
+    sibling is answering the group thread right now'."""
     rows = await pool.fetch(
         "SELECT m.id, m.from_project, r.agent_id AS leased_by, m.thread_id, "
         " extract(epoch FROM (now() - r.delivered_at)) AS held_secs "
@@ -1099,15 +1115,15 @@ async def in_flight(
 async def ack_messages(
     pool: asyncpg.Pool, reader_project: str, ids: list[int], *, reader_agent: str
 ) -> dict[str, Any]:
-    """Settle messages FOR THIS READER — a DM to it OR TO ANY GENERATION OF ITS LINEAGE
-    (the rollup: what a reader may READ it may SETTLE — Alfred's fixture, msg 666: four
-    DMs addressed to his -iii were readable by -iv but the ack's exact-id match no-oped
-    silently, so twice-acked mail redelivered forever), a seat it actively holds, or a
-    broadcast to its project. Returns {settled: [ids], skipped: {id: why}} — an ack that
-    did nothing must SAY SO AND SAY WHY; an empty response indistinguishable from success
-    is how the same mail gets acked three times. Idempotent: re-acking the settled lands
-    in skipped as 'already settled by you'. Another reader acking the same broadcast
-    settles only ITS own copy."""
+    """Settle messages FOR THIS READER: a DM to it OR TO ANY GENERATION OF ITS LINEAGE
+    (the rollup: what a reader may READ it may SETTLE; a past regression found that four
+    DMs addressed to an earlier lineage generation were readable by a later one, but the
+    ack's exact-id match no-oped silently, so twice-acked mail redelivered forever), a seat
+    it actively holds, or a broadcast to its project. Returns {settled: [ids], skipped: {id:
+    why}}: an ack that did nothing must SAY SO AND SAY WHY; an empty response
+    indistinguishable from success is how the same mail gets acked three times. Idempotent:
+    re-acking the settled lands in skipped as 'already settled by you'. Another reader
+    acking the same broadcast settles only ITS own copy."""
     from src.orchestrator.agents import _generation
 
     base = _generation(reader_agent)[0]
@@ -1116,10 +1132,10 @@ async def ack_messages(
         "SELECT m.id, $3, now() FROM fleet_messages m "
         "WHERE m.id = ANY($1::bigint[]) "
         "  AND ((m.to_agent = $3) "
-        # THE ROLLUP (kept in step with _DELIVERABLE_TO_READER and _addressed_to_me — the
+        # THE ROLLUP (kept in step with _DELIVERABLE_TO_READER and _addressed_to_me: the
         # read and reply-settle sides learned it long before this ack side did)
         "   OR (m.to_agent = $4 OR m.to_agent LIKE $4 || '-%') "
-        # ...or a SEAT the acking mind actively holds (Phase B2): settling seat mail is the
+        # ...or a SEAT the acking agent actively holds (Phase B2): settling seat mail is the
         # holder's right exactly as reading it is
         "   OR (m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
         "     JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
@@ -1157,7 +1173,7 @@ async def project_deliverable_count(
 ) -> int:
     """For the wake dispatch: messages to this project (broadcasts + DMs to its agents) that NO
     intended recipient has settled yet. Once anyone reads a broadcast the wake stops, but the
-    other agents still see it in their own inboxes — the wake ensures SOMEONE looks, without
+    other agents still see it in their own inboxes, the wake ensures SOMEONE looks, without
     re-firing per sibling. (Agent-precise waking is a later phase; this is the safe project
     signal.)"""
     return await pool.fetchval(  # type: ignore[no-any-return]
@@ -1167,8 +1183,8 @@ async def project_deliverable_count(
         "  AND r.read_at IS NOT NULL) "
         "AND (NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.delivered_at >= now() - make_interval(secs => $2))) "
-        # the live-holder extension: never WAKE a sibling for a message a live mind is
-        # already holding (grievance msg 244: duplicate reads while the grid computed)
+        # the live-holder extension: never WAKE a sibling for a message a live agent is
+        # already holding (this once caused duplicate reads while the grid computed)
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r "
         "  JOIN agent_mounts lm ON lm.agent_id = r.agent_id "
         "  WHERE r.message_id = m.id "
@@ -1177,26 +1193,27 @@ async def project_deliverable_count(
         _norm(project), lease_secs, _HOLD_GRACE_SECS)
 
 
-# ── THE DESK (operator direction, 2026-07-11: "my desk is full — fix it") ────────────────
+# ── THE DESK ──────────────────────────────────────────────────────────────────────────
 # The desk drowned in SHAPE, not volume: one fleet-wide condition reported five times, moot
 # alarms lingering because only the human may dismiss, CRITICAL interleaved with FYI, and
 # blockers re-stated in prose that the thread wall already carries. Four organs answer it:
-# BANDS (sender-declared desk_kind, heuristic fallback) · THREAD+SAME-STORY FOLDS (newest
-# per thread; pg_trgm clusters near-duplicates within a band) · DIM (an agent may annotate
-# a brief moot with a reason — never settle; the membrane holds) · YOUR-QUEUE (derived live
-# from owner='operator' threads — the graph is the record, the desk stops double-billing).
+# BANDS (sender-declared desk_kind, heuristic fallback); THREAD+SAME-STORY FOLDS (newest
+# per thread; pg_trgm clusters near-duplicates within a band); DIM (an agent may annotate
+# a brief moot with a reason, never settle; the separation between annotation and dismissal
+# holds); YOUR-QUEUE (derived live from owner='operator' threads: the graph is the record,
+# the desk stops double-billing).
 
 DESK_KINDS = ("decision", "hands", "fyi")
 
-# The PROJECT-mail analogue of the desk bands (thread f9449d8d): the sender's own triage of
+# The PROJECT-mail analogue of the desk bands: the sender's own triage of
 # what the message wants from its reader. 'ask' needs a reply or an act; 'fyi' is a notice an
-# ack settles. NULL stays honest ignorance — never heuristically guessed, unlike desk briefs,
+# ack settles. NULL stays honest ignorance, never heuristically guessed, unlike desk briefs,
 # because a wrong "needs nothing" on a duty-bearing letter silences it.
 MAIL_GRADES = ("ask", "fyi")
 
-# same-story threshold: pg_trgm similarity MEASURED on the live desk (2026-07-11): the
-# model-divergence five pair at 0.32–0.44; the worst FALSE pair (two long technical briefs
-# sharing engine vocabulary, 300 vs 237) at 0.294. 0.30 splits them — thin, so the sender
+# same-story threshold: pg_trgm similarity measured on the live desk: the
+# model-divergence five pair at 0.32 to 0.44; the worst FALSE pair (two long technical briefs
+# sharing engine vocabulary, 300 vs 237) at 0.294. 0.30 splits them, thin, so the sender
 # guard below carries half the load: same-story means one condition SEVERAL witnesses
 # reported, so two briefs from ONE sender never same-story fold (their lane is the
 # thread-fold via reply_to, which the wake prompt teaches).
@@ -1205,7 +1222,7 @@ _SAME_STORY_SIM = 0.30
 
 def classify_brief(body: str, desk_kind: str | None) -> str:
     """The band a brief belongs to. The SENDER's declaration wins; unclassified (legacy)
-    briefs are banded by heuristic — biased UPWARD (a CRITICAL misfiled under fyi costs
+    briefs are banded by heuristic, biased UPWARD (a CRITICAL misfiled under fyi costs
     more than an FYI misfiled under decision)."""
     if desk_kind in DESK_KINDS:
         return desk_kind
@@ -1223,10 +1240,11 @@ async def dim_brief(
     pool: asyncpg.Pool, message_id: int, *, because: str, by: str,
 ) -> dict[str, Any]:
     """DIM an operator-desk brief: annotate it moot-with-a-reason so the desk renders it
-    collapsed under the note. NEVER a settle — dismissing stays exclusively the human's
-    (the membrane); a dim is an agent saving the human the archaeology ("true when sent,
-    moot now: root cause fixed in <commit>"). Stamped who + when — an annotation is
-    testimony. Re-dimming overwrites (last honest word wins; the row keeps one note)."""
+    collapsed under the note. NEVER a settle: dismissing stays exclusively the human's
+    (the boundary between annotation and dismissal is enforced); a dim is an agent saving
+    the human the archaeology ("true when sent, moot now: root cause fixed in <commit>").
+    Stamped who and when: an annotation is testimony. Re-dimming overwrites (last honest
+    word wins; the row keeps one note)."""
     row = await pool.fetchrow(
         "UPDATE fleet_messages SET moot_note=$2, moot_by=$3, moot_at=now() "
         "WHERE id=$1 AND to_project=$4 RETURNING id", message_id, because, by, OPERATOR_ADDR)
@@ -1286,27 +1304,28 @@ async def _same_story_clusters(
 
 
 async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str, Any]]:
-    """The standing YOUR-QUEUE: open threads whose owner is the human (owner='operator' —
-    the tags shipped 90b2832). Derived LIVE from the graph, so briefs can point at a thread
-    instead of re-stating the blocker in prose that instantly goes stale.
+    """The standing YOUR-QUEUE: open threads whose owner is the human (owner='operator',
+    the tags shipped in commit 90b2832). Derived LIVE from the graph, so briefs can point
+    at a thread instead of re-stating the blocker in prose that instantly goes stale.
 
-    Carries the PROJECT (the in_repo edge) so the desk can group by it — the operator works
-    his debts a project at a time, not a band at a time ("no good way to resolve these debts
-    per thread or per project, so it snowballs into infinity", 2026-07-11).
+    Carries the PROJECT (the in_repo edge) so the desk can group by it: the operator works
+    his debts a project at a time, not a band at a time, since resolving them per thread or
+    per project without this grouping made the debt count snowball.
 
     DEFERRED debts are hidden until their date (capture.defer_thread). Fix at the lens: the
     thread stays open and owned in the record; only its visibility moves.
 
-    ASKED vs GUESSED — each row carries the GRADE of the mind that placed it (2026-07-12, the
-    operator: "according to the desk, this session owes 6, accurate or bug?" — bug, all six).
-    FIVE of those six were DERIVED: the miner read a conversation, inferred "the human must do
-    X", and minted a duty nobody ever asked him for — "check the mid-flight 121G rsync" (none
-    had run in a day), "process 17 non-auto-mergeable decisions" (the queue held one, already
-    resolved). Evidence-graded ingest puts DERIVED at the BOTTOM, and yet a DERIVED guess was
+    ASKED vs GUESSED: each row carries the GRADE of the agent that placed it. A past review
+    found that a reported debt count was wrong across the board. FIVE of six were DERIVED:
+    the miner read a conversation, inferred that the human must do something, and minted a
+    duty nobody ever asked for, such as checking an rsync that had not run in a day, or
+    processing seventeen non-auto-mergeable decisions when the queue held one, already
+    resolved. Evidence-graded ingest puts DERIVED at the BOTTOM, and yet a DERIVED guess was
     landing on the human's queue with the same weight, the same red number and the same
     permanence as a deliberate ask. LEXICAL SIMILARITY MAY ASK BUT NEVER ASSERT, one level up:
     THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. So the grade rides along and the lens splits
-    on it — the record keeps every guess, the RED NUMBER counts only what a mind actually asked.
+    on it: the record keeps every guess, the RED NUMBER counts only what an agent actually
+    asked.
     """
     rows = await pool.fetch(
         "SELECT o.id, o.created_at, "
@@ -1343,11 +1362,11 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
 
 
 async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
-    """The ORGANIZED desk — always a peek (reading the human's desk never leases; settling
+    """The ORGANIZED desk: always a peek (reading the human's desk never leases; settling
     is only ever the human's explicit word via ack). Bands ordered by what the human must
-    see first; within a band: thread-folded (newest per thread — the supersession lane the
+    see first; within a band: thread-folded (newest per thread, the supersession lane the
     wake prompt teaches), then same-story clustered. Dimmed briefs collapse to one line
-    each at the bottom — annotated moot by an agent, still the human's to dismiss."""
+    each at the bottom, annotated moot by an agent, still the human's to dismiss."""
     rows = await pool.fetch(
         "SELECT m.id, m.from_agent, m.from_project, m.body, m.created_at, m.thread_id, "
         " m.desk_kind, m.moot_note, m.moot_by "
@@ -1355,8 +1374,8 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         "AND NOT EXISTS (SELECT 1 FROM message_recipients r WHERE r.message_id=m.id "
         "  AND r.agent_id=$1 AND r.read_at IS NOT NULL) "
         "ORDER BY m.created_at DESC LIMIT $2", OPERATOR_ADDR, limit)
-    # THE SENDER'S OWN is_sidechain/patronym (obligation 706c27dc, msg 6029): same
-    # disclosure as read_inbox's fix — a fork briefing the operator's desk in its parent's
+    # THE SENDER'S OWN is_sidechain/patronym: same
+    # disclosure as read_inbox's fix. A fork briefing the operator's desk in its parent's
     # voice must be legible as such, not a bare unfamiliar id. Batched once for the page.
     from_ids = list({r["from_agent"] for r in rows if r["from_agent"]})
     sender_meta: dict[str, dict[str, Any]] = {}
@@ -1405,19 +1424,19 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
     for k in DESK_KINDS:  # same-story folding never crosses a band
         bands[k] = await _same_story_clusters(pool, bands[k])
     everything = await _operator_queue(pool)
-    # THE RED NUMBER IS A PROMISE. A debt is a duty a MIND deliberately placed on him; a
+    # THE RED NUMBER IS A PROMISE. A debt is a duty an AGENT deliberately placed on him; a
     # miner's inference is a SUGGESTION and must never wear the same colour. A count he cannot
-    # trust is a count he learns to ignore — which is how the desk reached a scary red 11.
+    # trust is a count he learns to ignore, which is how the desk once reached a scary red 11.
     queue = [t for t in everything if not t["guessed"]]
     guessed = [t for t in everything if t["guessed"]]
-    # the COUNT comes from the authority, never from len(a-capped-display-fetch) — the
-    # chrome and the statusline must show the same red number (vitals, 2026-07-19)
+    # the COUNT comes from the authority, never from len(a-capped-display-fetch): the
+    # UI and the statusline must show the same red number
     from src.orchestrator.vitals import operator_debts
     owed = (await operator_debts(pool))["owed"]
-    # PROPOSALS — READ-ONLY (Thoth mail 8920/8945, decision ac892cd9's item 2): a miner's
+    # PROPOSALS, READ-ONLY: a miner's
     # guess awaiting judgment is not a duty either, same discipline as `miner_guesses`
-    # above — count and up to three per owner, never counted in `owed`, accept/reject
-    # happen through the `proposal` verb from the owning seat's own tab, never here.
+    # above. Count and up to three per owner, never counted in `owed`; accept/reject
+    # happen through the `proposal` action from the owning seat's own tab, never here.
     from src.orchestrator.proposals import proposals_band
     proposals = await proposals_band(pool)
     return {
@@ -1449,13 +1468,12 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
 def _group_by_project(
     debts: list[dict[str, Any]], asks: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """THE DESK AS A WORKSPACE, not a notification list (operator, 2026-07-11: "no good way to
-    resolve these debts per thread or per project, so it snowballs into infinity"). One card
+    """THE DESK AS A WORKSPACE, not a notification list. One card
     per project carrying BOTH what he owes it (threads) and who asked (the decision/hands
-    briefs) — because he clears a project at a sitting, not a band. Letters (fyi) are excluded
+    briefs), because he clears a project at a sitting, not a band. Letters (fyi) are excluded
     on purpose: they carry no debt and must never crowd the ledger.
 
-    Ordered by weight: most debts first, then most asks — the project that needs him loudest
+    Ordered by weight: most debts first, then most asks. The project that needs him loudest
     is the one he opens."""
     projects: dict[str, dict[str, Any]] = {}
 
@@ -1471,9 +1489,9 @@ def _group_by_project(
         p["owed"] = len(p["debts"])
         p["critical"] = any("🚨" in (a.get("body") or "") or "CRITICAL" in (a.get("body") or "")
                             for a in p["asks"])
-        # the oldest thing this project is waiting on — the roster's rot signal. Both forms:
-        # the stamp (for a mind reading via inbox) and the age in seconds (for the lens, which
-        # is pure and must not know what `now` is).
+        # the oldest thing this project is waiting on: the roster's rot signal. Both forms:
+        # the stamp (for an agent reading via inbox) and the age in seconds (for the lens,
+        # which is pure and must not know what `now` is).
         stamps = ([d["born"] for d in p["debts"] if d.get("born")]
                   + [a["when"] for a in p["asks"] if a.get("when")])
         p["oldest"] = min(stamps) if stamps else None
@@ -1484,11 +1502,11 @@ def _group_by_project(
 
 
 async def zero_recipient_dm_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
-    """The exact population `graph_lint`'s own zero-recipient-dm check reports (thread
-    9d1d41c8): a DM (`fleet_messages.to_agent` IS NOT NULL) with no `message_recipients`
+    """The exact population `graph_lint`'s own zero-recipient-dm check reports: a DM
+    (`fleet_messages.to_agent` IS NOT NULL) with no `message_recipients`
     row at all. Extracted here, the ONE place this query lives, so the audit
     (compositions._fn_lint) and the mechanical backlog closer
-    (scripts/close_zero_recipient_dm_backlog.py) always act on the identical rows — never
+    (scripts/close_zero_recipient_dm_backlog.py) always act on the identical rows, never
     two queries that could quietly drift apart."""
     rows = await pool.fetch(
         "SELECT fm.id, fm.from_agent, fm.to_agent, fm.created_at FROM fleet_messages fm "
@@ -1501,22 +1519,21 @@ async def zero_recipient_dm_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 async def close_zero_recipient_dm_backlog(
     pool: asyncpg.Pool, *, thread_ref: str,
 ) -> dict[str, Any]:
-    """THE MECHANICAL CLOSER (thread 9d1d41c8's own audit, wave 13 item 1, operator's
-    word 2026-09-09): a compensating `message_recipients` row per row `zero_recipient_dm_
-    rows` reports — NEVER a delete (`fleet_messages` stays the full historical record,
-    constitution #3) — so the check goes to zero live and stays a live-only FORWARD
-    signal instead of re-reporting the same dead rows forever.
+    """THE MECHANICAL CLOSER: a compensating `message_recipients` row per row
+    `zero_recipient_dm_rows` reports. NEVER a delete (`fleet_messages` stays the full
+    historical record by design), so the check goes to zero live and stays a live-only
+    FORWARD signal instead of re-reporting the same dead rows forever.
 
     THE MARKER: `message_recipients` has no free-text column, so the compensating row's
-    own `agent_id` carries the closure's own testimony —
-    'system:undeliverable-superseded-by-<thread_ref>' — naming the Thread that tracks
+    own `agent_id` carries the closure's own testimony,
+    'system:undeliverable-superseded-by-<thread_ref>', naming the Thread that tracks
     this closure, rather than impersonating a real reader. A row this shape settles the
     check's own NOT EXISTS population without ever claiming the original addressee
     actually read it.
 
     Idempotent: `ON CONFLICT (message_id, agent_id) DO NOTHING` means a re-run with the
     SAME `thread_ref` finds nothing left to close (every row it already closed now has a
-    row, out of the NOT EXISTS population by construction) — safe to call more than
+    row, out of the NOT EXISTS population by construction), safe to call more than
     once."""
     rows = await zero_recipient_dm_rows(pool)
     before = len(rows)
