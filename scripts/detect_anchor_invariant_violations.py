@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""THE ANCHOR INVARIANT (Thoth msg 6546, operator's words: "the anchor should always end up
-under ~/.osiris/seats hence the call of migration"). Read-only detector — piece 1 of 4.
+"""THE ANCHOR INVARIANT: the anchor should always end up under ~/.osiris/seats, hence the
+call of migration. Read-only detector: piece 1 of 4.
 
 Thin wrapper over identity_heal.detect_anchor_invariant_violations (the same function now
-also ARMED at deploy time, informationally, in cli.cmd_deploy — this script exists for an
+also ARMED at deploy time, informationally, in cli.cmd_deploy; this script exists for an
 ad-hoc terminal run, never a second copy of the query).
 
 Usage: uv run python scripts/detect_anchor_invariant_violations.py

@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Backfill task #101's named gap (thread 32e2d5cb): a decision citing a commit sha
+"""Backfill a known gap: a decision citing a commit sha
 BEFORE gitlog reaches it mints no `decided_in` edge at write time, and nothing ever
 retries it. This is the batch cure, a thin CLI over
 src.orchestrator.capture.backfill_decided_in: a backward pass over every active,
 unmerged Decision, re-running the exact same citation-scan/prefix-match logic the live
-path (record_decision) already trusts — mechanical and safe because the failure mode
-(ruling c5ab0dcb's Mode B, omission) is a race, not an ambiguity: the same matcher run
-later succeeds because the commit has since been ingested, not because it got smarter.
+path (record_decision) already trusts. This is mechanical and safe because the failure
+mode (an omission case) is a race, not an ambiguity: the same matcher run later
+succeeds because the commit has since been ingested, not because it got smarter.
 
 Dry-run by default, writes nothing. Idempotent: a second run finds nothing new to mint.
-Every citation that could NOT be resolved is named on its own line — a skip is a finding
+Every citation that could NOT be resolved is named on its own line. A skip is a finding
 (the commit was never ingested at all), never silence.
 
 Usage: uv run python scripts/backfill_decided_in.py [--apply]
@@ -30,8 +30,8 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 
 
 async def run(apply: bool) -> None:
-    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
-    # instance exists on this box — refuse a silent one-off run against it.
+    # This DSN's own fallback IS the live fleet graph; no isolated dev instance exists
+    # on this box, so refuse a silent one-off run against it.
     refusal = refuse_silent_live_db("backfill_decided_in")
     if refusal is not None:
         print(refusal, file=sys.stderr)

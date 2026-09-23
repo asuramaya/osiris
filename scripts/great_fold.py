@@ -1,15 +1,15 @@
-"""THE GREAT FOLD's driver — the campaign runs THROUGH the machine (greatfold.py), never
+"""THE GREAT FOLD's driver. The campaign runs THROUGH the machine (greatfold.py), never
 around it. Dry-run is the default everywhere; --execute is the deliberate act.
 
     .venv/bin/python scripts/great_fold.py survey            # roster + evidence + conflicts
     .venv/bin/python scripts/great_fold.py census            # the honest numbers
-    .venv/bin/python scripts/great_fold.py seat thoth        # one seat, dry-run
-    .venv/bin/python scripts/great_fold.py seat thoth --execute
+    .venv/bin/python scripts/great_fold.py seat <handle>      # one seat, dry-run
+    .venv/bin/python scripts/great_fold.py seat <handle> --execute
     .venv/bin/python scripts/great_fold.py visits            # doorbell sweep, dry-run
     .venv/bin/python scripts/great_fold.py visits --execute
 
 Every executed seat run files its after-review brief on the operator's desk by itself
-(fold_seat does it — the machine briefs, not the driver)."""
+(fold_seat does it: the machine briefs, not the driver)."""
 from __future__ import annotations
 
 import argparse
@@ -44,7 +44,7 @@ async def _main() -> None:
     p_seat.add_argument("handle")
     p_seat.add_argument("--execute", action="store_true")
     p_seat.add_argument("--actor", default=ACTOR)
-    p_camp = sub.add_parser("campaign")  # every seat, ONE survey — dry unless --execute
+    p_camp = sub.add_parser("campaign")  # every seat, ONE survey, dry unless --execute
     p_camp.add_argument("--execute", action="store_true")
     p_camp.add_argument("--actor", default=ACTOR)
     p_vis = sub.add_parser("visits")
@@ -53,15 +53,15 @@ async def _main() -> None:
     p_vis.add_argument("--actor", default=ACTOR)
     args = ap.parse_args()
 
-    # thread 86d562e0: get_settings().database_url's class default silently targets
-    # 127.0.0.1:5432 — inert only by accident today, no real guard. Refuse a silent
-    # one-off run rather than trust that accident.
+    # get_settings().database_url's class default silently targets 127.0.0.1:5432,
+    # inert only by accident today, no real guard. Refuse a silent one-off run rather
+    # than trust that accident.
     refusal = refuse_silent_live_db("great_fold")
     if refusal is not None:
         print(refusal, file=sys.stderr)
         raise SystemExit(1)
     # the HOUSE pool, never bare asyncpg: its jsonb codecs are what Actions' event
-    # writes encode through — the bare pool refuses the first kernel write
+    # writes encode through. The bare pool refuses the first kernel write
     pool = await create_pool(
         get_settings().database_url, min_size=1, max_size=4,
         application_name="osiris-script:great-fold")

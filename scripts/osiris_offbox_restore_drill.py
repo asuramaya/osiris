@@ -1,19 +1,19 @@
-"""THE OFF-BOX RESTORE DRILL (thread cf134938's own shape, item 3 — design pending the
-operator's backend ruling on that thread; ships now, parameterized by the repository
-URL alone, so the eventual ruling is a one-line config change). "A backup that's never
-been restored is a hope, not a backup" — the SAME law osiris_pitr_drill.py already
-holds for the local vault, applied here to the OFF-BOX copy specifically: proving the
-SECOND copy survives in isolation is the whole point of having one, so this restores
-FROM the remote repository into its own scratch directory — never the live vault — and
-checks the result actually contains real content, not just that restic exited 0.
+"""THE OFF-BOX RESTORE DRILL: ships now, parameterized by the repository URL alone, so a
+future decision about the backend can be a one-line config change. A backup that has
+never been restored is a hope, not a backup, the same principle osiris_pitr_drill.py
+already holds for the local vault, applied here to the OFF-BOX copy specifically:
+proving the SECOND copy survives in isolation is the whole point of having one, so
+this restores FROM the remote repository into its own scratch directory, never the
+live vault, and checks the result actually contains real content, not just that
+restic exited 0.
 
 `restic check` alone is not enough: a repository can pass integrity checking while
 holding zero snapshots (nothing ever backed up, or every snapshot pruned), and empty
-is not restorable — this drill fails that case explicitly rather than reporting a
+is not restorable. This drill fails that case explicitly rather than reporting a
 `check`-clean repo as proof of anything.
 
 CREDENTIALS: RESTIC_PASSWORD or RESTIC_PASSWORD_FILE (restic's own env contract) must
-already be set in the calling environment, same as osiris_offbox_backup.sh — this
+already be set in the calling environment, same as osiris_offbox_backup.sh. This
 script never touches it.
 """
 from __future__ import annotations
@@ -30,7 +30,7 @@ from pathlib import Path
 def run_drill(repo_url: str, *, scratch: Path | None = None) -> str | None:
     """Returns a failure string, or None on success. Cleans up the scratch directory
     in every case (`finally`), same discipline as osiris_pitr_drill.py's own
-    run_drill. `scratch` defaults to a fresh tempdir — never a caller-reused
+    run_drill. `scratch` defaults to a fresh tempdir, never a caller-reused
     directory, so a prior drill's leftovers can never be mistaken for this run's own
     restored content."""
     scratch = scratch or Path(tempfile.mkdtemp(prefix="osiris-offbox-drill-"))

@@ -1,47 +1,47 @@
-"""Task #160 (Thoth, 2026-08-09): mechanical AST + call-graph sweep for src/ functions that
-are correct, tested, and never reached from a LIVE surface (MCP tool, HTTP route, CLI
-command, or daemon/cron entry point). Read-only — no repairs, this only reports.
+"""Mechanical AST + call-graph sweep for src/ functions that are correct, tested, and
+never reached from a LIVE surface (MCP tool, HTTP route, CLI command, or daemon/cron entry
+point). Read-only, no repairs; this only reports.
 
-METHOD (named so the ruling in the report can be checked against it; this is the FINAL
-design after five blind-spot fixes made against live false positives — see the report for
-what each one caught):
+METHOD (named so the result can be checked against it; this is the FINAL design after
+five blind-spot fixes made against live false positives; see the report for what each one
+caught):
   1. Parse every .py file under src/ and scripts/ with `ast`. Collect every FunctionDef/
-     AsyncFunctionDef (module-level, class methods, and nested closures — e.g. FastAPI
+     AsyncFunctionDef (module-level, class methods, and nested closures, e.g. FastAPI
      route handlers defined inside create_app()) as a DEF, keyed by its bare (unqualified)
      name, alongside its file, lineno, decorator names, docstring, and LOC.
   2. For every DEF's body, collect every Name/Attribute node in Load context (not just
-     Call — a registry dict value like `_FUNCTIONS = {"triage": _fn_triage}` is a Name
+     Call: a registry dict value like `_FUNCTIONS = {"triage": _fn_triage}` is a Name
      load, not a Call, and must count as a reference or every Function-op handler would
      wrongly read as dead). NAME-MATCH, not scope/type resolved: a call to `foo()` reaches
      EVERY def named `foo` anywhere in the tree. Named blind spot, traded for tractability.
   3. PASS-THROUGH NODES (module_level_assignments): any module- or class-body-level
      assignment (`_FUNCTIONS = {...}`, `class WorkerSettings: functions = [...]`) is a
-     relay, not a dead end — reaching the assigned NAME must reach everything its RHS
+     relay, not a dead end: reaching the assigned NAME must reach everything its RHS
      references. Closed transitively (assign_closure) so multi-hop registries resolve in
      one lookup.
   4. IMPORT-ALIAS EDGES (import_alias_edges): `from X import foo as _foo` (walked at any
-     depth, not just module top level — most of these are function-local, deliberately
+     depth, not just module top level, since most of these are function-local, deliberately
      avoiding self-shadowing an MCP tool wrapper of the same name) makes a call to `_foo()`
      invisible to bare-name matching unless the alias is folded back to `foo`. Modeled as
      another pass-through edge, same machinery as #3.
   5. ROOTS, level 0: any def decorated with @mcp.tool, @mcp.custom_route, @mcp.resource,
      @mcp.prompt, @app.<verb>, or @router.<verb> (APIRouter-based sub-apps). PLUS: every
      module-level (non-nested-in-a-def) statement in ROOT_FILES (the deploy/*.service
-     ExecStart targets + cli.py, hand-listed — see the constant) is directly root-reachable,
+     ExecStart targets + cli.py, hand-listed; see the constant) is directly root-reachable,
      folded through #3/#4 too. PLUS: every scripts/*.py file is its OWN root file
-     automatically (confirmed live: 23/23 carry their own `if __name__ == "__main__":`) —
-     an operator running one by hand is exactly as live as a systemd unit.
-  6. BFS from roots across the reference graph (+ pass-through relays), SRC-ONLY — tests/
+     automatically (confirmed live: 23/23 carry their own `if __name__ == "__main__":`);
+     running one by hand is exactly as live as a systemd unit.
+  6. BFS from roots across the reference graph (+ pass-through relays), SRC-ONLY: tests/
      never contributes an edge, so a function reached only from tests/ does not read as
-     reached, per Thoth's ruling.
+     reached, by design.
   7. Any def NOT reached, excluding dunders (called implicitly by the runtime, never as a
-     literal Name), is a candidate — labeled with whether it's referenced anywhere in
+     literal Name), is a candidate, labeled with whether it's referenced anywhere in
      tests/ (test_only_reference) and whether something in src/ OUTSIDE its own file names
      it despite that referrer itself never making it into `reached`
-     (referenced_cross_file_in_src — dead code calling dead code, surfaced not filtered).
-  8. Dynamic-dispatch sites this instrument CANNOT resolve — getattr() with a non-literal
+     (referenced_cross_file_in_src: dead code calling dead code, surfaced not filtered).
+  8. Dynamic-dispatch sites this instrument CANNOT resolve, getattr() with a non-literal
      attribute, or `.get()`/subscript on a short list of known registry-shaped dicts with a
-     non-literal key — are grepped separately and listed as NAMED BLIND SPOTS rather than
+     non-literal key, are grepped separately and listed as NAMED BLIND SPOTS rather than
      silently trusted to already be covered by #3.
 """
 from __future__ import annotations
@@ -59,7 +59,7 @@ SCRIPTS = ROOT / "scripts"
 TESTS = ROOT / "tests"
 
 # files whose MODULE-LEVEL statements are themselves root-reachable (systemd ExecStart /
-# python -m targets / the CLI entry point) — see deploy/*.service, cli.py's __main__ block
+# python -m targets / the CLI entry point); see deploy/*.service, cli.py's __main__ block
 ROOT_FILES = {
     "src/mcp_server.py", "src/api/app.py", "src/manager/daemon.py",
     "src/orchestrator/pulse.py", "src/workers/arq_worker.py", "src/cli.py",
@@ -69,7 +69,7 @@ ROOT_DECORATOR_MARKERS = (
     "mcp.tool", "mcp.custom_route", "mcp.resource", "mcp.prompt",
     "app.get", "app.post", "app.put", "app.patch", "app.delete",
     # APIRouter()-based sub-apps (src/api/inbox/app.py: `router = APIRouter()`, mounted
-    # into create_app() via include_router() — a second, smaller live surface at :8011,
+    # into create_app() via include_router() (a second, smaller live surface at :8011),
     # decorated @router.<verb>(...) rather than @app.<verb>(...))
     "router.get", "router.post", "router.put", "router.patch", "router.delete",
 )
@@ -134,7 +134,7 @@ def collect_defs(tree: ast.AST, file: str) -> list[DefInfo]:
 
 
 def collect_name_refs(node: ast.AST) -> set[str]:
-    """Every Name/Attribute in Load context anywhere under `node` — deliberately broader
+    """Every Name/Attribute in Load context anywhere under `node`, deliberately broader
     than Call nodes so a registry dict VALUE (not just a call) counts as a reference."""
     refs: set[str] = set()
     for n in ast.walk(node):
@@ -146,7 +146,7 @@ def collect_name_refs(node: ast.AST) -> set[str]:
 
 
 def module_level_refs(tree: ast.Module) -> set[str]:
-    """Refs appearing in statements that are NOT inside any def — module top-level code
+    """Refs appearing in statements that are NOT inside any def: module top-level code
     (the `if __name__ == '__main__':` block, WorkerSettings' functions=[...]/cron_jobs=[...]
     list literals, mcp.run() at the bottom of mcp_server.py, etc.)."""
     refs: set[str] = set()
@@ -189,9 +189,9 @@ def _direct_assignments(body: list[ast.stmt]) -> dict[str, set[str]]:
 def import_alias_edges(tree: ast.AST) -> dict[str, set[str]]:
     """THE ALIASED-IMPORT BLIND SPOT (the actual live specimen: mcp_server.py:3148,
     `from src.orchestrator.agents import claim_name as _claim`, precisely so the MCP tool
-    wrapper — itself named `claim_name` — doesn't shadow the import). A deferred, aliased
+    wrapper, itself named `claim_name`, doesn't shadow the import). A deferred, aliased
     import is common throughout this codebase (avoids exactly that self-shadowing for
-    every MCP tool wrapper that delegates to a same-named orchestrator function) — walked
+    every MCP tool wrapper that delegates to a same-named orchestrator function), walked
     at ANY depth, not just module top level, since most of these imports are function-local.
     Without this, EVERY orchestrator function whose MCP wrapper aliases it this way would
     misreport as unreached: the wrapper's call site never spells the def's own bare name."""
@@ -211,12 +211,12 @@ def import_alias_edges(tree: ast.AST) -> dict[str, set[str]]:
 def module_level_assignments(tree: ast.Module) -> dict[str, set[str]]:
     """PASS-THROUGH NODES (all files, not just ROOT_FILES): a module-level assignment like
     `_FUNCTIONS = {"triage": _fn_triage, ...}` is not a def, so a plain def-only graph drops
-    it — every _fn_* handler would misreport as unreached the moment ITS caller (run_spec)
+    it: every _fn_* handler would misreport as unreached the moment ITS caller (run_spec)
     only ever names the DICT, never the handler directly. Maps assigned top-level name ->
     every Name/Attribute Load reference inside its RHS, so the BFS can relay THROUGH the
     registry: reaching `_FUNCTIONS` (the name) must reach everything IN it.
 
-    ALSO scans direct CLASS-BODY assignments (not nested inside methods) the same way —
+    ALSO scans direct CLASS-BODY assignments (not nested inside methods) the same way:
     arq_worker.py's `class WorkerSettings: functions = [expand_case_job, ...]` / `cron_jobs
     = [cron(watched(drain_cascade, ...)), ...]` is the live specimen: a class attribute list
     is arq's own registry, structurally identical to a module dict, just one indent deeper."""
@@ -280,8 +280,8 @@ def main() -> None:
             defs_by_name[d.name].append(d)
             src_edges[d.qual] = collect_name_refs(d.node)
         local_assigns = module_level_assignments(tree)
-        # EVERY scripts/*.py is its own live surface (task #103/#119-style: 23 of 23 carry
-        # their own `if __name__ == "__main__":`, confirmed by grep) — an operator running
+        # EVERY scripts/*.py is its own live surface (23 of 23 carry their own
+        # `if __name__ == "__main__":`, confirmed by grep): running
         # `python scripts/foo.py` by hand is exactly as live as a systemd ExecStart, so
         # scripts/ is root-reachable file-by-file rather than needing each named in
         # ROOT_FILES individually (that set stays for the src/ daemon/CLI entry points).
@@ -289,7 +289,7 @@ def main() -> None:
         if is_root_file:
             root_refs = module_level_refs(tree)
             # module_level_refs skips ClassDef bodies entirely (they're handled per-DefInfo/
-            # per-assignment, not as bare module statements) — so a ROOT_FILE's own class
+            # per-assignment, not as bare module statements), so a ROOT_FILE's own class
             # attributes (arq_worker.py's `class WorkerSettings: functions = [...]`) need
             # their RHS refs folded in here too, or the class's registry role is invisible.
             for refs in local_assigns.values():
@@ -325,7 +325,7 @@ def main() -> None:
                 frontier.add(d.qual)
 
     # ASSIGN CLOSURE: `_FUNCTIONS = {"triage": _fn_triage}` means reaching the bare name
-    # `_FUNCTIONS` must also reach `_fn_triage` — precompute the full transitive closure of
+    # `_FUNCTIONS` must also reach `_fn_triage`. Precompute the full transitive closure of
     # assign_edges once (cycle-guarded) so the BFS below can treat "name X is reached" as
     # "X's whole closure is reached" in one lookup, instead of a fragile multi-pass relay.
     def close_name(name: str, seen: set[str] | None = None) -> set[str]:
@@ -346,7 +346,7 @@ def main() -> None:
             out |= assign_closure.get(n, set())
         return out
 
-    # a NAME can be "reached" without being a def (e.g. `_FUNCTIONS`, a module-level dict) —
+    # a NAME can be "reached" without being a def (e.g. `_FUNCTIONS`, a module-level dict);
     # track reached BARE NAMES separately purely for the cross-file bookkeeping below
     reached_names: set[str] = set()
     while frontier:
@@ -400,7 +400,7 @@ def main() -> None:
             "test_only_reference": test_only,
             "referenced_cross_file_in_src": cross_file_src_ref,  # should be False for a
             # true candidate; True means SOMETHING in src/ (outside its own file) names it,
-            # but that referrer itself never made it into the reached set — i.e. dead code
+            # but that referrer itself never made it into the reached set, i.e. dead code
             # calling dead code. Surfaced, not filtered, since it's part of the same finding.
         })
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Does this migration deadlock — or just stall — a LIVE reader? (thread 2a280e07's
-own migration, Thoth's reproduced-twice deadlock on DROP VIEW current_assertions, msg
-4228; decision 259e5c5b's fix, decision a8026bf0's own ad hoc version of this script).
+"""Does this migration deadlock, or just stall, a LIVE reader? This grew out of a
+migration with a reproduced-twice deadlock on DROP VIEW current_assertions, and an
+earlier ad hoc version of this script written to chase down its fix.
 
 The isolation that makes ordinary migration testing safe (conftest.py's pg_dsn, a fresh
-testcontainers Postgres per test worker) is EXACTLY what blinds it to lock contention —
+testcontainers Postgres per test worker) is EXACTLY what blinds it to lock contention:
 there is no concurrent load in that container. A migration can pass every gate, be
 provably correct against the real corpus, and still be structurally undeployable against
 a live fleet, because the isolated test that proves correctness cannot also prove it
@@ -22,7 +22,7 @@ Usage:
         --seed-objects 500 --seed-depth 20
 
 `--seed-objects`/`--seed-depth` build a synthetic assertions_supersedes chain (N objects,
-each with a D-deep same-source supersession chain) — the general shape most migrations
+each with a D-deep same-source supersession chain): the general shape most migrations
 touching `assertions`/`current_assertions` care about; pass `--seed-sql <file>` instead
 for anything else the migration under test actually needs live in the table.
 
@@ -46,12 +46,12 @@ from testcontainers.postgres import PostgresContainer
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 # resolve alongside THIS interpreter, same as every other repo script that shells out
-# to a sibling tool — never relies on the caller's own PATH having the venv active
+# to a sibling tool: never relies on the caller's own PATH having the venv active
 ALEMBIC = str(Path(sys.executable).parent / "alembic")
 
 
 def _down_revision(target_rev: str) -> str:
-    """Read the target revision's own `down_revision` straight off its migration file —
+    """Read the target revision's own `down_revision` straight off its migration file:
     never guessed, never hand-maintained, so this stays correct as new migrations land."""
     matches = list((REPO_ROOT / "alembic" / "versions").glob(f"{target_rev}_*.py"))
     if not matches:

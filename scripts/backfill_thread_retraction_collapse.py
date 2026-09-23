@@ -1,39 +1,40 @@
 #!/usr/bin/env python3
-"""Wave 3 Lane A (Thoth msg 6503) — THE 557 RETRACTED SIBLINGS.
+"""Second collapse lane: THE 557 RETRACTED SIBLINGS.
 
-Same cross-source leak as Lane 1 (ruling 1335332e), a different value pair: 557 active
+Same cross-source leak as the first collapse lane, a different value pair: 557 active
 Threads carry a current `status='open'` AND a current `status='retracted'` (no `resolved`).
-Lane 1 measured this population and deliberately did NOT rule on it (the resolve case does
-not obviously transfer) — this lane closes that question.
+The first lane measured this population and deliberately did NOT rule on it (the resolve
+case does not obviously transfer); this lane closes that question.
 
 THE UNMEASURED QUESTION, NOW MEASURED: 304 of the 557 carry a `self_declared` assertion
-somewhere in their history — sounds like "a mind touched it," which would mirror Lane 1's
-open+resolved case and argue for excluding them. It does NOT. Read closely (not assumed):
-in ALL 304, the self_declared assertion IS the retraction itself — `retracted`,
+somewhere in their history, which sounds like "a mind touched it," which would mirror the
+first lane's open+resolved case and argue for excluding them. It does NOT. Read closely (not
+assumed): in ALL 304, the self_declared assertion IS the retraction itself: `retracted`,
 `retracted_because`, `status='retracted'`, written by `dispose.py`'s own candidate-drop path
-(`_EC = "self_declared"`, its own comment: "a disposition is a MIND'S WORD, never the
-machine's"). Zero of the 304 carry a self_declared `status` assertion holding any value
-OTHER than 'retracted' — there is no specimen where a mind's later touch disputes or
+(`_EC = "self_declared"`, on the principle that a disposition is a deliberate choice, never
+an automated inference). Zero of the 304 carry a self_declared `status` assertion holding any
+value OTHER than 'retracted': there is no specimen where a mind's later touch disputes or
 reopens the retraction. The other 253 are `session-janitor`'s own automated cleanup
 (evidence_class='direct_observation'), covered by its own "no mind ever touched it"
 precondition directly. Both classes agree: `retracted` is the deliberate final word, machine
 or mind, always the newest current row (0 reopened, verified), row-shape uniformly 2 current
 rows per thread (no third value, no multi-witness agreement noise).
 
-RULING: unlike Lane 1's `resolved` case (where a MIND's later act legitimately overturns an
-earlier machine witness), here the machine and the mind AGREE — there is no population where
-collapsing to `retracted` would destroy real, disputing testimony. Collapse ALL 557 to
-`retracted`. `open` is always the sole loser (100% `evidence_class='derived'`, mined noise).
+RULING: unlike the first lane's `resolved` case (where a deliberate later act legitimately
+overturns an earlier automated witness), here the machine and the mind AGREE: there is no
+population where collapsing to `retracted` would destroy real, disputing testimony. Collapse
+ALL 557 to `retracted`. `open` is always the sole loser (100% `evidence_class='derived'`,
+mined noise).
 
-REFUSAL: same posture as Lane 1 — any thread outside this exact shape (a third status value,
-more than 2 current rows, a self_declared status assertion disputing 'retracted', or a tie)
-refuses the WHOLE run rather than being silently dropped.
+REFUSAL: same posture as the first lane: any thread outside this exact shape (a third status
+value, more than 2 current rows, a self_declared status assertion disputing 'retracted', or a
+tie) refuses the WHOLE run rather than being silently dropped.
 
 MECHANISM: `Actions.assert_singular_property` only, re-asserting the winning `retracted`
-row's own existing fields — no direct `UPDATE`.
+row's own existing fields, no direct `UPDATE`.
 
-`dry_run=True` is the hard default. Per Thoth's explicit instruction (msg 6503): dry-run and
-report only — this script is NOT authorized to `--apply` yet.
+`dry_run=True` is the hard default: this script is NOT authorized to `--apply` yet, dry-run
+and report only.
 
 Usage: uv run python scripts/backfill_thread_retraction_collapse.py [--apply] [--limit N]
 """
@@ -55,7 +56,7 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 
 async def candidates(pool: asyncpg.Pool) -> dict[str, list[asyncpg.Record]]:
     """Every active Thread with a current 'open' AND a current 'retracted' status row and
-    NO current 'resolved' — the disjoint sibling of Lane 1's own population."""
+    NO current 'resolved': the disjoint sibling of the first lane's own population."""
     rows = await pool.fetch(
         "SELECT a.object_id, o.canonical, a.id, a.value #>> '{}' AS v, a.source_id, "
         "  a.observed_at, a.confidence, a.evidence_class "
@@ -80,7 +81,7 @@ async def candidates(pool: asyncpg.Pool) -> dict[str, list[asyncpg.Record]]:
 
 async def _disputed(pool: asyncpg.Pool, object_id: Any) -> bool:
     """True if a self_declared status assertion on this object holds any value other than
-    'retracted' — the one shape that would mean a mind's touch disputes the retraction,
+    'retracted': the one shape that would mean a mind's touch disputes the retraction,
     never observed in the 557 but checked per-thread rather than assumed from the aggregate."""
     row = await pool.fetchval(
         "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='status' "

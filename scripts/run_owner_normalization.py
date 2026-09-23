@@ -1,28 +1,26 @@
 #!/usr/bin/env python3
-"""OWNER-LAW RESIDUE RE-RUN (operator's word via Thoth msg 8606/8618, 2026-09-09):
-migration 0059 (src/orchestrator/owner_normalization.py) normalizes every open
-obligation's owner onto a durable seat or the literal 'operator' at the moment it runs,
-but it is a one-time Alembic migration -- obligations opened or re-owned AFTER 0059
-applied are never re-swept. graph_lint(check='unresolvable-owner') found 14 residue rows,
-all owner='rotten-apple' (a peer-governed project with no manager on record, so this
-resolves to the literal 'operator' per operator ruling thread 614680c6 -- not a fold
-thread), plus a 15th open obligation carrying no owner at all.
+"""OWNER-LAW RESIDUE RE-RUN: migration 0059 (src/orchestrator/owner_normalization.py)
+normalizes every open obligation's owner onto a durable seat or the literal 'operator'
+at the moment it runs, but it is a one-time Alembic migration, so obligations opened or
+re-owned AFTER 0059 applied are never re-swept. graph_lint(check='unresolvable-owner')
+found 14 residue rows, all owner='rotten-apple' (a peer-governed project with no manager
+on record, so this resolves to the literal 'operator', not a fold case), plus a 15th
+open obligation carrying no owner at all.
 
-This is the SANCTIONED PATH the operator's word asked for: re-invoke the exact same
-tested resolver 0059 used (plan_owner_normalization / apply_owner_normalization), not a
-hand-written raw-SQL reassignment. Documented idempotent in RESULT, not row count --
-a re-run mints a fresh same-value assertion confirming "still true at T2" rather than a
-skip, which is the same law assert_property already enforces everywhere else.
+This is the sanctioned path: re-invoke the exact same tested resolver 0059 used
+(plan_owner_normalization / apply_owner_normalization), not a hand-written raw-SQL
+reassignment. Documented idempotent in RESULT, not row count: a re-run mints a fresh
+same-value assertion confirming "still true at T2" rather than a skip, which is the
+same rule assert_property already enforces everywhere else.
 
-`--skip-project` (operator ruling via Thoth DM 8650: rotten-apple's own peer_of/
-managed_by contradiction between its two governing seats is "that project's own data
-defect, for the operator, not ours to touch" -- no resolver patch, no --apply on it)
-excludes matching projects from what --apply actually writes/folds, repeatable. The
-GENUINELY unowned row (no repo at all, project=None in the plan) is never named by this
-flag -- it has no project string to skip and folds under the operator's own ruling that
-"the fold is the correct mechanical answer" for it.
+`--skip-project` (rotten-apple's own peer_of/managed_by contradiction between its two
+governing seats is that project's own data defect, for the operator to fix, not ours
+to touch here: no resolver patch, no --apply on it) excludes matching projects from
+what --apply actually writes/folds, repeatable. The GENUINELY unowned row (no repo at
+all, project=None in the plan) is never named by this flag: it has no project string
+to skip, and folding it is the correct mechanical answer regardless.
 
-`dry_run=True` is the hard default -- pass --apply to write.
+`dry_run=True` is the hard default, pass --apply to write.
 
 Usage: uv run python scripts/run_owner_normalization.py [--apply] [--skip-project NAME ...]
 """

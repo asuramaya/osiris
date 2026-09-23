@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Migrate `governs` off the Agent and onto the Seat (operator ruling 1db1ff41).
+"""Migrate `governs` off the Agent and onto the Seat.
 
 Before this, a charter originated from whichever Agent generation happened to declare it, and
 a successor re-declaring couldn't heal an ancestor's grant (invalidate_link needs the exact
-from_id) -- so a lineage's EFFECTIVE charter (what orient()/charter()'s lineage-walk showed,
-742df26) could silently accumulate repos nobody meant to keep. This is a thin CLI over
+from_id) -- so a lineage's EFFECTIVE charter (what orient()/charter()'s lineage-walk showed)
+could silently accumulate repos nobody meant to keep. This is a thin CLI over
 src.orchestrator.charter.migrate_charter_to_seat: it resolves every Agent-origin governs link
 to the Seat its lineage currently holds, re-declares the union as a fresh Seat-origin charter
 (through set_charter itself), and heals the old Agent-origin links.
@@ -32,8 +32,8 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 
 
 async def run(apply: bool, seats: list[str]) -> None:
-    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
-    # instance exists on this box — refuse a silent one-off run against it.
+    # This DSN's own fallback IS the live fleet graph; no isolated dev instance exists
+    # on this box, so refuse a silent one-off run against it.
     refusal = refuse_silent_live_db("backfill_charter_seat_key")
     if refusal is not None:
         print(refusal, file=sys.stderr)

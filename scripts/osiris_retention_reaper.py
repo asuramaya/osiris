@@ -1,17 +1,18 @@
 #!/usr/bin/env python
-"""Retention reaper — the scheduled runner for src.orchestrator.retention (msg 5397 leg
-2: "the 898,826-row outbox and audit_log tables get a scheduled reaper with a stated
-horizon, defensible and documented, not a periodic sweep somebody remembers").
+"""Retention reaper: the scheduled runner for src.orchestrator.retention, giving the
+outbox and audit_log tables (once at 898,826 rows) a scheduled reaper with a stated
+horizon, defensible and documented, rather than a periodic sweep somebody has to
+remember to run.
 
 Horizons are retention.py's own defaults and their own justification lives there:
-outbox 30 days (published rows only — an unpublished row is never eligible, no matter
+outbox 30 days (published rows only, an unpublished row is never eligible, no matter
 its age), audit_log 90 days (matches the telemetry search_log precedent, stays generous
 for the rare forensic undrop). This script is the only thing that ever passes
-`execute=True` on a schedule — a human-run `--dry-run` is available for inspection
+`execute=True` on a schedule; a human-run `--dry-run` is available for inspection
 without touching anything.
 
-CONFESSES into a `job:retention-reaper` watermark (the same `job:%` convention
-osiris_fleet_glance.py already scans for staleness) with the before/after row counts —
+RECORDS into a `job:retention-reaper` watermark (the same `job:%` convention
+osiris_fleet_glance.py already scans for staleness) with the before/after row counts,
 never a silent sweep.
 
     .venv/bin/python scripts/osiris_retention_reaper.py [--dry-run]
@@ -31,7 +32,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 _CURSOR_KEY = "job:retention-reaper"
-_EVERY_SECS = 86400  # daily — matches deploy/osiris-retention-reaper.timer's own cadence
+_EVERY_SECS = 86400  # daily, matches deploy/osiris-retention-reaper.timer's own cadence
 
 
 async def run(*, execute: bool) -> dict:

@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Seed `.osiris-lineage` sentinels for every currently-active seat's memory directory
-(thread 4dcc1849, decision f9e47d3c) — the one-time step Thoth's confirmation (DM 7763
-item (a)) required before the archive rule ships.
+"""Seed `.osiris-lineage` sentinels for every currently-active seat's memory directory,
+the one-time step confirmed as required before the archive rule ships.
 
 Without this, every currently-active lineage's own memory dir has no sentinel the
 instant the archive-on-collision logic ships, so its own very next mount() reports
-`memory_migration_needed` — safe (archiving only fires on a NAMED-DIFFERENT sentinel,
-none exist yet), but a fleet-wide false-alarm flood the moment every live session
-reconnects. This attributes today's real content to its true current holder, once,
-deliberately, rather than leaving it to accumulate as noise.
+`memory_migration_needed`. That's safe (archiving only fires on a NAMED-DIFFERENT
+sentinel, none exist yet), but it would cause a fleet-wide false-alarm flood the moment
+every live session reconnects. This attributes today's real content to its true current
+holder, once, deliberately, rather than leaving it to accumulate as noise.
 
 Dry-run by default, writes nothing. Idempotent: a second run finds nothing left to do
 for any seat already sentineled (by this script or by an ordinary mount() since).
