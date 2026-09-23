@@ -1477,6 +1477,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # by construction, so it never needs a ruling citation the way a fleet worker would.
     @app.get("/backup-settings")
     async def get_backup_settings_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Return the current backup configuration: vault path, timer schedule,
+        and configured offload targets."""
         from src.orchestrator.backup_settings import get_backup_settings
 
         return await get_backup_settings(p)
@@ -1485,6 +1487,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def set_backup_settings_route(
         body: BackupSettingsBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
+        """Update one or more backup configuration fields. Only the fields
+        included in the request body are changed; fields left out keep their
+        current value."""
         from src.orchestrator.backup_settings import write_backup_settings
 
         fields: dict[str, Any] = {}
@@ -1532,12 +1537,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # never touches Postgres (`soul_key_init` is pool-free by design).
     @app.get("/soul-key/status")
     async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Return the status of the encryption key that protects the data
+        store: whether a key exists, which backend holds it, and its
+        filesystem path. Never returns the key material itself."""
         from src.orchestrator.soul_key import soul_key_status
 
         return await soul_key_status(p)
 
     @app.post("/soul-key/init")
     async def soul_key_init_route(body: SoulKeyInitBody) -> dict[str, Any]:
+        """Create the encryption key that protects the data store. This is a
+        one-time setup step and fails if a key already exists. Set
+        `restart: true` to restart the dependent services automatically once
+        the key is created."""
         from src.cli import _SOUL_KEY_RESTART_UNITS, _real_restart_services
         from src.ingest.soul_crypto import soul_key_init
 
@@ -1556,14 +1568,18 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         else:
             out["restarted"] = False
             out["restart_hint"] = (
-                f"the key is minted, but osiris-mcp/osiris-worker won't see it until "
-                f"restarted — run `{restart_cmd}` (or re-run with restart: true)")
+                f"The key was created, but the osiris-mcp and osiris-worker services "
+                f"will not see it until they restart. Run `{restart_cmd}`, or call "
+                f"this endpoint again with restart: true.")
         return out
 
     @app.post("/soul-key/rotate")
     async def soul_key_rotate_route(
         body: SoulKeyRotateBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
+        """Rotate the encryption key: generate a new key and re-encrypt
+        existing data under it. Call again with `finish: true` to remove the
+        previous key once the rotation is confirmed complete."""
         from src.orchestrator.soul_key import soul_key_rotate
 
         return await soul_key_rotate(
@@ -1573,6 +1589,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_restore_drill_route(
         body: SoulKeyRestoreDrillBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
+        """Run a restore drill against one or more backup repositories to
+        confirm the current key can decrypt existing backups. Makes no
+        changes."""
         from src.orchestrator.soul_key import soul_key_restore_drill
 
         return await soul_key_restore_drill(p, repo_url=body.repo_url)
@@ -1587,6 +1606,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_recovery_material_route(
         p: asyncpg.Pool = Depends(get_pool),
     ) -> dict[str, Any]:
+        """Issue recovery material for enrolling a browser-based recovery
+        credential. This is the first step in registering a hardware
+        security key or platform authenticator as a way to recover the
+        encryption key."""
         from src.orchestrator.soul_key_recovery_material import issue_recovery_material
 
         return await issue_recovery_material(p)
@@ -1595,6 +1618,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_recovery_material_complete_route(
         body: SoulKeyRecoveryMaterialCompleteBody,
     ) -> dict[str, Any]:
+        """Complete browser-based recovery enrollment by submitting the
+        wrapped key material the browser produced, using the token issued by
+        the recovery-material request."""
         from src.orchestrator.soul_key_recovery_material import write_recovery_blob
 
         return write_recovery_blob(
@@ -1606,6 +1632,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_recovery_blob_route(
         p: asyncpg.Pool = Depends(get_pool),
     ) -> dict[str, Any]:
+        """Return the stored recovery blob needed to recover the encryption
+        key using a previously enrolled browser credential."""
         from src.orchestrator.soul_key_recovery_material import read_recovery_blob
 
         return await read_recovery_blob(p)
@@ -1614,6 +1642,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def soul_key_recover_from_browser_route(
         body: SoulKeyRecoverFromBrowserBody,
     ) -> dict[str, Any]:
+        """Complete key recovery using the raw key a browser unwrapped
+        locally from an enrolled recovery credential."""
         from src.orchestrator.soul_key_recovery_material import recover_from_browser
 
         return recover_from_browser(
@@ -1628,6 +1658,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # bytes themselves, restic_key_status's own docstring guarantee.
     @app.get("/restic-key/status")
     async def restic_key_status_route() -> dict[str, Any]:
+        """Return the status of the backup encryption credential used by the
+        backup tool: whether a credential exists and which backend holds it.
+        Never returns the credential itself."""
         from src.orchestrator.restic_credential import restic_key_status
 
         return restic_key_status()
@@ -1639,6 +1672,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # AUTHORITY LAW as every other /soul-key* and /restic-key* route.
     @app.post("/restic-key/init")
     async def restic_key_init_route(body: ResticKeyInitBody) -> dict[str, Any]:
+        """Create the backup encryption credential used by the backup tool.
+        Fails if a credential already exists."""
         from src.orchestrator.restic_credential import restic_key_init
 
         return restic_key_init(path=body.path, backend=body.backend)
@@ -1654,6 +1689,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # itself (offload_targets), already gated there.
     @app.post("/offload-runner/tick")
     async def offload_runner_tick_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        """Run one offload cycle immediately against the currently
+        configured offload targets. Does not change configuration; configure
+        targets with POST /backup-settings."""
         from src.orchestrator.offload_runner import run_offload_tick
 
         return await run_offload_tick(p)
@@ -1663,6 +1701,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # src/orchestrator/deploy_status.py's own module docstring for the full design.
     @app.get("/deploy-status")
     async def deploy_status_route() -> dict[str, Any]:
+        """Return the currently deployed build compared with the latest
+        available build, so a caller can tell whether a deploy is
+        pending."""
         from src.orchestrator.deploy_status import get_deploy_status
 
         return await get_deploy_status()
@@ -2373,21 +2414,9 @@ class DeskSettleBody(BaseModel):
 
 
 class BackupSettingsBody(BaseModel):
-    """The backup config panel's write half (thread f04cce36 piece 3) — a partial
-    update, only given fields change. `because` is required, same testimony
-    discipline `/threads/triage` runs for a deliberate operator act.
-
-    BUG FOUND AND FIXED IN PASSING (thread dd11ab34, GUI PARITY): `offload_targets`
-    (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, Thoth mail 12812) was never added
-    here when it replaced `offbox_repositories` as the canonical field — Pydantic
-    silently drops an unrecognized body key by default, so every POST /backup-
-    settings the Offload Targets panel's own Save button has ever made (since it
-    shipped, THE KEY PANEL + OFFLOAD TARGETS PANEL piece 1) wrote NOTHING for
-    offload_targets and reported success anyway (the response is just a fresh
-    get_backup_settings() read, unchanged). Caught building a genuinely new
-    end-to-end API test for /offload-runner/tick that needed a real target to
-    exist — a source-pin test alone (proving the JS sends the right JSON) could
-    never have caught a server-side field the route silently ignored."""
+    """Partial update to the backup configuration. Only the fields included
+    in the request are changed; every field is optional except `because`,
+    which records the reason for the change."""
     because: str
     vault_path: str | None = None
     timer_schedules: dict[str, str] | None = None
@@ -2419,17 +2448,13 @@ class BackfillBody(BaseModel):
 
 
 class SoulKeyInitBody(BaseModel):
-    """THE KEY DOOR's own init body (Thoth mail 12810/12836) — every field
-    optional; the console always runs as the operator's own login user, so
-    `owner`/`path` are rarely needed here (the same automatic --user-unit/XDG
-    resolution the CLI's own bare `osiris soul-key init` gets applies
-    unchanged). `backend` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): None
-    auto-selects (host+tpm2/host-cred/file); an explicit value is the same
-    escape hatch the CLI's own `--backend` carries. `restart` (THE FIRST KEY
-    MUST COME FROM THE NORMAL CLI, Thoth mail 13065): the SAME `osiris soul-key
-    init --restart` escape hatch, so the console's own Init button can restart
-    osiris-mcp/osiris-worker in one click instead of leaving the operator to
-    run `systemctl --user restart` by hand after."""
+    """Request body for creating the encryption key. All fields are
+    optional. `owner` and `path` default to the current user's standard
+    location. `backend` defaults to automatic selection among the available
+    backends (TPM2, host credential store, or file); set it explicitly to
+    override that choice. Set `restart: true` to restart the dependent
+    services automatically once the key is created, instead of restarting
+    them by hand afterward."""
     owner: str | None = None
     path: str | None = None
     backend: str | None = None
@@ -2438,30 +2463,30 @@ class SoulKeyInitBody(BaseModel):
 
 
 class SoulKeyRotateBody(BaseModel):
-    """THE KEY DOOR's own rotate body — `finish=False` (the default) mints a new
-    key and re-wraps every row right now; `finish=True` is step 2, removing the
-    old key once the receipt is clean. `print_recovery` (KEY CUSTODY REWRITTEN):
-    the old printed-banner opt-in, off by default now that FIDO2 enroll-recovery
-    is the primary path."""
+    """Request body for rotating the encryption key. `finish: false` (the
+    default) generates a new key and re-encrypts existing data under it now.
+    `finish: true` is the second step: it removes the previous key once the
+    rotation result is confirmed clean. `print_recovery` optionally prints a
+    recovery code; it defaults to off, since enrolling a hardware security
+    key is the primary recovery path."""
     finish: bool = False
     print_recovery: bool = False
 
 
 class SoulKeyRestoreDrillBody(BaseModel):
-    """THE KEY DOOR's own restore-drill body — `repo_url` explicit, or every URL
-    in `backup.offbox_repositories` when omitted."""
+    """Request body for a restore drill. `repo_url` targets one specific
+    backup repository; if omitted, every configured offload repository is
+    tested."""
     repo_url: str | None = None
 
 
 class SoulKeyRecoveryMaterialCompleteBody(BaseModel):
-    """THE BROWSER RECOVERY MATERIAL DOOR's own step 2 (Thoth mail 13002) — the
-    browser-wrapped blob, in the exact shape `soul_crypto._enroll_and_wrap` itself
-    produces: `token` from the matching `/soul-key/recovery-material` call,
-    `credential_id`/`salt`/`wrapped_key` all base64url (unpadded, matching Python's
-    own `base64.urlsafe_b64encode`), `key_fingerprint` the sha256(raw key)[:16] hex
-    the browser computed locally, `rp_id` the RP id the credential was created
-    against (see src/orchestrator/soul_key_recovery_material.py's own docstring on
-    why this must match `osiris.local`)."""
+    """Request body completing browser-based recovery enrollment. `token` is
+    the value returned by the matching `/soul-key/recovery-material` call.
+    `credential_id`, `salt`, and `wrapped_key` are base64url-encoded
+    (unpadded) values produced by the browser. `key_fingerprint` is the
+    SHA-256 fingerprint of the raw key, computed locally by the browser.
+    `rp_id` is the relying party ID the credential was created against."""
     token: str
     credential_id: str
     salt: str
@@ -2471,13 +2496,12 @@ class SoulKeyRecoveryMaterialCompleteBody(BaseModel):
 
 
 class SoulKeyRecoverFromBrowserBody(BaseModel):
-    """THE BROWSER RECOVERY MATERIAL DOOR's own reverse-direction step 2 — the
-    browser has already unwrapped the recovered raw key client-side and confirmed
-    its own `key_fingerprint` locally; `resolved_path` is the logical key path
-    `/soul-key/recovery-blob`'s own caller already resolved via `soul_key_status`'s
-    `path` field (never trusted as free text elsewhere — this box's own
-    `soul_key_status` is the only source a caller should ever have gotten it from).
-    `backend` mirrors `soul_key_init`'s own optional override; None auto-selects."""
+    """Request body completing key recovery using an enrolled browser
+    credential. `raw_key` is the key the browser unwrapped locally, and
+    `key_fingerprint` is its fingerprint, confirmed locally by the browser.
+    `resolved_path` is the key's logical path, obtained from a prior call to
+    `/soul-key/status`. `backend` optionally overrides automatic backend
+    selection; omit it to auto-select."""
     raw_key: str
     key_fingerprint: str
     resolved_path: str
@@ -2493,9 +2517,9 @@ class OperatorDeskReplyBody(BaseModel):
 
 
 class ResticKeyInitBody(BaseModel):
-    """THE RESTIC-KEY INIT ROUTE's own body (thread dd11ab34, GUI PARITY) — mirrors
-    `osiris restic-key init`'s own `--path`/`--backend` flags exactly; both optional,
-    same auto-selection as soul-key's own init when `backend` is omitted."""
+    """Request body for creating the backup encryption credential. `path`
+    and `backend` are both optional; `backend` defaults to automatic
+    selection when omitted."""
     path: str | None = None
     backend: str | None = None
 

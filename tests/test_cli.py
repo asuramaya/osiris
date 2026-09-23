@@ -1646,7 +1646,7 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
 
     assert out == 1  # refused, not the ordinary success-with-fresh-spawn path
     err = buf.getvalue()
-    assert "REFUSING" in err
+    assert "refusing" in err
     assert _RESUME_SID in err
     assert "claude -p --resume" in err and _RESUME_SID in err.split("claude -p --resume")[1]
 
@@ -1856,7 +1856,7 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     assert out == 1
     err = buf.getvalue()
     assert "anchor_cwd" in err
-    assert "GRAPH assertion" in err
+    assert "graph assertion" in err
     assert "rebind_seat(seat='clighostanchor'" in err
     assert "new_cwd=" in err
 
@@ -2376,7 +2376,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_whisper_probe_fails(
                                check_whisper_probe=_bad_probe)
     assert out == 1
     assert "REFUSED" in buf.getvalue()
-    assert "NOT recording this deploy" in buf.getvalue()
+    assert "not recording this deploy" in buf.getvalue()
 
 
 async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
@@ -2559,7 +2559,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
                                    osiris_deploy_chaos_gate=False))
     assert out == 1
     text = buf.getvalue()
-    assert "REFUSED" in text and "ModuleNotFoundError" in text
+    assert "refused" in text and "ModuleNotFoundError" in text
     assert "NOT recording this deploy" in text
 
 
@@ -2665,7 +2665,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
                                    osiris_deploy_full_suite_gate=False))
     assert out == 1
     text = buf.getvalue()
-    assert "REFUSED" in text and "a stranger was minted over a listed body" in text
+    assert "refused" in text and "a stranger was minted over a listed body" in text
     assert "NOT recording this deploy" in text
 
 
@@ -2704,7 +2704,7 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
                                check_whisper_probe=_fake_check_whisper_ok)
     assert out == 1
     text = buf.getvalue()
-    assert "REFUSED" in text and "false-mint-live" in text and "agent:dh0001" in text
+    assert "refused" in text and "false-mint-live" in text and "agent:dh0001" in text
     assert "NOT recording this deploy" in text
 
 
@@ -3140,7 +3140,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     # gap-reporting path without asserting exact names (that's composition_gap_notes' own
     # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
     assert out in (0, 1)
-    assert "TOOL LIST CHANGED: +retire_assertion, ~smoke changed" in buf.getvalue()
+    assert "tool list changed: +retire_assertion, ~smoke changed" in buf.getvalue()
 
 
 async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_restart(
@@ -3169,8 +3169,8 @@ async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_r
         "ORDER BY id")
     bodies = [r["body"] for r in rows]
     assert len(bodies) == 2
-    assert "restarting osiris-mcp" in bodies[0] and "your next call reconnects" in bodies[0]
-    assert "osiris-mcp is back up" in bodies[1] and "reconnect now" in bodies[1]
+    assert "restarting osiris-mcp" in bodies[0] and "Your next call reconnects" in bodies[0]
+    assert "osiris-mcp is back up" in bodies[1] and "Reconnect now" in bodies[1]
 
 
 async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
@@ -3266,7 +3266,7 @@ async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
-    assert "deploy ledger: HEAD unknown — not recorded" in buf.getvalue()
+    assert "deploy ledger: HEAD unknown, not recorded" in buf.getvalue()
 
 
 # --- osiris migrate + osiris deploy's migration gate (thread c4681c38) ---------------------------
@@ -3376,7 +3376,6 @@ async def test_apply_pending_migrations_names_an_unrecognized_revision(
     ok, note = await _apply_pending_migrations(
         actions.pool, repo_root, state=_state, run_migrations=_unreachable)
     assert ok is False
-    assert "8d3f5e2d" in note
     assert "0099_unmerged_branch_revision" in note
     assert "do not recognize" in note
 
@@ -3491,7 +3490,7 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
-    assert "casefold auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "casefold auto-merge: EXECUTED: 1 candidate(s)" in text
     assert "deploytwina -> repo:DeployTwinA" in text
 
     # the canonical migrates to the corrected (lowercase) case too now (DM 12786) — the
@@ -3525,7 +3524,7 @@ async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
-    assert "casefold auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+    assert "casefold auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploytwinb'")
@@ -3567,7 +3566,7 @@ async def test_cmd_deploy_remote_url_automerge_executes_by_default(
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
-    assert "remote_url auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "remote_url auto-merge: EXECUTED: 1 candidate(s)" in text
     assert "/home/x/code/REPOS/deployremotea -> repo:deployremotea" in text
 
     row = await actions.pool.fetchrow(
@@ -3593,7 +3592,7 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
-    assert "remote_url auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+    assert "remote_url auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/deployremoteb'")
@@ -3635,9 +3634,8 @@ async def test_cmd_deploy_name_alias_automerge_executes_by_default(
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
     text = buf.getvalue()
-    assert "name-alias auto-merge: EXECUTED — 1 candidate(s)" in text
+    assert "name-alias auto-merge: EXECUTED: 1 candidate(s)" in text
     assert "repo:deploynamea-husk -> repo:deploynamea" in text
-    assert "decision 31e5bae1" in text  # item 4's discoverability pointer
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploynamea-husk'")
@@ -3662,7 +3660,7 @@ async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
                          pool=actions.pool, wait_for_health=_fake_wait_for_health,
                          wait_for_smoke=_fake_wait_for_smoke,
                          check_whisper_probe=_fake_check_whisper_ok)
-    assert "name-alias auto-merge: dry-run — 1 candidate(s)" in buf.getvalue()
+    assert "name-alias auto-merge: dry-run: 1 candidate(s)" in buf.getvalue()
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:deploynameb-husk'")
@@ -3814,7 +3812,7 @@ async def test_real_install_user_units_no_deploy_user_dir_touches_nothing(
 
     notes = await _real_install_user_units(tmp_path)
 
-    assert notes == ["unit files: no deploy/user/ found — nothing to install"]
+    assert notes == ["unit files: no deploy/user/ found, nothing to install"]
     assert not fake_home.exists()
 
 
@@ -3931,7 +3929,7 @@ async def test_real_install_user_units_refuses_a_unit_missing_a_description(
 
     notes = await _real_install_user_units(repo_root)
     assert notes == [
-        "unit: REFUSED osiris-mcp.service — no [Unit] Description= line"]
+        "unit: REFUSED osiris-mcp.service: no [Unit] Description= line"]
     assert not (fake_home / ".config" / "systemd" / "user" / "osiris-mcp.service").exists()
 
 
@@ -3970,7 +3968,7 @@ async def test_real_install_user_units_refuses_the_whole_batch_on_one_bad_unit(
 
     notes = await _real_install_user_units(repo_root)
     assert notes == [
-        "unit: REFUSED osiris-pulse.service — no [Unit] Description= line"]
+        "unit: REFUSED osiris-pulse.service: no [Unit] Description= line"]
     assert not (fake_home / ".config" / "systemd" / "user").exists()
 
 
@@ -4108,7 +4106,7 @@ async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
                                restart=_unreachable, pool=actions.pool,
                                install_units=_silent_no_op)
     assert out == 1
-    assert "silent no-op" in buf.getvalue()
+    assert "reported nothing installed" in buf.getvalue()
 
 
 # --- deploy auto-installs the three machine-file installers (#204, Thoth ruling msg 6949:
