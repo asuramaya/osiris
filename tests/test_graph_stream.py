@@ -899,6 +899,45 @@ async def test_deltas_since_is_empty_when_nothing_changed(actions: Actions) -> N
     assert cursor2 == cursor
 
 
+# --- THE OUTBOX GAP: graph_layout._bulk_assert_positions used to write
+# graph_x/graph_y/graph_layout_v straight against the assertions table, bypassing
+# actions.assert_property -- the only thing that ever inserted an outbox row -- so a layout
+# tick never showed up here, not even after the object was genuinely positioned. Confirmed
+# live against a real scratch install before this fix: an open SSE connection sat
+# indefinitely, no delta ever arriving, for an object the DB had already positioned.
+# _LAYOUT_MOVED_EVENT closes it: one more outbox row per positioned object, per tick. -----
+
+
+async def test_deltas_since_reports_a_layout_tick_moving_a_previously_unplaced_object(
+    actions: Actions,
+) -> None:
+    oid = await actions.create_or_find_object("Thread", "thread:gs-layout-tick", "test")
+    _, cursor = await deltas_since(actions.pool, 0)  # past the object_created event
+
+    await layout_batch(actions, limit=1000)
+
+    deltas, cursor2 = await deltas_since(actions.pool, cursor)
+    assert cursor2 > cursor
+    matches = [d for d in deltas if d["id"] == str(oid)]
+    assert len(matches) == 1
+    assert matches[0]["op"] == "moved"
+    assert "x" in matches[0] and "y" in matches[0]
+
+
+# A live-route test (opening /graph/stream/deltas via httpx.ASGITransport and reading its
+# actual SSE body while the tick runs) was attempted, not skipped for lack of trying:
+# httpx.ASGITransport never returns from entering the stream at all -- confirmed by
+# isolating the bare `client.stream("GET", ...).__aenter__()` call with no other test logic
+# around it, still hangs past a 5s wait_for with nothing else happening concurrently. This
+# route's generator never terminates on its own (the same shape /cases/{id}/stream and
+# /console/stream already use, one 1s-interval poll loop that only exits on client
+# disconnect or app shutdown); no other test in this repo exercises any of those three
+# routes' live SSE body through this test client either (grepped for it), which is the
+# same limitation, not a coincidence. deltas_since is the entire route: the handler is a
+# thin `while true: deltas_since; yield; sleep(1)` with no branching of its own, so the
+# test above already proves everything the route could add on top.
+
+
 # --- REST: GET /graph/stream (single response, safe to exercise via the test client) --
 
 

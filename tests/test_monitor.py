@@ -188,6 +188,29 @@ async def test_evaluator_matches_property_value(actions: Actions) -> None:
     assert matched == org
 
 
+async def test_evaluator_stays_quiet_on_a_layout_tick(actions: Actions) -> None:
+    """THE OUTBOX GAP: graph_layout._bulk_assert_positions now writes
+    one 'layout_moved' outbox row per object it positions, closing the gap where an open
+    graph/stream/deltas connection could never learn a layout tick had happened. Proves
+    that widening the outbox with a real, frequent new event type changes nothing here:
+    watch_criteria() hardcodes event_types=["object_created"] for every watch saved
+    through the only real entry point (save_watch), so 'layout_moved' -- and, for that
+    matter, the pre-existing 'property_added' -- was already structurally excluded before
+    this change; a layout tick claims outbox rows (evaluate_watches has no event_type
+    filter in its own claim query) but can never produce an alert."""
+    from src.orchestrator.graph_layout import layout_batch
+
+    await save_watch(actions.pool, "any organization", "Organization", [])
+    org = await actions.create_or_find_object("Organization", "cik:layout-quiet", "test")
+    assert await evaluate_watches(actions.pool) == 1  # the real object_created match
+
+    await layout_batch(actions, limit=1000)  # positions org (and the fresh catalog, if any)
+
+    assert await evaluate_watches(actions.pool) == 0
+    rows = await actions.pool.fetch("SELECT event_type FROM alerts WHERE object_id=$1", org)
+    assert [r["event_type"] for r in rows] == ["object_created"]
+
+
 async def test_evaluator_inactive_watch_is_silent(actions: Actions) -> None:
     wid = await save_watch(actions.pool, "off", "Organization", [])
     await actions.pool.execute("UPDATE compositions SET active=false WHERE id=$1", wid)

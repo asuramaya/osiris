@@ -937,6 +937,18 @@ async def _place_projects(
     return _relax_projects(unplaced_ids, anchors, member_counts, weights)
 
 
+_LAYOUT_MOVED_EVENT = "layout_moved"  # see graph_stream.deltas_since's own comment: a
+                                       # DISTINCT event type from actions.assert_property's
+                                       # 'property_added', specifically so an existing watch
+                                       # (src.orchestrator.monitor) whose criteria matches
+                                       # broadly on event_types=['property_added'] (a
+                                       # plausible "alert me on any change to this object"
+                                       # shape) can never start firing on this tick's own
+                                       # graph_x/graph_y/graph_layout_v churn -- a watch can
+                                       # only ever match this type by explicitly naming it,
+                                       # which nothing could do before this constant existed.
+
+
 async def _bulk_assert_positions(
     actions: Actions, placed: dict[uuid.UUID, tuple[float, float]], observed_at: datetime,
 ) -> None:
@@ -944,7 +956,20 @@ async def _bulk_assert_positions(
     append-only and superseding exactly like assert_property (an existing current row for
     this source+name is flipped non-current, never mutated in place), just covering the
     batch with one multi-row statement per property instead of one call per object (see
-    the module docstring's WRITE PATH section for why that's safe here)."""
+    the module docstring's WRITE PATH section for why that's safe here).
+
+    THE OUTBOX GAP (confirmed live: a tab already open when a tick lands
+    sees the DB genuinely update and never learns about it): bypassing
+    actions.assert_property means this write path never inserted an outbox row, so
+    /graph/stream/deltas -- which polls the outbox -- could never observe a layout tick,
+    not just at first-install-empty-graph (worked around client-side in space.js) but for
+    ANY object positioned for the first time while a tab is already watching. Closed here
+    with one more bulk multi-row INSERT into outbox per tick (same discipline as the
+    assertions writes above: one statement, not `len(ids)` round-trips), object_id-keyed,
+    `_LAYOUT_MOVED_EVENT` typed (see that constant's own comment for why not
+    'property_added'). graph_stream.deltas_since needs exactly one line changed (widen its
+    event_type IN-list) to pick these up: it already resolves x/y per object_id generically
+    for any non-'object_merged' event type, no new branch needed there."""
     if not placed:
         return
     ids = list(placed.keys())
@@ -966,6 +991,10 @@ async def _bulk_assert_positions(
                 "FROM unnest($1::uuid[], $6::text[]) AS t(oid, val)",
                 ids, name, GRAPH_LAYOUT_SOURCE, observed_at, 0.9,
                 [json.dumps(v) for v in values])
+        await conn.execute(
+            "INSERT INTO outbox (event_type, object_id, payload) "
+            "SELECT $2, oid, '{}'::jsonb FROM unnest($1::uuid[]) AS t(oid)",
+            ids, _LAYOUT_MOVED_EVENT)
 
 
 async def layout_batch(actions: Actions, *, limit: int | None = None) -> int:
