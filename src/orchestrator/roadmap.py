@@ -1,10 +1,10 @@
-"""roadmap — the arc lookup for the "open" half of the roadmap composition (ruling
-c5b184cd, thread d56e7073/#44: the composition-abstraction READ half).
+"""roadmap: the arc lookup for the "open" half of the roadmap composition (the
+composition-abstraction READ half).
 
 The bespoke `roadmap(project)` read-model that used to live here RETIRED when the roadmap
 screen migrated to a real composition (`compositions.ROADMAP`, `/roadmap` route). All three
-sections — open, resolved, retracted — are now a pure `group`-by-arc-then-owner op-tree
-(task #60, the function-output-re-entering-the-op-tree follow-on, let the open bucket join
+sections, open, resolved, retracted, are now a pure `group`-by-arc-then-owner op-tree
+(the function-output-re-entering-the-op-tree follow-on, which let the open bucket join
 resolved/retracted's shape once a Function's output could feed a further `group`). The OPEN
 bucket still needs one piece of real Python: `open_thread_wall`'s echo-filter (evidence-
 provenance domain logic no `select` can express) and the arc lookup below, both called from
@@ -18,7 +18,7 @@ from typing import Any
 
 async def _arc_map(pool: Any, short_ids: list[str]) -> dict[str, str]:
     """arc values for a batch of OPEN threads, keyed by the 8-char short id `open_thread_wall`
-    already hands out — a self-contained lookup, never widening the shared wall function."""
+    already hands out: a self-contained lookup, never widening the shared wall function."""
     if not short_ids:
         return {}
     rows = await pool.fetch(

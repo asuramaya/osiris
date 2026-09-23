@@ -1,13 +1,13 @@
 """Promote a federated entity's web presence into crawlable seeds.
 
 A federated record (OpenSanctions / EDGAR / Wikidata) carries its ``website`` /
-``domain`` as bare PROPERTIES — facts the keyless crawl cannot act on, because the
+``domain`` as bare PROPERTIES: facts the keyless crawl cannot act on, because the
 cascade fires on typed URL/Domain *objects*, not on assertion values. This is the
 seam that bridges the two halves in the direction that actually has shared entity
 space (base -> crawl): it mints linked, crawlable URL + Domain objects from those
 properties and places them one hop past the entity, so the existing keyless
 collectors (url_fetch, crtsh, wayback) enrich the registered entity with its live
-open-web footprint — contact emails, social accounts, subdomains — each linked back
+open-web footprint (contact emails, social accounts, subdomains), each linked back
 with provenance.
 
 The has_url / has_domain links are AUTHORITATIVE_API: the base *declared* this site,

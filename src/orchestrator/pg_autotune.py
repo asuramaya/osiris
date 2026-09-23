@@ -1,32 +1,30 @@
-"""pg_autotune — derive Postgres GUCs from THIS host's actual RAM/CPU and the measured
+"""pg_autotune: derive Postgres GUCs from THIS host's actual RAM/CPU and the measured
 daemon envelope (`pool_health`'s own `fixed_budget`), instead of a hand-run
-postgres_tuning.sql the operator has to re-apply every time the fleet's envelope moves.
-Ruling 45b251ed, the operator's own word on desk 5092: "this should be mechanical and
-not depend on me, autotune dynamically?" Rulings 7d6815bb (mechanisms, never band-aids)
-and df646654 (self-healing over manual) apply directly. `deploy/postgres_tuning.sql`'s
-static values (applied by hand 2026-08-17, decision 1afeca3a) are what this REPLACES —
-that file stays as the historical record of the values it computed on that one day, this
-module recomputes them every time it runs.
+postgres_tuning.sql that has to be re-applied by hand every time the fleet's envelope
+moves. This should be mechanical, not dependent on a human re-running it, and it should
+autotune dynamically: mechanisms over band-aids, self-healing over manual steps.
+`deploy/postgres_tuning.sql`'s static values (applied by hand 2026-08-17) are what this
+REPLACES: that file stays as the historical record of the values it computed on that
+one day, this module recomputes them every time it runs.
 
 RELOADABLE VS RESTART-REQUIRING (Postgres's own GUC context, `pg_settings.context`):
 work_mem / maintenance_work_mem / effective_cache_size / random_page_cost are `sighup`
-or `user` context — `ALTER SYSTEM` + `pg_reload_conf()` picks them up with no
+or `user` context: `ALTER SYSTEM` + `pg_reload_conf()` picks them up with no
 interruption to a single live backend. `shared_buffers` and `max_connections` are
-`postmaster` context — nothing short of a restart moves them, ever.
+`postmaster` context: nothing short of a restart moves them, ever.
 
 THIS MODULE NEVER RESTARTS POSTGRES ITSELF (house law: a worker never restarts
-services, CLAUDE.md's own line — a restart of the ONE shared instance sixteen live
-agents depend on is the operator's/Thoth's hand, not code running unattended on a
-timer). It applies the reloadable half unconditionally (never a stop-the-world, msg
-5397) and PERSISTS the restart-requiring half via `ALTER SYSTEM` regardless — that
-costs nothing and takes effect at whatever restart happens next, from any cause — but a
-restart-required change always comes back in `deferred`, confessed loudly (never
-silently dropped), for a human to act on.
+services; a restart of the ONE shared instance sixteen live agents depend on is a
+human's hand, not code running unattended on a timer). It applies the reloadable half
+unconditionally (never a stop-the-world) and PERSISTS the restart-requiring half via
+`ALTER SYSTEM` regardless: that costs nothing and takes effect at whatever restart
+happens next, from any cause, but a restart-required change always comes back in
+`deferred`, confessed loudly (never silently dropped), for a human to act on.
 
 AVAILABLE, NOT TOTAL, RAM: this host is SHARED with the rest of the fleet's own
-processes (`deploy/postgresql.conf`'s own prior reasoning, measured 2026-08-17) — sizing
-off `MemAvailable` rather than `MemTotal` is the load-bearing difference between this
-module and the usual "25% of RAM" dedicated-server rule of thumb."""
+processes, sizing off `MemAvailable` rather than `MemTotal` is the load-bearing
+difference between this module and the usual "25% of RAM" dedicated-server rule of
+thumb."""
 from __future__ import annotations
 
 import os
@@ -45,7 +43,7 @@ _UNIT_BYTES = {"TB": 1024**4, "GB": 1024**3, "MB": 1024**2, "kB": 1024, "B": 1}
 
 def read_host_resources() -> dict[str, int]:
     """Actual host RAM (total + available, bytes) and CPU count off /proc/meminfo and
-    os.cpu_count() — never a hardcoded sizing-guide fraction, never guessed."""
+    os.cpu_count(), never a hardcoded sizing-guide fraction, never guessed."""
     mem: dict[str, int] = {}
     with open("/proc/meminfo") as f:
         for line in f:
@@ -65,7 +63,7 @@ def compute_recommended(
     """Mixed-workload sizing ratios (the same shape pgtune/postgresqlco.nf formulas use),
     applied against AVAILABLE RAM. `max_connections` is derived from the measured fixed
     daemon budget (`pool_health.pg_activity_by_app`'s own `fixed_budget`) plus a stated
-    ad-hoc/CLI headroom target — docs/DEPLOY.md's own envelope section (the ~41-
+    ad-hoc/CLI headroom target: docs/DEPLOY.md's own envelope section (the ~41-
     connection headroom, the 1,000-session refutation) is this function's justification,
     not a separate fact that has to be kept in sync by hand."""
     avail = mem_available_bytes
@@ -75,7 +73,7 @@ def compute_recommended(
         "effective_cache_size": int(avail * 0.65),
         "maintenance_work_mem": min(1024**3, max(64 * 1024 * 1024, int(avail * 0.05))),
         # Worst-case exposure bounded the same way deploy/postgresql.conf reasoned about
-        # 100 x 32MB by hand (a 3.2GB ceiling) — generalized to whatever max_connections
+        # 100 x 32MB by hand (a 3.2GB ceiling), generalized to whatever max_connections
         # THIS run derives instead of a number fixed once.
         "work_mem": max(4 * 1024 * 1024, min(64 * 1024 * 1024,
                         int(avail * 0.2 / max(max_connections, 1)))),
@@ -112,7 +110,7 @@ def _fmt_value(name: str, recommended: float | int) -> str:
 
 def _significant_change(name: str, current: str, recommended: float | int) -> bool:
     """A >15% swing for memory GUCs, an exact mismatch for max_connections, a >0.05
-    swing for random_page_cost — avoids perpetual no-op churn from rounding at a byte
+    swing for random_page_cost: avoids perpetual no-op churn from rounding at a byte
     boundary (`_fmt_mem`'s own rounding) reading as a "change" every single run."""
     if name == "max_connections":
         return int(current) != int(recommended)
@@ -128,7 +126,7 @@ async def plan_tuning(
     pool: asyncpg.Pool, *, fixed_budget: int, headroom_target: int = 40,
 ) -> dict[str, Any]:
     """Read the live host + live GUCs, compute what's recommended, and return every GUC
-    this module owns that's a SIGNIFICANT distance from its recommended value — applying
+    this module owns that's a SIGNIFICANT distance from its recommended value: applying
     nothing itself (that's `apply_tuning`'s job, kept separate so a caller can inspect
     the plan, e.g. in a dry-run report, before anything touches the running server)."""
     host = read_host_resources()
@@ -151,12 +149,12 @@ async def plan_tuning(
 
 async def apply_tuning(pool: asyncpg.Pool, plan: dict[str, Any]) -> dict[str, Any]:
     """Applies every reloadable change unconditionally (`ALTER SYSTEM` + a single
-    `pg_reload_conf()`, never a stop-the-world — no live backend is interrupted). A
+    `pg_reload_conf()`, never a stop-the-world: no live backend is interrupted). A
     restart-required change also gets `ALTER SYSTEM` (free, takes effect whenever
-    Postgres next restarts, from any cause) but is ALWAYS returned in `deferred` — this
+    Postgres next restarts, from any cause) but is ALWAYS returned in `deferred`: this
     module computes and persists, it never restarts the one shared instance sixteen live
-    agents depend on; that stays the operator's/Thoth's own hand, confessed here loudly
-    so it is never a silent gap."""
+    agents depend on; that stays a human's own hand, confessed here loudly so it is
+    never a silent gap."""
     applied: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
     any_reloadable = False

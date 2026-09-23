@@ -1,29 +1,25 @@
-"""THE OPPORTUNISTIC OFFLOAD RUNNER (operator ruling be21384a, THE BACKUP TOPOLOGY /
-INTERMITTENT TARGETS; Thoth mail 12813): this box is a laptop — the 8TB drive is
-present only when docked, the NAS only on Tailscale/LAN. This runner checks each
-configured `offload_targets[]` entry's presence on every tick, syncs the vault to
-every target that IS present via restic (never auto-mounts, never blocks on an
-absent target, never fails the local backup ladder — every failure here is caught
-and recorded, never raised past `run_offload_tick`'s own boundary), and records
-last-successful-offload per target to a local receipt file — `compositions.py`'s
-own `_fn_backup_status` (`offbox_section`) reads this back directly, the same
-"live filesystem read, never a DB write" pattern every other section of that
-Function already holds, rather than routing per-tick telemetry through
-`backup.offload_targets`'s own settings-authority route (that route is `operator_or_
-ruling` + `requires_because` — correctly heavy for a HUMAN reconfiguring a target,
-wrong for an unattended timer's own routine write).
+"""THE OPPORTUNISTIC OFFLOAD RUNNER (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS): this box
+is a laptop, the 8TB drive is present only when docked, the NAS only on Tailscale/LAN. This
+runner checks each configured `offload_targets[]` entry's presence on every tick, syncs the
+vault to every target that IS present via restic (never auto-mounts, never blocks on an
+absent target, never fails the local backup ladder: every failure here is caught and
+recorded, never raised past `run_offload_tick`'s own boundary), and records
+last-successful-offload per target to a local receipt file. `compositions.py`'s own
+`_fn_backup_status` (`offbox_section`) reads this back directly, the same "live filesystem
+read, never a DB write" pattern every other section of that Function already holds, rather
+than routing per-tick telemetry through `backup.offload_targets`'s own settings-authority
+route (that route is `operator_or_ruling` + `requires_because`: correctly heavy for a HUMAN
+reconfiguring a target, wrong for an unattended timer's own routine write).
 
-CREDENTIALS: `restic_credential.get_restic_password()` — the SAME systemd-creds
-custody KEY CUSTODY REWRITTEN (ruling e0b98ff2) built for the soul-store key,
-"same shape for the restic repository password" per that ruling's own wording. The
-password is set directly as the `RESTIC_PASSWORD` subprocess env var — never a temp
-file, never a CLI argument (visible via `ps`), matching `osiris_offbox_backup.sh`'s
-own long-standing rule.
+CREDENTIALS: `restic_credential.get_restic_password()`, the same systemd-creds custody built
+for the soul-store key, reused unchanged for the restic repository password. The password is
+set directly as the `RESTIC_PASSWORD` subprocess env var, never a temp file, never a CLI
+argument (visible via `ps`), matching `osiris_offbox_backup.sh`'s own long-standing rule.
 
 PRESENCE: 'local' targets use `backup_validation.check_local_target_presence`
 (findmnt against `expected_mountpoint`) exactly as the read-only settings route
 already does. 'restic' targets (the NAS, over sftp) have no local mountpoint to
-check — presence there means "an attempt to reach it, bounded by a real timeout,
+check: presence there means "an attempt to reach it, bounded by a real timeout,
 either succeeds or doesn't"; a reachability failure is treated identically to an
 absent mountpoint (skip, record, never raise), the same "an absent target is the
 expected common case, never an error" law `check_local_target_presence`'s own
@@ -65,7 +61,7 @@ def _read_receipts() -> dict[str, Any]:
 
 def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
     """Merges `receipt`'s fields into the existing per-target record rather than
-    replacing it wholesale — a failed tick must never CLOBBER a real prior
+    replacing it wholesale: a failed tick must never CLOBBER a real prior
     `last_successful_offload` with None; it only ever adds `last_attempt_at`/
     `last_error` alongside whatever succeeded most recently."""
     path = _receipts_path()
@@ -78,8 +74,8 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
 
 
 def offload_receipts() -> dict[str, Any]:
-    """Public read entry point for `compositions._fn_backup_status`'s own `offbox_section`
-    — never writes, mirrors `_read_receipts` under a name that doesn't look
+    """Public read entry point for `compositions._fn_backup_status`'s own `offbox_section`,
+    never writes, mirrors `_read_receipts` under a name that doesn't look
     private to an external caller."""
     return _read_receipts()
 
@@ -87,11 +83,11 @@ def offload_receipts() -> dict[str, Any]:
 def _run_restic_backup(
     *, repository: str, password: bytes, source: Path, init_if_needed: bool = True,
 ) -> str | None:
-    """Returns a failure string, or None on success — same return convention as
+    """Returns a failure string, or None on success, same return convention as
     `osiris_offbox_restore_drill.run_drill`. `restic init` runs once per
     repository, idempotently, the same guard `osiris_offbox_backup.sh` already
     uses (`restic snapshots` failing first is how an uninitialized repo is told
-    apart from a genuinely unreachable one — an unreachable one fails `init` too,
+    apart from a genuinely unreachable one: an unreachable one fails `init` too,
     caught the same way as any other restic failure below, never a special case)."""
     env = {**os.environ, "RESTIC_REPOSITORY": repository, "RESTIC_PASSWORD": password.decode()}
     try:
@@ -115,7 +111,7 @@ def _run_restic_backup(
 
 
 async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> dict[str, Any]:
-    """ONE TICK — meant to be `osiris-offload.timer`'s own `ExecStart`, opportunistic
+    """ONE TICK, meant to be `osiris-offload.timer`'s own `ExecStart`, opportunistic
     (never blocks, never fails the caller): for every ENABLED `offload_targets[]`
     row that is PRESENT right now, runs one restic backup, records a receipt.
     Absent/disabled targets are reported, never treated as an error. A missing
@@ -160,9 +156,9 @@ async def run_offload_tick(pool: asyncpg.Pool, *, vault: Path | None = None) -> 
             results.append({"name": name, "ok": True})
         else:
             # a 'restic' target's own unreachability surfaces here identically to a
-            # genuine backup failure — this runner has no separate network-reachable
-            # probe for restic targets (Thoth's own repeated instruction elsewhere in
-            # this domain: never a network call outside the real operation itself),
+            # genuine backup failure: this runner has no separate network-reachable
+            # probe for restic targets (the standing rule in this domain is never a
+            # network call outside the real operation itself),
             # so "tried and failed" is the only signal a sftp/NAS target ever gets.
             _write_receipt(name, {"last_attempt_at": now, "last_error": fail})
             results.append({"name": name, "ok": False, "error": fail})

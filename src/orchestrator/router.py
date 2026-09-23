@@ -1,4 +1,4 @@
-"""The router — per-(helper, object) routing decision (DESIGN §7).
+"""The router: per-(helper, object) routing decision (DESIGN §7).
 
 Phase 3 implements the tier=open path: cache -> token bucket -> server worker /
 defer. Fragile/gated/manual tiers return placeholder routes until their phases
@@ -79,7 +79,7 @@ async def route(
 
     if manifest.tier == "gated":
         # A valid (IP, UA)-bound lease lets us skip the human and reuse the solved
-        # session server-side — the single-box happy path (same egress IP).
+        # session server-side: the single-box happy path (same egress IP).
         if lease_store is not None and current_ip is not None:
             lease = await lease_store.get(manifest.origin)
             if lease is not None and valid_for_server_egress(lease, current_ip):

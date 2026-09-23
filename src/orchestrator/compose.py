@@ -1,10 +1,10 @@
-"""Compose — document → sourced lead, done right (cron Phase 5).
+"""Compose: document to sourced lead, done right (cron Phase 5).
 
 This is the whole point of the persistence ladder: a cron that *watches* a document
 source, *AI-extracts* each new document into graded entities, *resolves* them against
 what the graph already knows, and lets the subscription evaluator fire a *sourced
 lead*. It composes Phase 3 (the delta watcher) and Phase 4 (the universal extractor)
-with the kernel's resolution — no new collection primitive, just the pipeline.
+with the kernel's resolution: no new collection primitive, just the pipeline.
 
 Every part is injected (delta puller, document fetch, LLM) so the pipeline is hermetic
 and source-agnostic; a real source supplies the three callables. Two cursors keep the
@@ -32,7 +32,7 @@ logger = logging.getLogger("osiris.compose")
 class DocRef:
     """A document the watcher found. `doc_id` dedups, `date` is the cursor field,
     `text` may already be carried by the delta (else `fetch` is called). `media_type`
-    drives normalization — a scanned `image/*`/`application/pdf` page is OCR'd to text
+    drives normalization: a scanned `image/*`/`application/pdf` page is OCR'd to text
     via the vision provider before extraction (county notices are images)."""
 
     doc_id: str
@@ -63,14 +63,14 @@ async def watch_extract_tick(
     graded entities, resolve cross-base, advance the cursor. The extracted nodes write
     the outbox, so a saved subscription fires the lead. Returns roll-up counts.
 
-    `llm` defaults to the configured provider (`auto` → the LOCAL claude CLI on the core
-    box, keyless; an API key on a satellite) — the deployment wires the backend, not the
-    caller. A single bad document (fetch error, garbage text) is logged and skipped — it
+    `llm` defaults to the configured provider (`auto` picks the LOCAL claude CLI on the core
+    box, keyless; an API key on a satellite): the deployment wires the backend, not the
+    caller. A single bad document (fetch error, garbage text) is logged and skipped, it
     must never abort the cron or lose the cursor for the documents that did parse."""
     llm = llm or llm_provider()
     if llm is None:
         raise RuntimeError(
-            "no LLM provider for compose — install Claude Code (provider 'auto'/'claude-cli') "
+            "no LLM provider for compose, install Claude Code (provider 'auto'/'claude-cli') "
             "or set ANTHROPIC_API_KEY (the extraction seam)"
         )
     pool = actions.pool

@@ -2,7 +2,7 @@
 
 The operator opens the parked URL in their genuine Chrome (over CDP); we scrape
 the rendered DOM, capture the session cookies as a lease for later server-side
-reuse, run the helper's scraper to shape the result, and post it back — which
+reuse, run the helper's scraper to shape the result, and post it back, which
 finishes the run and lets downstream triggers cascade. This is the live path
 that complements the analyst manually posting back from a browser extension.
 """
@@ -71,7 +71,7 @@ async def cobrowse_open(
     lease_ttl_seconds: int = 900,
 ) -> dict[str, Any]:
     """Open a handoff's URL in a real browser, capture the session as a lease, and
-    return a summary for the analyst to review (no auto-parse — they post back or
+    return a summary for the analyst to review (no auto-parse; they post back or
     promote). The lightweight path for arbitrary gated/suggest link-outs."""
     row = await actions.pool.fetchrow(
         "SELECT url FROM handoffs WHERE id=$1 AND resolved_at IS NULL", handoff_id

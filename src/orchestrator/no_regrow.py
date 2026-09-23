@@ -1,42 +1,42 @@
-"""THE NO-REGROW RULE (operator's word via Thoth msg 8606/8618, 2026-09-09, dispatched
-in the same breath as the owner-law residue fix): an open obligation Thread that carries
-a `stale_after` and has drawn NO annotate/owner-change/resolution touch for N=7 days
-PAST that timestamp reclassifies to kind='task' by the heartbeat -- with a receipt on the
-owner's own mail, never silent. NEVER RESOLVED by this sweep: `status` is left exactly as
-it was, only `kind` moves, so the thread drops off the obligation wall's own ranking
-without erasing it or lying about whether it actually closed.
+"""THE NO-REGROW RULE, dispatched in the same breath as the owner-law residue fix: an
+open obligation Thread that carries a `stale_after` and has drawn NO annotate/owner-
+change/resolution touch for N=7 days PAST that timestamp reclassifies to kind='task' by
+the heartbeat, with a receipt on the owner's own mail, never silent. NEVER RESOLVED by
+this sweep: `status` is left exactly as it was, only `kind` moves, so the thread drops
+off the obligation wall's own ranking without erasing it or lying about whether it
+actually closed.
 
 DISTINCT FROM obligation_hygiene.py's OWN no-regrow leg (N1=7/N2=7 idle-since-last-touch,
-a DM nudge then a STALE-CANDIDATE marker, never touches `kind`) -- that sweep already
-ships and stays exactly as it is. This is a SEPARATE clock, keyed off `stale_after` (a
-property every open_thread already writes, carrying its own decided window) rather than
-idle-since-creation, and it actually MOVES the thread's own classification once the
-window closes, matching #203's own no-regrow proposal by name ("an obligation with no
+a DM nudge then a STALE-CANDIDATE marker, never touches `kind`), which already ships and
+stays exactly as it is. This is a SEPARATE clock, keyed off `stale_after` (a property
+every open_thread already writes, carrying its own decided window) rather than idle-
+since-creation, and it actually MOVES the thread's own classification once the window
+closes, matching the standing no-regrow proposal by name ("an obligation with no
 annotate, no owner change and no resolution for 7 days past its stale_after reclassifies
-to task"). Reuses reclassify_thread (capture.py) for the write -- the SAME sanctioned
+to task"). Reuses reclassify_thread (capture.py) for the write, the SAME sanctioned
 triage verb `thread(action='reclassify')` calls, never a second copy of the kind-mutation
-logic -- and obligation_hygiene.py's own owner-resolution ladder (`resolve_owner_target`/
+logic, and obligation_hygiene.py's own owner-resolution ladder (`resolve_owner_target`/
 `_nudge_owner`) for the receipt, never a third re-derivation of "who does this owner
 string address."
 
 TOUCHED, exactly as ruled: any self_declared write on the thread AFTER its own
-`stale_after` timestamp -- annotate, an owner reassignment, a corrected_summary, a
-resolve, anything -- resets the window entirely; a thread genuinely worked after going
-stale is never swept out from under a mind mid-conversation. Reuses `last_touched`, the
+`stale_after` timestamp (annotate, an owner reassignment, a corrected_summary, a
+resolve, anything) resets the window entirely; a thread genuinely worked after going
+stale is never swept out from under a human mid-conversation. Reuses `last_touched`, the
 SAME authoritative clock (the freshest self_declared assertion's own observed_at) every
-other wall/hygiene reader in this house already trusts -- never a second, drifting
+other wall/hygiene reader in this house already trusts, never a second, drifting
 definition of "touched."
 
 Same mirrored plan/execute split as obligation_hygiene.py and phantom_fold_reap.py: a
 pure `plan_no_regrow` dry-run report, then a separately-gated `apply_no_regrow`. A row's
-own mail hiccup on the receipt is caught and reported inline on that row -- never aborts
+own mail hiccup on the receipt is caught and reported inline on that row, never aborts
 the batch, same law as its siblings.
 
-CONTESTED IS EXCLUDED, fix (d) (Metron's mechanism report, mail 8890/8921/8922): a
-thread whose newest note disputes its own summary never reclassifies here, even past
-the grace window -- doing so would drop a false headline off the obligation wall right
-when it most needs a human's eye, backwards from the rule's own purpose. The exclusion
-lifts once the summary is corrected or the thread resolves, same as the marker itself."""
+CONTESTED IS EXCLUDED: a thread whose newest note disputes its own summary never
+reclassifies here, even past the grace window, since doing so would drop a false
+headline off the obligation wall right when it most needs a human's eye, backwards from
+the rule's own purpose. The exclusion lifts once the summary is corrected or the thread
+resolves, same as the marker itself."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -77,10 +77,10 @@ async def _candidate_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     `last_touched` (the freshest self_declared write's own observed_at, or the thread's
     own creation time when never touched at all).
 
-    `contested` (fix (d), Metron's mechanism report, mail 8890/8921/8922): present so
-    `plan_no_regrow` can EXCLUDE a disputed thread from reclassification — reclassifying
-    away from 'obligation' would let a false headline drop off the obligation wall right
-    when a note has just proven it wrong, exactly backwards from what should happen."""
+    `contested`: present so `plan_no_regrow` can EXCLUDE a disputed thread from
+    reclassification, since reclassifying away from 'obligation' would let a false
+    headline drop off the obligation wall right when a note has just proven it wrong,
+    exactly backwards from what should happen."""
     from src.orchestrator.capture import CONTESTED_SQL
 
     rows = await pool.fetch(
@@ -110,7 +110,7 @@ def _parse_dt(value: Any) -> datetime | None:
 async def plan_no_regrow(
     pool: asyncpg.Pool, *, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """THE REPORT — every open obligation Thread with a `stale_after`, bucketed into
+    """THE REPORT: every open obligation Thread with a `stale_after`, bucketed into
     would_reclassify / no_action with the reason named. Writes NOTHING."""
     now = now or datetime.now(UTC)
     rows = await _candidate_rows(pool)
@@ -126,14 +126,14 @@ async def plan_no_regrow(
             "last_touched": last_touched.isoformat() if last_touched else None,
         }
         if last_touched is not None and last_touched > stale_after:
-            no_action.append({**item, "reason": "touched since going stale — window reset"})
+            no_action.append({**item, "reason": "touched since going stale, window reset"})
             continue
         if r["contested"]:
-            # fix (d), mail 8890/8921/8922: a note has disputed this summary and nothing
-            # has corrected it yet — reclassifying away from 'obligation' now would drop
-            # a false headline off the wall right when it most needs a human's eye, the
-            # exact opposite of what this rule exists to do.
-            no_action.append({**item, "reason": "CONTESTED — a newer note disputes this "
+            # A note has disputed this summary and nothing has corrected it yet.
+            # Reclassifying away from 'obligation' now would drop a false headline off
+            # the wall right when it most needs a human's eye, the exact opposite of
+            # what this rule exists to do.
+            no_action.append({**item, "reason": "CONTESTED: a newer note disputes this "
                                                 "summary; correct it or resolve it "
                                                 "before this reclassifies"})
             continue
@@ -153,12 +153,12 @@ async def apply_no_regrow(
     actions: Actions, *, actor: str = _SANCTIONED_NO_REGROW_ACTOR, execute: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """THE ACTING HALF. DRY RUN IS THE DEFAULT (`execute=False`) — re-reads the tray via
+    """THE ACTING HALF. DRY RUN IS THE DEFAULT (`execute=False`): re-reads the tray via
     `plan_no_regrow` (never trusts a caller-supplied stale report), returning the plan
     without writing anything. On `execute=True`: `reclassify_thread(kind='task')` per row
-    (status untouched — never a resolve), plus a receipt DM to the owner (or the
+    (status untouched, never a resolve), plus a receipt DM to the owner (or the
     operator's desk, per the SAME owner-address fallback obligation_hygiene.py's own
-    `_nudge_owner` already implements — never a second copy of that ladder). A row's own
+    `_nudge_owner` already implements, never a second copy of that ladder). A row's own
     mail hiccup is caught and reported inline; the reclassification itself still lands."""
     from src.orchestrator.capture import reclassify_thread
     from src.orchestrator.obligation_hygiene import _nudge_owner
@@ -169,33 +169,33 @@ async def apply_no_regrow(
         "would_reclassify": report["would_reclassify"], "execute": execute,
     }
     if not execute:
-        plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        plan["note"] = "PLAN ONLY, call with execute=True to write. Nothing touched."
         return plan
 
     reclassified: list[dict[str, Any]] = []
     for item in plan["would_reclassify"]:
         because = (
             f"no-regrow rule: no annotate/owner-change/resolution for {N_GRACE_DAYS}+ "
-            f"days past stale_after ({item['stale_after']}) — auto-reclassified, never "
+            f"days past stale_after ({item['stale_after']}), auto-reclassified, never "
             "auto-resolved")
         tid = await reclassify_thread(
             actions, item["thread_id"], kind="task", because=because, source=actor)
         body = (
-            f"NO-REGROW RECLASSIFICATION — thread {item['thread_id'][:8]} "
+            f"NO-REGROW RECLASSIFICATION: thread {item['thread_id'][:8]} "
             f"({item['summary']!r}) went {N_GRACE_DAYS}+ days past its own stale_after "
             "with no touch, and has been reclassified kind='task' by the heartbeat. "
-            "Status is UNCHANGED — this never resolves anything on its own authority. "
+            "Status is UNCHANGED: this never resolves anything on its own authority. "
             "Annotate, reclassify back to 'obligation', or resolve it if it's still (or "
             "again) owed work.")
         try:
             sent = await _nudge_owner(actions.pool, item["owner"], actor=actor, body=body)
-        except Exception as exc:  # noqa: BLE001 — a mail hiccup must not skip the write
+        except Exception as exc:  # noqa: BLE001 - a mail hiccup must not skip the write
             sent = {"error": f"{type(exc).__name__}: {exc}"}
         reclassified.append({**item, "thread": str(tid), "receipt": sent})
 
     plan.update({
         "reclassified": reclassified,
-        "note": "EXECUTED — kind='task' and a receipt attempted for every row named above.",
+        "note": "EXECUTED: kind='task' and a receipt attempted for every row named above.",
     })
     return plan
 
@@ -203,9 +203,9 @@ async def apply_no_regrow(
 async def no_regrow_scheduled_tick(
     actions: Actions, *, settings: Settings | None = None, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """THE SCHEDULED LEG's own tick — `arq_worker.no_regrow_heartbeat` calls this
+    """THE SCHEDULED LEG's own tick: `arq_worker.no_regrow_heartbeat` calls this
     unconditionally, the same thin-shim shape every other scheduled writer in this house
-    uses. OFF unless `osiris_no_regrow_enabled` (dark-by-default — no explicit "ship it
+    uses. OFF unless `osiris_no_regrow_enabled` (dark-by-default, no explicit "ship it
     ON" instruction accompanied this dispatch, unlike obligation_hygiene_enabled/
     retention_heartbeat_enabled's own named exceptions)."""
     st = settings or get_settings()

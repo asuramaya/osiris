@@ -1,47 +1,47 @@
-"""THE SURFACE — one segment authority above vitals (ruling e9ef7373, 2026-07-21).
+"""THE SURFACE: one segment authority above vitals.
 
-THE PROBLEM, proven by the '$12/$10' bug (decision 5afabc9e): vitals.py already consolidated
-the raw NUMBERS (live_souls / operator_debts / wakes_hour) — 'same word, same number, same SQL'
-— but the PRESENTATION RULES never were. 'show $X/$10 only when metered, only past 60% of cap,
-amber→red at 85%' was written three times (mounts.fleet_pulse, digest._costs + api.membrane,
-scripts/osiris_statusline.py), and a one-line rule change took three commits and still missed
-one.
+THE PROBLEM, proven by the '$12/$10' bug: vitals.py already consolidated the raw NUMBERS
+(live_souls / operator_debts / wakes_hour), 'same word, same number, same SQL', but the
+PRESENTATION RULES never were. 'show $X/$10 only when metered, only past 60% of cap,
+amber to red at 85%' was written three times (mounts.fleet_pulse, digest._costs +
+api.membrane, scripts/osiris_statusline.py), and a one-line rule change took three
+commits and still missed one.
 
-THE FIX: this module computes every AMBIENT GLANCE segment — live, owed/owed_here, briefs
+THE FIX: this module computes every AMBIENT GLANCE segment (live, owed/owed_here, briefs
 (total + this-agent's-own), wakes, spend, sensing health, and mail (broadcasts + in-flight +
-DMs) — exactly ONCE, with every threshold/gate/severity rule already applied. A renderer
+DMs)) exactly ONCE, with every threshold/gate/severity rule already applied. A renderer
 (fleet_pulse's one-liner, the statusline's ANSI strip, the membrane header's HTML spans) does
 ZERO fetching and ZERO rule logic: it picks the segments it wants, in the order it wants, and
 formats `value`/`data`/`severity` in its own medium.
 
 SCOPE = the ambient glance segments shared across strip+pulse+console-header. It is explicitly
-NOT the console's deep detail sections (costs breakdown, roster, laundering/disputes, activity)
-— those stay console-specific (src/orchestrator/digest.py). `context%` is also out of scope on
+NOT the console's deep detail sections (costs breakdown, roster, laundering/disputes, activity):
+those stay console-specific (src/orchestrator/digest.py). `context%` is also out of scope on
 purpose: it is read straight off the harness's own payload/transcript, session-local, never a
-DB fact — there is nothing here for it to share.
+DB fact, there is nothing here for it to share.
 
 WHY SOME SEGMENTS COME IN TWO VARIANTS: the surfaces don't just duplicate the SAME rule for
-`owed` and `briefs` — they deliberately compute DIFFERENT SCOPES, per two distinct operator
-rulings that predate this module and stay in force here: 'owe' is FLEET-WIDE on the orient
-pulse (`owed`) but THIS-PROJECT-ONLY on the statusline (`owed_here`, 2026-07-16: 'a number you
-can do nothing about from this directory is wallpaper'); 'briefs' is the WHOLE DESK on the
-pulse (`briefs_total`) but THIS AGENT'S OWN on the statusline (`briefs_mine`, 2026-07-16: 'desk
-should not be globally scoped... only scope what is for or from the agent'). Both variants are
-computed here, once, from the same underlying authority — a renderer picks the one its surface
-has always shown.
+`owed` and `briefs`, they deliberately compute DIFFERENT SCOPES, per two distinct decisions
+that predate this module and stay in force here: 'owe' is FLEET-WIDE on the orient pulse
+(`owed`) but THIS-PROJECT-ONLY on the statusline (`owed_here`: a number an agent can do
+nothing about from its current directory is wallpaper); 'briefs' is the WHOLE DESK on the
+pulse (`briefs_total`) but THIS AGENT'S OWN on the statusline (`briefs_mine`: the desk should
+not be globally scoped, only scope what is for or from the agent). Both variants are computed
+here, once, from the same underlying authority: a renderer picks the one its surface has
+always shown.
 
 WHY `show` ISN'T UNIFORM EITHER: some segments are ambient-always (live/owed/owed_here/
-briefs_total/wakes/mail — every surface that renders them shows them every time, healthy or
-not); others are dark-until-it-matters (sensing, briefs_mine, spend on the alert convention) —
+briefs_total/wakes/mail, every surface that renders them shows them every time, healthy or
+not); others are dark-until-it-matters (sensing, briefs_mine, spend on the alert convention):
 an always-red debt teaches the eye to stop reading it. `severity` is the one TRUE, single-
 computed urgency (ok/amber/red/alarm); `show` on those segments follows the dark-until-matters
 convention directly. The one deliberate, documented exception: fleet_pulse's `spend` has never
-gated on severity (it shows the figure whenever spend is metered, full stop, no threshold) — its
+gated on severity (it shows the figure whenever spend is metered, full stop, no threshold); its
 renderer reads `segment.data["metered"]` itself rather than `segment.show` for that one field;
 see the migration note in mounts.fleet_pulse.
 
 PERF CONSTRAINT (load-bearing, non-negotiable): the statusline forks a fresh cold-connect
-process every ~10s. `fetch()` is the renderer's ONLY database contact — one call, sequential
+process every ~10s. `fetch()` is the renderer's ONLY database contact: one call, sequential
 awaits on whatever connection-like object it's handed (a bare short-lived Connection for the
 statusline, a pool for the long-lived servers; both quack fetchrow/fetchval, same contract
 vitals.py's `_DB` Protocol already relies on). Concurrent gather is deliberately NOT used here:
@@ -64,7 +64,7 @@ class Segment:
     enough for a consumer that just wants a label); `data` carries the raw numbers a renderer
     needs to reconstruct its OWN historical exact text (fleet_pulse's plain line and the
     statusline's per-substring ANSI coloring are not the same string shape, and were never
-    meant to become one — only the rule that PRODUCES their numbers was ever meant to unify)."""
+    meant to become one; only the rule that PRODUCES their numbers was ever meant to unify)."""
 
     key: str
     show: bool
@@ -92,14 +92,13 @@ class Segments:
 
 
 async def _sensing(conn: Any) -> list[str]:
-    """Is Osiris still SENSING? NOT relocated verbatim from a single statusline copy — this
-    rule was hand-duplicated at THREE sites (this function, monitor.py's `_verdict`, and
-    scripts/osiris_fleet_glance.py's own inline copy) before `sick_after_secs` collapsed the
-    threshold itself into one place (Thoth msg 6327, following the '$12/$10' bug this whole
-    module exists to prevent). A job is sick if it has never confessed an ok, or if it has
-    gone past `sick_after_secs(every)` quiet. Computed HERE, at read time, in a process that
-    is alive by construction (a watchdog cron would live inside the very worker that died,
-    2026-07-12's ten-hour outage)."""
+    """Is Osiris still SENSING? This rule was hand-duplicated at THREE sites (this function,
+    monitor.py's `_verdict`, and scripts/osiris_fleet_glance.py's own inline copy) before
+    `sick_after_secs` collapsed the threshold itself into one place, following the '$12/$10'
+    bug this whole module exists to prevent. A job is sick if it has never confessed an ok,
+    or if it has gone past `sick_after_secs(every)` quiet. Computed HERE, at read time, in a
+    process that is alive by construction (a watchdog cron would live inside the very worker
+    that died, in a past ten-hour outage)."""
     from src.orchestrator.monitor import sick_after_secs
 
     jobs = await conn.fetch("SELECT key, cursor FROM watermarks WHERE key LIKE 'job:%'")
@@ -127,7 +126,7 @@ async def fetch(
     lease_secs: int = 900,
     live_secs: int = 900,
 ) -> Segments:
-    """THE single lean batched fetch. `conn` is a pool or a live connection — anything that
+    """THE single lean batched fetch. `conn` is a pool or a live connection: anything that
     quacks fetchrow/fetchval/fetch, same contract as vitals.py's `_DB` Protocol. `project` and
     `agent` scope the this-project/this-agent variants (owed_here, briefs_mine, mail, flight);
     omit either and that variant reads as the identity-less/whole-desk default the underlying
@@ -185,8 +184,9 @@ async def fetch(
     wakes_seg = Segment("wakes", show=True, value=f"wakes {wakes_n}/h",
                         data={"wakes": wakes_n}, link="wakes")
 
-    # dm lights the segment BY ITSELF (the Alfred chain, 2026-07-19: seven DMs waiting, mail 0,
-    # flight 0 — a render condition that forgot `dm` rendered a dim "mail 0" over live traffic).
+    # dm lights the segment BY ITSELF: a past incident had seven DMs waiting, mail 0,
+    # flight 0, and a render condition that forgot `dm` rendered a dim "mail 0" over live
+    # traffic.
     mail_severity: Severity = (
         "alarm" if split["dm"] else "amber" if flight_n else "ok")
     mail_seg = Segment(

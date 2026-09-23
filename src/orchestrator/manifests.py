@@ -1,6 +1,6 @@
 """Helper manifests: load YAML, validate, and project the trigger table.
 
-Ruling #5: triggers are a *pure projection* of manifests — never hand-edited.
+Triggers are a *pure projection* of manifests: never hand-edited.
 `project_triggers` rebuilds the `triggers` table from the loaded manifest set,
 preserving only the analyst's per-trigger `enabled` flag across rebuilds. A
 helper that needs no properties triggers on `object_created`; one that requires
@@ -82,8 +82,8 @@ async def project_triggers(pool: asyncpg.Pool, manifests: dict[str, Manifest]) -
     """Rebuild the triggers table from manifests; keep prior `enabled` flags.
     Returns the number of triggers written.
 
-    NO ACCESS EXCLUSIVE LOCK (Thoth mail 10214, a live incident): this used to
-    `TRUNCATE triggers RESTART IDENTITY`, which needs ACCESS EXCLUSIVE — a concurrent
+    NO ACCESS EXCLUSIVE LOCK (from a live incident): this used to
+    `TRUNCATE triggers RESTART IDENTITY`, which needs ACCESS EXCLUSIVE, and a concurrent
     pg_dump's own (much weaker) lock on this table was enough to block that TRUNCATE,
     which in turn blocked console startup (this runs in the ASGI lifespan) behind a
     backup that had nothing to do with it. DELETE + upsert-by-`helper_id` (migration
@@ -92,7 +92,7 @@ async def project_triggers(pool: asyncpg.Pool, manifests: dict[str, Manifest]) -
     helper_id) never touches that column at all, so the analyst's own flag survives;
     a fresh INSERT (a helper_id absent from the table right now) uses the manifest's
     own default, same as a helper reappearing after removal always did. `SET LOCAL
-    lock_timeout` is the last line of defense — some OTHER exclusive-lock holder this
+    lock_timeout` is the last line of defense: some OTHER exclusive-lock holder this
     function doesn't anticipate must never hang the ASGI app forever; the caller (the
     lifespan startup path) catches the resulting `LockNotAvailableError` and leaves the
     previous projection in place rather than failing to bind."""

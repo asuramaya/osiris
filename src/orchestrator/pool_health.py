@@ -1,4 +1,4 @@
-"""pool_health — the pg_stat_activity-by-daemon surface (task #180 piece 2 (c), msg 5253).
+"""pool_health: the pg_stat_activity-by-daemon surface.
 
 Bounded per-daemon pools (src/db/pool.py's new `application_name` kwarg, src/config/
 settings.py's osiris_{mcp,worker,api,manager}_pool_size) tag every connection a daemon
@@ -9,18 +9,18 @@ os_bodies/ghost_gap beside it.
 
 TX RATE IS A CUMULATIVE COUNTER, NOT A LIVE RATE: `pg_stat_database.xact_commit` +
 `xact_rollback` are running totals since the last stats reset (`pg_stat_reset()`), not a
-per-second figure — a single `fleet()` call has no prior sample to diff against. Naming
+per-second figure, a single `fleet()` call has no prior sample to diff against. Naming
 it `tx_total` (not `tx_rate`) is deliberate: a caller who wants an actual rate takes two
 readings and divides by the elapsed time themselves; this module does not guess a window
-nobody gave it. The 01:35Z baseline (23 backends, ~8,300 tx/min idle) this task cites was
-itself derived that way — two `pg_stat_database` reads, not a single instantaneous one.
+nobody gave it. A measured baseline (23 backends, ~8,300 tx/min idle) was
+itself derived that way, two `pg_stat_database` reads, not a single instantaneous one.
 
-THE ENVELOPE (msg 5340, "fleet() pool_health shows the envelope"): `caps` rides beside
-`by_application` — each daemon's CONFIGURED bound (`osiris_{mcp,worker,api,manager}_
+THE ENVELOPE: `caps` rides beside
+`by_application`, each daemon's CONFIGURED bound (`osiris_{mcp,worker,api,manager}_
 pool_size`, the same settings `src/db/pool.py`'s callers already pass as `max_size`)
 next to its current live backend count and the resulting utilization percentage. A
 reader gets "how full is each pool RIGHT NOW relative to its own ceiling" in the same
-call that already answers "which daemon holds these backends" — the fixed-budget-vs-
+call that already answers "which daemon holds these backends", the fixed-budget-vs-
 `max_connections` arithmetic `docs/DEPLOY.md`'s own envelope section already reasons
 about, but read live instead of asserted from memory."""
 from __future__ import annotations
@@ -31,7 +31,7 @@ import asyncpg
 
 from src.db.pool import pool_acquire_wait_stats
 
-# Mirrors src/config/settings.py's own defaults — kept here as a fallback ONLY for a
+# Mirrors src/config/settings.py's own defaults, kept here as a fallback ONLY for a
 # caller with no live Settings object to hand (never authoritative; `caps` always prefers
 # a live `get_settings()` read when available, see `pg_activity_by_app`'s own body).
 _KNOWN_DAEMON_POOL_SETTINGS = {
@@ -43,7 +43,7 @@ _KNOWN_DAEMON_POOL_SETTINGS = {
 
 
 async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Best-effort — any read failure returns an empty shape, never raises. Scoped to
+    """Best-effort, any read failure returns an empty shape, never raises. Scoped to
     THIS database only (`datname = current_database()`): a shared Postgres instance can
     carry other databases' backends, which are not this house's business to report."""
     rows = await pool.fetch(
@@ -87,9 +87,9 @@ async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
         "headroom": (max_connections - fixed_budget) if max_connections is not None else None,
         "pg_autotune": await _last_scheduled_run(pool, "job:pg-autotune"),
         "retention_reaper": await _last_scheduled_run(pool, "job:retention-reaper"),
-        # THE ANSWER pg_stat_activity structurally cannot give (thread e4a5755a):
+        # THE ANSWER pg_stat_activity structurally cannot give:
         # queueing for a free connection happens client-side, before any backend is
-        # touched, so it's invisible to any Postgres-side view — src/db/pool.py's own
+        # touched, so it's invisible to any Postgres-side view, src/db/pool.py's own
         # acquire()-timing wrapper is the only place this can be measured. `{"count":
         # 0}` when THIS pool's own acquire was never wrapped (a caller other than
         # src.db.pool.create_pool) or has never been called yet.
@@ -98,11 +98,11 @@ async def pg_activity_by_app(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def _last_scheduled_run(pool: asyncpg.Pool, key: str) -> Any:
-    """The CONFESSION half of msg 5397's autotune/retention build — the before/after
+    """The confession half of the autotune/retention build: the before/after
     (or row counts) the last scheduled run recorded into its own `job:%` watermark
     (`osiris_fleet_glance.py`'s own sick-job convention), read back here so a caller of
     `fleet()` sees what the machine last decided without a separate query. Best-effort:
-    no watermark row yet, or a malformed one, reads as None — never raises."""
+    no watermark row yet, or a malformed one, reads as None, never raises."""
     import json
 
     raw = await pool.fetchval("SELECT cursor FROM watermarks WHERE key=$1", key)

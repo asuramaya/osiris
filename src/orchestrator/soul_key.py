@@ -1,9 +1,9 @@
-"""soul_key — THE KEY API's own orchestration layer (Thoth mail 12810/12830, wave 17):
-composes `src.ingest.soul_crypto` (pool-free, filesystem-only key primitives) with
+"""soul_key: THE KEY API's own orchestration layer, composing
+`src.ingest.soul_crypto` (pool-free, filesystem-only key primitives) with
 `src.ingest.soul_store` (the DB-touching legacy-row census and rewrap pass) and
 `scripts.osiris_offbox_restore_drill` into the three dict-in/dict-out functions BOTH
 `osiris soul-key <action>` (src/cli.py's own `cmd_soul_key`) and the `/soul-key/*` REST
-routes (src/api/app.py) call — never one wrapping the other, the same split every other
+routes (src/api/app.py) call, never one wrapping the other, the same split every other
 domain in this house already holds (backup_settings.py, settings_service.py).
 
 status/rotate/restore-drill all need Postgres; init stays pool-free (a thin pass-through
@@ -22,12 +22,12 @@ async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dic
     (still-plaintext) row count off the store itself, built against the EXPLICIT
     resolved key path rather than whatever the caller process's own env/default
     would resolve to (`soul_store.encrypt_existing_soul_lines`'s own `fernet=`
-    seam) — the exact defect a hand-run `--path` census surfaced during this
+    seam), the exact defect a hand-run `--path` census surfaced during this
     route's own build. NEVER the key bytes.
 
-    `rp_id` (Thoth mail 13006): the live `soul_key.rp_id` setting, surfaced here
-    so Seshat's console reads it off this SAME route (GET /soul-key/status)
-    instead of hard-coding a second copy — a future browser-based WebAuthn PRF
+    `rp_id`: the live `soul_key.rp_id` setting, surfaced here
+    so the console reads it off this SAME route (GET /soul-key/status)
+    instead of hard-coding a second copy, a future browser-based WebAuthn PRF
     enrollment needs the exact value the CLI's own `enroll-recovery` used."""
     from src.ingest import soul_crypto
     from src.orchestrator.settings_service import get_setting
@@ -63,7 +63,7 @@ async def soul_key_rotate(
     real (`dry_run=False`) using the two keys `begin` just handed back, so every row
     that exists RIGHT NOW moves onto the new primary in the same call. With
     `finish`: refuses unless a rotation is in flight, refuses unless a FRESH
-    dry-run re-wrap census comes back clean (zero rewrapped, zero broken — a
+    dry-run re-wrap census comes back clean (zero rewrapped, zero broken, a
     not-yet-restarted daemon may still be writing under the old key), then calls
     `soul_crypto.soul_key_rotate_finish` to remove the legacy key."""
     from cryptography.fernet import Fernet
@@ -74,7 +74,7 @@ async def soul_key_rotate(
     status = soul_crypto.soul_key_status(path=path)
     if finish:
         if not status["rotation_in_flight"]:
-            return {"error": "no rotation in flight — nothing to finish"}
+            return {"error": "no rotation in flight, nothing to finish"}
         resolved = Path(status["path"])
         # read_key_bytes_at/read_legacy_key_bytes decode EITHER backend
         # (systemd-creds or legacy plaintext) -- a raw .read_bytes() here would
@@ -90,7 +90,7 @@ async def soul_key_rotate(
         broken = census["hot_broken_count"] + census["cold_broken_count"]
         if remaining or broken:
             return {"error": f"{remaining} row(s) still under the old key and "
-                             f"{broken} broken row(s) found — re-run `osiris "
+                             f"{broken} broken row(s) found, re-run `osiris "
                              "soul-key rotate` (without --finish) to sweep them "
                              "before finishing", "census": census}
         return soul_crypto.soul_key_rotate_finish(path=path)
@@ -113,7 +113,7 @@ async def soul_key_restore_drill(
     """Wraps `scripts.osiris_offbox_restore_drill.run_drill` directly (the same
     function that script's own `main()` calls, never a duplicated subprocess
     shell-out). `repo_url` explicit, or every URL in `backup.offbox_repositories`
-    (`src.orchestrator.backup_settings.get_backup_settings`) when omitted — one
+    (`src.orchestrator.backup_settings.get_backup_settings`) when omitted, one
     drill per configured repository, never guessing which one the operator meant.
     A top-level `error` key is set whenever any drill fails (never only per-drill),
     so a generic caller's own error-key check reports the right exit code / HTTP

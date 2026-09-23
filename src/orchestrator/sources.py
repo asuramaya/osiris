@@ -1,9 +1,9 @@
-"""Source & analysis registry — the investigation playbook, as data.
+"""Source & analysis registry: the investigation playbook, as data.
 
 The one piece of judgment that lived in the operator's head (or the AI's): given an
 object, WHICH sources are worth pulling and WHICH analyses apply. Encoding it here
 turns "what do I do next?" into a lookup both the human front-end and an MCP client can
-read — so neither has to *know* that a private company means SEC Form D. Every entry
+read, so neither has to *know* that a private company means SEC Form D. Every entry
 maps to a real capability (an ingest function, a read-model, or a saved composition), names
 what it yields, and is keyless unless flagged.
 """
@@ -26,7 +26,7 @@ class Capability:
     keyless: bool = True
 
 
-# COLLECT — federate a base or crawl, materializing new nodes/links.
+# COLLECT: federate a base or crawl, materializing new nodes/links.
 _COLLECT: tuple[Capability, ...] = (
     Capability(
         "wikidata", "Wikidata entity + network", "collect", ("Organization", "Person"),
@@ -34,7 +34,7 @@ _COLLECT: tuple[Capability, ...] = (
     ),
     Capability(
         "edgar_formd", "SEC Form D (private placements)", "collect", ("Organization",),
-        "private financing rounds — officers, amounts, investor counts, feeder SPVs",
+        "private financing rounds: officers, amounts, investor counts, feeder SPVs",
         "ingest_form_d",
     ),
     Capability(
@@ -44,7 +44,7 @@ _COLLECT: tuple[Capability, ...] = (
     ),
     Capability(
         "clinicaltrials", "ClinicalTrials.gov", "collect", ("Organization",),
-        "registered human trials — status, sites, investigators, posted results",
+        "registered human trials: status, sites, investigators, posted results",
         "ingest_trials",
     ),
     Capability(
@@ -58,12 +58,12 @@ _COLLECT: tuple[Capability, ...] = (
     ),
     Capability(
         "litigation", "Court records (CourtListener)", "collect", ("Organization", "Person"),
-        "lawsuits & enforcement — dockets, parties, judges; 'sued or charged?'",
+        "lawsuits & enforcement: dockets, parties, judges; 'sued or charged?'",
         "ingest_litigation",
     ),
     Capability(
         "bc_registry", "Canadian (BC) corporate registry", "collect", ("Organization",),
-        "BC registration #, CRA business #, type/status/jurisdiction — verify + the family",
+        "BC registration #, CRA business #, type/status/jurisdiction: verify + the family",
         "verify_bc_entity",
     ),
     Capability(
@@ -78,7 +78,7 @@ _COLLECT: tuple[Capability, ...] = (
     ),
 )
 
-# ANALYZE — read-model lenses over what's already in the graph (no new collection).
+# ANALYZE: read-model lenses over what's already in the graph (no new collection).
 _ANALYZE: tuple[Capability, ...] = (
     Capability(
         "dossier", "Entity dossier", "analyze", ("Organization", "Person"),
@@ -97,7 +97,7 @@ _ANALYZE: tuple[Capability, ...] = (
     Capability(
         "subject_report", "Subject report (footprint)", "analyze",
         ("Person", "Account", "Username", "Email"),
-        "who is this? — Verified / Corroborated / Speculative tiers",
+        "who is this? Verified / Corroborated / Speculative tiers",
         "run_composition('who-is-this', subject=...)",
     ),
     Capability(
@@ -122,7 +122,7 @@ REGISTRY: tuple[Capability, ...] = _COLLECT + _ANALYZE
 
 
 def suggest(object_type: str) -> list[Capability]:
-    """Capabilities worth running on an object of this type — collect first, then
+    """Capabilities worth running on an object of this type: collect first, then
     analyze. This is the externalized 'what next?' the operator used to supply."""
     hits = [c for c in REGISTRY if object_type in c.applies_to]
     return sorted(hits, key=lambda c: (c.kind != "collect", c.id))

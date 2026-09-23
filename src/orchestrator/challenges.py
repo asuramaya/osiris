@@ -1,6 +1,6 @@
 """Centralized challenge detection (DESIGN §7).
 
-Helpers never duplicate this — the router/runner calls detect() on a server-side
+Helpers never duplicate this: the router/runner calls detect() on a server-side
 response and, on a hit, suspends the run to a human handoff. We never try to
 solve or evade; detection only routes the work to the analyst's real browser.
 """
