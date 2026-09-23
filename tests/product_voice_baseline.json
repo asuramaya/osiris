@@ -11,7 +11,7 @@
   "docs/RITUAL.md": 1,
   "docs/SPEC-agent-manager.md": 161,
   "src/cli.py": 737,
-  "src/mcp_server.py": 488,
+  "src/mcp_server.py": 146,
   "src/ui/static/index.html": 2,
   "src/ui/static/space.html": 1
 }
