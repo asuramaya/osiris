@@ -1,23 +1,26 @@
-"""Rung 4 — neighborhood consolidation (thread 0deaec4f; operator ruling a0cfcca1).
+"""Neighborhood consolidation: keeps search answering from consolidated memory instead
+of scattered fragments.
 
-Two motions, one purpose: search must answer from CONSOLIDATED memory, not fragments.
+Two motions serve that one purpose.
 
-(a) The MECHANICAL pass crons consolidate_memory over Threads and Decisions: DERIVED
-echoes fold into the deliberate captures they reword — the only auto-merge direction
-(two deliberate / two derived stay surfaced for review; the membrane, constitution #6).
-Fewer near-twin nodes = search hits stop splitting their rank across copies.
+(a) The mechanical pass crons consolidate_memory over Threads and Decisions: derived
+echoes fold into the deliberate captures they reword, the only auto-merge direction
+allowed (two deliberate records or two derived records stay surfaced for review rather
+than being merged automatically). Fewer near-duplicate nodes means search hits stop
+splitting their rank across copies.
 
-(b) The SUMMARY pass writes one Reference node per active repo neighborhood — an LLM
-digest of the neighborhood's open lines and recent rulings — so a project's dense season
-is recallable as ONE remembered page. Incremental by FINGERPRINT: the neighborhood's
-member set + last movement hash into a watermark stamped on the Reference; an unchanged
-neighborhood costs nothing (the skip-unchanged discipline the ladder named). Metered in
-llm_usage (purpose='neighborhood-summary' — the digest's cost stream sees every call).
-Recalled through consult_canon unchanged (it reads all Reference nodes), found by BOTH
-search paths: FTS immediately, the embed cron vectorizes the body on its next walk.
+(b) The summary pass writes one Reference node per active repo neighborhood: an LLM
+digest of the neighborhood's open lines and recent rulings, so a project's dense
+history is recallable as one page instead of many. It is incremental by fingerprint:
+the neighborhood's member set plus its last movement hash into a watermark stamped on
+the Reference, so an unchanged neighborhood costs nothing to re-check. Metered in
+llm_usage (purpose='neighborhood-summary') so the digest's cost is tracked per call.
+Recalled through consult_canon unchanged (it reads all Reference nodes), and found by
+both search paths: full-text search immediately, the embedding cron on its next walk.
 
-Ownership boundary: summaries are written by `neighborhood-miner`, DERIVED — a machine's
-digest of testimony is not testimony. It never touches the member objects themselves.
+Ownership boundary: summaries are written by `neighborhood-miner` and graded derived,
+since a machine's digest of testimony is not itself testimony. It never touches the
+member objects themselves.
 """
 from __future__ import annotations
 
@@ -40,17 +43,12 @@ _PURPOSE = "neighborhood-summary"
 _WINDOW_DAYS = 30
 _MAX_MEMBERS = 40           # the digest reads the neighborhood's densest recent core
 
-# THE NEIGHBORHOOD AS A PRIMITIVE (operator, 2026-07-11: "we don't hardcode, we build
-# primitives... a fanout and organizing per project helps across the entire stack. think about
-# neighborhoods and bundling. think about the garden of eden, and each project is a tree with
-# fruits"). The concept already lived here — but PRIVATE, owned by the summary miner, so every
-# surface that wanted "group this by project" re-derived it by hand: the operator's desk, the
-# wall's rollup, and (nearly) a bespoke console renderer. Three hand-rolled copies of one idea
-# is a primitive announcing itself.
-#
-# So: the garden is the graph, a TREE is a SoftwareProject, and the FRUIT is anything hanging
-# off it by `in_repo`. `neighborhoods_of` names the tree each fruit grew on — one batched query,
-# no N+1 — and everything above it (bundle/fanout, the desk roster, the wall) composes from it
+# "Group objects by project" is a reusable concept, not a one-off. It used to live only
+# inside the summary miner, so every surface that wanted the same grouping re-derived it
+# by hand instead of sharing one implementation. A SoftwareProject is the grouping unit,
+# and anything hanging off it via an `in_repo` link belongs to its neighborhood.
+# `neighborhoods_of` names the project each object belongs to in one batched query (no
+# N+1), and every other surface that needs "group this by project" composes from it
 # instead of re-deriving it.
 NEIGHBORHOOD = "neighborhood"
 
@@ -69,39 +67,33 @@ _SYSTEM = (
 
 
 async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict[str, Any]]:
-    """THE GARDEN AUDITS ITSELF (operator, 2026-07-12: "does it not detect the changes or is
-    that my fault"). Neither: one project had 126 commits on disk and the graph never read one,
-    because the pulse's repo list is a HAND-TYPED env var (OSIRIS_DEV_REPOS, 7 paths) while the
-    session-miner auto-discovers transcripts from every project alive. So Osiris learned what to
-    LISTEN TO from reality and what to LOOK AT from a list — it heard every promise in the fleet
-    and witnessed delivery in seven repos.
+    """Reports the gap between the projects the graph already knows about and the projects
+    the ingest pipeline actually watches.
 
-    It never had to be that way: the graph ALREADY KNOWS its trees. 368 threads are filed under
-    that one repo. It was told, 368 times, and had no mechanism to act on it.
+    This gap is real: the commit-ingest watch list is a hand-typed list of repo paths,
+    while other ingest paths (like the session miner) auto-discover their sources. So the
+    graph can end up hearing about work in a project through threads and decisions while
+    never reading a single commit from it on disk, even when the graph already has plenty
+    of testimony filed under that project.
 
-    This is the mechanism — and it only REPORTS. Osiris has no hands: it names the gap between
-    the trees it knows and the trees it watches, and a deliberate act closes it. Growing the
-    watch list is a decision, never a side effect (constitution #6: never silently).
+    This function only reports the gap; it does not close it. Growing the watch list stays
+    a deliberate, explicit action rather than a side effect of running this report.
 
-    THE READ-BACK A HOUSE NEEDS TO SEE ITS OWN INVISIBILITY (redmonth's report, thread 2309:
-    "I could not have discovered my own zero; you had to tell me... I would rank [being able
-    to tell] FIRST — being unwatched is recoverable; being unwatched and unable to tell is
-    not"). Every active SoftwareProject is reported, not just ones the graph already has
-    Thread/Commit testimony against — a truly fresh, zero-everything project used to be
-    silently absent from this function's own output, the exact "invisible until someone
-    tells you" defect it exists to close. `path` is READ from the stored `on_disk_path`
-    property (census_trees's own write, or a future explicit registration) — never
-    re-derived by matching this tree's name against a caller-supplied search root, which
-    the earlier version of this function did: a directory-name match is a GUESS, and
-    redmonth proved the guess can be wrong (his own mounted cwd is not a git repository at
-    all; his real repo lives elsewhere, under a different name). No path recorded means no
-    path claimed — the honest "I don't know" the earlier version couldn't say.
+    Every active SoftwareProject is reported, not just ones the graph already has
+    Thread/Commit testimony against. A truly fresh, zero-everything project must still show
+    up here rather than being silently absent, since a project nobody can see is a project
+    nobody can act on. `path` is read from the stored `on_disk_path` property (written by
+    `census_trees`, or by a future explicit registration), never re-derived by matching this
+    project's name against a caller-supplied search root: a directory-name match is only a
+    guess, and guesses can be wrong (a mounted working directory need not even be a git
+    repository, while the real repo lives elsewhere under a different name). No path
+    recorded means no path claimed, an honest "unknown" rather than a guess.
 
-    `reason` NAMES why `commits` is zero, so a zero never reads as silence: no on_disk_path
-    at all; on disk but not in `watched`; watched but ingest has never ticked (no
-    `devhead:<tree>` watermark yet — pulse.py's own cursor, so "last ingested" is exactly
-    that watermark's `updated_at`); or ingest has genuinely run and found nothing (the path
-    may no longer be a real git repo). A non-zero `commits` needs no reason and gets none.
+    `reason` names why `commits` is zero, so a zero never reads as plain silence: no
+    on_disk_path at all; on disk but not in `watched`; watched but ingest has never ticked
+    (no `devhead:<tree>` watermark yet, the ingest cursor whose `updated_at` is exactly
+    "last ingested"); or ingest has genuinely run and found nothing (the path may no longer
+    be a real git repo). A non-zero `commits` needs no reason and gets none.
     """
     rows = await pool.fetch(
         "SELECT p.id, replace(p.canonical, 'repo:', '') AS tree, "
@@ -151,22 +143,22 @@ _CENSUS_SKIP = {".claude", "node_modules", ".venv", "venv", "__pycache__"}
 
 def _path_gone(path: str | None) -> bool:
     """A plain sync wrapper so `census_trees` (async) never calls a blocking Path method
-    inline (ASYNC240, this codebase's own ruff gate) — no recorded path at all counts as
-    gone too (nothing to have moved from)."""
+    inline (ASYNC240, this codebase's own ruff gate). No recorded path at all counts as
+    gone too, since there is nothing to have moved from."""
     return not path or not Path(path).exists()
 
 
 def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
     """Every git repository under the census roots (bounded walk, sync disk IO).
 
-    Depth 2 covers the operator's layout (~/code/<repo> and ~/code/REPOS/<repo>) without
+    Depth 2 covers a typical `~/code/<repo>` and `~/code/REPOS/<repo>` layout without
     crawling the world; hidden dirs, tool caches, and worktree nests are skipped.
 
-    _CENSUS_SKIP matches "venv" as well as ".venv" (task #122, 2026-08-03): before this fix
-    a bare `venv` survived ONLY by accident, in layouts where it happened to sit exactly at
-    the depth-2 cutoff (e.g. `mirror/venv`) — `depth >= max_depth` returned before its own
-    children were ever iterated. A `venv` one level shallower had no such protection and
-    the walker would descend straight into it."""
+    _CENSUS_SKIP matches "venv" as well as ".venv": before this fix a bare `venv` survived
+    only by accident, in layouts where it happened to sit exactly at the depth-2 cutoff
+    (e.g. `mirror/venv`), because `depth >= max_depth` returned before its own children
+    were ever iterated. A `venv` one level shallower had no such protection and the walker
+    would descend straight into it."""
     found: list[Path] = []
 
     def walk(d: Path, depth: int) -> None:
@@ -190,66 +182,59 @@ def _git_dirs(roots: list[str], *, max_depth: int = 2) -> list[Path]:
 
 
 async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
-    """THE DISK CENSUS (thread 5e37630b, Atlas II's costliest ask): the graph models what
-    it was TOLD about; the disk holds the operator's whole history — and 'a memory that
-    doesn't know your ancestors cannot stop you reinventing them' (he was one conversation
-    from rebuilding an eval harness he had already written). This walks the census roots
-    and makes 'exists on disk' a FIRST-CLASS graph fact: a repo the graph has never met
-    is minted as a SoftwareProject with its on_disk_path and discovered='disk-census';
-    a known project gains its path if the graph lacked one. A cwd whose `.git` is a FILE
-    (a worktree's own gitdir pointer, never a directory) is filed as a Worktree of its
-    parent project via a `worktree_of` link instead — see the worktree branch below,
-    thread 922d920c/migration 0062: this NEVER mints a second SoftwareProject for a
-    checkout that is really just another view onto one it already knows. OBSERVATION
-    ONLY — nothing here grows the pulse's watch list (that remains a deliberate act,
-    discover_trees' doctrine), and remote-only repos stay honestly out of scope (no
-    network read). Idempotent: an unchanged disk costs reads, never writes.
+    """The disk census: the graph only models what it was told about, while the disk holds
+    the full history of what actually exists, and a memory graph that doesn't know its own
+    history can lead someone to reinvent work they already did. This walks the census roots
+    and makes "exists on disk" a first-class graph fact: a repo the graph has never met is
+    minted as a SoftwareProject with its on_disk_path and discovered='disk-census'; a known
+    project gains its path if the graph lacked one. A working directory whose `.git` is a
+    file (a worktree's own gitdir pointer, never a directory) is filed as a Worktree of its
+    parent project via a `worktree_of` link instead (see the worktree branch below): this
+    never mints a second SoftwareProject for a checkout that is really just another view
+    onto one it already knows. Observation only: nothing here grows the ingest watch list
+    (that stays a deliberate action, per `discover_trees`), and remote-only repos stay
+    honestly out of scope (no network read). Idempotent: an unchanged disk costs reads,
+    never writes.
 
-    THE MINT GOES THROUGH THE SAME CHOKE POINT AS EVERY OTHER LEGITIMATE MINT (ruling
-    1db1ff41, both halves): `_mint_or_find_repo` runs `_validate_repo_name` before
-    touching the graph — task #107's guard, previously bypassed here entirely (this walk
-    minted straight off `create_or_find_object`, so a directory basename that isn't a
-    well-formed project ref reached the graph unrefused; the two real "/home/.../ballgem"
-    and "/home/.../REPOS/sutra" duplicates, folded separately, are what that gap already
-    cost). A refusal degrades PER ENTRY, never the whole batch — #107's own third-order
-    defect (settle()'s batch-abort gap) is the standing precedent: one hostile directory
-    name costs that one census row, not the walk.
+    The mint goes through the same validation as every other legitimate mint:
+    `_mint_or_find_repo` runs `_validate_repo_name` before touching the graph. This guard
+    was previously bypassed here entirely, since this walk minted straight off
+    `create_or_find_object`, so a directory basename that isn't a well-formed project
+    reference reached the graph unrefused (two real duplicate projects, folded separately,
+    are what that gap already cost). A refusal degrades per entry, never the whole batch:
+    one hostile directory name costs that one census row, not the walk.
 
-    REMOTE_URL RIDES THE SAME WALK (#144 Rule 2, decision ffc193a4ce07): a git remote is
-    CONFIGURATION, not content — cheap to read (`git remote get-url origin` touches only
-    .git/config, no network), so it costs nothing new to capture on the walk this function
-    already runs every 10 minutes (arq_worker.py's backfill_transcripts cron). This is the
-    ONLY place remote_url is ever written — resolve_identity's hot mount()-time path reads
-    it as a plain DB column, never shells out live (577988ed: no subprocess on the path
-    every session in the fleet traverses). STALENESS IS BOUNDED BY THE EXISTING CADENCE:
-    a repo whose origin changes (the /srv/git relocation is a real, recent instance of
-    exactly this) self-heals on this function's own next run, at most 10 minutes later —
-    no new staleness window is introduced, because on_disk_path already carries this same
-    bound and nothing here reads faster than the walk that writes it. A repo with no
-    configured origin (ballgem's own shape, Sekhmet's e221128e) gets no remote_url
-    assertion at all — absence stays absence, never a persisted null standing in for
-    "checked, found nothing" (60bc15db: a reader downstream must be able to tell
-    "no signal" from "confirmed empty", and skipping the write is how that distinction
-    survives here).
+    remote_url rides the same walk: a git remote is configuration, not content, cheap to
+    read (`git remote get-url origin` touches only .git/config, no network), so it costs
+    nothing new to capture on the walk this function already runs on a fixed cadence. This
+    is the only place remote_url is ever written; the hot mount()-time identity-resolution
+    path reads it as a plain DB column and never shells out live, so no subprocess sits on
+    the path every session in the fleet traverses. Staleness is bounded by the existing
+    cadence: a repo whose origin changes self-heals on this function's own next run, at
+    most one cycle later, no new staleness window is introduced, because on_disk_path
+    already carries this same bound and nothing here reads faster than the walk that
+    writes it. A repo with no configured origin gets no remote_url assertion at all;
+    absence stays absence, never a persisted null standing in for "checked, found
+    nothing", because a reader downstream must be able to tell "no signal" from "confirmed
+    empty", and skipping the write is how that distinction survives here.
 
-    THE LOCATION FIX (obligation e5b0ece4, decision fa0eb021, Thoth's dispatch msg 4762):
-    a RENAMED directory fails the name lookup above and, before this fix, minted a
-    DUPLICATE SoftwareProject rather than reconnecting to the one that already existed
-    under its old name. When name lookup finds nothing but the directory has a real
-    remote_url, this now tries that remote_url as a second signal: an unambiguous match
-    (exactly one active SoftwareProject already carrying it) reconnects — updating only
-    `on_disk_path`/`remote_url` on the EXISTING object; more than one match refuses per
-    entry rather than guessing. THE BINDING LINE, not a preference: this carries LOCATION
-    forward and never RE-DERIVES IDENTITY — `name`/`canonical` stay `rename_project`'s own
-    deliberate act (1db1ff41), the same discipline that closed 13af22fc's phantom-repo
-    defect. Reconnect is additionally gated on the OLD on_disk_path being confirmed GONE
-    (or never having been recorded) — a live old path means this is a COPY of a working
-    tree, not a MOVE, and a copy must mint its own object rather than steal another
-    checkout's identity. ONE WALK, loud receipt (`reconnected` in the return dict): the
-    same idempotent 10-minute cadence that already bounds on_disk_path staleness bounds a
-    missed reconnect too, and a bad reconnect can't reach the graph in the first place
-    because the ambiguous case above refuses outright — a second confirmation walk would
-    buy no correctness gain here, only latency."""
+    The location fix: a renamed directory fails the name lookup above and, before this
+    fix, minted a duplicate SoftwareProject rather than reconnecting to the one that
+    already existed under its old name. When name lookup finds nothing but the directory
+    has a real remote_url, this now tries that remote_url as a second signal: an
+    unambiguous match (exactly one active SoftwareProject already carrying it) reconnects,
+    updating only `on_disk_path`/`remote_url` on the existing object; more than one match
+    refuses per entry rather than guessing. This carries location forward and never
+    re-derives identity: `name`/`canonical` stay `rename_project`'s own deliberate act,
+    the same discipline that closed an earlier phantom-repo defect. Reconnect is
+    additionally gated on the old on_disk_path being confirmed gone (or never having been
+    recorded): a live old path means this is a copy of a working tree, not a move, and a
+    copy must mint its own object rather than steal another checkout's identity. One walk,
+    with a loud receipt (`reconnected` in the return dict): the same idempotent cadence
+    that already bounds on_disk_path staleness bounds a missed reconnect too, and a bad
+    reconnect can't reach the graph in the first place because the ambiguous case above
+    refuses outright, so a second confirmation walk would buy no correctness gain here,
+    only latency."""
     from src.orchestrator.capture import _mint_or_find_repo, _resolve_repo, _resolve_repo_by_remote
     from src.orchestrator.project_identity import (
         _git_remote,
@@ -269,14 +254,14 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     for repo in _git_dirs(roots):
         name = repo.name
 
-        # WORKTREES AS A FIRST-CLASS SHAPE (thread 922d920c): `.git` a FILE, not a
-        # directory, is the unambiguous worktree signal `_git_dirs`'s own bare `.exists()`
-        # check can't distinguish from a real repo — before this, a worktree living as a
-        # SIBLING under a census root (never one nested under a repo's own `.claude/
-        # worktrees`, which `_git_dirs`'s early-return-on-`.git` already keeps unreached)
-        # minted its own SoftwareProject, keyed on the worktree dir's own basename (the
-        # ballgem-wt-* residue, census 583e2669/migration 0062). Filed as a Worktree of its
-        # PARENT project via a `worktree_of` link instead, never a second SoftwareProject.
+        # Worktrees are a first-class shape: `.git` being a file, not a directory, is the
+        # unambiguous worktree signal that `_git_dirs`'s own bare `.exists()` check can't
+        # distinguish from a real repo. Before this, a worktree living as a sibling under a
+        # census root (never one nested under a repo's own `.claude/worktrees`, which
+        # `_git_dirs`'s early-return-on-`.git` already keeps unreached) minted its own
+        # SoftwareProject, keyed on the worktree directory's own basename. It is filed as a
+        # Worktree of its parent project via a `worktree_of` link instead, never a second
+        # SoftwareProject.
         if (repo / ".git").is_file():
             parent_path = worktree_parent_path(str(repo))
             if parent_path is None:
@@ -319,13 +304,12 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
         _, remote_url = _git_remote(str(repo))
         existing = await _resolve_repo(actions.pool, name)
         if existing is None and remote_url:
-            # THE LOCATION FIX (obligation e5b0ece4, decision fa0eb021): a renamed directory
-            # fails the name lookup above and would otherwise mint a DUPLICATE. Try the
-            # remote_url as a second signal before minting. THE BINDING LINE (Thoth, msg
-            # 4762): this carries LOCATION forward and never RE-DERIVES IDENTITY — only
-            # on_disk_path/remote_url move here; name/canonical stay rename_project's own
-            # deliberate act (1db1ff41). Unambiguous match → reconnect. More than one
-            # candidate → refuse per entry, never guess (577988ed inverted for identity).
+            # The location fix: a renamed directory fails the name lookup above and would
+            # otherwise mint a duplicate. Try the remote_url as a second signal before
+            # minting. This carries location forward and never re-derives identity: only
+            # on_disk_path/remote_url move here, name/canonical stay rename_project's own
+            # deliberate act. An unambiguous match reconnects; more than one candidate
+            # refuses per entry rather than guessing.
             candidates = await _resolve_repo_by_remote(actions.pool, remote_url)
             if len(candidates) > 1:
                 refused.append({
@@ -342,16 +326,15 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                     "SELECT a.value #>> '{}' FROM current_assertions a "
                     "WHERE a.object_id=$1 AND a.name='on_disk_path' LIMIT 1", candidate)
                 if old_path == str(repo):
-                    # ALREADY reconnected here on a prior walk — the object's own `name`
-                    # deliberately never moved to match the directory (the binding line),
-                    # so a name lookup will keep missing forever; recognize this exact
-                    # location as KNOWN rather than re-walking the move/copy gate below on
-                    # every future census (idempotency for the reconnected case).
+                    # Already reconnected here on a prior walk: the object's own `name`
+                    # deliberately never moved to match the directory, so a name lookup
+                    # will keep missing forever. Recognize this exact location as known
+                    # rather than re-walking the move/copy gate below on every future
+                    # census (idempotency for the reconnected case).
                     existing = candidate
-                # GATE (a), Thoth's binding lean: reconnect only once the OLD path is
-                # confirmed gone — that's what keeps a COPY (two live checkouts of one
-                # remote) from being misread as a MOVE. No recorded path at all is not a
-                # copy risk either, so it clears the gate too.
+                # Reconnect only once the old path is confirmed gone: that's what keeps a
+                # copy (two live checkouts of one remote) from being misread as a move. No
+                # recorded path at all is not a copy risk either, so it clears the gate too.
                 elif _path_gone(old_path):
                     await actions.assert_property(
                         candidate, "on_disk_path", str(repo), "disk-census",
@@ -361,7 +344,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                         observed, 0.9, evidence_class=ec)
                     reconnected.append(name)
                     continue
-                # else: the OLD path still exists — this is a COPY, not a MOVE; falls
+                # else: the old path still exists, this is a copy, not a move; falls
                 # through to mint its own object rather than steal the original's identity.
         if existing is None:
             try:
@@ -370,26 +353,26 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             except ValueError as e:
                 refused.append({"name": name, "path": str(repo), "reason": str(e)})
                 continue
-            # SAME CHECK-CURRENT-FIRST PATTERN as the "known" branch just below (operator
-            # ruling, thread 2a280e07, mail 9240 — "fix the sources"): `_mint_or_find_repo`
-            # finding `obj` here does NOT mean this is genuinely the first sighting — when
-            # `_resolve_repo`'s own (narrower) lookup keeps missing an object that already
-            # exists under this exact canonical, this branch runs on EVERY census sweep for
-            # it, live-measured at 3,140 identical rows apiece across discovered/on_disk_
-            # path/remote_url for seven objects. Checked once per property so a repeat
-            # sweep of an already-discovered object writes nothing.
+            # Same check-current-first pattern as the "known" branch just below:
+            # `_mint_or_find_repo` finding `obj` here does not mean this is genuinely the
+            # first sighting. When `_resolve_repo`'s own (narrower) lookup keeps missing an
+            # object that already exists under this exact canonical, this branch runs on
+            # every census sweep for it; measured live at 3,140 identical rows apiece
+            # across discovered/on_disk_path/remote_url for seven objects. Checked once
+            # per property so a repeat sweep of an already-discovered object writes
+            # nothing.
             discovered_current = await actions.pool.fetchval(
                 "SELECT 1 FROM current_assertions WHERE object_id=$1 "
                 "AND name='discovered' AND source_id='disk-census' LIMIT 1", obj)
             if not discovered_current:
                 await actions.assert_property(obj, "discovered", "disk-census", "disk-census",
                                               observed, 0.9, evidence_class=ec)
-            # SAME-SOURCE SCOPING (ruling 0623995e, thread 2a280e07): this branch's own
-            # on_disk_path/remote_url checks used to compare against `current_assertions`
-            # (the cross-source, evidence-graded WINNER) rather than disk-census's OWN prior
-            # value — undefined once a different, higher-confidence source also holds a
-            # current assertion on the same property; the SAME bug the "known" branch below
-            # already fixed via `would_be_noop_assert`, missed here on first sighting.
+            # Same-source scoping: this branch's own on_disk_path/remote_url checks used to
+            # compare against `current_assertions` (the cross-source, evidence-graded
+            # winner) rather than disk-census's own prior value, which is undefined once a
+            # different, higher-confidence source also holds a current assertion on the
+            # same property. This is the same bug the "known" branch below already fixed
+            # via `would_be_noop_assert`, just missed here on first sighting.
             if not await actions.would_be_noop_assert(obj, "on_disk_path", "disk-census",
                                                        str(repo)):
                 await actions.assert_property(obj, "on_disk_path", str(repo), "disk-census",
@@ -403,13 +386,13 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             minted.append(name)
             continue
         known += 1
-        # NO-OP REASSERTION GUARD (ruling 0623995e, thread 2a280e07): this used to compare
-        # against `current_assertions` (the cross-source, evidence-graded WINNER) rather than
-        # disk-census's OWN prior value — so once any other, higher-confidence source (e.g. a
-        # human rename_project) disagreed with disk-census's own on_disk_path/remote_url, this
-        # census could never "win" its own comparison and re-asserted the identical value on
-        # EVERY walk, forever (1.5-3k rows per triple, live). `would_be_noop_assert` is scoped
-        # to THIS source specifically, matching assert_property's own same-source supersession.
+        # No-op reassertion guard: this used to compare against `current_assertions` (the
+        # cross-source, evidence-graded winner) rather than disk-census's own prior value,
+        # so once any other, higher-confidence source (e.g. a human rename_project)
+        # disagreed with disk-census's own on_disk_path/remote_url, this census could never
+        # "win" its own comparison and re-asserted the identical value on every walk,
+        # forever (1.5-3k rows per triple, live). `would_be_noop_assert` is scoped to this
+        # source specifically, matching assert_property's own same-source supersession.
         if not await actions.would_be_noop_assert(existing, "on_disk_path", "disk-census",
                                                    str(repo)):
             await actions.assert_property(existing, "on_disk_path", str(repo),
@@ -428,9 +411,9 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
 async def neighborhoods_of(
     pool: asyncpg.Pool, ids: list[Any],
 ) -> dict[Any, dict[str, Any]]:
-    """The TREE each of these objects hangs from — {object_id: {name, id}} for every object
-    with an `in_repo` edge. Objects with no tree are simply absent (the caller decides what
-    rootless fruit means: the desk calls it '-', a bundle gives it its own pile).
+    """The project each of these objects belongs to: {object_id: {name, id}} for every
+    object with an `in_repo` edge. Objects with no project are simply absent (the caller
+    decides what that means, e.g. a dashboard renders '-' or groups them separately).
 
     One query for the whole set. The newest edge wins if an object was re-filed."""
     if not ids:
@@ -444,8 +427,8 @@ async def neighborhoods_of(
         "ORDER BY l.from_id, l.created_at DESC", ids)
     return {r["oid"]: {"name": r["hood"], "id": str(r["pid"])} for r in rows}
 async def consolidate_pass(actions: Actions) -> dict[str, int]:
-    """The mechanical motion: fold DERIVED echoes into deliberate captures, both memory
-    types. Pure token-overlap, no LLM — cheap enough to walk daily."""
+    """The mechanical motion: fold derived echoes into deliberate captures, both memory
+    types. Pure token-overlap, no LLM, cheap enough to walk daily."""
     out: dict[str, int] = {}
     for typ, prefix in (("Thread", "thread:"), ("Decision", "decision:")):
         out.update(await consolidate_memory(actions, object_type=typ, prefix=prefix))
@@ -453,8 +436,8 @@ async def consolidate_pass(actions: Actions) -> dict[str, int]:
 
 
 async def _neighborhoods(pool: asyncpg.Pool) -> list[dict[str, Any]]:
-    """Repos whose memory moved inside the window, each with a FINGERPRINT of its member
-    set + last movement — the watermark that makes summarization incremental. Ordered
+    """Repos whose memory moved inside the window, each with a fingerprint of its member
+    set plus last movement, the watermark that makes summarization incremental. Ordered
     stalest-summary-first so the per-pass budget rotates fairly."""
     return [dict(r) for r in await pool.fetch(
         "WITH member AS ("
@@ -487,7 +470,7 @@ async def _neighborhoods(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 async def _member_texts(pool: asyncpg.Pool, repo_id: Any) -> str:
     """The neighborhood's readable core: open threads first, then recent decisions with
-    their rationale — winner texts only, newest movement first, capped."""
+    their rationale. Winner texts only, newest movement first, capped."""
     rows = await pool.fetch(
         "SELECT o.type, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -545,7 +528,7 @@ async def summarize_neighborhoods(
         if usage_out:
             await record_usage(actions.pool, purpose=_PURPOSE, usage=usage_out[-1])
         if not body.strip():
-            continue  # an empty digest is not a memory — leave the old one standing
+            continue  # an empty digest is not a memory, leave the old one standing
         ref_id, _canon = await ingest_reference(
             actions, f"Neighborhood — {repo}", vendor="osiris",
             body=body.strip()[:8000], repo=repo, source=_SOURCE)

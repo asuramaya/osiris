@@ -1,71 +1,64 @@
-"""MINERS AS LAST RESORT (wave 15, operator's word verbatim, relayed by Thoth mail
-8842: "the reason why miners held for so long is because they are the last resort
-clean up, and if they are not treated as such they make a mess and we end up with a
-worse messier graph"). Order of the graph's own self-healing: write-time laws refuse
-first, mechanical sweeps (`derive_or_abstain`) derive-or-abstain second, and ONLY what
-is left as a durable abstention is a miner's to look at. A miner never mints directly
-again — it proposes; a mind accepts or rejects.
+"""Miners as last resort: miners exist to clean up what nothing else caught, and if
+they aren't treated as a last resort they make a mess and leave the graph worse than
+they found it. Order of the graph's own self-healing: write-time laws refuse first,
+mechanical sweeps (`derive_or_abstain`) derive-or-abstain second, and only what is left
+as a durable abstention is a miner's to look at. A miner never mints directly again: it
+proposes, and a human accepts or rejects.
 
-THE SCHEMA (decision ac892cd9, item 1 — this module is that item, one commit):
-a `Proposal` is a graph object, never a raw table, same as everything else in this
-kernel — `evidence_pointer` names the exact abstention it answers, `candidate` names
-the object/link it would create if accepted, `confidence` is capped at the DERIVED
-tier (0.4) regardless of what the caller passes (a miner's own guess is never graded
-above what a mechanical sweep already earns), `owner` is resolved via the one owner
-law (`resolve_owner_seat`) at write time — unresolvable refuses the whole call, never
-mints an orphaned Proposal. `status` starts 'proposed'; `expires_at` is stamped once,
-mint_time + 14 days.
+The schema: a `Proposal` is a graph object, never a raw table, same as everything else
+in this kernel. `evidence_pointer` names the exact abstention it answers, `candidate`
+names the object/link it would create if accepted, `confidence` is capped at the
+derived tier (0.4) regardless of what the caller passes (a miner's own guess is never
+graded above what a mechanical sweep already earns), `owner` is resolved via the one
+owner law (`resolve_owner_seat`) at write time, unresolvable refuses the whole call,
+never mints an orphaned Proposal. `status` starts 'proposed'; `expires_at` is stamped
+once, mint_time + 14 days.
 
-THE LAST-RESORT LAW (Khnum mail 8849, Sekhmet mail 8857, both independently agreeing
-on the identical predicate `backfill_lineage_repo_links` already runs, capture.py):
-propose() refuses unless `evidence_pointer` names a `from_id`/`link_type` pair whose
-CURRENT `derivation_abstained_<link_type>` property does NOT carry a `resolved` key —
-a successful mint SUPERSEDES a live abstention via `supersede_assertion`, writing
-`{"link_type", "resolved": True, "resolved_to": <id>}` as the new current value under
-the SAME name, so a resolved abstention is a settled question, not a genuine gap. This
-IS the "may only propose against an existing abstention record" law, verbatim.
+The last-resort law: propose() refuses unless `evidence_pointer` names a
+`from_id`/`link_type` pair whose current `derivation_abstained_<link_type>` property
+does not carry a `resolved` key. A successful mint supersedes a live abstention via
+`supersede_assertion`, writing `{"link_type", "resolved": True, "resolved_to": <id>}`
+as the new current value under the same name, so a resolved abstention is a settled
+question, not a genuine gap. This is the "may only propose against an existing
+abstention record" law, verbatim.
 
-INVISIBLE TO ORIENT/BACKLOG/DESK BANDS/EVERY COUNT, BY OMISSION: none of those
-surfaces' own queries allowlist 'Proposal' — a caller extending any of them to a new
-object type must do so explicitly, so this type never appears anywhere except the
-read-only proposals band this same wave adds deliberately (item 2's own desk surface).
+Invisible to orient/backlog/desk bands/every count, by omission: none of those
+surfaces' own queries allowlist 'Proposal', so a caller extending any of them to a new
+object type must do so explicitly. This type never appears anywhere except the
+read-only proposals band this module adds deliberately.
 
-ITEM 2 (already landed, commit 8e44e78): accept()/reject() — accept() mints the REAL
-object/link named by the Proposal's own `candidate`, verbatim, under the ACCEPTING
-actor's own self_declared
-testimony (never re-using the miner's derived grade), citing the Proposal back on the
-minted thing itself (a link's own `properties.accepted_from`, or an object's own
-`accepted_from_proposal` property — this kernel's only two provenance-carrying slots,
+accept()/reject(): accept() mints the real object/link named by the Proposal's own
+`candidate`, verbatim, under the accepting actor's own self_declared testimony (never
+re-using the miner's derived grade), citing the Proposal back on the minted thing
+itself (a link's own `properties.accepted_from`, or an object's own
+`accepted_from_proposal` property, this kernel's only two provenance-carrying slots,
 never a new edge type invented for this). reject() retires the Proposal with a
-mandatory reason, written back where the SAME miner can read it on its next tick (the
-rolling signal item 3's budget-throttle will read). Both refuse on anything but
-status='proposed', and refuse an expired Proposal even before any sweep marks it so.
+mandatory reason, written back where the same miner can read it on its next tick (what
+the budget-throttle below reads). Both refuse on anything but status='proposed', and
+refuse an expired Proposal even before any sweep marks it so.
 
-ITEM 3 (this pass), THE BUDGET (decision ac892cd9, Thoth mail 8920 confirming the two
-window lengths): a daily budget per (miner, owner) PAIR that scales with that pair's
-own trailing 30-day acceptance rate (accepted / (accepted+rejected) of resolved
-Proposals in the window) — `_DAILY_BUDGET_BASE` proposals/day at a perfect record,
-scaling down linearly, `_NEW_PAIR_STARTER_BUDGET` for a pair with no resolved history
-yet (neither the full trust of a proven record nor the total silence of zero). A
-7-day window with rejections but ZERO acceptances (Thoth's own explicit number) hard-
-stops the budget to zero regardless of the 30-day rate — a pair actively producing
-nothing but rejections right now doesn't get to coast on an old good record — and
-fires a RECEIPT (a Thread, kind='fyi', owner=the Proposal owner) naming the rejection
-count that triggered it. `open_thread`'s own idempotency-on-summary-hash is the dedup:
-the receipt's summary embeds the day, so it fires at most once per (miner, owner, day)
-without a second piece of state to track it.
+The budget: a daily budget per (miner, owner) pair that scales with that pair's own
+trailing 30-day acceptance rate (accepted / (accepted+rejected) of resolved Proposals
+in the window). `_DAILY_BUDGET_BASE` proposals/day at a perfect record, scaling down
+linearly, `_NEW_PAIR_STARTER_BUDGET` for a pair with no resolved history yet (neither
+the full trust of a proven record nor the total silence of zero). A 7-day window with
+rejections but zero acceptances hard-stops the budget to zero regardless of the 30-day
+rate, a pair actively producing nothing but rejections right now doesn't get to coast
+on an old good record, and fires a receipt (a Thread, kind='fyi', owner=the Proposal
+owner) naming the rejection count that triggered it. `open_thread`'s own
+idempotency-on-summary-hash is the dedup: the receipt's summary embeds the day, so it
+fires at most once per (miner, owner, day) without a second piece of state to track it.
 
-ITEM 4 (this pass), TELEMETRY: made/accepted/rejected/expired-in-effect per (miner,
-owner) lives in digest.py's own `_proposal_telemetry` (the per-project/per-seat
-summary convention `fleet_digest` already holds), not here — this module carries only
+Telemetry: made/accepted/rejected/expired-in-effect per (miner, owner) lives in
+digest.py's own `_proposal_telemetry` (the per-project/per-seat summary convention
+`fleet_digest` already holds), not here. This module carries only
 `guarded_miner_tick`, the "a miner tick that raises writes a failure receipt first"
-discipline (decision ac892cd9) a future miner's own periodic tick wraps itself in.
-Dollar cost is deliberately NOT re-derived per pair — digest.py's own `costs` stream
-already reads `ceiling()`'s measured vendor figure, and llm_usage carries no owner
-dimension to split it by pair.
+discipline a future miner's own periodic tick wraps itself in. Dollar cost is
+deliberately not re-derived per pair: digest.py's own `costs` stream already reads the
+measured vendor figure, and llm_usage carries no owner dimension to split it by pair.
 
-DELIBERATELY NOT BUILT HERE (Thoth's "one commit per item"): any miner wiring —
-existing miners stay off, unwired, exactly as before this module existed."""
+Deliberately not built here: any miner wiring. Existing miners stay off, unwired,
+exactly as before this module existed."""
 from __future__ import annotations
 
 import uuid
@@ -87,14 +80,14 @@ _CONFIDENCE_CAP = confidence_for(EvidenceClass.DERIVED)
 _EXPIRY_DAYS = 14
 _LEGAL_CANDIDATE_KINDS = ("link", "object")
 _TRAILING_WINDOW_DAYS = 30
-# THE BUDGET KNOBS THEMSELVES moved to settings.py (osiris_miner_daily_budget_base /
-# osiris_miner_new_pair_starter_budget / osiris_miner_zero_acceptance_window_days,
-# THE SETTINGS MENU piece 1, thread f4498ab304e4) — registered with effect='next_tick'
-# since every read below already calls get_settings() fresh, never once at import.
+# The budget knobs themselves moved to settings.py (osiris_miner_daily_budget_base /
+# osiris_miner_new_pair_starter_budget / osiris_miner_zero_acceptance_window_days),
+# registered with effect='next_tick' since every read below already calls
+# get_settings() fresh, never once at import.
 
 
 def _validate_candidate(candidate: dict[str, Any]) -> str | None:
-    """The two legal shapes a graph write can ever be in this kernel, named plainly —
+    """The two legal shapes a graph write can ever be in this kernel, named plainly:
     a `link` candidate needs `from_id`/`to_id`/`link_type`, an `object` candidate needs
     `type`/`canonical`. Returns an error string, or None when the shape is legal."""
     kind = candidate.get("kind")
@@ -115,12 +108,11 @@ def _validate_candidate(candidate: dict[str, Any]) -> str | None:
 async def _live_abstention_exists(
     pool: asyncpg.Pool, from_id: uuid.UUID, link_type: str,
 ) -> bool:
-    """The last-resort law's own precondition, verbatim per Khnum's (mail 8849) and
-    Sekhmet's (mail 8857) independent agreement — the identical predicate
+    """The last-resort law's own precondition: the same predicate
     `backfill_lineage_repo_links` already runs (capture.py) to find a stale abstention
-    still worth retiring: a CURRENT `derivation_abstained_<link_type>` property on
-    `from_id` whose value carries no `resolved` key. A row that HAS a `resolved` key
-    was already answered by a real mint — proposing against it would re-litigate a
+    still worth retiring: a current `derivation_abstained_<link_type>` property on
+    `from_id` whose value carries no `resolved` key. A row that has a `resolved` key
+    was already answered by a real mint; proposing against it would re-litigate a
     settled question, not fill a genuine gap."""
     row = await pool.fetchval(
         "SELECT 1 FROM current_assertions WHERE object_id=$1 AND name=$2 "
@@ -134,8 +126,8 @@ async def _resolved_count_since(
     pool: asyncpg.Pool, miner: str, owner: str, status: str, since: datetime,
 ) -> int:
     """How many Proposals for this (miner, owner) pair reached `status` at or after
-    `since` — the raw count `_throttle_status` combines into a rate, kept as its own
-    query (never a Python-side filter of a wider fetch) so the window is the DATABASE's
+    `since`: the raw count `_throttle_status` combines into a rate, kept as its own
+    query (never a Python-side filter of a wider fetch) so the window is the database's
     own comparison, matching this house's existing trailing-window convention
     (settle.py, digest.py: `observed_at >= $n` in the query itself)."""
     count = await pool.fetchval(
@@ -156,11 +148,11 @@ async def _resolved_count_since(
 async def _proposals_made_since(
     pool: asyncpg.Pool, miner: str, owner: str, since: datetime,
 ) -> int:
-    """How many Proposals this (miner, owner) pair has MINTED (any status) since
-    `since` — the daily budget's own spend counter. Mint time is the `miner` property's
+    """How many Proposals this (miner, owner) pair has minted (any status) since
+    `since`: the daily budget's own spend counter. Mint time is the `miner` property's
     own `observed_at` (asserted once at propose(), never resuperseded), never the
     Proposal object's `created_at` (this kernel's own append-only convention keeps that
-    off every read path — `object_events`, not a mutable column, is the only truth for
+    off every read path; `object_events`, not a mutable column, is the only truth for
     "when")."""
     count = await pool.fetchval(
         "SELECT count(*) FROM objects o WHERE o.type='Proposal' "
@@ -179,14 +171,13 @@ async def _throttle_status(
     pool: asyncpg.Pool, miner: str, owner: str,
 ) -> dict[str, Any]:
     """The daily budget for this (miner, owner) pair, right now. Scales
-    `osiris_miner_daily_budget_base` (settings.py — THE SETTINGS MENU piece 1) linearly
-    by the pair's own trailing 30-day acceptance rate (accepted / (accepted+rejected) of
-    RESOLVED Proposals in the window); a pair with no resolved history yet gets
-    `osiris_miner_new_pair_starter_budget`, neither a proven record's
-    full trust nor a bad one's zero. Overrides that entirely to budget=0, `throttled`
-    True, when the trailing 7-day window holds at least one rejection and zero
-    acceptances (Thoth's own explicit number, mail 8920) — a pair producing nothing but
-    rejections right now doesn't coast on an old good rate."""
+    `osiris_miner_daily_budget_base` (settings.py) linearly by the pair's own trailing
+    30-day acceptance rate (accepted / (accepted+rejected) of resolved Proposals in the
+    window); a pair with no resolved history yet gets
+    `osiris_miner_new_pair_starter_budget`, neither a proven record's full trust nor a
+    bad one's zero. Overrides that entirely to budget=0, `throttled` True, when the
+    trailing 7-day window holds at least one rejection and zero acceptances, so a pair
+    producing nothing but rejections right now doesn't coast on an old good rate."""
     st = get_settings()
     now = datetime.now(UTC)
     window_30 = now - timedelta(days=_TRAILING_WINDOW_DAYS)
@@ -210,20 +201,20 @@ async def propose(
     actions: Actions, *, from_id: uuid.UUID, link_type: str, candidate: dict[str, Any],
     confidence: float, owner: str, miner: str, actor: str,
 ) -> dict[str, Any]:
-    """Mint a Proposal — never a real graph write. Refuses (nothing minted) when:
-      (1) no LIVE `derivation_abstained_<link_type>` property exists on `from_id`
+    """Mint a Proposal, never a real graph write. Refuses (nothing minted) when:
+      (1) no live `derivation_abstained_<link_type>` property exists on `from_id`
           (the last-resort law: a miner proposes only against an existing, unresolved
           abstention, never freehand);
       (2) `owner` does not resolve via `resolve_owner_seat` to an active Seat or the
           literal 'operator' (the one owner law, applied here exactly as it is on
           every other durable object this house mints);
       (3) `candidate` is not one of the two legal shapes (`kind`: 'link' or 'object');
-      (4) the (miner, owner) pair's own daily budget is spent (item 3's throttle,
-          `_throttle_status` — scales with the pair's trailing 30-day acceptance rate,
-          hard-stopped to zero on a 7-day window of rejections with no acceptances,
-          which also fires a receipt Thread to the owner naming why).
-    `confidence` is capped at the DERIVED tier (0.4) regardless of what's passed — a
-    miner's own guess is never graded above what a mechanical sweep already earns.
+      (4) the (miner, owner) pair's own daily budget is spent (the throttle in
+          `_throttle_status`, which scales with the pair's trailing 30-day acceptance
+          rate, hard-stopped to zero on a 7-day window of rejections with no
+          acceptances, and also fires a receipt Thread to the owner naming why).
+    `confidence` is capped at the derived tier (0.4) regardless of what's passed, since
+    a miner's own guess is never graded above what a mechanical sweep already earns.
     Returns `{"error": ...}` on any refusal, naming which law refused it; otherwise
     the minted Proposal's own canonical, status, and expiry."""
     if not await _live_abstention_exists(actions.pool, from_id, link_type):
@@ -280,15 +271,14 @@ async def propose(
 
 
 async def _proposal_row(pool: asyncpg.Pool, proposal: str) -> dict[str, Any] | None:
-    """The Proposal's own id plus its CURRENT status (with the status assertion's own
-    row id, needed to supersede it)/candidate/owner/expires_at — read fresh every call,
+    """The Proposal's own id plus its current status (with the status assertion's own
+    row id, needed to supersede it)/candidate/owner/expires_at, read fresh every call,
     never cached, since accept()/reject() must see a status another caller just wrote.
-    `status` transitions cross sources (propose()'s own miner, then a DIFFERENT actor
-    accepting/rejecting) — `assert_property`'s own supersession is same-source-only, so
-    a plain re-assert would leave 'proposed' AND 'accepted' simultaneously current
-    (Khnum's own correct_agent_house precedent, actions/core.py's supersede_assertion
-    docstring). `status_assertion_id` names the one row `supersede_assertion` must
-    retire."""
+    `status` transitions cross sources (propose()'s own miner, then a different actor
+    accepting/rejecting). `assert_property`'s own supersession is same-source-only, so
+    a plain re-assert would leave 'proposed' and 'accepted' simultaneously current (see
+    actions/core.py's supersede_assertion docstring for the same-source precedent).
+    `status_assertion_id` names the one row `supersede_assertion` must retire."""
     proposal_id = await pool.fetchval(
         "SELECT id FROM objects WHERE type='Proposal' AND canonical=$1", proposal)
     if proposal_id is None:
@@ -310,12 +300,12 @@ async def _proposal_row(pool: asyncpg.Pool, proposal: str) -> dict[str, Any] | N
 async def accept(
     actions: Actions, *, proposal: str, actor: str,
 ) -> dict[str, Any]:
-    """Mint the REAL object/link the Proposal's own `candidate` names, verbatim, under
-    `actor`'s own SELF_DECLARED testimony — never the miner's derived grade; accepting
-    a proposal is a mind's act, the same evidence tier every other self-declared write
+    """Mint the real object/link the Proposal's own `candidate` names, verbatim, under
+    `actor`'s own self_declared testimony, never the miner's derived grade. Accepting
+    a proposal is a human's act, the same evidence tier every other self-declared write
     in this house carries. Cites the Proposal back on the minted thing itself: a link
     candidate's own `properties.accepted_from`, an object candidate's own
-    `accepted_from_proposal` property — the only two provenance-carrying slots this
+    `accepted_from_proposal` property, the only two provenance-carrying slots this
     kernel has, never a new edge type invented for this. Refuses on anything but
     status='proposed', or a Proposal already past its own `expires_at` (checked here
     directly, never depending on a sweep having already marked it 'expired')."""
@@ -360,9 +350,9 @@ async def accept(
 async def reject(
     actions: Actions, *, proposal: str, reason: str, actor: str,
 ) -> dict[str, Any]:
-    """Retire the Proposal (status='rejected') with a MANDATORY reason, written back
-    where the SAME miner can read it on its own next tick — the rolling signal item 3's
-    budget-throttle reads. Refuses on anything but status='proposed'."""
+    """Retire the Proposal (status='rejected') with a mandatory reason, written back
+    where the same miner can read it on its own next tick, the signal the
+    budget-throttle above reads. Refuses on anything but status='proposed'."""
     if not reason.strip():
         return {"error": "reason is required — a rejection is testimony the miner "
                          "reads back, never a silent drop"}
@@ -385,11 +375,10 @@ async def reject(
 
 
 async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
-    """READ-ONLY (Thoth mail 8920): the operator desk's own proposals band — total
-    count of live (status='proposed', not yet expired) Proposals, and up to three per
-    owner, newest first. Accept/reject happen through accept()/reject() from the
-    owner's own tab, never from this band directly — this function never mutates
-    anything."""
+    """Read-only: the operator desk's own proposals band, total count of live
+    (status='proposed', not yet expired) Proposals, and up to three per owner, newest
+    first. Accept/reject happen through accept()/reject() from the owner's own tab,
+    never from this band directly; this function never mutates anything."""
     now = datetime.now(UTC).isoformat()
     rows = await pool.fetch(
         "SELECT o.canonical AS proposal, "
@@ -419,19 +408,19 @@ async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
 async def guarded_miner_tick(
     actions: Actions, miner: str, fn: Callable[[], Awaitable[Any]],
 ) -> Any:
-    """Item 4's own tick discipline (decision ac892cd9): "a miner tick that raises
-    writes a failure receipt first" — before the exception is allowed to propagate or
-    the tick is otherwise abandoned, so a crashed tick is a durable, queryable fact,
-    never silent. Reuses `open_or_annotate_persisting_alarm` (capture.py) rather than a
-    new alarm shape — the same call deploy_guard's own boot-drift alarm and
-    fleet_reconcile's own blind-tick alarm already use, converging on the same live-
-    desk `drift_alarms` filter for free. `fn` is a zero-arg async callable (never an
-    already-created coroutine — this house's own footgun a coroutine can only be
-    awaited once would otherwise invite) so a caller can retry the SAME tick through
+    """The tick discipline: a miner tick that raises writes a failure receipt first,
+    before the exception is allowed to propagate or the tick is otherwise abandoned, so
+    a crashed tick is a durable, queryable fact, never silent. Reuses
+    `open_or_annotate_persisting_alarm` (capture.py) rather than a new alarm shape, the
+    same call deploy_guard's own boot-drift alarm and fleet_reconcile's own blind-tick
+    alarm already use, converging on the same live-desk `drift_alarms` filter for free.
+    `fn` is a zero-arg async callable (never an already-created coroutine, since a
+    coroutine can only be awaited once) so a caller can retry the same tick through
     this guard more than once.
 
-    No existing miner calls this yet — existing miners stay off, unwired, exactly as
-    every other item in this wave — this is the primitive future miner wiring adopts."""
+    No existing miner calls this yet: existing miners stay off, unwired, exactly as
+    every other item in this module. This is the primitive future miner wiring
+    adopts."""
     from src.orchestrator.capture import open_or_annotate_persisting_alarm
 
     try:

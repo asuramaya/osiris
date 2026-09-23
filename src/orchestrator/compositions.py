@@ -402,7 +402,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # embedding search inherits run_spec's caller via the ACL contextvar
     caller = str(args.get("caller") or "") or _ACL_CALLER.get()
     if not q:
-        return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
+        return {"hits": [], "note": "pass q: words, phrases, or \"quoted phrases\""}
     # THE ID ROUTE: a hex TOKEN is a RULING/THREAD ID,
     # not vocabulary. A caller may quote it as the OBJECT's uuid prefix (dd27f61f...) or as
     # its CANONICAL short hash (thread:23423ff856ab, the typical quoting habit),
@@ -454,7 +454,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     if not id_hits and not await pool.fetchval(
             "SELECT websearch_to_tsquery('english', $1)::text", q):
         return {"hits": [], "q": q,
-                "note": "query is all stopwords/punctuation — nothing to match (not logged)"}
+                "note": "query is all stopwords/punctuation: nothing to match (not logged)"}
     # rank inside `cand`, headline ONLY the surviving rows (`top`); ts_headline is the
     # expensive part and a broad query can match thousands of candidates. ts_rank
     # normalization 1 divides by 1+log(doc length) so a long rationale can't outrank a
@@ -544,7 +544,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             [h["id"] for h in hits]) if (r["v"] or "").strip()}
         for h in hits:
             if h["id"] in buried:
-                h["superseded"] = f"by decision {buried[h['id']][:8]} — read the successor"
+                h["superseded"] = f"by decision {buried[h['id']][:8]}: read the successor"
         # a refuted Practice must stay findable ('a half-
         # remembered refuted lesson is exactly what must remain findable'), unlike a
         # superseded Decision it is NEVER hidden or buried, only flagged, same batched
@@ -557,7 +557,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             [h["id"] for h in hits]) if (r["v"] or "").strip()}
         for h in hits:
             if h["id"] in refuted:
-                h["refuted"] = (f"by decision {refuted[h['id']][:8]} — a dead lesson, "
+                h["refuted"] = (f"by decision {refuted[h['id']][:8]}: a dead lesson, "
                                 "not standing law")
         # a scope-narrowed decision must not read as unbounded testimony either, unlike
         # supersedes/refutes this is a real EDGE (`narrows`), not a
@@ -571,7 +571,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             [h["id"] for h in hits])}
         for h in hits:
             if h["id"] in narrowed:
-                h["scope_limited_by"] = (f"decision {str(narrowed[h['id']])[:8]} — "
+                h["scope_limited_by"] = (f"decision {str(narrowed[h['id']])[:8]}: "
                                          "read it for the boundary")
 
     # GRAPH SCOPE FILTER (Phase 2): hit-set filtering by project and/or lineage scope
@@ -634,11 +634,11 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     await pool.execute(
         "DELETE FROM search_log WHERE searched_at < now() - interval '90 days'")
     return {"hits": hits, "q": q,
-            **({"note": "strict match (ALL terms) found nothing — these hits match ANY term, "
+            **({"note": "strict match (ALL terms) found nothing: these hits match ANY term, "
                         "best-covered first"} if relaxed and not fuzzy else {}),
-            **({"note": "exact matches found nothing — these are spelling-tolerant "
+            **({"note": "exact matches found nothing: these are spelling-tolerant "
                         "(trigram) matches"} if fuzzy else {}),
-            **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
+            **({"note": "no hits: logged, the zero-hit rate is watched"} if not hits else {})}
 
 
 # THE RARITY-WEIGHTED RELAXATION: the ANY-term retry's rank is the sum
@@ -891,7 +891,7 @@ async def _fn_family(
         missing = everyone - role_repos[role]
         rows.append({"role": role,
                      "have": ", ".join(sorted(rmap[i] for i in role_repos[role])),
-                     "missing": ", ".join(sorted(rmap[i] for i in missing)) or "—",
+                     "missing": ", ".join(sorted(rmap[i] for i in missing)) or "-",
                      "consistent": not missing})
     rows.sort(key=lambda r: (r["consistent"], r["role"]))   # inconsistencies (the findings) first
     return {f"Family consistency — {len(rmap)} repos ({', '.join(sorted(rmap.values()))})": rows}
@@ -1025,7 +1025,7 @@ async def _fn_project(
             for c in commits if c["summary"]],
         f"{name} — decisions": [
             {"kind": d["kind"], "decision": d["summary"]} for d in decisions if d["summary"]],
-        f"{name} — file roles": [{"roles": ", ".join(role_list) or "—"}],
+        f"file roles for {name}": [{"roles": ", ".join(role_list) or "-"}],
     }
 
 
@@ -1138,8 +1138,8 @@ async def _fn_portfolio(
             key=lambda t: (docfreq[t], -tf[rid][t]))       # rarest-across-repos first
         rows.append({
             "repo": name,
-            "stack": ", ".join(e for e, _ in exts[rid].most_common(4)) or "—",
-            "about": ", ".join(distinctive[:cap]) or "—",
+            "stack": ", ".join(e for e, _ in exts[rid].most_common(4)) or "-",
+            "about": ", ".join(distinctive[:cap]) or "-",
             "commits": ncommits[rid],
         })
     rows.sort(key=lambda x: -x["commits"])
@@ -1204,18 +1204,18 @@ async def _fn_pulse(
         "SELECT ran_at, synced, findings FROM dev_pulses ORDER BY id DESC LIMIT $1", cap)
     if not rows:                                    # the loop has NEVER run: keep the how-to row
         return {_PULSE_TITLE: [
-            {"finding": "no pulse yet — run `python -m src.orchestrator.pulse`",
-             "when": "—", "synced": "—"}]}
+            {"finding": "no pulse yet: run `python -m src.orchestrator.pulse`",
+             "when": "-", "synced": "-"}]}
 
     last_ran = rows[0]["ran_at"]
     age = _pulse_now(args) - last_ran
     if age > _PULSE_STALE:                          # DEAD: lead with the dead-since row
-        status = {"finding": f"heartbeat DEAD — no pulse since {str(last_ran)[:19]} "
+        status = {"finding": f"heartbeat DEAD: no pulse since {str(last_ran)[:19]} "
                              f"({_ago(age)} ago); the loop is not running",
-                  "when": str(last_ran)[:19], "synced": "—"}
+                  "when": str(last_ran)[:19], "synced": "-"}
     else:
-        status = {"finding": f"heartbeat alive — last pulse {_ago(age)} ago",
-                  "when": str(last_ran)[:19], "synced": "—"}
+        status = {"finding": f"heartbeat alive: last pulse {_ago(age)} ago",
+                  "when": str(last_ran)[:19], "synced": "-"}
 
     # explicit `last` ⇒ exactly those N pulses; else the last 24h anchored at the newest pulse.
     window = rows if override is not None else [
@@ -1224,12 +1224,12 @@ async def _fn_pulse(
     for r in window:
         for finding in (_coerce(r["findings"]) or []):
             findings.append({"finding": finding, "when": str(r["ran_at"])[:19],
-                             "synced": ", ".join(_coerce(r["synced"]) or []) or "—"})
+                             "synced": ", ".join(_coerce(r["synced"]) or []) or "-"})
     if not findings:                                # pulses ran, nothing changed in the window
-        findings = [{"finding": f"quiet — no changes across {len(window)} pulse"
+        findings = [{"finding": f"quiet: no changes across {len(window)} pulse"
                                 f"{'s' if len(window) != 1 else ''} since "
                                 f"{str(window[-1]['ran_at'])[:19]}",
-                     "when": str(last_ran)[:19], "synced": "—"}]
+                     "when": str(last_ran)[:19], "synced": "-"}]
     return {_PULSE_TITLE: [status, *findings]}
 
 
@@ -1336,7 +1336,7 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
     oid = (await resolve_ref(pool, ref)) if ref else subject
     if oid is None:
         return {"note": (f"nothing matches {ref!r}" if ref else
-                         "pass ref=<uuid|canonical|name> (or focus a subject) — "
+                         "pass ref=<uuid|canonical|name> (or focus a subject): "
                          "lap answers for ONE object")}
     head = await pool.fetchrow(
         "SELECT id, type, canonical, status, merged_into, created_at "
@@ -1399,7 +1399,7 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
         "counts": {"assertions": len(a_rows), "links": len(l_rows), "events": len(e_rows),
                    "superseded": sum(1 for a in a_rows if a["dead"])},
         **({"note": f"newest {limit} of {len(timeline)} entries shown "
-                    f"({dropped} older dropped — raise limit to see them)"} if dropped else {}),
+                    f"({dropped} older dropped, raise limit to see them)"} if dropped else {}),
     }
 
 
@@ -1586,7 +1586,7 @@ async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         from src.orchestrator.adoption_meter import adoption_meter
         meter = await adoption_meter(pool)
         return {"kind": kind, "cohorts": meter.get("cohorts", {})}
-    return {"error": f"unknown census kind {kind!r} — pass one of: "
+    return {"error": f"unknown census kind {kind!r}: pass one of: "
                      "'seat_property_contradictions', 'cohort'"}
 
 
@@ -2296,7 +2296,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "detail": f"'{_cell(r['winner'])}' ({r['winner_source']}, "
                        f"{round(float(r['winner_conf']), 3)}) wins over "
                        f"'{_cell(r['rival'])}' ({r['rival_source']}, "
-                       f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
+                       f"{round(float(r['rival_conf']), 3)}) by ≤{eps}: a coin-flip winner"}
             for r in con])
 
         # STATUS-REGRESSION: the lifecycle property's real failure modes: a normal
@@ -2336,7 +2336,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         findings_reg = [
             {"subject": r["canonical"],
              "detail": f"re-opened by {r['reopener']} AFTER {r['resolver']} resolved it "
-                       f"({str(r['reopened_at'])[:19]}) — a deliberate close is being overridden "
+                       f"({str(r['reopened_at'])[:19]}): a deliberate close is being overridden "
                        f"by recency: {_cell(r['summary'])}"}
             for r in reg]
         seen_regression = {r["canonical"] for r in reg}
@@ -2372,7 +2372,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 "subject": r["canonical"],
                 "detail": f"status reads 'open' ({str(r['open_at'])[:19]}) but resolved_because/"
                           f"resolved_in evidence dated {str(r['resolved_at'])[:19]} shows a close "
-                          "happened and the flag never flipped — never reopened since"})
+                          "happened and the flag never flipped, never reopened since"})
 
         exact_tie = await pool.fetch(
             "SELECT o.canonical, a.observed_at, a.v AS a_val, a.source_id AS a_source, "
@@ -2394,7 +2394,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 "subject": r["canonical"],
                 "detail": f"{r['a_source']} says '{r['a_val']}' and {r['b_source']} says "
                           f"'{r['b_val']}' at the IDENTICAL timestamp "
-                          f"({str(r['observed_at'])[:19]}) — the winner-picker's own "
+                          f"({str(r['observed_at'])[:19]}): the winner-picker's own "
                           "confidence/recency tiebreak has nothing left to break the tie on"})
         land("status-regression", "error", findings_reg)
 
@@ -2458,7 +2458,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                         dangling.append({"subject": walk[-1],
                                          "detail": f"succeeded_by points at {nxt!r}, "
                                                    "which no Agent object of any status "
-                                                   "carries — a pointer into the void"})
+                                                   "carries: a pointer into the void"})
                     break
                 if nxt in walked:
                     members = frozenset(walk[walk.index(nxt):])
@@ -2498,11 +2498,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         succ_from = {c: p["succeeded_from"] for c, p in props.items() if p.get("succeeded_from")}
         land("dangling-succeeded_from", "error", [
             {"subject": c, "detail": f"succeeded_from points at {anc!r}, which no Agent "
-                                     "object of any status carries — a pointer into the void"}
+                                     "object of any status carries: a pointer into the void"}
             for c, anc in sorted(succ_from.items()) if anc not in known])
 
         land("orphan-heir", "warn", [
-            {"subject": c, "detail": "a generation suffix with no succeeded_from — an heir "
+            {"subject": c, "detail": "a generation suffix with no succeeded_from: an heir "
                                      "with no recorded ancestor"}
             for c in sorted(canons)
             if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
@@ -2529,12 +2529,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": c,
              "detail": (
                  f"succeeded_from names {a!r} as ancestor, but {a!r}'s own succeeded_by "
-                 + (f"names {succ_by[a]!r} instead — a real disagreement, not an absence"
+                 + (f"names {succ_by[a]!r} instead: a real disagreement, not an absence"
                     if succ_by.get(a) else
                     ("no Agent object of any status carries that canonical at all"
                      if a not in known else
                      "was never asserted (or was phantom-folded blank)")
-                    + " — the expected/benign shape per decision 1081a782, still worth a "
+                    + ": the expected/benign shape, still worth a "
                       "glance, never an alarm"))}
             for c in sorted(canons)
             if (a := props.get(c, {}).get("succeeded_from"))
@@ -2544,12 +2544,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "SELECT DISTINCT agent_id FROM agent_mounts "
             "WHERE last_seen > now() - make_interval(secs => $1)", live_secs)}
         land("retired-live", "error", [
-            {"subject": c, "detail": "carries a winning retired=true yet holds a LIVE mount — "
+            {"subject": c, "detail": "carries a winning retired=true yet holds a LIVE mount: "
                                      "a closed name is being worn"}
             for c in sorted(canons)
             if props.get(c, {}).get("retired") == "true" and c in live])
         land("false-mint", "info", [
-            {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
+            {"subject": c, "detail": "a healed false mint (compensating events): expected to "
                                      "be retired; listed so the healing stays visible"}
             for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
         # A NAMED, DISTINCT check from "retired-live" above (which fires for any deliberate
@@ -2563,10 +2563,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         # worth a human's glance, never worth silently trusting agent_mounts alone for a
         # repair decision.
         land("false-mint-live", "error", [
-            {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount — a "
+            {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount: a "
                                      "genuinely live body may be wearing a phantom-folded "
-                                     "face (the halcyon shape, obligation 6b1efacb); "
-                                     "reinstate_generation is the repair door"}
+                                     "face; reinstate_generation is the repair door"}
             for c in sorted(canons)
             if props.get(c, {}).get("false_mint") == "true" and c in live])
 
@@ -2585,8 +2584,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("merged-with-live-successor", "warn", [
             {"subject": c,
              "detail": f"status=merged yet its own succeeded_by names "
-                       f"{props[c]['succeeded_by']!r}, which is currently ACTIVE — the mis-merge "
-                       "shape (decision 4510e4c6): review before trusting the fold, unmerge() is "
+                       f"{props[c]['succeeded_by']!r}, which is currently ACTIVE (the mis-merge "
+                       "shape): review before trusting the fold, unmerge() is "
                        "the repair door if the successor's chain is real and independent"}
             for c in sorted(status_of)
             if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
@@ -2605,7 +2604,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         # (a live process census is not available inside this report-only function).
         land("pulse-only-liveness", "info", [
             {"subject": r["agent_id"],
-             "detail": "this agent's own harness is not claude-code — its liveness reads "
+             "detail": "this agent's own harness is not claude-code: its liveness reads "
                        "ENTIRELY off a self-reported pulse (mounts.pulse_mount), never a "
                        "census-verified body; listed so the population relying on the "
                        "weaker signal stays visible"}
@@ -2661,7 +2660,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        + ", ".join(f"{c} is {s}" for c, s in
                                    ((r["from_c"], r["from_s"]), (r["to_c"], r["to_s"]))
                                    if s != "active")
-                       + ") — expected under resolve-on-read; the count meters consolidation "
+                       + "), expected under resolve-on-read; the count meters consolidation "
                          "debt, not damage"}
             for r in orphans])
         counts["orphan-link"] = int(orphan_total)
@@ -2734,10 +2733,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                     rot.append({
                         "subject": str(r["id"]),
                         "detail": f"probably resolved, confirm? open thread "
-                                  f"'{_cell(r['summary'])}' — later commit {c['canonical']} "
+                                  f"'{_cell(r['summary'])}', later commit {c['canonical']} "
                                   f"shares its vocabulary ({', '.join(sorted(shared)[:5])}); "
                                   "if truly done: resolve_thread with the commit as the "
-                                  "because — your judgment is the testimony"})
+                                  "because; your judgment is the testimony"})
                     break
         land("rot-candidate", "info", rot)
 
@@ -2757,7 +2756,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "  AND (l.valid_until IS NULL OR l.valid_until > now()))")
         land("rot-candidate-unscoped", "info", [
             {"subject": "fleet", "count": int(unscoped),
-             "detail": f"{unscoped} open thread(s) have no in_repo edge at all — the "
+             "detail": f"{unscoped} open thread(s) have no in_repo edge at all: the "
                        "rot-candidate check above cannot evaluate them (no repo, no commit "
                        "corpus to compare against); not a defect, a structural blind spot "
                        "this check is now honest about"}] if unscoped else [])
@@ -2782,7 +2781,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("edgeless-closure-growth", "error", [
             {"subject": "fleet", "count": int(edgeless), "ceiling": EDGELESS_CLOSURE_CEILING,
              "detail": f"resolved-with-no-closure-edge grew to {edgeless}, past the ceiling of "
-                       f"{EDGELESS_CLOSURE_CEILING} — every sanctioned closing path mints an "
+                       f"{EDGELESS_CLOSURE_CEILING}: every sanctioned closing path mints an "
                        "edge unconditionally now, so this can only mean a bypass: raw SQL, an "
                        "unguarded new writer, or a closure edge healed while status stayed "
                        "resolved"}
@@ -2806,7 +2805,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("attribution", "error", [
             {"subject": r["source_id"], "writes": int(r["writes"]),
              "detail": f"{r['writes']} write(s) from an agent id the graph never registered "
-                       f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
+                       f"(last {r['last'].isoformat()[:19]}): who wore this face?"}
             for r in ghosts])
 
         # PHANTOM-TWIN: an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
@@ -2839,7 +2838,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": r["suspect"], "office": r["office"], "seat": r["seat"],
              "detail": f"anonymous agent {r['suspect']} mounted at {r['holder']}'s office "
                        f"({r['seat']}, last seen "
-                       f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}) — "
+                       f"{r['last_seen'].isoformat()[:19] if r['last_seen'] else 'never'}): "
                        "likely the same soul wearing a second row (a bridged resume without "
                        "its receipts). Verify and heal by hand; never auto-merge"}
             for r in twins])
@@ -2867,7 +2866,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": r["heir"],
              "detail": f"{r['heir']} was minted ({r['because'] or 'unknown seam'}) while "
                        f"door {r['door']} of its own lineage held a live pulse (predecessor "
-                       f"last seen {r['pulse_at'] or '?'}) — a parallel life: the "
+                       f"last seen {r['pulse_at'] or '?'}), a parallel life: the "
                        "predecessor was not dead. Verify the seam; fold by hand if false"}
             for r in par])
 
@@ -2904,7 +2903,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("duplicate-works-in", "warn", [
             {"subject": r["agent"],
              "detail": f"{r['agent']} is live right now and carries {r['n']} simultaneously-"
-                       f"live works_in edges ({', '.join(r['projects'])}) — orient() itself "
+                       f"live works_in edges ({', '.join(r['projects'])}); orient() itself "
                        "does not resolve project through this edge (seat->derive_house or "
                        "cwd pin/basename instead), but lineage_works_in's repo= default and "
                        "offices.py's pin self-heal vote both abstain here instead of resolving "
@@ -2954,13 +2953,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "ORDER BY ap.peered_since", stale_days)
         land("peer-silent", "warn", [
             {"subject": f"{r['seat_a']} <-> {r['seat_b']}",
-             "detail": f"peered since {r['peered_since'].isoformat()} ({r['because']!r}) — "
+             "detail": f"peered since {r['peered_since'].isoformat()} ({r['because']!r}): "
                        + (f"last direct mail between them was {r['last_contact'].isoformat()}"
                           if r["last_contact"] is not None
                           else "no direct mail between them has ever been seen")
                        + f", past the {stale_days}-day disclosure window. A proxy for the "
-                         "fiduciary-disclosure duty (spec e6636c7e), not proof either peer "
-                         "withheld a finding — testimony for a mind to judge, same as every "
+                         "fiduciary-disclosure duty, not proof either peer "
+                         "withheld a finding: testimony for a mind to judge, same as every "
                          "other check here"}
             for r in peer_silence])
 
@@ -3003,7 +3002,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("held-past-deadline", "warn", [
             {"subject": f"{r['holder']} holding {r['held']}'s act ({r['act']})",
              "detail": f"time-boxed hold expired {r['deadline'].isoformat()} with no "
-                       "resolve_thread call yet — the spec's auto-escalation-to-the-operator "
+                       "resolve_thread call yet: the spec's auto-escalation-to-the-operator "
                        "half, unbuilt as a push, surfaces here instead: this is where a mind "
                        "(or a future caller reading this check) takes it to the operator's "
                        "desk, not lint's own act"}
@@ -3036,8 +3035,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
              "detail": f"{r['agent']} ({r['status']}) still carries a live works_in/governs "
                        f"edge to {r['project']} though "
                        f"{off_head_of[_generation(str(r['agent']))[0]]} is this lineage's "
-                       "living head now — backfill_agent_project_links is the repair; this "
-                       "only counts (thread 20af2c95's own recurrence tripwire)"}
+                       "living head now: backfill_agent_project_links is the repair; this "
+                       "only counts (a recurrence tripwire)"}
             for r in stale_links])
 
         # STALE-CURRENT-FLAG (recurrence detection): the SAME anomaly `stale_current_flags`'s
@@ -3070,8 +3069,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": str(r["object_id"]),
              "detail": f"assertion {r['stale_id']} ({r['name']}) on {r['object_id']} still "
                        "reads is_current=true though a real supersedes FK already points at "
-                       "it — repair_stale_current_flags is the batched repair; this only "
-                       "counts (thread 09bde57e's own recurrence tripwire)"}
+                       "it: repair_stale_current_flags is the batched repair; this only "
+                       "counts (a recurrence tripwire)"}
             for r in stale_flags])
         counts["stale-current-flag"] = int(stale_flag_total or 0)
 
@@ -3094,7 +3093,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "   WHERE a.object_id=o.id AND a.name='kind')")
         land("kindless-open-thread", "warn", [
             {"subject": r["canonical"],
-             "detail": f"open with no kind at all — {(r['summary'] or '')[:120]!r}; "
+             "detail": f"open with no kind at all: {(r['summary'] or '')[:120]!r}; "
                        "reclassify_thread(kind=...) is the fix, never a silent default"}
             for r in kindless])
 
@@ -3127,7 +3126,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 bad_owner.append({
                     "subject": r["canonical"],
                     "detail": f"owner {owner_val!r} resolves to no active seat or "
-                             "'operator' — a bare handle nobody holds, a dead agent id, "
+                             "'operator': a bare handle nobody holds, a dead agent id, "
                              "or a project with no chartered coordinator seat",
                 })
         land("unresolvable-owner", "warn", bad_owner)
@@ -3152,7 +3151,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("zero-recipient-dm", "warn", [
             {"subject": r["to_agent"],
              "detail": f"DM #{r['id']} from {r['from_agent']} to {r['to_agent']} "
-                       f"({r['created_at'].isoformat()}) has NO message_recipients row — "
+                       f"({r['created_at'].isoformat()}) has NO message_recipients row: "
                        "nobody was ever registered to read it; resend by handle if it "
                        "still matters"}
             for r in zero_recip])
@@ -3168,8 +3167,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("orphan", "warn", [
             {"subject": r["canonical"],
              "detail": f"type={r['type']}, no live link at all" + (
-                 " (a derivation_abstained record already explains this — expected, not "
-                 "unexamined)" if r["abstained"] else " — never linked, never abstained; "
+                 " (a derivation_abstained record already explains this: expected, not "
+                 "unexamined)" if r["abstained"] else ": never linked, never abstained; "
                  "genuinely unexamined")}
             for r in orphan_census_result["rows"]])
 
@@ -3193,7 +3192,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("contested-summary", "warn", [
             {"subject": r["canonical"],
              "detail": "a note newer than this thread's own last summary correction "
-                       "disputes it — correct_summary or annotate(corrected_summary=) to "
+                       "disputes it: correct_summary or annotate(corrected_summary=) to "
                        "clear it"}
             for r in contested["rows"]])
 
@@ -3214,20 +3213,20 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("project-identity", "warn", [
             {"subject": r["canonical"],
              "detail": f"empty stub (name={r['name']!r}, no live inbound link) shares "
-                       f"its own name/canonical with {r['collides_with']} — likely the "
+                       f"its own name/canonical with {r['collides_with']}: likely the "
                        "same project split across a rename; verify and merge_project "
                        "onto the live survivor, never auto-fold"}
             for r in identity_result["stub_collisions"]
         ] + [
             {"subject": r["canonical"],
              "detail": f"{len(r['names'])} competing current `name` values: "
-                       f"{', '.join(r['names'])} — migrate_project_name_singular "
+                       f"{', '.join(r['names'])}: migrate_project_name_singular "
                        "collapses this, newest/highest-confidence wins"}
             for r in identity_result["not_singular"]
         ] + [
             {"subject": r["alias"],
              "detail": f"retired canonical of {r['owner']} is also live on "
-                       f"{r['conflicts_with']} — an alias must name exactly one object; "
+                       f"{r['conflicts_with']}: an alias must name exactly one object; "
                        "fold or rename the squatter, never treat the alias as a second name"}
             for r in identity_result["alias_conflicts"]])
 
@@ -3236,7 +3235,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         holder_result = await seat_holder_census(pool)
         land("seat-holders", "warn", [
             {"subject": r["seat"],
-             "detail": f"holder {r['holder']} is not a real identity — it is "
+             "detail": f"holder {r['holder']} is not a real identity: it is "
                        f"{r['borrowed_from']}'s own live job_dir slug, borrowed. "
                        "rehold_seat(seat_id, agent_id=<the seat's real lineage>, "
                        "because='...') corrects it; never auto-fold"}
@@ -3244,7 +3243,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         ] + [
             {"subject": r["seat"],
              "detail": f"holder {r['holder']} carries no provenance of its own (never "
-                       "minted, never named, never succeeded anything) — may be a "
+                       "minted, never named, never succeeded anything): may be a "
                        "genuine pre-Seat-object holder, or the same borrowed-id shape "
                        "through a door this check's own fingerprint didn't catch; "
                        "verify by hand"}
@@ -3270,7 +3269,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         remaining = total - page_offset - len(findings)
         capped = {check_filter: remaining} if remaining > 0 else {}
         note = (f"showing {len(findings)} of {total} for check={check_filter!r} "
-                f"(offset={page_offset}) — {remaining} more; raise limit/offset for the "
+                f"(offset={page_offset}), {remaining} more; raise limit/offset for the "
                 "rest") if remaining > 0 else None
     else:
         capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
@@ -3301,7 +3300,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "orphan_abstained_total": orphan_census_result["abstained_total"],
         "untraceable_by_type": traceability_census_result["by_type"],
         "ran_at": now.isoformat(),
-        "discipline": "report-only — the lint never writes (rule #7); "
+        "discipline": "report-only: the lint never writes (rule #7); "
                       "findings are testimony, not verdicts",
     }
 
@@ -3676,10 +3675,10 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         shown, more = rank_open_threads(wall, me, owner_roots)
         return {"wall": shown, "more_on_wall": more,
                 "echo_pile": {"count": len(echoes),
-                              "note": "untouched miner echoes + judged questions — the "
+                              "note": "untouched miner echoes + judged questions: the "
                                       "record keeps them open; triage them in the echoes "
                                       "lens (adopt / question / resolve)"},
-                "note": "the graded wall — one law with orient(): obligations first, "
+                "note": "the graded wall: one law with orient(): obligations first, "
                         "yours-to-act before others' claims before waiting-on-the-human"}
     # same partition per project: open = wall + pile, and `obligations` counts only DECLARED
     # duties (a miner-guessed obligation nobody touched is a guess, not a debt)
@@ -3815,19 +3814,19 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "unfiled": unfiled,  # counted in `open`, absent from every `projects[]` row: no
                               # in_repo edge to file it under; not garbage, just homeless
         "reads": "open = wall + pile, over LIVE projects only. `obligations` are DECLARED duties "
-                 "and are a subset of `wall` — never add them to anything. `halted` is work on "
+                 "and are a subset of `wall`, never add them to anything. `halted` is work on "
                  "programs the operator stopped: not garbage (never swept), not debt (never "
                  "counted); resume the project and it returns. `unfiled` is threads with no "
-                 "in_repo edge at all — counted in `open`, but structurally absent from every "
+                 "in_repo edge at all: counted in `open`, but structurally absent from every "
                  "`projects[]` row, so summing that list will always undercount `open` by "
                  "exactly this many.",
     }
     return {"totals": totals, "projects": projects,
             "top_of_wall": shown, "more_on_wall": more,
-            "note": "the fleet wall — the graded top (declared duties + threads a mind touched), "
+            "note": "the fleet wall: the graded top (declared duties + threads a mind touched), "
                     "never the raw scroll. `pile` is untouched miner echoes (no mind has read "
                     "them); `guessed_obligations` are duties the MINER inferred and nobody "
-                    "confirmed — they are NOT debt. Focus a project to see its own graded wall."}
+                    "confirmed, they are NOT debt. Focus a project to see its own graded wall."}
 
 
 async def _fn_roadmap_open(
@@ -3873,7 +3872,7 @@ async def _fn_roadmap_open(
         items.append({
             "id": None, "kind": None,
             "summary": f"{more} more open thread{'s' if more != 1 else ''} not shown here "
-                       f"(ranked lower) — narrow the query or ask for a wider view",
+                       f"(ranked lower); narrow the query or ask for a wider view",
             "arc": "(more)", "owner": "(more)",
         })
     return items
@@ -4221,7 +4220,7 @@ async def _fn_mail_threads(
 
     box = str(args.get("box") or "").strip()
     if not box:
-        return [{"thread": "no box given — pass args.box (a project name or "
+        return [{"thread": "no box given: pass args.box (a project name or "
                            "'@agent:...'/'@seat:...')", "between": "-", "msgs": "-"}]
     try:
         threads = await mail_threads(pool, box)
@@ -4287,7 +4286,7 @@ async def _fn_overhead(
             telemetry if telemetry is not None
             # a confirmed, genuinely-empty store: NOT the same claim as "error" above,
             # and left as a plain string on purpose: this is a checked fact, not a gap
-            else "nothing retained yet — the store hasn't eaten a telemetry file")
+            else "nothing retained yet: the store hasn't eaten a telemetry file")
     return out
 
 
@@ -4372,7 +4371,7 @@ async def _fn_desk_project(
 
     project = str(args.get("project") or "").strip()
     if not project:
-        return [{"debt": "no project given — pass args.project", "kind": "-"}]
+        return [{"debt": "no project given: pass args.project", "kind": "-"}]
     try:
         desk = await read_desk(pool)
     except Exception:  # noqa: BLE001 - see desk_overview: unavailable, not silent.
@@ -4380,7 +4379,7 @@ async def _fn_desk_project(
         return {"error": "desk data unavailable"}
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     if p is None:
-        return [{"debt": f"nothing owed to {project} — cleared, or never was", "kind": "-"}]
+        return [{"debt": f"nothing owed to {project}: cleared, or never was", "kind": "-"}]
     because_not_mine = f"operator: not mine — {project} owns this"
     rows = [
         {"debt": t["summary"], "kind": t.get("kind") or "-", "id": t["id"],
@@ -4505,7 +4504,7 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     if mode == "buckets":
         return await _triage_buckets(pool, args)
     if mode != "census":
-        return [{"note": f"unknown mode {mode!r} — use 'census' or 'buckets'"}]
+        return [{"note": f"unknown mode {mode!r}: use 'census' or 'buckets'"}]
     rows = await pool.fetch(_TRIAGE_LINK_CTE + """
         SELECT o.type, o.status, count(*) AS n,
                count(*) FILTER (WHERE COALESCE(ls.link_count,0) = 0) AS orphans,
@@ -5017,9 +5016,9 @@ async def _fn_obligation_backlog(
 _BACKUP_TIMER_UNITS: list[tuple[str, str]] = [
     ("osiris-backup.timer", "dumps (pg_dump, every 6h)"),
     ("osiris-base-backup.timer", "base backups (pg_basebackup, weekly)"),
-    ("osiris-prune-manifest.timer", "prune ladder — manifest (dry run, mailed)"),
-    ("osiris-prune-apply.timer", "prune ladder — apply (deletes if the manifest is clear)"),
-    ("osiris-preflight.timer", "weekly preflight — includes the dump-restore drill"),
+    ("osiris-prune-manifest.timer", "prune ladder: manifest (dry run, mailed)"),
+    ("osiris-prune-apply.timer", "prune ladder: apply (deletes if the manifest is clear)"),
+    ("osiris-preflight.timer", "weekly preflight: includes the dump-restore drill"),
 ]
 
 
@@ -5230,7 +5229,7 @@ async def _fn_backup_status(
     }
     pitr_section = {
         "wired_to_a_timer": False,
-        "note": "scripts/osiris_pitr_drill.py — manual-only today, no receipt persisted",
+        "note": "scripts/osiris_pitr_drill.py: manual-only today, no receipt persisted",
     }
 
     return {
@@ -5272,7 +5271,7 @@ async def _fn_upstream_readers(
     plausibly trace", never a claim that this exact fact used that exact read; the
     `door`/`read_at` per fact are the edge's own stamped context, not proof of use."""
     if subject is None:
-        return {"error": "upstream-readers needs a subject — the upstream object id"}
+        return {"error": "upstream-readers needs a subject: the upstream object id"}
     rows = await pool.fetch(
         "SELECT ca.object_id, ca.name, ca.value #>> '{}' AS value, ca.source_id, "
         "       ca.confidence, ca.observed_at, "
@@ -5646,7 +5645,7 @@ def _row_action_arg(row: dict[str, Any], spec: dict[str, Any]) -> Any:
     if unknown:
         raise ValueError(f"row_actions arg spec has unknown key(s) {sorted(unknown)}: {spec!r}")
     if "literal" in spec and "property" in spec:
-        raise ValueError(f"row_actions arg spec has BOTH literal and property — exactly "
+        raise ValueError(f"row_actions arg spec has BOTH literal and property: exactly "
                          f"one is required: {spec!r}")
     if "literal" in spec:
         return spec["literal"]
@@ -6724,7 +6723,7 @@ async def run_spec(
             # its own `_bounded` key if the response is still over budget after this; a
             # shared key name would let one silently clobber the other's honest receipt.
             out["_projected"] = {"tool": "run_composition", "note": (
-                "you asked for a bounded view — this names exactly what's not shown, same "
+                "you asked for a bounded view: this names exactly what's not shown, same "
                 "as an unrequested trim would."), "dropped": dropped}
     return out
 
@@ -7261,29 +7260,29 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
 # Applied by the seeder to defaults and to already-saved compositions whose names it
 # knows, replacing what used to be 19 flat, hard-to-navigate chips.
 _COMP_META: dict[str, tuple[str, str]] = {
-    "briefing": ("arrive", "start here — the graded wall, recent work, what self-healed"),
+    "briefing": ("arrive", "start here: the graded wall, recent work, what self-healed"),
     "pulse-digest": ("arrive", "what the autonomic loop sensed lately"),
-    "the-wall": ("wall", "what is GENUINELY unresolved — obligations first, echoes counted"),
-    "live-desk": ("wall", "what's actionable for the operator right now — owed, decisions, "
+    "the-wall": ("wall", "what is GENUINELY unresolved: obligations first, echoes counted"),
+    "live-desk": ("wall", "what's actionable for the operator right now: owed, decisions, "
                           "drift alarms"),
-    "fleet-strip": ("fleet", "live co-agents right now, ranked — not the wall 'fleet' already "
+    "fleet-strip": ("fleet", "live co-agents right now, ranked: not the wall 'fleet' already "
                              "renders"),
     "fleet-live": ("fleet", "the full roster: every project, souls folded by generation, "
                             "doors/ancestors, the wake ledger and hourly budget"),
-    "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only — "
+    "mail": ("fleet", "every mailbox with traffic, busiest-latest first (overview only: "
                       "see mail_threads for one box)"),
-    "desk": ("wall", "what you owe each project, oldest first — see desk_project for one "
-                     "(overview only — same shape as mail/mail_threads)"),
+    "desk": ("wall", "what you owe each project, oldest first: see desk_project for one "
+                     "(overview only, same shape as mail/mail_threads)"),
     "backlog": ("wall", "every open obligation, by project and by seat, past-window "
-                        "flagged — desk's own per-project gauge widened fleet-wide, plus "
+                        "flagged: desk's own per-project gauge widened fleet-wide, plus "
                         "who's actually carrying it"),
-    "open threads": ("wall", "the raw unresolved list (ungraded — prefer the-wall)"),
+    "open threads": ("wall", "the raw unresolved list (ungraded: prefer the-wall)"),
     "echoes": ("wall", "the triage pile: untouched miner echoes, oldest first"),
     "decision-log": ("memory", "every decision with its WHY; superseded entries grayed"),
-    "design-canon": ("memory", "the design memory — ask it before re-deriving"),
-    "reference": ("memory", "the type catalog osiris SHIPS — static and pool-free, never a "
+    "design-canon": ("memory", "the design memory: ask it before re-deriving"),
+    "reference": ("memory", "the type catalog osiris SHIPS: static and pool-free, never a "
                             "live accretive stub"),
-    "docs": ("memory", "the docs canon by topic — getting-started, concepts, reference, "
+    "docs": ("memory", "the docs canon by topic: getting-started, concepts, reference, "
                        "deployment, history"),
     "recent work": ("memory", "latest commits across the graph"),
     "changelog by area": ("memory", "what changed, grouped by area"),
@@ -7291,31 +7290,31 @@ _COMP_META: dict[str, tuple[str, str]] = {
     "the composer arc": ("memory", "the composer's own build history"),
     "fleet": ("fleet", "every agent the graph knows"),
     "projects": ("fleet", "all repos by recency of touch"),
-    "project": ("fleet", "one repo's brief — focus a repo or pass args.repo"),
+    "project": ("fleet", "one repo's brief: focus a repo or pass args.repo"),
     "project-briefing": ("fleet", "a project's scoped briefing (what orient reads)"),
     "portfolio": ("fleet", "the operator's repos as a portfolio"),
-    "roadmap": ("fleet", "a project's work map — open/resolved/retracted, arc then owner"),
-    "graph-lint": ("engine", "the graph auditing itself — findings, not verdicts"),
-    "type-census": ("engine", "every type's health — counts, orphans, thin, median links"),
+    "roadmap": ("fleet", "a project's work map: open/resolved/retracted, arc then owner"),
+    "graph-lint": ("engine", "the graph auditing itself: findings, not verdicts"),
+    "type-census": ("engine", "every type's health: counts, orphans, thin, median links"),
     "closure-health": ("engine", "the four numbers: how much of thread closure is held by "
                                  "structure vs memory, fleet-wide"),
     "census-seat-property-contradictions": ("engine", "every (seat, property) pair "
         "currently holding more than one live distinct value, fleet-wide"),
-    "census-cohort": ("engine", "the #189 adoption instrument's own cohort-aged "
+    "census-cohort": ("engine", "the adoption instrument's own cohort-aged "
         "connectivity figures"),
     "family-consistency": ("engine", "config families that should agree but don't"),
     "family-drift": ("engine", "how config families drift over time"),
-    "lap": ("engine", "one object's provenance timeline — how belief formed"),
+    "lap": ("engine", "one object's provenance timeline: how belief formed"),
     "upstream-readers": ("engine", "who could plausibly trace to this upstream object, "
                                    "and what they went on to write"),
-    "overhead": ("engine", "what the harness itself costs — hidden channels, cache vs "
+    "overhead": ("engine", "what the harness itself costs: hidden channels, cache vs "
                           "fresh, reminders, compactions, retained telemetry"),
     "operational-vs-disclosed-geography": ("casework", "where an org operates vs claims"),
     "co-investment-ties": ("casework", "who co-invests with the subject"),
     "who-is-this": ("casework", "the subject's dossier at a glance"),
     "screen-financing-network": ("casework", "the subject's financing network, screened"),
-    "browse": ("memory", "the newest 200 objects, no type filter — browse's own first proof "
-                        "as a composition (588148bb)"),
+    "browse": ("memory", "the newest 200 objects, no type filter: browse's own first proof "
+                        "as a composition"),
 }
 
 # Auto-refresh: absent means manual only, the default for every composition not named

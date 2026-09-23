@@ -1,54 +1,51 @@
-"""THE #189 ADOPTION METER — an instrument, not a fix (Thoth msg 5825, ruling d68c57e5,
-obligation 8d510875). The risk this answers is stated in the ruling itself: "a gate that
-exists in code and refuses nothing in production is the same artifact as a confession
-nobody acts on." The acceptance test used to be a `triage(mode='census')` call somebody had
-to REMEMBER to run and compare by hand against a baseline held in a decision's own prose —
-exactly the shape that decays (5169686b diagnosed this identically on 2026-08-02 and the
-population it named grew ~1,800 in the 24 days the record sat unbuilt).
+"""The adoption meter: an instrument, not a fix. The risk this answers: a gate that exists in
+code and refuses nothing in production is the same artifact as a confession nobody acts on.
+The acceptance test used to be a `triage(mode='census')` call somebody had to remember to run
+and compare by hand against a baseline held in a decision's own prose, exactly the shape that
+decays (one earlier diagnosis of this identical failure found the population it named had grown
+by roughly 1,800 in the 24 days the record sat unbuilt).
 
-THE HEADLINE METRIC WAS REPLACED (Thoth msg 5866, superseding ruling d68c57e5's own
-"Decision median_links moving off 1"): Khnum measured (decision b71e1e0dcadf) that a
-Thread structurally CANNOT declare a forward relational link at its own birth — `open_thread`
-has no grounds=/relates_to= parameter, so a Thread's eventual connectivity is entirely a
-function of whether a LATER Decision's `resolves=` cites it back. A Reference is the same
-shape (its only route to connectivity is being named in a later Decision's `grounds=`).
-Even a well-connected Decision gets most of its own links from LATER objects citing it
-(supersedes/rediscovers/confirms/refutes), not from what its own writer declared. A
-population-wide snapshot median cannot tell "born yesterday, correctly not yet cited" apart
-from "born in June, never cited by anyone" — those are opposite conditions the old metric
-reported identically, and at ~20 new Decisions/day the always-young, legitimately-uncited
-population dominates the snapshot forever. median_links was never going to move off 1
-regardless of whether declaration-at-creation was actually working.
+THE HEADLINE METRIC WAS REPLACED, superseding an earlier target of "Decision median_links
+moving off 1": measurement showed that a Thread structurally cannot declare a forward
+relational link at its own birth. `open_thread` has no grounds=/relates_to= parameter, so a
+Thread's eventual connectivity is entirely a function of whether a later Decision's `resolves=`
+cites it back. A Reference is the same shape (its only route to connectivity is being named in
+a later Decision's `grounds=`). Even a well-connected Decision gets most of its own links from
+later objects citing it (supersedes/rediscovers/confirms/refutes), not from what its own writer
+declared. A population-wide snapshot median cannot tell "born yesterday, correctly not yet
+cited" apart from "born long ago, never cited by anyone"; those are opposite conditions the old
+metric reported identically, and at roughly 20 new Decisions/day the always-young,
+legitimately-uncited population dominates the snapshot forever. median_links was never going to
+move off 1 regardless of whether declaration-at-creation was actually working.
 
-COHORT-AGED CONNECTIVITY replaces it: objects are bucketed by BIRTH WEEK
-(`date_trunc('week', created_at)`), and each cohort's own live link count is measured at
-THREE FIXED HISTORICAL AGES — at birth, +7 days, +30 days (`links.created_at <= objects.
-created_at + N days`, using the SAME live-link definition `triage`'s own `_TRIAGE_LINK_CTE`
-uses). The question stops being "are writes born connected" (they structurally cannot be,
-per Khnum's own finding) and becomes "DO WRITES BECOME CONNECTED" — does a cohort's own
-median link count climb between birth and day 30, or does it sit flat.
+COHORT-AGED CONNECTIVITY replaces it: objects are bucketed by birth week
+(`date_trunc('week', created_at)`), and each cohort's own live link count is measured at three
+fixed historical ages: at birth, +7 days, +30 days (`links.created_at <= objects.
+created_at + N days`, using the same live-link definition `triage`'s own `_TRIAGE_LINK_CTE`
+uses). The question stops being "are writes born connected" (they structurally cannot be) and
+becomes "do writes become connected": does a cohort's own median link count climb between birth
+and day 30, or does it sit flat.
 
-NO BASELINE ROW IS NEEDED HERE, unlike the metric this replaces (deliberately, Thoth's own
-item 2 — "check that before building"): `links.created_at` has existed since migration
-0001, so every cohort old enough to have reached a checkpoint age is a FIXED HISTORICAL
-FACT the instant that window has fully elapsed — re-querying it tomorrow, next week, or a
-year from now returns the identical number, because the query only ever counts links that
-existed within a bounded historical interval, never "as of right now". This is structurally
-different from the old metric (a live snapshot of an ever-growing present, which is exactly
-what made a fixed comparison point necessary and hazardous to re-derive). Agreement by
-construction, not by a persisted snapshot: the same principle this reign's preflight fix
-(commit c0ea155) already applied to `wake_gate_preflight`.
+NO BASELINE ROW IS NEEDED HERE, unlike the metric this replaces (deliberately checked before
+building): `links.created_at` has existed since migration 0001, so every cohort old enough to
+have reached a checkpoint age is a fixed historical fact the instant that window has fully
+elapsed; re-querying it tomorrow, next week, or a year from now returns the identical number,
+because the query only ever counts links that existed within a bounded historical interval,
+never "as of right now". This is structurally different from the old metric, a live snapshot of
+an ever-growing present, which is exactly what made a fixed comparison point necessary and
+hazardous to re-derive. Agreement by construction, not by a persisted snapshot: the same
+principle an earlier preflight fix already applied to `wake_gate_preflight`.
 
-THE HATCH HALF IS UNCHANGED (Imhotep's `unlinked_because`, msg 5828) — Thoth's own framing
-was explicit that the METER is correct and the CRITERION it reported against was wrong;
-this file's hatch-reading half was never implicated and needed no rebuild.
+THE HATCH HALF IS UNCHANGED (the `unlinked_because` property read below): the meter itself was
+correct and the criterion it reported against was wrong; this file's hatch-reading half was
+never implicated and needed no rebuild.
 
-SCOPE, MATCHING THE OBLIGATION'S OWN EXCLUSIONS: File (#120 proved single-link Files
-benign — in_repo only, zero (repo,relpath) collisions) and Type (does not participate in
-`links` like an ordinary object, per `triage`'s own contract) are never counted here.
+SCOPE, MATCHING THE OBLIGATION'S OWN EXCLUSIONS: File (single-link Files were shown to be
+benign: in_repo only, zero (repo,relpath) collisions) and Type (does not participate in `links`
+like an ordinary object, per `triage`'s own contract) are never counted here.
 
-NEVER A GATE: this module makes zero writes anywhere — not to `objects`/`links`/
-assertions, and (new, since the old metric's one write is gone) not even to `watermarks`."""
+NEVER A GATE: this module makes zero writes anywhere, not to `objects`/`links`/assertions, and
+not even to `watermarks` (the retired metric's one write)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -57,29 +54,29 @@ from typing import Any
 import asyncpg
 
 SCOPED_TYPES = ("Decision", "Thread", "Reference")
-"""The obligation's own scope (8d510875): every other object type is either explicitly
-carved out (File, Type — see this module's own docstring) or was never part of #189's
-original diagnosis (5169686b/d68c57e5 named Decision/Thread/Reference specifically)."""
+"""The obligation's own scope: every other object type is either explicitly carved out
+(File, Type; see this module's own docstring) or was never part of the original diagnosis,
+which named Decision/Thread/Reference specifically."""
 
 HEADLINE_TYPE = "Decision"
-"""Kept as the deploy line's headlined type for continuity with ruling d68c57e5's own
-framing (it singled out Decision specifically) — Thread's own cohort curve is arguably the
-SHARPER signal going forward (its connectivity is *entirely* inbound-accrued per Khnum's
-finding, so its birth->30d delta isolates citation discipline with none of a Decision's own
-self-declared-link noise), but swapping the headlined type is a second, unrequested change
-this build does not make unilaterally. Thread/Reference cohorts are computed and returned
-alongside Decision's in `cohorts` regardless — a future call can re-point the headline
-without touching this module's own query."""
+"""Kept as the deploy line's headlined type for continuity with the original ruling, which
+singled out Decision specifically. Thread's own cohort curve is arguably the sharper signal
+going forward (its connectivity is entirely inbound-accrued, so its birth->30d delta isolates
+citation discipline with none of a Decision's own self-declared-link noise), but swapping the
+headlined type is a second, unrequested change this build does not make unilaterally.
+Thread/Reference cohorts are computed and returned alongside Decision's in `cohorts`
+regardless; a future call can re-point the headline without touching this module's own
+query."""
 
 
 async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
     """Per SCOPED_TYPES: the latest birth-week cohort old enough to have reached its own
-    30-day checkpoint, plus that SAME cohort's 7-day figure (always available once 30 days
-    have passed) and the PRIOR eligible cohort's own 30-day figure (so a reader watching
-    this number move deploy over deploy sees trend without two cohorts crammed into one
-    line — see `render_adoption_line`). `status='active'` only, matching the retired
-    metric's own scope. Returns `{}` for a type with no 30-day-eligible cohort yet (an
-    honest absence, not a zero)."""
+    30-day checkpoint, plus that same cohort's 7-day figure (always available once 30 days
+    have passed) and the prior eligible cohort's own 30-day figure (so a reader watching this
+    number move deploy over deploy sees trend without two cohorts crammed into one line, see
+    `render_adoption_line`). `status='active'` only, matching the retired metric's own scope.
+    Returns `{}` for a type with no 30-day-eligible cohort yet (an honest absence, not a
+    zero)."""
     rows = await pool.fetch("""
         WITH scoped AS (
             SELECT id, type, created_at, date_trunc('week', created_at) AS cohort_week
@@ -105,21 +102,21 @@ async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
             percentile_cont(0.5) WITHIN GROUP (ORDER BY links_at_30d) AS median_at_30d
         FROM per_object
         GROUP BY type, cohort_week
-        -- ELIGIBILITY FILTERED HERE, not in Python: a cohort only counts once it has
-        -- genuinely reached 30 days of age — a fresher cohort's numbers would keep
-        -- changing on every re-query (more links can still land within its own window),
-        -- which is exactly the "live snapshot of an ever-growing present" hazard this
-        -- metric was built to avoid.
+        -- Eligibility filtered here, not in Python: a cohort only counts once it has
+        -- genuinely reached 30 days of age. A fresher cohort's numbers would keep changing
+        -- on every re-query (more links can still land within its own window), which is
+        -- exactly the "live snapshot of an ever-growing present" hazard this metric was
+        -- built to avoid.
         --
-        -- MEASURED FROM THE COHORT'S YOUNGEST MEMBER, NOT ITS WEEK START (corrected
-        -- 2026-08-31, thread 1ef3a6e1). This read `cohort_week + interval '30 days'`,
-        -- which is the week's OPENING instant — so an object born on the Sunday of that
-        -- week was declared 30-day-eligible at 24 DAYS OLD, and its links_at_30d was
-        -- still moving. That is precisely the hazard the comment above says the gate
-        -- exists to prevent: the gate as written admitted the very cohorts whose numbers
-        -- had not finished changing. max(created_at) is the stated invariant exactly —
-        -- no member is younger than its own full window — rather than the week-start
-        -- approximation, and it needs no separate "+7 for the week to complete" fudge.
+        -- Measured from the cohort's youngest member, not its week start (corrected after
+        -- an earlier bug: this read `cohort_week + interval '30 days'`, which is the
+        -- week's opening instant, so an object born on the Sunday of that week was
+        -- declared 30-day-eligible at 24 days old, and its links_at_30d was still moving.
+        -- That is precisely the hazard the comment above says this gate exists to prevent:
+        -- the gate as written admitted the very cohorts whose numbers had not finished
+        -- changing. max(created_at) states the invariant exactly, no member is younger
+        -- than its own full window, rather than the week-start approximation, and it needs
+        -- no separate "+7 for the week to complete" fudge.
         HAVING max(created_at) + interval '30 days' <= now()
         ORDER BY type, cohort_week DESC
     """, list(SCOPED_TYPES))
@@ -151,34 +148,32 @@ async def _cohort_connectivity(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
 
 
 async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
-    """PREVENTION, not healing (thread eea88e1c, decision 185d5072's own correction to
-    #189's headline): does the FRACTION OF EACH BIRTH-WEEK COHORT that never acquired a
-    single live link WITHIN 7 DAYS OF ITS OWN BIRTH fall over time — the question
-    Sekhmet's lineage-root fallback (main 5001f00) was shipped to move, and the one
-    instrument this house had nothing to answer it with (Thoth msg 5936).
+    """Prevention, not healing: does the fraction of each birth-week cohort that never
+    acquired a single live link within 7 days of its own birth fall over time. This is the
+    question a fallback shipped elsewhere in this codebase (for lineage-root resolution) was
+    meant to move, and the one instrument this house had nothing to answer it with before.
 
-    A FIXED HISTORICAL FACT, same discipline as `_cohort_connectivity` above and for the
-    identical reason: the link check is bounded to `created_at + 7 days`, so a LATER
-    backfill (Lane 0/1, or any future one) can never revise an already-eligible week's
-    number. Not a hypothetical risk — re-deriving 185d5072's own literal protocol (an
-    UNBOUNDED "still orphan right now" check, no window) live this session found
-    Thread's own weekly rate for 07-27..08-24 moved by up to 12 points, because Lane 1's
-    boot-alarm backfill happened to land mid-session and retroactively linked ~127
-    previously-orphaned Threads spanning those very weeks. An unbounded check is exactly
-    the "live snapshot of an ever-growing present" trap this file's own cohort metric
-    was already built to avoid (see this module's top docstring); 185d5072's protocol
-    predates this file and inherited the trap. The 7-day bound closes it: generous
-    against the congenital-settle finding itself (92.8%/92.3% of Decisions/Threads get
-    every link they will ever declare within 60 SECONDS of birth), so it costs this
-    metric nothing a stricter window would also catch, while making the number
-    un-revisable by a later healing pass — the property `_cohort_connectivity` already
-    has and an unbounded read does not.
+    A fixed historical fact, same discipline as `_cohort_connectivity` above and for the
+    identical reason: the link check is bounded to `created_at + 7 days`, so a later backfill
+    can never revise an already-eligible week's number. Not a hypothetical risk: re-deriving
+    the original protocol's literal approach (an unbounded "still orphan right now" check, no
+    window) live in one session found Thread's own weekly rate for a several-week span moved
+    by up to 12 points, because an unrelated backfill happened to land mid-session and
+    retroactively linked roughly 127 previously-orphaned Threads spanning those very weeks.
+    An unbounded check is exactly the "live snapshot of an ever-growing present" trap this
+    file's own cohort metric was already built to avoid (see this module's top docstring);
+    the original protocol predates this file and inherited the trap. The 7-day bound closes
+    it: generous against the underlying finding that most objects get every link they will
+    ever declare within 60 seconds of birth (92.8%/92.3% of Decisions/Threads), so it costs
+    this metric nothing a stricter window would also catch, while making the number
+    un-revisable by a later healing pass, a property `_cohort_connectivity` already has and
+    an unbounded read does not.
 
     SCOPE/ELIGIBILITY: same SCOPED_TYPES, `status='active'`, and
-    `cohort_week + 7 days <= now()` eligibility gate as `_cohort_connectivity` — a week
-    is not reported until every member of it has actually had its own full 7-day window.
-    Newest eligible week headlines; the prior eligible week rides along for trend, same
-    shape as `_cohort_connectivity`'s own return."""
+    `cohort_week + 7 days <= now()` eligibility gate as `_cohort_connectivity`; a week is not
+    reported until every member of it has actually had its own full 7-day window. Newest
+    eligible week headlines; the prior eligible week rides along for trend, same shape as
+    `_cohort_connectivity`'s own return."""
     rows = await pool.fetch("""
         WITH scoped AS (
             SELECT id, type, created_at, date_trunc('week', created_at) AS cohort_week
@@ -197,14 +192,13 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
             count(*) FILTER (WHERE born_orphan) AS n_orphan
         FROM flagged
         GROUP BY type, cohort_week
-        -- MEASURED FROM THE COHORT'S YOUNGEST MEMBER, NOT ITS WEEK START (corrected
-        -- 2026-08-31, thread 1ef3a6e1). This read `cohort_week + interval '7 days'`,
-        -- the week's OPENING instant, while this function's own docstring promises "a
-        -- week is not reported until every member of it has actually had its own full
-        -- 7-day window." Those differ by up to six days: an object born on the Sunday of
-        -- a week became eligible at ONE DAY OLD, its born_orphan flag still able to flip.
-        -- THE DOCSTRING WAS RIGHT AND THE SQL WAS WRONG. max(created_at) states the
-        -- documented invariant exactly.
+        -- Measured from the cohort's youngest member, not its week start (corrected after
+        -- an earlier bug: this read `cohort_week + interval '7 days'`, the week's opening
+        -- instant, while this function's own docstring promises "a week is not reported
+        -- until every member of it has actually had its own full 7-day window." Those
+        -- differ by up to six days: an object born on the Sunday of a week became eligible
+        -- at one day old, its born_orphan flag still able to flip. The docstring was right
+        -- and the SQL was wrong. max(created_at) states the documented invariant exactly.
         HAVING max(created_at) + interval '7 days' <= now()
         ORDER BY type, cohort_week DESC
     """, list(SCOPED_TYPES))
@@ -236,13 +230,13 @@ async def _orphan_birth_rate(pool: asyncpg.Pool) -> dict[str, dict[str, Any]]:
 
 
 _LEGACY_EXTENSION_REASON_STRINGS = frozenset({
-    # Every wording `_EXTENSION_LINK_PENDING_REASON` (src/mcp_server.py) is KNOWN to have
-    # held before `unlinked_because_kind` existed as a structural discriminator (thread
-    # 20b06fbb) — found via `git log --all --oneline -G "rediscovers=" -- src/mcp_server.py`
-    # (b7fee6c/57c9a0b/6fb6ba5 each edited this line as narrows=/cites= joined the param
-    # list) and confirmed against the live graph 2026-09-01 (decision 755fabe1). CLOSED: a
-    # row written from this point on always carries unlinked_because_kind structurally, so
-    # this set never needs a new entry for a future wording change.
+    # Every wording `_EXTENSION_LINK_PENDING_REASON` (src/mcp_server.py) is known to have
+    # held before `unlinked_because_kind` existed as a structural discriminator. Found via
+    # `git log --all --oneline -G "rediscovers=" -- src/mcp_server.py` (three separate
+    # commits each edited this line as narrows=/cites= joined the param list) and confirmed
+    # against the live graph. Closed: a row written from this point on always carries
+    # unlinked_because_kind structurally, so this set never needs a new entry for a future
+    # wording change.
     "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
     "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
     "implements=/rediscovers=/bears_on=, which mint after this transaction and cannot "
@@ -274,39 +268,36 @@ _HATCH_CAVEAT = (
 
 
 async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
-    """Imhotep's `unlinked_because` hatch (msg 5828): an ordinary property assertion, not a
-    column — `current_assertions` has existed since migration 0001, so this read is always
-    structurally live; an empty result is a REAL zero, never a missing instrument, which is
+    """The `unlinked_because` hatch: an ordinary property assertion, not a column.
+    `current_assertions` has existed since migration 0001, so this read is always
+    structurally live; an empty result is a real zero, never a missing instrument, which is
     why this reports raw counts unconditionally rather than an `available` flag gating on
-    schema. THE SPLIT (Thoth's requirement #2 — an extension-link-only write must never be
-    summed into the same bucket as a genuinely standalone one) needs Imhotep's own
-    `_EXTENSION_LINK_PENDING_REASON` constant, imported live from `src.mcp_server` at
-    census time (never copied — he named it as still liable to move before he commits).
-    The `try` is NOT dead now that the gate has merged (main 45b42cd): it is the guard
-    for a build where that constant has been renamed or removed out from under this
-    reader, and `split=None` then degrades to raw per-value counts rather than
-    silently reporting a zero that would read as "the gate refuses nothing".
+    schema. The split (an extension-link-only write must never be summed into the same
+    bucket as a genuinely standalone one) needs the `_EXTENSION_LINK_PENDING_REASON`
+    constant, imported live from `src.mcp_server` at census time rather than copied, because
+    it is still liable to move. The `try` is not dead now that the gate has merged: it is
+    the guard for a build where that constant has been renamed or removed out from under
+    this reader, and `split=None` then degrades to raw per-value counts rather than silently
+    reporting a zero that would read as "the gate refuses nothing".
 
-    NEITHER COUNT IS A RATE OR A WINDOW (Lane C, Thoth XC msg 6143 — see `_HATCH_CAVEAT`
-    for the full finding): `current_assertions` here is every `unlinked_because` ever
-    written, all-time, monotonically growing, and the extension/standalone split is
-    additionally sensitive to `_EXTENSION_LINK_PENDING_REASON`'s own CURRENT exact text —
-    an older-worded write silently reclassifies as standalone the moment that constant's
-    wording moves, with no change to the underlying object. This function's own numbers
-    are correct census, unchanged by this finding; only the LABEL was wrong. Fixing the
-    exact-match itself: FIXED (thread 20b06fbb) — the split now reads `unlinked_because_
-    kind`, a SEPARATE non-prose property `capture._enforce_required_links` asserts
-    alongside `unlinked_because` in the same transaction (record_decision's MCP wrapper
-    passes the exact boolean it already computes, never a later re-derivation from text).
-    A row written BEFORE this fix carries no `unlinked_because_kind` at all — `_LEGACY_
-    EXTENSION_REASON_STRINGS` is the closed, frozen enumeration of every wording
-    `_EXTENSION_LINK_PENDING_REASON` is KNOWN to have ever held (found by reading git
-    history, not guessed), so those rows still classify correctly at query time, no
-    backfill/repair-verb needed — satisfying Thoth XC's own condition (msg 6159): "if the
-    fix makes historical rows read correctly by re-evaluating at query time, good." This
-    list is CLOSED going forward too: every future write gets `unlinked_because_kind`
-    structurally, so the constant's own prose is never load-bearing for classification
-    again and this frozenset needs no further entries."""
+    NEITHER COUNT IS A RATE OR A WINDOW (see `_HATCH_CAVEAT` for the full finding):
+    `current_assertions` here is every `unlinked_because` ever written, all-time,
+    monotonically growing, and the extension/standalone split is additionally sensitive to
+    `_EXTENSION_LINK_PENDING_REASON`'s own current exact text; an older-worded write
+    silently reclassifies as standalone the moment that constant's wording moves, with no
+    change to the underlying object. This function's own numbers are correct census,
+    unchanged by this finding; only the label was wrong. Fixing the exact-match itself is
+    done: the split now reads `unlinked_because_kind`, a separate non-prose property
+    `capture._enforce_required_links` asserts alongside `unlinked_because` in the same
+    transaction (record_decision's MCP wrapper passes the exact boolean it already computes,
+    never a later re-derivation from text). A row written before this fix carries no
+    `unlinked_because_kind` at all; `_LEGACY_EXTENSION_REASON_STRINGS` is the closed, frozen
+    enumeration of every wording `_EXTENSION_LINK_PENDING_REASON` is known to have ever held
+    (found by reading git history, not guessed), so those rows still classify correctly at
+    query time, no backfill or repair verb needed: historical rows read correctly by
+    re-evaluating at query time. This list is closed going forward too: every future write
+    gets `unlinked_because_kind` structurally, so the constant's own prose is never
+    load-bearing for classification again and this frozenset needs no further entries."""
     rows = await pool.fetch(
         "SELECT ub.object_id, (ub.value #>> '{}') AS reason, "
         "(k.value #>> '{}') AS kind "
@@ -339,11 +330,10 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def adoption_meter(pool: asyncpg.Pool) -> dict[str, Any]:
-    """THE WHOLE INSTRUMENT: cohort-aged connectivity per SCOPED_TYPES, orphan BIRTH rate
-    per SCOPED_TYPES (thread eea88e1c — prevention, not healing), plus Imhotep's hatch
-    split. Zero writes anywhere — read-only in full, including against `watermarks` (the
-    retired metric's one write; see this module's own docstring for why cohort
-    connectivity needs no persisted baseline)."""
+    """The whole instrument: cohort-aged connectivity per SCOPED_TYPES, orphan birth rate
+    per SCOPED_TYPES (prevention, not healing), plus the hatch split. Zero writes anywhere,
+    read-only in full, including against `watermarks` (the retired metric's one write; see
+    this module's own docstring for why cohort connectivity needs no persisted baseline)."""
     cohorts = await _cohort_connectivity(pool)
     orphan_birth_rate = await _orphan_birth_rate(pool)
     hatch = await _hatch_counts(pool)
@@ -357,20 +347,20 @@ async def adoption_meter(pool: asyncpg.Pool) -> dict[str, Any]:
 
 def render_adoption_line(meter: dict[str, Any]) -> str:
     """One terse line, the same discipline `cmd_deploy`'s own other checks already use
-    (`chaos replay: ...`, `full suite: green ...`) — printed on EVERY deploy, not only when
+    (`chaos replay: ...`, `full suite: green ...`), printed on every deploy, not only when
     something moved. A conditional "only print on change" line was considered and rejected:
     it recreates exactly the failure this instrument exists to prevent (something that
     quietly stops being seen), and a deploy is not so frequent in this house that one more
-    honest, terse line is real noise — the existing lines already accept that trade. Only
-    the headlined type's cohort renders here (`HEADLINE_TYPE`); the full per-type detail
-    lives in the returned dict for a caller who wants it."""
+    honest, terse line is real noise; the existing lines already accept that trade. Only the
+    headlined type's cohort renders here (`HEADLINE_TYPE`); the full per-type detail lives
+    in the returned dict for a caller who wants it."""
     headline = meter["cohorts"].get(HEADLINE_TYPE)
     ob_headline = meter.get("orphan_birth_rate", {}).get(HEADLINE_TYPE)
     hatch = meter["hatch"]
-    # ALL-TIME CUMULATIVE, NEVER A WINDOW (Lane C, Thoth XC msg 6143 — a number printed on
-    # every deploy with no window WILL be misread as a per-deploy or per-period figure;
-    # see `_HATCH_CAVEAT` for the full finding, including the exact-string classification
-    # fragility this label does not attempt to fix).
+    # All-time cumulative, never a window: a number printed on every deploy with no window
+    # will be misread as a per-deploy or per-period figure. See `_HATCH_CAVEAT` for the full
+    # finding, including the exact-string classification fragility this label does not
+    # attempt to fix.
     if hatch["split"] is not None:
         hatch_str = (f"extension={hatch['split']['extension_link_pending']} "
                      f"standalone={hatch['split']['standalone_other']} (all-time total, "

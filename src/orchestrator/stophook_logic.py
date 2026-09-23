@@ -1,17 +1,16 @@
-"""stophook_logic — the PURE HALVES of scripts/osiris_stophook.py's two DB reads (task
-#180 piece 2 (b), msg 5253), extracted verbatim so the `/stop` route and the hook's own
-direct-connect fallback share ONE implementation instead of drifting copies.
+"""stophook_logic: the PURE HALVES of scripts/osiris_stophook.py's two DB reads,
+extracted verbatim so the `/stop` route and the hook's own direct-connect fallback share
+ONE implementation instead of drifting copies.
 
-Every real stop-hook invocation used to open its OWN `asyncpg.connect()` — up to two per
-call (`_deliverable` always, `_offload_boxes` conditionally) — the same per-process-fork
-pattern Thoth measured on the statusline before `/heartbeat` (thread #180): a Stop hook
-fires on every turn boundary, fleet-wide, so this was the SAME cost repeated on a
-different trigger. `compute_stop_deliverable`/`compute_stop_offload` take an already-open
-`conn`/`pool` (the MCP server's shared pool, warm) instead of opening one; the hook script
-tries the new `/stop` route first and only falls back to its own direct connect (now
-calling these same functions against a throwaway connection) on any failure — a route
-outage costs exactly what today already costs, never more, same law `_heartbeat_via_http`
-established."""
+Every real stop-hook invocation used to open its OWN `asyncpg.connect()`, up to two per
+call (`_deliverable` always, `_offload_boxes` conditionally), the same per-process-fork
+pattern measured on the statusline before `/heartbeat`: a Stop hook fires on every turn
+boundary, fleet-wide, so this was the SAME cost repeated on a different trigger.
+`compute_stop_deliverable`/`compute_stop_offload` take an already-open `conn`/`pool` (the
+MCP server's shared pool, warm) instead of opening one; the hook script tries the new
+`/stop` route first and only falls back to its own direct connect (now calling these same
+functions against a throwaway connection) on any failure, so a route outage costs exactly
+what it already costs today, never more, the same law `_heartbeat_via_http` established."""
 from __future__ import annotations
 
 import re
@@ -21,15 +20,15 @@ from typing import Any
 
 import asyncpg
 
-# The HOOK's patience window (osiris_stophook.py's own STOP_GRACE_SECS) — duplicated here
+# The HOOK's patience window (osiris_stophook.py's own STOP_GRACE_SECS), duplicated here
 # rather than imported, because the hook script inserts the repo root onto sys.path itself
 # (arbitrary cwd) and this module must not gain a reverse import back onto a scripts/ file.
 STOP_GRACE_SECS = 3600
 
 
-# no-regrow hygiene item 2 (practice 393be453) — every subquery COALESCEs to the SAME
-# "current winning value" pattern the-wall/obligation_hygiene.py already use; kept local
-# (not a shared constant) since this is the only caller in this module.
+# No-regrow hygiene: every subquery COALESCEs to the SAME "current winning value" pattern
+# the-wall/obligation_hygiene.py already use; kept local (not a shared constant) since
+# this is the only caller in this module.
 _OBLIGATION_SUMMARY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -76,26 +75,25 @@ async def owned_obligations(
     conn: asyncpg.Pool | asyncpg.Connection, agent_id: str,
 ) -> dict[str, int]:
     """{owned, stale, project}: OPEN kind='obligation' Threads this agent (seat, lineage,
-    handle) owns, how many are past their stale_after window, and — THE THIRD OWNER
-    CATEGORY (thread 3a9d9a5d89fa, Ra XL's measured report, mail 10351/10358: "three
-    owner categories existed, the fix reasoned about two") — how many more sit in a
-    project this agent's own seat GOVERNS (`charter_of`) whose owner is the bare PROJECT
-    NAME itself, or empty, rather than any individual spelling `owner_refs` matches.
-    THE BAR'S `owe N (+M project)` (operator 2026-09-06's own `owe` ruling narrowed to
-    the reader's own premises; this restores the population that narrowing silently
-    dropped, without re-widening `owned` itself — `project` stays a SEPARATE, honestly
-    labeled count, never folded back into `owned`).
+    handle) owns, how many are past their stale_after window, and a THIRD OWNER CATEGORY
+    that a measured report found was previously missed: how many more sit in a project
+    this agent's own seat GOVERNS (`charter_of`) whose owner is the bare PROJECT NAME
+    itself, or empty, rather than any individual spelling `owner_refs` matches. The
+    displayed `owe N (+M project)` figure was narrowed to just the reader's own
+    obligations at one point; this restores the population that narrowing silently
+    dropped, without re-widening `owned` itself. `project` stays a SEPARATE, honestly
+    labeled count, never folded back into `owned`.
 
     READ-TIME ONLY, never resolves or normalizes (see `owner_normalization.
-    resolve_owner_seat` for the write-time act that eventually retitles these rows) —
-    a peer-governed project's own obligations (owner_normalization.py's own
-    `_coordinating_seat_for_project`, operator ruling thread 90ea942a92b5: no manager on
-    record resolves to the literal 'operator') still count here for EVERY governing
-    seat's own `project` figure regardless of whether that resolution has actually been
-    applied — rotten-apple's own 11 were deliberately excluded from the one migration
-    run that would have retitled them (Thoth DM 8650, "that project's own data defect,
-    not ours to touch"), so they remain genuinely, literally owner='rotten-apple' today,
-    and this counts them by that literal string, not a hypothetical resolved one."""
+    resolve_owner_seat` for the write-time act that eventually retitles these rows). A
+    peer-governed project's own obligations (owner_normalization.py's own
+    `_coordinating_seat_for_project`: no manager on record resolves to the literal
+    'operator') still count here for EVERY governing seat's own `project` figure
+    regardless of whether that resolution has actually been applied. rotten-apple's own 11
+    rows were deliberately excluded from the one migration run that would have retitled
+    them, since that was judged to be that project's own data defect, not this codebase's
+    to touch, so they remain genuinely, literally owner='rotten-apple' today, and this
+    counts them by that literal string, not a hypothetical resolved one."""
     owners = await owner_refs(conn, agent_id)
     row = await conn.fetchrow(
         "SELECT count(*) AS owned, "
@@ -115,10 +113,10 @@ async def owned_obligations(
 async def _project_owned_count(
     conn: asyncpg.Pool | asyncpg.Connection, agent_id: str, owners: list[str],
 ) -> int:
-    """The `project` half of `owned_obligations` — open obligation Threads filed
+    """The `project` half of `owned_obligations`: open obligation Threads filed
     (`in_repo`) under one of THIS agent's own seat's `charter_of` projects, whose owner
     is empty or exactly that project's own bare name. 0 for an agent holding no seat, or
-    a seat with an empty charter — never a fleet-wide scan."""
+    a seat with an empty charter, never a fleet-wide scan."""
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import held_seat
 
@@ -151,8 +149,8 @@ async def project_owned_obligation_count(
     conn: asyncpg.Pool | asyncpg.Connection, project_object_id: Any, owners: list[str],
 ) -> int:
     """Open obligation Threads filed (`in_repo`) under ONE project (by its object id,
-    already resolved by the caller — `threads()`'s own `proj_id`) whose owner is empty
-    or exactly that project's own bare name — the single-project sibling of
+    already resolved by the caller, `threads()`'s own `proj_id`) whose owner is empty
+    or exactly that project's own bare name: the single-project sibling of
     `_project_owned_count`'s cross-charter scan, for a caller (`threads()`) that already
     knows exactly which project it's asking about and needs no charter lookup at all.
     `owners` excludes anything `owner_refs` already matches, so this and the main
@@ -176,15 +174,15 @@ async def project_owned_obligation_count(
 async def compute_stale_obligations(
     conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, cwd: str,
 ) -> list[dict[str, Any]]:
-    """No-regrow hygiene item 2's own READ half (practice 393be453, operator ruling
-    2026-09-06): every OPEN kind='obligation' Thread THIS session's own identity owns,
-    past its `stale_after` window (open_thread's own `stale_after_days`, default 14) —
-    named, never a bare count, so the owner sees exactly what to touch (annotate/resolve/
-    reclassify). Matched the same way `_leased_assignment` above already identifies "the
-    freshest open obligation whose owner is this seat or this agent's lineage", widened to
-    ALSO match the seat's own HANDLE string — `open_thread`'s own default owner for an
-    unowned obligation IS the handle (a bare display name), never the raw seat/agent id,
-    so a handle-only match would silently miss the common case."""
+    """No-regrow hygiene's own READ half: every OPEN kind='obligation' Thread THIS
+    session's own identity owns, past its `stale_after` window (open_thread's own
+    `stale_after_days`, default 14), named, never a bare count, so the owner sees exactly
+    what to touch (annotate/resolve/reclassify). Matched the same way `_leased_assignment`
+    above already identifies "the freshest open obligation whose owner is this seat or
+    this agent's lineage", widened to ALSO match the seat's own HANDLE string:
+    `open_thread`'s own default owner for an unowned obligation IS the handle (a bare
+    display name), never the raw seat/agent id, so a handle-only match would silently
+    miss the common case."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.seats import held_seat
 
@@ -222,13 +220,13 @@ async def compute_stale_obligations(
 async def compute_stop_deliverable(
     conn: asyncpg.Pool | asyncpg.Connection, *, cwd: str, session_id: str,
 ) -> dict[str, Any]:
-    """Verbatim extraction of osiris_stophook.py's own `_deliverable` body — see that
+    """Verbatim extraction of osiris_stophook.py's own `_deliverable` body: see that
     function's docstring for the full rationale (the project resolution, the self-echo
     guard, the lineage rollup). Returns a JSON-shaped dict instead of a tuple so the /stop
     route can hand it back unchanged; the hook's own `_deliverable` wrapper unpacks it.
 
-    `stale_obligations` (no-regrow hygiene item 2) rides along in the SAME phase/round-
-    trip — a session at Stop already pays for this query's own identity resolution via
+    `stale_obligations` (no-regrow hygiene) rides along in the SAME phase/round-trip: a
+    session at Stop already pays for this query's own identity resolution via
     `_resolve_worker_identity`, so adding it here costs one more SELECT, not a second
     phase the hook has to remember to call."""
     from src.orchestrator.agents import soul_base
@@ -271,7 +269,7 @@ async def compute_stop_deliverable(
 async def compute_stop_offload(
     conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, cwd: str,
 ) -> dict[str, bool | None] | None:
-    """Verbatim extraction of osiris_stophook.py's own `_offload_boxes` body — see that
+    """Verbatim extraction of osiris_stophook.py's own `_offload_boxes` body: see that
     function's docstring for the full rationale (the seat-office cwd resolution, the
     shared `settle_boxes` delegation)."""
     from src.orchestrator.mounts import find_session_row
@@ -295,15 +293,15 @@ async def compute_self_compaction(
     conn: asyncpg.Pool | asyncpg.Connection, *, session_id: str, pct: int | None,
     job_for: Any = None, reply: Any = None,
 ) -> dict[str, Any]:
-    """SELF-COMPACTION AT SELF_COMPACT_PCT (operator ruling a3fb7c11, thread e9c8cf50). The
-    stop hook calls this ONLY after the offload boxes came back complete (settle's own
-    `missing_boxes` rule, the same gate /settle confirms with) — so the order the ruling
-    fixes is enforced by construction: settle first, then the seam. Never another body:
-    the job is resolved from THIS session's own id (decision 3d01ee94 still forbids
-    compacting a worker from outside). The injected turn rides the daemon's sanctioned
-    op='reply' lane (ruling 85fba696) and carries its own provenance in the text, since the
-    harness stamps every injected turn origin.kind='human' (claude_daemon.reply's docstring).
-    `job_for`/`reply` are injectable exactly like trigger.dispatch_dm's nudge seam."""
+    """SELF-COMPACTION AT SELF_COMPACT_PCT. The stop hook calls this ONLY after the
+    offload boxes came back complete (settle's own `missing_boxes` rule, the same gate
+    /settle confirms with), so the required order (settle first, then compaction) is
+    enforced by construction. Never another body: the job is resolved from THIS session's
+    own id; compacting a worker from outside is still forbidden. The injected turn rides
+    the daemon's sanctioned op='reply' lane and carries its own provenance in the text,
+    since the harness stamps every injected turn origin.kind='human'
+    (claude_daemon.reply's docstring). `job_for`/`reply` are injectable exactly like
+    trigger.dispatch_dm's nudge seam."""
     from src.orchestrator.context_lens import SELF_COMPACT_PCT
     from src.orchestrator.mounts import find_session_row
 
@@ -329,19 +327,19 @@ async def compute_self_compaction(
             "why": None if ok else "daemon refused the reply"}
 
 
-# ═══════════ STAGE A/B/C — THE PIT WATCH + THE PRACTICE AUDIT (dispatch 5441 LEG 1,
-# ported verbatim from osiris_stophook.py's own `_stage_a_async` and its helpers during the
-# hook-migration parity fix; see that file's THE PIT WATCH / STAGE C section headers for the
-# full founding rationale — reproduced here only where the porting itself changed something).
+# ═══════════ STAGE A/B/C: THE STOP-TIME STATUS CHECK + THE PRACTICE AUDIT, ported
+# verbatim from osiris_stophook.py's own `_stage_a_async` and its helpers during the
+# hook-migration parity fix; see that file's own section headers for the full founding
+# rationale, reproduced here only where the porting itself changed something.
 #
 # THE ONE THING THAT CHANGED IN THE PORT: `_assert_pending`/`_assert_context_pct` used to
 # open their OWN one-off `asyncpg.create_pool` (the hook script's bare `asyncpg.connect` had
 # no jsonb codec registered for `assert_property`'s write). The MCP server's shared pool
 # already IS Actions-ready (every other route here writes through `Actions(await
-# _pool_get())`) — so this takes `pool` directly, no second pool, no codec workaround. Every
+# _pool_get())`), so this takes `pool` directly, no second pool, no codec workaround. Every
 # other helper is unchanged: same queries, same fail-open discipline, same "detection only,
 # never actuation, never blocks" law. Fire-and-forget from the /stop route's own caller
-# (osiris_hook.py's `_cmd_stop`) — a failure here costs a missed courtesy note, never a
+# (osiris_hook.py's `_cmd_stop`): a failure here costs a missed courtesy note, never a
 # broken stop.
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+|\n+")
 _QUOTE_NGRAM = 5
@@ -350,10 +348,10 @@ _QUOTE_NGRAM = 5
 async def _self_restore_mount(
     conn: Any, *, agent_id: str, cwd: str, session_id: str,
 ) -> None:
-    """#178 residual — a seat resolved solely through this module's own seat-binding
-    fallback (one that stops every turn but never itself calls an osiris MCP tool this
-    session) earns no `agent_mounts` row otherwise. Fail-open: a missed restore costs
-    exactly what it already costs today, never more."""
+    """A seat resolved solely through this module's own seat-binding fallback (one that
+    stops every turn but never itself calls an osiris MCP tool this session) earns no
+    `agent_mounts` row otherwise. Fail-open: a missed restore costs exactly what it
+    already costs today, never more."""
     from src.orchestrator.handshake import _derive_job_dir
     from src.orchestrator.mounts import save_mount
     from src.orchestrator.seats import resolve_project
@@ -366,7 +364,7 @@ async def _self_restore_mount(
         project = await resolve_project(conn, agent_id, cwd)
         await save_mount(conn, job_dir=job_dir, agent_id=agent_id, project=project,
                          cwd=cwd, model=None, session_key=f"sid:{sid32}")
-    except Exception:  # noqa: BLE001 — the Stop hook must never block a turn on this
+    except Exception:  # noqa: BLE001 - the Stop hook must never block a turn on this
         pass
 
 
@@ -439,10 +437,10 @@ async def _mail_gap(
 
 
 def _last_assistant_text(transcript_path: str) -> str | None:
-    """The literal text of the most recent real assistant turn — same tail-read shape as
-    the swap-confession's model scan (osiris_hook.py's own local port): filter isSidechain,
-    and unlike the model scan do NOT skip an empty-text entry — a turn that ends on a bare
-    tool call has no visible question either, and that IS the answer."""
+    """The literal text of the most recent real assistant turn: same tail-read shape as
+    the swap-confession's model scan (osiris_hook.py's own local port). Filter
+    isSidechain, and unlike the model scan do NOT skip an empty-text entry: a turn that
+    ends on a bare tool call has no visible question either, and that IS the answer."""
     import json as _json
 
     if not transcript_path:
@@ -475,14 +473,14 @@ def _last_assistant_text(transcript_path: str) -> str | None:
 
 
 def _parked_on_a_question(text: str | None) -> bool:
-    """A turn that ends on a question mark is a turn waiting for someone to answer it —
+    """A turn that ends on a question mark is a turn waiting for someone to answer it,
     fine if that someone is real, a bug if the room is empty."""
     return text is not None and text.rstrip().endswith("?")
 
 
 async def _sent_a_real_ask(conn: Any, agent_id: str, within_secs: int = 300) -> bool:
     """True when this agent already sent a grade='ask' message inside the last
-    `within_secs` — the signal that a trailing '?' is a REAL mail-routed ask, not a
+    `within_secs`: the signal that a trailing '?' is a REAL mail-routed ask, not a
     question narrated into an empty room."""
     from datetime import timedelta
 
@@ -499,7 +497,7 @@ async def _sent_a_real_ask(conn: Any, agent_id: str, within_secs: int = 300) -> 
 def _stage_a_confession(
     *, leased: dict[str, Any], manager_dm_at: Any, my_dm_at: Any,
 ) -> str | None:
-    """Confess only when the ball is provably in my court — the manager spoke (an
+    """Confess only when the ball is provably in my court: the manager spoke (an
     assignment message exists) and I never spoke back since."""
     if manager_dm_at is None:
         return None
@@ -515,7 +513,7 @@ async def _confess_if_parked(
     conn: Any, *, payload: dict[str, Any], agent_id: str, project: str | None,
     manager_seat: str,
 ) -> None:
-    """Stage B: detection only, no actuation — a courtesy fyi DM to the manager. `project`
+    """Stage B: detection only, no actuation, a courtesy fyi DM to the manager. `project`
     is the CALLER's already-resolved `seats.resolve_project` result, never re-derived here."""
     text = _last_assistant_text(str(payload.get("transcript_path") or ""))
     if not _parked_on_a_question(text) or await _sent_a_real_ask(conn, agent_id):
@@ -531,7 +529,7 @@ async def _confess_if_parked(
 
 
 async def _active_practices(conn: Any, limit: int = 25) -> list[dict[str, Any]]:
-    """Standing Practices only — refuted ones are excluded (dead law must never trip a
+    """Standing Practices only: refuted ones are excluded (dead law must never trip a
     live-turn audit), ordered by confirmed witness count."""
     rows = await conn.fetch(
         "SELECT o.id, "
@@ -548,7 +546,7 @@ async def _active_practices(conn: Any, limit: int = 25) -> list[dict[str, Any]]:
 
 def _quotes_the_practice(sentence_words: list[str], stmt_words: list[str]) -> bool:
     """A sentence that reproduces a contiguous N-word run of the practice's OWN wording is
-    citing it, not reversing it — checked on WORD ORDER, not vocabulary density."""
+    citing it, not reversing it: checked on WORD ORDER, not vocabulary density."""
     if len(stmt_words) < _QUOTE_NGRAM:
         return False
     joined = " ".join(sentence_words)
@@ -563,7 +561,7 @@ def _practice_violation(
 ) -> dict[str, Any] | None:
     """Pure, no DB: the same lexical reversal fingerprint layer 1 uses at write time
     (`capture.practice_contradiction_cues`), applied to a turn's raw tail text instead of a
-    Decision's summary. Returns the first (highest-confirmed) match, or None — a miss is
+    Decision's summary. Returns the first (highest-confirmed) match, or None: a miss is
     not proof of compliance, only that this fingerprint found nothing."""
     if not text or not practices:
         return None
@@ -584,7 +582,7 @@ def _practice_violation(
         sent_topic = set(sent_words)
         for p in practices:
             if p["id"] in quoted_ids:
-                continue  # cited verbatim somewhere in this turn — citation, not reversal
+                continue  # cited verbatim somewhere in this turn: citation, not reversal
             stmt = p.get("statement") or ""
             stmt_topic = set(re.findall(r"[a-z]{4,}", stmt.lower()))
             if len(sent_topic & stmt_topic) < 2:
@@ -594,7 +592,7 @@ def _practice_violation(
 
 
 async def _already_flagged_today(conn: Any, agent_id: str, practice_id: str) -> bool:
-    """One Stage C flag per (agent, practice) per calendar day — an alert nobody believes
+    """One Stage C flag per (agent, practice) per calendar day: an alert nobody believes
     is worse than no alert."""
     from src.orchestrator.agents import _generation
 
@@ -612,10 +610,10 @@ async def _confess_if_practice_violated(
     conn: Any, *, payload: dict[str, Any], agent_id: str, project: str | None,
     manager_seat: str,
 ) -> None:
-    """Stage C: DISARMED by default (`Settings.osiris_stage_c_practice_check_enabled`,
-    ruling DM 3059 — 20 flags/24h, 14/14 individually verified false, zero confirmed true
-    positives found in this mechanism's whole deployment history). Re-arming is one flag,
-    never a silent revert of this function's own logic."""
+    """Stage C: DISARMED by default (`Settings.osiris_stage_c_practice_check_enabled`).
+    In this mechanism's whole deployment history it produced 20 flags in 24 hours, all
+    14 individually-checked ones verified false, zero confirmed true positives. Re-arming
+    is one flag, never a silent revert of this function's own logic."""
     from src.config.settings import get_settings
 
     if not get_settings().osiris_stage_c_practice_check_enabled:
@@ -640,7 +638,7 @@ async def compute_stop_stage_a(
     pool: asyncpg.Pool, *, payload: dict[str, Any], session_id: str, cwd: str,
     pct: int | None = None,
 ) -> None:
-    """Ported from osiris_stophook.py's own `_stage_a_async` — see the STAGE A/B/C banner
+    """Ported from osiris_stophook.py's own `_stage_a_async`: see the STAGE A/B/C banner
     above for what changed in the port (only the pool source). Fire-and-forget from the
     caller's own POV: never raises, never returns anything the caller needs to act on."""
     from src.actions.core import Actions
@@ -657,7 +655,7 @@ async def compute_stop_stage_a(
             obj, "context_pct", str(pct), agent_id, datetime.now(UTC), 1.0,
             evidence_class="direct_observation")
     if not identity.get("seat_id"):
-        return  # unclaimed seat — nothing further to confess
+        return  # unclaimed seat: nothing further to confess
     seat_id = identity["seat_id"]
     project = await resolve_project(pool, agent_id, cwd)
     manager_seat = await manager_of_seat(pool, seat_id)
@@ -677,7 +675,7 @@ async def compute_stop_stage_a(
             evidence_class="self_declared")
         return
     if manager_seat is None:
-        return  # no manager of record — nobody to confess to
+        return  # no manager of record: nobody to confess to
     manager_dm_at, my_dm_at = await _mail_gap(pool, seat_id, manager_seat, agent_id)
     body = _stage_a_confession(leased=leased, manager_dm_at=manager_dm_at, my_dm_at=my_dm_at)
     if body is None:
