@@ -20,7 +20,7 @@ from datastar_py.sse import DatastarEvent
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import RedirectResponse
 
-from src.api.app import get_pool
+from src.api.deps import get_pool
 from src.api.inbox.inbox import build_inbox
 from src.api.inbox.render import render_block
 

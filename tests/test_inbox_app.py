@@ -1,9 +1,26 @@
 """THE INBOX's wiring — ONE live-route test (test_api.py's own precedent: pure unit tests
 can't catch whether the route is actually wired to the real pool/registry). Everything
 else about the Inbox is covered by test_inbox_blocks.py (builders) and
-test_inbox_catalog.py (rendering)."""
+test_inbox_catalog.py (rendering).
+
+A circular import lived here since the inbox cutover: src.api.inbox.app imported
+get_pool straight from src.api.app, while src.api.app (at module scope, via
+`app = create_app()`) lazily imports src.api.inbox.app's own router. Importing
+src.api.inbox.app FIRST, in a process where src.api.app has never been imported,
+re-entered src.api.app's module execution, reached create_app(), and tried to import
+src.api.inbox.app back while it was still mid-import (only partially initialized,
+`router` not yet defined) -- raising an ImportError. The in-process import above (line
+13, historically) never caught it, because by the time this test file's collection ran,
+some OTHER test module had already imported src.api.app first, leaving it fully
+initialized in sys.modules. Fixed by moving get_pool into its own dependency-free module
+(src.api.deps) that both sides import instead of each other; test_inbox_app_imports_
+standalone_in_a_fresh_process below is what would have caught the regression, since it
+runs in a subprocess with neither module preloaded, mirroring the collect-this-file-
+alone repro (`pytest tests/test_inbox_app.py` on its own)."""
 from __future__ import annotations
 
+import subprocess
+import sys
 from collections.abc import AsyncIterator
 
 import httpx
@@ -11,6 +28,16 @@ import pytest_asyncio
 from fastapi import FastAPI
 from src.actions.core import Actions
 from src.api.inbox.app import router
+
+
+def test_inbox_app_imports_standalone_in_a_fresh_process() -> None:
+    """`import src.api.inbox.app` with nothing preloaded, in a real subprocess so no
+    module already sits in sys.modules from an earlier import in this same test run --
+    the exact shape that let the circular import above hide behind import order."""
+    result = subprocess.run(
+        [sys.executable, "-c", "import src.api.inbox.app"],
+        capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest_asyncio.fixture

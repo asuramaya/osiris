@@ -35,6 +35,7 @@ from pydantic import BaseModel
 
 from src.actions.core import Actions
 from src.api import chrome
+from src.api.deps import get_pool
 from src.config.settings import get_settings
 from src.connectors.leases import LeaseStore
 from src.connectors.osint4all import suggest_manifests
@@ -103,11 +104,6 @@ class _RevalidatingStaticFiles(StaticFiles):
 
 
 _log = logging.getLogger("osiris.api")
-
-
-def get_pool(request: Request) -> asyncpg.Pool:
-    pool: asyncpg.Pool = request.app.state.pool
-    return pool
 
 
 async def compute_stats(pool: asyncpg.Pool, redis: Any, case_id: uuid.UUID) -> dict[str, Any]:
