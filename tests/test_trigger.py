@@ -5282,8 +5282,81 @@ async def test_launch_nudges_and_reports_when_the_brief_never_reaches_a_turn(
     assert len(sleep_calls) == 2  # the full bounded window, never fewer, never more
     assert d["brief_delivery"]["delivered"] is False
     assert d["brief_delivery"]["nudge"] == {"mode": "nudged"}
+    # "nudged" injects mail into an ALREADY-LIVE session directly — no lineage walk.
+    assert d["brief_delivery"]["delivered_via"] == "direct"
     assert len(nudge_calls) == 1
     assert nudge_calls[0]["msg_id"] == d["brief_message_id"]
+
+
+async def test_launch_names_lineage_delivery_when_the_nudge_resumes_a_dormant_session(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thread 209d55f6 (Nebbercracker DM 13255/13284): chowder's own live specimen —
+    the nudge genuinely delivered the brief (session 7806f810's real transcript grew
+    69MB two seconds later), but by RESUMING a dormant session in the seat's own
+    lineage, not the literal harness session launch just spawned. THE DESIGN DECISION:
+    "mint a body, deliver through the lineage" is the accepted shape, named honestly
+    on the receipt (`delivered_via: "lineage"`) rather than pretending session-exact
+    precision this door cannot promise."""
+    from src.orchestrator import trigger as trigger_mod
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:lineage01", manager_agent="agent:lineagem01",
+        worker_handle="Lineagebody", house="monsterhouse")
+    await _office(actions, worker_seat, "/tmp/lineagebody")
+
+    async def _fake_sleep(secs: float) -> None:
+        pass  # never marks the message read — the fresh spawn never picks it up
+
+    async def _fake_dispatch_dm(pool: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "resumed", "session_id": "7806f810-057e-4380-b479-d7ad812d1a83",
+               "detail": "the addressee's own session (7806f810) is continued with this "
+                         "mail as its next turn — watch the hop in the agents view"}
+
+    monkeypatch.setattr(trigger_mod, "dispatch_dm", _fake_dispatch_dm)
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:lineagem01", target=worker_seat, message="welcome aboard",
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        sleep=_fake_sleep, brief_poll_attempts=1, brief_poll_delay_secs=0.0)
+
+    assert d["status"] == "launched"
+    assert d["brief_delivery"]["delivered"] is False
+    assert d["brief_delivery"]["delivered_via"] == "lineage"
+    assert d["brief_delivery"]["nudge"]["session_id"] == "7806f810-057e-4380-b479-d7ad812d1a83"
+
+
+async def test_launch_names_no_delivery_path_when_the_nudge_only_queues(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A nudge that neither resumed nor injected directly (queued, refused, skipped)
+    did not deliver through either concrete path this house can characterize —
+    `delivered_via` stays absent rather than guessing one."""
+    from src.orchestrator import trigger as trigger_mod
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:queued01", manager_agent="agent:queuedm01",
+        worker_handle="Queuedbody", house="monsterhouse")
+    await _office(actions, worker_seat, "/tmp/queuedbody")
+
+    async def _fake_sleep(secs: float) -> None:
+        pass
+
+    async def _fake_dispatch_dm(pool: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "queued-live-holder", "detail": "it reads this at its next turn"}
+
+    monkeypatch.setattr(trigger_mod, "dispatch_dm", _fake_dispatch_dm)
+
+    spawned: list[dict[str, Any]] = []
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:queuedm01", target=worker_seat, message="welcome aboard",
+        spawn=_fake_spawn(spawned), agents_json=_fake_agents_json([[]]),
+        sleep=_fake_sleep, brief_poll_attempts=1, brief_poll_delay_secs=0.0)
+
+    assert d["status"] == "launched"
+    assert d["brief_delivery"]["delivered"] is False
+    assert "delivered_via" not in d["brief_delivery"]
 
 
 async def test_launch_harness_lane_refuses_an_over_budget_mint(
