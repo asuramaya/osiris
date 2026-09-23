@@ -825,13 +825,18 @@ async def deltas_since(
     resolved for the whole page with plain joins instead of two correlated subqueries
     per row. `new_cursor` advances to the highest outbox id actually seen in the page,
     including rows coalesced away, so nothing already read is ever re-scanned,
-    even though only the survivor per object is reported."""
+    even though only the survivor per object is reported.
+
+    THE OUTBOX GAP: 'layout_moved' (graph_layout._LAYOUT_MOVED_EVENT)
+    joins the type list here for exactly this reason and needs no new branch below --
+    every type other than 'object_merged' already resolves to op='moved' and gets the
+    same graph_x/graph_y join, which is exactly what a freshly-positioned object needs."""
     rows = await pool.fetch(
         "WITH raw AS ("
         "  SELECT o.id AS outbox_id, o.object_id, o.event_type "
         "  FROM outbox o "
         "  WHERE o.id > $1 AND o.event_type IN "
-        "    ('object_created','property_added','object_merged') "
+        "    ('object_created','property_added','object_merged','layout_moved') "
         "    AND o.object_id IS NOT NULL "
         "  ORDER BY o.id ASC "
         "  LIMIT $2"
