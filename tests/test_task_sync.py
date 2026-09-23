@@ -1,10 +1,9 @@
-"""The harness tasklist reconciled against the graph. Phase 1 (Thoth DM 2636, decisions
-ab27af61/42f63782) is report-only — reconcile()/resolve_task_citations()/
-parse_thread_citations() never write. The write half (Thoth DM 2722, authorizing the
-three-tier design of DM 2687) is additive/visibility-only by construction: Tier 1 asserts
-correlation facts, never a status; Tier 2 mints review threads, never resolves anything.
-Tier 3 (no status sync, no auto-close, no invented bindings, no touching ~/.claude/tasks)
-needs no test — it is the shape of what Tier 1/2 deliberately do not do."""
+"""The harness tasklist reconciled against the graph. Phase 1 is report-only:
+reconcile()/resolve_task_citations()/parse_thread_citations() never write. The write half,
+authorizing the three-tier design, is additive/visibility-only by construction: Tier 1
+asserts correlation facts, never a status; Tier 2 mints review threads, never resolves
+anything. Tier 3 (no status sync, no auto-close, no invented bindings, no touching
+~/.claude/tasks) needs no test: it is the shape of what Tier 1/2 deliberately do not do."""
 from __future__ import annotations
 
 import uuid
@@ -44,10 +43,10 @@ def test_parse_finds_a_comma_separated_list() -> None:
 
 
 def test_parse_ignores_a_mail_thread_number() -> None:
-    # "thread 1843" here names a MAIL thread (a small decimal id), not a graph Thread —
+    # "thread 1843" here names a message thread (a small decimal id), not a graph Thread:
     # the 8-hex-char shape requirement excludes it on its own, no special-casing needed.
     assert parse_thread_citations(
-        "Thoth DM 1843 (thread 1843): root-cause the fork-inbox bug.") == []
+        "message 1843 (thread 1843): root-cause the fork-inbox bug.") == []
 
 
 def test_parse_ignores_unrelated_hex_looking_tokens_far_from_the_keyword() -> None:
@@ -141,7 +140,7 @@ async def test_reconcile_reports_all_six_buckets_as_named_rows_not_bare_counts(
 async def test_reconcile_flags_a_disagreement_never_silently_resolving_it(
     actions: Actions,
 ) -> None:
-    # task says done, thread's own property_status still says open — a real disagreement
+    # task says done, thread's own property_status still says open: a real disagreement
     tid = await open_thread(actions, "task says done, thread says open", source="agent:me")
     tasks = [_task("1", f"thread {str(tid)[:8]}", status="completed")]
     out = await reconcile(actions.pool, tasks)
@@ -191,9 +190,9 @@ async def test_reconcile_finds_thread_side_orphans_kind_task_with_no_binding(
 async def test_reconcile_sees_threads_with_no_in_repo_edge_the_trap_named_in_the_module(
     actions: Actions,
 ) -> None:
-    """The in_repo trap (Thoth DM 2636, Khnum's and Seshat's independent findings): a
-    repo-scoped enumeration would silently exclude this thread entirely. reconcile must
-    still bind and report it, proving it walks enumerate_threads UNSCOPED."""
+    """The in_repo trap (found independently by two separate reviews): a repo-scoped
+    enumeration would silently exclude this thread entirely. reconcile must still bind
+    and report it, proving it walks enumerate_threads UNSCOPED."""
     tid = await open_thread(actions, "no repo link at all", source="agent:me")  # no repo=
     tasks = [_task("1", f"thread {str(tid)[:8]}", status="pending")]
     out = await reconcile(actions.pool, tasks)
@@ -201,7 +200,7 @@ async def test_reconcile_sees_threads_with_no_in_repo_edge_the_trap_named_in_the
     assert out["bound"][0]["thread_ids"] == [str(tid)]
 
 
-# ── THE WRITE HALF (Thoth DM 2722) ─────────────────────────────────────────────────────
+# ── THE WRITE HALF ──────────────────────────────────────────────────────────────────────
 
 async def _property_rows(actions: Actions, thread_id: uuid.UUID, name: str) -> list[dict]:
     rows = await actions.pool.fetch(
@@ -236,7 +235,7 @@ async def test_write_tier1_correlations_asserts_a_fact_never_a_status(
     assert len(rows) == 1
     assert rows[0]["source_id"] == "harness:1"
     assert rows[0]["value"] == {"task_id": "1", "store": None}
-    # never touches status — the thread's own status property is untouched
+    # never touches status: the thread's own status property is untouched
     status_rows = await _property_rows(actions, tid, "status")
     assert len(status_rows) == 1  # the single row open_thread itself wrote, nothing added
 
@@ -244,10 +243,10 @@ async def test_write_tier1_correlations_asserts_a_fact_never_a_status(
 async def test_write_tier1_correlations_per_citing_task_source_lets_citations_coexist(
     actions: Actions,
 ) -> None:
-    """The part of the design Thoth said he'd defend hardest: two different (task, store)
-    pairs citing the SAME thread must both survive as distinct current rows, never one
-    silently overwriting the other the way a shared source would (current_assertions
-    resolves one winner per object+name+SOURCE)."""
+    """The hardest part of the design to defend: two different (task, store) pairs citing
+    the SAME thread must both survive as distinct current rows, never one silently
+    overwriting the other the way a shared source would (current_assertions resolves one
+    winner per object+name+SOURCE)."""
     tid = await open_thread(actions, "cited by two different tasks", source="agent:me")
     tasks = [
         {"id": "1", "subject": "x", "description": f"thread {str(tid)[:8]}",
@@ -278,10 +277,10 @@ def test_tier2_mints_is_pure_and_deterministic() -> None:
 
 
 def test_tier2_mints_groups_disagreement_by_thread_not_by_citation() -> None:
-    """Thoth's ruling, DM 2744: the first live dry run measured 40 disagreement rows
-    landing on only 28 distinct Threads (one Thread, up to 4 citing tasks). One mint per
-    Thread, every citing task enumerated inside — not one mint per citation, which would
-    make resolving a single real disagreement take as many closes as it has citations."""
+    """The first live dry run measured 40 disagreement rows landing on only 28 distinct
+    Threads (one Thread, up to 4 citing tasks). One mint per Thread, every citing task
+    enumerated inside, not one mint per citation, which would make resolving a single
+    real disagreement take as many closes as it has citations."""
     shared = "cccccccc-0000-0000-0000-000000000000"
     report = {
         "disagreement": [
@@ -352,17 +351,17 @@ async def test_mint_tier2_threads_is_idempotent_on_rerun(actions: Actions) -> No
     assert first[0]["thread_id"] == second[0]["thread_id"]  # collapses, never duplicates
 
 
-async def test_mint_tier2_threads_twins_when_the_citing_set_changes_between_runs(
+async def test_mint_tier2_threads_duplicates_when_the_citing_set_changes_between_runs(
     actions: Actions,
 ) -> None:
-    """THE REAL RISK Thoth's dispatch (msg 3266, item 4) asked to be established with
-    evidence, not assumed: mint_tier2_threads is idempotent on BYTE-IDENTICAL summary text
-    only (see test_mint_tier2_threads_is_idempotent_on_rerun, and open_thread's own
+    """This risk needed to be established with evidence, not assumed: mint_tier2_threads
+    is idempotent on BYTE-IDENTICAL summary text only (see
+    test_mint_tier2_threads_is_idempotent_on_rerun, and open_thread's own
     create_or_find_object -> ON CONFLICT (type, canonical) DO NOTHING, a real DB unique
     constraint). But a disagreement summary encodes the FULL current citing-task set
     (tier2_mints's own rerun note). A second run where a new task starts citing the same
     disputed Thread changes the summary text and therefore mints a SECOND, DISTINCT Thread
-    rather than updating the first — a real twin, not a hypothetical one. This is why
+    rather than updating the first: a real duplicate, not a hypothetical one. This is why
     firing this at every turn-end is not yet safe: the citing set legitimately changes
     turn to turn as the agent works."""
     disputed = await open_thread(actions, "disputed, citing set will grow", source="agent:me")
@@ -383,10 +382,10 @@ async def test_mint_tier2_threads_twins_when_the_citing_set_changes_between_runs
         "thread_side_orphans": [],
     }
     second = await mint_tier2_threads(actions, tier2_mints(report_v2))
-    assert first[0]["thread_id"] != second[0]["thread_id"]  # TWINNED, not collapsed
+    assert first[0]["thread_id"] != second[0]["thread_id"]  # duplicated, not collapsed
 
 
-# ── archive_eligible_targets (Thoth DM 3266's item 1, pure computation only) ──────────────
+# ── archive_eligible_targets (pure computation only) ───────────────────────────────────
 
 def test_archive_eligible_targets_wants_completed_task_and_full_agreement() -> None:
     report = {
@@ -471,8 +470,8 @@ def test_archive_eligible_targets_is_scoped_by_store_not_bare_task_id() -> None:
     ]
 
 
-# ── task_sync_reconcile (the MCP tool, task #160 — the on-ramp task_sync.py's own docstring
-# promised and never got) — report-only by default, Tier 1/2 write gated behind write=True,
+# ── task_sync_reconcile (the MCP tool, task #160: the on-ramp task_sync.py's own docstring
+# promised and never got), report-only by default, Tier 1/2 write gated behind write=True,
 # never touching the harness's own task store either way. ────────────────────────────────
 
 async def test_mcp_tool_is_report_only_by_default(actions: Actions) -> None:
@@ -491,7 +490,7 @@ async def test_mcp_tool_is_report_only_by_default(actions: Actions) -> None:
     assert out["report"]["counts"]["bound"] == 1
     assert "tier1_written" not in out
     assert "tier2_minted" not in out
-    # no write actually landed — the citation property was never asserted
+    # no write actually landed: the citation property was never asserted
     rows = await _property_rows(actions, tid, "harness_task_citation")
     assert rows == []
 

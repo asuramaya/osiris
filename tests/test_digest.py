@@ -1,8 +1,8 @@
-"""The membrane — fleet_digest, the operator's window into the autonomous fleet.
+"""fleet_digest, the window into the autonomous fleet.
 
-Constructs a small fleet with all four upward streams — a clean and an unresolved identity, a
+Constructs a small fleet with all four upward streams: a clean and an unresolved identity, a
 model-swapped agent, agent-authored activity inside and outside the window (and miner backfill
-that must be excluded), and a relay/origin co-assertion — and asserts the digest surfaces each.
+that must be excluded), and a relay/origin co-assertion. Asserts the digest surfaces each.
 """
 from __future__ import annotations
 
@@ -26,9 +26,9 @@ async def _prop(actions, oid, name, value, source, ec, conf=0.9, when=NOW):
 
 
 async def _seed_project(pool, project: str) -> None:
-    """send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
-    #117) — alive=False registers `project` as existing without a live pulse, matching
-    test_mailbox.py's own `_seed()` idiom."""
+    """send_message refuses a to_project nobody has ever mounted under: alive=False
+    registers `project` as existing without a live pulse, matching test_mailbox.py's
+    own `_seed()` idiom."""
     await save_mount(pool, job_dir=f"/test/seed/{project}", agent_id=f"agent:seed-{project}",
                      project=project, cwd="/test", model=None, session_key=None, alive=False)
 
@@ -41,8 +41,8 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
     await _prop(actions, a, "identity_resolved", True, "fleet-observer", DO)
     await _prop(actions, a, "model_swapped", "claude-fable-5 → claude-opus-4-8",
                 "fleet-observer", DO)
-    # a swap is witnessed by READING a transcript, so the miner stamps the sighting in the same
-    # breath (see sessions._stamp_alive) — an agent cannot be swapped and never-seen at once.
+    # a swap is witnessed by READING a transcript, so the miner stamps the sighting at the same
+    # time (see sessions._stamp_alive): an agent cannot be swapped and never-seen at once.
     await _prop(actions, a, "last_active", (NOW - timedelta(minutes=5)).isoformat(),
                 "fleet-observer", DO)
     u = await actions.create_or_find_object("Agent", "agent:unknown-sibling-one", "fleet-observer")
@@ -97,7 +97,7 @@ async def test_fleet_digest_surfaces_the_four_streams(actions: Actions) -> None:
 
 async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Actions) -> None:
     """The upward lane's compliance-free half: lateral threads and the operator's inbox are
-    read straight off fleet_messages — an agent that shirks its report-up duty is still seen."""
+    read straight off fleet_messages: an agent that shirks its report-up duty is still seen."""
     p = actions.pool
     since = NOW - timedelta(hours=24)
     await _seed_project(p, "sibling-one")
@@ -105,7 +105,7 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
     ask = await send_message(p, from_agent="agent:aaa", from_project="sibling-two",
                              to_project="sibling-one", body="run the ablation?")
     await send_message(p, from_agent="agent:bbb", from_project="sibling-one",
-                       body="done — organ delta reproduces", reply_to=ask["id"])
+                       body="done, organ delta reproduces", reply_to=ask["id"])
     # a report-up brief on the operator's desk
     await send_message(p, from_agent="agent:bbb", from_project="sibling-one",
                        to_project=OPERATOR_ADDR, body="FINDING: organ delta is real; "
@@ -117,7 +117,7 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
     lateral = next(c for c in dg["conversations"] if c["thread"] == ask["id"])
     assert set(lateral["between"]) >= {"sibling-two", "sibling-one"}
     assert lateral["msgs"] == 2
-    assert lateral["last"]["body"].startswith("done — organ delta")
+    assert lateral["last"]["body"].startswith("done, organ delta")
     # the desk: counted and previewed, newest first, NOT leased by the digest (a peek)
     assert dg["summary"]["operator_unread"] == 1
     assert dg["operator_inbox"]["latest"][0]["from_project"] == "sibling-one"
@@ -128,13 +128,13 @@ async def test_digest_surfaces_conversations_and_the_operator_desk(actions: Acti
 async def test_activity_excludes_agent_sourced_mined_rows(actions: Actions) -> None:
     """Origin-attribution regression: the session-miner now SOURCES its DERIVED backfill to the
     ORIGINATING agent (agent:%), so `source_id LIKE 'agent:%'` alone would LEAK a mined echo into
-    the deliberate-activity stream. _activity must exclude it by GRADE — only SELF_DECLARED agent
+    the deliberate-activity stream. _activity must exclude it by GRADE: only SELF_DECLARED agent
     work is 'what the fleet deliberately did in your name'."""
     since = NOW - timedelta(hours=24)
     deliberate = await actions.create_or_find_object("Decision", "decision:deliberate", "agent:h")
     await _prop(actions, deliberate, "summary", "deliberately decided X", "agent:h", SD)
     # the miner's echo of this SAME session's words: agent-SOURCED now (post origin attribution),
-    # but DERIVED — the object is the miner's (actor session-miner), the words are the agent's.
+    # but DERIVED: the object is the miner's (actor session-miner), the words are the agent's.
     mined = await actions.create_or_find_object("Thread", "thread:mined-echo", "session-miner")
     await _prop(actions, mined, "summary", "a mined echo of the discussion", "agent:h",
                 "derived", conf=0.4)
@@ -150,7 +150,7 @@ async def test_activity_excludes_agent_sourced_mined_rows(actions: Actions) -> N
 async def test_activity_dedups_a_co_asserted_summary_to_one_row(actions: Actions) -> None:
     """A Decision/Thread co-asserted by several agents carries one summary row PER source (the
     multi-source set), so _activity would list the SAME activity twice. Dedup by object, keeping
-    the highest-grade (then most-recent) row — one line per decision, not one per asserter."""
+    the highest-grade (then most-recent) row: one line per decision, not one per asserter."""
     since = NOW - timedelta(hours=24)
     # two agents deliberately assert the SAME summary → same canonical → ONE object, two sources
     d = await actions.create_or_find_object("Decision", "decision:coassert", "agent:a")
@@ -171,7 +171,7 @@ async def test_activity_dedups_a_co_asserted_summary_to_one_row(actions: Actions
 
 
 async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> None:
-    """The desk norm applied to the digest: glancing is a peek — only the DELIBERATE act
+    """The desk norm applied to the digest: glancing is a peek; only the DELIBERATE act
     (mark_seen) advances the stored operator watermark; an explicit `since` never touches it."""
     # no watermark yet → 24h fallback, reported honestly
     dg = await fleet_digest(actions)
@@ -180,15 +180,15 @@ async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> No
     # a plain read did NOT set one (peek changed nothing)
     dg2 = await fleet_digest(actions)
     assert dg2["watermark"]["value"] is None
-    # the deliberate act advances it…
+    # the deliberate act advances it...
     dg3 = await fleet_digest(actions, mark_seen=True)
     assert dg3["watermark"]["marked"] is True and dg3["watermark"]["advanced_to"]
-    # …and the next glance opens exactly there
+    # ...and the next glance opens exactly there
     dg4 = await fleet_digest(actions)
     assert dg4["watermark"]["mode"] == "watermark"
     assert dg4["watermark"]["value"] == dg3["watermark"]["advanced_to"]
     assert dg4["since"] == dg4["watermark"]["value"]
-    # an explicit window is explicit — and leaves the watermark alone
+    # an explicit window is explicit, and leaves the watermark alone
     dg5 = await fleet_digest(actions, since=NOW - timedelta(hours=1))
     assert dg5["watermark"]["mode"] == "explicit"
     dg6 = await fleet_digest(actions)
@@ -197,11 +197,11 @@ async def test_watermark_mode_advances_only_on_mark_seen(actions: Actions) -> No
 
 async def test_costs_stream_meters_the_window_honestly(
     actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
-    """The operator's 'where are the tokens burnt', metered — grouped by burner, biggest
+    """Where are the tokens burnt, metered: grouped by burner, biggest
     first, and NEVER without its coverage note (a spend figure that overclaims is worse
     than none: wakes and interactive tabs are unmetered today). This is the BILLED case
     (spend_is_metered True): only there is the dollar figure a real debit; the subscription
-    case — where it is notional and omitted — is the test below."""
+    case, where it is notional and omitted, is the test below."""
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: True)
     p = actions.pool
     await p.execute(
@@ -221,8 +221,8 @@ async def test_costs_stream_meters_the_window_honestly(
 async def test_costs_stream_OMITS_notional_dollars_on_a_subscription(
     actions: Actions, monkeypatch: pytest.MonkeyPatch) -> None:
     """On a subscription the CLI's cost_usd is notional, so the console shows the REAL token
-    counts and drops the phantom $ — the same reason the daily ceiling no longer gates on it
-    (Thoth LIII 2026-07-21). Tokens stay; every usd goes None so the membrane's guards omit it."""
+    counts and drops the phantom $, the same reason the daily ceiling no longer gates on it.
+    Tokens stay; every usd goes None so the digest's own guards omit it."""
     monkeypatch.setattr("src.ingest.providers.spend_is_metered", lambda s=None: False)
     p = actions.pool
     await p.execute(
@@ -236,15 +236,15 @@ async def test_costs_stream_OMITS_notional_dollars_on_a_subscription(
 
 
 async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actions) -> None:
-    """Task #50: an agent updating its prior brief (reply_to its OWN message — the threading
+    """Task #50: an agent updating its prior brief (reply_to its OWN message: the threading
     duty) stacks the thread; the desk shows ONE head per thread with the older briefs counted
-    under it. The system folds; only the human settles — the superseded rows stay unread."""
+    under it. The system folds; only the human settles: the superseded rows stay unread."""
     p = actions.pool
     first = await send_message(p, from_agent="agent:h", from_project="sibling-one",
                                to_project=OPERATOR_ADDR, body="BRIEF: run 1 started")
     # the self-reply routes ONWARD to the desk (not back to the sender) and joins the thread
     second = await send_message(p, from_agent="agent:h", from_project="sibling-one",
-                                body="BRIEF v2: run 1 done — organ delta reproduces",
+                                body="BRIEF v2: run 1 done, organ delta reproduces",
                                 reply_to=first["id"])
     assert second["to"] == OPERATOR_ADDR and second["thread_id"] == first["id"]
     # an unrelated brief from another project is its own head
@@ -254,12 +254,12 @@ async def test_desk_folds_superseded_briefs_under_the_newest_head(actions: Actio
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
     desk = dg["operator_inbox"]
 
-    assert desk["unread"] == 2       # active HEADS — the number that nags
+    assert desk["unread"] == 2       # active HEADS, the number that nags
     assert desk["unread_raw"] == 3   # the honest backlog underneath
     heads = {m["body"]: m for m in desk["latest"]}
-    assert "BRIEF v2: run 1 done — organ delta reproduces" in heads   # newest head shown
-    assert "BRIEF: run 1 started" not in heads                        # superseded — folded
-    assert heads["BRIEF v2: run 1 done — organ delta reproduces"]["supersedes"] == 1
+    assert "BRIEF v2: run 1 done, organ delta reproduces" in heads   # newest head shown
+    assert "BRIEF: run 1 started" not in heads                        # superseded, folded
+    assert heads["BRIEF v2: run 1 done, organ delta reproduces"]["supersedes"] == 1
     assert heads["BRIEF: memory audit queued"]["supersedes"] == 0
     # NOTHING was settled by the fold: the superseded brief is still the operator's to clear
     assert await unread_count(p, OPERATOR_ADDR, reader_agent=OPERATOR_ADDR, lease_secs=0) == 3
@@ -280,27 +280,27 @@ async def test_replying_to_your_own_lateral_message_routes_onward(actions: Actio
 
 async def test_live_swap_surfaces_before_a_re_mount(actions: Actions) -> None:
     """The sibling-eight audit's #2: a mid-session classifier swap lands in agent_mounts via
-    the heartbeat BEFORE the Agent object is re-stamped. The danger map must show it live —
+    the heartbeat BEFORE the Agent object is re-stamped. The danger map must show it live:
     a mount-once agent can't be left running opus behind a stale-green roster."""
-    a = await actions.create_or_find_object("Agent", "agent:ra", "fleet-observer")
+    a = await actions.create_or_find_object("Agent", "agent:rx", "fleet-observer")
     await _prop(actions, a, "project", "sibling-eight", "fleet-observer", DO)
     await _prop(actions, a, "source_model", "claude-fable-5", "fleet-observer", DO)
     # the heartbeat wrote the LIVE model (opus) to the mount row; the Agent object still says fable
     await actions.pool.execute(
         "INSERT INTO agent_mounts (job_dir, agent_id, project, cwd, model, last_seen) "
-        "VALUES ('/j/ra','agent:ra','sibling-eight','/w/ra','claude-opus-4-8', now())")
+        "VALUES ('/j/rx','agent:rx','sibling-eight','/w/rx','claude-opus-4-8', now())")
 
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
-    r = next(x for x in dg["roster"] if x["agent"] == "agent:ra")
+    r = next(x for x in dg["roster"] if x["agent"] == "agent:rx")
     assert r["live_model"] == "claude-opus-4-8"
     assert "claude-fable-5 → claude-opus-4-8 (unstamped)" == r["live_swap"]
     # and it counts in the danger map + swapped tally, without any re-mount
-    assert any(d["agent"] == "agent:ra" for d in dg["danger"])
+    assert any(d["agent"] == "agent:rx" for d in dg["danger"])
     assert dg["summary"]["swapped"] >= 1
 
 
 async def test_matching_live_model_is_not_a_swap(actions: Actions) -> None:
-    """The heartbeat model AGREEING with the stamp is the healthy case — no false alarm."""
+    """The heartbeat model AGREEING with the stamp is the healthy case: no false alarm."""
     a = await actions.create_or_find_object("Agent", "agent:ok", "fleet-observer")
     await _prop(actions, a, "source_model", "claude-fable-5", "fleet-observer", DO)
     await actions.pool.execute(
@@ -312,11 +312,11 @@ async def test_matching_live_model_is_not_a_swap(actions: Actions) -> None:
     assert not any(d["agent"] == "agent:ok" for d in dg["danger"])
 
 
-# --- miner tick telemetry: the onboarding-day instrument (decision 3191e0df) ------------
+# --- miner tick telemetry: the onboarding-day instrument -----------------------------
 
 async def test_miner_telemetry_records_and_digest_surfaces_it(actions: Actions) -> None:
-    """A tick's whole life lands in miner:ticks — start, outcome, saturation, error — and
-    the digest reads it back as vital signs. The heartbeat says the worker breathes; THIS
+    """A tick's whole life lands in miner:ticks: start, outcome, saturation, error, and
+    the digest reads it back as vital signs. The heartbeat says the worker is alive; THIS
     says the sensing tick actually finishes (the outage ran a day behind a green beat)."""
     from src.orchestrator.monitor import miner_health, miner_tick_ended, miner_tick_started
 
@@ -347,7 +347,7 @@ async def test_miner_telemetry_records_and_digest_surfaces_it(actions: Actions) 
 
 async def test_miner_telemetry_is_bounded_and_absent_is_quiet(actions: Actions) -> None:
     """The blob keeps a bounded tail (~8h of ticks), and a fleet with no telemetry yet
-    digests to zeros instead of an error — a young instrument is not a failure."""
+    digests to zeros instead of an error: a young instrument is not a failure."""
     from src.orchestrator.monitor import _MINER_KEEP, miner_health, miner_tick_ended
 
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
@@ -362,7 +362,7 @@ async def test_miner_telemetry_is_bounded_and_absent_is_quiet(actions: Actions) 
 
 
 async def test_proposal_telemetry_counts_per_miner_owner_pair(actions: Actions) -> None:
-    """Item 4 (decision ac892cd9): made/accepted/rejected/expired-in-effect per (miner,
+    """Item 4: made/accepted/rejected/expired-in-effect per (miner,
     owner) pair, off the Proposal objects items 1-3 mint. Fabricated directly here
     (never through propose(), which needs a live abstention and would trip item 3's own
     daily budget) since only the properties `_proposal_telemetry`'s own queries read
@@ -399,9 +399,8 @@ async def test_proposal_telemetry_counts_per_miner_owner_pair(actions: Actions) 
 
 
 async def test_proposal_telemetry_reports_by_lane(actions: Actions) -> None:
-    """Wave 16, decision 4d622aee: 'the weekly desk line reports proposals and
-    acceptance per lane' — a lane is `<from object's type>:<link_type>`, read off
-    evidence_pointer, never a new column."""
+    """The weekly desk line reports proposals and acceptance per lane: a lane is
+    `<from object's type>:<link_type>`, read off evidence_pointer, never a new column."""
     decision_id = await actions.create_or_find_object(
         "Decision", "decision:digestlane1", "test")
     thread_id = await actions.create_or_find_object("Thread", "thread:digestlane1", "test")
@@ -432,11 +431,11 @@ async def test_proposal_telemetry_reports_by_lane(actions: Actions) -> None:
 
 
 async def test_proposal_telemetry_by_lane_names_the_signal(actions: Actions) -> None:
-    """THE LANE SIGNAL (Thoth ruling, mail 9847, decision 2406c9c5): a made-in-window
-    Proposal's own `candidate.signal` is counted per lane, so the desk sees WHICH signal
-    — 'dominance' vs 'author_tiebreak' — is actually producing each lane's proposals. A
-    Proposal with no `signal` key (pre-ruling, or a non-abstention caller) contributes
-    nothing to `by_signal` but still counts toward `made`."""
+    """THE LANE SIGNAL: a made-in-window Proposal's own `candidate.signal` is counted per
+    lane, so the desk sees WHICH signal, 'dominance' vs 'author_tiebreak', is actually
+    producing each lane's proposals. A Proposal with no `signal` key (pre-ruling, or a
+    non-abstention caller) contributes nothing to `by_signal` but still counts toward
+    `made`."""
     decision_id = await actions.create_or_find_object(
         "Decision", "decision:digestlanesignal1", "test")
 
@@ -461,7 +460,7 @@ async def test_proposal_telemetry_by_lane_names_the_signal(actions: Actions) -> 
                 "link_type": "in_repo", "signal": "dominance"})
     await _mint({"kind": "link", "from_id": str(decision_id), "to_id": str(decision_id),
                 "link_type": "in_repo", "signal": "author_tiebreak"})
-    await _mint(None)  # no candidate at all — must not blow up, must not count anywhere
+    await _mint(None)  # no candidate at all: must not blow up, must not count anywhere
 
     dg = await fleet_digest(actions, since=NOW - timedelta(hours=24))
     by_lane = {r["lane"]: r for r in dg["proposals"]["by_lane"]}
@@ -475,8 +474,8 @@ async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
 ) -> None:
     """The window applies to the ROSTER, and what it excludes it still COUNTS.
 
-    fleet_digest(hours=24) used to ship every agent that ever lived — 1026 rows, 173k chars, a
-    firehose wearing a window — because `_roster` was the one stream that ignored `since`. But
+    fleet_digest(hours=24) used to ship every agent that ever lived: 1026 rows, 173k chars, a
+    firehose wearing a window, because `_roster` was the one stream that ignored `since`. But
     the naive fix (drop anything not seen in the window) would have silently deleted 91 real model
     swaps from the danger map, on the grounds that the graph could not say whether those minds
     were alive. Absence of evidence is not evidence of absence. So: bounded ROWS, whole COUNTS.
@@ -490,7 +489,7 @@ async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
     await _prop(actions, stale, "identity_resolved", True, "fleet-observer", DO)
     await _prop(actions, stale, "last_active", (NOW - timedelta(days=30)).isoformat(),
                 "fleet-observer", DO)
-    # the ghost: no sighting of any kind, ever — and it carries a swap
+    # the ghost: no sighting of any kind, ever, and it carries a swap
     ghost = await actions.create_or_find_object("Agent", "agent:ghost", "fleet-observer")
     await _prop(actions, ghost, "identity_resolved", True, "fleet-observer", DO)
     await _prop(actions, ghost, "model_swapped", "claude-opus-4-8 → claude-haiku-4-5",
@@ -506,7 +505,7 @@ async def test_the_window_bounds_the_roster_without_ever_deleting_a_soul(
     assert "3" in dg["roster_scope"]                 # and the lens says what it did
 
 
-# ═══ no-regrow hygiene item 4 (practice 393be453) — the digest's own obligation-pressure
+# ═══ no-regrow hygiene item 4: the digest's own obligation-pressure
 # gauge: per-project open count against a fixed target, naming the three OLDEST owners ═══
 
 

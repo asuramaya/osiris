@@ -1,4 +1,4 @@
-"""DRAWING THE WHOLE GRAPH, THE MIGRATIONS (thread 325ef660): hermetic coverage for
+"""DRAWING THE WHOLE GRAPH, THE MIGRATIONS: hermetic coverage for
 the three name-dispatched graph-shape repairs in graph_migrations.py."""
 from __future__ import annotations
 
@@ -91,7 +91,7 @@ async def test_repo_seats_fix_refiles_agents_and_edges_then_retires_repo_seats(
 async def test_repo_seats_fix_scans_edges_regardless_of_container_status(
     actions: Actions,
 ) -> None:
-    """THE STATUS-GATE BUG (Thoth mail 11448, found by cross-checking the first dry
+    """THE STATUS-GATE BUG (found by cross-checking the first dry
     run against tree_ledger): a phantom container's own edges must be fixed
     whatever status the container itself is in -- the original gate silently
     skipped the whole edge repair the instant repo:seats drifted out of
@@ -125,7 +125,7 @@ async def test_repo_seats_fix_scans_edges_regardless_of_container_status(
 async def test_repo_seats_fix_supersedes_cross_source_project_assertion(
     actions: Actions,
 ) -> None:
-    """THE w316 LIVE FINDING (Thoth mail 11469): the original cut wrote the re-stamp
+    """A LIVE FINDING: the original cut wrote the re-stamp
     via plain `assert_property`, whose own supersession is same-source-only -- when
     the prior "seats" assertion's source (the agent's own self-declaration) differs
     from the migration's `actor` (the console/migration actor), the new "osiris" row
@@ -155,7 +155,7 @@ async def test_repo_seats_fix_supersedes_cross_source_project_assertion(
 async def test_repo_seats_fix_reports_the_unchanged_agent_to_osiris_link_count(
     actions: Actions,
 ) -> None:
-    """Read-only, for the record (Thoth mail 11448): a live link between a
+    """Read-only, for the record: a live link between a
     seats-stamped agent and an object already in osiris becomes same-district
     the moment the agent is re-stamped -- it needs no edge rewrite of its own,
     but the receipt still names how many there are."""
@@ -219,7 +219,7 @@ async def test_file_the_unfiled_no_neighbour_project_stays_unfiled(actions: Acti
 
 
 async def test_file_the_unfiled_iterates_to_a_fixed_point(actions: Actions) -> None:
-    """THE FIXED-POINT FIX (Thoth mail 11448): a whole cluster of mutually-unfiled
+    """THE FIXED-POINT FIX: a whole cluster of mutually-unfiled
     objects only touches a real project through ANOTHER unfiled object -- a
     single pass cannot see across two hops, but a second pass (now able to see
     the first pass's own newly-filed neighbour) can."""
@@ -242,7 +242,7 @@ async def test_file_the_unfiled_iterates_to_a_fixed_point(actions: Actions) -> N
 
 
 async def test_file_the_unfiled_excludes_person_and_seat_from_filing(actions: Actions) -> None:
-    """Thoth mail 11448: a global with heavy structural fan-in (a principal, a
+    """A global with heavy structural fan-in (a principal, a
     seat) is a landmark, not a member of whatever district it happens to touch
     most -- Person/Seat objects are never filed, even when they'd otherwise win
     a clean majority vote."""
@@ -360,9 +360,9 @@ async def test_assertion_links_unresolvable_source_is_skipped_not_guessed(
 
 
 async def test_assertion_links_acknowledges_was_dropped(actions: Actions) -> None:
-    """Thoth mail 11448, "you read it right": the confirmation already mints a
-    real `cites` edge (acknowledge_prior_art's own docstring) -- a distinct
-    acknowledges link would be redundant, dropped from the migration entirely."""
+    """The confirmation already mints a real `cites` edge
+    (acknowledge_prior_art's own docstring) -- a distinct acknowledges link would be
+    redundant, dropped from the migration entirely."""
     out = await migrate_assertion_links(actions, actor="test", dry_run=True)
     assert "acknowledges" not in out["receipt"]
 
@@ -370,7 +370,7 @@ async def test_assertion_links_acknowledges_was_dropped(actions: Actions) -> Non
 async def test_assertion_links_owned_by_falls_back_to_a_project_name(
     actions: Actions,
 ) -> None:
-    """Thoth mail 11448, "the owner law's legacy shape": a Thread.owner value
+    """The owner rule's legacy shape: a Thread.owner value
     that never resolves as a Seat/Agent canonical is tried against an active
     SoftwareProject's own bare name before it's given up as unresolvable."""
     now = datetime.now(UTC)
@@ -420,7 +420,7 @@ async def test_owned_by_second_pass_resolves_operator_to_the_principal(
 
 
 async def test_owned_by_second_pass_resolves_a_raw_seat_canonical(actions: Actions) -> None:
-    """Thoth mail 11567, the live catch: the first cut's own docstring claimed it
+    """The live catch: the first cut's own docstring claimed it
     re-tried the plain canonical resolve, but the code never did -- a value that is
     ALREADY a live, active Seat canonical (never a bare handle name) must resolve
     directly, not fall through to the handle lookup (which would fail: a full
@@ -588,7 +588,7 @@ async def test_file_the_residual_only_touches_messages(actions: Actions) -> None
     assert out["scanned"] == 0
 
 
-# --- commits_to_agents (backfill door, WAVE 27 ruling 4cf5e4b3/b8fb26494e0e) --------
+# --- commits_to_agents (backfill pass) -----------------------------------------------
 
 
 async def test_commits_to_agents_requires_because_to_apply(actions: Actions) -> None:
@@ -694,7 +694,7 @@ async def test_commits_to_agents_abstains_when_the_commit_predates_any_holder(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='committed_by'", commit) == 0
 
 
-# --- house_to_project (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY") --------------
+# --- house_to_project (implements "ONE TAXONOMY") -------------------------------------------
 
 async def test_migrate_house_to_project_repairs_a_null_house_on_apply(
     actions: Actions,
@@ -731,9 +731,9 @@ async def test_migrate_house_to_project_repairs_a_null_house_on_apply(
 async def test_migrate_house_to_project_refuses_a_stamped_house_that_disagrees(
     actions: Actions,
 ) -> None:
-    """w347 (Thoth mail 12153): a NON-NULL stamped house that disagrees with the
-    charter's own governed project is the house anchor's own carve-out — the door
-    refuses rather than overwriting a real value it has no standing to guess about."""
+    """A NON-NULL stamped house that disagrees with the charter's own governed
+    project is the house anchor's own carve-out: the migration refuses rather than
+    overwriting a real value it has no standing to guess about."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import ensure_seat
 
@@ -794,11 +794,10 @@ async def test_migrate_house_to_project_skips_a_seat_already_correct(
 async def test_migrate_house_to_project_stamps_the_renamed_name_not_the_canonical(
     actions: Actions,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
-    renamed to 'handlingtheloop'): a seat whose charter governs a project that has
-    since been RENAMED (canonical stays repo:<old>, only `name` changes -- rename_
-    project's own law) must be stamped with the project's CURRENT name, never
-    charter_of's own frozen-at-mint canonical."""
+    """PROJECT IDENTITY DRIFT (a live specimen: a repo renamed after the fact): a
+    seat whose charter governs a project that has since been RENAMED (canonical stays
+    repo:<old>, only `name` changes, rename_project's own rule) must be stamped with
+    the project's CURRENT name, never charter_of's own frozen-at-mint canonical."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import ensure_seat
 
@@ -831,7 +830,7 @@ async def test_run_migration_accepts_house_to_project(actions: Actions) -> None:
     assert out["dry_run"] is True
 
 
-# --- holds_sandwich (WAVE 27/28 boundary, Thoth dispatch 12079/12190) --------------
+# --- holds_sandwich -------------------------------------------------------------------
 
 
 async def _seed_sandwich(
@@ -846,7 +845,7 @@ async def _seed_sandwich(
     own row and the real holder's next row are back-to-back, no separate gap); passing
     it distinct from `t3` seeds a DISCONTINUOUS sandwich -- the phantom closes early and
     a further stretch with NO holds row at all follows before the real holder resumes,
-    the exact live shape found on Thoth's own seat (DM 12288): a 174ms phantom followed
+    the exact live shape found in practice: a 174ms phantom followed
     by ~43 minutes with no covering row before the real holder's next row began."""
     from src.orchestrator.seats import ensure_seat
 
@@ -856,7 +855,7 @@ async def _seed_sandwich(
     real_oid = await actions.create_or_find_object("Agent", real_holder, "test")
     phantom_oid = await actions.create_or_find_object("Agent", phantom, "test")
     await actions.assert_property(
-        phantom_oid, "minted_because", "launch_seat: bind-before-spawn (piece 1, msg 6692)",
+        phantom_oid, "minted_because", "launch_seat: bind-before-spawn (piece 1)",
         "test", t2, 0.9)
     await actions.create_link(real_oid, seat_oid, "holds", "test", t1, 1.0)
     await actions.pool.execute(
@@ -933,14 +932,14 @@ async def test_holds_sandwich_apply_re_opens_the_real_holders_window(
         "SELECT f.canonical AS holder, l.first_seen, l.valid_until FROM links l "
         "JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='holds' ORDER BY l.first_seen", seat)
-    assert len(rows) == 3  # never a delete — all three original rows still exist
+    assert len(rows) == 3  # never a delete, all three original rows still exist
     real1, phantom_row, real2 = rows
     assert real1["holder"] == "agent:gm-sw2-real" and real1["first_seen"] == t1
     assert real1["valid_until"] is None  # re-opened across the whole sandwich
     assert phantom_row["valid_until"] == phantom_row["first_seen"] == t2  # zeroed
     assert real2["valid_until"] == real2["first_seen"] == t3  # zeroed, now redundant
 
-    # AT ANY POINT IN TIME, exactly one row answers "who held this seat" — never two
+    # AT ANY POINT IN TIME, exactly one row answers "who held this seat", never two
     at = t2 + (t3 - t2) / 2
     covering = [r for r in rows if r["first_seen"] <= at
                and (r["valid_until"] is None or r["valid_until"] > at)]
@@ -964,7 +963,7 @@ async def test_holds_sandwich_never_matches_a_genuine_lineage_succession(
     actions: Actions,
 ) -> None:
     """Three consecutive holders, no bind-before-spawn `minted_because` anywhere, and the
-    first and third holders are DIFFERENT agents — an ordinary succession chain, never a
+    first and third holders are DIFFERENT agents: an ordinary succession chain, never a
     sandwich, never touched."""
     from src.orchestrator.seats import ensure_seat
 
@@ -998,8 +997,8 @@ async def test_run_migration_accepts_holds_sandwich(actions: Actions) -> None:
 
 
 async def test_holds_sandwich_refuses_apply_on_a_vacancy(actions: Actions) -> None:
-    """No evidence the real holder did anything in the gap -- "vacancy, not a cut"
-    (Thoth DM 12215): --apply reports the sandwich but writes nothing."""
+    """No evidence the real holder did anything in the gap -- "vacancy, not a cut":
+    --apply reports the sandwich but writes nothing."""
     t1, t2 = datetime(2026, 2, 1, tzinfo=UTC), datetime(2026, 2, 1, 1, tzinfo=UTC)
     t3 = datetime(2026, 2, 1, 1, 0, 5, tzinfo=UTC)
     seat = await _seed_sandwich(
@@ -1021,8 +1020,7 @@ async def test_holds_sandwich_refuses_apply_when_phantom_not_near_instant(
     actions: Actions,
 ) -> None:
     """Real-holder activity throughout the gap does not rescue a phantom window longer
-    than a week (Thoth DM 12215: jenny's six-week span, too risky to bridge whatever
-    the evidence)."""
+    than a week (a live six-week span, too risky to bridge whatever the evidence)."""
     t1 = datetime(2026, 3, 1, tzinfo=UTC)
     t2 = datetime(2026, 3, 2, tzinfo=UTC)
     t3 = t2 + timedelta(days=42)
@@ -1046,9 +1044,9 @@ async def test_holds_sandwich_refuses_apply_when_phantom_not_near_instant(
 async def test_holds_sandwich_evidence_gap_spans_a_discontinuous_holds_chain(
     actions: Actions,
 ) -> None:
-    """REGRESSION (Thoth DM 12288, w352's live probe): the phantom's own window and
+    """REGRESSION: the phantom's own window and
     the real gap between the two real-holder rows are NOT always the same interval --
-    a live specimen on Thoth's own seat had a 174ms phantom immediately followed by a
+    a live specimen had a 174ms phantom immediately followed by a
     further ~43-minute stretch with no covering holds row at all before the real
     holder's next row began. Evidence seeded ONLY in that wider stretch (never inside
     the phantom's own tiny window) must still pass the gate -- checking against the
@@ -1115,8 +1113,7 @@ async def test_run_migration_only_seat_refused_for_other_targets(actions: Action
     assert "error" in out
 
 
-# --- project_name_singular (operator ruling b5663511, PROJECT IDENTITY DRIFT, -----------
-# Thoth dispatch 12401) -------------------------------------------------------------------
+# --- project_name_singular (PROJECT IDENTITY DRIFT) --------------------------------------
 
 
 async def test_project_name_singular_requires_because_to_apply(actions: Actions) -> None:
@@ -1127,7 +1124,7 @@ async def test_project_name_singular_requires_because_to_apply(actions: Actions)
 async def test_project_name_singular_finds_the_highest_confidence_winner(
     actions: Actions,
 ) -> None:
-    """The live specimen: repo:bytebye's 27 competing current names — the winner is
+    """A live specimen: a repo's 27 competing current names, the winner is
     whichever current value carries the highest confidence, newest breaking a tie
     (rename_project's own 0.95 always outranks any ordinary evidence-class write)."""
     now = datetime.now(UTC)
@@ -1190,7 +1187,7 @@ async def test_project_name_singular_never_flags_redundant_agreement(
     actions: Actions,
 ) -> None:
     """Two sources asserting the IDENTICAL name value are agreement, not a
-    contradiction — count(DISTINCT value), never a raw multi-row count."""
+    contradiction: count(DISTINCT value), never a raw multi-row count."""
     now = datetime.now(UTC)
     proj_id = "repo:gm-pns-agree"
     proj = await actions.create_or_find_object("SoftwareProject", proj_id, "test")

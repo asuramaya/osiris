@@ -1,35 +1,35 @@
-"""THE LIVE-INVOCATION CHECK (Thoth mail 9382 item 2, f0a64374): "a test that runs
---help and one no-write invocation of every CLI command... so a broken door is caught
-by the gate not the operator." Same live-walk discipline test_cli_mcp_parity.py and
-test_cli_json_promise.py already hold — never by reading the code, by actually calling
+"""THE LIVE-INVOCATION CHECK: a test that runs --help and one no-write invocation of
+every CLI command, so a broken command is caught by the test suite rather than by
+whoever runs it next. Same live-walk discipline test_cli_mcp_parity.py and
+test_cli_json_promise.py already hold: never by reading the code, by actually calling
 it.
 
-GATE 1 (--help, complete, all 63 subcommands): mechanical and fully safe — argparse
+GATE 1 (--help, complete, all 63 subcommands): mechanical and fully safe, argparse
 only, never touches a pool or a real process. Catches a broken subparser wiring
 (a bad `add_argument`, a dest typo) that a purely-static check would miss.
 
 GATE 2 (one real no-write invocation per command): NOT complete. Every entry in
 NO_WRITE_INVOCATIONS below is either (a) an EXISTING refusal-shaped call already
 proven safe by a passing test elsewhere in this suite (test_cli.py or test_cli_json_
-promise.py — this file never reinvents those, it reuses the exact same args), or
+promise.py: this file never reinvents those, it reuses the exact same args), or
 (b) safe BY CONSTRUCTION via an explicit dry-run/apply/execute=False default in the
-command's own signature, true regardless of what ref is passed, or (c) — the class
-this file's own second wave (mail 9382 item 6) added — a resolve-first-then-refuse
-path CONFIRMED by reading the wrapped orchestrator function's own body: an unknown/
-nonexistent ref hits a named refusal (an "unknown seat"/"unknown project"/etc. return)
-strictly BEFORE any write, verified line-by-line rather than assumed from this house's
-general convention. NEEDS_SAFE_INVOCATION below names every command where that same
-close reading found the OPPOSITE — either the body genuinely writes unconditionally
-(mint-seat/new/bootstrap/create-project mint for real every time; decide always
-records a fresh Decision; smoke/deploy/seed touch real infra with no dry-run switch).
-The completeness gate requires every live subcommand to be in ONE of the two dicts — so
-a name can never silently fall through either as untested or as wrongly presumed safe.
+command's own signature, true regardless of what ref is passed, or (c), a class added
+in a later pass, a resolve-first-then-refuse path CONFIRMED by reading the wrapped
+orchestrator function's own body: an unknown/nonexistent ref hits a named refusal (an
+"unknown seat"/"unknown project"/etc. return) strictly BEFORE any write, verified
+line-by-line rather than assumed from this house's general convention.
+NEEDS_SAFE_INVOCATION below names every command where that same close reading found
+the OPPOSITE: either the body genuinely writes unconditionally (mint-seat/new/
+bootstrap/create-project mint for real every time; decide always records a fresh
+Decision; smoke/deploy/seed touch real infra with no dry-run switch). The completeness
+gate requires every live subcommand to be in ONE of the two dicts, so a name can never
+silently fall through either as untested or as wrongly presumed safe.
 
 resync-seat-house's own third-party verb WAS the one specimen this reading actually
 caught, not merely presumed: it used to find-or-CREATE the Seat object it was told to
 correct with no existence check at all, so a "safe" nonexistent-ref call would silently
-mint a stray Seat rather than refuse. Fixed (WAVE 21 item 4, mail 9869 ad48598f) —
-resync_seat_house_third_party now refuses an unknown seat_id by name, the same
+mint a stray Seat rather than refuse. Fixed: resync_seat_house_third_party now refuses
+an unknown seat_id by name, the same
 `SELECT ... WHERE canonical=$1 AND type='Seat' AND status='active'` shape its own
 precedent-named sibling reconcile_seat_identity_third_party already used; moved to
 NO_WRITE_INVOCATIONS below alongside it.
@@ -144,7 +144,7 @@ def _subparsers() -> dict[str, argparse.ArgumentParser]:
 # --- GATE 1: --help for every subcommand, zero execution --------------------------------------
 
 def test_every_subcommand_help_exits_clean_with_a_usage_line() -> None:
-    """Runs `osiris <command> --help` for real, through the actual top-level parser —
+    """Runs `osiris <command> --help` for real, through the actual top-level parser:
     a broken subparser (a typo'd dest, a bad add_argument call) raises here even
     though it would never surface from a static structure check."""
     parser = _build_parser()
@@ -154,7 +154,7 @@ def test_every_subcommand_help_exits_clean_with_a_usage_line() -> None:
         try:
             with redirect_stdout(buf), pytest.raises(SystemExit) as exc_info:
                 parser.parse_args([name, "--help"])
-        except Exception as e:  # noqa: BLE001 — a broken door, not an expected SystemExit
+        except Exception as e:  # noqa: BLE001 -- a broken command, not an expected SystemExit
             broken.append(f"{name}: raised {e!r} instead of exiting cleanly")
             continue
         if exc_info.value.code != 0:
@@ -167,11 +167,11 @@ def test_every_subcommand_help_exits_clean_with_a_usage_line() -> None:
 # --- GATE 2: one real no-write invocation, where proven or structurally safe ------------------
 
 async def _fake_manager_no_match(req: dict[str, Any]) -> dict[str, Any]:
-    return {"sessions": [{"name": "[OS] thoth", "alive": True}]}
+    return {"sessions": [{"name": "[OS] worker-a", "alive": True}]}
 
 
 async def _unreachable(*a: Any, **k: Any) -> Any:
-    raise AssertionError("should never be called — the ref lookup must refuse first")
+    raise AssertionError("should never be called: the ref lookup must refuse first")
 
 
 async def _empty_agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
@@ -185,7 +185,7 @@ async def _fake_chaos_gate(pool: Any) -> dict[str, Any]:
 
 # name -> async thunk(actions) -> int exit code. Every call here is EITHER an existing
 # proven-safe refusal (copied verbatim from test_cli.py/test_cli_json_promise.py) or
-# safe by an explicit dry-run/apply/execute=False default — see the module docstring.
+# safe by an explicit dry-run/apply/execute=False default: see the module docstring.
 NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "attach": lambda a: cmd_attach("nobody-here", manager=_fake_manager_no_match),
     "status": lambda a: cmd_status(as_json=False),
@@ -250,9 +250,9 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "not-a-real-table", days=30, execute=False, pool=a.pool),
     "migrate": lambda a: cmd_migrate(
         check=True, repo_root=_REPO_ROOT, pool=a.pool),
-    # --- wave 2 (mail 9382 item 6): each of these was proven refusal-only by reading
-    # --- the wrapped orchestrator function's own body — an unknown ref hits a named
-    # --- refusal strictly before any write, not merely assumed from house convention.
+    # --- each of these was proven refusal-only by reading the wrapped orchestrator
+    # --- function's own body: an unknown ref hits a named refusal strictly before any
+    # --- write, not merely assumed from house convention.
     "merge": lambda a: cmd_merge(
         "no-such-dupe-anywhere", "no-such-into-anywhere", "test evidence",
         actor="operator", pool=a.pool),
@@ -318,26 +318,25 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
     "proposal": lambda a: cmd_proposal(
         "propose", candidate="not valid json{", pool=a.pool),
     # settings get: get_setting refuses BEFORE any write on an unregistered key
-    # (settings_service.get_setting's own "unknown setting key" refusal) — a pure
+    # (settings_service.get_setting's own "unknown setting key" refusal): a pure
     # read regardless, never anything write-shaped.
     "settings": lambda a: cmd_settings("get", key="no-such-key-anywhere", pool=a.pool),
-    # backup-settings get: a pure read (get_backup_settings), never write-shaped —
-    # PARITY GAPS, WAVE 27 item 3 (thread 45aff160).
+    # backup-settings get: a pure read (get_backup_settings), never write-shaped.
     "backup-settings": lambda a: cmd_backup_settings("get", pool=a.pool),
-    # backup-status: a pure read (_fn_backup_status), never write-shaped — THE BACKUP
-    # CLI DOOR (Thoth mail 12809).
+    # backup-status: a pure read (_fn_backup_status), never write-shaped: the backup
+    # CLI surface.
     "backup-status": lambda a: cmd_backup_status(pool=a.pool),
-    # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832): dossier/
-    # object-events/succession-chain/candidates/composition are all pure reads called
-    # over the wire (same shape as show/search above); retire-assertion/retire-link/
-    # cite resolve-first-then-refuse on a nonexistent ref strictly before any write
-    # (retirement.py's own body, read directly — see the CLI door's own docstring);
-    # citation is a pure read, never writes.
-    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): fleet_digest is a pure
-    # read (watermark mode, mark_seen defaults False so this never advances it).
+    # CLI parity, the remaining census gaps: dossier/object-events/succession-chain/
+    # candidates/composition are all pure reads called over the wire (same shape as
+    # show/search above); retire-assertion/retire-link/cite resolve-first-then-refuse
+    # on a nonexistent ref strictly before any write (retirement.py's own body, read
+    # directly: see the CLI surface's own docstring); citation is a pure read, never
+    # writes.
+    # fleet_digest is a pure read (watermark mode, mark_seen defaults False so this
+    # never advances it).
     "digest": lambda a: cmd_digest(),
-    # #93, THE MECHANICAL SETTLE (Thoth mail 11789): no args is settle()'s own read-only
-    # completeness-boxes surface, per its own docstring — never a write.
+    # no args is settle()'s own read-only completeness-boxes surface, per its own
+    # docstring: never a write.
     "settle": lambda a: cmd_settle(),
     "dossier": lambda a: cmd_dossier("no-such-ref-anywhere"),
     "object-events": lambda a: cmd_object_events("no-such-ref-anywhere"),
@@ -360,55 +359,55 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
 }
 
 # CLI commands the population gate below knows are NOT in NO_WRITE_INVOCATIONS, each
-# with the real reason — never a silent gap. Most are "no declared dry-run flag, no
-# existing test proves a bare nonexistent-ref call is genuinely write-free" — this
+# with the real reason: never a silent gap. Most are "no declared dry-run flag, no
+# existing test proves a bare nonexistent-ref call is genuinely write-free": this
 # house's own resolve-first-then-refuse convention is confirmed for MANY of these
 # siblings above, but confirming it for each of these specifically needs reading that
 # command's own body (or its wrapped orchestrator function's), not assumed from shape
 # alone. mint-seat/new/bootstrap are flagged separately: they mint or spawn for real,
 # with no confirmed refusal-only path found anywhere in this suite.
 NEEDS_SAFE_INVOCATION: dict[str, str] = {
-    "layout": "genuinely writes unconditionally (own body read) — graph_layout."
+    "layout": "genuinely writes unconditionally (own body read): graph_layout."
               "run_layout_migrate loops layout_batch, which asserts real graph_x/"
               "graph_y/graph_layout_v on every unplaced object it finds; no dry-run "
               "switch, and a hermetic test DB is never guaranteed to already be fully "
               "placed under the current version, so a 'safe' invocation would still "
               "write for real",
     "smoke": "needs a live osiris-mcp pool + real chrome routes per its own docstring "
-             "(\"8 chrome routes + the live mcp pool\") — a different, heavier infra "
+             "(\"8 chrome routes + the live mcp pool\"), a different, heavier infra "
              "assumption than the plain MCP search/fleet calls above",
     "deploy": "11 injectable callables (git_status/restart/chaos gate/etc), every one "
-              "defaulting to the REAL side-effecting callable (own body read, wave 2): "
+              "defaulting to the REAL side-effecting callable (own body read): "
               "assembling a full fake set here risks missing one and running a real "
               "restart/kill",
     "seed": "genuinely writes (compositions/canon) even with compositions_only=True; "
-            "no dry-run flag — already declared an operator devops bootstrap act "
+            "no dry-run flag: already declared a devops bootstrap act "
             "elsewhere (NO_MCP_EQUIVALENT)",
-    "create-project": "own body read, wave 2: create_project is a genuine find-OR-CREATE "
-                      "(never a mint-a-twin door, but a never-before-seen name mints "
-                      "fresh every time) — no refusal-only shape exists for any name "
+    "create-project": "own body read: create_project is a genuine find-OR-CREATE "
+                      "(never a mint-a-duplicate call, but a never-before-seen name mints "
+                      "fresh every time), no refusal-only shape exists for any name "
                       "guaranteed not to collide",
-    "decide": "own body read, wave 2: record_decision unconditionally mints a fresh "
-              "Decision on any valid summary/kind — there is no ref to fail to resolve. "
+    "decide": "own body read: record_decision unconditionally mints a fresh "
+              "Decision on any valid summary/kind; there is no ref to fail to resolve. "
               "The one near-miss (grounds=['not-a-uuid']) does avoid the write, but only "
-              "by raising SystemExit from this CLI door's own pre-call UUID validation "
-              "(_uuids()), not by returning a clean int — the wrong shape for this file's "
+              "by raising SystemExit from this CLI command's own pre-call UUID validation "
+              "(_uuids()), not by returning a clean int: the wrong shape for this file's "
               "own thunk contract, so still no usable no-write invocation",
     "soul-key": "requires a positional action (status/init/rotate/restore-drill); "
                 "init genuinely writes a real key file to disk for any non-root caller "
                 "(soul_key_init's own refusal gate fires ONLY when running as root "
-                "with no --owner given — this test process is never root), rotate "
-                "genuinely mints and re-wraps for real, no dry-run flag on either — "
-                "same operator-devops-bootstrap class as seed/bootstrap",
+                "with no --owner given, this test process is never root), rotate "
+                "genuinely mints and re-wraps for real, no dry-run flag on either: "
+                "same devops-bootstrap class as seed/bootstrap",
     "restic-key": "requires a positional action (status/init); init genuinely writes a "
                   "real credential to disk unconditionally (restic_key_init's own "
                   "refusal is only 'a credential already exists', not reachable on a "
-                  "fresh no-write call) — same class as soul-key above",
+                  "fresh no-write call), same class as soul-key above",
     "offload-runner": "requires a positional action (tick); tick genuinely runs real "
                       "restic subprocess calls against configured offload_targets rows "
-                      "with no dry-run flag — same operator-devops-bootstrap class as "
+                      "with no dry-run flag: same devops-bootstrap class as "
                       "smoke/deploy/seed",
-    "mint-seat": "genuinely mints a seat; no confirmed refusal-only path — every "
+    "mint-seat": "genuinely mints a seat; no confirmed refusal-only path: every "
                  "existing test mints for real",
     "new": "genuinely spawns/mints a seat for real; no confirmed refusal-only path",
     "bootstrap": "genuinely writes for real in every existing test; no confirmed "
@@ -417,7 +416,7 @@ NEEDS_SAFE_INVOCATION: dict[str, str] = {
 
 
 def test_every_subcommand_is_covered_or_declares_why_not() -> None:
-    """The population gate: nothing falls through either dict silently — a new
+    """The population gate: nothing falls through either dict silently. A new
     subcommand must be added to one of them, and a renamed/removed one must be
     dropped from whichever it's in."""
     live = set(_subparsers())
@@ -456,10 +455,10 @@ async def test_no_write_invocation_rematerialize(actions: Actions, tmp_path: Any
 async def test_no_write_invocation_cmd_smoke_chaos(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`cmd_smoke_chaos` — reached via `smoke --chaos`, not its own subcommand, so it
+    """`cmd_smoke_chaos` is reached via `smoke --chaos`, not its own subcommand, so it
     has no population-gate key of its own (`smoke` itself is in NEEDS_SAFE_INVOCATION).
     A bonus check anyway: its REAL default (`_real_chaos_gate`) kills/restarts real
-    units — the same fake every existing test_cli.py test for it already substitutes."""
+    units, the same fake every existing test_cli.py test for it already substitutes."""
     import src.cli as cli_mod
 
     monkeypatch.setattr(cli_mod, "_real_chaos_gate", _fake_chaos_gate)

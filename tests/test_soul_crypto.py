@@ -1,4 +1,4 @@
-"""Soul-store key management (Thoth mail 9134/9194/9245, wave 17): NO keyring branch —
+"""Soul-store key management: NO keyring branch,
 env override, else a key file, nothing else; the ONE generator (`soul_key_init`) refuses
 to overwrite an existing key and refuses to write without a known-good owner; a missing
 key is a named, loud refusal (`SoulKeyMissing`), never a silent auto-generate.
@@ -21,7 +21,7 @@ from src.ingest.soul_crypto import (
     soul_key_init,
 )
 
-# Captured before the autouse fixture below ever stubs it out — the two
+# Captured before the autouse fixture below ever stubs it out. The two
 # `test_installed_user_unit_env_value_*` tests restore this real implementation for
 # their own duration (everything else in this file wants the stub, see that
 # fixture's own docstring for why).
@@ -31,12 +31,12 @@ _REAL_INSTALLED_USER_UNIT_ENV_VALUE = soul_crypto._installed_user_unit_env_value
 @pytest.fixture(autouse=True)
 def _clear_soul_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """conftest.py sets a durable `OSIRIS_SOUL_KEY` for every OTHER test's own encrypted
-    rows (xdist worker isolation) — this file tests the key-resolution ladder itself, so
+    rows (xdist worker isolation). This file tests the key-resolution ladder itself, so
     every test here starts from a genuinely clean slate and opts back in explicitly.
 
-    ALSO stubs `_installed_user_unit_env_value` to always return None (THE KEY DOOR,
-    defect 1): the real function reads THIS BOX's own actual `~/.config/systemd/user/
-    osiris-mcp.service` — a real file, since this exact box is the deployment the
+    ALSO stubs `_installed_user_unit_env_value` to always return None (the key-resolution
+    ladder, defect 1): the real function reads THIS BOX's own actual `~/.config/systemd/user/
+    osiris-mcp.service`, a real file, since this exact box is the deployment the
     whole soul-store encryption feature is FOR. Leaving it live would make every test
     below depend on whatever this developer's own machine happens to have installed
     at the moment the suite runs, never a controlled input. Tests that specifically
@@ -48,16 +48,16 @@ def _clear_soul_key_env(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.fixture(autouse=True)
 def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI: the DEFAULT
     (no explicit `--path`) credential location is now the box's own REAL per-user
     credstore (`~/.config/credstore.encrypted/`, `systemd_credential.
-    user_credstore_encrypted_dir()`) — a location this file never needed to isolate
-    before this ruling (every write used to land at a sibling of `resolved`, which
+    user_credstore_encrypted_dir()`), a location this file never needed to isolate
+    before this change (every write used to land at a sibling of `resolved`, which
     every test already redirects via `OSIRIS_SOUL_KEY_FILE`/`_DEFAULT_KEY_FILE`/
     tmp_path). Without this, a test that mints a key with the auto-selected
     host-cred/host+tpm2 backend and NO explicit `--path` (several already do,
     testing owner/note mechanics unrelated to WHERE the credential lands) would
-    silently read/write THIS DEVELOPER'S OWN real credential store — caught live
+    silently read/write THIS DEVELOPER'S OWN real credential store, caught live
     during this fix's own build (a stray test-written key was found sitting in the
     real `~/.config/credstore.encrypted/soul.key`, cleaned up by hand). Redirecting
     `XDG_CONFIG_HOME` is the SAME env-var isolation `user_credstore_encrypted_dir`
@@ -67,10 +67,10 @@ def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_no_keyring_import_anywhere_in_the_module() -> None:
-    """The amended design (Thoth DM 9245) drops the OS-keyring branch entirely — a
+    """The amended design drops the OS-keyring branch entirely: a
     regression here would silently reintroduce the exact non-determinism (a login
     session's D-Bus still live under systemd) the amendment exists to close. Checks for
-    an actual `import keyring` statement, not the word itself — the module's own
+    an actual `import keyring` statement, not the word itself: the module's own
     docstring names keyring in prose, explaining why it was dropped."""
     import ast
     import inspect
@@ -83,14 +83,14 @@ def test_no_keyring_import_anywhere_in_the_module() -> None:
     assert "keyring" not in imported
 
 
-# --- _installed_user_unit_env_value: THE KEY DOOR, defect 1 -----------------------------------
+# --- _installed_user_unit_env_value: the key-resolution ladder, defect 1 ----------------------
 
 def test_installed_user_unit_env_value_reads_and_expands_h(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The REAL function (not the autouse stub above) reads a static unit file at
     `~/.config/systemd/user/osiris-mcp.service` and expands systemd's own `%h`
-    specifier to this process's own home — a plain sync file read, no systemctl."""
+    specifier to this process's own home: a plain sync file read, no systemctl."""
     fake_home = tmp_path / "fakehome"
     unit_dir = fake_home / ".config" / "systemd" / "user"
     unit_dir.mkdir(parents=True)
@@ -164,8 +164,8 @@ def test_get_soul_key_never_auto_generates(tmp_path, monkeypatch: pytest.MonkeyP
 def test_get_soul_fernet_scope_param_is_accepted_and_inert(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`scope` (Thoth DM 9379): the seam for per-tenant keys the operator is weighing —
-    today it never varies the lookup, so any scope resolves the SAME single-store key."""
+    """`scope`: the seam for per-tenant keys, weighed as a future option.
+    Today it never varies the lookup, so any scope resolves the SAME single-store key."""
     key_file = tmp_path / "soul.key"
     key_file.write_bytes(Fernet.generate_key())
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
@@ -200,9 +200,9 @@ def test_soul_key_init_refuses_when_a_key_already_exists(
 def test_soul_key_init_refuses_as_root_with_no_owner(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thoth DM 9435: this box's own live units are systemd --user, no dedicated
-    service account at all — refusing every non-root caller (the old behavior) would
-    wrongly block the exact shape that deployment needs (the operator running this as
+    """This box's own live units are systemd --user, no dedicated
+    service account at all: refusing every non-root caller (the old behavior) would
+    wrongly block the exact shape that deployment needs (a login user running this as
     themselves). Only root, with no --owner to disambiguate, is genuinely ambiguous."""
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "soul.key"))
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 0)
@@ -215,11 +215,11 @@ def test_soul_key_init_refuses_as_root_with_no_owner(
 def test_soul_key_init_writes_when_running_as_a_normal_user(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """Thoth DM 9435: no dedicated service account is assumed — any non-root caller
+    """No dedicated service account is assumed: any non-root caller
     (the operator's own login user, for a systemd --user deploy) proceeds directly.
-    `backend="file", print_recovery=True` here (KEY CUSTODY REWRITTEN, ruling
-    e0b98ff2): this test is about the owner/print mechanics, not backend
-    selection — the systemd-creds backend gets its OWN dedicated tests below."""
+    `backend="file", print_recovery=True` here (KEY CUSTODY REWRITTEN):
+    this test is about the owner/print mechanics, not backend
+    selection. The systemd-creds backend gets its OWN dedicated tests below."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
@@ -228,12 +228,12 @@ def test_soul_key_init_writes_when_running_as_a_normal_user(
     assert key_file.is_file()
     assert out["path"] == str(key_file)
     assert out["chowned"] is False
-    # THE MANDATORY DISCLOSURE (Thoth DM 9245): printed exactly once, to stdout, where a
+    # THE MANDATORY DISCLOSURE: printed exactly once, to stdout, where a
     # human running this in their own terminal actually sees it -- now opt-in only
     # (`print_recovery=True` above), see KEY CUSTODY REWRITTEN.
     captured = capsys.readouterr()
     assert "THIS IS THE ONLY TIME THIS KEY PRINTS" in captured.out
-    # a fresh key is a real, usable Fernet key — round-trips
+    # a fresh key is a real, usable Fernet key: round-trips
     monkeypatch.delenv("OSIRIS_SOUL_KEY", raising=False)
     assert get_soul_fernet().decrypt(get_soul_fernet().encrypt(b"x")) == b"x"
 
@@ -241,9 +241,9 @@ def test_soul_key_init_writes_when_running_as_a_normal_user(
 def test_soul_key_init_root_default_path_note_says_no_change_needed(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    """THE KEY DOOR: root always resolves `_DEFAULT_KEY_FILE` (the system-unit
+    """The key-resolution ladder: root always resolves `_DEFAULT_KEY_FILE` (the system-unit
     shape's own default, `deploy/osiris-worker.service`'s `EnvironmentFile=`
-    default) — unaffected by the --user-unit/XDG ladder, which is unprivileged-only."""
+    default), unaffected by the --user-unit/XDG ladder, which is unprivileged-only."""
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     monkeypatch.setattr(soul_crypto, "_DEFAULT_KEY_FILE", str(tmp_path / "soul.key"))
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 0)
@@ -256,9 +256,9 @@ def test_soul_key_init_root_default_path_note_says_no_change_needed(
 def test_soul_key_init_matches_installed_user_unit_note_says_no_change_needed(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    """THE KEY DOOR, defect 1 fixed: when the resolved path already matches what an
+    """The key-resolution ladder, defect 1 fixed: when the resolved path already matches what an
     INSTALLED osiris-mcp/osiris-worker --user unit's own `Environment=
-    OSIRIS_SOUL_KEY_FILE=` line carries, no env change is needed — just a restart."""
+    OSIRIS_SOUL_KEY_FILE=` line carries, no env change is needed, just a restart."""
     key_file = tmp_path / "soul.key"
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
@@ -274,10 +274,10 @@ def test_soul_key_init_matches_installed_user_unit_note_says_no_change_needed(
 def test_key_file_path_unprivileged_no_installed_unit_falls_back_to_xdg(
     monkeypatch: pytest.MonkeyPatch, tmp_path,
 ) -> None:
-    """THE KEY DOOR, defect 1: a genuinely fresh box (no --user unit installed yet)
-    resolves to `$XDG_CONFIG_HOME/osiris/soul.key` for an unprivileged caller —
+    """The key-resolution ladder, defect 1: a genuinely fresh box (no --user unit installed yet)
+    resolves to `$XDG_CONFIG_HOME/osiris/soul.key` for an unprivileged caller,
     never `/etc/osiris` (a PermissionError waiting to happen for a login user, the
-    exact live defect the operator hit by hand)."""
+    exact live defect a prior deployment hit by hand)."""
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 1000)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
@@ -288,8 +288,8 @@ def test_key_file_path_unprivileged_no_installed_unit_falls_back_to_xdg(
 def test_key_file_path_root_never_uses_xdg_or_installed_unit(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Root has no natural `~` for a system-unit deploy — falls straight through to
-    `_DEFAULT_KEY_FILE`, the same as before THE KEY DOOR ever touched this function."""
+    """Root has no natural `~` for a system-unit deploy: falls straight through to
+    `_DEFAULT_KEY_FILE`, the same as before the key-resolution ladder ever touched this function."""
     monkeypatch.delenv("OSIRIS_SOUL_KEY_FILE", raising=False)
     monkeypatch.setattr(soul_crypto.os, "getuid", lambda: 0)
     monkeypatch.setattr(
@@ -317,7 +317,7 @@ def test_soul_key_init_non_default_path_names_the_env_line(
 def test_soul_key_init_with_owner_chowns_when_a_pwd_entry_exists(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Running as root before the service user can run anything itself — the `--owner`
+    """Running as root before the service user can run anything itself: the `--owner`
     path. Never asserts real ownership (this test does not run as root); proves the
     chown call is actually MADE with the right target instead."""
     key_file = tmp_path / "soul.key"
@@ -343,7 +343,7 @@ def test_soul_key_init_with_owner_chowns_when_a_pwd_entry_exists(
 def test_soul_key_init_explicit_path_overrides_resolution(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE KEY DOOR, `--path`: the escape hatch, bypassing the whole resolution
+    """The key-resolution ladder, `--path`: the escape hatch, bypassing the whole resolution
     ladder including any env var already set."""
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(tmp_path / "env-path" / "soul.key"))
     explicit = tmp_path / "explicit" / "soul.key"
@@ -366,8 +366,8 @@ def test_soul_key_status_absent(tmp_path, monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_soul_key_status_present_reports_facts_never_key_bytes(tmp_path) -> None:
-    """KEY CUSTODY REWRITTEN (ruling e0b98ff2): a legacy plaintext file at the
-    LOGICAL path (no `.cred` sibling) reads as backend `"file"` — the shape
+    """KEY CUSTODY REWRITTEN: a legacy plaintext file at the
+    LOGICAL path (no `.cred` sibling) reads as backend `"file"`: the shape
     `soul_key_init(backend="file")` itself would have written."""
     key_file = tmp_path / "soul.key"
     key_bytes = Fernet.generate_key()
@@ -400,7 +400,7 @@ def test_soul_key_status_rotation_in_flight_when_legacy_file_exists(tmp_path) ->
     assert out["rotation_in_flight"] is True
 
 
-# --- soul_key_rotate_begin/finish: THE KEY DOOR's two-step rotation ----------------------------
+# --- soul_key_rotate_begin/finish: the key-resolution ladder's two-step rotation --------------
 
 def test_soul_key_rotate_begin_refuses_when_no_key_exists(tmp_path) -> None:
     out = soul_crypto.soul_key_rotate_begin(path=str(tmp_path / "soul.key"))
@@ -463,7 +463,7 @@ def test_soul_key_rotate_finish_removes_the_legacy_key(tmp_path) -> None:
     assert "error" in second
 
 
-# --- KEY CUSTODY REWRITTEN (ruling e0b98ff2): systemd-creds backend selection/rotation ---------
+# --- KEY CUSTODY REWRITTEN: systemd-creds backend selection/rotation ---------
 
 def test_resolve_backend_prefers_host_tpm2_when_tss_member(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(soul_crypto, "_systemd_creds_available", lambda: True)
@@ -500,12 +500,12 @@ def test_soul_key_init_host_cred_tss_hint_names_the_group(
 
     Resolves the key path via `OSIRIS_SOUL_KEY_FILE` for BOTH `init` and the
     later `get_soul_key()` read (never an explicit `--path` for one and the env
-    var for the other) — THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail
-    13065): `init`'s DEFAULT credential location is now the real per-user
+    var for the other). THE FIRST KEY MUST COME FROM THE NORMAL CLI:
+    `init`'s DEFAULT credential location is now the real per-user
     credstore, keyed off `_CRED_NAME` alone, never a sibling of the resolved
-    path — a caller that writes via an explicit `--path` and reads via `env`
+    path. A caller that writes via an explicit `--path` and reads via `env`
     (two DIFFERENT resolution ladders that only happened to agree by accident
-    before this ruling) is a genuine mismatch this door no longer papers over,
+    before this change) is a genuine mismatch this path no longer papers over,
     matching production's own real shape (osiris-mcp/osiris-worker always
     resolve via env/installed-unit, never a CLI `--path` flag)."""
     key_file = tmp_path / "soul.key"
@@ -596,7 +596,7 @@ class _FakeAssertionSelection:
 
 
 class _FakeFido2Client:
-    """A fake standing in for `fido2.client.Fido2Client` — the PRF output is
+    """A fake standing in for `fido2.client.Fido2Client`: the PRF output is
     DETERMINISTIC per fake credential+salt (an HMAC over the salt, keyed by a
     fixed per-instance secret), matching the real extension's own contract
     (same credential, same salt, same output, every time) closely enough to
@@ -642,11 +642,10 @@ def test_soul_key_enroll_recovery_refuses_with_no_device(
 def test_soul_key_enroll_recovery_and_recover_round_trip_with_a_fake_device(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE KEY DOOR's own FIDO2 plumbing, proved with a fake device/client — the
-    live touch+PIN ceremony against real hardware is NOT exercised here (see
-    this module's own docstring: the agent that wrote this has no hands, no
-    eyes on a physical Security Key) — this proves the wrap/unwrap/fingerprint
-    logic around that ceremony is wired correctly."""
+    """The key-resolution ladder's own FIDO2 plumbing, proved with a fake device/client: the
+    live touch+PIN interaction against real hardware is NOT exercised here (this
+    environment has no access to a physical Security Key). This proves the
+    wrap/unwrap/fingerprint logic around that interaction is wired correctly."""
     key_file = tmp_path / "soul.key"
     init_out = soul_key_init(path=str(key_file), backend="file")
     original_key = key_file.read_bytes()
@@ -677,7 +676,7 @@ def test_soul_key_enroll_recovery_and_recover_round_trip_with_a_fake_device(
 def test_soul_key_enroll_recovery_stamps_the_given_rp_id_into_the_blob(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thoth mail 13006: rp_id is now a caller-supplied param (the CLI reads
+    """rp_id is now a caller-supplied param (the CLI reads
     `soul_key.rp_id` off settings and passes it down), never the old hard-coded
     `_RP_ID = "osiris.local"` module constant."""
     key_file = tmp_path / "soul.key"
@@ -700,7 +699,7 @@ def test_soul_key_recover_prefers_the_blobs_own_rp_id_over_the_callers(
     tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A credential must be addressed by the rp_id it was actually enrolled
-    under — if the live `soul_key.rp_id` setting ever changes between enroll and
+    under: if the live `soul_key.rp_id` setting ever changes between enroll and
     recover, recovery must still use the ORIGINAL value, never the new one."""
     key_file = tmp_path / "soul.key"
     soul_key_init(path=str(key_file), backend="file")

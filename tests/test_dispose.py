@@ -1,4 +1,4 @@
-"""THE SEAM — the adversary proposes, the seat disposes, and nothing is silent.
+"""dispose(): the adversary proposes, the seat disposes, and nothing is silent.
 
 What may NOT happen is tested harder than what may. A verb that lets one seat retract another
 project's work, or lets a mind's signed word be swept by a machine, is worse than the pile it was
@@ -19,14 +19,14 @@ from src.orchestrator.dispose import (
 )
 
 NOW = datetime.now(UTC)
-SEAT = "agent:thoth-xxviii"
+SEAT = "agent:test-seat"
 
 
 async def _mined(actions: Actions, canon: str, summary: str, *, origin: str = "session-miner",
                  repo: str | None = None, v2: bool = True) -> object:
     """A row the MINER wrote: DERIVED, unsigned by any mind.
 
-    `v2` stamps `about_agent` — the speaker/subject split the current adversary always writes, and
+    `v2` stamps `about_agent`, the speaker/subject split the current adversary always writes, and
     therefore the marker that says WHICH PRODUCER MADE THIS ROW. v2=False forges v1 sediment: a
     row from the dead crawl, which the licence gate must not hold against its successor."""
     o = await actions.create_or_find_object("Thread", canon, origin)
@@ -42,7 +42,7 @@ async def _mined(actions: Actions, canon: str, summary: str, *, origin: str = "s
 
 
 async def test_admit_PROMOTES_the_row_into_the_seat_s_own_name(actions: Actions) -> None:
-    """The miner proposed; the seat ADOPTS. The row is not copied — it becomes the seat's word,
+    """The miner proposed; the seat ADOPTS. The row is not copied: it becomes the seat's word,
     which is also what puts it permanently behind the janitor's absolute guard."""
     t = await _mined(actions, "thread:real", "the wake trigger reads the broken liveness field")
 
@@ -65,7 +65,7 @@ async def test_admit_PROMOTES_the_row_into_the_seat_s_own_name(actions: Actions)
 
 
 async def test_a_drop_must_NAME_ITS_CLASS_or_it_is_refused(actions: Actions) -> None:
-    """Not "no" — WHY no. Naming the class is what turns a dismissal into a DIAGNOSIS: the drop
+    """Not "no": WHY no. Naming the class is what turns a dismissal into a DIAGNOSIS: the drop
     rate per class is how we learn which rule the extractor is still breaking."""
     t = await _mined(actions, "thread:slop", "Execute step 1: re-export the model")
 
@@ -85,7 +85,7 @@ async def test_a_drop_must_NAME_ITS_CLASS_or_it_is_refused(actions: Actions) -> 
 
 
 async def test_a_drop_is_a_compensating_event_and_the_rug_is_TRANSPARENT(actions: Actions) -> None:
-    """You may shove anything under the rug. The shape of what you shoved stays visible forever —
+    """You may shove anything under the rug. The shape of what you shoved stays visible forever:
     the row, your name, and your reason. Never a DELETE (invariant 3)."""
     t = await _mined(actions, "thread:gone", "swept, but not erased")
     await dispose(actions, source=SEAT, drop=[{"id": str(t)[:8], "why": "narration"}])
@@ -102,7 +102,7 @@ async def test_a_drop_is_a_compensating_event_and_the_rug_is_TRANSPARENT(actions
 
 async def test_a_MIND_S_OWN_WORD_IS_NEVER_A_CANDIDATE(actions: Actions) -> None:
     """THE ABSOLUTE GUARD. A deliberate open_thread is a mind's promise. The seam has no standing
-    over it — not at any age, not for any reason, not even from the seat that wrote it."""
+    over it, not at any age, not for any reason, not even from the seat that wrote it."""
     declared = await open_thread(actions, "a duty I declared myself", source=SEAT)
 
     assert (await candidates(actions.pool))["count"] == 0
@@ -116,7 +116,7 @@ async def test_a_MIND_S_OWN_WORD_IS_NEVER_A_CANDIDATE(actions: Actions) -> None:
 
 
 async def test_an_ADMIT_without_a_reason_is_refused(actions: Actions) -> None:
-    """Admitting is a PROMISE — you are putting your name on a machine's guess. A promise with no
+    """Admitting is a PROMISE: you are putting your name on a machine's guess. A promise with no
     stated reason is how a guess launders itself into a duty, which is the whole disease."""
     t = await _mined(actions, "thread:x", "something")
     rep = await dispose(actions, source=SEAT, admit=[{"id": str(t)[:8]}])
@@ -127,8 +127,8 @@ async def test_candidates_scope_to_ONE_project_because_that_is_all_a_seat_has_st
     actions: Actions,
 ) -> None:
     """Only a seat with STANDING may judge a project's pile. A stranger disposing of another
-    project's rows is the janitor acting on judgement instead of proof (operator, 2026-07-13:
-    "this remediation thing should happen for each seat/agent in charge of the project")."""
+    project's rows is the janitor acting on judgement instead of proof: remediation should
+    happen per seat/agent in charge of its own project."""
     await _mined(actions, "thread:mine", "an osiris guess", repo="osiris")
     await _mined(actions, "thread:theirs", "someone else's guess", repo="other")
 
@@ -136,15 +136,15 @@ async def test_candidates_scope_to_ONE_project_because_that_is_all_a_seat_has_st
     assert mine["count"] == 1
     assert mine["candidates"][0]["summary"] == "an osiris guess"
 
-    # the fleet total is a COUNT you may look at — not a pile you may touch
+    # the fleet total is a COUNT you may look at, not a pile you may touch
     assert (await candidates(actions.pool))["count"] == 2
 
 
 async def test_candidates_limit_zero_skips_the_rows_query_but_keeps_the_true_count(
     actions: Actions,
 ) -> None:
-    """Thread 72e45258 (measured): orient()'s own "your_pile" glance calls
-    candidates(limit=0) for the count alone and never reads `candidates` — the rows query
+    """Measured directly: orient()'s own "your_pile" glance calls
+    candidates(limit=0) for the count alone and never reads `candidates`. The rows query
     used to run anyway, correlated summary subquery included, purely to be discarded.
     `count` must still be exact with the rows fetch skipped."""
     await _mined(actions, "thread:mine1", "guess one", repo="osiris")
@@ -157,10 +157,10 @@ async def test_candidates_limit_zero_skips_the_rows_query_but_keeps_the_true_cou
 
 
 async def test_the_YIELD_is_the_adversary_s_LICENCE(actions: Actions) -> None:
-    """admitted ÷ judged. The one number nobody was keeping — a producer whose telemetry counts
+    """admitted ÷ judged. The one number nobody was keeping: a producer whose telemetry counts
     what it MADE rather than what was USED is unfalsifiable, and will rot unnoticed. Osiris's own
     first pass scored 26 of 264."""
-    keep = await _mined(actions, "thread:gem", "the panopticon seam — flagged, then dropped")
+    keep = await _mined(actions, "thread:gem", "flagged, then dropped, so it should count")
     junk = [await _mined(actions, f"thread:junk{i}", f"work-step {i}") for i in range(4)]
 
     await dispose(
@@ -183,7 +183,7 @@ async def test_disposing_twice_is_a_no_op_never_a_double_retraction(actions: Act
     assert again["dropped"] == 0 and "not a candidate" in again["skipped"][0]["why"]
 
 
-# --- THE LICENCE (B5) — the meter is not a dashboard, it is a GATE ------------------------
+# --- THE LICENCE (B5): the meter is not a dashboard, it is a GATE ------------------------
 
 async def _judged(actions: Actions, *, admit: int, drop: int, v2: bool = True) -> None:
     """Walk the seam `admit` + `drop` times, so the meter has a real sample to read."""
@@ -199,9 +199,9 @@ async def _judged(actions: Actions, *, admit: int, drop: int, v2: bool = True) -
 async def test_a_producer_BELOW_THE_FLOOR_LOSES_THE_RIGHT_TO_SPEND(actions: Actions) -> None:
     """THE FIX FOR THE ACTUAL ROOT CAUSE.
 
-    The miner's tick reported {"chunks": 12, "threads": 8} — WHAT IT MADE, never WHAT WAS USED.
-    So a 90%-garbage producer and a 90%-gold producer emitted IDENTICAL telemetry, and nobody —
-    not the operator, not the miner, not any mind reading the graph — could tell them apart. It
+    The miner's tick reported {"chunks": 12, "threads": 8}: WHAT IT MADE, never WHAT WAS USED.
+    So a 90%-garbage producer and a 90%-gold producer emitted IDENTICAL telemetry, and nobody,
+    not the operator, not the miner, not any mind reading the graph, could tell them apart. It
     drifted to garbage for eight days and $40 and NOTHING ANYWHERE COULD NOTICE.
 
     A producer that cannot be falsified will rot. Not might: WILL, because nothing pushes back.
@@ -209,7 +209,7 @@ async def test_a_producer_BELOW_THE_FLOOR_LOSES_THE_RIGHT_TO_SPEND(actions: Acti
     """
     from src.orchestrator.dispose import YIELD_FLOOR, licence
 
-    await _judged(actions, admit=4, drop=46)          # yield 0.08 — the crawl's own lifetime score
+    await _judged(actions, admit=4, drop=46)          # yield 0.08, the crawl's own lifetime score
     lic = await licence(actions.pool)
     assert lic["yield"] == 0.08 and lic["yield"] < YIELD_FLOOR
     assert lic["may_spend"] is False
@@ -228,8 +228,8 @@ async def test_a_producer_that_EARNS_ITS_TOKENS_keeps_spending(actions: Actions)
 
 
 async def test_the_gate_cannot_fire_before_there_is_ANYTHING_TO_MEASURE(actions: Actions) -> None:
-    """A producer is given a real sample before it is judged, or one unlucky session kills it —
-    the same courtesy the wall now extends to a guess: judged on EVIDENCE, never on suspicion.
+    """A producer is given a real sample before it is judged, or one unlucky session kills it.
+    That is the same courtesy now extended to a guess: judged on EVIDENCE, never on suspicion.
 
     And it fails OPEN: a metering bug must never silently disable the memory. It says WHY.
     """
@@ -239,7 +239,7 @@ async def test_the_gate_cannot_fire_before_there_is_ANYTHING_TO_MEASURE(actions:
     assert lic["may_spend"] is True and lic["judged"] == 0
     assert "given a real sample" in lic["reason"]
 
-    await _judged(actions, admit=0, drop=5)           # yield 0.0 — but only 5 rows
+    await _judged(actions, admit=0, drop=5)           # yield 0.0, but only 5 rows
     lic = await licence(actions.pool)
     assert lic["judged"] < LICENCE_MIN_JUDGED
     assert lic["may_spend"] is True, "a 0% yield over 5 rows is noise, not a verdict"
@@ -250,7 +250,7 @@ async def test_the_gate_JUDGES_THE_PRODUCER_THAT_EXISTS_not_its_dead_predecessor
 ) -> None:
     """A GATE THAT CAN NEVER OPEN IS A KILL SWITCH WEARING A GATE'S CLOTHES.
 
-    I shipped the licence reading the FLEET-WIDE yield, ran it live, and it refused — on v1's
+    I shipped the licence reading the FLEET-WIDE yield, ran it live, and it refused: on v1's
     0.098, computed over rows V1 MADE, against a v2 that had not yet written a single line. And
     v2 could never have raised that number, because it was not allowed to produce. The stated
     purpose (a circuit breaker) and the actual behaviour (a permanent lockout) differed, which is
@@ -266,7 +266,7 @@ async def test_the_gate_JUDGES_THE_PRODUCER_THAT_EXISTS_not_its_dead_predecessor
     await _judged(actions, admit=4, drop=46, v2=False)
 
     hist = await adversary_yield(actions.pool)
-    assert hist["yield"] == 0.08, "the historical record must stay READABLE — it is what killed v1"
+    assert hist["yield"] == 0.08, "the historical record must stay READABLE: it is what killed v1"
 
     lic = await licence(actions.pool)
     assert lic["may_spend"] is True, "v2 was condemned for a crime its predecessor committed"
@@ -275,10 +275,10 @@ async def test_the_gate_JUDGES_THE_PRODUCER_THAT_EXISTS_not_its_dead_predecessor
 
 
 async def test_ask_keeps_a_question_a_QUESTION_never_a_promise(actions: Actions) -> None:
-    """THE THIRD VERB (Ra V's taxonomy gap, thread 4d01b076): dispose could ADMIT (a duty,
-    mine) or DROP (never real) but not say 'this is a QUESTION'. Ra V admitted one question
-    (it now reads as a promise it isn't) and dropped another as 'other'. `ask` keeps it
-    open, kind='question', in the seat's name — the same grammar reclassify_thread speaks —
+    """THE THIRD VERB: a taxonomy gap found in practice. dispose could ADMIT (a duty,
+    mine) or DROP (never real) but not say 'this is a QUESTION'. A prior session admitted one
+    question (it now reads as a promise it isn't) and dropped another as 'other'. `ask` keeps it
+    open, kind='question', in the seat's name (the same grammar reclassify_thread speaks),
     and it counts as USE in the yield: the miner surfaced something a seat judged real."""
     t = await _mined(actions, "thread:xen-mesh",
                      "should the Xen mesh be the north star for the machine broker?")
@@ -312,11 +312,11 @@ async def test_ask_keeps_a_question_a_QUESTION_never_a_promise(actions: Actions)
     assert m["asked"] == 1 and m["yield"] == 1.0
 
 async def test_the_HONEST_DENOMINATOR_forgives_the_public_retractor(actions: Actions) -> None:
-    """THE METRIC'S FIFTH CORRECTION (Anubis XIII, thread 1258d382): raw admit-rate punishes
-    a project that RETRACTS — the miner keeps filing tickets against work the project
+    """THE METRIC'S FIFTH CORRECTION: raw admit-rate punishes
+    a project that RETRACTS. The miner keeps filing tickets against work the project
     already buried, and every one drops as stale, so the honest repos read as the bad piles.
     A candidate born AFTER its project's last superseding ruling is a corpse at birth:
-    excluded from the honest denominator the licence reads. Nothing hidden — raw stays
+    excluded from the honest denominator the licence reads. Nothing hidden, raw stays
     reported beside it."""
     # a project that retracts publicly: an old decision, buried by a later ruling
     d = await actions.create_or_find_object("Decision", "decision:dead-lane", "agent:h")
@@ -344,7 +344,7 @@ async def test_the_HONEST_DENOMINATOR_forgives_the_public_retractor(actions: Act
     assert m["yield_honest"] == 1.0                        # judged only where the test was fair
 
 
-# --- repair_stale_pile_summons (thread e2326ab7, Soundwave XIV's decepticons report): the
+# --- repair_stale_pile_summons: the
 # 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads froze that day's candidates()
 # count in prose and never re-derive it. -----------------------------------------------
 
@@ -354,14 +354,14 @@ _PILE_BODY = ("\n\nThe session-miner read your transcripts and minted these as t
 
 
 async def _mint_pile_thread(actions: Actions, project: str, frozen_count: int) -> object:
-    """Mints a thread byte-for-byte matching the real 2026-07-13 bulk template — the exact
+    """Mints a thread byte-for-byte matching the real 2026-07-13 bulk template: the exact
     prefix `repair_stale_pile_summons`'s own regex matches, `owner` set the same way the
     real ones were."""
     return await open_thread(
         actions, f"DISPOSE OF YOUR MINER PILE — {frozen_count} candidates on "
                  f"{project}, and NOBODY BUT THIS PROJECT'S SEAT HAS STANDING TO JUDGE "
                  f"THEM.{_PILE_BODY}",
-        owner=project, kind="obligation", source="agent:ad1a1cb0-xxviii")
+        owner=project, kind="obligation", source="agent:test-miner")
 
 
 async def test_repair_stale_pile_leaves_an_accurate_count_untouched(actions: Actions) -> None:
@@ -380,7 +380,7 @@ async def test_repair_stale_pile_dry_run_reports_without_writing(actions: Action
         {"id": str(t), "owner": "driftedproj", "frozen": 149, "live": 0}]
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE id=$1", t)
-    assert row["status"] == "active"  # nothing landed — a dry run writes nothing
+    assert row["status"] == "active"  # nothing landed, a dry run writes nothing
 
 
 async def test_repair_stale_pile_refuses_dry_run_false_with_no_because(
@@ -396,7 +396,7 @@ async def test_repair_stale_pile_resolves_as_moot_when_the_pile_is_empty(
 ) -> None:
     t = await _mint_pile_thread(actions, "emptiedproj", 257)
     out = await repair_stale_pile_summons(
-        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+        actions, actor="agent:test", dry_run=False, because="pile confirmed empty, clear it")
     assert out["to_resolve"] == [
         {"id": str(t), "owner": "emptiedproj", "frozen": 257, "live": 0}]
     status = await actions.pool.fetchval(
@@ -418,13 +418,13 @@ async def test_repair_stale_pile_corrects_the_summary_when_the_pile_partially_dr
         await _mined(actions, f"thread:partial-cand-{i}", f"real loose end {i}",
                     repo="partialproj")
     out = await repair_stale_pile_summons(
-        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+        actions, actor="agent:test", dry_run=False, because="pile confirmed empty, clear it")
     assert out["to_correct"] == [
         {"id": str(t), "owner": "partialproj", "frozen": 38, "live": 27}]
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
-    assert status == "open"  # never resolved — the judging duty is still real
+    assert status == "open"  # never resolved, the judging duty is still real
     corrected = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='corrected_summary'", t)
@@ -436,18 +436,18 @@ async def test_repair_stale_pile_corrects_the_summary_when_the_pile_partially_dr
 
 
 async def test_repair_stale_pile_never_double_corrects_on_a_rerun(actions: Actions) -> None:
-    """assert_property's own write-side no-op guard (operator ruling, thread 2a280e07,
-    mail 9240) makes this genuinely idempotent: a second run against an unchanged live
-    count reasserts the SAME corrected_summary at the SAME confidence/evidence_class, so
-    it writes no new row at all — not even a second, immediately-superseded one."""
+    """assert_property's own write-side no-op guard makes this genuinely idempotent: a second
+    run against an unchanged live count reasserts the SAME corrected_summary at the SAME
+    confidence/evidence_class, so it writes no new row at all, not even a second,
+    immediately-superseded one."""
     t = await _mint_pile_thread(actions, "rerunproj", 38)
     for i in range(27):
         await _mined(actions, f"thread:rerun-cand-{i}", f"real loose end {i}",
                     repo="rerunproj")
     await repair_stale_pile_summons(
-        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+        actions, actor="agent:test", dry_run=False, because="pile confirmed empty, clear it")
     await repair_stale_pile_summons(
-        actions, actor="agent:test", dry_run=False, because="thread e2326ab7")
+        actions, actor="agent:test", dry_run=False, because="pile confirmed empty, clear it")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='corrected_summary'", t)
     assert n == 1  # the rerun's own identical correction never grew a second row
@@ -459,7 +459,7 @@ async def test_repair_stale_pile_never_double_corrects_on_a_rerun(actions: Actio
 
 async def test_repair_stale_pile_never_touches_a_hand_written_thread(actions: Actions) -> None:
     """MECHANICAL, not a fuzzy match: a thread that merely mentions a number in the same
-    shape must never be swept in — only the EXACT bulk-mint template."""
+    shape must never be swept in, only the EXACT bulk-mint template."""
     t = await open_thread(
         actions, "I counted 149 candidates on driftedproj by hand and they're all noise",
         owner="driftedproj", kind="obligation", source="agent:test")

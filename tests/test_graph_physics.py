@@ -1,8 +1,8 @@
-"""THE PHYSICS LAYOUT (operator ruling d7d55257, Thoth mail 11047), now HIERARCHICAL
-(v8, Thoth mail 11128): a project-contracted level 1 (extent-aware separation so no
-two projects ever overlap) plus a per-project level 2 (springs, district gravity,
-the collapsed-container fix, rescaled onto its own level-1 disc), cross-project
-bridge nudges, unfiled-object placement, and a VERIFIED declump floor."""
+"""THE PHYSICS LAYOUT, now hierarchical: a project-contracted level 1
+(extent-aware separation so no two projects ever overlap) plus a per-project level 2
+(springs, district gravity, the collapsed-container fix, rescaled onto its own level-1
+disc), cross-project bridge nudges, unfiled-object placement, and a VERIFIED declump
+floor."""
 from __future__ import annotations
 
 import math
@@ -60,10 +60,10 @@ def test_seed_positions_real_vertices_are_spread_deterministically() -> None:
 async def test_memory_guard_refuses_on_a_degenerate_all_coincident_seed(
     actions: Actions,
 ) -> None:
-    """THE PHYSICS LAYOUT OOM (Thoth mail 11097): the one remaining shape that could
-    still cost O(k^2) memory after the declump grid rewrite -- every point landing
-    in a single grid cell. 12,000 coincident points -> 12,000^2*16 ~= 2.3 GB, over
-    the default 2 GB layout.physics_max_bytes."""
+    """THE PHYSICS LAYOUT OOM case: the one remaining shape that could still cost
+    O(k^2) memory after the declump grid rewrite, every point landing in a single
+    grid cell. 12,000 coincident points -> 12,000^2*16 ~= 2.3 GB, over the default
+    2 GB layout.physics_max_bytes."""
     seed = np.zeros((12_000, 2))
     reason = await _memory_guard(actions, seed)
     assert reason is not None
@@ -79,10 +79,9 @@ async def test_memory_guard_passes_for_a_well_spread_population(actions: Actions
 
 def test_build_physics_graph_container_edges_are_scaled_by_member_count(
 ) -> None:
-    """THE COLLAPSED-CONTAINER FIX (Thoth mail 11111): container weight is
-    _CONTAINER_SPRING_WEIGHT / member_count, never flat -- a container with more
-    members pulls each one weaker so sibling repulsion can actually spread them
-    out post-FR."""
+    """THE COLLAPSED-CONTAINER FIX: container weight is _CONTAINER_SPRING_WEIGHT /
+    member_count, never flat. A container with more members pulls each one weaker
+    so sibling repulsion can actually spread them out post-FR."""
     a, b, proj = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     object_ids = [a, b, proj]
 
@@ -157,10 +156,10 @@ def test_build_physics_graph_reroutes_community_members_through_synthetic_vertex
 
 def test_build_physics_graph_membership_gives_an_assertion_only_member_an_edge(
 ) -> None:
-    """THE MEMBERSHIP UNION FIX (Thoth mail 11221): a member whose project comes
-    ONLY from the `project` assertion (no in_repo link, so NO container edge from
-    the link_rows loop) would otherwise be an isolated vertex FR has no reason to
-    pull toward its own project -- `membership` gives it a synthetic edge."""
+    """THE MEMBERSHIP UNION FIX: a member whose project comes ONLY from the
+    `project` assertion (no in_repo link, so NO container edge from the link_rows
+    loop) would otherwise be an isolated vertex FR has no reason to pull toward
+    its own project. `membership` gives it a synthetic edge."""
     a, proj = uuid.uuid4(), uuid.uuid4()
     object_ids = [a, proj]
     g, vertex_ids = _build_physics_graph(object_ids, [], {}, membership={a: proj})
@@ -183,11 +182,11 @@ async def test_project_membership_reflects_live_in_repo_links(actions: Actions) 
 async def test_project_membership_falls_back_to_the_project_assertion(
     actions: Actions,
 ) -> None:
-    """THE MEMBERSHIP UNION FIX (ruling d7d55257, Thoth mail 11221): 16,226 live
-    objects carried a `project` assertion with ZERO carrying an in_repo link --
-    minted with a project but never actually linked in_repo. A member with NO
-    in_repo link but a `project` assertion naming the repo (mapped to the repo
-    object's own canonical `repo:<name>`) must still resolve to that project."""
+    """THE MEMBERSHIP UNION FIX: 16,226 live objects carried a
+    `project` assertion with ZERO carrying an in_repo link, minted with a project
+    but never actually linked in_repo. A member with NO in_repo link but a
+    `project` assertion naming the repo (mapped to the repo object's own
+    canonical `repo:<name>`) must still resolve to that project."""
     proj = await actions.create_or_find_object(
         "SoftwareProject", "repo:gp-union", "test")
     member = await actions.create_or_find_object("Thread", "thread:gp-union-member", "test")
@@ -214,11 +213,11 @@ async def test_project_membership_prefers_in_repo_over_the_assertion_on_disagree
 
 
 async def test_project_membership_follows_a_merge(actions: Actions) -> None:
-    """MEMBERSHIP FOLLOWS A MERGE (thread 826a1a13): a member's own in_repo link (or
-    `project` assertion) can name a SoftwareProject that has since been folded into a
-    survivor -- neither the link nor the assertion is rewritten by the fold itself
-    (resolve-on-read), so membership must resolve through `merged_into` to land the
-    member in the SURVIVOR's district, never the now-merged dupe's own."""
+    """MEMBERSHIP FOLLOWS A MERGE: a member's own in_repo link (or `project`
+    assertion) can name a SoftwareProject that has since been folded into a
+    survivor. Neither the link nor the assertion is rewritten by the fold itself
+    (resolve-on-read), so membership must resolve through `merged_into` to land
+    the member in the SURVIVOR's district, never the now-merged dupe's own."""
     survivor = await actions.create_or_find_object(
         "SoftwareProject", "repo:gp-merge-survivor", "test")
     dupe = await actions.create_or_find_object(
@@ -292,10 +291,10 @@ async def test_detect_communities_finds_real_clusters_above_threshold(
 async def test_detect_communities_is_deterministic_across_repeated_calls(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE LEIDEN SEED FIX (bbox compactness follow-up, decision cc2f2ea7): igraph's
-    `community_leiden` draws from Python's own unseeded `random` module by default,
-    so the SAME population could partition differently call to call -- measured
-    live, a 4x bbox swing on identical code. A project with several plausible,
+    """THE LEIDEN SEED FIX (bbox compactness follow-up): igraph's `community_leiden`
+    draws from Python's own unseeded `random` module by default, so the SAME
+    population could partition differently call to call, measured live as a 4x
+    bbox swing on identical code. A project with several plausible,
     roughly-balanced clusters (not one dominant pair) is what actually exercises
     Leiden's own randomness; calling `_detect_communities` twice over the exact
     same input must return the exact same partition now that it reseeds from
@@ -357,9 +356,9 @@ async def test_physics_positions_places_every_active_object_with_no_exact_collis
     for x, y in positions.values():
         assert x == x and y == y  # not NaN
 
-    # tolerance matches `_verify_min_separation`'s own PROPORTIONAL floor (Thoth
-    # mail 11191; already enforced inside `_physics_positions` itself, which would
-    # have raised DeclumpVerificationFailed otherwise) -- a bare 1e-6 assumed exact
+    # tolerance matches `_verify_min_separation`'s own PROPORTIONAL floor
+    # (already enforced inside `_physics_positions` itself, which would have
+    # raised DeclumpVerificationFailed otherwise): a bare 1e-6 assumed exact
     # convergence, which the declump's own docstring already disclaims ("a few
     # thousandths short after rounding"); this population's unfiled objects seed
     # via a Gaussian fog (item 4) rather than the old deterministic sunflower
@@ -374,11 +373,10 @@ async def test_physics_positions_places_every_active_object_with_no_exact_collis
 async def test_level2_layout_does_not_collapse_a_large_project_into_one_cell(
     actions: Actions,
 ) -> None:
-    """THE COLLAPSED-CONTAINER FIX (Thoth mail 11111), re-checked against the
-    hierarchical scheme's own per-project FR pass -- 1,000 members, hermetic DB, no
-    semantic edges at all, so container gravity is the ONLY force differentiating
-    them. Acceptance (Thoth's own line): no post-FR cell holds more than roughly
-    50 points for any project."""
+    """THE COLLAPSED-CONTAINER FIX, re-checked against the hierarchical scheme's
+    own per-project FR pass: 1,000 members, hermetic DB, no semantic edges at all,
+    so container gravity is the ONLY force differentiating them. Acceptance: no
+    post-FR cell holds more than roughly 50 points for any project."""
     proj = await actions.create_or_find_object(
         "SoftwareProject", "repo:gp-collapse-check", "test")
     now = datetime.now(UTC)
@@ -519,7 +517,7 @@ async def test_cross_project_edges_aggregates_by_unordered_project_pair(
     assert edges.get(key) == 2.0
 
 
-# --- THE COMPACT ARRANGEMENT (v9, Thoth mail 11533, thread 7c9adebb) ---------------
+# --- THE COMPACT ARRANGEMENT (tight circle packing) --------------------------------
 
 
 def test_pack_siblings_no_pair_overlaps_for_varied_radii() -> None:
@@ -608,10 +606,10 @@ def test_pack_order_falls_back_to_seed_distance_with_no_edges() -> None:
 
 
 def test_level1_layout_anchors_onto_a_previous_run_when_given() -> None:
-    """ANCHOR (Thoth mail 11533): with a previous position for every vertex, the
-    new layout should land CLOSE to those previous positions (small displacement
-    relative to the population's own scale), not at some arbitrary
-    Procrustes-unrelated spot -- the whole point of anchoring."""
+    """ANCHOR: with a previous position for every vertex, the new layout should
+    land CLOSE to those previous positions (small displacement relative to the
+    population's own scale), not at some arbitrary Procrustes-unrelated spot,
+    the whole point of anchoring."""
     a, b, c = uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     radii = {a: 50.0, b: 50.0, c: 50.0}
     cross_edges = {(a, b): 3.0, (b, c): 2.0}
@@ -627,12 +625,11 @@ def test_level1_layout_anchors_onto_a_previous_run_when_given() -> None:
 
 
 def test_level2_extent_uses_the_true_max_not_the_95th_percentile() -> None:
-    """THE PACKING GAP FIX (Thoth mail 11597/11605): under v9's tight circle
-    packing, `_level1_layout` reserves EXACTLY this radius for a project -- the
-    95th percentile always excludes the outermost 5% of members by
-    construction, which is exactly what produced the live negative top-10
-    gap. One point far outside the 95th-percentile band must still be
-    covered."""
+    """THE PACKING GAP FIX: under tight circle packing, `_level1_layout`
+    reserves EXACTLY this radius for a project. The 95th percentile always
+    excludes the outermost 5% of members by construction, which is exactly
+    what produced the live negative top-10 gap. One point far outside the
+    95th-percentile band must still be covered."""
     raw = {uuid.uuid4(): np.array([float(i), 0.0]) for i in range(20)}
     far_id = uuid.uuid4()
     raw[far_id] = np.array([500.0, 0.0])  # a genuine outlier
@@ -641,12 +638,12 @@ def test_level2_extent_uses_the_true_max_not_the_95th_percentile() -> None:
 
 
 def test_layout_acceptance_metrics_gap_check_uses_packed_centroids_not_member_drift() -> None:
-    """THE GAP-CHECK CENTROID FIX (Thoth mail 11597/11605): a member cloud
-    biased hard toward a neighbouring project (simulating what a bridge nudge
-    does at scale) must never make the gap check go negative, as long as the
-    PACKED centroids themselves still respect their own radii+gutter -- the
-    metric is a promise about the rendered district anchor, not about where an
-    individual member's own position happens to have drifted to."""
+    """THE GAP-CHECK CENTROID FIX: a member cloud biased hard toward a
+    neighbouring project (simulating what a bridge nudge does at scale) must
+    never make the gap check go negative, as long as the PACKED centroids
+    themselves still respect their own radii+gutter. The metric is a promise
+    about the rendered district anchor, not about where an individual member's
+    own position happens to have drifted to."""
     import math as _math
 
     from src.orchestrator.graph_physics import _layout_acceptance_metrics
@@ -682,18 +679,18 @@ def test_level1_layout_places_a_single_project_at_the_origin_ish() -> None:
 
 
 def test_level1_layout_a_semantically_linked_pair_ends_up_closer_than_an_unlinked_one() -> None:
-    """THE LONG EDGES RULING (operator, grounds 9163b1c7): the actual beam turned
-    out to be unfiled fog, not a level-1 spring-weight problem -- level-1 weight
-    stays the raw semantic cross-link count, unchanged. Regression coverage,
-    UPDATED for THE COMPACT ARRANGEMENT (v9, Thoth mail 11533): under pure circle
-    packing a linked pair is GUARANTEED to reach the minimum possible distance
-    (exactly tangent, r_a+r_b+gutter -- `_pack_order`'s own graph-adjacency-first
-    walk, see its docstring), but with four EQUAL-sized circles the pack's own
-    geometry can coincidentally make an UNLINKED pair also end up tangent (the
-    "flower" a 4-equal-circle pack forms has more than one tangent pair by
-    necessity) -- so the acceptance property that survives compaction is "never
-    farther apart", not "always strictly closer": a linked pair always reaches
-    minimum (tangent) distance, an unlinked pair is never guaranteed to."""
+    """THE LONG EDGES RULING: the actual cause turned out to be unfiled fog, not
+    a level-1 spring-weight problem, so level-1 weight stays the raw semantic
+    cross-link count, unchanged. Regression coverage, updated for THE COMPACT
+    ARRANGEMENT: under pure circle packing a linked pair is GUARANTEED to reach
+    the minimum possible distance (exactly tangent, r_a+r_b+gutter, per
+    `_pack_order`'s own graph-adjacency-first walk, see its docstring), but with
+    four EQUAL-sized circles the pack's own geometry can coincidentally make an
+    UNLINKED pair also end up tangent (the "flower" a 4-equal-circle pack forms
+    has more than one tangent pair by necessity), so the acceptance property
+    that survives compaction is "never farther apart", not "always strictly
+    closer": a linked pair always reaches minimum (tangent) distance, an
+    unlinked pair is never guaranteed to."""
     a, b, c, d = uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     radii = {a: 500.0, b: 500.0, c: 500.0, d: 500.0}
     cross_edges = {(a, b): 50.0}
@@ -742,10 +739,10 @@ def test_place_unfiled_with_neighbours_lands_at_their_mean_position() -> None:
 
 
 def test_place_unfiled_counts_a_structural_link_as_a_neighbour() -> None:
-    """THE LONG EDGES RULING (operator, grounds 9163b1c7): an unfiled object
-    linked ONLY by a structural type (e.g. sent_by) must still land near that
-    neighbour, not fall through to fog -- the old semantic-only filter was
-    exactly what stranded 1,960 live objects as a "beam" of long edges."""
+    """THE LONG EDGES RULING: an unfiled object linked ONLY by a structural type
+    (e.g. sent_by) must still land near that neighbour, not fall through to fog.
+    The old semantic-only filter was exactly what stranded 1,960 live objects as
+    a run of long edges."""
     a, b = uuid.uuid4(), uuid.uuid4()
     placed = {b: np.array([500.0, 500.0])}
 
@@ -784,11 +781,11 @@ def test_place_unfiled_excludes_a_hub_from_the_neighbour_mean() -> None:
 
 
 def test_place_unfiled_never_lands_within_min_sep_of_an_already_placed_point() -> None:
-    """THE UNFILED-VS-PLACED FIX (live specimen, third real migration attempt on
-    bcf0ca63): a naive neighbour-mean placement dropped an unfiled object right on
-    top of an already-densely-packed project -- pre-declump positions 205 units
-    apart converged to 0.058 apart post-declump because the single GLOBAL declump
-    pass at the very end couldn't always finish that local cleanup. `_place_unfiled`
+    """THE UNFILED-VS-PLACED FIX (live specimen, third real migration attempt): a
+    naive neighbour-mean placement dropped an unfiled object right on top of an
+    already-densely-packed project. Pre-declump positions 205 units apart
+    converged to 0.058 apart post-declump because the single GLOBAL declump pass
+    at the very end couldn't always finish that local cleanup. `_place_unfiled`
     now runs its own local anchor-mode declump against every already-placed
     position, so its OWN output must already respect the floor before the caller
     ever merges it in."""
@@ -807,9 +804,9 @@ def test_place_unfiled_never_lands_within_min_sep_of_an_already_placed_point() -
 
 
 def test_place_unfiled_edgeless_scatters_away_from_a_fixed_ring() -> None:
-    """The exact failure Thoth's own measurement flagged on v7 -- a fixed-radius
-    ring shell -- must NOT reproduce here: many edgeless unfiled objects should
-    land at a SPREAD of distances from the cloud centre, not all at one radius."""
+    """The exact failure the v7 measurement flagged, a fixed-radius ring shell,
+    must NOT reproduce here: many edgeless unfiled objects should land at a
+    SPREAD of distances from the cloud centre, not all at one radius."""
     placed = {uuid.uuid4(): np.array([float(i), 0.0]) for i in range(50)}
     unfiled = [uuid.uuid4() for _ in range(200)]
     out = _place_unfiled(unfiled, [], placed)
@@ -833,10 +830,10 @@ def test_verify_min_separation_raises_on_two_coincident_points() -> None:
 
 
 def test_verify_min_separation_tolerates_a_residual_above_the_proportional_floor() -> None:
-    """PROPORTIONAL VERIFICATION (Thoth mail 11191): a residual comfortably above
-    `_PHYSICS_VERIFY_FAIL_RATIO * min_sep` (e.g. 13.6 of 15, Thoth's own "a
-    convergence residual, not a collapse; invisible") must NOT raise -- only a
-    genuine collapse well below that line does."""
+    """PROPORTIONAL VERIFICATION: a residual comfortably above
+    `_PHYSICS_VERIFY_FAIL_RATIO * min_sep` (e.g. 13.6 of 15, a convergence
+    residual rather than a collapse, and invisible in practice) must NOT raise.
+    Only a genuine collapse well below that line does."""
     residual = _MIN_SEPARATION * (graph_physics._PHYSICS_VERIFY_FAIL_RATIO + 0.05)
     _verify_min_separation(residual, min_sep=_MIN_SEPARATION)  # no raise
 
@@ -852,13 +849,13 @@ def test_worst_pair_distance_returns_min_sep_for_a_well_spread_population() -> N
 
 
 def test_declump_until_converged_never_flakes_on_many_random_small_unfiled_pops() -> None:
-    """Live flake specimen (full-suite serial gate, e7cf6c59 follow-up): a hermetic
+    """Live flake specimen (full-suite serial gate follow-up): a hermetic
     3-object all-unfiled population occasionally left one pair 14.24 units apart
     after `_declump`'s own default 30 iterations, under the old fixed-epsilon
-    floor. Reproduced here directly (no DB) over many random small populations --
-    `_place_unfiled`'s own Gaussian fog is exactly what generated the flaky
-    starting configuration -- to confirm the converge-or-budget declump actually
-    closes the gap rather than just moving it to a rarer seed."""
+    floor. Reproduced here directly (no DB) over many random small populations,
+    since `_place_unfiled`'s own Gaussian fog is exactly what generated the
+    flaky starting configuration, to confirm the converge-or-budget declump
+    actually closes the gap rather than just moving it to a rarer seed."""
     for _trial in range(300):
         for n in (2, 3, 4):
             ids = [uuid.uuid4() for _ in range(n)]
@@ -906,11 +903,11 @@ def test_long_edge_counts_skips_edges_missing_a_final_position() -> None:
 
 
 def test_place_hubs_in_zone_spreads_hubs_at_least_min_sep_apart() -> None:
-    """THE HUB ZONE fix (live specimen, first bcc6b3f3 migration attempt): the old
-    "jitter by 1 unit around the centroid" scheme packed every hub into a 2-unit
-    disc regardless of population -- this replacement must give hubs a REAL
-    min-sep-respecting spread among themselves before declump ever runs, and NEVER
-    rescale that spread down below the floor."""
+    """THE HUB ZONE fix (live specimen, first migration attempt): the old "jitter
+    by 1 unit around the centroid" scheme packed every hub into a 2-unit disc
+    regardless of population. This replacement must give hubs a REAL
+    min-sep-respecting spread among themselves before declump ever runs, and
+    NEVER rescale that spread down below the floor."""
     hubs = [uuid.uuid4() for _ in range(11)]
     center = np.array([500.0, -300.0])
     out = graph_physics._place_hubs_in_zone(hubs, center)
@@ -952,11 +949,11 @@ async def test_physics_positions_empty_population_returns_empty(actions: Actions
 async def test_physics_positions_multi_project_end_to_end_acceptance(
     actions: Actions,
 ) -> None:
-    """THE HIERARCHICAL PHYSICS acceptance (Thoth mail 11128), at hermetic scale --
-    3 projects, ~40 members each, one cross-project bridge, one unfiled object.
-    v7's own live failure was every project's members spreading to ~1,000 units
-    while centroids sat only 82-224 apart; the acceptance line here is the direct
-    hermetic analogue -- every pair of project centroids at least as far apart as
+    """THE HIERARCHICAL PHYSICS acceptance, at hermetic scale: 3 projects, ~40
+    members each, one cross-project bridge, one unfiled object. v7's own live
+    failure was every project's members spreading to ~1,000 units while
+    centroids sat only 82-224 apart; the acceptance line here is the direct
+    hermetic analogue: every pair of project centroids at least as far apart as
     the sum of their own radius budgets, which v7 never enforced at all."""
     now = datetime.now(UTC)
     projects = []
@@ -1016,8 +1013,8 @@ async def test_run_physics_migrate_writes_every_active_object_at_the_current_ver
     assert receipts[-1]["done"] is True
     assert receipts[-1]["placed"] >= 2
     assert receipts[-1]["peak_rss_kb"] > 0
-    # PROPORTIONAL VERIFICATION diagnostics (Thoth mail 11191) ride the receipt
-    # "either way" -- present on a successful run too, not just a refusal.
+    # PROPORTIONAL VERIFICATION diagnostics ride the receipt either way: present
+    # on a successful run too, not just a refusal.
     assert receipts[-1]["declump_worst_residual"] > 0
     assert receipts[-1]["declump_iterations"] >= 0
 
@@ -1032,9 +1029,9 @@ async def test_run_physics_migrate_writes_every_active_object_at_the_current_ver
 
 
 async def test_run_physics_migrate_verify_only_writes_nothing(actions: Actions) -> None:
-    """THE VERIFY-ONLY DOOR (ruling 6befd2a5, Thoth mail 11178): computes and
-    verifies but never reaches the write step -- a real migration door's own
-    positions_for lookup for the SAME objects must come back empty."""
+    """THE VERIFY-ONLY PATH: computes and verifies but never
+    reaches the write step. A real migration's own positions_for lookup for the
+    SAME objects must come back empty."""
     from src.orchestrator.graph_layout import positions_for
 
     now = datetime.now(UTC)
@@ -1046,11 +1043,11 @@ async def test_run_physics_migrate_verify_only_writes_nothing(actions: Actions) 
     assert receipts[-1]["done"] is True
     assert receipts[-1]["verify_only"] is True
     assert receipts[-1]["placed"] >= 2
-    # THE RECEIPT-STATS TIP (decision cc2f2ea7): peak_rss_kb rides every receipt
-    # shape now, not just a real write's own -- `--verify-only` used to report
-    # nothing about memory at all.
+    # THE RECEIPT-STATS TIP: peak_rss_kb rides every receipt shape now, not just
+    # a real write's own. `--verify-only` used to report nothing about memory at
+    # all.
     assert receipts[-1]["peak_rss_kb"] > 0
-    # THE ACCEPTANCE METRICS (Thoth mail 11208) ride the receipt too.
+    # THE ACCEPTANCE METRICS ride the receipt too.
     assert "layout_bbox_min" in receipts[-1]
     assert "layout_bbox_max" in receipts[-1]
     assert "layout_project_stats" in receipts[-1]
@@ -1060,10 +1057,10 @@ async def test_run_physics_migrate_verify_only_writes_nothing(actions: Actions) 
 
 
 def test_layout_acceptance_metrics_reports_purity_gap_and_bbox_for_two_projects() -> None:
-    """THE ACCEPTANCE METRICS (Thoth mail 11208, required after the first real v8
-    write measured a 163k-unit bbox with every centroid near-coincident and 0.32
-    same-project purity): two well-separated projects, hand-built positions, should
-    report a positive centroid gap and full same-project purity."""
+    """THE ACCEPTANCE METRICS, required after the first real v8 write measured a
+    163k-unit bbox with every centroid near-coincident and 0.32 same-project
+    purity: two well-separated projects, hand-built positions, should report a
+    positive centroid gap and full same-project purity."""
     proj_a, proj_b = uuid.uuid4(), uuid.uuid4()
     members_a = [uuid.uuid4() for _ in range(6)]
     members_b = [uuid.uuid4() for _ in range(6)]
