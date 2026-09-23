@@ -1,7 +1,7 @@
-"""SEAT REBIND — move a seat's anchor cwd, preserving identity, lineage, attribution, and mail
-(Phase 1 §4.1, ruling `dd47c1da`: 'path = project = identity' orphaned alfred when the operator
-moved his folder — the operator is BLOCKED on this cure). Pilot shape exercised here: house
-bytebye, alfred's seat, a pure office with no code in the folder.
+"""SEAT REBIND: move a seat's anchor cwd, preserving identity, lineage, attribution, and mail.
+Under the old rule that path equals project equals identity, a seat lost its identity when its
+folder moved, and that bug is still unresolved. Pilot shape exercised here: house bytebye,
+one seat's own office, a pure office with no code in the folder.
 """
 from __future__ import annotations
 
@@ -28,10 +28,10 @@ NOW = datetime.now(UTC)
 
 async def _seed_works_in(actions: Actions, agent_id: str, project: str, source: str,
                          when: datetime) -> None:
-    """A real works_in edge alongside the raw `project` stamp fixtures here already write —
+    """A real works_in edge alongside the raw `project` stamp fixtures here already write.
     project_of (agents.py) resolves through lineage_works_in, never a bare stamp with
     nothing behind it, so a fixture missing this edge is a fixture lying about how real
-    mounts actually work (thread c5a91ea1/19d6bdcb7fa9)."""
+    mounts actually work."""
     a = await actions.create_or_find_object("Agent", agent_id, source)
     proj = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", source)
     await actions.assert_property(proj, "name", project, source, when, 0.9,
@@ -47,18 +47,18 @@ async def test_rebind_moves_the_anchor_preserving_everything(
     b_dir = tmp_path / "bytebye-b"
     a_dir.mkdir()
 
-    ident = resolve_identity(cwd=str(a_dir), session="alfred01", project_label="bytebye")
+    ident = resolve_identity(cwd=str(a_dir), session="keeper01", project_label="bytebye")
     await register_agent(actions, ident, actor="analyst:operator")
-    await claim_name(actions, ident.agent_id, "alfred", source=ident.agent_id)
-    await mounts.save_mount(actions.pool, job_dir="/j/alfred01", agent_id=ident.agent_id,
+    await claim_name(actions, ident.agent_id, "keeper", source=ident.agent_id)
+    await mounts.save_mount(actions.pool, job_dir="/j/keeper01", agent_id=ident.agent_id,
                             project="bytebye", cwd=str(a_dir), model="claude-fable-5",
                             session_key="k")
-    # mail addressed to alfred's PROJECT — unread, waiting
+    # mail addressed to the seat's PROJECT, unread, waiting
     await send_message(actions.pool, from_agent="agent:ux", from_project="bytebye",
                        to_project="bytebye", body="the office move is happening")
     assert await unread_count(actions.pool, "bytebye", reader_agent=ident.agent_id) == 1
 
-    receipt = await rebind_seat(actions, seat_or_agent="alfred", new_cwd=str(b_dir))
+    receipt = await rebind_seat(actions, seat_or_agent="keeper", new_cwd=str(b_dir))
     assert receipt["agent"] == ident.agent_id
     assert receipt["project"] == "bytebye"
     assert receipt["old_cwd"] == str(a_dir)
@@ -66,8 +66,8 @@ async def test_rebind_moves_the_anchor_preserving_everything(
     assert receipt["mount_rows_updated"] == 1
     assert receipt["osiris_written"] == str(b_dir / ".osiris")
 
-    # (a) the SAME agent_id resolves — no mint, no fork
-    assert await resolve_handle(actions, "alfred") == ident.agent_id
+    # (a) the SAME agent_id resolves, no mint, no fork
+    assert await resolve_handle(actions, "keeper") == ident.agent_id
     # (b) the durable project label is UNCHANGED
     assert await house_of(actions.pool, ident.agent_id) == "bytebye"
     # (c) mail is still readable under the same label
@@ -91,9 +91,9 @@ async def test_rebind_moves_the_anchor_preserving_everything(
 async def test_rebind_moves_every_generation_of_the_lineage(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """(d): the WHOLE lineage's durable mount rows move, not just the current holder's — or an
-    earlier generation's row resurrects the seat at the old path the instant anything reads it
-    by job_dir."""
+    """(d): the WHOLE lineage's durable mount rows move, not just the current holder's.
+    Otherwise an earlier generation's row resurrects the seat at the old path the instant
+    anything reads it by job_dir."""
     a_dir = tmp_path / "multi-a"
     b_dir = tmp_path / "multi-b"
     a_dir.mkdir()
@@ -119,7 +119,7 @@ async def test_rebind_moves_every_generation_of_the_lineage(
 
 
 async def test_rebind_of_a_raw_agent_id_works(actions: Actions, tmp_path: Path) -> None:
-    """The grave rule: an explicit id is intent — a seat with NO claimed name can still be
+    """The grave rule: an explicit id is intent, so a seat with NO claimed name can still be
     rebound by its raw agent id."""
     a_dir = tmp_path / "raw-a"
     b_dir = tmp_path / "raw-b"
@@ -142,10 +142,10 @@ async def test_rebind_of_a_raw_agent_id_works(actions: Actions, tmp_path: Path) 
 async def test_rebind_writes_the_seat_anchor_for_a_never_claimed_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 3ae57d36's lying receipt: a seat nobody has ever claim_name'd resolves to NO
-    agent at all (grantprobe's real shape — its one-off occupant never claimed the name), so
-    the old code's early resolution refused outright before ever reaching the seat-anchor
-    write. Calling by the seat's OWN handle must now succeed on the seat record alone."""
+    """A seat nobody has ever claim_name'd resolves to NO agent at all (a real shape seen in
+    practice: a one-off occupant that never claimed the name), so the old code's early
+    resolution refused outright before ever reaching the seat-anchor write. Calling by the
+    seat's OWN handle must now succeed on the seat record alone."""
     from src.orchestrator.seats import ensure_seat
 
     seat = await ensure_seat(actions, house="anchorhouse", handle="Orphaned",
@@ -169,13 +169,13 @@ async def test_rebind_refuses_an_unknown_seat_loudly(actions: Actions, tmp_path:
     target = tmp_path / "nowhere"
     out = await rebind_seat(actions, seat_or_agent="NobodyHome", new_cwd=str(target))
     assert "error" in out
-    assert not target.exists()  # refused — nothing written, not even the directory
+    assert not target.exists()  # refused: nothing written, not even the directory
 
 
 async def test_rebind_of_an_unmounted_bare_id_is_also_refused(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """A raw id with no Agent object at all is still 'unknown' — the grave rule is intent
+    """A raw id with no Agent object at all is still 'unknown': the grave rule is intent
     about a REAL grave, not licence to mint one."""
     out = await rebind_seat(actions, seat_or_agent="agent:never-existed",
                             new_cwd=str(tmp_path / "ghost"))
@@ -188,8 +188,8 @@ async def test_rebind_of_an_unmounted_bare_id_is_also_refused(
 def test_migrate_harness_metadata_moves_transcripts_and_rekeys_project_state(
     tmp_path: Path,
 ) -> None:
-    """mv + rebind = a complete non-event: the transcripts dir merges old→new (never
-    clobbering — both sides of a fracture may hold real sessions) and the .claude.json
+    """mv + rebind = a complete non-event: the transcripts dir merges old to new (never
+    clobbering, since both sides of a fracture may hold real sessions) and the .claude.json
     project entry re-keys, atomically."""
     import json as _json
 
@@ -204,7 +204,7 @@ def test_migrate_harness_metadata_moves_transcripts_and_rekeys_project_state(
     (old / "subagents" / "child.jsonl").write_text("{}\n")
     new = root / "-w-code-REPOS-ByeByte"
     new.mkdir(parents=True)
-    (new / "bbbb.jsonl").write_text('{"other": true}\n')   # exists on BOTH sides — stays
+    (new / "bbbb.jsonl").write_text('{"other": true}\n')   # exists on BOTH sides: stays
     cj = tmp_path / "claude.json"
     cj.write_text(_json.dumps({"projects": {
         "/w/code/bytebye": {"allowedTools": ["Bash"], "hasTrustDialogAccepted": True}}}))
@@ -282,14 +282,14 @@ async def test_rebind_seat_carries_the_harness_half(actions: Actions, tmp_path: 
     assert row == new_cwd
 
 
-# --- extraction mode (the seat-offices ruling, ed5f5ce2) ---
+# --- extraction mode (the seat-offices ruling) ---
 
 
 async def test_extraction_takes_only_the_seats_own_lineage(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Moving a seat OUT of a shared cwd (into its Osiris office) takes only its own
-    lineage's transcripts — the co-resident repo sessions' history stays, their slug
+    """Moving a seat OUT of a shared cwd (into its own office) takes only its own
+    lineage's transcripts: the co-resident repo sessions' history stays, their slug
     survives, and the .claude.json entry for the old path is never touched (it is still
     a living project)."""
     import json as _json
@@ -339,10 +339,10 @@ async def test_extraction_carries_a_registry_less_lineage_by_transcript_evidence
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A lineage whose generations all predate the mount registry (no agent_mounts row
-    anywhere) still gets its estate carried: the anchor derives from where its sid
-    transcripts actually live — their internal cwd, the address authority — instead of
-    minting an office while the whole mind stays in the old slug (the children's-rollout
-    catch: all five rollout children were this case)."""
+    anywhere) still gets everything it owns carried: the anchor derives from where its sid
+    transcripts actually live, using their internal cwd as the address authority, instead
+    of minting an office while the whole mind stays in the old slug (a real case seen with
+    a batch of rollout children, all five of which hit this)."""
     shared = str(tmp_path / "repo-home")
     office = str(tmp_path / "seats" / "orphan")
     Path(shared).mkdir()
@@ -394,8 +394,8 @@ def test_lineage_cwd_evidence_reads_the_freshest_transcript(tmp_path: Path) -> N
 
 
 async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: Path) -> None:
-    """A rebound seat-holder's Seat OBJECT follows: anchor_cwd re-asserts to the new path —
-    the daemon summons at the office."""
+    """A rebound seat-holder's Seat OBJECT follows: anchor_cwd re-asserts to the new path,
+    so the daemon launches it at the office."""
     from src.orchestrator.mounts import rebind_seat, save_mount
     from src.orchestrator.seats import attach_session, ensure_seat, mint_attach_token
 
@@ -410,7 +410,7 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
     await _seed_works_in(actions, "agent:dddd77bb", "anchorhouse", "agent:dddd77bb", now)
     await save_mount(actions.pool, job_dir="/jobs/dddd77bb", agent_id="agent:dddd77bb",
                      project="anchorhouse", cwd=old, model=None, session_key=None)
-    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves",
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Warden",
                              anchor_cwd=old, source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
@@ -430,13 +430,13 @@ async def test_rebind_updates_the_held_seats_anchor(actions: Actions, tmp_path: 
 async def test_rebind_collapses_the_old_anchor_never_leaves_it_coexisting(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE ANCHOR INVARIANT (Thoth msg 6546, ruling 12387fcc/2e05d662): rebind_seat used to
-    write anchor_cwd via assert_property, whose same-source-only supersession never
-    retires a DIFFERENT source's prior current row. When the mint's own console-sourced
-    anchor and a later self_declared rebind (a different source) both stayed is_current,
-    every LIMIT-1 read of the seat's office became a coin flip — exactly the corruption
-    found live on Jesus and Chad. assert_singular_property (this session's own mechanism,
-    ruling 1335332e) must collapse the old row, not merely outrank it by recency."""
+    """THE ANCHOR INVARIANT: rebind_seat used to write anchor_cwd via assert_property, whose
+    same-source-only supersession never retires a DIFFERENT source's prior current row. When
+    the mint's own console-sourced anchor and a later self_declared rebind (a different
+    source) both stayed is_current, every LIMIT-1 read of the seat's office became a coin
+    flip, exactly the corruption found live on real seats in production.
+    assert_singular_property (this session's own mechanism) must collapse the old row, not
+    merely outrank it by recency."""
     from src.orchestrator.mounts import rebind_seat
     from src.orchestrator.seats import ensure_seat
 
@@ -444,7 +444,7 @@ async def test_rebind_collapses_the_old_anchor_never_leaves_it_coexisting(
     new = str(_default_office_root() / "new-office")
     Path(old).mkdir()
     (Path(old) / ".osiris").write_text('project = "anchorhouse"\n')
-    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves2",
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Warden2",
                              anchor_cwd=old, source="console")
 
     await rebind_seat(actions, seat_or_agent=seat["seat_id"], new_cwd=new,
@@ -460,11 +460,11 @@ async def test_rebind_collapses_the_old_anchor_never_leaves_it_coexisting(
 async def test_rebind_off_office_root_moves_the_footprint_but_never_anchor_cwd(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE WRITE-PATH GUARD (ruling 23771416, msg 6563): anchor_cwd is identity, always
-    <office_root>/<handle>, never a caller-supplied path — this is the exact mechanism that
-    let Chad and Jesus break their own anchor by rebinding themselves to their own live cwd.
-    Relocating a WORK TREE (bind_seat_tree's job) still moves mounts/harness; it must never
-    touch anchor_cwd."""
+    """THE WRITE-PATH GUARD: anchor_cwd is identity, always <office_root>/<handle>, never
+    a caller-supplied path. This is the exact mechanism that let real seats in production
+    break their own anchor by rebinding themselves to their own live cwd. Relocating a
+    WORK TREE (bind_seat_tree's job) still moves mounts/harness; it must never touch
+    anchor_cwd."""
     from src.orchestrator.mounts import rebind_seat, save_mount
     from src.orchestrator.seats import attach_session, ensure_seat, mint_attach_token
 
@@ -479,7 +479,7 @@ async def test_rebind_off_office_root_moves_the_footprint_but_never_anchor_cwd(
     await _seed_works_in(actions, "agent:jeeves3", "anchorhouse", "agent:jeeves3", now)
     await save_mount(actions.pool, job_dir="/jobs/jeeves3", agent_id="agent:jeeves3",
                      project="anchorhouse", cwd=office, model=None, session_key=None)
-    seat = await ensure_seat(actions, house="anchorhouse", handle="Jeeves3",
+    seat = await ensure_seat(actions, house="anchorhouse", handle="Warden3",
                              anchor_cwd=office, source="console")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
@@ -495,13 +495,13 @@ async def test_rebind_off_office_root_moves_the_footprint_but_never_anchor_cwd(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='anchor_cwd' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", seat["seat_id"])
-    assert anchor == office  # untouched — still the office, never the tree
+    assert anchor == office  # untouched: still the office, never the tree
     mount_cwd = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id='agent:jeeves3'")
     assert mount_cwd == tree  # the footprint DID move
 
 
-# --- the resume heal (thread 39ea074c: the alfred transition test's catch) ---
+# --- the resume heal (the seat-transition test's catch) ---
 
 
 def _jsonl(path: Path, *cwds: str | None) -> None:
@@ -536,12 +536,12 @@ def test_moved_transcripts_get_readdressed(tmp_path: Path) -> None:
     root = tmp_path / "projects"
     old = root / "-w-old"
     old.mkdir(parents=True)
-    # a wanderer: three historical cwds + a summary line with none (alfred's real shape)
+    # a wanderer: three historical cwds + a summary line with none (a real seat's shape)
     _jsonl(old / "aaaa.jsonl", "/w/old", None, "/w/older-still", "/w/elsewhere")
     new = root / "-w-new"
     new.mkdir(parents=True)
     _jsonl(new / "bbbb.jsonl", "/w/old")          # exists ONLY on the new side: co-resident
-    _jsonl(old / "bbbb.jsonl", "/w/old")          # conflict — stays put, never re-addressed
+    _jsonl(old / "bbbb.jsonl", "/w/old")          # conflict: stays put, never re-addressed
 
     out = migrate_harness_metadata("/w/old", "/w/new", projects_root=root,
                                    claude_json=tmp_path / "cj.json")
@@ -553,9 +553,9 @@ def test_moved_transcripts_get_readdressed(tmp_path: Path) -> None:
 
 
 def test_extraction_takes_sid_dirs_memory_and_readdresses(tmp_path: Path) -> None:
-    """Extraction takes the seat's WHOLE session estate: the .jsonl, the sid DIRECTORY
-    (subagents/ + tool-results/ — session state as much as the transcript), and the slug's
-    memory/ (the seat's knowledge; an office booting blind defeats the office) — and the
+    """Extraction takes the seat's WHOLE session footprint: the .jsonl, the sid DIRECTORY
+    (subagents/ + tool-results/, session state as much as the transcript), and the slug's
+    memory/ (the seat's knowledge; an office booting blind defeats the office), and the
     moved transcript is re-addressed. Co-residents stay, untouched."""
     from src.orchestrator.mounts import migrate_harness_metadata
 
@@ -606,7 +606,7 @@ def test_extraction_never_clobbers_the_destinations_own_memory(tmp_path: Path) -
 
 def test_heal_slug_transcripts_converges_the_listed_directory(tmp_path: Path) -> None:
     """The automount-time heal: a transcript LISTED here but ADDRESSED elsewhere is
-    rewritten to point here — unless it is the mounting session's own, a live-pulse sid's,
+    rewritten to point here, unless it is the mounting session's own, a live-pulse sid's,
     or still warm from an open tab's pen (deferred, converges on a later launch)."""
     import os
 
@@ -631,9 +631,9 @@ def test_heal_slug_transcripts_converges_the_listed_directory(tmp_path: Path) ->
                                 skip_sids={"cccc3333-me"}, skip_sid_prefixes={"dddd4444"})
 
     assert out["healed"] == {"aaaa1111": 2}
-    # FULL anchor_sid -> resolved path, beside `healed`'s own 8-char-prefix keys (thread
-    # 6e56cf7e item 5) — a reconciling caller (forget_and_reingest) needs the exact
-    # (harness, anchor_sid) key, never a truncated prefix.
+    # FULL anchor_sid -> resolved path, beside `healed`'s own 8-char-prefix keys: a
+    # reconciling caller (forget_and_reingest) needs the exact (harness, anchor_sid) key,
+    # never a truncated prefix.
     assert out["healed_paths"] == {"aaaa1111-moved": str(slug / "aaaa1111-moved.jsonl")}
     assert out["skipped_live"] == 2
     assert out["deferred_fresh"] == 1
@@ -648,9 +648,8 @@ def test_heal_slug_transcripts_converges_the_listed_directory(tmp_path: Path) ->
 async def test_automount_heals_the_slug_it_mounts_into(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The whole loop, whisper-shaped: a session starting in a directory heals the moved
-    transcripts listed there — the operator's ruling made flesh (part of the system,
-    never a one-time patch)."""
+    """The whole loop end to end: a session starting in a directory heals the moved
+    transcripts listed there, as a standing part of the system, never a one-time patch."""
     import os
 
     from src.orchestrator.handshake import automount
@@ -671,11 +670,11 @@ async def test_automount_heals_the_slug_it_mounts_into(
     assert _cwds_of(slug / "ffff6666-moved.jsonl") == [cwd]
 
 
-# --- the bridged resume + the recollection guard (thread 90f0cb3a) ---
+# --- the bridged resume + the recollection guard ---
 
 
 def test_resumed_anchor_reads_the_bridge_receipt(tmp_path: Path) -> None:
-    """A session-picker resume mints a new job whose state.json names resumeSessionId —
+    """A session-picker resume mints a new job whose state.json names resumeSessionId,
     the harness's own receipt of the pair. resumed_anchor follows it; garbage is a None,
     never a verdict."""
     import json as _json
@@ -699,12 +698,12 @@ def test_resumed_anchor_reads_the_bridge_receipt(tmp_path: Path) -> None:
     assert resumed_anchor(str(jobs / "never-was")) is None
 
 
-async def test_automount_adopts_a_bridged_resume_instead_of_minting_a_twin(
+async def test_automount_adopts_a_bridged_resume_instead_of_minting_a_duplicate(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The ctrl+a resume: a new sid with NO transcript of its own (appends continue in the
-    resumed file) used to mint a twin over a living seat — the job-state receipt now names
-    who it continues, and the whisper adopts."""
+    resumed file) used to mint a duplicate agent over a living seat. The job-state receipt now
+    names who it continues, and the whisper adopts."""
     import json as _json
 
     from src.orchestrator.handshake import automount
@@ -725,7 +724,7 @@ async def test_automount_adopts_a_bridged_resume_instead_of_minting_a_twin(
     out = await automount(actions, session_id=new_sid, cwd=office, actor="whisper",
                           root=root, jobs_home=jobs)
 
-    assert out["agent"] == "agent:beef0001"                    # the resumed mind, no twin
+    assert out["agent"] == "agent:beef0001"                    # the resumed mind, no duplicate
     row = await actions.pool.fetchval(
         "SELECT agent_id FROM agent_mounts WHERE job_dir=$1", str(jobs / "feed9999"))
     assert row == "agent:beef0001"                             # the new anchor knows him too
@@ -733,7 +732,7 @@ async def test_automount_adopts_a_bridged_resume_instead_of_minting_a_twin(
 
 def test_stale_recollection_trusts_the_transcripts_address(tmp_path: Path) -> None:
     """The recollection guard's evidence rule: the harness writes a session's transcript
-    under the directory it actually runs in — the row's cwd holding it while the declared
+    under the directory it actually runs in. The row's cwd holding it while the declared
     cwd does not marks the declaration as a stale memory. Everything else is conservative."""
     from src.orchestrator.mounts import stale_recollection
 
@@ -754,7 +753,7 @@ def test_stale_recollection_trusts_the_transcripts_address(tmp_path: Path) -> No
 
 def test_rewrite_aborts_when_the_file_changes_underfoot(tmp_path: Path) -> None:
     """The torn-write guard: an off-the-rails live pen appending mid-rewrite must lose
-    NOTHING — the rewrite re-checks the caller's stat at the last instant and aborts,
+    NOTHING. The rewrite re-checks the caller's stat at the last instant and aborts,
     leaving the original (appended words included) untouched."""
     import pytest
     from src.orchestrator.mounts import _rewrite_transcript_cwd
@@ -775,9 +774,9 @@ def test_rewrite_aborts_when_the_file_changes_underfoot(tmp_path: Path) -> None:
 async def test_wholesale_rebind_repoints_the_co_residents_too(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A wholesale move moves EVERYONE (Werner's catch): when the directory itself has
-    moved, every row anchored there is stale, whatever its seat — co-residents' rows
-    follow. Extraction keeps today's law: the seat leaves, the co-residents stay."""
+    """A wholesale move moves EVERYONE: when the directory itself has moved, every row
+    anchored there is stale, whatever its seat, so co-residents' rows follow. Extraction
+    keeps today's rule: the seat leaves, the co-residents stay."""
     from src.orchestrator.mounts import rebind_seat, save_mount
 
     old = str(tmp_path / "old-house")
@@ -804,8 +803,8 @@ async def test_wholesale_rebind_repoints_the_co_residents_too(
     assert co == new                                    # the housemate moved with the house
 
 
-# ═══ THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07) — self stays open,
-# third-party-on-live refuses by default, force=True (+ because) overrides. ═══
+# ═══ THE LIVENESS GUARD: self stays open, third-party-on-live refuses by default,
+# force=True (+ because) overrides. ═══
 
 _REBIND_LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
 
@@ -841,7 +840,7 @@ async def test_rebind_refuses_a_third_party_rebind_of_a_live_seat(
 
 
 async def test_rebind_self_of_a_live_seat_stays_open(actions: Actions, tmp_path: Path) -> None:
-    """establish_office's own shape: the caller IS the live occupant's lineage."""
+    """establish_office's own shape: the caller is the live occupant's own lineage."""
     a_dir = tmp_path / "rbg2-a"
     b_dir = tmp_path / "rbg2-b"
     a_dir.mkdir()
@@ -901,8 +900,8 @@ async def test_rebind_force_overrides_a_third_party_live_refusal(
 
 def test_harness_slug_matches_the_current_scheme_and_legacy_converges(tmp_path: Path) -> None:
     """THE SPLIT-BRAIN (witnessed live 2026-07-16, harness v2.1.211): the current harness
-    slugs '.' to '-' too (~/.osiris/... → --osiris-...), while one night's ceremonies
-    parked estates under dot-form slugs the new harness cannot list. _harness_slug now
+    slugs '.' to '-' too (~/.osiris/... to --osiris-...), while one night's launches
+    parked sessions under dot-form slugs the new harness cannot list. _harness_slug now
     speaks the current scheme; converge_legacy_slug folds a legacy dir home, never
     clobbering, idempotently."""
     assert mounts._harness_slug("/home/u/.osiris/seats/ra") == "-home-u--osiris-seats-ra"

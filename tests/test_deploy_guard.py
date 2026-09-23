@@ -1,8 +1,7 @@
-"""deploy_guard — the code-ahead-of-schema alarm (thread e6f5556f), plus the reboot-is-a-
-deploy confession (thread 489a39d0). LOUD ALARM, never a refusal (Thoth's ruling, DM 1339):
-osiris-mcp is a fleet-wide single point of failure, so a false positive from a buggy check
-refusing to serve would self-inflict a total outage strictly worse than the silent drift
-either guard exists to catch.
+"""deploy_guard: the code-ahead-of-schema alarm, plus the reboot-is-a-deploy confession.
+This alarms loudly and never refuses a request. osiris-mcp is a fleet-wide single point of
+failure, so a false positive from a buggy check refusing to serve would self-inflict a total
+outage strictly worse than the silent drift either guard exists to catch.
 """
 from __future__ import annotations
 
@@ -48,7 +47,7 @@ def test_a_genuine_mismatch_is_named_both_ways() -> None:
 
 
 def test_either_side_unknown_is_not_drift() -> None:
-    """None means 'don't know' — an empty alembic_version table, a script directory that
+    """None means 'don't know': an empty alembic_version table, a script directory that
     failed to load. Never treated as a confident mismatch."""
     assert schema_drift(None, "0036") is None
     assert schema_drift("0034", None) is None
@@ -56,8 +55,8 @@ def test_either_side_unknown_is_not_drift() -> None:
 
 
 def test_a_known_prior_revision_reads_as_the_benign_code_ahead_shape() -> None:
-    """Decision 8d3f5e2d: db_version_known=True (or the default None) is the ORDINARY,
-    benign transient — the DB just hasn't run a migration the tree already has."""
+    """db_version_known=True (or the default None) is the ORDINARY, benign transient: the
+    DB just hasn't run a migration the tree already has."""
     out = schema_drift("0034", "0036", db_version_known=True)
     assert out is not None and out.startswith("CODE_AHEAD_OF_DB")
     out_default = schema_drift("0034", "0036")
@@ -65,11 +64,11 @@ def test_a_known_prior_revision_reads_as_the_benign_code_ahead_shape() -> None:
 
 
 def test_an_unrecognized_revision_reads_as_the_blocking_db_ahead_shape() -> None:
-    """db_version_known=False is the ONE population that actually blocks a deploy — the
+    """db_version_known=False is the ONE population that actually blocks a deploy: the
     tree has never heard of this revision at all, meaning another branch's migration ran
-    against shared DATABASE_URL before merging (decision 8d3f5e2d). Direction must be named,
-    not just the bare mismatch — a caller reading only 'ahead of (or behind)' cannot tell
-    these two populations apart, which is the exact defect this fix removes."""
+    against shared DATABASE_URL before merging. Direction must be named, not just the bare
+    mismatch: a caller reading only 'ahead of (or behind)' cannot tell these two populations
+    apart, which is the exact defect this fix removes."""
     out = schema_drift("0099_unmerged", "0045", db_version_known=False)
     assert out is not None
     assert out.startswith("DB_AHEAD_OF_TREE")
@@ -79,7 +78,7 @@ def test_an_unrecognized_revision_reads_as_the_blocking_db_ahead_shape() -> None
 
 
 async def test_check_schema_drift_is_clean_on_a_freshly_migrated_db(actions: Actions) -> None:
-    """conftest's own pg_dsn fixture migrates the test container to head — so the running
+    """conftest's own pg_dsn fixture migrates the test container to head, so the running
     code and the test DB's alembic_version must already agree."""
     assert await check_schema_drift(actions.pool) is None
 
@@ -93,7 +92,7 @@ async def test_check_schema_drift_finds_a_real_mismatch(actions: Actions) -> Non
         # '0001' is a REAL, known revision in this tree's own chain -- benign, the DB is
         # simply behind, not carrying a revision this tree has never heard of.
         assert out.startswith("CODE_AHEAD_OF_DB")
-    finally:  # alembic_version isn't in conftest's per-test _TABLES reset — restore by hand
+    finally:  # alembic_version isn't in conftest's per-test _TABLES reset, restore by hand
         await actions.pool.execute(
             "UPDATE alembic_version SET version_num = $1", real)
 
@@ -101,9 +100,9 @@ async def test_check_schema_drift_finds_a_real_mismatch(actions: Actions) -> Non
 async def test_check_schema_drift_names_a_revision_this_tree_never_heard_of(
     actions: Actions,
 ) -> None:
-    """Decision 8d3f5e2d's live shape, reproduced: the DB carries a revision no script in
-    this tree's own alembic/versions/ defines at all — the class that blocked a deploy on
-    2026-08-13, caught by luck at deploy time. This check now names it directly."""
+    """A live shape reproduced here: the DB carries a revision no script in this tree's own
+    alembic/versions/ defines at all, the class that blocked a deploy on 2026-08-13, caught
+    by luck at deploy time. This check now names it directly."""
     real = await actions.pool.fetchval("SELECT version_num FROM alembic_version")
     await actions.pool.execute(
         "UPDATE alembic_version SET version_num = '0099_unmerged_branch_revision'")
@@ -120,7 +119,7 @@ async def test_check_schema_drift_names_a_revision_this_tree_never_heard_of(
 async def test_check_schema_drift_fails_open_on_a_broken_script_directory(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ANY error in the check — a bad alembic.ini, a script directory that won't load —
+    """ANY error in the check (a bad alembic.ini, a script directory that won't load)
     degrades to None (unknown), never to a refusal."""
     import src.orchestrator.deploy_guard as guard
 
@@ -136,8 +135,8 @@ async def test_alarm_opens_one_durable_thread_and_briefs_the_desk(actions: Actio
         "JOIN objects o ON o.id = a.object_id "
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
         "AND a.value #>> '{}' ILIKE '%SCHEMA DRIFT%'")
-    # `service` is deliberately OUT of the summary (thread 35c425f9 — see alarm_schema_drift's
-    # own docstring): it still survives per-observation via the assertion's own source.
+    # `service` is deliberately OUT of the summary (see alarm_schema_drift's own docstring):
+    # it still survives per-observation via the assertion's own source.
     assert thread is not None and "osiris-worker" not in thread["summary"]
     assert thread["source_id"] == "boot:osiris-worker"
     brief = await actions.pool.fetchrow(
@@ -147,8 +146,7 @@ async def test_alarm_opens_one_durable_thread_and_briefs_the_desk(actions: Actio
 
 
 async def test_alarm_stamps_a_real_severity_property(actions: Actions) -> None:
-    """Ruling c5b184cd, thread d56e7073/#44 (the live-desk composition's drift_alarms leg):
-    a real, filterable property, not a summary a reader has to text-match."""
+    """A real, filterable property, not a summary a reader has to text-match."""
     await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
                              service="osiris-worker")
     severity = await actions.pool.fetchval(
@@ -161,7 +159,7 @@ async def test_alarm_stamps_a_real_severity_property(actions: Actions) -> None:
 
 
 async def test_alarm_is_idempotent_on_the_same_drift_text(actions: Actions) -> None:
-    """A persistent drift across many restarts must not mint a duplicate Thread every boot —
+    """A persistent drift across many restarts must not mint a duplicate Thread every boot.
     open_thread's own summary-hash idempotency is the mechanism, reused here, not rebuilt."""
     for _ in range(3):
         await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
@@ -177,17 +175,17 @@ async def test_alarm_is_idempotent_on_the_same_drift_text(actions: Actions) -> N
 async def test_two_services_reporting_the_same_drift_converge_on_one_thread(
     actions: Actions,
 ) -> None:
-    """The regression this fixes (thread 35c425f9, the boot-listener double-record bug):
-    osiris-mcp and osiris-worker each independently detect the identical alembic gap at
-    their own boot. Before the fix, baking {service} into the Thread summary forked this
-    into two separate objects; now both converge on one."""
+    """The regression this fixes (the boot-listener double-record bug): osiris-mcp and
+    osiris-worker each independently detect the identical alembic gap at their own boot.
+    Before the fix, baking {service} into the Thread summary forked this into two separate
+    objects; now both converge on one."""
     await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
                              service="osiris-mcp")
     await alarm_schema_drift(actions.pool, "code expects '0036', DB is at '0034'",
                              service="osiris-worker")
     # count(DISTINCT o.id), not count(*): the two services' testimony legitimately coexists
     # as TWO current_assertions rows on the SAME object (assert_property's own multi-source
-    # corroboration) — a plain count(*) would double-count one object as two.
+    # corroboration). A plain count(*) would double-count one object as two.
     count = await actions.pool.fetchval(
         "SELECT count(DISTINCT o.id) FROM objects o "
         "JOIN current_assertions a ON a.object_id = o.id "
@@ -198,7 +196,7 @@ async def test_two_services_reporting_the_same_drift_converge_on_one_thread(
         "SELECT a.source_id FROM current_assertions a "
         "JOIN objects o ON o.id = a.object_id "
         "WHERE o.type = 'Thread' AND a.name = 'status'")}
-    # both listeners' testimony survives as distinct sources on the SAME object — nothing
+    # both listeners' testimony survives as distinct sources on the SAME object: nothing
     # is lost by converging, only the duplicate Thread is gone
     assert sources == {"boot:osiris-mcp", "boot:osiris-worker"}
 
@@ -206,8 +204,8 @@ async def test_two_services_reporting_the_same_drift_converge_on_one_thread(
 async def test_alarm_uses_a_generous_desk_dedup_window(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A schema drift can easily outlive send_message's own 600s default across restarts —
-    this must pass a longer window so the desk isn't re-briefed on every single boot."""
+    """A schema drift can easily outlive send_message's own 600s default across restarts.
+    This must pass a longer window so the desk isn't re-briefed on every single boot."""
     import src.orchestrator.mailbox as mailbox
 
     captured: dict[str, Any] = {}
@@ -224,7 +222,7 @@ async def test_alarm_uses_a_generous_desk_dedup_window(
 async def test_alarm_survives_the_desk_being_unreachable(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The durable Thread must land even if the mailbox write fails — the alarm's most
+    """The durable Thread must land even if the mailbox write fails. The alarm's most
     important half (a graph fact the fleet can see) must not depend on the desk succeeding."""
     import src.orchestrator.mailbox as mailbox
 
@@ -266,7 +264,7 @@ async def test_mcp_boot_check_alarms_on_a_real_mismatch(actions: Actions) -> Non
         await srv._boot_check()
     finally:
         srv._pool = saved_pool
-        # alembic_version isn't in conftest's per-test _TABLES reset — restore by hand
+        # alembic_version isn't in conftest's per-test _TABLES reset, restore by hand
         await actions.pool.execute("UPDATE alembic_version SET version_num = $1", real)
     thread = await actions.pool.fetchval(
         "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id = o.id "
@@ -277,7 +275,7 @@ async def test_mcp_boot_check_alarms_on_a_real_mismatch(actions: Actions) -> Non
 
 def test_worker_startup_imports_the_guard() -> None:
     """A light presence check, same spirit as the cron-registration tests elsewhere in this
-    suite — proves the wiring exists without needing a full CascadeContext/redis boot."""
+    suite, proving the wiring exists without needing a full CascadeContext/redis boot."""
     import inspect
 
     from src.workers import arq_worker
@@ -286,7 +284,7 @@ def test_worker_startup_imports_the_guard() -> None:
     assert "check_schema_drift" in src_text and "alarm_schema_drift" in src_text
 
 
-# --- the reboot-is-a-deploy confession (thread 489a39d0) -----------------------------------
+# --- the reboot-is-a-deploy confession --------------------------------------------------
 
 def test_matching_heads_are_not_an_unreviewed_boot() -> None:
     assert unreviewed_boot("abc123", "abc123") is None
@@ -299,7 +297,7 @@ def test_a_genuine_head_mismatch_is_named_both_ways() -> None:
 
 def test_either_side_unknown_is_not_an_unreviewed_boot() -> None:
     """A fresh box that never once ran `osiris deploy` (no cursor yet) is not evidence of an
-    unreviewed reboot — same 'don't know' discipline as schema_drift's own null handling."""
+    unreviewed reboot: same 'don't know' discipline as schema_drift's own null handling."""
     assert unreviewed_boot(None, "def456") is None
     assert unreviewed_boot("abc123", None) is None
     assert unreviewed_boot(None, None) is None
@@ -320,8 +318,8 @@ async def test_check_unreviewed_boot_is_clean_when_the_ledger_matches_running_he
 async def test_check_unreviewed_boot_is_clean_on_a_box_with_no_deploy_history(
     actions: Actions,
 ) -> None:
-    """No watermark ever written (conftest truncates `watermarks` per test) — unknown, never
-    a false alarm on a fresh box or a freshly-added guard."""
+    """No watermark ever written (conftest truncates `watermarks` per test), so this is
+    unknown, never a false alarm on a fresh box or a freshly-added guard."""
     assert await check_unreviewed_boot(actions.pool) is None
 
 
@@ -365,11 +363,11 @@ async def test_reboot_alarm_opens_one_durable_thread_and_briefs_the_desk(
 
 
 async def test_reboot_alarm_declares_its_own_repo_gap_honestly(actions: Actions) -> None:
-    """Thoth msg 5858 — the hatch's first real user: this alarm has no ctx and no mounted
-    caller, so it can never satisfy a repo requirement the way a real agent write can. It
-    must DECLARE that gap via unlinked_because rather than land as a silent orphan, and the
-    declaration must survive even while required_link_kinds ships empty (decision b792c039
-    — the gate stays dark; this is an honest confession, not enforcement)."""
+    """The write path's first real user: this alarm has no ctx and no mounted caller, so it
+    can never satisfy a repo requirement the way a real agent write can. It must DECLARE
+    that gap via unlinked_because rather than land as a silent orphan, and the declaration
+    must survive even while required_link_kinds ships empty (the gate stays dark; this is
+    an honest confession, not enforcement)."""
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'aaa' was never recorded by `osiris deploy`",
         running_head="aaa", service="osiris-worker")
@@ -383,28 +381,28 @@ async def test_reboot_alarm_declares_its_own_repo_gap_honestly(actions: Actions)
 async def test_reboot_alarm_names_src_root_in_the_brief_not_the_thread(
     actions: Actions,
 ) -> None:
-    """Task #180 piece 2 (msg 5253): `src_root` rides beside `running_head` in the operator
-    brief — the fact that would have surfaced the week-long Imhotep-worktree drift on day
-    one — but stays OUT of the Thread's own dedup identity, same discipline as `service`."""
+    """Task #180 piece 2: `src_root` rides beside `running_head` in the operator brief, the
+    fact that would have surfaced the week-long stale-worktree drift on day one, but stays
+    OUT of the Thread's own dedup identity, same discipline as `service`."""
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'aaa' was never recorded by `osiris deploy`",
         running_head="aaa", service="osiris-worker",
-        src_root="/home/asuramaya/code/osiris/.claude/worktrees/imhotep")
+        src_root="/home/asuramaya/code/osiris/.claude/worktrees/stale-worktree")
     thread = await actions.pool.fetchrow(
         "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
         "JOIN objects o ON o.id = a.object_id "
         "WHERE o.type = 'Thread' AND a.name = 'summary' "
         "AND a.value #>> '{}' ILIKE '%UNREVIEWED BOOT%aaa%'")
-    assert thread is not None and "imhotep" not in thread["summary"]
+    assert thread is not None and "stale-worktree" not in thread["summary"]
     brief = await actions.pool.fetchrow(
         "SELECT body FROM fleet_messages WHERE from_agent = 'system:osiris-worker' "
         "AND to_project = 'operator'")
-    assert brief is not None and "imhotep" in brief["body"]
+    assert brief is not None and "stale-worktree" in brief["body"]
 
 
 async def test_reboot_alarm_omitted_src_root_still_works(actions: Actions) -> None:
     """Existing callers with no `src_root` to hand (the pre-#180-piece-2 shape) keep working
-    unchanged — the parameter is optional and appended-only."""
+    unchanged: the parameter is optional and appended-only."""
     await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
                                 running_head="aaa", service="osiris-worker")
     brief = await actions.pool.fetchrow(
@@ -427,10 +425,10 @@ async def test_reboot_alarm_is_idempotent_on_the_same_drift_text(actions: Action
 async def test_reboot_alarm_dedups_on_running_head_alone_across_different_watermarks(
     actions: Actions,
 ) -> None:
-    """Decision 8a830336 — the 76-thread specimen: the SAME unreviewed commit confessing
-    against a DIFFERENT `last_deployed` watermark each restart (a normal thing to happen
-    across several real deploys) must still converge on ONE Thread, not one per distinct
-    drift text. Only `running_head` is the canonical identity now."""
+    """The 76-thread specimen: the SAME unreviewed commit confessing against a DIFFERENT
+    `last_deployed` watermark each restart (a normal thing to happen across several real
+    deploys) must still converge on ONE Thread, not one per distinct drift text. Only
+    `running_head` is the canonical identity now."""
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'aaa' was never recorded (last recorded deploy: 'old1')",
         running_head="aaa", service="osiris-worker")
@@ -447,10 +445,9 @@ async def test_reboot_alarm_dedups_on_running_head_alone_across_different_waterm
 async def test_reboot_alarm_resolves_the_same_services_older_open_alarm_at_mint_time(
     actions: Actions,
 ) -> None:
-    """THE REGROWTH CURE (operator ruling, DM 7035, item 4): a NEW unreviewed head for the
-    SAME service must close that service's OLDER open alarm before minting a sibling — only
-    one open UNREVIEWED BOOT per service, ever, so the pile that grew to 171 threads cannot
-    regrow."""
+    """THE REGROWTH CURE: a NEW unreviewed head for the SAME service must close that
+    service's OLDER open alarm before minting a sibling. Only one open UNREVIEWED BOOT per
+    service, ever, so the pile that grew to 171 threads cannot regrow."""
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'deadbee0' was never recorded",
         running_head="deadbee0", service="osiris-worker")
@@ -473,12 +470,13 @@ async def test_reboot_alarm_never_resolves_a_thread_a_different_service_still_wi
     actions: Actions,
 ) -> None:
     """THE MULTI-SERVICE SAFETY GUARD: `status` is SINGULAR (a resolve supersedes EVERY
-    open source's status, not just the resolving source's own — thread's own multi-witness
-    convergence, `test_two_services_confessing_the_same_unreviewed_head_converge_on_one_
-    thread`). Resolving a Thread two services still share would silently retract the OTHER
+    open source's status, not just the resolving source's own, per the Thread's own
+    multi-witness convergence covered in
+    `test_two_services_confessing_the_same_unreviewed_head_converge_on_one_thread`).
+    Resolving a Thread two services still share would silently retract the OTHER
     service's own live confession. osiris-worker and osiris-mcp both boot on the identical
-    unrecorded head (one shared Thread); osiris-worker then boots again on a NEWER head —
-    the shared Thread must stay open (osiris-mcp still confesses it), and osiris-worker's
+    unrecorded head (one shared Thread); osiris-worker then boots again on a NEWER head.
+    The shared Thread must stay open (osiris-mcp still confesses it), and osiris-worker's
     new alarm mints as its own second Thread rather than silently retracting osiris-mcp's."""
     await alarm_unreviewed_boot(
         actions.pool, "running HEAD 'deadbee0' was never recorded",
@@ -496,13 +494,14 @@ async def test_reboot_alarm_never_resolves_a_thread_a_different_service_still_wi
 async def test_two_services_confessing_the_same_unreviewed_head_converge_on_one_thread(
     actions: Actions,
 ) -> None:
-    """Same lesson as thread 35c425f9, applied from the start: osiris-mcp and osiris-worker
-    both booting on the identical unrecorded HEAD must not fork into two Threads."""
+    """Same lesson as the boot-listener double-record bug, applied from the start: osiris-mcp
+    and osiris-worker both booting on the identical unrecorded HEAD must not fork into two
+    Threads."""
     await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
                                 running_head="aaa", service="osiris-mcp")
     await alarm_unreviewed_boot(actions.pool, "running HEAD 'aaa' was never recorded",
                                 running_head="aaa", service="osiris-worker")
-    # count(DISTINCT o.id) — see the schema-drift version of this test for why a plain
+    # count(DISTINCT o.id): see the schema-drift version of this test for why a plain
     # count(*) would double-count one object's two-source testimony as two objects.
     count = await actions.pool.fetchval(
         "SELECT count(DISTINCT o.id) FROM objects o JOIN current_assertions a "
@@ -530,7 +529,7 @@ async def test_reboot_alarm_survives_the_desk_being_unreachable(
     assert thread == 1
 
 
-# --- the withheld-deploy-record confession (thread 3b34f6c5, #52's own law) ----------------
+# --- the withheld-deploy-record confession -------------------------------------------------
 
 async def test_withheld_record_alarm_opens_one_durable_thread_and_briefs_the_desk(
     actions: Actions,
@@ -555,9 +554,8 @@ async def test_withheld_record_alarm_opens_one_durable_thread_and_briefs_the_des
 async def test_withheld_record_alarm_declares_its_own_repo_gap_honestly(
     actions: Actions,
 ) -> None:
-    """Same hatch discipline as `alarm_unreviewed_boot` (Thoth msg 5858): this alarm has
-    no ctx and no mounted caller, so it must DECLARE the repo gap rather than land as a
-    silent orphan."""
+    """Same discipline as `alarm_unreviewed_boot`: this alarm has no ctx and no mounted
+    caller, so it must DECLARE the repo gap rather than land as a silent orphan."""
     await alarm_withheld_deploy_record(
         actions.pool, running_head="deadbeef", reason="false-mint-live")
     reason = await actions.pool.fetchval(
@@ -583,8 +581,8 @@ async def test_withheld_record_alarm_is_idempotent_on_the_same_head_and_reason(
 async def test_withheld_record_alarm_mints_a_second_thread_for_a_different_head(
     actions: Actions,
 ) -> None:
-    """A genuinely new fact — a different withheld HEAD — must get its own confession,
-    never fold into an older one just because the refusal category matches."""
+    """A genuinely new fact (a different withheld HEAD) must get its own confession, never
+    fold into an older one just because the refusal category matches."""
     await alarm_withheld_deploy_record(
         actions.pool, running_head="aaaaaaa", reason="false-mint-live: agent:x")
     await alarm_withheld_deploy_record(
@@ -614,9 +612,8 @@ async def test_withheld_record_alarm_survives_the_desk_being_unreachable(
     assert count == 1
 
 
-# --- the supersession mechanism (operator ruling, DM 7032, following the backlog
-# measurement decision 6354c424): "superseded by the next recorded deploy or clean boot of
-# the same service; only the newest per service stays open." ------------------------------
+# --- the supersession mechanism: an alarm is superseded by the next recorded deploy or
+# clean boot of the same service; only the newest per service stays open. -------------------
 
 async def _open_alarm_count(actions: Actions, *, like: str = "%") -> int:
     return await actions.pool.fetchval(
@@ -668,7 +665,7 @@ async def test_deploy_leg_keeps_a_divergent_alarm_open(
 ) -> None:
     """The precision half of the mechanism: an alarm whose head is NOT an ancestor of the
     newly recorded deploy (a divergent/rewritten branch, or simply a boot more recent than
-    this deploy) must never be silently swept up — only a proven ancestry match closes
+    this deploy) must never be silently swept up. Only a proven ancestry match closes
     anything."""
     from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
 
@@ -687,11 +684,11 @@ async def test_deploy_leg_keeps_a_divergent_alarm_open(
 async def test_deploy_leg_never_touches_schema_drift(
     actions: Actions, small_repo: Path,
 ) -> None:
-    """A schema-drift alarm needs a human's deploy to fix the DB, not just a later git HEAD
-    — a deploy-recorded git head is not even the right AXIS for it (alembic revisions, not
+    """A schema-drift alarm needs a human's deploy to fix the DB, not just a later git HEAD:
+    a deploy-recorded git head is not even the right AXIS for it (alembic revisions, not
     commits). It has its own dedicated resolver, `resolve_schema_drift_alarms_on_clean_
-    check` (operator ruling, DM 7035, item 3), tested separately below — the deploy leg
-    must not fold it in just because it shares the boot:{service} source."""
+    check`, tested separately below. The deploy leg must not fold it in just because it
+    shares the boot:{service} source."""
     from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
 
     new = _commit(small_repo, "new")
@@ -703,7 +700,7 @@ async def test_deploy_leg_never_touches_schema_drift(
     assert await _open_alarm_count(actions, like="SCHEMA DRIFT%") == 1
 
 
-# --- schema drift's own supersession rule (operator ruling, DM 7035, item 3) --------------
+# --- schema drift's own supersession rule ---------------------------------------------------
 
 async def test_schema_drift_leg_resolves_on_a_confirmed_clean_check(actions: Actions) -> None:
     from src.orchestrator.deploy_guard import resolve_schema_drift_alarms_on_clean_check
@@ -821,10 +818,10 @@ async def test_check_and_resolve_clean_boot_resolves_on_a_confirmed_match(
 async def test_a_withheld_deploy_followed_by_a_recorded_one_leaves_exactly_one_open_alarm(
     actions: Actions, small_repo: Path,
 ) -> None:
-    """THE OPERATOR'S OWN ACCEPTANCE TEST (DM 7032, item 3): a withheld deploy at a head
-    that a LATER recorded deploy supersedes must close; a second, unrelated/divergent alarm
-    already open must be left alone — proving the mechanism is selective, not a blanket
-    sweep. Two alarms go in; one comes out."""
+    """THE ACCEPTANCE TEST: a withheld deploy at a head that a LATER recorded deploy
+    supersedes must close; a second, unrelated/divergent alarm already open must be left
+    alone. This proves the mechanism is selective, not a blanket sweep. Two alarms go in;
+    one comes out."""
     from src.orchestrator.deploy_guard import resolve_alarms_superseded_by_deploy
 
     withheld_head = _commit(small_repo, "withheld")
@@ -845,9 +842,9 @@ async def test_a_withheld_deploy_followed_by_a_recorded_one_leaves_exactly_one_o
     assert await _open_alarm_count(actions) == 1
 
 
-# --- the grace window (thread c27afb62): a ref still unrecorded past 60 minutes alarms
-# exactly once, across both services combined — an ordinary in-flight deploy (recorded
-# by `osiris deploy` moments after this restart) alarms nothing at all. --------------------
+# --- the grace window: a ref still unrecorded past 60 minutes alarms exactly once, across
+# both services combined. An ordinary in-flight deploy (recorded by `osiris deploy` moments
+# after this restart) alarms nothing at all. -------------------------------------------------
 
 async def test_grace_window_first_sighting_starts_the_clock_and_alarms_nothing(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
@@ -865,8 +862,8 @@ async def test_grace_window_first_sighting_starts_the_clock_and_alarms_nothing(
 async def test_grace_window_a_recorded_deploy_within_the_window_files_nothing(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE ACCEPTANCE TEST, Thoth's own words: a restart followed by a recorded deploy
-    within the window files nothing."""
+    """THE ACCEPTANCE TEST: a restart followed by a recorded deploy within the window
+    files nothing."""
     import src.orchestrator.deploy_guard as guard
     from src.orchestrator.monitor import set_cursor
 
@@ -884,7 +881,7 @@ async def test_grace_window_still_unrecorded_past_the_window_alarms_exactly_once
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """THE OTHER HALF: a ref left unrecorded past the window files exactly one brief for
-    both services combined — a SECOND service seeing the identical still-unrecorded ref
+    both services combined. A SECOND service seeing the identical still-unrecorded ref
     after the first already alarmed must stay quiet, not double the confession."""
     import src.orchestrator.deploy_guard as guard
     from src.orchestrator.monitor import set_cursor
@@ -896,10 +893,10 @@ async def test_grace_window_still_unrecorded_past_the_window_alarms_exactly_once
     out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
     assert out is not None and "stalehead1" in out
 
-    # a SECOND service, same still-unrecorded ref — already alarmed, stays quiet
+    # a SECOND service, same still-unrecorded ref: already alarmed, stays quiet
     again = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-worker")
     assert again is None
-    # and a THIRD call from the original service too — no re-alarm on its own ref either
+    # and a THIRD call from the original service too, no re-alarm on its own ref either
     assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
 
 
@@ -907,7 +904,7 @@ async def test_grace_window_a_different_ref_mid_window_resets_the_clock(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A second deploy landing before the first was ever alarmed must not inherit the
-    first ref's already-elapsed clock — the new ref gets its own fresh grace window."""
+    first ref's already-elapsed clock: the new ref gets its own fresh grace window."""
     import src.orchestrator.deploy_guard as guard
     from src.orchestrator.monitor import set_cursor
 
@@ -917,7 +914,7 @@ async def test_grace_window_a_different_ref_mid_window_resets_the_clock(
     assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
 
     monkeypatch.setattr(guard, "_git_head", lambda root: "newref2")
-    # the new ref is a FRESH sighting even though grace_s is 0 — it must not inherit the
+    # the new ref is a FRESH sighting even though grace_s is 0, it must not inherit the
     # old ref's already-past-window clock
     assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
     out = await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp")
@@ -940,7 +937,7 @@ async def test_grace_window_a_clean_boot_clears_the_pending_clock(
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "willberecorded")  # clean now
     assert await check_and_alarm_unreviewed_boot(actions.pool, service="osiris-mcp") is None
 
-    # a genuinely new unrecorded ref right after — must get its OWN fresh sighting, not
+    # a genuinely new unrecorded ref right after: must get its OWN fresh sighting, not
     # read as "already past window" off the cleared ref's old clock
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, "0" * 40)
     monkeypatch.setattr(guard, "_git_head", lambda root: "brandnewref")
@@ -954,9 +951,9 @@ async def test_grace_window_a_clean_boot_clears_the_pending_clock(
 async def test_mcp_boot_check_alarms_on_an_unrecorded_head(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The grace window (thread c27afb62) means the FIRST sighting of an unrecorded ref
-    never alarms — zeroed here so this test still proves the wiring end to end without
-    waiting out a real 60 minutes."""
+    """The grace window means the FIRST sighting of an unrecorded ref never alarms, zeroed
+    here so this test still proves the wiring end to end without waiting out a real
+    60 minutes."""
     import src.orchestrator.deploy_guard as guard
     from src import mcp_server as srv
     from src.orchestrator.monitor import set_cursor
@@ -966,8 +963,8 @@ async def test_mcp_boot_check_alarms_on_an_unrecorded_head(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        await srv._boot_check()  # first sighting — starts the grace clock, alarms nothing
-        await srv._boot_check()  # grace_s=0 — this ref is already "past" the window
+        await srv._boot_check()  # first sighting: starts the grace clock, alarms nothing
+        await srv._boot_check()  # grace_s=0, this ref is already "past" the window
     finally:
         srv._pool = saved_pool
     thread = await actions.pool.fetchval(
@@ -986,10 +983,10 @@ def test_worker_startup_imports_the_reboot_guard_too() -> None:
     assert "check_unreviewed_boot" in src_text and "alarm_unreviewed_boot" in src_text
 
 
-# --- THE ONE REAL WORKER GATE (decision 8a830336): osiris_worker_role, mirroring
-# osiris_mcp_transport's own non-inferred shape — an ad hoc/local `arq` invocation left it
-# unset and confessed truthfully but uselessly against the shared graph, 76 times fleet-wide,
-# because arq_worker.startup() had no equivalent to mcp_server.main()'s own transport gate. ---
+# --- THE ONE REAL WORKER GATE: osiris_worker_role, mirroring osiris_mcp_transport's own
+# non-inferred shape. An ad hoc/local `arq` invocation left it unset and confessed truthfully
+# but uselessly against the shared graph, 76 times fleet-wide, because arq_worker.startup()
+# had no equivalent to mcp_server.main()'s own transport gate. -------------------------------
 
 async def test_worker_startup_gate_mints_nothing_without_the_role_var(
     actions: Actions, redis_url: str, pg_dsn: str, monkeypatch: pytest.MonkeyPatch,
@@ -1014,10 +1011,10 @@ async def test_worker_startup_gate_mints_nothing_without_the_role_var(
 async def test_worker_startup_gate_runs_and_dedups_with_the_role_var_set(
     actions: Actions, redis_url: str, pg_dsn: str, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The var present is what the real osiris-worker.service unit sets — the guard must
+    """The var present is what the real osiris-worker.service unit sets: the guard must
     actually run (mints one Thread), same claim `test_mcp_boot_check_alarms_on_an_unrecorded_
-    head` already carries for the sibling service. Grace window zeroed (thread c27afb62) so
-    a second startup, not the first, is the one that actually alarms."""
+    head` already carries for the sibling service. Grace window zeroed here so a second
+    startup, not the first, is the one that actually alarms."""
     import src.orchestrator.deploy_guard as guard
     from src.orchestrator.monitor import set_cursor
     from src.workers.arq_worker import shutdown, startup
@@ -1042,12 +1039,12 @@ async def test_worker_startup_gate_runs_and_dedups_with_the_role_var_set(
         await shutdown(ctx2)
 
 
-# --- the ref-race detector (thread 771366d1: two agents moved main/composer out from under
-# each other tonight; nothing noticed until a by-hand branch survey). DISTINCT from
-# unreviewed_boot: that one fires on ANY head difference (including a normal fast-forward
-# between deploys), which would be useless noise here — every deploy after the first one has
-# a different running head than the last. This fires ONLY when the last-deployed head fell
-# OUT of the branch's own ancestry, the specific shape of a rewrite/reset/force-move. ---------
+# --- the ref-race detector (two agents moved main/composer out from under each other
+# tonight; nothing noticed until a by-hand branch survey). DISTINCT from unreviewed_boot:
+# that one fires on ANY head difference (including a normal fast-forward between deploys),
+# which would be useless noise here, since every deploy after the first one has a different
+# running head than the last. This fires ONLY when the last-deployed head fell OUT of the
+# branch's own ancestry, the specific shape of a rewrite/reset/force-move. -------------------
 
 
 def test_matching_heads_are_not_a_divergence() -> None:
@@ -1056,7 +1053,7 @@ def test_matching_heads_are_not_a_divergence() -> None:
 
 def test_a_normal_fast_forward_is_not_a_divergence() -> None:
     """The common case: every deploy after the first advances past the last one. is_ancestor
-    True means the old head is still in this branch's own past — ordinary progress."""
+    True means the old head is still in this branch's own past: ordinary progress."""
     assert diverged_since_last_deploy("new", "old", is_ancestor=True) is None
 
 
@@ -1071,7 +1068,7 @@ def test_either_side_unknown_is_not_a_divergence() -> None:
 
 
 def test_unresolvable_ancestry_is_not_a_divergence() -> None:
-    """is_ancestor=None means the check itself could not run (bad sha, git failure) — 'don't
+    """is_ancestor=None means the check itself could not run (bad sha, git failure): 'don't
     know', same fail-open law as every other comparison in this module. A false alarm here
     is exactly the noise that teaches a reader to stop looking at a real one."""
     assert diverged_since_last_deploy("new", "old", is_ancestor=None) is None
@@ -1167,7 +1164,7 @@ async def test_check_diverged_finds_a_real_rewrite(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path,
 ) -> None:
     """End-to-end through the IO wrapper against a real throwaway repo, not just the pure
-    function — the exact shape of tonight's incident: `a` was recorded as deployed, then the
+    function: the exact shape of tonight's incident. `a` was recorded as deployed, then the
     branch got rewritten onto an unrelated history and never re-deployed before something
     else tried to trust it."""
     import src.orchestrator.deploy_guard as guard
@@ -1198,7 +1195,7 @@ async def test_check_diverged_is_clean_on_a_real_fast_forward(
 
 # --- wiring: osiris deploy actually calls the ref-race detector (src/cli.py) ---------------
 # wait_for_health/wait_for_smoke default to REAL bounded pollers (120s/30s ceilings, real
-# network round-trips against the live console/MCP) — these tests are exercising the
+# network round-trips against the live console/MCP). These tests are exercising the
 # divergence-guard wiring, not that wait, so a restart-succeeds path injects fast fakes.
 
 async def _fake_wait_for_health() -> tuple[bool, float]:
@@ -1224,7 +1221,7 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
     c = _commit(small_repo, "c")
     # _REPO_ROOT deliberately points somewhere ELSE (a live false positive, 2026-08-04:
     # this house runs five worktrees, each its own copy of deploy_guard.py on disk, and
-    # _REPO_ROOT resolves to whichever one Python happened to import from — not
+    # _REPO_ROOT resolves to whichever one Python happened to import from, not
     # necessarily the repo being deployed). The load-bearing fact this test pins is that
     # `cmd_deploy` no longer trusts that ambient guess: it passes ITS OWN resolved
     # `repo_root` (small_repo, below) through explicitly, so the divergence is still
@@ -1243,8 +1240,8 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
                                wait_for_smoke=_fake_wait_for_smoke)
     assert "WARNING: HISTORY DIVERGED SINCE THE LAST DEPLOY" in buf.getvalue()
     assert a in buf.getvalue() and c in buf.getvalue()
-    # THE LOAD-BEARING ASSERTION (577988ed: never refuse on a check that can false-positive):
-    # a real divergence PRINTS, it does not change the exit code — restart still ran and the
+    # THE LOAD-BEARING ASSERTION (never refuse on a check that can false-positive):
+    # a real divergence PRINTS, it does not change the exit code. Restart still ran and the
     # deploy completed on its own ordinary merits, exactly as if the warning were absent.
     assert out in (0, 1)
 
@@ -1252,11 +1249,11 @@ async def test_cmd_deploy_warns_but_never_refuses_on_a_real_divergence(
 async def test_cmd_deploy_ignores_an_unrelated_repo_roots_ambient_head(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, small_repo: Path, tmp_path: Path,
 ) -> None:
-    """THE EXACT LIVE FALSE POSITIVE, pinned directly (Thoth's catch, 2026-08-04, the
-    deploy immediately before the second history rewrite): the module-level `_REPO_ROOT`
-    names a DIFFERENT repo whose HEAD has ALSO diverged from the ledger — if `cmd_deploy`
-    ever silently fell back to that ambient guess instead of its own resolved root, this
-    would warn on a deploy that is, on its OWN actual repo, a clean fast-forward."""
+    """THE EXACT LIVE FALSE POSITIVE, pinned directly (caught 2026-08-04, the deploy
+    immediately before the second history rewrite): the module-level `_REPO_ROOT` names a
+    DIFFERENT repo whose HEAD has ALSO diverged from the ledger. If `cmd_deploy` ever
+    silently fell back to that ambient guess instead of its own resolved root, this would
+    warn on a deploy that is, on its OWN actual repo, a clean fast-forward."""
     import io
     from contextlib import redirect_stdout
 
@@ -1270,7 +1267,7 @@ async def test_cmd_deploy_ignores_an_unrelated_repo_roots_ambient_head(
     await set_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY, a)
 
     # an UNRELATED repo that _REPO_ROOT happens to resolve to, itself genuinely
-    # diverged — if the guard reads THIS by accident, it would warn wrongly.
+    # diverged: if the guard reads THIS by accident, it would warn wrongly.
     decoy = tmp_path / "decoy"
     decoy.mkdir()
     _git(decoy, "init", "-q")
@@ -1296,7 +1293,7 @@ async def test_cmd_deploy_ignores_an_unrelated_repo_roots_ambient_head(
 async def test_cmd_deploy_is_silent_on_a_normal_deploy(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No prior deploy recorded (conftest truncates `watermarks` per test) — must not print
+    """No prior deploy recorded (conftest truncates `watermarks` per test): must not print
     the divergence warning on an ordinary first-ever deploy."""
     import io
     from contextlib import redirect_stdout
@@ -1336,7 +1333,7 @@ async def test_real_record_deploy_is_a_noop_off_a_non_git_root(actions: Actions)
     assert await get_cursor(actions.pool, guard._DEPLOY_CURSOR_KEY) is None
 
 
-# --- origin_visibility (the read-side alarm, 2026-08-15 incident, ruling 2fc98818) ---------
+# --- origin_visibility (the read-side alarm, 2026-08-15 incident) --------------------------
 
 class _FakeResponse:
     def __init__(self, status_code: int, json_body: dict[str, Any] | None = None) -> None:
@@ -1364,7 +1361,7 @@ class _FakeAsyncClient:
 
 
 def _stub_ls_remote_clean(monkeypatch: pytest.MonkeyPatch) -> None:
-    """No branches, no error — isolates the GitHub-visibility leg from a real network
+    """No branches, no error: isolates the GitHub-visibility leg from a real network
     `ls-remote` against a URL that was never a real reachable remote."""
     import src.orchestrator.deploy_guard as guard
 
@@ -1387,7 +1384,7 @@ async def test_origin_visibility_reports_no_remote_when_none_configured(
 async def test_origin_visibility_lists_real_branches_from_a_local_remote(
     small_repo: Path, tmp_path: Path,
 ) -> None:
-    """A REAL `git ls-remote` against a real local repo, not a mock — the branch-listing leg
+    """A REAL `git ls-remote` against a real local repo, not a mock: the branch-listing leg
     needs no network to prove it reads the true ref set, same discipline as `_is_ancestor`'s
     own real-repo tests in this file."""
     upstream = tmp_path / "upstream"
@@ -1480,7 +1477,7 @@ async def test_local_ref_hygiene_does_not_flag_ordinary_remote_tracking_refs(
     small_repo: Path,
 ) -> None:
     """Caught live while dogfooding against the real osiris checkout: `refs/remotes/*` is
-    present in EVERY clone that has ever fetched — flagging it as stray would drown the
+    present in EVERY clone that has ever fetched. Flagging it as stray would drown the
     real signal in noise on every single ordinary checkout, not just this repo's own."""
     a = _commit(small_repo, "a")
     _git(small_repo, "update-ref", "refs/remotes/origin/main", a)
@@ -1517,7 +1514,7 @@ async def test_local_ref_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) ->
     assert "UNKNOWN" in note
 
 
-# ── merge_claim_hygiene (Sekhmet's fd3a703 specimen, msg 5201, thread #175/#180) ────────────
+# ── merge_claim_hygiene (the fd3a703 specimen, #175/#180) ────────────────────────────────────
 
 async def test_merge_claim_hygiene_verifies_a_real_merge(small_repo: Path) -> None:
     _commit(small_repo, "root")
@@ -1531,11 +1528,11 @@ async def test_merge_claim_hygiene_verifies_a_real_merge(small_repo: Path) -> No
 
 
 async def test_merge_claim_hygiene_catches_a_false_claim(small_repo: Path) -> None:
-    """Sekhmet's own specimen, reproduced exactly: a branch named in the subject that was
-    never actually merged — fd3a703 claimed sekhmet-launch-resume-fix and never contained
-    it. A PLAIN commit (one parent) whose SUBJECT follows the convention is the STRONGER,
-    structural catch now (thread 9b6b5269): the parent count alone proves it never merged
-    anything, before any branch-tip comparison even runs."""
+    """A real specimen, reproduced exactly: a branch named in the subject that was never
+    actually merged: fd3a703 claimed a launch-resume-fix branch and never contained it. A
+    PLAIN commit (one parent) whose SUBJECT follows the convention is the STRONGER,
+    structural catch now: the parent count alone proves it never merged anything, before
+    any branch-tip comparison even runs."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-y")
     _commit(small_repo, "work nobody actually merged")
@@ -1559,7 +1556,7 @@ async def test_merge_claim_hygiene_unverifiable_when_the_named_branch_is_gone(
     small_repo: Path,
 ) -> None:
     """The common, innocent case: a merged feature branch gets deleted afterward. Absence of
-    the branch must never read as a false claim — it is simply unverifiable now."""
+    the branch must never read as a false claim, it is simply unverifiable now."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-z")
     _commit(small_repo, "work")
@@ -1575,10 +1572,10 @@ async def test_merge_claim_hygiene_fails_open_on_a_non_git_root(tmp_path: Path) 
     assert "nothing to verify" in note
 
 
-# ── merge_claim_hygiene's `since` ranged walk (obligation 8752024d, 1c85ed3's own gap) ──────
+# ── merge_claim_hygiene's `since` ranged walk (1c85ed3's own gap) ───────────────────────────
 #
 # THE SPECIMEN THIS CLOSES: a "merge, raise ratchet, deploy" sequence carries TWO real
-# merges under one final ratchet commit whose own subject never claims a branch — the
+# merges under one final ratchet commit whose own subject never claims a branch. The
 # old HEAD-only check reported "nothing to verify" while a bad merge rode underneath.
 
 async def test_merge_claim_hygiene_catches_a_hidden_bad_merge_under_a_ratchet_commit(
@@ -1623,10 +1620,10 @@ async def test_merge_claim_hygiene_ranged_walk_all_clean(small_repo: Path) -> No
 async def test_merge_claim_hygiene_case_insensitive_capital_m_merge_verifies(
     small_repo: Path,
 ) -> None:
-    """Thread 9b6b5269, decision b86e65ed: this house's own convention drifted from
-    'merge <branch>' to 'Merge <branch>' — the lowercase-only literal silently matched
-    NOTHING on a capital-M subject, so every merge since the drift went unverified. A
-    capital-M merge must verify exactly like a lowercase one now."""
+    """This house's own convention drifted from 'merge <branch>' to 'Merge <branch>': the
+    lowercase-only literal silently matched NOTHING on a capital-M subject, so every merge
+    since the drift went unverified. A capital-M merge must verify exactly like a lowercase
+    one now."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-cap")
     _commit(small_repo, "the actual work")
@@ -1641,18 +1638,18 @@ async def test_merge_claim_hygiene_case_insensitive_capital_m_merge_verifies(
 async def test_merge_claim_hygiene_survives_the_branch_being_reused_after_a_real_merge(
     small_repo: Path,
 ) -> None:
-    """THE seshat-b98eb0b-casualty-sweep SPECIMEN, live, 2026-09-01 (thread 9b6b5269): a
-    completely genuine merge, no cited sha in its subject, and the branch simply kept
-    being worked on afterward — the OLD branch-tip-is-ancestor-of-merge direction false-
-    flags this the instant the branch moves on. The NEW direction (the merge's own second
-    parent is an ancestor of the branch's CURRENT tip) must verify it cleanly instead."""
+    """THE b98eb0b-casualty-sweep SPECIMEN, live, 2026-09-01: a completely genuine merge,
+    no cited sha in its subject, and the branch simply kept being worked on afterward. The
+    OLD branch-tip-is-ancestor-of-merge direction false-flags this the instant the branch
+    moves on. The NEW direction (the merge's own second parent is an ancestor of the
+    branch's CURRENT tip) must verify it cleanly instead."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "reused-live")
     _commit(small_repo, "first round of work")
     _git(small_repo, "checkout", "-q", "-")
     _git(small_repo, "merge", "--no-ff", "-m", "merge reused-live: first landing",
         "reused-live")
-    # the branch is reused for MORE work after being merged — no cited sha to fall back on.
+    # the branch is reused for MORE work after being merged, no cited sha to fall back on.
     _git(small_repo, "checkout", "-q", "reused-live")
     _commit(small_repo, "second round, added after the merge already landed")
     _git(small_repo, "checkout", "-q", "-")
@@ -1667,18 +1664,18 @@ async def test_merge_claim_hygiene_prefers_the_cited_sha_over_a_reused_branchs_m
     small_repo: Path,
 ) -> None:
     """THE LIVE SPECIMEN (found by dry-running the ranged walk against this house's own
-    real history, obligation 8752024d): 'sekhmet-150-backlog' was reused across two
-    separate merges weeks apart — checking the branch's CURRENT tip against the OLDER
-    merge commit false-flagged a completely genuine historical merge the moment the
-    branch moved on to a second round of work. The cited sha (this house's own
-    'merge <branch> (<sha>) — ...' convention) is time-stable; the branch tip is not."""
+    real history): a backlog branch was reused across two separate merges weeks apart.
+    Checking the branch's CURRENT tip against the OLDER merge commit false-flagged a
+    completely genuine historical merge the moment the branch moved on to a second round
+    of work. The cited sha (this house's own 'merge <branch> (<sha>) ...' convention) is
+    time-stable; the branch tip is not."""
     root = _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "reused-branch")
     first_round = _commit(small_repo, "first round of work")
     _git(small_repo, "checkout", "-q", "-")
     _git(small_repo, "merge", "--no-ff", "-m",
-        f"merge reused-branch ({first_round[:8]}) — first landing", "reused-branch")
-    # the branch is REUSED for a second, later round — its tip moves on, unrelated to the
+        f"merge reused-branch ({first_round[:8]}), first landing", "reused-branch")
+    # the branch is REUSED for a second, later round, its tip moves on, unrelated to the
     # first merge commit above.
     _git(small_repo, "checkout", "-q", "reused-branch")
     _commit(small_repo, "second round of work, unrelated to the first merge")
@@ -1691,7 +1688,7 @@ async def test_merge_claim_hygiene_prefers_the_cited_sha_over_a_reused_branchs_m
 
 
 async def test_merge_claim_hygiene_catches_a_false_cited_sha(small_repo: Path) -> None:
-    """A cited sha that is ITSELF not an ancestor is still a real false claim — preferring
+    """A cited sha that is ITSELF not an ancestor is still a real false claim. Preferring
     the cited sha over the branch tip must not become a way to launder a bad merge."""
     root = _commit(small_repo, "root")
     base_branch = _current_branch(small_repo)
@@ -1701,7 +1698,7 @@ async def test_merge_claim_hygiene_catches_a_false_cited_sha(small_repo: Path) -
     unrelated = _commit(small_repo, "never actually merged")
     _git(small_repo, "checkout", "-q", base_branch)
     _git(small_repo, "merge", "--no-ff", "-m",
-        f"merge feature-w ({unrelated[:8]}) — claims a sha that was never merged",
+        f"merge feature-w ({unrelated[:8]}), claims a sha that was never merged",
         "feature-w")
 
     note = await merge_claim_hygiene(small_repo, since=root)
@@ -1724,8 +1721,8 @@ async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
     small_repo: Path,
 ) -> None:
     """A `since` sha this checkout has never heard of (a fresh clone, a rewritten history,
-    the first deploy this checkout has ever recorded) must never be guessed against —
-    degrades to the ORIGINAL HEAD-only check, exactly as if `since` were never passed."""
+    the first deploy this checkout has ever recorded) must never be guessed against.
+    Degrades to the ORIGINAL HEAD-only check, exactly as if `since` were never passed."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-x")
     _commit(small_repo, "the actual work")
@@ -1740,7 +1737,7 @@ async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
 async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
     small_repo: Path,
 ) -> None:
-    """No new commits since the last deploy — an empty range degrades to the same
+    """No new commits since the last deploy: an empty range degrades to the same
     HEAD-only check `since=None` would run, never an empty-but-technically-a-range walk."""
     _commit(small_repo, "root")
     _git(small_repo, "checkout", "-q", "-b", "feature-y")
@@ -1753,17 +1750,17 @@ async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
                     "ancestor of the merge")
 
 
-# ── venv_import_hygiene (task #180 piece 2, decision 6fc0c082's own specimen) ───────────────
+# ── venv_import_hygiene (task #180 piece 2) ──────────────────────────────────────────────────
 
 async def test_venv_import_hygiene_clean_when_src_resolves_from_repo_root() -> None:
     """The real, running interpreter's own `src` package DOES resolve from this very repo
-    root in a correctly-configured dev box/CI — the positive case needs no fixture at all."""
+    root in a correctly-configured dev box/CI: the positive case needs no fixture at all."""
     note = await venv_import_hygiene(_REPO_ROOT)
     assert note.startswith("venv import: clean")
 
 
 async def test_venv_import_hygiene_flags_a_mismatched_repo_root(tmp_path: Path) -> None:
-    """The Imhotep-worktree specimen, reproduced structurally: `src` resolves from the real
+    """The stale-worktree specimen, reproduced structurally: `src` resolves from the real
     repo, but the caller claims a DIFFERENT tree is the one being deployed."""
     note = await venv_import_hygiene(tmp_path)
     assert "NOT the deploying tree" in note
@@ -1771,8 +1768,8 @@ async def test_venv_import_hygiene_flags_a_mismatched_repo_root(tmp_path: Path) 
     assert str(tmp_path.resolve()) in note
 
 
-# ── THE LANDING AUDITOR (Thoth dispatch msg 5339, thread 5256/5313) ─────────────────────────
-# `git init`'s own default branch is `master`, not this house's real `main` — every test
+# ── THE LANDING AUDITOR ───────────────────────────────────────────────────────────────────────
+# `git init`'s own default branch is `master`, not this house's real `main`. Every test
 # below says so explicitly rather than assume it.
 
 def _commit_dated(repo: Path, msg: str, when: str) -> str:
@@ -1794,25 +1791,25 @@ def main_repo(small_repo: Path) -> Path:
 async def test_stale_unmerged_branches_flags_an_old_unclaimed_branch(
     main_repo: Path,
 ) -> None:
-    _git(main_repo, "checkout", "-q", "-b", "seshat-old-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-old-lane")
     _commit_dated(main_repo, "old work, never merged", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
     out = await stale_unmerged_branches(main_repo, claimed=set())
-    assert [s["branch"] for s in out] == ["seshat-old-lane"]
+    assert [s["branch"] for s in out] == ["wip-old-lane"]
     assert out[0]["age_hours"] > 48
 
 
 async def test_stale_unmerged_branches_exempts_a_held_work_claim(main_repo: Path) -> None:
-    _git(main_repo, "checkout", "-q", "-b", "seshat-old-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-old-lane")
     _commit_dated(main_repo, "old work, claimed", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
-    out = await stale_unmerged_branches(main_repo, claimed={"seshat-old-lane"})
+    out = await stale_unmerged_branches(main_repo, claimed={"wip-old-lane"})
     assert out == []
 
 
 async def test_stale_unmerged_branches_exempts_a_fresh_branch(main_repo: Path) -> None:
     """A branch mid-build, committed moments ago, is not yet a specimen of anything."""
-    _git(main_repo, "checkout", "-q", "-b", "seshat-fresh-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-fresh-lane")
     _commit(main_repo, "just started")
     _git(main_repo, "checkout", "-q", "main")
     out = await stale_unmerged_branches(main_repo, claimed=set())
@@ -1820,11 +1817,11 @@ async def test_stale_unmerged_branches_exempts_a_fresh_branch(main_repo: Path) -
 
 
 async def test_stale_unmerged_branches_empty_when_everything_merged(main_repo: Path) -> None:
-    _git(main_repo, "checkout", "-q", "-b", "seshat-landed-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-landed-lane")
     _commit_dated(main_repo, "old work, actually landed", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
-    _git(main_repo, "merge", "--no-ff", "-m", "merge seshat-landed-lane: real",
-        "seshat-landed-lane")
+    _git(main_repo, "merge", "--no-ff", "-m", "merge wip-landed-lane: real",
+        "wip-landed-lane")
     out = await stale_unmerged_branches(main_repo, claimed=set())
     assert out == []
 
@@ -1836,33 +1833,33 @@ async def test_stale_unmerged_branches_fails_open_on_a_non_git_root(tmp_path: Pa
 async def test_audit_graph_merge_claims_catches_a_decision_naming_an_unlanded_branch(
     actions: Actions, main_repo: Path,
 ) -> None:
-    """decision 114b4052's own shape: prose says a branch is in, git disagrees — the
-    branch is real and exists locally, but was never actually merged into main."""
-    _git(main_repo, "checkout", "-q", "-b", "seshat-roster-review")
+    """Prose says a branch is in, git disagrees: the branch is real and exists locally,
+    but was never actually merged into main."""
+    _git(main_repo, "checkout", "-q", "-b", "wip-roster-review")
     _commit(main_repo, "the real work")
     _git(main_repo, "checkout", "-q", "main")
     obj = await actions.create_or_find_object("Decision", "decision:auditgraph01", "test")
     await actions.assert_property(
         obj, "summary",
-        "accepted into merge seshat-roster-review, ready for the batch",
+        "accepted into merge wip-roster-review, ready for the batch",
         "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
     out = await audit_graph_merge_claims(actions.pool, main_repo)
     assert len(out) == 1
     assert out[0]["canonical"] == "decision:auditgraph01"
-    assert "seshat-roster-review" in out[0]["note"] and "NOT an ancestor" in out[0]["note"]
+    assert "wip-roster-review" in out[0]["note"] and "NOT an ancestor" in out[0]["note"]
 
 
 async def test_audit_graph_merge_claims_silent_when_actually_landed(
     actions: Actions, main_repo: Path,
 ) -> None:
-    _git(main_repo, "checkout", "-q", "-b", "seshat-real-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-real-lane")
     _commit(main_repo, "the real work")
     _git(main_repo, "checkout", "-q", "main")
-    _git(main_repo, "merge", "--no-ff", "-m", "merge seshat-real-lane: landed",
-        "seshat-real-lane")
+    _git(main_repo, "merge", "--no-ff", "-m", "merge wip-real-lane: landed",
+        "wip-real-lane")
     obj = await actions.create_or_find_object("Decision", "decision:auditgraph02", "test")
     await actions.assert_property(
-        obj, "summary", "merge seshat-real-lane: landed, all gates green",
+        obj, "summary", "merge wip-real-lane: landed, all gates green",
         "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.SELF_DECLARED.value)
     out = await audit_graph_merge_claims(actions.pool, main_repo)
     assert out == []
@@ -1872,7 +1869,7 @@ async def test_audit_graph_merge_claims_ignores_a_spurious_non_branch_match(
     actions: Actions, main_repo: Path,
 ) -> None:
     """"merge batch"/"merge conflict"-shaped prose parses as a candidate branch name that
-    simply doesn't exist — unverifiable, never a false mismatch."""
+    simply doesn't exist, unverifiable, never a false mismatch."""
     obj = await actions.create_or_find_object("Decision", "decision:auditgraph03", "test")
     await actions.assert_property(
         obj, "summary", "accepted into his merge batch, nothing landed yet though",
@@ -1884,7 +1881,7 @@ async def test_audit_graph_merge_claims_ignores_a_spurious_non_branch_match(
 async def test_landing_audit_mints_one_obligation_and_is_idempotent(
     actions: Actions, main_repo: Path,
 ) -> None:
-    _git(main_repo, "checkout", "-q", "-b", "seshat-idempotent-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-idempotent-lane")
     _commit_dated(main_repo, "old, unclaimed", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
 
@@ -1900,14 +1897,14 @@ async def test_landing_audit_mints_one_obligation_and_is_idempotent(
 async def test_landing_audit_never_reopens_a_stale_branch_thread_a_human_resolved(
     actions: Actions, main_repo: Path,
 ) -> None:
-    """Thread 672972a2's own live finding, generalized (Thoth msg 8175): `open_thread` is
-    idempotent on the summary hash — a repeated `landing_audit` run against the SAME
+    """A live finding, generalized: `open_thread` is idempotent on the summary hash, a
+    repeated `landing_audit` run against the SAME
     still-stale branch used to unconditionally re-assert status='open' on the identical
     Thread, silently overriding a human's own resolve every subsequent run. A resolved
     specimen must stay resolved, picking up an annotation instead."""
     from src.orchestrator.capture import resolve_thread
 
-    _git(main_repo, "checkout", "-q", "-b", "seshat-resolved-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-resolved-lane")
     _commit_dated(main_repo, "old, unclaimed", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
 
@@ -1936,21 +1933,21 @@ async def test_landing_audit_skips_a_branch_an_open_held_work_thread_already_cla
 ) -> None:
     from src.orchestrator.capture import open_thread
 
-    _git(main_repo, "checkout", "-q", "-b", "seshat-claimed-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-claimed-lane")
     _commit_dated(main_repo, "old, but claimed", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
-    await open_thread(actions, "still building seshat-claimed-lane",
-                      branch="seshat-claimed-lane")
+    await open_thread(actions, "still building wip-claimed-lane",
+                      branch="wip-claimed-lane")
 
     out = await landing_audit(actions, main_repo)
     assert out["stale_unmerged_branches"] == []
 
 
 async def test_landing_audit_heartbeat_is_scheduled_as_a_cron_job() -> None:
-    """The scheduled leg exists and is wired into the cron table — same proof shape as
-    reap_leases'/reap_stuck_sweeps' own registration tests (Thoth DM 5544: a mechanism
-    whose only trigger is `osiris deploy` succeeding is not adopted, it is hostage to
-    whatever else can block a deploy)."""
+    """The scheduled leg exists and is wired into the cron table, same proof shape as
+    reap_leases'/reap_stuck_sweeps' own registration tests: a mechanism whose only trigger
+    is `osiris deploy` succeeding is not adopted, it is hostage to whatever else can block
+    a deploy."""
     from src.workers.arq_worker import WorkerSettings
 
     crons = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
@@ -1965,7 +1962,7 @@ async def test_landing_audit_heartbeat_noop_when_flag_off(
     from src.workers.arq_worker import landing_audit_heartbeat
 
     monkeypatch.setenv("OSIRIS_LANDING_AUDIT_ENABLED", "0")
-    _git(main_repo, "checkout", "-q", "-b", "seshat-heartbeat-off-lane")
+    _git(main_repo, "checkout", "-q", "-b", "wip-heartbeat-off-lane")
     _commit_dated(main_repo, "stranded, flag off", "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
 
@@ -1980,14 +1977,14 @@ async def test_landing_audit_heartbeat_mints_when_flag_on_replaying_a_stranded_b
     actions: Actions, main_repo: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The replay the dispatch asked for: a branch shaped exactly like tonight's
-    seshat-hook-flip specimen — finished, committed, never merged — swept unprompted by
+    wip-hook-flip specimen, finished, committed, never merged, swept unprompted by
     the cron tick, with no `osiris deploy` involved at all."""
     from types import SimpleNamespace
 
     from src.workers.arq_worker import landing_audit_heartbeat
 
     monkeypatch.setenv("OSIRIS_LANDING_AUDIT_ENABLED", "1")
-    _git(main_repo, "checkout", "-q", "-b", "seshat-hook-flip")
+    _git(main_repo, "checkout", "-q", "-b", "wip-hook-flip")
     _commit_dated(main_repo, "statusline port + onboard.py SessionEnd gap",
                   "2020-01-01T00:00:00")
     _git(main_repo, "checkout", "-q", "main")
@@ -2004,15 +2001,15 @@ async def test_landing_audit_heartbeat_mints_when_flag_on_replaying_a_stranded_b
     minted = await actions.pool.fetch(
         "SELECT o.id FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='summary' "
-        "WHERE o.type='Thread' AND a.value #>> '{}' ILIKE '%seshat-hook-flip%'")
+        "WHERE o.type='Thread' AND a.value #>> '{}' ILIKE '%wip-hook-flip%'")
     assert len(minted) == 1  # idempotent: one Thread, never a duplicate obligation
 
 
 async def test_landing_audit_stays_idempotent_as_the_branch_ages(
     actions: Actions, main_repo: Path, monkeypatch: Any,
 ) -> None:
-    """THE SPAM (operator 2026-09-06): 70 open LANDING AUDIT threads for six branches, one
-    per hourly run, because the summary embedded `~{age}h` — the idempotency test above
+    """THE SPAM (found 2026-09-06): 70 open LANDING AUDIT threads for six branches, one
+    per hourly run, because the summary embedded `~{age}h`. The idempotency test above
     ran twice within one second and never saw the age move. Same branch an hour older
     must reuse the same Thread."""
     from src.orchestrator import deploy_guard as dg
@@ -2021,7 +2018,7 @@ async def test_landing_audit_stays_idempotent_as_the_branch_ages(
 
     async def _stale(repo_root: Path, *, claimed: set[str],
                      min_age_hours: float = 48.0) -> list[dict[str, Any]]:
-        return [{"branch": "seshat-ageing-lane", "age_hours": next(ages)}]
+        return [{"branch": "wip-ageing-lane", "age_hours": next(ages)}]
 
     monkeypatch.setattr(dg, "stale_unmerged_branches", _stale)
     first = await landing_audit(actions, main_repo)

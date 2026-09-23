@@ -49,22 +49,21 @@ async def test_health(client: httpx.AsyncClient) -> None:
 
 
 async def test_membrane_route_is_retired(client: httpx.AsyncClient) -> None:
-    """THE INBOX (task #71, ruling 0b3dd431) replaced /membrane as :8011's front door —
-    locking in the retirement as intentional, not an accidental regression. src/api/
-    membrane.py itself is gone now too (task #92's residual, thread 0aa9debf7c04) — its
-    three still-live names (_CSS/_age/_e) folded into chrome.py, which was already their
-    only caller."""
+    """The inbox (task #71) replaced /membrane as :8011's front page. This locks in
+    the retirement as intentional, not an accidental regression. src/api/membrane.py
+    itself is gone now too (task #92's residual): its three still-live names
+    (_CSS/_age/_e) folded into chrome.py, which was already their only caller."""
     r = await client.get("/membrane")
     assert r.status_code == 404
 
 
 async def test_inbox_route_wires_the_real_app_live(client: httpx.AsyncClient) -> None:
-    """The one live-route test for THE INBOX at the real create_app() level (pure
+    """The one live-route test for the inbox at the real create_app() level (pure
     builder/render coverage lives in test_inbox_blocks.py/test_inbox_catalog.py/
-    test_inbox_app.py) — this is the wiring check those can't cover on their own: the
-    router is actually include_router()'d (GET / redirects to /ui, the operator's own
-    front-door consolidation, 2026-09-10), and the static mount still serves the
-    vendored assets, from the SAME app real deploys boot."""
+    test_inbox_app.py). This is the wiring check those can't cover on their own: the
+    router is actually include_router()'d (GET / redirects to /ui, a front-page
+    consolidation done on 2026-09-10), and the static mount still serves the
+    vendored assets, from the same app real deploys boot."""
     r = await client.get("/", follow_redirects=False)
     assert r.status_code in (302, 307)
     assert r.headers["location"] == "/ui/"
@@ -94,9 +93,9 @@ async def test_get_object_resolves_name_via_the_full_chain(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """Task #97 workstream 3 (client half): osiris.js's objectDetail rendered the
-    inspector's title from a raw `name`-property scan — a Practice (statement/
+    inspector's title from a raw `name`-property scan. A Practice (statement/
     failure_prevented/surface, no name) showed its canonical hash there even though
-    every list view of the SAME object already resolved it correctly. GET /objects/{id}
+    every list view of the same object already resolved it correctly. GET /objects/{id}
     now carries a top-level `name` via resolve_label, same as /objects and the dossier."""
     p = await actions.create_or_find_object("Practice", "practice:gettest", "test")
     await actions.assert_property(p, "statement", "measure it yourself, not from memory",
@@ -109,9 +108,9 @@ async def test_get_object_resolves_name_via_the_full_chain(
 async def test_get_object_carries_the_same_agreement_signals_as_the_dossier_route(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """PROVENANCE PIECE 3(b) (thread b4477e9e): the plain browse object view used to
-    bypass credence entirely — every property row now carries agreement/distinct_
-    upstreams/disputed, the SAME shared signal /objects/{id}/dossier already had."""
+    """Provenance piece 3(b): the plain browse object view used to bypass credence
+    entirely. Every property row now carries agreement/distinct_upstreams/disputed,
+    the same shared signal /objects/{id}/dossier already had."""
     obj = await actions.create_or_find_object("SoftwareProject", "repo:objsig", "test")
     now = datetime.now(UTC)
     await actions.assert_property(obj, "status", "open", "agent:one", now, 0.9)
@@ -130,7 +129,7 @@ async def test_objects_search_is_word_order_proof(
 ) -> None:
     from src.orchestrator.capture import record_decision
 
-    # summary carries some tokens, rationale others — so a query can span both properties
+    # summary carries some tokens, rationale others, so a query can span both properties
     d = await record_decision(
         actions, "the atomic claim uses a partial unique index",
         rationale="idempotent retry-safe dedup on active statuses",
@@ -152,7 +151,7 @@ async def test_objects_list_resolves_labels_via_the_full_chain_and_disambiguates
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """Task #97 workstream 3: /objects' own `name` used to be a raw SQL COALESCE
-    (name/title/summary/subject/canonical only) — a Practice fell straight to its
+    (name/title/summary/subject/canonical only), so a Practice fell straight to its
     canonical hash. Now resolve_label + disambiguate_labels, same as every other
     consumer, with a `display_label` field alongside."""
     p = await actions.create_or_find_object("Practice", "practice:apitest", "test")
@@ -168,9 +167,8 @@ async def test_objects_list_resolves_labels_via_the_full_chain_and_disambiguates
 async def test_objects_types_param_is_the_multi_select_sibling_of_type(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up,
-    Thoth DM 10711): the browse table's pill bar allows more than one type selected at
-    once — `types` (repeatable) is that multi-select's own server-side lever, sibling to
+    """The browse table's pill bar allows more than one type selected at once.
+    `types` (repeatable) is that multi-select's own server-side lever, sibling to
     the legacy singular `type` (unchanged, still equality-only, still exercised by
     test_list_and_get_object above)."""
     thread = await actions.create_or_find_object("Thread", "thread:objs-types-a", "test")
@@ -188,7 +186,7 @@ async def test_objects_types_param_is_the_multi_select_sibling_of_type(
 async def test_objects_status_param_narrows_on_top_of_the_terminal_status_exclusion(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """`status` is an EXTRA equality narrowing, layered on top of — never replacing —
+    """`status` is an extra equality narrowing, layered on top of, never replacing,
     /objects' own historical unconditional "not archived/merged/retired" rule."""
     proposed = await actions.create_or_find_object("Thread", "thread:objs-status-proposed",
                                                     "test")
@@ -309,10 +307,10 @@ async def test_graph_supernodes_counts_members_per_project(
 async def test_graph_supernodes_shows_the_projects_name_not_its_raw_canonical(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """Thoth dispatch 9563/9769: the retired Atlas showed `project_canonical` verbatim
-    (repo:foo) — a named project now resolves through the SAME resolve_label chain
-    /objects and the projects composition already use. Unnamed stays canonical (the test
-    above, unchanged) — this is the ONLY new behavior."""
+    """The retired graph-overview view showed `project_canonical` verbatim (repo:foo). A named
+    project now resolves through the same resolve_label chain /objects and the
+    projects composition already use. Unnamed stays canonical (the test above,
+    unchanged): this is the only new behavior."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:gv-lod-named", "test")
     await actions.assert_property(proj, "name", "gv-lod-named-display", "test",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -372,10 +370,10 @@ async def test_graph_supernodes_unfiled_bucket_counts_projectless_objects(
 async def test_graph_supernodes_unfiled_is_positioned_and_id_matches_the_sentinel(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """Thoth DM 9019: unfiled carries its own `id` (the sentinel /graph/clusters?project=
-    reads back), sized and placed by the SAME heartbeat-stored positions as a project
-    supernode — the centroid of whichever of its members the heartbeat already placed,
-    never a bespoke layout of its own."""
+    """Unfiled carries its own `id` (the sentinel /graph/clusters?project= reads back),
+    sized and placed by the same heartbeat-stored positions as a project supernode:
+    the centroid of whichever of its members the heartbeat already placed, never a
+    bespoke layout of its own."""
     positioned = await actions.create_or_find_object("Thread", "thread:gv-unfiled-pos", "test")
     await actions.assert_property(positioned, "graph_x", 12.0, "test", datetime.now(UTC), 1.0)
     await actions.assert_property(positioned, "graph_y", -4.0, "test", datetime.now(UTC), 1.0)
@@ -390,11 +388,11 @@ async def test_graph_supernodes_unfiled_abstained_matches_the_census_predicate(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """`abstained` mirrors compositions.orphan_census's own live-`derivation_abstained_*`
-    predicate exactly (Khnum's stale-abstention catch, DM 8855): an acknowledged
-    disconnection counts, an unexamined one doesn't, and a RESOLVED abstention (a later
-    successful mint superseded it) never masquerades as a live one. Measured as a DELTA
-    against the endpoint's own before/after reading — the test DB already carries other
-    fixtures' orphans, so only the shift this test itself causes is a safe assertion."""
+    predicate exactly: an acknowledged disconnection counts, an unexamined one doesn't,
+    and a resolved abstention (a later successful mint superseded it) never masquerades
+    as a live one. Measured as a delta against the endpoint's own before/after reading,
+    since the test DB already carries other fixtures' orphans, so only the shift this
+    test itself causes is a safe assertion."""
     before = (await client.get("/graph/supernodes")).json()["unfiled"]
 
     acknowledged = await actions.create_or_find_object(
@@ -448,9 +446,9 @@ async def test_graph_clusters_resolves_a_bare_project_name(
 async def test_graph_clusters_unfiled_sentinel_groups_the_last_resort_bucket_by_type(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """The Atlas's unfiled supernode (Thoth DM 9019) drills into its own members by type
-    the SAME way a real project's clusters do — `project="unfiled"` (graph_supernodes's
-    own `unfiled.id`) is the sentinel, never a real project's canonical, so it never
+    """The graph overview's unfiled supernode drills into its own members by type the same way
+    a real project's clusters do. `project="unfiled"` (graph_supernodes's own
+    `unfiled.id`) is the sentinel, never a real project's canonical, so it never
     collides with an actual repo named "unfiled"."""
     await actions.create_or_find_object("Thread", "thread:gv-unfiled-cl-1", "test")
     await actions.create_or_find_object("Thread", "thread:gv-unfiled-cl-2", "test")
@@ -533,10 +531,10 @@ async def test_object_404(client: httpx.AsyncClient) -> None:
 async def test_resolve_canonicals_returns_the_label_field_handle(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """THE CANONICAL-RESOLVE DOOR (Thoth mail 12120/12231): a console table showing a
-    bare `seat:xxxx` has nowhere to get the reader-facing handle from without this. Seat's
-    own declared label_field ("handle", ontology/schema.py) is exactly what should win —
-    same resolve_label rule tier /objects/{id} already uses, not a second labelling rule."""
+    """A console table showing a bare `seat:xxxx` has nowhere to get the reader-facing
+    handle from without this. Seat's own declared label_field ("handle",
+    ontology/schema.py) is exactly what should win, the same resolve_label rule tier
+    /objects/{id} already uses, not a second labelling rule."""
     seat = await actions.create_or_find_object("Seat", "seat:resolvetest", "test")
     await actions.assert_property(seat, "handle", "Testhandle", "test", datetime.now(UTC), 0.9)
     r = await client.post("/objects/resolve-canonicals",
@@ -585,8 +583,8 @@ async def test_list_cases_with_counts(client: httpx.AsyncClient, actions: Action
 
 
 async def test_projects_index(client: httpx.AsyncClient, actions: Actions) -> None:
-    """#93: the project index — name never leaks the `repo:` canonical prefix (operator's
-    own ruling), object_count/object_counts_by_type reflect real linked objects, and the
+    """#93: the project index. Name never leaks the `repo:` canonical prefix,
+    object_count/object_counts_by_type reflect real linked objects, and the
     status dimension is never collapsed (each row carries its own real status)."""
     from src.orchestrator.capture import link_repo
 
@@ -623,9 +621,9 @@ async def test_projects_index_unnamed_project_strips_repo_prefix(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """Console honesty fix (2026-09-07): a SoftwareProject minted with no `name`/`title`/
-    etc. property resolves through resolve_label's canonical tier — `/projects` must say
+    etc. property resolves through resolve_label's canonical tier. `/projects` must say
     so (`unnamed: true`), and `name` must not leak the internal `repo:` scheme prefix, only
-    the bare id, per the operator's own ruling that `repo:` never reaches the UI."""
+    the bare id: `repo:` never reaches the UI."""
     await actions.create_or_find_object("SoftwareProject", "repo:bareidtest", "test")
     r = await client.get("/projects")
     mine = next(row for row in r.json() if row["canonical"] == "repo:bareidtest")
@@ -637,8 +635,9 @@ async def test_projects_index_named_project_is_not_unnamed(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
     """The converse of the fix above: a project with a real `name` assertion (link_repo
-    always stamps one on a fresh mint) resolves through the `chain` tier, never `canonical`
-    — `unnamed` must read False and `name` must be the real chosen name, not a bare id."""
+    always stamps one on a fresh mint) resolves through the `chain` tier, never
+    `canonical`. `unnamed` must read False and `name` must be the real chosen name,
+    not a bare id."""
     from src.orchestrator.capture import link_repo
 
     now = datetime.now(UTC)
@@ -653,17 +652,16 @@ async def test_projects_index_named_project_is_not_unnamed(
 async def test_projects_index_nests_worktrees_under_their_parent(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """Thread 922d920c/55992ca9: a Worktree is never a project of its own (Sekhmet's own
-    Worktree/worktree_of shape) — /projects must nest it under its parent's own row, never
-    list it as a flat sibling that could misread as a project (the exact ballgem-wt-*
-    misfiling shape this whole mechanism exists to stop)."""
+    """A Worktree is never a project of its own (Worktree/worktree_of shape).
+    /projects must nest it under its parent's own row, never list it as a flat
+    sibling that could misread as a project."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:wtparenttest", "test")
     await actions.assert_property(proj, "name", "wtparenttest", "test", now, 0.9,
                                   evidence_class="self_declared")
     wt = await actions.create_or_find_object("Worktree", "worktree:wtparenttest-feature",
                                              "test")
-    await actions.assert_property(wt, "branch", "khnum-feature", "test", now, 0.9,
+    await actions.assert_property(wt, "branch", "feature-branch", "test", now, 0.9,
                                   evidence_class="self_declared")
     await actions.create_link(wt, proj, "worktree_of", "test", now, 0.9,
                               evidence_class="self_declared")
@@ -673,7 +671,7 @@ async def test_projects_index_nests_worktrees_under_their_parent(
     mine = next(row for row in body if row["canonical"] == "repo:wtparenttest")
     assert mine["worktrees"] == [
         {"canonical": "worktree:wtparenttest-feature", "name": "wtparenttest-feature",
-         "branch": "khnum-feature"},
+         "branch": "feature-branch"},
     ]
     assert not any(row["canonical"] == "worktree:wtparenttest-feature"
                   for row in body)  # never a flat sibling row
@@ -706,11 +704,11 @@ async def test_objects_scoped_to_case(client: httpx.AsyncClient, actions: Action
 async def test_objects_scoped_to_multiple_projects(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """#196 (Thoth msg 5600): `project` used to bind as a bare `str`, so a multi-repo scope
-    pill selection (console.js sends `&project=a&project=b` for a multi-select) silently
-    filtered on whichever value FastAPI happened to bind last — the scope pill's own
-    "server-side, not client-side after a capped fetch" gap. Two repos selected together
-    must return objects from BOTH, not just one."""
+    """#196: `project` used to bind as a bare `str`, so a multi-repo scope pill
+    selection (console.js sends `&project=a&project=b` for a multi-select) silently
+    filtered on whichever value FastAPI happened to bind last: a server-side gap,
+    not a client-side one, after a capped fetch. Two repos selected together must
+    return objects from both, not just one."""
     from src.orchestrator.capture import open_thread
 
     ta = await open_thread(actions, "in project alpha only", repo="apitest-alpha")
@@ -725,7 +723,7 @@ async def test_objects_scoped_to_multiple_projects(
 
 
 async def test_object_counts_endpoint(client: httpx.AsyncClient, actions: Actions) -> None:
-    """#196: /objects/counts is the TRUE per-type count over the live scope — the browse
+    """#196: /objects/counts is the true per-type count over the live scope. The browse
     surface's own stat chrome must never infer counts from a capped /objects fetch (silently
     wrong the instant a type/scope exceeds the cap)."""
     await _seed(actions)
@@ -753,7 +751,7 @@ async def test_object_counts_scoped_to_project(
 async def test_objects_keyset_pagination_walks_strictly_older_and_never_repeats(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """#196: keyset paging is ADDITIVE — omitting before_created_at/before_id must reproduce
+    """#196: keyset paging is additive. Omitting before_created_at/before_id must reproduce
     the exact prior (uncursored) response, and a cursor built from the last row of one page
     must walk strictly older, with zero overlap between pages (the OFFSET failure mode this
     replaces: re-sorting mid-walk can duplicate or skip rows)."""
@@ -824,12 +822,12 @@ async def test_lifespan_seeds_the_type_catalog_on_boot(
     pg_dsn: str, redis_url: str, actions: Actions
 ) -> None:
     """Task #97 workstream 1 shipped `seed_catalog()` but nothing called it on a real
-    boot (Thoth msg 2131, caught live: 0f139b9 deployed with the catalog machinery
-    correct and production sitting at zero Type objects). This proves the FIX, not
-    just the unit — the real ASGI lifespan protocol, driven exactly like uvicorn
-    drives it, against a DB where Type rows have deliberately been wiped.
+    boot (caught live: a deploy shipped with the catalog machinery correct and
+    production sitting at zero Type objects). This proves the fix, not just the
+    unit: the real ASGI lifespan protocol, driven exactly like uvicorn drives it,
+    against a DB where Type rows have deliberately been wiped.
 
-    The expected count is schema.py's own tuple lengths, not a hardcoded guess — the
+    The expected count is schema.py's own tuple lengths, not a hardcoded guess: the
     manifest is the source of truth and this test breaks loudly the day it drifts."""
     import os
 
@@ -839,7 +837,7 @@ async def test_lifespan_seeds_the_type_catalog_on_boot(
     n_expect_link = len(schema._LINK_TYPES)
 
     # unwind exactly what the earlier (actions fixture's own) seed_catalog call wrote
-    # for the Type rows this test is about to delete — every table it inserts into
+    # for the Type rows this test is about to delete: every table it inserts into
     # (src/actions/core.py: assert_property -> outbox/object_events, create_or_find_object
     # -> object_events), mirroring the FK-reachability discipline conftest.py's own
     # comment documents for the shared fixture.
@@ -874,7 +872,7 @@ async def test_lifespan_seeds_the_type_catalog_on_boot(
     assert n_object == n_expect_object
     assert n_link == n_expect_link
 
-    # idempotent on a second boot (the real restart case) — no duplicates, no error
+    # idempotent on a second boot (the real restart case): no duplicates, no error
     app2 = create_app()
     async with app2.router.lifespan_context(app2):
         n2 = await app2.state.pool.fetchval("SELECT count(*) FROM objects WHERE type = 'Type'")
@@ -884,35 +882,34 @@ async def test_lifespan_seeds_the_type_catalog_on_boot(
 async def test_lifespan_binds_even_when_triggers_is_exclusively_locked(
     pg_dsn: str, redis_url: str, actions: Actions,
 ) -> None:
-    """A live incident (Thoth mail 10214): a concurrent pg_dump held a lock
-    project_triggers' own TRUNCATE needed, hanging the ASGI lifespan at startup — the
-    console never bound, and the deploy's health/smoke poller burned its own timeout
-    reporting a false console failure. project_triggers no longer takes ACCESS
-    EXCLUSIVE (DELETE + upsert-by-helper_id instead, migration 0068's own unique
-    constraint) and sets its own bounded `lock_timeout`; the lifespan catches the
-    resulting LockNotAvailableError and leaves the previous projection in place.
+    """A live incident: a concurrent pg_dump held a lock project_triggers' own
+    TRUNCATE needed, hanging the ASGI lifespan at startup. The console never bound,
+    and the deploy's health/smoke poller burned its own timeout reporting a false
+    console failure. project_triggers no longer takes ACCESS EXCLUSIVE (DELETE +
+    upsert-by-helper_id instead, migration 0068's own unique constraint) and sets
+    its own bounded `lock_timeout`; the lifespan catches the resulting
+    LockNotAvailableError and leaves the previous projection in place.
 
-    Proved at the REAL lifespan protocol, same law test_lifespan_seeds_the_type_
-    catalog_on_boot already holds — and against a lock even STRONGER than a pg_dump
+    Proved at the real lifespan protocol, the same rule test_lifespan_seeds_the_type_
+    catalog_on_boot already holds, and against a lock even stronger than a pg_dump
     would ever take (ACCESS EXCLUSIVE, held open in a second connection for the whole
     test), so this can never pass by accident of a lock too weak to matter.
 
-    THE TIMING DEPENDENCY (WAVE 26 item 2, thread 01c08600, Thoth DM 11536): this
-    failed a full gate under load and passed alone with a 10s bound. The lock itself
-    was never the risk — project_triggers' own `SET LOCAL lock_timeout = '2s'` bounds
-    THAT wait tightly regardless of ambient load. The lifespan does real work BEFORE
-    ever reaching the locked call, none of it bounded by anything but this test's own
-    outer timeout: a fresh `create_pool` (real connections), `seed_catalog` upserting
-    the whole declared Type catalog (~150+ objects, each its own find-or-create plus
-    several `assert_property` writes), and `create_arq_pool` (a real Redis
-    handshake) — every one of them a real DB/Redis round trip that a quiet box clears
-    in well under a second but that genuine `-n4` full-suite contention (many other
-    workers hammering the SAME shared testcontainer Postgres/Redis) can measurably
-    slow down. A 10s ceiling left those steps almost no margin once the 2s lock wait
-    is added on top. Bounded to 60s instead — a longer wait bound that is still
-    bounded, not a skip: a real infinite hang (the one incident this test exists to
-    catch) still fails it, just with realistic headroom for contention that was never
-    the bug."""
+    The timing dependency: this failed a full gate under load and passed alone
+    with a 10s bound. The lock itself was never the risk: project_triggers' own
+    `SET LOCAL lock_timeout = '2s'` bounds that wait tightly regardless of ambient
+    load. The lifespan does real work before ever reaching the locked call, none of
+    it bounded by anything but this test's own outer timeout: a fresh `create_pool`
+    (real connections), `seed_catalog` upserting the whole declared Type catalog
+    (~150+ objects, each its own find-or-create plus several `assert_property`
+    writes), and `create_arq_pool` (a real Redis handshake), every one of them a
+    real DB/Redis round trip that a quiet machine clears in well under a second but
+    that genuine `-n4` full-suite contention (many other workers hammering the same
+    shared testcontainer Postgres/Redis) can measurably slow down. A 10s ceiling
+    left those steps almost no margin once the 2s lock wait is added on top.
+    Bounded to 60s instead: a longer wait bound that is still bounded, not a skip.
+    A real infinite hang (the one incident this test exists to catch) still fails
+    it, just with realistic headroom for contention that was never the bug."""
     import asyncio
     import os
     import time
@@ -938,10 +935,9 @@ async def test_lifespan_binds_even_when_triggers_is_exclusively_locked(
 
 
 async def test_create_app_always_carries_a_shutting_down_event(actions: Actions) -> None:
-    """THE CONSOLE GRACEFUL SHUTDOWN (thread 0be2f790's own deploy-reliability
-    follow-up, Thoth DM 10653): `app.state.shutting_down` must exist the instant
-    `create_app()` returns, never only after the lifespan runs — this file's own
-    `client` fixture (and test_graph_stream.py's) builds `create_app(actions.pool)`
+    """The console's graceful shutdown: `app.state.shutting_down` must exist the
+    instant `create_app()` returns, never only after the lifespan runs. This file's
+    own `client` fixture (and test_graph_stream.py's) builds `create_app(actions.pool)`
     and never drives `app.router.lifespan_context`, so an SSE route's own loop
     condition evaluating `request.app.state.shutting_down.is_set()` would raise
     AttributeError on first use if this event were only ever set inside the lifespan
@@ -957,11 +953,11 @@ async def test_lifespan_sets_shutting_down_on_the_way_out(
     pg_dsn: str, redis_url: str,
 ) -> None:
     """The real end-to-end proof, same `app.router.lifespan_context` protocol
-    `test_lifespan_seeds_the_type_catalog_on_boot` above already drives: NOT set while
-    the app is up, set the moment the lifespan's own shutdown sequence runs — an SSE
+    `test_lifespan_seeds_the_type_catalog_on_boot` above already drives: not set while
+    the app is up, set the moment the lifespan's own shutdown sequence runs. An SSE
     generator's loop condition checked on the next `keep-alive` tick after a restart
-    is signaled sees it flip, rather than only noticing a client disconnect that an
-    operator's browser holding a stream open across the restart never sends."""
+    is signaled sees it flip, rather than only noticing a client disconnect that a
+    browser holding a stream open across the restart never sends."""
     import os
 
     os.environ["DATABASE_URL"] = pg_dsn
@@ -973,7 +969,7 @@ async def test_lifespan_sets_shutting_down_on_the_way_out(
 
 
 def test_every_sse_route_checks_shutting_down_before_is_disconnected() -> None:
-    """Reads the REAL source (not a synthetic reproduction) — the same discipline
+    """Reads the real source (not a synthetic reproduction), the same discipline
     test_shipped_osiris_mcp_unit_declares_a_transcripts_root holds for a unit file:
     a future edit to one of the four SSE loops that drops the check without meaning
     to fails here, loudly, rather than silently reintroducing the incident's own
@@ -991,7 +987,7 @@ def test_every_sse_route_checks_shutting_down_before_is_disconnected() -> None:
 
 async def test_object_card_title_uses_resolve_label_not_name_only(actions: Actions) -> None:
     """Task #97 workstream 3: _object_card (the watch/subscription card-preview
-    endpoint) used to check ONLY the `name` property for its title — a Practice
+    endpoint) used to check only the `name` property for its title. A Practice
     (statement/failure_prevented/surface, no name) rendered its raw canonical hash.
     Now shares the same resolve_label every other consumer does."""
     from src.api.app import _object_card
@@ -1007,14 +1003,14 @@ async def test_object_card_title_uses_resolve_label_not_name_only(actions: Actio
     assert any(pr["name"] == "statement" for pr in card["properties"])
 
 
-# THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d): /pane/{agent_id}/
-# stream tails a live seat's own transcript over SSE, no writes. Both tests below hit only the
-# EARLY-RETURN refusal branches, which return before the route's own
-# `while not await request.is_disconnected()` loop is ever reached — the same structural limit
-# test_inbox_app.py's own SSE test names ("driving the actual infinite generator through
-# httpx's ASGITransport hangs... no precedent anywhere in this suite for testing an SSE route
-# that way"). The polling loop itself reuses sessions.py's own _read_chunk/distill, already
-# covered by test_sessions.py; this file's job is the route's OWN new resolution logic.
+# The read-only pane: /pane/{agent_id}/stream tails a live seat's own transcript over
+# SSE, no writes. Both tests below hit only the early-return refusal branches, which
+# return before the route's own `while not await request.is_disconnected()` loop is ever
+# reached, the same structural limit test_inbox_app.py's own SSE test names document
+# ("driving the actual infinite generator through httpx's ASGITransport hangs, no
+# precedent anywhere in this suite for testing an SSE route that way"). The polling loop
+# itself reuses sessions.py's own _read_chunk/distill, already covered by
+# test_sessions.py; this file's job is the route's own new resolution logic.
 
 
 async def test_pane_live_lists_only_live_seated_agents(
@@ -1022,7 +1018,7 @@ async def test_pane_live_lists_only_live_seated_agents(
 ) -> None:
     from src.orchestrator.mounts import save_mount
 
-    # live + seated (a real object behind the canonical) — must appear
+    # live + seated (a real object behind the canonical): must appear
     await actions.create_or_find_object("Agent", "agent:paneseated1", "test")
     await save_mount(actions.pool, job_dir="/tmp/jobs/paneseated1", agent_id="agent:paneseated1",
                      project="p", cwd="/tmp/paneseated1", model=None, session_key=None)
@@ -1035,10 +1031,10 @@ async def test_pane_live_lists_only_live_seated_agents(
         assert set(row) == {"agent_id", "seat", "project"}
 
 
-# THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): POST /pane/{agent_id}/reply — a
-# one-shot turn against the seat's OWN already-running session via ProcessAdapter.reply(),
-# never a new spawn. Carries the SAME may_spend gate piece 1 gave every other hand-birth
-# path (a new billed call site with no gate would have been a fifth instance of that bug).
+# The reply endpoint: POST /pane/{agent_id}/reply, a one-shot turn against the seat's
+# own already-running session via ProcessAdapter.reply(), never a new spawn. Carries the
+# same may_spend gate piece 1 gave every other hand-birth path (a new billed call site
+# with no gate would have been a fifth instance of that bug).
 
 
 async def test_pane_reply_refuses_honestly_when_no_live_mount_exists(
@@ -1137,7 +1133,7 @@ async def test_pane_stream_refuses_honestly_when_no_transcript_resolves(
     assert "agent:paneless01" in r.text
 
 
-# --- backup-settings (Wave 21, thread f04cce36 piece 3b) --------------------
+# --- backup-settings --------------------------------------------------------
 
 async def test_backup_settings_route_get_starts_empty(client: httpx.AsyncClient) -> None:
     r = await client.get("/backup-settings")
@@ -1148,15 +1144,15 @@ async def test_backup_settings_route_get_starts_empty(client: httpx.AsyncClient)
 async def test_backup_settings_route_writes_as_the_operator(
     client: httpx.AsyncClient, actions: Actions, tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """The console is the operator's own surface (6c18709f) — every write here is
-    analyst:operator, an operator actor by construction, needing no ruling citation.
+    """The console is the operator's own surface: every write here is analyst:operator,
+    an operator actor by construction, needing no ruling citation.
 
     The vault path must be a real, writable directory now that the shared validator
-    (backup_validation.validate_vault_path) sits on the write path — a fake box-specific
-    path like the old "/mnt/nas/osiris-vault" gets refused honestly, same as a genuine
-    caller would see. The always-present-mount check is exercised on its own in
-    test_backup_validation.py, so it's mocked true here to isolate this test to the
-    route's own write/read mechanics."""
+    (backup_validation.validate_vault_path) sits on the write path. A fake
+    machine-specific path like the old "/mnt/nas/osiris-vault" gets refused honestly,
+    same as a genuine caller would see. The always-present-mount check is exercised
+    on its own in test_backup_validation.py, so it's mocked true here to isolate this
+    test to the route's own write/read mechanics."""
     from src.orchestrator import backup_validation
 
     monkeypatch.setattr(backup_validation, "_is_always_present_mountpoint", lambda p: True)
@@ -1189,7 +1185,7 @@ async def test_backup_settings_route_rejects_a_bad_field_without_writing(
     assert (await client.get("/backup-settings")).json()["timer_schedules"] == {}
 
 
-# --- settings (THE SETTINGS MENU, thread f4498ab304e4 piece 1) --------------
+# --- settings menu -----------------------------------------------------------
 
 async def test_settings_route_list_shows_every_registered_knob(
     client: httpx.AsyncClient,
@@ -1203,8 +1199,8 @@ async def test_settings_route_list_shows_every_registered_knob(
 async def test_settings_route_writes_as_the_operator(
     client: httpx.AsyncClient, actions: Actions,
 ) -> None:
-    """The console is the operator's own surface (6c18709f) — every write here is
-    analyst:operator, an operator actor by construction, needing no ruling citation."""
+    """The console is the operator's own surface: every write here is analyst:operator,
+    an operator actor by construction, needing no ruling citation."""
     r = await client.post("/settings", json={
         "key": "daemon.pit_watch.enabled", "value": True, "because": "watching tonight"})
     assert r.status_code == 200
@@ -1226,21 +1222,20 @@ async def test_settings_route_rejects_a_bad_value_without_writing(
     assert row["value"] is False  # untouched
 
 
-# --- soul-key (THE KEY DOOR, Thoth mail 12810/12830, wave 17) ---------------
+# --- soul-key endpoints -------------------------------------------------------
 
 @pytest.fixture(autouse=True)
 def _redirect_credstore_dir_for_soul_key_tests(
     request: pytest.FixtureRequest, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every test
-    below sets `OSIRIS_SOUL_KEY_FILE` (the LOGICAL path) but none pass an explicit
-    `--path`, so the credential blob's own DEFAULT location is now the real
-    per-user credstore (`~/.config/credstore.encrypted/`) — a real, SHARED,
-    machine-wide location that WOULD collide across these tests (and with this
-    developer's own real credential) under xdist parallelism without this
-    redirect. Scoped to just this file's own soul-key section (`autouse=True` at
-    module scope would be too broad for a file this large) via `request.node`'s
-    own test name."""
+    """The first key must come from the normal CLI: every test below sets
+    `OSIRIS_SOUL_KEY_FILE` (the logical path) but none pass an explicit `--path`, so
+    the credential blob's own default location is now the real per-user credstore
+    (`~/.config/credstore.encrypted/`), a real, shared, machine-wide location that
+    would collide across these tests (and with this developer's own real credential)
+    under xdist parallelism without this redirect. Scoped to just this file's own
+    soul-key section (`autouse=True` at module scope would be too broad for a file
+    this large) via `request.node`'s own test name."""
     if request.node.name.startswith(("test_soul_key_", "test_restic_key_")):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
 
@@ -1259,9 +1254,9 @@ async def test_soul_key_status_route_absent(
 async def test_soul_key_init_route_writes_a_key(
     client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`backend: "file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default
-    systemd-creds backend gets its own dedicated test below; this one is about
-    the route's own plumbing (body -> soul_crypto.soul_key_init)."""
+    """`backend: "file"`: the default systemd-creds backend gets its own dedicated
+    test below; this one is about the route's own plumbing
+    (body -> soul_crypto.soul_key_init)."""
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     r = await client.post("/soul-key/init", json={"backend": "file"})
@@ -1284,10 +1279,10 @@ async def test_soul_key_init_route_default_backend_is_systemd_creds(
     body = r.json()
     assert "error" not in body
     assert body["backend"] == "host-cred"
-    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
-    # (no path) credential blob lands in the per-user credstore, NOT sibling to
-    # the logical OSIRIS_SOUL_KEY_FILE path — the autouse fixture above redirects
-    # XDG_CONFIG_HOME so this is tmp_path-scoped, never the real credstore.
+    # The first key must come from the normal CLI: the default (no path) credential
+    # blob lands in the per-user credstore, not sibling to the logical
+    # OSIRIS_SOUL_KEY_FILE path. The autouse fixture above redirects XDG_CONFIG_HOME
+    # so this is tmp_path-scoped, never the real credstore.
     assert (systemd_credential.user_credstore_encrypted_dir() / "soul.key").is_file()
     assert body["restart_units"] == ["osiris-mcp.service", "osiris-worker.service"]
     assert body["restarted"] is False
@@ -1297,8 +1292,8 @@ async def test_soul_key_init_route_restart_true_calls_the_shared_restart_primiti
     client: httpx.AsyncClient, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`restart: true` on the console's own Init button reuses `_real_restart_
-    services` — the SAME primitive `osiris deploy` and the CLI's own `--restart`
-    both use — proved by monkeypatching it, never shelling out to a real
+    services`, the same primitive `osiris deploy` and the CLI's own `--restart`
+    both use, proved by monkeypatching it, never shelling out to a real
     `systemctl` in this test."""
     from src import cli
 
@@ -1362,7 +1357,7 @@ async def test_soul_key_restore_drill_route_refuses_with_no_repo_configured(
 async def test_backfill_route_dry_run_reports_the_plan(
     client: httpx.AsyncClient,
 ) -> None:
-    """A dry-run request is never authority-gated — read-only, no write, no because."""
+    """A dry-run request is never authority-gated: read-only, no write, no because."""
     r = await client.post("/backfill", json={
         "target": "bootstrap_orphan_references", "dry_run": True})
     assert r.status_code == 200
@@ -1378,7 +1373,7 @@ async def test_backfill_route_unknown_target_refuses(client: httpx.AsyncClient) 
 async def test_backfill_route_apply_as_the_operator_writes(
     client: httpx.AsyncClient,
 ) -> None:
-    """The console posts as analyst:operator (an _OPERATOR_ACTORS member) — authorized
+    """The console posts as analyst:operator (an _OPERATOR_ACTORS member), authorized
     by construction, same reasoning /settings' own write route already documents."""
     r = await client.post("/backfill", json={
         "target": "bootstrap_orphan_references", "dry_run": False,
@@ -1398,10 +1393,10 @@ async def test_backfill_route_apply_without_because_refuses(
 async def test_backfill_route_refuses_operator_charter_apply_even_as_the_operator(
     client: httpx.AsyncClient,
 ) -> None:
-    """THE ONE STRUCTURAL EXCLUSION (thread c89a9873): operator_charter's own blast
-    radius (fleet-wide operator authority) is refused here regardless of the caller's
-    own authority — never merely hidden behind the UI's own missing button. Posting
-    directly, as the fully-authorized console operator actor, must still refuse."""
+    """The one structural exclusion: operator_charter's own blast radius (fleet-wide
+    operator authority) is refused here regardless of the caller's own authority,
+    never merely hidden behind the UI's own missing button. Posting directly, as the
+    fully-authorized console operator actor, must still refuse."""
     r = await client.post("/backfill", json={
         "target": "operator_charter", "dry_run": False, "because": "trying anyway"})
     body = r.json()
@@ -1412,7 +1407,7 @@ async def test_backfill_route_refuses_operator_charter_apply_even_as_the_operato
 async def test_backfill_route_operator_charter_dry_run_still_works(
     client: httpx.AsyncClient,
 ) -> None:
-    """The exclusion is APPLY-only — the panel's own dry-run preview for this target
+    """The exclusion is apply-only: the panel's own dry-run preview for this target
     stays informational and harmless."""
     r = await client.post("/backfill", json={
         "target": "operator_charter", "dry_run": True})

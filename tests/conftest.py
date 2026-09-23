@@ -26,192 +26,188 @@ from src.db.redis import create_redis
 from testcontainers.postgres import PostgresContainer
 from testcontainers.redis import RedisContainer
 
-# rooms/cases/objects/assertions are DELIBERATELY ABSENT (task #97): the `actions`
-# fixture below resets everything in THIS tuple first, then handles those four
-# separately (scoped deletes for objects/assertions, plain DELETEs for cases/rooms) —
-# sparing the persistent Type catalog. All four were in this set once; if you're
-# re-adding any of them, you are almost certainly re-introducing one of two bugs
-# already caught live, THE SECOND ONE TWICE (it has two hops):
-#   (1) Imhotep's catch (msg 2116): re-adding objects/assertions means the blanket
-#       reset wipes the Type rows before the scoped delete runs (which then no-ops
-#       on an already-empty table) — every test raises UnknownTypeError.
-#   (2) THE CASCADE LEAK (found independently, same night, TWO HOPS DEEP): even with
+# rooms/cases/objects/assertions are DELIBERATELY ABSENT: the `actions` fixture below
+# resets everything in THIS tuple first, then handles those four separately (scoped
+# deletes for objects/assertions, plain DELETEs for cases/rooms), sparing the
+# persistent Type catalog. All four were in this set once; if you're re-adding any of
+# them, you are almost certainly re-introducing one of two bugs already caught live:
+#   (1) re-adding objects/assertions means the blanket reset wipes the Type rows
+#       before the scoped delete runs (which then no-ops on an already-empty table):
+#       every test raises UnknownTypeError.
+#   (2) THE CASCADE LEAK (found independently, same night, two hops deep): even with
 #       objects/assertions/cases correctly absent, TRUNCATE ... CASCADE (this set's
-#       reset statement BEFORE task #100) reached `assertions` via a chain that
-#       starts somewhere that looks harmless: `rooms` (a normal, no-preservation-
-#       needed table, easy to assume safe to leave in this set) has `cases.room_id
-#       REFERENCES rooms(id)` pointing AT it — so truncating `rooms` cascaded to
-#       `cases` (a table this set already knew to exclude, but CASCADE doesn't care
-#       what your OWN exclusion list intended), which THEN cascaded again to
-#       `assertions` via `case_id REFERENCES cases(id)`. Confirmed empirically via
-#       `conn.add_log_listener` on a live TRUNCATE — Postgres's own NOTICE output
-#       said exactly this: "truncate cascades to table cases" then "truncate
-#       cascades to table assertions". Lesson, still true under DELETE even though
-#       the specific TRUNCATE-CASCADE mechanism is gone (see below): a LATER
+#       reset statement before the DELETE rewrite below) reached `assertions` via a
+#       chain that starts somewhere that looks harmless: `rooms` (a normal, no-
+#       preservation-needed table, easy to assume safe to leave in this set) has
+#       `cases.room_id REFERENCES rooms(id)` pointing at it, so truncating `rooms`
+#       cascaded to `cases` (a table this set already knew to exclude, but CASCADE
+#       doesn't care what your own exclusion list intended), which then cascaded
+#       again to `assertions` via `case_id REFERENCES cases(id)`. Confirmed
+#       empirically via `conn.add_log_listener` on a live TRUNCATE: Postgres's own
+#       NOTICE output said exactly this, "truncate cascades to table cases" then
+#       "truncate cascades to table assertions". Lesson, still true under DELETE even
+#       though the specific TRUNCATE-CASCADE mechanism is gone (see below): a later
 #       migration can add a new FK to an old, innocent-looking table (0010_rooms.py
 #       added cases.room_id years after cases was first created) and silently widen
-#       what a reset touches. Don't reason this by hand: if a future migration adds
-#       a new FK anywhere near objects/assertions/cases/rooms/_RESET_TABLES, re-
-#       verify with a live query against pg_constraint (see _RESET_TABLES's own
-#       comment for the exact query) rather than re-deriving the graph by reading
-#       CREATE TABLE statements. `rooms` and `cases` are each cleared by a plain
-#       DELETE issued AFTER the scoped assertions/objects delete — `rooms`'s own
-#       referencing FKs (cases.room_id, compositions.room_id, console_state.room_id)
-#       are all `ON DELETE SET NULL`, which DELETE honors, so deleting rooms this
-#       way never touches — let alone cascades into — anything else.
+#       what a reset touches. Don't reason this by hand: if a future migration adds a
+#       new FK anywhere near objects/assertions/cases/rooms/_RESET_TABLES, re-verify
+#       with a live query against pg_constraint (see _RESET_TABLES's own comment for
+#       the exact query) rather than re-deriving the graph by reading CREATE TABLE
+#       statements. `rooms` and `cases` are each cleared by a plain DELETE issued
+#       after the scoped assertions/objects delete: `rooms`'s own referencing FKs
+#       (cases.room_id, compositions.room_id, console_state.room_id) are all `ON
+#       DELETE SET NULL`, which DELETE honors, so deleting rooms this way never
+#       touches, let alone cascades into, anything else.
 #
-# TASK #100 (Thoth msg 2144/2152/2161): this used to be one `TRUNCATE {_TABLES}
-# RESTART IDENTITY CASCADE` statement. Measured live (decision 335ddd13): TRUNCATE
-# pays a FIXED catalog/lock cost per table REGARDLESS of row count — ~270ms average
-# even against empty tables, ~73-83% of the whole suite's 588s, dwarfing pool
-# creation (~19ms) and everything else in this fixture combined. Since every one of
-# these tables is nearly empty at reset time (a handful of rows a single test wrote,
-# at most), DELETE beats TRUNCATE by roughly two orders of magnitude — DELETE's cost
-# scales with row count, TRUNCATE's doesn't (decision 41c47976: ~9.88ms average
-# against the same empty-table benchmark, ~27x). Sequential DELETEs need the FK-
-# dependency order TRUNCATE's own CASCADE used to compute for you — get that order
-# from Postgres itself, never by hand (the exact lesson bug (2) above already
-# taught): `SELECT conrelid::regclass::text AS child, confrelid::regclass::text AS
-# parent FROM pg_constraint WHERE contype = 'f'`, filtered to edges where both sides
-# are in _RESET_TABLES, topologically sorted child-before-parent. Re-run that query
-# and re-sort if a migration adds a new FK among these tables — a stale order fails
-# LOUDLY (a FK violation on the misordered DELETE), never silently, which is the one
-# way this is safer than TRUNCATE CASCADE's silent-widening failure mode.
+# This used to be one `TRUNCATE {_TABLES} RESTART IDENTITY CASCADE` statement.
+# Measured live: TRUNCATE pays a fixed catalog/lock cost per table regardless of row
+# count, about 270ms average even against empty tables, roughly 73-83% of the whole
+# suite's 588s, dwarfing pool creation (~19ms) and everything else in this fixture
+# combined. Since every one of these tables is nearly empty at reset time (a handful
+# of rows a single test wrote, at most), DELETE beats TRUNCATE by roughly two orders
+# of magnitude: DELETE's cost scales with row count, TRUNCATE's doesn't (about 9.88ms
+# average against the same empty-table benchmark, roughly 27x). Sequential DELETEs
+# need the FK-dependency order TRUNCATE's own CASCADE used to compute for you: get
+# that order from Postgres itself, never by hand (the exact lesson bug (2) above
+# already taught): `SELECT conrelid::regclass::text AS child,
+# confrelid::regclass::text AS parent FROM pg_constraint WHERE contype = 'f'`,
+# filtered to edges where both sides are in _RESET_TABLES, topologically sorted
+# child-before-parent. Re-run that query and re-sort if a migration adds a new FK
+# among these tables: a stale order fails loudly (a FK violation on the misordered
+# DELETE), never silently, which is the one way this is safer than TRUNCATE CASCADE's
+# silent-widening failure mode.
 #
-# ONE REAL BEHAVIOR CHANGE: DELETE does not reset sequences the way TRUNCATE
-# RESTART IDENTITY did — bigserial ids climb across the whole session instead of
-# restarting at 1 every test. Verified before landing this: no test anywhere in
-# tests/ or src/ asserts a literal id for any of these 31 tables (regex-swept, not
-# just spot-checked — one incidental false positive, a UA-string, zero real hits).
+# ONE REAL BEHAVIOR CHANGE: DELETE does not reset sequences the way TRUNCATE RESTART
+# IDENTITY did; bigserial ids climb across the whole session instead of restarting at
+# 1 every test. Verified before landing this: no test anywhere in tests/ or src/
+# asserts a literal id for any of these 31 tables (regex-swept, not just
+# spot-checked; one incidental false positive, a UA-string, zero real hits).
 #
-# `backup_settings` (migration 0066, thread f04cce36 piece 3) joined here the same
-# night it shipped — FK-free by construction (a singleton settings row, no
-# REFERENCES at all), so no ordering constraint, added to this unordered group
-# BEFORE it could repeat harness_messages'/soul_lines' own missing-from-day-one gap
-# (found live: test_backup_settings_survives_a_wiped_singleton saw a previous test's
-# rev leak across, the exact "assert 3 == 0" shape those two entries already named).
-# `settings` (migration 0067, THE SETTINGS MENU piece 1, thread f4498ab304e4) joined
-# here the same day for the identical reason — FK-free, no seeded row at all (unlike
-# backup_settings' singleton), so a bare DELETE is a true no-op on an untouched test.
+# `backup_settings` joined here the same night it shipped: FK-free by construction (a
+# singleton settings row, no REFERENCES at all), so no ordering constraint, added to
+# this unordered group before it could repeat harness_messages'/soul_lines' own
+# missing-from-day-one gap (found live: test_backup_settings_survives_a_wiped_singleton
+# saw a previous test's rev leak across, the exact "assert 3 == 0" shape those two
+# entries already named). `settings` joined here the same day for the identical
+# reason: FK-free, no seeded row at all (unlike backup_settings' singleton), so a bare
+# DELETE is a true no-op on an untouched test.
 _RESET_TABLES = (
     "agent_mounts", "agent_wakes", "alerts", "audit_log", "backup_settings",
     "body_usage", "case_objects",
     "collection_jobs", "console_state", "cookie_leases", "dev_pulses", "handoffs",
     "settings",
-    # harness_messages (migration 0051) joined its three siblings here on 2026-08-28,
-    # closing obligation 4ffb2b37. It was missing from the day the table shipped: every
-    # OTHER harness_* table was listed, so the omission read as deliberate rather than
-    # forgotten, and the only symptom was test_cross_channel's recover-execute tests
-    # seeing rows a PREVIOUS test had inserted (assert 3 == 0). FK-free by construction
-    # (0051 declares none — anchor_sid/from_agent are plain text, resolution is best
-    # effort), so it has no ordering constraint and belongs in this unordered group.
+    # harness_messages joined its three siblings here, closing an open obligation. It
+    # was missing from the day the table shipped: every OTHER harness_* table was
+    # listed, so the omission read as deliberate rather than forgotten, and the only
+    # symptom was test_cross_channel's recover-execute tests seeing rows a PREVIOUS
+    # test had inserted (assert 3 == 0). FK-free by construction (anchor_sid/
+    # from_agent are plain text, resolution is best effort), so it has no ordering
+    # constraint and belongs in this unordered group.
     "harness_messages",
     "harness_telemetry", "harness_telemetry_files", "harness_turns", "helper_cache",
     "links", "llm_usage", "mcp_tool_stats", "merge_candidates", "message_recipients",
     "object_aliases", "object_events", "outbox", "pit_watch_alarms", "resource_leases",
     "search_log", "search_vectors",
-    # session_reads (migration 0069, PROVENANCE PIECE 1) joined here the same day it
-    # shipped, ahead of the harness_messages/soul_lines gap this comment block already
-    # names twice — FK-only to objects (like `links` above, same unordered position),
-    # so no ordering constraint among this tuple's own members.
+    # session_reads joined here the same day it shipped, ahead of the
+    # harness_messages/soul_lines gap this comment block already names twice: FK-only
+    # to objects (like `links` above, same unordered position), so no ordering
+    # constraint among this tuple's own members.
     "session_reads",
-    # soul_lines/soul_sessions (migration 0050) were missing from the day the table
-    # shipped, the exact same shape as harness_messages' own gap above: FK-free by
-    # construction (0050 declares neither table with a REFERENCES/FOREIGN KEY — a
-    # plain composite PK on each, no relationship to anything else in this tuple), so
-    # no ordering constraint, but their ABSENCE meant Khnum's wire-resume-to-store
-    # lane (ruling d161a156/d63b2ca6) hit real cross-test contamination: many
-    # test_trigger.py/test_cli.py fixtures reuse the SAME literal session id constant
-    # (FULL_SID, _RESUME_SID) across dozens of DIFFERENT test functions, each writing
-    # DIFFERENT transcript bytes under that id — `ingest_path`'s own idempotent
-    # `ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING` means whichever test
-    # ran FIRST in a session permanently owns that anchor_sid's stored content for
-    # every OTHER test reusing the same id, silently, for the rest of the run.
+    # soul_lines/soul_sessions were missing from the day the table shipped, the exact
+    # same shape as harness_messages' own gap above: FK-free by construction (neither
+    # table declares a REFERENCES/FOREIGN KEY, a plain composite PK on each, no
+    # relationship to anything else in this tuple), so no ordering constraint, but
+    # their absence meant a wire-resume-to-store lane hit real cross-test
+    # contamination: many test_trigger.py/test_cli.py fixtures reuse the same literal
+    # session id constant (FULL_SID, _RESUME_SID) across dozens of DIFFERENT test
+    # functions, each writing different transcript bytes under that id: `ingest_path`'s
+    # own idempotent `ON CONFLICT (harness, anchor_sid, line_idx) DO NOTHING` means
+    # whichever test ran first in a session permanently owns that anchor_sid's stored
+    # content for every other test reusing the same id, silently, for the rest of the
+    # run.
     "soul_lines", "soul_sessions",
-    # soul_lines_cold (migration 0063, the cold tier): the THIRD instance of this
-    # exact omission class, caught live building THE KEY DOOR (Thoth mail 12810) --
+    # soul_lines_cold (the cold tier): the third instance of this exact omission
+    # class, caught live while building the encryption key-rotation path:
     # rewrap_soul_lines_key's own dry-run census, run against the shared suite-wide
-    # DB, found OTHER tests' cold-tier rows (encrypted under the real conftest
+    # DB, found other tests' cold-tier rows (encrypted under the real conftest
     # OSIRIS_SOUL_KEY, undecryptable under a fresh per-test key never used to write
     # them) counted as "broken", failing a test that only ever touched its own rows.
-    # FK-free by construction (0063 declares none), same unordered position as its
-    # hot-tier sibling above.
+    # FK-free by construction, same unordered position as its hot-tier sibling above.
     "soul_lines_cold",
     "sweep_ledger", "triggers", "watermarks",
-    # these four must come LAST, in this order — each is the PARENT side of an
+    # these four must come LAST, in this order: each is the PARENT side of an
     # internal FK from a table above it in this tuple (alerts->compositions,
     # handoffs->helper_runs, harness_turns->harness_sessions,
     # message_recipients->fleet_messages), so a CHILD row can still reference it
     # while everything above deletes. Deleting a parent before its child violates
-    # the FK — this order was wrong once already (caught live: the first version of
+    # the FK: this order was wrong once already (caught live: the first version of
     # this tuple had the direction backwards, an inverted topological sort that a
     # timing-only benchmark against empty tables never exercised; the real suite's
     # FK violations on handoffs->helper_runs are what caught it). Everything above
     # this line has no FK to anything else in this tuple (verified via the
-    # pg_constraint query above, then re-verified against REAL referencing rows —
-    # not just an empty-table benchmark — for all four pairs before landing this
-    # fix) and can run in any order relative to each other.
+    # pg_constraint query above, then re-verified against real referencing rows, not
+    # just an empty-table benchmark, for all four pairs before landing this fix) and
+    # can run in any order relative to each other.
     "compositions", "fleet_messages", "harness_sessions", "helper_runs",
 )
 
 
-# PYTEST-XDIST PARALLELIZATION (task #100's tail, Thoth msg 2224): pg_dsn used to be
-# one session-scoped PostgresContainer per pytest PROCESS. Under `-n auto`, xdist
-# runs each worker as its OWN process — that fixture, unmodified, would silently
-# start N separate containers (one per worker), which is legal but exactly the
-# "one container per run" docker load this build exists to keep flat, multiplied by
-# worker count instead of collapsed to one. ONE container instead, shared by every
-# worker, each worker with its OWN DATABASE inside it (test_gw0, test_gw1, ... —
-# "test" itself, unchanged, outside xdist) — parallelism at the pytest level, on top
-# of (not instead of) task #100's own per-database ordered-DELETE isolation between
-# tests within a worker.
+# PYTEST-XDIST PARALLELIZATION: pg_dsn used to be one session-scoped PostgresContainer
+# per pytest PROCESS. Under `-n auto`, xdist runs each worker as its OWN process; that
+# fixture, unmodified, would silently start N separate containers (one per worker),
+# which is legal but exactly the "one container per run" docker load this build
+# exists to keep flat, multiplied by worker count instead of collapsed to one. ONE
+# container instead, shared by every worker, each worker with its OWN DATABASE inside
+# it (test_gw0, test_gw1, ..., "test" itself, unchanged, outside xdist): parallelism
+# at the pytest level, on top of (not instead of) the per-database ordered-DELETE
+# isolation between tests within a worker.
 #
-# WHY HOOKS, NOT A FIXTURE, OWN THE CONTAINER: xdist's controller process never runs
-# a test and never evaluates a test-scoped fixture — only worker processes do. A
+# WHY HOOKS, NOT A FIXTURE, OWN THE CONTAINER: xdist's controller process never runs a
+# test and never evaluates a test-scoped fixture; only worker processes do. A
 # session-scoped fixture body only runs inside a worker, so nothing "session-scoped"
 # can single-flight across workers; every worker would independently race to be the
 # one that starts it. `pytest_configure`/`pytest_unconfigure` are different: real
 # pytest hooks, and they DO fire once in the controller too. `hasattr(config,
 # "workerinput")` is xdist's own documented way to tell a worker's pytest_configure
 # from the controller's (or a plain non-xdist run's, which takes the same branch as
-# the controller since it IS the only process either way) — a worker's config
-# carries that attribute, the others don't. So the controller starts the ONE
-# container in its own pytest_configure and stops it in pytest_unconfigure; a
-# worker's pytest_configure sees workerinput and does nothing.
+# the controller since it IS the only process either way): a worker's config carries
+# that attribute, the others don't. So the controller starts the ONE container in its
+# own pytest_configure and stops it in pytest_unconfigure; a worker's pytest_configure
+# sees workerinput and does nothing.
 #
 # HANDOFF VIA workerinput, NOT A SHARED TEMP FILE: `pytest_configure_node(node)` is
 # xdist's own controller-side hook, fired once per worker right before that worker
 # starts, specifically for handing controller-computed data down
-# (`node.workerinput[...] = ...`) — the documented channel for exactly this, no
+# (`node.workerinput[...] = ...`): the documented channel for exactly this, no
 # polling and no lock file needed.
 #
-# NO RYUK-DISABLE NEEDED: testcontainers' default reaper ties a container's cleanup
-# to the process that started it staying connected; that process here is the
-# controller, which by construction stays alive for the whole run (xdist's
-# controller doesn't finish until every worker has finished and reported back) — the
-# same lifetime invariant that already held before this change, now spanning N
-# workers instead of one process's own tests.
+# NO RYUK-DISABLE NEEDED: testcontainers' default reaper ties a container's cleanup to
+# the process that started it staying connected; that process here is the controller,
+# which by construction stays alive for the whole run (xdist's controller doesn't
+# finish until every worker has finished and reported back): the same lifetime
+# invariant that already held before this change, now spanning N workers instead of
+# one process's own tests.
 _CONTAINER: dict[str, PostgresContainer | RedisContainer] = {}
 
 
-# THE LIVE-DB GUARD (thread 9b9ba394): agent:repro-test-same/agent:repro-test-0 were a
-# reproduction harness that reached the LIVE fleet graph instead of an isolated fixture
-# DB — the twin of dev_env.refuse_silent_live_db (e4a3f3c) one layer over: that guard
-# stops a bare SCRIPT invocation from silently defaulting to the live DSN; this one stops
-# a pytest PROCESS from ever opening one at all, no matter how deep the call — a fixture,
-# a script imported and driven by a repro test, a CLI/orchestrator function called
-# directly. Same law (never infer from cwd, key on the DSN itself): the only DSNs this
-# process may ever open are THIS session's own testcontainer's host:port, learned once at
-# container start and never trusted from an env var or a caller's own claim. Patches BOTH
-# asyncpg entrypoints (create_pool — src.db.pool.create_pool's own primitive, and every
-# scripts/*.py direct caller; connect — the bare-connection callers like
-# osiris_stophook.py/osiris_fleet_glance.py) so nothing in this process can route around
-# it by skipping src.db.pool. Installed once per process (the controller's own copy is
-# inert dead weight under xdist — a controller never runs a test — but harmless to
-# install there too; the worker's own copy, in its own process, is the one that matters).
+# THE LIVE-DB GUARD: a reproduction harness once reached the LIVE fleet graph instead
+# of an isolated fixture DB, the twin of dev_env.refuse_silent_live_db one layer over.
+# That guard stops a bare SCRIPT invocation from silently defaulting to the live DSN;
+# this one stops a pytest PROCESS from ever opening one at all, no matter how deep the
+# call: a fixture, a script imported and driven by a repro test, a CLI/orchestrator
+# function called directly. Same rule (never infer from cwd, key on the DSN itself):
+# the only DSNs this process may ever open are THIS session's own testcontainer's
+# host:port, learned once at container start and never trusted from an env var or a
+# caller's own claim. Patches BOTH asyncpg entrypoints (create_pool:
+# src.db.pool.create_pool's own primitive, and every scripts/*.py direct caller;
+# connect: the bare-connection callers like osiris_stophook.py/osiris_fleet_glance.py)
+# so nothing in this process can route around it by skipping src.db.pool. Installed
+# once per process (the controller's own copy is inert dead weight under xdist, a
+# controller never runs a test, but harmless to install there too; the worker's own
+# copy, in its own process, is the one that matters).
 def _dsn_host_port(dsn: str | None, host: object = None, port: object = None) -> tuple[str, str]:
     """Extract (host, port) the same way asyncpg itself would resolve a connection
-    target — either a `dsn` string (the common case, every call site in this repo) or
+    target: either a `dsn` string (the common case, every call site in this repo) or
     bare `host=`/`port=` kwargs (asyncpg.connect's own alternate calling form, unused
     today but a guard keyed only on `dsn` would silently miss it)."""
     from urllib.parse import urlsplit
@@ -222,19 +218,20 @@ def _dsn_host_port(dsn: str | None, host: object = None, port: object = None) ->
     return str(host), str(port)
 
 
-# THE ONE NAMED EXEMPTION: a test that deliberately dials a target NOTHING listens on
-# (test_manager's "postgres is unreachable" probe dials 127.0.0.1:1) is not opening a live
-# DB — but the guard cannot tell "dead port" from "live DSN" without a heuristic, and a
-# heuristic is exactly what 9b9ba394 forbids. So the exemption is an EXPLICIT ACT at the
-# call site: `with unreachable_dsn_allowed(): ...` — visible in the test, greppable, and
-# scoped to that block only. Never a global flag, never an env var.
+# THE ONE NAMED EXEMPTION: a test that deliberately dials a target nothing listens on
+# (test_manager's "postgres is unreachable" probe dials 127.0.0.1:1) is not opening a
+# live DB, but the guard cannot tell "dead port" from "live DSN" without a heuristic,
+# and a heuristic is exactly what the live-DB guard forbids. So the exemption is an
+# explicit act at the call site: `with unreachable_dsn_allowed(): ...`, visible in the
+# test, greppable, and scoped to that block only. Never a global flag, never an env
+# var.
 _FOREIGN_DSN_ALLOWED: contextvars.ContextVar[bool] = contextvars.ContextVar(
     "osiris_test_foreign_dsn_allowed", default=False)
 
 
 @contextlib.contextmanager
 def unreachable_dsn_allowed() -> Iterator[None]:
-    """Let THIS block open a non-testcontainer DSN — for tests that prove failure paths
+    """Let THIS block open a non-testcontainer DSN, for tests that prove failure paths
     against a target nothing listens on. The name says what it is for; using it to reach
     a real database is the defect the guard exists to catch."""
     token = _FOREIGN_DSN_ALLOWED.set(True)
@@ -253,10 +250,10 @@ def _install_live_db_guard(host: str, port: str) -> None:
 
     def _refuse(kind: str, got: tuple[str, str]) -> None:
         raise RuntimeError(
-            f"LIVE-DB GUARD (thread 9b9ba394): a pytest process tried {kind} against "
+            f"LIVE-DB GUARD: a pytest process tried {kind} against "
             f"{got[0]}:{got[1]}, not this session's own testcontainer ({allowed[0]}:"
             f"{allowed[1]}). Refused before any network attempt. Route through the "
-            "`actions`/`pg_dsn` fixtures — never a hardcoded or env-sourced DSN inside "
+            "`actions`/`pg_dsn` fixtures, never a hardcoded or env-sourced DSN inside "
             "a test, fixture, or a script called from one."
         )
 
@@ -277,24 +274,23 @@ def _install_live_db_guard(host: str, port: str) -> None:
 
 
 def _install_tool_contract_ceiling_merge_driver() -> None:
-    """Self-installs the merge driver for TOOL_CONTRACT_CEILING_CHARS (dispatch 26686b77,
-    Thoth msg 3658) into this repo's SHARED git config — `.gitattributes` alone names the
-    driver, but a custom driver's own COMMAND is local config only (`git config
-    merge.<name>.driver`), never version-controlled, so `.gitattributes` by itself is
-    silent machinery a stranger would never find. Worktrees share ONE `.git/config`
-    (confirmed: `git rev-parse --git-common-dir` is identical across every seat's own
-    worktree here), so registering it from any ONE worktree's first pytest run arms it
-    fleet-wide — exactly the discoverability gap a bare merge driver would otherwise have.
+    """Self-installs the merge driver for TOOL_CONTRACT_CEILING_CHARS into this repo's
+    SHARED git config. `.gitattributes` alone names the driver, but a custom driver's
+    own COMMAND is local config only (`git config merge.<name>.driver`), never
+    version-controlled, so `.gitattributes` by itself is silent machinery a stranger
+    would never find. Worktrees share ONE `.git/config` (confirmed: `git rev-parse
+    --git-common-dir` is identical across every worktree here), so registering it from
+    any ONE worktree's first pytest run arms it repo-wide.
 
     The registered command is deliberately WORKTREE-AGNOSTIC (no absolute path to this
     checkout, no `sys.executable`): it `cd`s to `$(git rev-parse --show-toplevel)` first,
     then runs a bare `python3` (stdlib-only script, no venv needed) against the
-    repo-relative script path — correct no matter which worktree's merge invokes it,
+    repo-relative script path, correct no matter which worktree's merge invokes it,
     including one that didn't exist yet when this was registered.
 
     Idempotent (only writes when the registered value differs) and never fails the test
     run: a git-config write failure (e.g. read-only `.git`) degrades to a printed warning,
-    not a collection error — this is a merge-time safety net, not a test-time one, so its
+    not a collection error. This is a merge-time safety net, not a test-time one, so its
     own absence must never block the gate it doesn't touch.
     """
     import shlex
@@ -319,87 +315,88 @@ def _install_tool_contract_ceiling_merge_driver() -> None:
         print(f"tool-contract-ceiling merge driver NOT installed: {exc}", file=sys.stderr)
 
 
-# AF_UNIX SOCKET PATH LENGTH (Sekhmet's find, msg 2261, task #119's gate): pytest's own
-# default basetemp is "/tmp/pytest-of-<user>/pytest-<N>/", N an EVER-GROWING counter
-# shared fleet-wide across every pytest invocation on this box (already past 270 the
-# night this was found, from this house's own overnight test-running alone) — plus, under
-# `-n auto`, xdist's own "popen-gwN/" worker segment, plus a long test function name (a
-# tests/test_pty_broker.py socket test's tmp_path directory alone is its function name)
-# comfortably exceeds AF_UNIX's ~108-byte sun_path limit on Linux. Confirmed live: 121
-# bytes for that file's two longest-named socket tests under -n auto; 111 even under BARE
-# pytest once the counter climbs high enough — this was never xdist-exclusive, only newly
-# EXPOSED by the extra worker segment tipping an already-fragile path over TODAY's counter
-# value (a length bug waiting to recur in bare pytest too, on a long-lived box, xdist or
-# not). A short, PID-keyed basetemp — not pytest's own incrementing counter, which only
-# grows and is shared fleet-wide, and unrelated to _CONTAINER's per-run Postgres — buys
-# back the byte budget without colliding with any other concurrent pytest invocation on
-# this box (a PID is unique to the OS process that holds it, controller or worker alike,
-# no coordination needed). Only applied when the caller hasn't already passed --basetemp
-# themselves (CI or a human override always wins).
-# THE OFFICE-ROOT SEAT-BELT (wave 9, Thoth's msg 6089): every one of offices.py's
-# scaffold/sweep functions defaults to OSIRIS_OFFICE_ROOT when a caller passes no
-# office_root of its own (offices._default_office_root(), re-read fresh on every call —
-# never a module-level constant a monkeypatch could miss). Set here, once, before ANY
-# test module imports the src package, so a NEW test that simply forgets office_root
-# still lands in a throwaway directory instead of the real ~/.osiris/seats/ — the
-# climintworker1/inferredworker1 shape (decision 5d97b750/f642a1e6), closed for every
-# CURRENT and FUTURE test in this tree at once, rather than one call site at a time.
-# PID-keyed (mirrors basetemp just above) so concurrent pytest invocations on this same
-# box — another worktree's own run — never share, or race over, one directory.
+# AF_UNIX SOCKET PATH LENGTH: pytest's own default basetemp is
+# "/tmp/pytest-of-<user>/pytest-<N>/", N an ever-growing counter shared across every
+# pytest invocation on this box (already past 270 the night this was found, from
+# overnight test-running alone), plus, under `-n auto`, xdist's own "popen-gwN/"
+# worker segment, plus a long test function name (a tests/test_pty_broker.py socket
+# test's tmp_path directory alone is its function name) comfortably exceeds AF_UNIX's
+# ~108-byte sun_path limit on Linux. Confirmed live: 121 bytes for that file's two
+# longest-named socket tests under -n auto; 111 even under BARE pytest once the
+# counter climbs high enough: this was never xdist-exclusive, only newly exposed by
+# the extra worker segment tipping an already-fragile path over the counter's current
+# value (a length bug waiting to recur in bare pytest too, on a long-lived box, xdist
+# or not). A short, PID-keyed basetemp, not pytest's own incrementing counter, which
+# only grows and is shared across runs, and unrelated to _CONTAINER's per-run
+# Postgres, buys back the byte budget without colliding with any other concurrent
+# pytest invocation on this box (a PID is unique to the OS process that holds it,
+# controller or worker alike, no coordination needed). Only applied when the caller
+# hasn't already passed --basetemp themselves (CI or a human override always wins).
+# THE OFFICE-ROOT SEAT-BELT: every one of offices.py's scaffold/sweep functions
+# defaults to OSIRIS_OFFICE_ROOT when a caller passes no office_root of its own
+# (offices._default_office_root(), re-read fresh on every call, never a module-level
+# constant a monkeypatch could miss). Set here, once, before ANY test module imports
+# the src package, so a NEW test that simply forgets office_root still lands in a
+# throwaway directory instead of the real ~/.osiris/seats/, closed for every CURRENT
+# and FUTURE test in this tree at once, rather than one call site at a time.
+# PID-keyed (mirrors basetemp just above) so concurrent pytest invocations on this
+# same box, another worktree's own run, never share, or race over, one directory.
 _TEST_OFFICE_ROOT = Path(tempfile.mkdtemp(prefix=f"osiris-test-seats-{os.getpid()}-"))
 os.environ["OSIRIS_OFFICE_ROOT"] = str(_TEST_OFFICE_ROOT)
 
-# SOUL-STORE ENCRYPTION TEST KEY, FIXED (Thoth mail 9134): every soul_store write/read
-# now goes through src.ingest.soul_crypto.get_soul_key(), whose real fallback ladder (OS
-# keyring, then a 0600 file at /etc/osiris/soul.key) is wrong for a test run in every
-# way — no permission to write /etc/osiris, and (the load-bearing reason for a FIXED
-# key rather than one generated fresh here) xdist runs each test worker as its own OS
-# process with its own `os.environ`, so a key minted per-process would make one worker's
-# encrypted rows unreadable by any assertion running in another. `OSIRIS_SOUL_KEY` (the
-# env override get_soul_key's own docstring names for exactly this) is pinned to one
-# constant every worker agrees on — same discipline `LeaseStore`'s own tests already use
-# a fixed `KEY` constant for, adapted for a module with no per-call key param.
+# SOUL-STORE ENCRYPTION TEST KEY, FIXED: every soul_store write/read now goes through
+# src.ingest.soul_crypto.get_soul_key(), whose real fallback ladder (OS keyring, then
+# a 0600 file at /etc/osiris/soul.key) is wrong for a test run in every way: no
+# permission to write /etc/osiris, and (the load-bearing reason for a FIXED key
+# rather than one generated fresh here) xdist runs each test worker as its own OS
+# process with its own `os.environ`, so a key minted per-process would make one
+# worker's encrypted rows unreadable by any assertion running in another.
+# `OSIRIS_SOUL_KEY` (the env override get_soul_key's own docstring names for exactly
+# this) is pinned to one constant every worker agrees on, the same discipline
+# `LeaseStore`'s own tests already use a fixed `KEY` constant for, adapted for a
+# module with no per-call key param.
 os.environ.setdefault("OSIRIS_SOUL_KEY", "nq4cGwKz9TMd_Nl8ZV8rrhonPw_P_KR7HqCZN_V6qVQ=")
 
 
 def _default_basetemp() -> str:
-    """THE ENOSPC INCIDENT'S OWN ROOT CAUSE (obligation a867ae37, found while building its
-    own early-warning instrument): this PID-keyed basetemp used to be a LITERAL "/tmp/..."
-    path, never derived from `$TMPDIR` — so every gate run following the house's own
-    documented convention ("TMPDIR=/var/tmp/osiris-scratch .venv/bin/pytest ...") still
-    wrote its basetemp (every tmp_path fixture's actual files) straight onto the
-    constrained tmpfs regardless, UNCLEANED, forever (pytest's own retention-pruning only
-    ever revisits its OWN auto-numbered default basetemp naming, never a caller-supplied
-    one — a fresh PID every invocation means no run ever revisits, let alone prunes, a
-    previous run's now-orphaned directory). Confirmed live: 92 leftover `/tmp/pt-<pid>`
-    trees from one ordinary day of fleet activity already accounted for 233,279 of
-    235,301 files under /tmp (99.1%) at measurement time.
+    """THE ENOSPC INCIDENT'S OWN ROOT CAUSE (found while building its own early-warning
+    instrument): this PID-keyed basetemp used to be a LITERAL "/tmp/..." path, never
+    derived from `$TMPDIR`, so every gate run following the documented convention
+    ("TMPDIR=/var/tmp/osiris-scratch .venv/bin/pytest ...") still wrote its basetemp
+    (every tmp_path fixture's actual files) straight onto the constrained tmpfs
+    regardless, uncleaned, forever (pytest's own retention-pruning only ever revisits
+    its OWN auto-numbered default basetemp naming, never a caller-supplied one: a
+    fresh PID every invocation means no run ever revisits, let alone prunes, a
+    previous run's now-orphaned directory). Confirmed live: 92 leftover
+    `/tmp/pt-<pid>` trees from one ordinary day of fleet activity already accounted
+    for 233,279 of 235,301 files under /tmp (99.1%) at measurement time.
 
     `$TMPDIR` now WINS when the caller (gate_hook.py, or a human following the same
-    convention) sets it, same respect-for-caller-intent `pytest_configure` already gives
-    an explicit `--basetemp`; absent that, `/var/tmp` (real disk, 507G free, no fixed
-    inode ceiling the way tmpfs has) is the new default rather than `/tmp` — the same
-    non-tmpfs choice gate_hook.py's own `_SAFE_TMPDIR` already encodes, now the
-    UNCONDITIONAL default instead of something a caller has to remember to request. The
-    PID-keyed shortening itself (msg 2261's own AF_UNIX sun_path-length fix) is
-    unchanged — `/var/tmp` costs 4 more bytes than `/tmp`, comfortably inside the margin
-    that fix bought back."""
+    convention) sets it, the same respect-for-caller-intent `pytest_configure` already
+    gives an explicit `--basetemp`; absent that, `/var/tmp` (real disk, 507G free, no
+    fixed inode ceiling the way tmpfs has) is the new default rather than `/tmp`, the
+    same non-tmpfs choice gate_hook.py's own `_SAFE_TMPDIR` already encodes, now the
+    UNCONDITIONAL default instead of something a caller has to remember to request.
+    The PID-keyed shortening itself (the AF_UNIX sun_path-length fix above) is
+    unchanged: `/var/tmp` costs 4 more bytes than `/tmp`, comfortably inside the
+    margin that fix bought back."""
     base = os.environ.get("TMPDIR") or "/var/tmp"
     return f"{base}/pt-{os.getpid()}"
 
 
-# THE SESSION WATCHDOG (mail 9658, the deadlock fix): pytest-timeout's own per-test
-# ceiling (see the ini `timeout` above) covers a test that hangs WHILE RUNNING — it does
-# nothing for the shape the seshat specimen actually was, an xdist CONTROLLER at 0% CPU
-# in futex_do_wait with no worker processes visible at all (workers dead or hung, the
+# THE SESSION WATCHDOG (the deadlock fix): pytest-timeout's own per-test ceiling (see
+# the ini `timeout` above) covers a test that hangs WHILE RUNNING; it does nothing for
+# the shape one real incident actually was, an xdist CONTROLLER at 0% CPU in
+# futex_do_wait with no worker processes visible at all (workers dead or hung, the
 # controller waiting on a report that will never arrive; --max-worker-restart=2 above
 # covers a worker that dies and gets replaced, this covers the controller's own wait
 # never resolving either way). `_last_report_at` is a one-element mutable box (not a
-# plain module global float) so `pytest_runtest_logreport` can rebind it from any thread
-# without a `global` statement; started only in the SAME branch that starts the Postgres/
-# Redis containers below (the controller, or this same process outside xdist — an actual
-# xdist WORKER never reaches this point, `pytest_configure` returns before it). A daemon
-# thread: it must never keep the process alive past a normal exit on its own.
+# plain module global float) so `pytest_runtest_logreport` can rebind it from any
+# thread without a `global` statement; started only in the SAME branch that starts the
+# Postgres/Redis containers below (the controller, or this same process outside
+# xdist; an actual xdist WORKER never reaches this point, `pytest_configure` returns
+# before it). A daemon thread: it must never keep the process alive past a normal exit
+# on its own.
 _last_report_at = [0.0]
 _watchdog_stop = threading.Event()
 _WATCHDOG_SILENCE_LIMIT_S = 600  # ten minutes with no test report at all = hung, not slow
@@ -408,11 +405,12 @@ _WATCHDOG_POLL_S = 20
 
 def pytest_runtest_logreport(report: pytest.TestReport) -> None:
     """Fires for EVERY report (setup/call/teardown, every outcome) in the process that
-    collects it — the controller too, under xdist, since it re-fires this hook for every
-    report a worker forwards it (the documented channel; this is not a local-only hook).
-    The watchdog thread (started only in the controller/standalone process, see
-    `pytest_configure` below) reads this same box; a worker process rebinding it too is
-    harmless — nothing there ever reads it, since no watchdog thread runs in a worker."""
+    collects it: the controller too, under xdist, since it re-fires this hook for
+    every report a worker forwards it (the documented channel; this is not a
+    local-only hook). The watchdog thread (started only in the controller/standalone
+    process, see `pytest_configure` below) reads this same box; a worker process
+    rebinding it too is harmless, nothing there ever reads it, since no watchdog
+    thread runs in a worker."""
     _last_report_at[0] = time.monotonic()
 
 
@@ -422,14 +420,14 @@ def _watchdog_loop() -> None:
         if silent_for > _WATCHDOG_SILENCE_LIMIT_S:
             sys.stderr.write(
                 f"\n[session watchdog] no pytest_runtest_logreport in {silent_for:.0f}s "
-                f"(limit {_WATCHDOG_SILENCE_LIMIT_S}s) — controller-side hang presumed "
+                f"(limit {_WATCHDOG_SILENCE_LIMIT_S}s): controller-side hang presumed "
                 "(dead/hung xdist workers, or a bare run stuck outside any single test's "
-                "own per-test timeout). Dumping every thread's stack, then os._exit(3) — "
-                "a hang here must never outlive this ceiling.\n")
+                "own per-test timeout). Dumping every thread's stack, then os._exit(3), "
+                "because a hang here must never outlive this ceiling.\n")
             sys.stderr.flush()
             faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
             sys.stderr.flush()
-            os._exit(3)  # not sys.exit — a wedged process needs a hard exit, and this
+            os._exit(3)  # not sys.exit: a wedged process needs a hard exit, and this
             # thread's own caller (pytest's own run loop) is exactly what's presumed stuck
 
 
@@ -441,8 +439,8 @@ def pytest_configure(config: pytest.Config) -> None:
         _install_live_db_guard(str(wi["pg_host"]), str(wi["pg_port"]))
         return  # an xdist worker: the controller (or, outside xdist, this same
         # process, since it then takes this same branch itself) owns the containers
-    _last_report_at[0] = time.monotonic()  # started fresh here, not at import time — a
-    # slow container pull/start below must not already count against the silence budget
+    _last_report_at[0] = time.monotonic()  # started fresh here, not at import time:
+    # a slow container pull/start below must not already count against the silence budget
     threading.Thread(target=_watchdog_loop, name="osiris-session-watchdog",
                      daemon=True).start()
     _install_tool_contract_ceiling_merge_driver()
@@ -450,15 +448,15 @@ def pytest_configure(config: pytest.Config) -> None:
     pg.start()
     _CONTAINER["pg"] = pg
     _install_live_db_guard(pg.get_container_host_ip(), str(pg.get_exposed_port(5432)))
-    # SAME PATTERN AS pg (thread 5550a8df): one container, not one per xdist worker —
-    # redis_url used to be plain session-scoped, so `-n auto` silently started N
-    # containers instead of collapsing to one, exactly the pg_dsn defect task #100's
-    # tail already fixed. Workers get separate DB INDICES inside the one container
-    # (`redis_url` fixture, below) rather than separate containers — Redis's own
-    # per-connection SELECT, no CREATE DATABASE equivalent needed. `--databases 64`
-    # raises the default 16-DB ceiling well past any plausible `-n auto` worker count
-    # on this box, the same headroom reasoning pg_dsn's per-worker CREATE DATABASE
-    # never had to make (postgres has no such fixed ceiling).
+    # SAME PATTERN AS pg: one container, not one per xdist worker; redis_url used to
+    # be plain session-scoped, so `-n auto` silently started N containers instead of
+    # collapsing to one, exactly the pg_dsn defect fixed above. Workers get separate
+    # DB INDICES inside the one container (`redis_url` fixture, below) rather than
+    # separate containers, Redis's own per-connection SELECT, no CREATE DATABASE
+    # equivalent needed. `--databases 64` raises the default 16-DB ceiling well past
+    # any plausible `-n auto` worker count on this box, the same headroom reasoning
+    # pg_dsn's per-worker CREATE DATABASE never had to make (postgres has no such
+    # fixed ceiling).
     redis = RedisContainer("redis:7")
     redis.with_command("redis-server --databases 64")
     redis.start()
@@ -475,7 +473,7 @@ def pytest_configure_node(node: pytest.Item) -> None:  # xdist controller-only h
 
 
 def pytest_unconfigure(config: pytest.Config) -> None:
-    _watchdog_stop.set()  # a normal finish must not leave the daemon thread polling —
+    _watchdog_stop.set()  # a normal finish must not leave the daemon thread polling,
     # harmless either way (daemon, dies with the process), but a clean stop is cheap
     pg = _CONTAINER.pop("pg", None)
     if pg is not None:
@@ -492,12 +490,11 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
     ("master" outside xdist, "gw0"/"gw1"/... under it) is pytest-xdist's own
     fixture. Migrated to head once per worker process (session-scoped: once per
     worker under xdist, once total otherwise) since each worker's database starts
-    empty. The Type catalog (task #97) is seeded lazily by the `actions` fixture
-    below (a cheap existence check, real seed only on the first test that needs it)
-    rather than here — a session-scoped ASYNC fixture proved unreliable under
-    pytest-asyncio's per-function event loop default (see `actions`'s own
-    docstring); unaffected by this change, it already ran per-database, not
-    per-container."""
+    empty. The Type catalog is seeded lazily by the `actions` fixture below (a cheap
+    existence check, real seed only on the first test that needs it) rather than
+    here: a session-scoped ASYNC fixture proved unreliable under pytest-asyncio's
+    per-function event loop default (see `actions`'s own docstring); unaffected by
+    this change, it already ran per-database, not per-container."""
     workerinput = getattr(request.config, "workerinput", None)
     if workerinput is not None:
         host, port = workerinput["pg_host"], workerinput["pg_port"]
@@ -505,7 +502,7 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
         pg = _CONTAINER["pg"]
         host, port = pg.get_container_host_ip(), pg.get_exposed_port(5432)
 
-    # "test" (the container's own default db) IS worker "master"'s database — matches
+    # "test" (the container's own default db) IS worker "master"'s database: matches
     # this fixture's exact pre-xdist behavior 1:1 when nobody passes -n. Only actual
     # xdist workers get a freshly CREATEd database.
     db_name = "test" if worker_id == "master" else f"test_{worker_id}"
@@ -513,7 +510,7 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
     if db_name != "test":
         # no existence check needed: db_name is unique per (fresh, ephemeral)
         # container per worker, and this fixture body runs at most once per worker
-        # process (session scope) — nothing else can have created it first.
+        # process (session scope): nothing else can have created it first.
         with psycopg.connect(admin_dsn, autocommit=True) as conn:
             conn.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
 
@@ -527,26 +524,29 @@ def pg_dsn(request: pytest.FixtureRequest, worker_id: str) -> Iterator[str]:
 def _no_inherited_git_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test inherits git's per-invocation GIT_* variables. Defence in depth.
 
-    THE INCIDENT (2026-08-27, ruling 06029cbf): git exports GIT_DIR and GIT_INDEX_FILE,
-    both ABSOLUTE, into every hook it runs FROM A LINKED WORKTREE. The pre-commit gate runs
-    in worktrees and spawned pytest with the ambient environment. GIT_DIR overrides
-    repository discovery for the whole subprocess tree, and `git -C <dir>` does NOT rescope
-    it -- `-C` chdirs, nothing more. So every fixture in this suite that builds its own
-    throwaway repo, all of them correctly `-C`-scoped, was writing into the fleet's SHARED
-    repository: identity overwritten to test/test@test, HEADs repointed to a fabricated
-    orphan branch, core.bare set on the main checkout, and both installed hooks replaced
-    with stubs -- which disarmed the gate and push_guard fleet-wide, silently.
+    THE INCIDENT: git exports GIT_DIR and GIT_INDEX_FILE, both ABSOLUTE, into every
+    hook it runs FROM A LINKED WORKTREE. The pre-commit gate runs in worktrees and
+    spawned pytest with the ambient environment. GIT_DIR overrides repository
+    discovery for the whole subprocess tree, and `git -C <dir>` does NOT rescope it:
+    `-C` chdirs, nothing more. So every fixture in this suite that builds its own
+    throwaway repo, all of them correctly `-C`-scoped, was writing into the shared
+    repository: identity overwritten to test/test@test, HEADs repointed to a
+    fabricated orphan branch, core.bare set on the main checkout, and both installed
+    hooks replaced with stubs, which disarmed the gate and push_guard repo-wide,
+    silently.
 
-    scripts/gate_hook.py:_pytest_env() is the choke point and closes that path. THIS is the
-    belt to its braces, and it covers what the choke point cannot: the suite run any OTHER
-    way under a poisoned environment -- a bare `pytest` from a shell that has GIT_DIR set,
-    CI wired differently, a future hook that shells out to tests. Every one of those was
-    hypothetical the day before the incident, and so was the incident.
+    scripts/gate_hook.py:_pytest_env() is the choke point and closes that path. THIS
+    is the belt to its braces, and it covers what the choke point cannot: the suite
+    run any OTHER way under a poisoned environment, a bare `pytest` from a shell that
+    has GIT_DIR set, CI wired differently, a future hook that shells out to tests.
+    Every one of those was hypothetical the day before the incident, and so was the
+    incident.
 
-    Deleted, never blanked: an empty GIT_DIR is not "unset", it is a git directory whose
-    path is the empty string, which fails differently and just as wrongly. monkeypatch
-    restores the real environment at teardown, so a test that deliberately sets GIT_* for
-    its own subprocess is unaffected -- this only removes what was INHERITED."""
+    Deleted, never blanked: an empty GIT_DIR is not "unset", it is a git directory
+    whose path is the empty string, which fails differently and just as wrongly.
+    monkeypatch restores the real environment at teardown, so a test that
+    deliberately sets GIT_* for its own subprocess is unaffected: this only removes
+    what was INHERITED."""
     for key in [k for k in os.environ if k.startswith("GIT_")]:
         monkeypatch.delenv(key, raising=False)
 
@@ -557,7 +557,7 @@ def _strict_schema() -> Iterator[None]:
     catalog doesn't declare RAISES. Runtime stays warn-only. Flips BOTH the legacy
     ontology/schema.py flag (still consulted by not-yet-migrated callers: labels.py,
     app.py, mcp_server.py) and the new graph-backed catalog.py flag (actions/core.py's
-    own write path) — remove the schema.py half once every caller has migrated off it."""
+    own write path): remove the schema.py half once every caller has migrated off it."""
     from src.ontology import catalog, schema
 
     schema.set_strict(True)
@@ -571,32 +571,33 @@ def _strict_schema() -> Iterator[None]:
 
 @pytest.fixture(autouse=True)
 def _no_ambient_deploy_gate_flags(monkeypatch: pytest.MonkeyPatch) -> None:
-    """thread be24817b, THE SELF-REFUTING FULL-SUITE DEPLOY GATE: arming
-    OSIRIS_DEPLOY_FULL_SUITE_GATE/OSIRIS_DEPLOY_CHAOS_GATE via env for a real deploy makes
-    `full_suite_gate`'s own spawned pytest subprocess INHERIT that exact env. Every
-    `cmd_deploy` call anywhere in this suite that never explicitly injects its own
-    `deploy_settings` (nearly all of them — 20+ call sites across test_cli.py and
-    test_deploy_guard.py test something else entirely and were never meant to care about
-    either flag) would otherwise read the ambient-armed value as True and try to invoke the
-    REAL `_real_full_suite_gate`/`_real_chaos_gate` defaults: a pytest run recursively
-    spawning itself, or a genuine SIGKILL chaos replay against live daemons, fired by a test
-    that never asked for either. Scrubbed here, unconditionally, for every test in the
-    suite — never a partial fix scoped to the handful of tests that happen to name these
-    flags. A test that DOES want one armed passes its own explicit
-    `deploy_settings=Settings(osiris_deploy_..._gate=True)` (`cmd_deploy`'s injectable
-    Settings param — init kwargs beat env in pydantic-settings, so this fixture leaving the
-    env scrubbed never overrides that test's own explicit construction)."""
+    """THE SELF-REFUTING FULL-SUITE DEPLOY GATE: arming
+    OSIRIS_DEPLOY_FULL_SUITE_GATE/OSIRIS_DEPLOY_CHAOS_GATE via env for a real deploy
+    makes `full_suite_gate`'s own spawned pytest subprocess INHERIT that exact env.
+    Every `cmd_deploy` call anywhere in this suite that never explicitly injects its
+    own `deploy_settings` (nearly all of them, 20+ call sites across test_cli.py and
+    test_deploy_guard.py test something else entirely and were never meant to care
+    about either flag) would otherwise read the ambient-armed value as True and try to
+    invoke the REAL `_real_full_suite_gate`/`_real_chaos_gate` defaults: a pytest run
+    recursively spawning itself, or a genuine SIGKILL chaos replay against live
+    daemons, fired by a test that never asked for either. Scrubbed here,
+    unconditionally, for every test in the suite: never a partial fix scoped to the
+    handful of tests that happen to name these flags. A test that DOES want one armed
+    passes its own explicit `deploy_settings=Settings(osiris_deploy_..._gate=True)`
+    (`cmd_deploy`'s injectable Settings param: init kwargs beat env in
+    pydantic-settings, so this fixture leaving the env scrubbed never overrides that
+    test's own explicit construction)."""
     monkeypatch.delenv("OSIRIS_DEPLOY_FULL_SUITE_GATE", raising=False)
     monkeypatch.delenv("OSIRIS_DEPLOY_CHAOS_GATE", raising=False)
 
 
 @pytest.fixture(autouse=True)
 def _reset_settings_overlay_cache() -> None:
-    """THE SETTINGS MENU's own overlay (thread f4498ab304e4, settings_service.py) caches
-    the whole `settings` table in a module-level dict for a 30s TTL — real, load-bearing
-    in production (one query, not one per registered key), but a genuine cross-test
-    leak risk here: two tests writing the SAME key within that window in the same xdist
-    worker would otherwise see each other's value. Reset before every test."""
+    """The settings overlay (settings_service.py) caches the whole `settings` table
+    in a module-level dict for a 30s TTL: real, load-bearing in production (one
+    query, not one per registered key), but a genuine cross-test leak risk here: two
+    tests writing the SAME key within that window in the same xdist worker would
+    otherwise see each other's value. Reset before every test."""
     from src.orchestrator.settings_service import _invalidate_overlay_cache
 
     _invalidate_overlay_cache()
@@ -606,41 +607,42 @@ def _reset_settings_overlay_cache() -> None:
 async def actions(pg_dsn: str) -> AsyncIterator[Actions]:
     pool = await create_pool(pg_dsn)
     async with pool.acquire() as conn, conn.transaction():
-        # THE CATALOG SURVIVES THE RESET (task #97): every table in _RESET_TABLES is
-        # cleared FIRST, in its own dependency order (see that tuple's comment) —
-        # rooms/cases/objects/assertions are excluded, same as before task #100's
-        # TRUNCATE -> DELETE change (see its own comment for the two-hop CASCADE leak
-        # this still avoids: rooms -> cases -> assertions). Wrapped in one explicit
-        # transaction (conn.transaction(), new under task #100) so 31 sequential
-        # DELETEs commit atomically together — a mid-sequence failure now rolls back
-        # everything instead of leaving a partially-reset database for the next test,
-        # which a single TRUNCATE statement never risked but never needed either.
+        # THE CATALOG SURVIVES THE RESET: every table in _RESET_TABLES is cleared
+        # FIRST, in its own dependency order (see that tuple's comment); rooms/cases/
+        # objects/assertions are excluded, same as before the TRUNCATE -> DELETE
+        # change (see its own comment for the two-hop CASCADE leak this still avoids:
+        # rooms -> cases -> assertions). Wrapped in one explicit transaction
+        # (conn.transaction()) so 31 sequential DELETEs commit atomically together: a
+        # mid-sequence failure now rolls back everything instead of leaving a
+        # partially-reset database for the next test, which a single TRUNCATE
+        # statement never risked but never needed either.
         for table in _RESET_TABLES:
             await conn.execute(f"DELETE FROM {table}")
         # objects/assertions: spare exactly the Type rows the catalog check below
         # seeds. assertions.id is bigserial and this scoped delete does NOT reset it
         # (DELETE never resets a sequence, unlike the old TRUNCATE ... RESTART
-        # IDENTITY) — checked before landing this: no test asserts a literal
+        # IDENTITY): checked before landing this, no test asserts a literal
         # assertions.id value (grepped tests/ + src/ for one; every read is by a
         # dynamically-fetched id, never a hardcoded literal).
         await conn.execute(
             "DELETE FROM assertions a USING objects o "
             "WHERE a.object_id = o.id AND o.type <> 'Type'")
         await conn.execute("DELETE FROM objects WHERE type <> 'Type'")
-        # cases and rooms LAST, after the two deletes above — by now nothing in
+        # cases and rooms LAST, after the two deletes above: by now nothing in
         # `assertions` still holds a case_id (Type rows never carry one; every other
         # row is already gone), so plain DELETEs satisfy every FK with zero
         # referencing rows left to violate.
         await conn.execute("DELETE FROM cases")
         await conn.execute("DELETE FROM rooms")
     actions_ = Actions(pool)
-    # SEED ONCE, CHEAPLY CHECKED EVERY TEST (not a session-scoped async fixture: pytest-
-    # asyncio's per-function event loop default makes that scoping unreliable — a
-    # session-scoped async fixture silently re-running, or not surviving, across
-    # per-test loops is exactly the kind of framework interaction to verify rather than
-    # trust). The scoped delete above preserves Type rows across every test's reset, so
-    # after the real first-test seed this is one fast indexed existence check, not a
-    # re-seed — cheap enough it was never worth the fixture-scoping risk to avoid.
+    # SEED ONCE, CHEAPLY CHECKED EVERY TEST (not a session-scoped async fixture:
+    # pytest-asyncio's per-function event loop default makes that scoping unreliable:
+    # a session-scoped async fixture silently re-running, or not surviving, across
+    # per-test loops is exactly the kind of framework interaction to verify rather
+    # than trust). The scoped delete above preserves Type rows across every test's
+    # reset, so after the real first-test seed this is one fast indexed existence
+    # check, not a re-seed: cheap enough it was never worth the fixture-scoping risk
+    # to avoid.
     from src.ontology.catalog import is_known_object_type, seed_catalog
 
     if not await is_known_object_type(pool, "Organization"):
@@ -661,12 +663,12 @@ async def case_id(actions: Actions) -> str:
 
 @pytest.fixture(scope="session")
 def redis_url(request: pytest.FixtureRequest, worker_id: str) -> str:
-    """The shared container's DSN for THIS worker's own DB INDEX (thread 5550a8df) —
-    same shape as `pg_dsn` above: one container regardless of `-n auto` worker count,
-    each worker isolated by a distinct Redis DB number rather than a distinct
-    container. `worker_id` ("master" outside xdist, "gw0"/"gw1"/... under it) maps to
-    index 0 for master, 1+N for gwN — so a bare pytest run keeps using db 0 exactly
-    like before this change."""
+    """The shared container's DSN for THIS worker's own DB INDEX: same shape as
+    `pg_dsn` above, one container regardless of `-n auto` worker count, each worker
+    isolated by a distinct Redis DB number rather than a distinct container.
+    `worker_id` ("master" outside xdist, "gw0"/"gw1"/... under it) maps to index 0
+    for master, 1+N for gwN, so a bare pytest run keeps using db 0 exactly like
+    before this change."""
     workerinput = getattr(request.config, "workerinput", None)
     if workerinput is not None:
         host, port = workerinput["redis_host"], workerinput["redis_port"]
@@ -680,9 +682,9 @@ def redis_url(request: pytest.FixtureRequest, worker_id: str) -> str:
 @pytest_asyncio.fixture
 async def redis_client(redis_url: str) -> AsyncIterator[aioredis.Redis]:
     client = create_redis(redis_url)
-    # flushdb, never flushall (thread 5550a8df): the container is now shared across
-    # xdist workers, each on its own DB index — flushall would wipe every worker's
-    # data, not just this connection's own selected DB.
+    # flushdb, never flushall: the container is now shared across xdist workers, each
+    # on its own DB index; flushall would wipe every worker's data, not just this
+    # connection's own selected DB.
     await client.flushdb()
     try:
         yield client

@@ -1,9 +1,9 @@
-"""scripts/osiris_hook.py — the unified, stdlib-only hook client (dispatch 5441, the hook
-migration). This file proves the pieces this session's parity audit found genuinely
-missing before the port: the `stop_hook_active` loop guard, the swap confession (ported
-verbatim from osiris_stophook.py's own `_swap_confession`), and that `_fire_stage_a` is
-actually called on every ALLOW path and never on a BLOCKED one (confessing "stopping" on a
-path that ends up blocked would be a lie — the same law the original `_stage_a` names).
+"""scripts/osiris_hook.py: the unified, stdlib-only hook client (the hook migration).
+This file proves the pieces this session's parity audit found genuinely missing before
+the port: the `stop_hook_active` loop guard, the swap confession (ported verbatim from
+osiris_stophook.py's own `_swap_confession`), and that `_fire_stage_a` is actually called
+on every ALLOW path and never on a BLOCKED one (confessing "stopping" on a path that ends
+up blocked would be a lie, the same rule the original `_stage_a` follows).
 Pure/no-DB throughout: `_post` is monkeypatched, never a real HTTP round trip."""
 from __future__ import annotations
 
@@ -74,7 +74,7 @@ def test_no_session_id_is_a_clean_noop(monkeypatch: Any) -> None:
     assert _cmd_stop({}) == 0
 
 
-# --- the swap confession — pure, local, no DB, ONE per change ----------------------------
+# --- the swap confession: pure, local, no DB, ONE per change -----------------------------
 
 def _entry(model: str, content: str = "ok") -> dict[str, Any]:
     return {"type": "assistant", "isSidechain": False,
@@ -105,7 +105,7 @@ def test_swap_confession_only_fires_once_per_pair(tmp_path: Path, monkeypatch: A
 def test_swap_confession_ignores_a_1m_variant_suffix(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """Bracket variants ([1m]) are the SAME weights — never a swap."""
+    """Bracket variants ([1m]) are the SAME weights, never a swap."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     t = tmp_path / "t.jsonl"
     _write_transcript(t, _entry("claude-opus-5[1m]"), _entry("claude-opus-5"))
@@ -150,7 +150,7 @@ def test_swap_confession_blocks_before_any_mail_check(tmp_path: Path, monkeypatc
     out = []
     monkeypatch.setattr("builtins.print", lambda s="", **kw: out.append(s))
     rc = _cmd_stop({"session_id": "ffffhook6", "transcript_path": str(t)})
-    # Stop/SubagentStop hooks ONLY block on exit code 2 (dispatch 5599's own parity proof) —
+    # Stop/SubagentStop hooks ONLY block on exit code 2 (per the earlier parity proof);
     # the old, live osiris_stophook.py never used exit codes at all: it prints the JSON
     # decision to stdout and exits 0.
     assert rc == 0
@@ -178,10 +178,10 @@ def test_stage_a_never_fires_when_mail_blocks_the_stop(monkeypatch: Any) -> None
 
 
 def test_pure_fyi_mail_never_blocks_the_stop(monkeypatch: Any) -> None:
-    """obligation 6ad2f400 (msg 6029): the stop-block is reserved for grade='ask' (+
-    ungraded) — an fyi that dispatch #151's own grammar already promises "never wakes
-    anyone" must not still interrupt a live turn. n=2, both counted in bands['fyi'] ->
-    blocking=0 -> stop proceeds to stage_a, same as a clean inbox."""
+    """The stop-block is reserved for grade='ask' (plus ungraded): an fyi that the send
+    grammar already promises "never wakes anyone" must not still interrupt a live turn.
+    n=2, both counted in bands['fyi'] -> blocking=0 -> stop proceeds to stage_a, same as
+    a clean inbox."""
     calls: list[dict[str, Any]] = []
 
     def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
@@ -198,7 +198,7 @@ def test_pure_fyi_mail_never_blocks_the_stop(monkeypatch: Any) -> None:
 
 
 def test_an_ask_still_blocks_alongside_a_non_blocking_fyi(monkeypatch: Any) -> None:
-    """A mixed inbox (1 ask, 1 fyi) still blocks — the ask carries the debt, the fyi
+    """A mixed inbox (1 ask, 1 fyi) still blocks: the ask carries the debt, the fyi
     rides along in the message text but is never counted toward it."""
     out = []
 
@@ -219,8 +219,8 @@ def test_an_ask_still_blocks_alongside_a_non_blocking_fyi(monkeypatch: Any) -> N
 
 
 def test_ungraded_mail_still_blocks_never_guessed_as_fyi(monkeypatch: Any) -> None:
-    """#151's own law: ungraded mail is never assumed to be fyi. n=1 with an empty bands
-    dict (ungraded, unscored) must still block — blocking = n - bands.get('fyi', 0) = 1."""
+    """Ungraded mail is never assumed to be fyi. n=1 with an empty bands
+    dict (ungraded, unscored) must still block: blocking = n - bands.get('fyi', 0) = 1."""
     out = []
 
     def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
@@ -236,8 +236,8 @@ def test_ungraded_mail_still_blocks_never_guessed_as_fyi(monkeypatch: Any) -> No
 
 
 def test_stale_obligations_block_the_stop_named_not_counted(monkeypatch: Any) -> None:
-    """No-regrow hygiene item 2 (practice 393be453): a stale-after obligation blocks Stop
-    the same severity an ask message does, and NAMES it — never a bare count."""
+    """No-regrow hygiene: a stale-after obligation blocks Stop with the same severity
+    an ask message does, and NAMES it: never a bare count."""
     out: list[str] = []
 
     def _fake_post(url: str, data: dict[str, Any], timeout: int = 3) -> dict[str, Any] | None:
@@ -259,7 +259,7 @@ def test_stale_obligations_block_the_stop_named_not_counted(monkeypatch: Any) ->
 
 
 def test_stale_obligations_never_fire_when_mail_already_blocks(monkeypatch: Any) -> None:
-    """The mail gate is checked first — a caller already blocked on mail never sees a
+    """The mail gate is checked first: a caller already blocked on mail never sees a
     second, competing block for the same turn."""
     calls: list[dict[str, Any]] = []
 
@@ -298,13 +298,13 @@ def test_stage_a_fires_on_a_clean_allowed_stop(monkeypatch: Any) -> None:
     assert phases == ["deliverable", "stage_a"]
 
 
-# --- the offload gate: ONE AUTHORITY + the assumed-window safety law (dispatch 5599) ------
+# --- the offload gate: ONE AUTHORITY + the assumed-window safety rule --------------------
 # Found in the retirement's own parity proof: the stub used here reimplemented context
 # occupancy by hand (no `window_assumed` concept at all) instead of delegating to
 # context_lens.last_usage/occupancy/window_for, the SAME authority osiris_stophook.py's own
 # `_offload_pct` already uses. A hand-rolled guess ("200000 or 1000000") that never tracks
-# whether it guessed can alarm exactly where the live script's own safety law — NEVER on an
-# unknown or assumed window (the Anubis VII false-eulogy law) — forbids it.
+# whether it guessed can alarm exactly where the live script's own safety rule forbids it:
+# never on an unknown or assumed window.
 
 def test_offload_pct_delegates_to_the_context_lens_authority(tmp_path: Path) -> None:
     t = tmp_path / "t.jsonl"
@@ -333,8 +333,8 @@ def test_offload_pct_none_with_no_transcript() -> None:
 
 
 def test_cmd_stop_never_blocks_on_an_assumed_window(monkeypatch: Any, tmp_path: Path) -> None:
-    """Even a HIGH guessed pct must never trigger the offload block — assumed=True short-
-    circuits before ALARM_PCT is even consulted, matching osiris_stophook.py's own law."""
+    """Even a HIGH guessed pct must never trigger the offload block: assumed=True short-
+    circuits before ALARM_PCT is even consulted, matching osiris_stophook.py's own rule."""
     t = tmp_path / "t.jsonl"
     t.write_text(json.dumps({
         "type": "assistant",
@@ -361,8 +361,8 @@ def test_cmd_stop_never_blocks_on_an_assumed_window(monkeypatch: Any, tmp_path: 
 
 
 def test_missing_boxes_delegates_to_the_settle_authority() -> None:
-    """ONE AUTHORITY (dispatch 5599): this used to carry its own friendlier name_map,
-    drifting from src.orchestrator.settle.missing_boxes — the same pure function /settle's
+    """ONE AUTHORITY: this used to carry its own friendlier name_map,
+    drifting from src.orchestrator.settle.missing_boxes, the same pure function /settle's
     own confirm step and osiris_stophook.py's own offload verdict already share."""
     from src.orchestrator.settle import missing_boxes
 
@@ -373,8 +373,8 @@ def test_missing_boxes_delegates_to_the_settle_authority() -> None:
 def test_cmd_stop_offload_block_uses_the_decision_json_protocol_not_exit_1(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Stop/SubagentStop hooks ONLY block on exit code 2 (dispatch 5599's own parity proof,
-    verified against Claude Code's own hooks reference) — exit 1 is a non-blocking error,
+    """Stop/SubagentStop hooks ONLY block on exit code 2 (per the earlier parity proof,
+    verified against Claude Code's own hooks reference); exit 1 is a non-blocking error,
     the stop proceeds anyway, silently. The proven, live osiris_stophook.py never used exit
     codes for this: it prints {"decision": "block", "reason": ...} to stdout and exits 0."""
     t = tmp_path / "t.jsonl"
@@ -415,7 +415,7 @@ def test_fire_stage_a_posts_the_expected_shape(monkeypatch: Any) -> None:
     assert captured["url"] == osiris_hook._URLS["stop"]
 
 
-# --- _cmd_statusline: the chrome rendering (dispatch 5441/5492 parity fix — /heartbeat has
+# --- _cmd_statusline: the chrome rendering (a parity fix: /heartbeat has
 # only ever returned raw counts, never a pre-rendered line; found live, the day of the flip,
 # that this was ENTIRELY missing and would have rendered a blank status bar) --------------
 
@@ -424,7 +424,7 @@ def _heartbeat_result(**overrides: Any) -> dict[str, Any]:
         "briefs": 0, "mail": 0, "dm": 0, "flight": 0, "souls": 3, "wakes": 2,
         "owed": 0, "owed_here": 0, "sick": [], "spend": [0.0, 0.0, 0],
         "resolved_project": "osiris", "resolved_intent": "claude-sonnet-5",
-        "resolved_seat_handle": "Seshat",
+        "resolved_seat_handle": "opsbot",
     }
     base.update(overrides)
     return base
@@ -441,7 +441,7 @@ def test_statusline_renders_the_full_line_on_a_clean_heartbeat(monkeypatch: Any)
     })
     assert rc == 0
     assert len(out) >= 1
-    assert "Seshat" in out[0] and "osiris" in out[0]
+    assert "opsbot" in out[0] and "osiris" in out[0]
     assert "fleet" not in out[0] and "wakes" not in out[0]   # premises-scoped bar
     assert "\u2709\ufe0e 0" in out[0]
     assert "owe" not in out[0]          # absent at zero (operator 2026-09-06)
@@ -451,15 +451,15 @@ def test_statusline_route_failure_reports_the_probe_not_a_diagnosis(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
     """CONTRACT DELIBERATELY CHANGED, 2026-09-01. This test previously asserted
-    `graph unreachable` — the exact string that sent the operator after osiris-pg while
+    `graph unreachable`, the exact string that once sent someone chasing osiris-pg while
     that container had been up 27 hours and the real cause was an osiris-mcp restart from
-    his own deploy. A failed POST is evidence about the PROBE and nothing else, so the
+    a routine deploy. A failed POST is evidence about the PROBE and nothing else, so the
     render now says so. Kept as a test (not deleted) because the fallback path still must
     exist, exit 0, and never invent counts.
 
     Also now ISOLATES THE CACHE: the original read the real ~/.osiris/statusline-cache,
     so once the cache landed this test's outcome depended on whatever other agents had
-    written — a test that passes or fails on the machine's state, not the code's."""
+    written, a test that passes or fails on the machine's state, not the code's."""
     monkeypatch.setattr(osiris_hook, "_statusline_cache_path",
                         lambda project: tmp_path / "empty" / f"{project}.json")
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: None)
@@ -483,7 +483,7 @@ def test_statusline_marks_owed_here_red_when_nonzero(monkeypatch: Any) -> None:
 
 
 def test_statusline_shows_a_dm_doorbell_even_with_zero_plain_mail(monkeypatch: Any) -> None:
-    """thread from the old script: `dm` must light the segment by itself — mail 0 + flight 0
+    """thread from the old script: `dm` must light the segment by itself: mail 0 + flight 0
     + 7 DMs waiting must never render as a dim 'mail 0'."""
     monkeypatch.setattr(
         osiris_hook, "_post",
@@ -576,8 +576,8 @@ def test_operator_swap_false_with_no_command_in_transcript(tmp_path: Any) -> Non
     assert osiris_hook._operator_swap(str(t), "swapop02", "claude-opus-5") is False
 
 
-# --- render_whisper: ported verbatim from osiris_whisper.py (dispatch 5441/5492 parity
-# fix — /automount has only ever returned automount()'s own raw structured output, never a
+# --- render_whisper: ported verbatim from osiris_whisper.py (a parity fix:
+# /automount has only ever returned automount()'s own raw structured output, never a
 # rendered "intro"/"message" string; found live, the same day as the flip). Same test
 # suite tests/test_whisper.py already proved against the pre-port function. -------------
 
@@ -590,21 +590,21 @@ def _whisper_base(**extra: Any) -> dict[str, Any]:
 
 
 def test_render_whisper_drops_the_top_of_wall_reprint() -> None:
-    """Context-bloat diet (decision e1fbde18, Thoth msg 6884): orient() already shows the
-    wall, so the whisper no longer re-prints it — even when the payload carries
-    obligations, the key is simply ignored."""
+    """Context-bloat diet: orient() already shows the
+    wall, so the whisper no longer re-prints it, even when the payload carries
+    obligations; the key is simply ignored."""
     out = _whisper_base(obligations=[
-        {"id": "12a58447", "summary": "HANDOFF — Thoth L to LI", "kind": "obligation"},
-        {"id": "9dc3ce8b", "summary": "READ-SIDE ADOPTION OF THE VISIT CLASS"},
+        {"id": "12a58447", "summary": "handoff note, first shift to second", "kind": "obligation"},
+        {"id": "9dc3ce8b", "summary": "read-side adoption of the visit class"},
     ])
-    text = osiris_hook.render_whisper(out, cwd="/home/asuramaya/.osiris/seats/seshat", env_job="")
+    text = osiris_hook.render_whisper(out, cwd="/home/asuramaya/.osiris/seats/office1", env_job="")
     assert "Top of your project's wall" not in text
     assert "[12a58447]" not in text
 
 
 def test_render_whisper_mechanical_seat_mount_says_exactly_one_sentence(
 ) -> None:
-    """THE MECHANICAL SEAT MOUNT short-circuit (thread dae06a32): a passive body dropped
+    """THE MECHANICAL SEAT MOUNT short-circuit: a passive body dropped
     into a project tree gets told exactly one thing, never the normal glance -- even when
     the payload also carries mail/pulse/obligations, none of it prints."""
     out = _whisper_base(
@@ -631,10 +631,10 @@ def test_render_whisper_speaks_plainly_on_a_witnessed_operator_swap() -> None:
 
 def test_render_whisper_succession_pointer_by_query() -> None:
     out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii", succession={
-        "thread_id": "12a58447", "thread_summary": "HANDOFF — Thoth L to LI"})
+        "thread_id": "12a58447", "thread_summary": "handoff note, first shift to second"})
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
     assert "MINTED as this lineage's successor" in text
-    assert "[12a58447] HANDOFF — Thoth L to LI" in text
+    assert "[12a58447] handoff note, first shift to second" in text
 
 
 def test_render_whisper_succession_falls_back_with_no_query_result() -> None:
@@ -645,15 +645,15 @@ def test_render_whisper_succession_falls_back_with_no_query_result() -> None:
 
 def test_render_whisper_identity_anchor_unconditional_no_mint_needed() -> None:
     out = _whisper_base(identity_anchor={
-        "charter_file": "/home/asuramaya/.osiris/seats/thoth/charter.md"})
+        "charter_file": "/home/asuramaya/.osiris/seats/office1/charter.md"})
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
     assert "MINTED" not in text
-    assert "your charter file is /home/asuramaya/.osiris/seats/thoth/charter.md" in text
+    assert "your charter file is /home/asuramaya/.osiris/seats/office1/charter.md" in text
 
 
 def test_render_whisper_names_a_missing_charter_loudly() -> None:
-    """Thread e2326ab7: the same fact settle()'s terminal box checks, said at first
-    breath instead — must render with the ⚠ marker every other loud whisper line uses."""
+    """The same fact settle()'s terminal box checks, said at session start
+    instead: must render with the ⚠ marker every other loud whisper line uses."""
     out = _whisper_base(charter_missing="UNDECLARED — call charter(repos=[...]) naming "
                                          "the repos you govern before writing anywhere")
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
@@ -677,7 +677,7 @@ def test_render_whisper_mail_count_names_asks() -> None:
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
     assert "3 unread fleet messages" in text
     # ported verbatim, pre-existing pluralization quirk and all (osiris_whisper.py's own
-    # `'s' if asks == 1 else ''` is inverted from what "asks == 1" suggests) — out of scope
+    # `'s' if asks == 1 else ''` is inverted from what "asks == 1" suggests): out of scope
     # for this parity fix to silently correct.
     assert "1 asks something of you" in text
 
@@ -688,17 +688,17 @@ def test_render_whisper_anonymous_offers_the_claim() -> None:
 
 
 def test_render_whisper_named_seat_names_the_dm_address() -> None:
-    out = _whisper_base(seat="Seshat XXXVIII")
+    out = _whisper_base(seat="OpsTag XXXVIII")
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
-    assert "You answer to the name Seshat XXXVIII" in text
-    assert "send(to_agent='Seshat')" in text
+    assert "You answer to the name OpsTag XXXVIII" in text
+    assert "send(to_agent='OpsTag')" in text
 
 
 def test_render_whisper_collapses_to_one_orient_pointer_naming_get_status_first() -> None:
-    """Context-bloat diet (decision e1fbde18, Thoth msg 6884): the whisper used to point
+    """Context-bloat diet: the whisper used to point
     at orient() up to 6 separate times across its own optional bits; now exactly one
-    remains, in the closing ritual line, and it names get_status() — the cheap door — before
-    orient() — the deep one — so a fresh session doesn't default to the 59K-char briefing."""
+    remains, in the closing ritual line, and it names get_status(), the cheap check, before
+    orient(), the deep one, so a fresh session doesn't default to the 59K-char briefing."""
     out = _whisper_base(minted="agent:ad1a1cb0-g40-xiii", away={"threads": ["t1"]})
     text = osiris_hook.render_whisper(out, cwd="/x", env_job="")
     assert text.count("orient()") == 1
@@ -715,10 +715,10 @@ def test_render_whisper_drops_the_durable_anchor_mechanics_paragraph() -> None:
 
 
 # --- _cmd_whisper: the request body must carry the env-derived attach/bridge/spawn fields
-# the harness's own stdin JSON never provides (found live, the SAME day as the flip — a
+# the harness's own stdin JSON never provides (found live, the same day as the flip: a
 # structural continuity gap, not merely a missing banner) ------------------------------
 
-def test_cmd_whisper_carries_the_attach_ceremony_env_vars(monkeypatch: Any) -> None:
+def test_cmd_whisper_carries_the_attach_env_vars(monkeypatch: Any) -> None:
     monkeypatch.setenv("OSIRIS_SEAT_ID", "seat:abc123")
     monkeypatch.setenv("OSIRIS_ATTACH_TOKEN", "tok-xyz")
     monkeypatch.setenv("OSIRIS_SPAWNED_BY", "agent:parent001")
@@ -748,7 +748,7 @@ def test_cmd_whisper_no_session_id_or_cwd_is_a_clean_noop(monkeypatch: Any) -> N
     assert osiris_hook._cmd_whisper({}) == 0
 
 
-# --- bg-spare bodies never mint or mount (task #204, Thoth msg 6997: pid 2979241, cmdline
+# --- bg-spare bodies never mint or mount (found live: pid 2979241, cmdline
 # `claude bg-spare --bg-spare .../claim.sock`, cwd the bare container root, zero turns
 # ever, its own heartbeat refreshing agent_mounts every few minutes; the phantom-fold
 # correctly retired the resulting false_mint generation, but the mount row itself kept
@@ -778,7 +778,7 @@ def test_is_bg_spare_process_fails_open_when_proc_is_unreadable(monkeypatch: Any
 
 def test_cmd_whisper_never_mints_a_bg_spare_body(monkeypatch: Any) -> None:
     def _unreachable(*a: Any, **k: Any) -> None:
-        raise AssertionError("a bg-spare has no identity until claimed — must never POST")
+        raise AssertionError("a bg-spare has no identity until claimed: must never POST")
 
     monkeypatch.setattr(osiris_hook, "_is_bg_spare_process", lambda: True)
     monkeypatch.setattr(osiris_hook, "_post", _unreachable)
@@ -830,11 +830,11 @@ def test_cmd_whisper_logs_the_connected_diagnostic_to_stderr(monkeypatch: Any, c
     assert "connected" in capsys.readouterr().err
 
 
-# --- session-end/precompact/spawn: stderr diagnostic parity (dispatch 5599) ----------------
+# --- session-end/precompact/spawn: stderr diagnostic parity ----------------
 # The retirement's own parity proof (run both paths against a real capture server, diff the
 # wire output, never a read-and-conclude claim) found the request bodies matched byte-for-
-# byte, but the retired scripts always logged "posted {url} — connected/failed" to stderr on
-# every attempt and the ported versions were silent — no replacement, unlike whisper's own
+# byte, but the retired scripts always logged "posted {url}: connected/failed" to stderr on
+# every attempt and the ported versions were silent, with no replacement, unlike whisper's own
 # user-visible fallback message on failure. Restored via the shared `_log_post` helper.
 
 def test_session_end_logs_the_connected_diagnostic(monkeypatch: Any) -> None:
@@ -878,7 +878,7 @@ def test_spawn_logs_the_diagnostic_only_with_an_agent_id(monkeypatch: Any) -> No
 
 
 def _fake_stdout_print(out: list[str]) -> Any:
-    """Captures only STDOUT prints (the hookSpecificOutput JSON) — _log_post's own
+    """Captures only STDOUT prints (the hookSpecificOutput JSON); _log_post's own
     diagnostic always targets file=sys.stderr and must not be conflated with it."""
     def _p(s: str = "", **kw: Any) -> None:
         if kw.get("file") is None:
@@ -889,13 +889,13 @@ def _fake_stdout_print(out: list[str]) -> Any:
 def test_spawn_start_prints_the_fork_orientation_as_additional_context(
     monkeypatch: Any,
 ) -> None:
-    """obligation 706c27dc's second half (msg 6034): SubagentStart is NOT in Claude Code's
+    """SubagentStart is NOT in Claude Code's
     plain-stdout-as-context exception list, so a fork only ever sees this if it's shaped as
-    hookSpecificOutput.additionalContext JSON — the one place this client emits that shape."""
+    hookSpecificOutput.additionalContext JSON: the one place this client emits that shape."""
     monkeypatch.setattr(
         osiris_hook, "_post",
         lambda url, data, timeout=3: {"spawn": "agent:forkabcd", "of": "agent:parent",
-                                      "fork_orientation": "you are a FORK — Khnum XLII.15"})
+                                      "fork_orientation": "you are a FORK, worker 15"})
     out: list[str] = []
     monkeypatch.setattr("builtins.print", _fake_stdout_print(out))
     rc = osiris_hook._cmd_spawn({"session_id": "s", "agent_id": "agent-forkabcd",
@@ -907,7 +907,7 @@ def test_spawn_start_prints_the_fork_orientation_as_additional_context(
 
 
 def test_spawn_stop_never_prints_orientation(monkeypatch: Any) -> None:
-    """Stop has nothing left to orient — even if the server echoed a fork_orientation, the
+    """Stop has nothing left to orient: even if the server echoed a fork_orientation, the
     Stop phase must never print it (it would be a stray, unexplained stdout line)."""
     monkeypatch.setattr(
         osiris_hook, "_post",
@@ -922,7 +922,7 @@ def test_spawn_stop_never_prints_orientation(monkeypatch: Any) -> None:
 
 
 def test_spawn_start_with_no_orientation_prints_nothing(monkeypatch: Any) -> None:
-    """An ordinary (non-fork) subagent's start carries no fork_orientation — silent, as
+    """An ordinary (non-fork) subagent's start carries no fork_orientation: silent, as
     before this fix."""
     monkeypatch.setattr(
         osiris_hook, "_post",
@@ -936,13 +936,13 @@ def test_spawn_start_with_no_orientation_prints_nothing(monkeypatch: Any) -> Non
     assert out == []
 
 
-# --- anchor: the CHANNEL parity audit (dispatch 5547) --------------------------------------
+# --- anchor: the channel parity audit --------------------------------------
 # The stub that shipped at the hook migration only stamped a raw session_id onto EVERY
 # osiris call, ungated, and echoed the whole hook payload back in the WRONG envelope (no
-# hookSpecificOutput wrapper) — meaning even that stamp would never have reached a real
+# hookSpecificOutput wrapper), meaning even that stamp would never have reached a real
 # tool call. Ported verbatim from osiris_mount_anchor.py: job_dir derivation, ANCHOR_AWARE/
-# SPAWN_AWARE gating, the MAIN-session strip, and the CLAUDE_CODE_BRIDGE_SESSION_ID door —
-# an OS-environment read the stub dropped entirely, the same CHANNEL-class gap already found
+# SPAWN_AWARE gating, the MAIN-session strip, and the CLAUDE_CODE_BRIDGE_SESSION_ID env read,
+# a read the stub dropped entirely, the same class of gap already found
 # in whisper and statusline.
 
 def test_anchor_the_hook_and_the_SERVER_stay_in_lockstep() -> None:
@@ -1028,7 +1028,7 @@ def test_anchor_a_non_osiris_tool_is_never_touched() -> None:
 
 def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() -> None:
     """The stub this fix replaces echoed the WHOLE hook payload unconditionally, in a shape
-    the harness's PreToolUse contract does not recognize — no `hookSpecificOutput.updatedInput`
+    the harness's PreToolUse contract does not recognize: no `hookSpecificOutput.updatedInput`
     means the harness never applies the edit at all, silently. Unchanged input must print
     NOTHING (the harness leaves the call alone), never a no-op envelope."""
     import os as _os
@@ -1044,9 +1044,9 @@ def test_anchor_output_uses_the_hookSpecificOutput_envelope_only_when_changed() 
 
 
 # ---------------------------------------------------------------------------
-# THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has
-# to be self-healing over restarts and such"). It made ONE POST on a 1-second budget with
-# no retry and no cache, so any miss — every `osiris deploy` restarts osiris-mcp — painted
+# THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART: everything needs to keep working across
+# a restart without manual intervention. It made ONE POST on a 1-second budget with
+# no retry and no cache, so any miss (every `osiris deploy` restarts osiris-mcp) painted
 # the bar `graph unreachable`, naming a subsystem that was up the whole time. These prove
 # the three states stay APART: LIVE, STALE (cached, marked), SILENT (nothing known).
 # ---------------------------------------------------------------------------
@@ -1063,12 +1063,12 @@ def _statusline(
 ) -> str:
     """Render one statusline with `_post` stubbed and the cache redirected into tmp.
 
-    `project_hint` stands in for `read_project_label(cwd)`'s real filesystem pin-climb —
+    `project_hint` stands in for `read_project_label(cwd)`'s real filesystem pin-climb,
     defaulted to a resolvable name so these tests exercise the cache's ordinary, keyed
     behavior; pass `None` to exercise the unresolved-project path instead (no `.osiris`
     pin anywhere up the tree, e.g. a bare seat-office container or an unpinned repo).
 
-    `dead_unit` stubs `_first_dead_unit` (thread bc6a5d455da2) — defaults to None (every
+    `dead_unit` stubs `_first_dead_unit`, defaults to None (every
     port answers), the same "no diagnosis available" shape every existing no-answer test
     here already expects; pass e.g. "mcp:8790" to exercise the naming path instead of
     letting these tests reach real sockets on the box."""
@@ -1101,8 +1101,8 @@ def test_statusline_live_answer_renders_counts_and_no_stale_marker(
 def test_statusline_falls_back_to_cache_and_marks_it_rather_than_crying_unreachable(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE OPERATOR'S ACTUAL FAILURE. A miss must render the last good counts with a
-    marker — never `graph unreachable`, which blamed Postgres while it was up 27 hours."""
+    """THE ACTUAL FAILURE SEEN LIVE. A miss must render the last good counts with a
+    marker, never `graph unreachable`, which blamed Postgres while it was up 27 hours."""
     _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})   # warm the cache
     out = _statusline(monkeypatch, tmp_path, answer=None)            # now the probe misses
     assert "team 7/8" in out and "owe 2" in out    # last-known-good survives the miss
@@ -1114,7 +1114,7 @@ def test_statusline_marks_a_zero_second_old_cache_as_stale_too(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
     """Gating the marker on the AGE (`if stale_age`) instead of on the SOURCE made a
-    cache written under a second ago render IDENTICALLY to a live answer — collapsing the
+    cache written under a second ago render IDENTICALLY to a live answer, collapsing the
     two states in the very line meant to keep them apart. Caught in live testing, not review."""
     _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS})
     out = _statusline(monkeypatch, tmp_path, answer=None)
@@ -1126,9 +1126,9 @@ def test_statusline_never_caches_the_callers_own_identity(
 ) -> None:
     """The cache file is SHARED by every agent on the project. Caching caller-scoped fields
     let one seat's bar wear another's name (seen live: a probe from the osiris tree rendered
-    `imhotep·osiris` off Imhotep's row). Counts are the project's; identity is not."""
+    a different worker's handle off a cached row). Counts are the project's; identity is not."""
     _statusline(monkeypatch, tmp_path,
-                answer={"result": {**_COUNTS, "resolved_seat_handle": "imhotep",
+                answer={"result": {**_COUNTS, "resolved_seat_handle": "workerbot",
                                    "resolved_intent": "claude-opus-5"}})
     # Find the file by GLOB, not by guessing its name: the cache key comes from
     # read_project_label(cwd), a real filesystem pin-climb, so hard-coding "osiris.json"
@@ -1144,7 +1144,7 @@ def test_statusline_never_caches_the_callers_own_identity(
 def test_statusline_renders_the_project_owned_suffix_beside_owe(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """thread 3a9d9a5d89fa, Ra XL's measured report: the bar's own `owe N` gains a
+    """Per a measured live report: the bar's own `owe N` gains a
     `(+M project)` suffix for obligations project-owned in a project you govern."""
     out = _statusline(monkeypatch, tmp_path,
                        answer={"result": {**_COUNTS, "owed_mine_project": 11}})
@@ -1155,7 +1155,7 @@ def test_statusline_shows_the_project_suffix_even_with_zero_personal_owe(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
     """The whole point: a seat with zero PERSONAL debt can still be sitting on real
-    project pressure no individual `owe` count would ever surface — the cell must not
+    project pressure no individual `owe` count would ever surface: the cell must not
     stay hidden just because owed_mine/stale_mine are both 0."""
     out = _statusline(monkeypatch, tmp_path,
                        answer={"result": {**_COUNTS, "owed_mine": 0, "stale_mine": 0,
@@ -1173,8 +1173,8 @@ def test_statusline_omits_the_project_suffix_when_zero(
 def test_statusline_puts_the_sick_warning_at_the_far_right_of_the_line(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Operator's word (2026-09-12): "move the warning to the right end of the chrome so
-    the standard lines are not displaced." Before this, sick_s/spend_s sat right after
+    """The warning belongs at the right end of the chrome so the standard lines are not
+    displaced. Before this, sick_s/spend_s sat right after
     the project cell, so a sick sense shoved owe/mail/team rightward every time one
     fired. Order now: project, owe, mail, team, the stale marker, THEN the alarms."""
     out = _statusline(monkeypatch, tmp_path,
@@ -1201,9 +1201,9 @@ def test_statusline_with_no_answer_and_no_cache_says_only_what_it_knows(
 def test_statusline_no_answer_names_the_first_dead_unit(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """thread bc6a5d455da2, REBOOT SURVIVAL's fleet half: a pg-reachable-but-mcp-dead
-    case used to render the identical bare "no answer" as every-unit-dead — this names
-    which one, so the operator does not have to guess."""
+    """Reboot survival, the fleet half: a pg-reachable-but-mcp-dead
+    case used to render the identical bare "no answer" as every-unit-dead: this names
+    which one, so the reader does not have to guess."""
     out = _statusline(monkeypatch, tmp_path, answer=None, dead_unit="mcp:8790")
     assert "no answer" in out
     assert "mcp:8790" in out
@@ -1243,20 +1243,20 @@ def test_first_dead_unit_returns_none_when_every_port_answers(
 def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE LIVE SPECIMEN (Thoth, msg 6655/6654): two DIFFERENT sessions whose cwd carries no
-    resolvable `.osiris` pin (a bare seat-office container; an unpinned repo like lilguy) both
-    got `project_hint is None`, both fell into `cache_key = project_hint or "_"` — the SAME
-    file — and one session's counts (not just its label) leaked into the other's bar on the
+    """A LIVE SPECIMEN found in the field: two DIFFERENT sessions whose cwd carries no
+    resolvable `.osiris` pin (a bare seat-office container; an unpinned side-project repo) both
+    got `project_hint is None`, both fell into `cache_key = project_hint or "_"`, the SAME
+    file, and one session's counts (not just its label) leaked into the other's bar on the
     next fallback read. `"_"` is not a project; it is "we could not tell," and a bucket keyed
     on ignorance has no shared identity to hold. Fix: never write, and never read, that bucket."""
-    # Session A: unresolved project, live answer — must NOT write any cache file at all.
+    # Session A: unresolved project, live answer: must NOT write any cache file at all.
     out_a = _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS}, project_hint=None)
     assert "team 7" in out_a
     assert list(tmp_path.glob("*.json")) == []
 
-    # Session B: also unresolved, but its own probe MISSES — it must render SILENT, never
+    # Session B: also unresolved, but its own probe MISSES: it must render SILENT, never
     # borrow session A's counts (there is nothing to borrow: A wrote nothing above, but the
-    # law holds even if some other unresolved caller had — the bucket is never read either).
+    # rule holds even if some other unresolved caller had: the bucket is never read either).
     out_b = _statusline(monkeypatch, tmp_path, answer=None, project_hint=None)
     assert "no answer" in out_b
     assert "team 7" not in out_b
@@ -1266,33 +1266,33 @@ def test_statusline_never_shares_the_ignorance_bucket_across_sessions(
 def test_statusline_unpinned_cwd_with_a_session_heals_from_its_own_cache(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE SEAT-OFFICE-ROOT TAB (Thoth, 2026-09-06): cwd is the seats container, whose pin
+    """THE SEAT-OFFICE-ROOT TAB: cwd is the seats container, whose pin
     is deliberately `kind = "container"` and never a project, so `project_hint` is None.
     With no cache key at all, every deploy restart rendered `? graph: no answer` for the
     whole restart window. A session-scoped key is safe (one writer, one reader) and carries
     the caller's OWN resolved identity, so the fallback bar wears its own name, not `?`."""
-    live = {**_COUNTS, "resolved_seat_handle": "thoth", "resolved_intent": "claude-opus-5"}
+    live = {**_COUNTS, "resolved_seat_handle": "workerbot", "resolved_intent": "claude-opus-5"}
     out_a = _statusline(monkeypatch, tmp_path, answer={"result": live},
                         project_hint=None, session_id="sess-A")
-    assert "thoth\u00b7osiris" in out_a
+    assert "workerbot\u00b7osiris" in out_a
     assert [p.name for p in tmp_path.glob("*.json")] == ["session-sess-A.json"]
 
     # The same session's probe misses across a restart: its own last answer, marked.
     out_a2 = _statusline(monkeypatch, tmp_path, answer=None,
                          project_hint=None, session_id="sess-A")
-    assert "thoth\u00b7osiris" in out_a2 and "team 7" in out_a2 and "ago" in out_a2
+    assert "workerbot\u00b7osiris" in out_a2 and "team 7" in out_a2 and "ago" in out_a2
     assert "?" not in out_a2 and "no answer" not in out_a2
 
     # A DIFFERENT unpinned session never borrows it: its own miss stays silent.
     out_b = _statusline(monkeypatch, tmp_path, answer=None,
                         project_hint=None, session_id="sess-B")
-    assert "no answer" in out_b and "team 7" not in out_b and "thoth" not in out_b
+    assert "no answer" in out_b and "team 7" not in out_b and "workerbot" not in out_b
 
 
 def test_statusline_resolved_project_still_caches_normally(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """The fix is scoped to the unresolved/`None` case only — a real project keeps its
+    """The fix is scoped to the unresolved/`None` case only: a real project keeps its
     ordinary shared, keyed cache (this is what every other project-scoped test here relies
     on continuing to work)."""
     _statusline(monkeypatch, tmp_path, answer={"result": _COUNTS}, project_hint="realproj")
@@ -1318,10 +1318,10 @@ def test_statusline_retries_once_before_giving_up(monkeypatch: Any, tmp_path: Pa
 def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Ruling a3fb7c11: settle first, then the seam. With every offload box complete at or
+    """Settle first, then the seam. With every offload box complete at or
     past SELF_COMPACT_PCT the hook asks the self_compact phase exactly once (marker file),
     never blocks the stop, and never asks while a box is missing (that path blocks with the
-    offload ritual instead — the existing test above)."""
+    offload ritual instead: the existing test above)."""
     t = tmp_path / "t.jsonl"
     t.write_text(json.dumps({
         "type": "assistant",
@@ -1334,7 +1334,7 @@ def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
         if data["phase"] == "deliverable":
             return {"result": {"n": 0, "senders": [], "window": 200000, "bands": {}}}
         if data["phase"] == "offload":
-            return {"result": {}}  # nothing missing — settle already complete
+            return {"result": {}}  # nothing missing: settle already complete
         if data["phase"] == "self_compact":
             assert data["pct"] >= 70
             return {"result": {"compacted": True, "job_short": "selfcomp"}}
@@ -1358,8 +1358,8 @@ def test_cmd_stop_self_compacts_once_when_every_box_is_complete(
 def test_cmd_stop_self_compacts_even_after_the_soft_nudge_already_fired(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE FIRST LIVE ACCEPTANCE RUN (compacttest, 2026-09-06 22:38Z): the soft nudge fired,
-    the body settled to complete:true, ended its turn — and the hook returned at "soft
+    """THE FIRST LIVE ACCEPTANCE RUN: the soft nudge fired,
+    the body settled to complete:true, ended its turn, and the hook returned at "soft
     already fired, below hard line" without re-checking the boxes, so the seam never came.
     A settled body past the line self-compacts regardless of which nudges already fired."""
     t = tmp_path / "t.jsonl"
@@ -1397,7 +1397,7 @@ def test_cmd_stop_self_compacts_even_after_the_soft_nudge_already_fired(
 def test_statusline_envelope_counts_needs_not_every_unread_broadcast(
     monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """Operator 2026-09-06: every worker showed "9" — nine fyi deploy broadcasts nobody had
+    """Seen live: every worker showed "9", nine fyi deploy broadcasts nobody had
     acked. The envelope renders the heartbeat's `needs` (direct mail + non-fyi room mail),
     never the raw unread count."""
     out = _statusline(monkeypatch, tmp_path,
@@ -1406,7 +1406,7 @@ def test_statusline_envelope_counts_needs_not_every_unread_broadcast(
 
 
 def test_statusline_owe_is_yours_and_briefs_is_gone(monkeypatch: Any, tmp_path: Path) -> None:
-    """Operator 2026-09-06: owe counted the operator's debts in the project, briefs stacked
+    """Owe used to count the viewer's debts across the whole project, and briefs stacked
     29 unread on a bar nobody reads. Now owe = obligations you own, dim, red only when one
     is stale, absent at zero; briefs never renders."""
     out = _statusline(monkeypatch, tmp_path,
@@ -1430,8 +1430,8 @@ def _boundary_transcript(path: Path, *, used: int, boundary_ts: str) -> None:
 
 def test_precompact_clears_every_once_per_life_marker(monkeypatch: Any, tmp_path: Path) -> None:
     """A background session keeps its id, and so its job dir, across compactions; the markers
-    are facts about ONE life. Seshat (8407756e, 2026-09-07): a soft marker from 2026-08-23
-    muted every nudge, so she never settled and the seam never came."""
+    are facts about ONE life. Found live: a soft marker from weeks earlier
+    muted every nudge for a session that then never settled and the seam never came."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "home")
     monkeypatch.setattr(osiris_hook, "_post", lambda url, data, timeout=3: {"ok": True})
     monkeypatch.setattr("sys.stderr", type("F", (), {"write": lambda self, s: None,
@@ -1520,9 +1520,9 @@ def test_self_compacted_marker_from_a_dead_life_does_not_mute_the_seam(
     assert phases.count("self_compact") == 1
 
 
-# --- read (UserPromptSubmit) — THE ZERO-TOKEN READ HOOK (#92, Thoth mail 11780 item B):
+# --- read (UserPromptSubmit): THE ZERO-TOKEN READ HOOK:
 # the matcher, the act-word fall-through, and one full rendered-read round trip, subprocess
-# mocked (never a real osiris CLI/MCP round trip — pure/no-DB, same discipline this whole
+# mocked (never a real osiris CLI/MCP round trip, pure/no-DB, same discipline this whole
 # file already keeps). -------------------------------------------------------------------
 
 def test_parse_slash_read_matches_a_served_verb_and_splits_its_args() -> None:
@@ -1543,7 +1543,7 @@ def test_parse_slash_read_ignores_an_unserved_verb() -> None:
     """/seat, /launch, and every write-triangle face are deliberately NOT in
     _READ_HOOK_VERBS -- an act-shaped command always reaches the model."""
     assert _parse_slash_read("/seat roster") is None
-    assert _parse_slash_read("/launch Thoth") is None
+    assert _parse_slash_read("/launch worker7") is None
     assert _parse_slash_read("/merge dupe into --evidence x") is None
 
 
@@ -1574,8 +1574,8 @@ def test_cmd_read_falls_through_on_unmatched_prompt(monkeypatch: Any) -> None:
 def test_cmd_read_falls_through_when_the_cli_subcommand_does_not_exist_yet(
     monkeypatch: Any,
 ) -> None:
-    """/practices matches a verb this hook knows about, but its CLI door (Khnum's own
-    branch, not yet merged as of this wave) may not exist on a given machine -- a
+    """/practices matches a verb this hook knows about, but its CLI subcommand (still on
+    an unmerged branch as of this writing) may not exist on a given machine -- a
     nonzero exit from an unrecognized subcommand is a clean fall-through, never a crash
     or a stray block."""
     import subprocess as _subprocess
@@ -1651,10 +1651,10 @@ def test_cmd_read_search_joins_its_words_into_one_query_arg(monkeypatch: Any) ->
 def test_cmd_read_inspect_shells_out_to_the_real_inspect_aggregator_not_dossier(
     monkeypatch: Any,
 ) -> None:
-    """WAVE 28 (Thoth mail 11962): `osiris inspect` landed on main in fc2eea19, so the
+    """`osiris inspect` landed on main more recently, so the
     read hook's /inspect matcher now serves off the real aggregator (dossier + the
     events/chain/candidates flags this bare-ref-only hook never passes through, same
-    discipline as every other ref-taking door here), not the flat `dossier` door it was
+    discipline as every other ref-taking verb here), not the flat `dossier` form it was
     scoped to before that branch merged."""
     import subprocess as _subprocess
 
@@ -1694,9 +1694,9 @@ def test_cmd_read_falls_through_on_an_unhandled_flag_rather_than_serving_unscope
 
 
 def test_cmd_read_practices_list_is_served_practices_show_is_not(monkeypatch: Any) -> None:
-    """Thoth's own spec names `/practices list` specifically, never `show <ref>` — the
+    """The spec names `/practices list` specifically, never `show <ref>`: the
     hook accepts the bare form and an explicit `list`, refuses (falls through) anything
-    else, even though `osiris practices` itself is Khnum's own not-yet-merged CLI door
+    else, even though `osiris practices` itself is still a not-yet-merged CLI subcommand
     (a nonzero exit from the real thing would ALSO fall through, per the earlier test)."""
     import subprocess as _subprocess
 
@@ -1736,8 +1736,8 @@ def test_cmd_read_blank_render_is_a_clean_fall_through(monkeypatch: Any) -> None
     assert printed == []
 
 
-# --- settle-gate (PreToolUse) + the PreCompact fallback — THE MECHANICAL SETTLE (#93,
-# Thoth mail 11789). _post is monkeypatched throughout (pure/no-DB, same discipline this
+# --- settle-gate (PreToolUse) + the PreCompact fallback: THE MECHANICAL SETTLE.
+# _post is monkeypatched throughout (pure/no-DB, same discipline this
 # whole file already keeps for /stop round trips). ------------------------------------
 
 def _hook_with_pct(pct: int, **extra: Any) -> dict[str, Any]:

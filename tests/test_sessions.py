@@ -1,4 +1,4 @@
-"""Session-sensing — the agent is the last unsensed source (ruling 10f4058b).
+"""Session-sensing: the agent is the last unsensed source.
 
 The compaction test, structurally: a session's unconfessed yield must be recoverable
 from its transcript by a cron, behind the same ownership boundaries that keep the git
@@ -60,15 +60,15 @@ async def test_emit_yield_rehomes_cross_project_items(actions: Actions) -> None:
 
 
 async def test_emit_yield_fails_closed_on_conflicting_foreign_projects(actions: Actions) -> None:
-    """THE CWD BUG (thread 7c65472b, Anubis's census of heinrich's own candidate pile): 6 of
-    heinrich's 7 "misfiled" drops were OTHER projects' work — dispose.py's own drop-class
+    """THE CWD BUG (a census of one worker's own candidate pile): 6 of
+    that worker's 7 "misfiled" drops were OTHER projects' work. dispose.py's own drop-class
     taxonomy names the mechanism outright ("misfiled": "attributed here by the cwd bug"). An
     item that distinctively names TWO OTHER real, registered projects and never its own used to
     still land under the mining session's cwd repo (`_home_repo`'s old "ambiguity keeps default"
-    covered this case too, not just genuine silence) — a guess exactly as wrong as filing
-    decepticons' own bug under heinrich's wall. Now it fails closed: no `in_repo` edge is minted
-    at all, so the row is genuinely unowned and `dispose.orphans()` — the existing tripwire for
-    "a producer that cannot name an owner for its output" — catches it, instead of it silently
+    covered this case too, not just genuine silence), a guess exactly as wrong as filing
+    decepticons' own bug under that worker's wall. Now it fails closed: no `in_repo` edge is minted
+    at all, so the row is genuinely unowned and `dispose.orphans()`, the existing tripwire for
+    "a producer that cannot name an owner for its output", catches it, instead of it silently
     piling onto whichever project the miner happened to be sitting in."""
     from src.orchestrator.dispose import orphans
 
@@ -88,7 +88,7 @@ async def test_emit_yield_fails_closed_on_conflicting_foreign_projects(actions: 
         "  SELECT 1 FROM current_assertions a WHERE a.object_id=o.id AND a.name='summary' "
         "  AND a.value#>>'{}' = $1)", summary)
     assert row is not None
-    assert row["home"] is None  # neither heinrich (the guess) nor either named project (ambiguous)
+    assert row["home"] is None  # neither the cwd repo (the guess) nor the named project (ambiguous)
 
     report = await orphans(actions.pool)
     assert report["orphans"] >= 1
@@ -124,25 +124,25 @@ def _dialogue(operator: str, claude: str) -> list[str]:
     ]
 
 
-# --- the soul store's own miner (task #51 piece 3) — reads soul_lines instead of disk -----
+# --- the soul store's own miner (task #51 piece 3): reads soul_lines instead of disk -----
 
 async def test_adversary_pass_from_store_matches_the_disk_path_byte_for_byte(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE CONTRACT TEST (piece 3's own acceptance bar): mine the SAME session content
-    twice — once via adversary_pass against the real file, once via
-    adversary_pass_from_store against the store ALONE after the file is gone — and
+    twice, once via adversary_pass against the real file, once via
+    adversary_pass_from_store against the store ALONE after the file is gone, and
     prove they are the same act, not merely similar-looking output. The prompt the LLM
     sees must be BYTE-IDENTICAL (proves distill() over store-sourced lines matches
     distill() over disk-sourced lines exactly); the resulting yield must land on the
     exact same Thread (proves the closure candidate itself, not just its shape, is
-    equivalent) — the sha256/hash-chain proof piece 1/2 already gave for the BYTES
+    equivalent). The sha256/hash-chain proof piece 1/2 already gave for the BYTES
     extends here to the MINING that reads them."""
     dialogue = _dialogue(
         "we agreed the soul store's own miner must read soul_lines, never the disk, so "
         "a session survives its own transcript being deleted. " * 2,
         "recorded that; the mining view projects turn_index/role/text/tool_calls, and "
-        "the adversary itself now has a store-backed twin. " * 2,
+        "the adversary itself now has a store-backed counterpart. " * 2,
     )
     lines = dialogue
     proj = tmp_path / "-home-x-code-testrepo"
@@ -150,7 +150,7 @@ async def test_adversary_pass_from_store_matches_the_disk_path_byte_for_byte(
     disk_path = proj / "diskonly01-session.jsonl"
     disk_path.write_text("\n".join(lines) + "\n")
 
-    # ingest into the store BEFORE the disk pass, exactly as a live pipeline would —
+    # ingest into the store BEFORE the disk pass, exactly as a live pipeline would:
     # the store and the disk both hold the same content at this point
     await SoulStore(actions.pool).ingest_path(str(disk_path), "diskonly01")
 
@@ -160,7 +160,7 @@ async def test_adversary_pass_from_store_matches_the_disk_path_byte_for_byte(
     llm_disk = FakeLLM(payload)
     disk_report = await adversary_pass(actions, disk_path, llm_disk)
 
-    disk_path.unlink()  # THE SOURCE IS GONE — the exact scenario piece 3 exists for
+    disk_path.unlink()  # THE SOURCE IS GONE: the exact scenario piece 3 exists for
     assert not disk_path.exists()
 
     llm_store = FakeLLM(payload)
@@ -172,7 +172,7 @@ async def test_adversary_pass_from_store_matches_the_disk_path_byte_for_byte(
         "SELECT o.id FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type='Thread' AND a.name='summary' "
         "AND a.value #>> '{}' = 'the soul store''s own miner reads the store'")
-    assert len(rows) == 1  # ONE candidate, not two — the same closure candidate either way
+    assert len(rows) == 1  # ONE candidate, not two: the same closure candidate either way
 
 
 async def test_adversary_pass_from_store_errors_when_nothing_ingested(
@@ -186,11 +186,11 @@ async def test_adversary_pass_from_store_skips_a_wake_spawn(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The store-backed path must filter Osiris's own alarm-clock chatter exactly like
-    the disk path — _is_wake_spawn_lines is the shared fingerprint, not a re-guess."""
+    the disk path: _is_wake_spawn_lines is the shared fingerprint, not a re-guess."""
     from src.ingest.sessions import _WAKE_FIRST_TURN
 
     lines = [
-        _line("user", _WAKE_FIRST_TURN + " — three unread, check your desk"),
+        _line("user", _WAKE_FIRST_TURN + ", three unread, check your inbox"),
         *_dialogue("routine wake chatter, nothing anyone asked for. " * 3,
                   "acknowledged the wake and did the mechanical thing. " * 3),
     ]
@@ -201,7 +201,7 @@ async def test_adversary_pass_from_store_skips_a_wake_spawn(
     assert report.get("skipped_wake") == 1
 
 
-# --- redaction (ruling f8f22e14) -------------------------------------------------------
+# --- redaction ----------------------------------------------------------------------------
 
 def test_redact_strikes_credential_shapes_and_keeps_prose() -> None:
     text = (
@@ -215,7 +215,7 @@ def test_redact_strikes_credential_shapes_and_keeps_prose() -> None:
     assert "abc.def-12345678" not in out
     assert "sk-ant" not in out
     assert "deadbeefdeadbeefdeadbeef" not in out
-    # short commit refs and UUIDs are citations, not credentials — they survive
+    # short commit refs and UUIDs are citations, not credentials: they survive
     assert "5b2b5fe" in out
     assert "7336c5fc-84ad-4b5c-8e26-53a4c7beca90" in out
 
@@ -290,9 +290,9 @@ def test_parse_session_yield_tolerates_garbage_and_gates() -> None:
 
 
 def test_parse_session_yield_promotion_bar() -> None:
-    """The v2 thread shape (ruling 758ded94): commitments are owed work, questions are
-    remembered but never promoted to the work wall; unknown class reads as QUESTION —
-    a question can be promoted later, a fake commitment pollutes the fleet's list."""
+    """The v2 thread shape: commitments are owed work, questions are
+    remembered but never promoted to the work wall; unknown class reads as QUESTION.
+    A question can be promoted later, a fake commitment pollutes the list of active work."""
     y = parse_session_yield(json.dumps({
         "decisions": [],
         "threads_opened": [
@@ -318,12 +318,12 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     t.write_text("\n".join(_dialogue("old history " * 30, "old reply " * 30)) + "\n")
 
     # the specimen is a THREAD, not a Decision: the adversary no longer mints decisions at all
-    # (1,620 minted, ZERO ever touched — a decision is what a mind KNOWS it made and records).
+    # (1,620 minted, ZERO ever touched: a decision is what a mind KNOWS it made and records).
     llm = FakeLLM({"threads_opened": [{"summary": "the session transcript is a sensed source",
                                        "class": "commitment"}],
                    "threads_resolved": []})
     rep = await sense_sessions_tick(actions, tmp_path, llm)
-    # first sight PLANTS the cursor at EOF — history is backfill's explicit job
+    # first sight PLANTS the cursor at EOF: history is backfill's explicit job
     assert rep["planted"] == 1 and rep["chunks"] == 0 and llm.prompts == []
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Decision'") == 0
@@ -343,7 +343,7 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     rep = await sense_sessions_tick(actions, tmp_path, llm)
     assert rep["chunks"] == 1 and rep["threads"] == 1
     # TWO calls: the adversary reads, then the CRITIC judges its yield before it lands (the
-    # check-and-balance at birth). The critic only fires on threads — it never had a decision to
+    # check-and-balance at birth). The critic only fires on threads: it never had a decision to
     # judge, which is its own small indictment of the decision-mining we just deleted.
     assert len(llm.prompts) == 2
     assert llm.prompts[0].startswith("<transcript>") and "<candidates>" in llm.prompts[1]
@@ -356,7 +356,7 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     )
     assert row is not None
     # THE SPEAKER IS THE ADVERSARY; THE AGENT IS THE SUBJECT (B4). Rows used to be SOURCED to
-    # agent:<session> on the argument that "the mined words are the agent's words" — they are not.
+    # agent:<session> on the argument that "the mined words are the agent's words": they are not.
     # The agent never said them: THE MINER SAID THEM ABOUT THE AGENT, and the graph answered
     # "who said this?" with a name that had never uttered the sentence.
     assert row["source_id"] == "session-miner"                       # who SPOKE
@@ -364,7 +364,7 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='about_agent'",
         row["object_id"]) == "agent:session1"                        # whom it spoke ABOUT
     assert row["evidence_class"] == "derived"  # an LLM reading is an inference, never more
-    # ...but the MINER stays the ACTOR (audit_log) — a mined row is still tellable from a declared
+    # ...but the MINER stays the ACTOR (audit_log): a mined row is still tellable from a declared
     # one two ways: the DERIVED grade AND the miner-vs-agent actor. Provenance preserved.
     assert await actions.pool.fetchval(
         "SELECT actor FROM audit_log WHERE action='assert_property' "
@@ -374,7 +374,7 @@ async def test_first_sight_plants_cursor_then_senses_only_forward(
     assert await actions.pool.fetchval(
         "SELECT actor FROM object_events WHERE object_id=$1 AND event_type='create'",
         row["object_id"]) == "session-miner"
-    # filed under the repo the transcript's own cwd names — no slug decoding
+    # filed under the repo the transcript's own cwd names: no slug decoding
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects p ON p.id=l.to_id "
         "WHERE l.type='in_repo' AND p.canonical='repo:testrepo'") == 1
@@ -403,7 +403,7 @@ async def test_oversized_line_never_wedges_the_cursor(
     rep = await sense_sessions_tick(
         actions, tmp_path, llm, only=t, backfill=True, max_chunk_bytes=4096, max_chunks=64
     )
-    # the 300KB single line is a tool dump by definition — skipped whole, cursor at EOF
+    # the 300KB single line is a tool dump by definition: skipped whole, cursor at EOF
     cur = await actions.pool.fetchval(
         "SELECT cursor FROM watermarks WHERE key = $1", f"session:p/{t.stem}")
     assert cur == str(t.stat().st_size)
@@ -430,8 +430,8 @@ async def test_miner_never_writes_onto_capture_owned_objects(actions: Actions) -
 
 
 async def test_resolution_touches_only_threads_the_miner_opened(actions: Actions) -> None:
-    """Phase 1a/2 follow-up (Thoth DM 2581, decision cb38d922/fc5b6c5f): this miner no
-    longer CLOSES anything — its evidence (an LLM's extraction of a transcript, matched by
+    """Phase 1a/2 follow-up: this miner no
+    longer CLOSES anything. Its evidence (an LLM's extraction of a transcript, matched by
     raw token overlap) is too weak to write a definitive status, so it flags a rot_candidate
     instead, the same discipline close_by_commits' own weak tier already uses. The ownership
     boundary (never touching a session-owned thread) still holds regardless."""
@@ -467,8 +467,8 @@ async def test_resolution_touches_only_threads_the_miner_opened(actions: Actions
 async def test_same_excerpt_open_and_resolve_does_not_close(actions: Actions) -> None:
     """Live receipt: the model opened a PLANNED task and resolved it in the same breath
     (a plan discussed is not work completed). A thread must survive its own excerpt.
-    "Close" here means flag-as-candidate (this miner never writes status, see decision
-    fc5b6c5f) — the survival law is unchanged, only what happens once it survives is."""
+    "Close" here means flag-as-candidate (this miner never writes status). The
+    survival rule is unchanged; only what happens once it survives is."""
     y = SessionYield(threads_opened=["ingest the design essays as canon nodes"],
                      threads_resolved=["ingested the design essays as canon nodes"])
     counts = await emit_yield(actions, y, repo=None)
@@ -495,13 +495,13 @@ async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
     await actions.assert_property(t, "status", "open", "session-miner", now,
                                   confidence_for(EvidenceClass.DERIVED),
                                   evidence_class=EvidenceClass.DERIVED.value)
-    # a session resolved it at a higher grade, asserting only status — so the miner still
+    # a session resolved it at a higher grade, asserting only status: so the miner still
     # solely owns the summary; the grade-winner is 'resolved', the miner's 'open' is buried
     await actions.assert_property(t, "status", "resolved", "agent:someone", now,
                                   confidence_for(EvidenceClass.SELF_DECLARED),
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
 
-    # the miner senses a later excerpt reporting the same work done — it must NOT re-flag it
+    # the miner senses a later excerpt reporting the same work done: it must NOT re-flag it
     done = SessionYield(threads_resolved=[
         "pruned the internal-URL spread in url_fetch to profile-shaped only"])
     counts = await emit_yield(actions, done, repo=None)
@@ -509,7 +509,7 @@ async def test_resolve_own_threads_skips_a_thread_with_a_resolved_winner(
 
 
 async def test_multi_source_properties_do_not_kill_the_tick(actions: Actions) -> None:
-    """The onboarding-day outage (2026-07-10): a FLEET writes multi-source — a Thread whose
+    """The onboarding-day outage (2026-07-10): a FLEET writes multi-source: a Thread whose
     summary (or a SoftwareProject whose name) carries assertions from several sources made
     the miner's bare scalar subqueries throw CardinalityViolation, killing EVERY sensing
     tick for a day. Every per-(object,name) read takes the grade-then-recency winner now."""
@@ -531,7 +531,7 @@ async def test_multi_source_properties_do_not_kill_the_tick(actions: Actions) ->
 
     assert "polyglot" in await _known_projects(actions.pool, exclude=None)
     n = await _resolve_own_threads(actions, ["totally unrelated text"], now)
-    assert n == 0  # no match — the point is it RAN
+    assert n == 0  # no match: the point is it RAN
 
 
 def test_extractor_instrument_transcripts_are_excluded(tmp_path: Path) -> None:
@@ -547,21 +547,21 @@ def test_extractor_instrument_transcripts_are_excluded(tmp_path: Path) -> None:
     assert _list_transcripts(tmp_path) == [real]
 
 
-# --- obligations (ruling 7336c5fc) -------------------------------------------------------
+# --- obligations --------------------------------------------------------------------------
 
 async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
     actions: Actions,
 ) -> None:
     """A GUESS MUST NEVER APPEAR WHERE A PROMISE APPEARS.
 
-    The old law here was "a duty never hides" — and it was half right. A duty a MIND declared
+    The old rule here was that a duty never hides, and it was half right. A duty a MIND declared
     never hides. A duty a MACHINE GUESSED is a proposal, and it was riding the wall wearing the
     full authority of a declaration. It got a week's grace before folding into the pile, and
     the miner mints faster than a week, so the wall was permanently full of fresh guesses: 88%
-    of the fleet's open threads were inferences no mind had ever touched.
+    of the open threads were inferences no mind had ever touched.
 
-    Nothing is deleted and nothing is hidden — the guess stays OPEN and stays COUNTED in the
-    pile, one click away (land on counts, walk in). It simply stops billing the operator for a
+    Nothing is deleted and nothing is hidden: the guess stays OPEN and stays COUNTED in the
+    pile, one click away (land on counts, walk in). It simply stops billing anyone for a
     promise nobody made.
     """
     y = SessionYield(obligations=["restart the daemons after kernel changes to ingest paths"])
@@ -585,7 +585,7 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
     assert not any("restart the daemons" in s for s in top), \
         "a MINER'S GUESS rode the wall with the authority of a promise"
 
-    # and it is not gone — untouched is a fact about readers, never a resolution (758ded94)
+    # and it is not gone: untouched is a fact about readers, never a resolution
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE a.name='status' AND o.type='Thread' AND EXISTS (SELECT 1 FROM current_assertions s "
@@ -596,25 +596,25 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
 
 
 def test_MINING_IS_SUMMONED_NEVER_WALKING() -> None:
-    """THE CRAWL IS GONE, and its absence is the design (B6, ruling ceae1604).
+    """THE CRAWL IS GONE, and its absence is the design (B6).
 
-    The old law here was "a capability nothing schedules is a shelf ornament", and it was half
+    The old rule here was that a capability nothing schedules is a shelf ornament, and it was half
     right. A capability that schedules ITSELF, against a world that never stops growing, is a
-    LEAK. The miner walked every transcript in the fleet every ten minutes, forever, paying a
+    LEAK. The miner walked every transcript every ten minutes, forever, paying a
     `claude -p` per chunk: 3,579 rows, 10.5% ever used, $40, and a worker wedged at its memory cap.
 
     Worse, the crawl's SHAPE was the bug. It read a growing file FORWARD, in byte-chunks, with a
-    cursor and no memory — minting the question from an early chunk and NEVER SEEING THE ANSWER
+    cursor and no memory, minting the question from an early chunk and NEVER SEEING THE ANSWER
     that arrived forty minutes later. It cannot do otherwise while it crawls.
 
-    So mining is now SUMMONED: `sweep_session` fires at the death rite, against the ONE dying
-    transcript, read WHOLE. This test guards the absence — if a cron ever schedules the miner
+    So mining is now SUMMONED: `sweep_session` fires when a session ends, against the ONE dying
+    transcript, read WHOLE. This test guards the absence: if a cron ever schedules the miner
     again, someone has quietly rebuilt the leak.
     """
     from src.workers.arq_worker import WorkerSettings
 
     names = {c.coroutine.__name__ for c in WorkerSettings.cron_jobs}
-    assert "sense_sessions" not in names, "the miner must never walk again — it is summoned"
+    assert "sense_sessions" not in names, "the miner must never walk again, it is summoned"
     assert "sweep_session" in {f.__name__ for f in WorkerSettings.functions}, \
         "...but the death rite must still be able to summon it"
 
@@ -633,7 +633,7 @@ def test_model_probe_reads_the_harness_field_not_the_prompt() -> None:
     lines = [
         _amodel("first", "claude-fable-5"),
         _line("user", "a question"),
-        _amodel("synthetic filler", "<synthetic>"),   # ignored — not a real model
+        _amodel("synthetic filler", "<synthetic>"),   # ignored, not a real model
         _amodel("second", "claude-opus-4-8"),
     ]
     assert models_in(lines) == ["claude-fable-5", "claude-opus-4-8"]  # first-seen order
@@ -642,8 +642,8 @@ def test_model_probe_reads_the_harness_field_not_the_prompt() -> None:
 
 
 def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
-    """The multi-session box runs a FLEET; newest-mtime grabs the hottest parallel session
-    (proven live — the probe found 'a-sibling' then 'a-sibling' before the anchor was fixed)."""
+    """Multiple sessions can run at once; newest-mtime grabs the hottest parallel session
+    (proven live: the probe found the wrong sibling session before the anchor was fixed)."""
     from src.ingest.sessions import locate_current_transcript
 
     mine = tmp_path / "-home-x-code-osiris"
@@ -666,7 +666,7 @@ def test_locate_anchors_on_job_id_over_newest(tmp_path: Path) -> None:
     assert locate_current_transcript(tmp_path, None) == hot
 
 
-# ═══ cwd_of_transcript — #178 piece (b)'s self-restore primitive: a session's own cwd,
+# ═══ cwd_of_transcript: #178 piece (b)'s self-restore primitive: a session's own cwd,
 # read directly off its transcript, no agent_mounts row required ═══
 
 
@@ -682,8 +682,8 @@ async def test_cwd_of_transcript_reads_the_first_cwd_line(tmp_path: Path) -> Non
 
 
 async def test_cwd_of_transcript_is_anchored_only_never_a_neighbors_file(tmp_path: Path) -> None:
-    """The same identity-path law `current_model`'s own anchored callers already follow: a
-    job id that matches no transcript restores NOTHING, never a co-tenant's cwd — reading a
+    """The same identity-path rule `current_model`'s own anchored callers already follow: a
+    job id that matches no transcript restores NOTHING, never a co-tenant's cwd. Reading a
     neighbor's cwd as ours would restore the WRONG identity."""
     from src.ingest.sessions import cwd_of_transcript
 
@@ -727,7 +727,7 @@ def test_repo_from_cwd_walks_to_the_git_root(tmp_path: Path) -> None:
 
 
 def test_repo_from_cwd_refuses_the_bare_seat_office_container() -> None:
-    """THE repo:seats BUG (DRAWING THE WHOLE GRAPH, thread 325ef660): the bare
+    """THE repo:seats BUG (DRAWING THE WHOLE GRAPH): the bare
     seat-office container (~/.osiris/seats, or OSIRIS_OFFICE_ROOT in tests) is not
     a git repo, so the old fallback minted a "seats" phantom SoftwareProject from
     it -- the same guard `offices.is_bare_office_root` already applies to
@@ -767,30 +767,30 @@ def test_dormant_history_confession_none_when_no_transcript(tmp_path: Path) -> N
 
 
 def test_dormant_history_confession_none_below_the_trivial_floor(tmp_path: Path) -> None:
-    """A bare metadata shell (a few KB, no real turns) must not confess — that is the
-    'misfires on every ordinary relaunch' failure Thoth named (DM 3129)."""
+    """A bare metadata shell (a few KB, no real turns) must not confess: that is the
+    real "misfires on every ordinary relaunch" failure this test guards against."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     (proj / "c035336c-metadata.jsonl").write_text("x" * 100)
-    assert dormant_history_confession("/home/x/.osiris/seats/ooblek", root=tmp_path) is None
+    assert dormant_history_confession("/home/x/.osiris/seats/halfmoon", root=tmp_path) is None
 
 
 def test_dormant_history_confession_fires_above_the_floor(tmp_path: Path) -> None:
-    """The Ooblek specimen, shaped: a substantial transcript already sitting at the office
-    cwd is named — path, size, and last-touched — before a fresh launch would spawn into it."""
+    """The Halfmoon specimen, shaped: a substantial transcript already sitting at the office
+    cwd is named (path, size, and last-touched) before a fresh launch would spawn into it."""
     import os
 
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     big = proj / "b5f04f84-live.jsonl"
     big.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
     os.utime(big, (1_700_000_000, 1_700_000_000))
 
-    info = dormant_history_confession("/home/x/.osiris/seats/ooblek", root=tmp_path)
+    info = dormant_history_confession("/home/x/.osiris/seats/halfmoon", root=tmp_path)
     assert info is not None
     assert info["path"] == str(big)
     assert info["size_bytes"] == _DORMANT_HISTORY_FLOOR_BYTES + 1
@@ -800,7 +800,7 @@ def test_dormant_history_confession_fires_above_the_floor(tmp_path: Path) -> Non
 def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
     tmp_path: Path,
 ) -> None:
-    """Task #135/#136: office and tree_cwd are two different slugs by design (#103) — a
+    """Task #135/#136: office and tree_cwd are two different slugs by design (#103), and a
     dormant transcript can sit under either one. A caller checking only the cwd it happens
     to be launching into would miss the other slug entirely; `extra_cwds` fixes that, and
     the FRESHEST match across every candidate wins, not just the first found."""
@@ -808,13 +808,13 @@ def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
 
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    office = tmp_path / "-home-x--osiris-seats-imhotep"
+    office = tmp_path / "-home-x--osiris-seats-brightwood"
     office.mkdir()
     office_transcript = office / "e08c3850-old.jsonl"
     office_transcript.write_text("x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
     os.utime(office_transcript, (1_700_000_000, 1_700_000_000))  # older
 
-    tree = tmp_path / "-home-x-code-osiris--claude-worktrees-imhotep"
+    tree = tmp_path / "-home-x-code-osiris--claude-worktrees-brightwood"
     tree.mkdir()
     tree_transcript = tree / "aa0277bc-new.jsonl"
     tree_transcript.write_text("y" * (_DORMANT_HISTORY_FLOOR_BYTES + 2))
@@ -822,39 +822,39 @@ def test_dormant_history_confession_checks_extra_cwds_and_picks_the_freshest(
 
     # checking the office cwd alone must NOT miss the tree slug's newer transcript
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/imhotep",
-        "/home/x/code/osiris/.claude/worktrees/imhotep",
+        "/home/x/.osiris/seats/brightwood",
+        "/home/x/code/osiris/.claude/worktrees/brightwood",
         root=tmp_path,
     )
     assert info is not None
     assert info["path"] == str(tree_transcript)  # the FRESHER one, not the first argument
 
-    # order doesn't matter — same result checking the tree cwd first
+    # order doesn't matter: same result checking the tree cwd first
     info2 = dormant_history_confession(
-        "/home/x/code/osiris/.claude/worktrees/imhotep",
-        "/home/x/.osiris/seats/imhotep",
+        "/home/x/code/osiris/.claude/worktrees/brightwood",
+        "/home/x/.osiris/seats/brightwood",
         root=tmp_path,
     )
     assert info2 is not None
     assert info2["path"] == str(tree_transcript)
 
-    # no extra_cwds at all — unchanged single-cwd behavior, still finds the office one
-    office_only = dormant_history_confession("/home/x/.osiris/seats/imhotep", root=tmp_path)
+    # no extra_cwds at all: unchanged single-cwd behavior, still finds the office one
+    office_only = dormant_history_confession("/home/x/.osiris/seats/brightwood", root=tmp_path)
     assert office_only is not None
     assert office_only["path"] == str(office_transcript)
 
 
-# --- resumable_tail_bytes (thread 771366d1, task #135/#136): a transcript's cumulative
-# lifetime size is a poor proxy for what a resume would actually hydrate — Claude Code
+# --- resumable_tail_bytes (task #135/#136): a transcript's cumulative
+# lifetime size is a poor proxy for what a resume would actually hydrate. Claude Code
 # auto-compacts, and only content since the LAST compaction is live. Verified against two
-# real specimens: imhotep XVIII (72MB, 17 boundaries, 2.29MB tail, 3.2%) and seshat XXIII
+# real specimens: one transcript (72MB, 17 boundaries, 2.29MB tail, 3.2%) and another
 # (103MB, 20 boundaries, 2.23MB tail, 2.2%). ------------------------------------------------
 
 _COMPACT_LINE = b'{"type":"system","subtype":"compact_boundary","summary":"compacted"}\n'
 
 
 def test_resumable_tail_bytes_is_the_whole_file_when_never_compacted(tmp_path: Path) -> None:
-    """No compact_boundary marker at all: nothing to discount from — the raw size IS the
+    """No compact_boundary marker at all: nothing to discount from, the raw size IS the
     live size (a short session that never triggered auto-compaction)."""
     from src.ingest.sessions import resumable_tail_bytes
 
@@ -879,7 +879,7 @@ def test_resumable_tail_bytes_measures_only_content_after_the_last_boundary(
 
 
 def test_resumable_tail_bytes_uses_the_last_boundary_not_the_first(tmp_path: Path) -> None:
-    """Multiple compactions across a long session — only the MOST RECENT one bounds the
+    """Multiple compactions across a long session: only the MOST RECENT one bounds the
     live tail; earlier ones are themselves now historical residue."""
     from src.ingest.sessions import resumable_tail_bytes
 
@@ -896,17 +896,17 @@ def test_resumable_tail_bytes_uses_the_last_boundary_not_the_first(tmp_path: Pat
 
 def test_dormant_history_confession_names_a_resumable_session(tmp_path: Path) -> None:
     """Under the ceiling by raw size: resumable, with the exact command to run by hand
-    (task #135/#136's actual acceptance bar — `osiris launch` itself cannot resume through
+    (task #135/#136's actual acceptance bar: `osiris launch` itself cannot resume through
     `--bg`, proven; the next best thing is naming the command)."""
     from src.ingest.sessions import _DORMANT_HISTORY_FLOOR_BYTES, dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     (proj / f"{sid}.jsonl").write_bytes(b"x" * (_DORMANT_HISTORY_FLOOR_BYTES + 1))
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=8_000_000)
+        "/home/x/.osiris/seats/halfmoon", root=tmp_path, ceiling_bytes=8_000_000)
     assert info is not None
     assert info["session_id"] == sid
     assert info["resumable"] is True
@@ -917,13 +917,13 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
     tmp_path: Path,
 ) -> None:
     """THE SIZE FIX, through the confession, isolated: raw size is over the ceiling, but
-    the tail since the last compaction fits comfortably under it — correctly named
+    the tail since the last compaction fits comfortably under it, correctly named
     resumable BY SIZE, where the old raw-size check would have said not-resumable (exactly
-    Sekhmet's two real repro cases, imhotep XVIII and seshat XXIII). min_tail_bytes=1
-    widens the separate compaction gate out of the way — that gate has its own test below."""
+    two real repro cases seen live). min_tail_bytes=1
+    widens the separate compaction gate out of the way: that gate has its own test below."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -932,7 +932,7 @@ def test_dormant_history_confession_rescues_a_large_transcript_with_a_small_tail
     (proj / f"{sid}.jsonl").write_bytes(body)
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
+        "/home/x/.osiris/seats/halfmoon", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
     assert info is not None
     assert info["resumable"] is True
     assert info["resume_command"] == f"claude --resume {sid}"
@@ -944,7 +944,7 @@ def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path
     isolates the size gate, matching the test above."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -952,7 +952,7 @@ def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path
     (proj / f"{sid}.jsonl").write_bytes(body)
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
+        "/home/x/.osiris/seats/halfmoon", root=tmp_path, ceiling_bytes=1000, min_tail_bytes=1)
     assert info is not None
     assert info["resumable"] is False
     assert "resume_command" not in info
@@ -961,15 +961,15 @@ def test_dormant_history_confession_names_a_non_resumable_session(tmp_path: Path
 def test_dormant_history_confession_resumable_after_one_compaction_with_real_tail_work(
     tmp_path: Path,
 ) -> None:
-    """#156's rebuild (2026-08-09, the operator's own correction): a tail comfortably
-    under the ceiling, carrying REAL work since the last compaction, is resumable —
-    compacting once and then doing real work is the common case, not a disqualifier. The
+    """#156's rebuild (2026-08-09): a tail comfortably
+    under the ceiling, carrying REAL work since the last compaction, is resumable.
+    Compacting once and then doing real work is the common case, not a disqualifier. The
     OLD gate refused this transcript purely for having compacted at all; that was the bug
-    (sekhmet's own live specimen: 12 compactions, 4.07MB of real work after the last one,
-    refused anyway — factually wrong about her transcript, not a policy this house held)."""
+    (a real live specimen: 12 compactions, 4.07MB of real work after the last one,
+    refused anyway, factually wrong about that transcript, not a policy this held)."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = (b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
@@ -977,7 +977,7 @@ def test_dormant_history_confession_resumable_after_one_compaction_with_real_tai
     (proj / f"{sid}.jsonl").write_bytes(body)
 
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1_000_000_000)
+        "/home/x/.osiris/seats/halfmoon", root=tmp_path, ceiling_bytes=1_000_000_000)
     assert info is not None
     assert info["resumable"] is True
     assert info["compactions"] == 1
@@ -987,20 +987,20 @@ def test_dormant_history_confession_resumable_after_one_compaction_with_real_tai
 def test_dormant_history_confession_not_resumable_when_the_tail_is_empty(
     tmp_path: Path,
 ) -> None:
-    """The operator's own "rare special case": a session closed AT the seam itself,
-    nothing after the last compaction boundary — genuinely nothing to resume into, the
+    """A rare special case: a session closed AT the seam itself,
+    nothing after the last compaction boundary, genuinely nothing to resume into, the
     ONE shape the new minimum-tail floor still refuses."""
     from src.ingest.sessions import dormant_history_confession
 
-    proj = tmp_path / "-home-x--osiris-seats-ooblek"
+    proj = tmp_path / "-home-x--osiris-seats-halfmoon"
     proj.mkdir()
     sid = "b5f04f84-707e-49cc-85f1-482fc70058c8"
     body = b'{"type":"assistant","message":"old"}\n' * 100_000 + _COMPACT_LINE
     (proj / f"{sid}.jsonl").write_bytes(body)
 
-    # the boundary marker line itself is the only thing in the tail — nothing followed it
+    # the boundary marker line itself is the only thing in the tail: nothing followed it
     info = dormant_history_confession(
-        "/home/x/.osiris/seats/ooblek", root=tmp_path, ceiling_bytes=1_000_000_000,
+        "/home/x/.osiris/seats/halfmoon", root=tmp_path, ceiling_bytes=1_000_000_000,
         min_tail_bytes=len(_COMPACT_LINE) + 1)
     assert info is not None
     assert info["resumable"] is False
@@ -1010,14 +1010,14 @@ def test_dormant_history_confession_not_resumable_when_the_tail_is_empty(
     assert "seam itself" in info["not_resumable_reason"]
 
 
-# --- resume_verdict's CEILING is now OCCUPANCY, not raw tail bytes (2026-09-08, operator
-# dispatch, the anubis specimen: "29.52 MB tail over the 8 MB ceiling" refused a candidate
+# --- resume_verdict's CEILING is now OCCUPANCY, not raw tail bytes (2026-09-08: a real
+# specimen, "29.52 MB tail over the 8 MB ceiling", refused a candidate
 # whose last recorded context occupancy was well under its window). `ceiling_bytes` keeps
 # exactly one job now: a catastrophic-corruption sanity bound (still byte-based, still
 # fires regardless of occupancy). -----------------------------------------------------------
 
 def _usage_line(input_tokens: int, cache_read: int = 0, cache_creation: int = 0) -> bytes:
-    """One main-loop assistant transcript line carrying a usage block — the same shape
+    """One main-loop assistant transcript line carrying a usage block, the same shape
     `context_lens._usage_of` parses (`message.usage.{input,cache_read,cache_creation}_tokens`)."""
     entry = {
         "type": "assistant",
@@ -1034,19 +1034,19 @@ def _usage_line(input_tokens: int, cache_read: int = 0, cache_creation: int = 0)
 
 
 def test_resume_verdict_resumes_a_byte_huge_tail_with_low_occupancy(tmp_path: Path) -> None:
-    """(a) THE ANUBIS SHAPE ITSELF: a tail dominated by a huge tool-output blob (never
+    """(a) THE REAL SHAPE: a tail dominated by a huge tool-output blob (never
     rehydrated by a resume) followed by a small, low-occupancy usage block. Under the OLD
-    byte-ceiling (8MB) this tail — comfortably over 8MB — would have refused; under the new
+    byte-ceiling (8MB) this tail, comfortably over 8MB, would have refused; under the new
     occupancy ceiling it resumes, because what a resume actually rehydrates is small."""
     from src.ingest.sessions import resume_diagnostics, resume_verdict
 
     t = tmp_path / "x.jsonl"
-    # a large tool-result-shaped blob, never carrying a usage block itself — the exact shape
+    # a large tool-result-shaped blob, never carrying a usage block itself: the exact shape
     # a resume does NOT rehydrate (file reads, search results, fed to the model once)
     blob = (b'{"type":"user","message":{"role":"user","content":[{"type":"tool_result",'
             b'"content":"' + b"x" * 200 + b'"}]}}\n')
     tail = blob * 50_000  # >8MB of tool-output-shaped lines
-    tail += _usage_line(5_000)  # the LAST recorded usage — low occupancy
+    tail += _usage_line(5_000)  # the LAST recorded usage: low occupancy
     t.write_bytes(tail)
 
     _count, tail_bytes, _lines = resume_diagnostics(t)
@@ -1060,10 +1060,10 @@ def test_resume_verdict_resumes_a_byte_huge_tail_with_low_occupancy(tmp_path: Pa
 def test_resume_verdict_refuses_when_occupancy_genuinely_exceeds_the_window(
     tmp_path: Path,
 ) -> None:
-    """(b) The occupancy ceiling still refuses a GENUINELY over-window transcript — and its
+    """(b) The occupancy ceiling still refuses a GENUINELY over-window transcript, and its
     message names tokens/percentage, never bytes. Occupancy is pushed past 1M (not just
     200k) because `window_for(None, used)` self-corrects to the 1M tier the instant
-    occupancy exceeds 200k — an occupancy of merely 250k would self-correct to a window it
+    occupancy exceeds 200k: an occupancy of merely 250k would self-correct to a window it
     still fits inside."""
     from src.ingest.sessions import resume_verdict
 
@@ -1081,12 +1081,12 @@ def test_resume_verdict_min_tail_floor_still_fires_independent_of_occupancy(
     tmp_path: Path,
 ) -> None:
     """(c) The min_tail_bytes FLOOR is completely unchanged: still byte-based, still fires
-    before the occupancy check even runs — a tiny tail refuses even carrying a usage block
+    before the occupancy check even runs: a tiny tail refuses even carrying a usage block
     that would otherwise pass the occupancy ceiling easily."""
     from src.ingest.sessions import resume_verdict
 
     t = tmp_path / "x.jsonl"
-    t.write_bytes(_usage_line(10))  # tiny occupancy — would pass the ceiling on its own
+    t.write_bytes(_usage_line(10))  # tiny occupancy, would pass the ceiling on its own
 
     verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=10_000_000)
     assert verdict is not None
@@ -1097,7 +1097,7 @@ def test_resume_verdict_corruption_bound_fires_regardless_of_occupancy(
     tmp_path: Path,
 ) -> None:
     """(d) The catastrophic-corruption sanity bound (what `ceiling_bytes` now means) fires
-    on a pathologically large tail REGARDLESS of what the occupancy read says — here the
+    on a pathologically large tail REGARDLESS of what the occupancy read says: here the
     occupancy itself is tiny (would pass the occupancy ceiling easily), but a small
     `ceiling_bytes` stands in for "truly pathological" without needing an actual 64MB
     fixture file."""
@@ -1113,7 +1113,7 @@ def test_resume_verdict_corruption_bound_fires_regardless_of_occupancy(
 
 def test_resume_verdict_passes_when_no_usage_block_in_the_tail(tmp_path: Path) -> None:
     """(e) No usage block anywhere in the tail (a young session, or one whose read window
-    landed entirely on non-assistant/no-usage lines) PASSES the occupancy ceiling — the
+    landed entirely on non-assistant/no-usage lines) PASSES the occupancy ceiling: the
     documented fallback: with no occupancy signal there is nothing to refuse ON, and the
     corruption-sanity bound is the independent backstop for a genuinely dangerous tail."""
     from src.ingest.sessions import resume_verdict
@@ -1181,19 +1181,19 @@ async def test_source_model_stamped_on_emitted_yield(actions: Actions) -> None:
 
 # --- origin attribution: THE SPEAKER IS THE ADVERSARY, THE AGENT IS THE SUBJECT ----------
 #
-# The test that lived here guarded the OPPOSITE law — that a mined row is SOURCED to the
-# originating agent, 'so the miner stops laundering the agent's words under its own
-# identity'. That reasoning was backwards and it produced the disease: THE AGENT NEVER SAID
-# THOSE WORDS. The miner said them ABOUT the agent, and the graph then answered 'who said
-# this?' with a name that had never uttered the sentence. See
-# test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s (B4, ruling ceae1604).
+# The test that lived here guarded the OPPOSITE rule: that a mined row is SOURCED to the
+# originating agent, so the miner stops laundering the agent's words under its own
+# identity. That reasoning was backwards and it produced the disease: THE AGENT NEVER SAID
+# THOSE WORDS. The miner said them ABOUT the agent, and the graph then answered "who said
+# this?" with a name that had never uttered the sentence. See
+# test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s (B4).
 
 
 async def test_miner_skips_extractions_the_session_already_declared(actions: Actions) -> None:
-    """Miner over-read dedup (thread f34c572c, a sibling's grievance #4): when the ORIGINATING
+    """Miner over-read dedup (a sibling's grievance #4): when the ORIGINATING
     agent
     already recorded something deliberately (SELF_DECLARED), a fresh extraction that merely
-    REWORDS it — same modulo case/punctuation and a prefix/suffix — is skipped, never re-minted
+    REWORDS it (same modulo case/punctuation and a prefix/suffix) is skipped, never re-minted
     as a DERIVED near-duplicate. Exact-hash dups are the ownership boundary's job; this catches
     the normalized near-dups the hash misses. A genuinely-new extraction still lands."""
     agent = "agent:a-sibling"
@@ -1211,7 +1211,7 @@ async def test_miner_skips_extractions_the_session_already_declared(actions: Act
     counts = await emit_yield(actions, y, repo=None, origin=agent)
     assert counts["skipped_dup"] == 2                 # both rewordings of the agent's own words
     assert counts["threads"] == 1                     # only the genuinely-new one landed
-    # the deliberate record is untouched — no DERIVED echo of it was minted alongside it
+    # the deliberate record is untouched: no DERIVED echo of it was minted alongside it
     grades = await actions.pool.fetch(
         "SELECT DISTINCT a.evidence_class AS ec FROM current_assertions a JOIN objects o "
         "ON o.id=a.object_id WHERE a.name='summary' AND a.value #>> '{}' ILIKE '%loop silently%'")
@@ -1219,8 +1219,8 @@ async def test_miner_skips_extractions_the_session_already_declared(actions: Act
 
 
 async def test_miner_never_reminds_the_fleet_of_finished_work(actions: Actions) -> None:
-    """The re-echo dup-gate's second jaw (XVIII's forensics, 2026-07-11): a long session's
-    later chunks re-describe work that already FINISHED — the resolved thread's summary often
+    """The re-echo dup-gate's second jaw (from live forensics, 2026-07-11): a long session's
+    later chunks re-describe work that already FINISHED. The resolved thread's summary often
     belongs to another source (the miner's own earlier echo, another agent), so the
     deliberate-captures jaw never saw it and the miner re-minted reworded copies of done work.
     A fresh extraction near-matching a recently-resolved thread is skipped; genuinely new
@@ -1254,10 +1254,9 @@ async def test_tick_detects_a_warm_swap_and_stamps_the_danger_map(
     actions: Actions, tmp_path: Path
 ) -> None:
     """A model change inside one session is the warm rug-pull the running agent can't feel;
-    the sensor stamps model_swapped on the session's AGENT — the digest danger map's exact
-    read path — and mints NO thread (a swap is a fact about an agent, never work for the
-    fleet; the per-sighting 'verify' threads were the overminting forensics' biggest class,
-    ruling 84be6cbe)."""
+    the sensor stamps model_swapped on the session's AGENT (the digest danger map's exact
+    read path) and mints NO thread. A swap is a fact about an agent, never work for the
+    fleet; the per-sighting "verify" threads were the overminting forensics' biggest class."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     t = proj / "s.jsonl"
@@ -1303,7 +1302,7 @@ async def test_miner_defers_to_a_self_documenting_session(
                  "extractor would happily mint as a durable thread if it ever ran on this. ")
     t.write_text("\n".join(_dialogue("let us weigh the design", long_turn * 2)) + "\n")
 
-    # control — a session with NO deliberate captures is mined (backfill from byte 0)
+    # control: a session with NO deliberate captures is mined (backfill from byte 0)
     llm1 = FakeLLM({"decisions": [], "threads_opened": ["a durable open question worth keeping"],
                     "threads_resolved": [], "obligations": []})
     rep1 = await sense_sessions_tick(actions, tmp_path, llm1, backfill=True)
@@ -1313,7 +1312,7 @@ async def test_miner_defers_to_a_self_documenting_session(
     for i in range(3):
         await record_decision(actions, f"a deliberate ruling number {i}", source="agent:selfdocc")
 
-    # re-mine from byte 0 — the miner now DEFERS: the extractor is never even called
+    # re-mine from byte 0: the miner now DEFERS, the extractor is never even called
     before = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Thread'")
     llm2 = FakeLLM({"threads_opened": ["a thread the miner would mint if it still ran"]})
     rep2 = await sense_sessions_tick(actions, tmp_path, llm2, backfill=True)
@@ -1324,8 +1323,8 @@ async def test_miner_defers_to_a_self_documenting_session(
 
 
 async def test_emit_yield_questions_land_with_question_kind(actions: Actions) -> None:
-    """The promotion bar's emit half: a mined question is remembered at kind='question' —
-    searchable, open, and ranked OFF the work wall — while a commitment stays a plain
+    """The promotion bar's emit half: a mined question is remembered at kind='question',
+    searchable, open, and ranked OFF the work wall, while a commitment stays a plain
     thread. Nobody's work list grows because someone wondered aloud."""
     y = SessionYield(threads_opened=[
         {"summary": "should the renderer support live theming, someone wondered",
@@ -1347,7 +1346,7 @@ async def test_emit_yield_questions_land_with_question_kind(actions: Actions) ->
 
 async def test_miner_skips_triage_wake_transcripts(actions: Actions, tmp_path: Path) -> None:
     """TRIAGE-WAKE HUMILITY (miner overmint, 2026-07-11): a one-shot wake settles mail and
-    retires — its transcript is the MAIL's business, not project memory. The 2026-07-11
+    retires; its transcript is the mail's own business, not project memory. The 2026-07-11
     wake storm became 474 echo threads in one day because every doomed wake got mined.
     The wake prompt's opening line is the marker: no model call, no minting, cursor still
     advances (crash-safe forward-only sensing is untouched)."""
@@ -1363,13 +1362,13 @@ async def test_miner_skips_triage_wake_transcripts(actions: Actions, tmp_path: P
     with t.open("a") as f:
         for line in _dialogue(
             'You have unread Osiris mail. Call mount(cwd="/repo/wakerepo", '
-            "job_dir=$CLAUDE_JOB_DIR), then inbox(peek=true) — settle each message. " * 3,
+            "job_dir=$CLAUDE_JOB_DIR), then inbox(peek=true) to settle each message. " * 3,
             "mounted, read one grievance broadcast, acked it, retiring now. " * 5,
         ):
             f.write(line + "\n")
     rep = await sense_sessions_tick(actions, tmp_path, llm)
     assert rep.get("wakes_skipped") == 1
-    assert llm.prompts == []  # not even a model call — the yield discipline starts early
+    assert llm.prompts == []  # not even a model call: the yield discipline starts early
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Thread'") == 0
     # the cursor ADVANCED past the wake chunk: a second tick re-reads nothing
@@ -1380,13 +1379,13 @@ async def test_miner_skips_triage_wake_transcripts(actions: Actions, tmp_path: P
 def test_the_miner_never_mines_osiris_own_wake_spawns(tmp_path: Path) -> None:
     """THE INSTRUMENT MAY NOT READ ITSELF (rule 7), second door.
 
-    The extractor's own transcripts were already excluded — but that guard keys on a DIRECTORY,
+    The extractor's own transcripts were already excluded, but that guard keys on a DIRECTORY,
     and a WAKE's transcript lands in the project's ordinary folder among real work. So Osiris was
     mining sessions IT HAD SPAWNED ITSELF: the trigger rings its own doorbell, the woken agent
     talks, and the miner files the echo of Osiris's own alarm clock as something the fleet LEARNED.
     203 wake transcripts had been mined this way before anyone looked (2026-07-12).
 
-    A wake's DELIBERATE writes still survive it — record_decision / open_thread go straight to the
+    A wake's DELIBERATE writes still survive it: record_decision / open_thread go straight to the
     graph, as they should. It is the CHATTER that is not knowledge, and it had become 85% of the
     open-thread wall.
     """
@@ -1404,7 +1403,7 @@ def test_the_miner_never_mines_osiris_own_wake_spawns(tmp_path: Path) -> None:
 
     wake = _write("wake.jsonl", "You have unread Osiris mail. Call mount(cwd=\"/repo/demo\"...")
     real = _write("real.jsonl", "fix the renderer, it drops the last frame")
-    # a session that merely DISCUSSES the wake prompt is not a wake — the fingerprint is the
+    # a session that merely DISCUSSES the wake prompt is not a wake: the fingerprint is the
     # FIRST TURN, not a mention (this very session quotes the prompt constantly)
     about = _write("about.jsonl", "why does the wake prompt say 'You have unread Osiris mail'?")
 
@@ -1439,20 +1438,20 @@ async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: A
     """THE BIGGEST NOISE PUMP OF ALL, and it hid behind a working-looking guard.
 
     The ownership boundary (rule 7) says the miner backfills the SILENT and never second-guesses
-    the diligent. It checked for deliberate writes by the TRANSCRIPT-DERIVED id (agent:513aa520) —
-    but a mind that has mounted writes under its SEAT (agent:ad1a1cb0-xxvii). Same session, two
+    the diligent. It checked for deliberate writes by the TRANSCRIPT-DERIVED id (agent:513aa520),
+    but a mind that has mounted writes under its SEAT uses a different id. Same session, two
     strings. The count came back ZERO for every agent that holds a name, which is every real agent
     in the fleet.
 
     So the miner mined precisely the sessions that were documenting themselves, re-minting a
     reworded DERIVED copy of every decision they had already recorded by hand. It was PLAGIARISING
-    ITS MOST DILIGENT AUTHORS — and that is a large part of why 81% of the graph is DERIVED.
+    ITS MOST DILIGENT AUTHORS, and that is a large part of why 81% of the graph is DERIVED.
     """
     from src.ingest.sessions import _is_self_documenting, _writers_for
     from src.orchestrator.capture import record_decision
 
     pool = actions.pool
-    # a session whose transcript is 513aa520... but which MOUNTED and took the seat 'Thoth XXVII'
+    # a session whose transcript is 513aa520... but which MOUNTED and took a named seat
     await pool.execute(
         "INSERT INTO agent_mounts (agent_id, job_dir, cwd, last_seen) "
         "VALUES ($1,$2,$3, now()) ON CONFLICT (job_dir) DO UPDATE SET agent_id=EXCLUDED.agent_id",
@@ -1462,24 +1461,24 @@ async def test_the_miner_stops_plagiarising_its_most_diligent_authors(actions: A
     writers = await _writers_for(pool, "agent:abc12345")
     assert "agent:seatholder-xxvii" in writers
 
-    # it writes back deliberately, like a good citizen — under its SEAT, not its filename
+    # it writes back deliberately, like a good citizen, under its SEAT, not its filename
     for i in range(3):
         await record_decision(actions, f"a deliberate ruling number {i}",
                               source="agent:seatholder-xxvii")
 
     # ...and the miner now RECOGNISES that and leaves it alone
     assert await _is_self_documenting(pool, "agent:abc12345") is True
-    # a silent session (no deliberate writes) is still backfilled — that is the miner's real job
+    # a silent session (no deliberate writes) is still backfilled: that is the miner's real job
     assert await _is_self_documenting(pool, "agent:nobody-home") is False
 
 
 async def test_the_critic_drops_work_steps_before_they_land() -> None:
-    """THE CHECK AND BALANCE, at birth (the operator: "it should also check and balance itself on
-    the same pass").
+    """THE CHECK AND BALANCE, at birth: it should also check and balance itself on
+    the same pass.
 
-    The extractor is TOLD, in its own system prompt, that a work-step is never a thread — and it
+    The extractor is TOLD, in its own system prompt, that a work-step is never a thread, and it
     mints them anyway: "rebuild the bundle after the lighting change", "restart the session to
-    load the config", "settle with osiris before compacting" (that last was the operator's
+    load the config", "settle with osiris before compacting" (that last was an
     instruction to ONE agent, minted as a duty for the whole fleet). Instruction-following decays
     across a long prompt juggling six jobs; a critic with ONE job does not have that problem.
     """
@@ -1496,13 +1495,13 @@ async def test_the_critic_drops_work_steps_before_they_land() -> None:
 
     threads = [
         {"summary": "Rebuild bundle after lighting changes to pbr_viewer.js"},
-        {"summary": "Operator must verify pen pressure on the real tablet — no device on hand"},
+        {"summary": "Someone must verify pen pressure on the real tablet, no device on hand"},
         {"summary": "Settle with osiris and prepare to compact before retiring"},
     ]
     kept, dropped = await critique_threads(_Critic(), threads, model="haiku")  # type: ignore[arg-type]
     assert dropped == 2
     assert [t["summary"] for t in kept] == [
-        "Operator must verify pen pressure on the real tablet — no device on hand"]
+        "Someone must verify pen pressure on the real tablet, no device on hand"]
     # the asymmetry is deliberate and it is stated
     assert "WHEN UNSURE, REJECT" in _CRITIC_SYSTEM
     assert "rots there forever" in _CRITIC_SYSTEM
@@ -1510,7 +1509,7 @@ async def test_the_critic_drops_work_steps_before_they_land() -> None:
 
 async def test_the_critic_fails_OPEN_never_silently_dropping_an_unjudged_yield() -> None:
     """A critic that errors keeps EVERYTHING. The miner must degrade to its old, noisier self
-    rather than silently drop a yield it never actually judged — unjudged beats wrongly-dropped."""
+    rather than silently drop a yield it never actually judged: unjudged beats wrongly-dropped."""
     from src.ingest.sessions import critique_threads
 
     class _Broken:
@@ -1527,14 +1526,14 @@ async def test_the_critic_fails_OPEN_never_silently_dropping_an_unjudged_yield()
         assert dropped == 0 and len(kept) == 2
 
 
-# --- THE ADVERSARY (B4, ruling ceae1604) -------------------------------------------------
+# --- THE ADVERSARY (B4) --------------------------------------------------------------------
 
 async def test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s(actions: Actions) -> None:
     """THE ATTRIBUTION LIE, and it is the whole law of this week in one field.
 
     Mined rows used to be SOURCED to `agent:<the session whose transcript it read>`, on the
     argument that "the mined words are the agent's words". THEY ARE NOT. The agent never said
-    them — THE MINER SAID THEM ABOUT THE AGENT. So the graph answered "who said this?" with a
+    them: THE MINER SAID THEM ABOUT THE AGENT. So the graph answered "who said this?" with a
     name that had never uttered the sentence, and 3,579 machine guesses sat on the fleet's wall
     WEARING THEIR AUTHORS' FACES.
 
@@ -1554,14 +1553,14 @@ async def test_the_adversary_SPEAKS_IN_ITS_OWN_NAME_never_the_agent_s(actions: A
     assert row["source_id"] != "agent:someone-else", \
         "the adversary signed an agent's name to words that agent never said"
     assert row["source_id"] == "session-miner"      # the SPEAKER
-    assert row["subject"] == "agent:someone-else"   # the SUBJECT — findable, but not the author
+    assert row["subject"] == "agent:someone-else"   # the SUBJECT: findable, but not the author
     assert row["evidence_class"] == "derived"       # and still, always, a guess
 
 
 async def test_the_adversary_CANNOT_MINT_A_DECISION_even_if_it_tries(actions: Actions) -> None:
     """1,620 mined Decisions. ZERO ever touched by anyone, ever.
 
-    A decision is precisely the thing a mind KNOWS it made and records on purpose — there is
+    A decision is precisely the thing a mind KNOWS it made and records on purpose: there is
     nothing there to infer, and eight days of trying produced a 0% hit rate. The prompt no longer
     asks for them; this is the belt to that braces, because a model that drifts back to an old
     habit must not be able to LAND it.
@@ -1577,7 +1576,7 @@ async def test_the_adversary_CANNOT_MINT_A_DECISION_even_if_it_tries(actions: Ac
 
 
 def test_the_whole_arc_is_read_or_the_elision_SAYS_SO(tmp_path: Path) -> None:
-    """ABANDONMENT IS ONLY VISIBLE ACROSS A CONVERSATION — a thing raised early and never
+    """ABANDONMENT IS ONLY VISIBLE ACROSS A CONVERSATION: a thing raised early and never
     returned to. Head-and-tail sampling would destroy the very signal we hunt, so when a session
     is too big to fit we keep the head (where things get flagged) and the tail (where they get
     forgotten) and SAY SO in the middle, loudly, rather than lying by omission."""
@@ -1629,7 +1628,7 @@ async def test_scoped_tick_spends_only_inside_the_armed_projects(
     actions: Actions, tmp_path: Path
 ) -> None:
     """OSIRIS_SENSE_PROJECTS as a real lever: a scoped tick neither plants cursors nor
-    spends chunks outside the named projects — and a scoped-out `only` (the death-rite /
+    spends chunks outside the named projects, and a scoped-out `only` (the end-of-session
     sweep path) is refused without spend or cursor motion. Scope DEFERS reading, never
     buries it: the un-planted transcript is picked up whole the moment the scope widens."""
     inside = tmp_path / "-home-x-code-pokex"
@@ -1645,21 +1644,21 @@ async def test_scoped_tick_spends_only_inside_the_armed_projects(
     rep = await sense_sessions_tick(actions, tmp_path, llm, scopes=["pokex"])
     assert rep["planted"] == 1  # ONLY the in-scope transcript got a cursor
 
-    # the scoped-out `only`: refused — no LLM call, no cursor planted or moved
+    # the scoped-out `only`: refused, no LLM call, no cursor planted or moved
     rep2 = await sense_sessions_tick(
         actions, tmp_path, llm, only=t_out, backfill=True, scopes=["pokex"])
     assert rep2.get("skipped_scope") == 1 and rep2["chunks"] == 0 and llm.prompts == []
 
-    # widening back to unscoped walks everything: the deferred transcript plants NOW —
+    # widening back to unscoped walks everything: the deferred transcript plants NOW,
     # nothing was buried by the narrow interval
     rep3 = await sense_sessions_tick(actions, tmp_path, llm, scopes=[])
     assert rep3["planted"] == 1
 
 
-def test_the_spec_carries_jennys_thirty_and_the_field_weights() -> None:
-    """Thread 5660ad36 — the first full pile-clear (30 judged) amended the spec: unverified
+def test_the_spec_carries_the_pile_clear_thirty_and_the_field_weights() -> None:
+    """The first full pile-clear (30 judged) amended the spec: unverified
     work is a STRONG positive signal (both such rows were real; one was the corpus's only
-    production defect), audit-shaped rows are skipped (they complete in-session), twins
+    production defect), audit-shaped rows are skipped (they complete in-session), duplicates
     referencing one artifact cluster to ONE concern, and a later session's proof
     self-retires a stale candidate (16 of 23 drops were already-done work)."""
     from src.ingest.sessions import _SYSTEM

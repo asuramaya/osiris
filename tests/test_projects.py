@@ -1,7 +1,7 @@
-"""THE STUB CULL (msg 1675) — retire_project, a sanctioned status-flip for a dead
+"""THE STUB CULL: retire_project, a sanctioned status-flip for a dead
 SoftwareProject. Every test here demonstrates a refusal the live-signal check exists to
-catch, or the disambiguation Thoth flagged by name (a stub project 'ra'/'seshat' is not the
-seat of the same name)."""
+catch, or the disambiguation of a stub project sharing a name with a seat (a stub
+project named 'nova' is not the seat of the same name)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -89,8 +89,8 @@ async def test_retire_project_refuses_a_project_with_a_commit(actions: Actions) 
 
 
 async def test_retire_project_ignores_a_retracted_commit_link(actions: Actions) -> None:
-    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): the commit-count refusal check counted
-    ANY `in_repo` edge, live or retracted — so a project whose only commit link was
+    """THE IN-REPO JOIN AUDIT: the commit-count refusal check counted
+    ANY `in_repo` edge, live or retracted, so a project whose only commit link was
     invalidated (e.g. by a fold that moved the commit to its surviving project) would
     still read as having "live signal" and refuse a legitimate retirement forever."""
     pid = await actions.create_or_find_object("SoftwareProject", "repo:had-commits", "test")
@@ -149,32 +149,32 @@ async def test_retire_project_resolves_by_short_id_and_bare_canonical(actions: A
 
 
 async def test_retire_project_never_touches_a_seat_of_the_same_name(actions: Actions) -> None:
-    """The exact disambiguation Thoth flagged: 'ra' and 'seshat' name stub PROJECTS, not
-    the seats of the same names — retiring the project must leave a same-named seat alone,
-    and must never accidentally resolve INTO the seat."""
-    seat = await ensure_seat(actions, house="osiris", handle="ra", source="test")
-    await _stub_project(actions, "repo:ra", "ra")
-    out = await retire_project(actions, project="ra", actor="agent:test", because="reap stub")
-    assert out["retired_project"] == "repo:ra"          # resolved the PROJECT, not the seat
+    """The exact disambiguation case: a stub project and a seat can share a name. Retiring
+    the project must leave a same-named seat alone, and must never accidentally resolve
+    INTO the seat."""
+    seat = await ensure_seat(actions, house="osiris", handle="nova", source="test")
+    await _stub_project(actions, "repo:nova", "nova")
+    out = await retire_project(actions, project="nova", actor="agent:test", because="reap stub")
+    assert out["retired_project"] == "repo:nova"        # resolved the PROJECT, not the seat
     seat_row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical=$1", seat["seat_id"])
     assert seat_row["status"] == "active"               # the seat is untouched
     project_row = await actions.pool.fetchrow(
-        "SELECT status FROM objects WHERE canonical='repo:ra'")
+        "SELECT status FROM objects WHERE canonical='repo:nova'")
     assert project_row["status"] == "retired"
 
 
 async def test_retire_project_refuses_when_only_a_seat_of_that_name_exists(
     actions: Actions,
 ) -> None:
-    """No SoftwareProject named 'ghost' exists — only a same-named Seat. The resolver must
+    """No SoftwareProject named 'ghost' exists, only a same-named Seat. The resolver must
     stay scoped to type='SoftwareProject' and refuse rather than silently retiring the seat."""
     await ensure_seat(actions, house="osiris", handle="ghost", source="test")
     out = await retire_project(actions, project="ghost", actor="agent:test", because="reap")
     assert "no such SoftwareProject" in out["error"]
 
 
-# ═══ assert_project_property (task #74) — the sanctioned write for a single
+# === assert_project_property (task #74): the sanctioned write for a single
 # project-scoped property, closing the gap that forced in-process scripts for anything
 # beyond a status flip during the reap.
 
@@ -184,7 +184,7 @@ async def test_assert_project_property_stamps_a_named_property(actions: Actions)
                                         value="repo:bytebye", actor="agent:test")
     oid = out.pop("id", None)
     assert out == {"project": "repo:app1", "name": "merged_into", "value": "repo:bytebye"}
-    assert oid  # the written object's own id — PROVENANCE PIECE 1's stamping needs it
+    assert oid  # the written object's own id: the provenance stamping needs it
     val = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='merged_into' WHERE o.canonical='repo:app1'")
@@ -218,8 +218,8 @@ async def test_assert_project_property_refuses_an_unknown_project(actions: Actio
 
 
 async def test_assert_project_property_refuses_status(actions: Actions) -> None:
-    """status has its own compensating-event path (retire_project) — a bare assertion
-    here would reopen the exact STATUS GAP class already fixed once for seats."""
+    """status has its own compensating-event path (retire_project). A bare assertion
+    here would reopen the exact status-gap class already fixed once for seats."""
     await _stub_project(actions, "repo:app4", "app4")
     out = await assert_project_property(actions, project="app4", name="status",
                                         value="retired", actor="agent:test")
@@ -242,17 +242,17 @@ async def test_assert_project_property_never_touches_a_seat_of_the_same_name(
     assert seat_val is None
 
 
-# ═══ set_project_window_tag (window-tag-gets-an-owner, decision 26f4f825's corollary) —
+# === set_project_window_tag (window-tag-gets-an-owner):
 # the persisted `[TAG]` override trigger.py's `_house_tag`/`_window_name` read BEFORE
 # ever deriving one from the house/project's own first two letters.
 
 async def test_set_project_window_tag_stamps_window_tag_not_tag(actions: Actions) -> None:
-    """Written under its OWN property name, `window_tag` — never the pre-existing, totally
+    """Written under its OWN property name, `window_tag`, never the pre-existing, totally
     unrelated `tag` property (frontier.py's/dossier.py's additive case-subject marking,
     `{"tag": "subject"}`). Reusing that name would silently collide two meanings."""
     await _stub_project(actions, "repo:mhouse1", "mhouse1")
     out = await set_project_window_tag(actions, project="mhouse1", tag="MH",
-                                       because="operator's own code", actor="agent:test")
+                                       because="manual override", actor="agent:test")
     assert out == {"project": "repo:mhouse1", "window_tag": "MH"}
     val = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
@@ -282,7 +282,7 @@ async def test_set_project_window_tag_refuses_a_blank_because(actions: Actions) 
 async def test_set_project_window_tag_refuses_a_malformed_shape(
     actions: Actions, bad_tag: str,
 ) -> None:
-    """1-4 uppercase letters, EXACTLY as given — never silently lowercased, truncated, or
+    """1-4 uppercase letters, EXACTLY as given, never silently lowercased, truncated, or
     uppercased into something the caller never asked for (refuse-don't-guess)."""
     await _stub_project(actions, "repo:mhouse3", "mhouse3")
     out = await set_project_window_tag(actions, project="mhouse3", tag=bad_tag,
@@ -297,8 +297,8 @@ async def test_set_project_window_tag_refuses_an_unresolvable_project(actions: A
     assert "no such SoftwareProject" in out["error"]
 
 
-# ═══ fold_project (task #102's lane 2, Thoth's dispatch DM 2302/2310) — the deliberate,
-# evidence-gated cure for a genuine TWIN. Never executed live tonight: these tests build
+# === fold_project (task #102's lane 2): the deliberate,
+# evidence-gated cure for a genuine duplicate pair. Never executed live: these tests build
 # and prove the verb, they do not fold osiris's own real fragments.
 
 async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> None:
@@ -320,7 +320,7 @@ async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> Non
                      cwd="/w/dupe1", model="claude-fable-5", session_key=None, alive=True)
 
     out = await fold_project(actions, dupe="dupe1", into="into1",
-                             evidence="both mint the same repo, confirmed by the operator",
+                             evidence="both mint the same repo, confirmed by manual review",
                              actor="agent:test")
     assert out["folded"] == "repo:dupe1" and out["into"] == "repo:into1"
     assert out["edges_moved"] == {"in_repo": 1, "works_in": 1, "governs": 1, "informs": 1}
@@ -348,9 +348,9 @@ async def test_fold_project_moves_the_estate_and_merges(actions: Actions) -> Non
 
 
 async def test_fold_project_names_a_seat_left_stale_by_the_fold(actions: Actions) -> None:
-    """The dtfb/dealer-to-fb acceptance shape (Thoth dispatch 6484/6493, decision f5d5473b):
+    """The dealer-to-fb acceptance shape:
     the fold itself is correct (edges/mounts move), but a seat's OWN house never gets
-    re-asserted — this proves the fold's own receipt now names that seat rather than
+    re-asserted. This proves the fold's own receipt now names that seat rather than
     leaving it to be found by hand."""
     await _stub_project(actions, "repo:dupe2", "dupe2")
     await _stub_project(actions, "repo:into2", "into2")
@@ -367,8 +367,8 @@ async def test_fold_project_names_a_seat_left_stale_by_the_fold(actions: Actions
 async def test_fold_project_carries_the_original_writers_attribution_forward(
     actions: Actions,
 ) -> None:
-    """Decision 540007ca (the ramstein write-attribution specimen): a moved edge's
-    source_id/confidence/evidence_class must survive the estate move UNCHANGED — the
+    """The ramstein write-attribution specimen: a moved edge's
+    source_id/confidence/evidence_class must survive the fold move UNCHANGED. The
     prior version stamped every re-pointed edge with the fold's own actor and a fresh
     SELF_DECLARED evidence class, silently destroying the original writer's attribution
     with no way for any reader-side fix to recover it afterward. The fold's own actor
@@ -383,7 +383,7 @@ async def test_fold_project_carries_the_original_writers_attribution_forward(
     await actions.create_link(commit, dupe_id, "in_repo", "agent:original-writer", NOW, 0.73)
 
     await fold_project(actions, dupe="dupe1b", into="into1b",
-                       evidence="both mint the same repo, confirmed by the operator",
+                       evidence="both mint the same repo, confirmed by manual review",
                        actor="agent:fold-executor")
 
     row = await actions.pool.fetchrow(
@@ -400,9 +400,9 @@ async def test_fold_project_carries_the_original_writers_attribution_forward(
 async def test_fold_project_preserves_a_distinct_source_id_per_link_type(
     actions: Actions,
 ) -> None:
-    """Ruling 4fd979a0 (ATTRIBUTION SURVIVES A FOLD, operator 2026-09-10): the single-type
+    """ATTRIBUTION SURVIVES A FOLD (dated 2026-09-10): the single-type
     specimen above proves in_repo alone; this is the scratch pair the ruling itself asks
-    for — one edge of EVERY _PROJECT_ESTATE_LINK_TYPES kind, each from a DIFFERENT
+    for: one edge of EVERY _PROJECT_ESTATE_LINK_TYPES kind, each from a DIFFERENT
     source, so a fold that accidentally shared a hardcoded actor across link types would
     still be caught. The fold's own actor lands only on the object_event (the mover),
     never on any of the four edges (the original writer)."""
@@ -422,7 +422,7 @@ async def test_fold_project_preserves_a_distinct_source_id_per_link_type(
     await actions.create_link(ref, dupe_id, "informs", "agent:writer-informs", NOW, 0.5)
 
     out = await fold_project(actions, dupe="dupe1c", into="into1c",
-                             evidence="both mint the same repo, confirmed by the operator",
+                             evidence="both mint the same repo, confirmed by manual review",
                              actor="agent:fold-executor-1c")
     assert out["edges_moved"] == {"in_repo": 1, "works_in": 1, "governs": 1, "informs": 1}
 
@@ -438,7 +438,7 @@ async def test_fold_project_preserves_a_distinct_source_id_per_link_type(
             "AND (valid_until IS NULL OR valid_until > now())", from_id, into_id, link_type)
         assert row is not None, f"{link_type} edge never landed on into"
         assert row["source_id"] == original_source, (
-            f"{link_type}'s original writer was lost — got {row['source_id']!r}")
+            f"{link_type}'s original writer was lost, got {row['source_id']!r}")
 
     # the mover belongs on the fold event, never on any edge
     fold_event = await actions.pool.fetchrow(
@@ -450,7 +450,7 @@ async def test_fold_project_preserves_a_distinct_source_id_per_link_type(
 async def test_fold_project_is_idempotent_on_an_edge_already_live_to_into(
     actions: Actions,
 ) -> None:
-    """The estate re-point must never duplicate a link `into` already has — the SAME
+    """The re-point must never duplicate a link `into` already has: the SAME
     "re-capture is a no-op" discipline link_repo/grounds already follow."""
     await _stub_project(actions, "repo:dupe2", "dupe2")
     await _stub_project(actions, "repo:into2", "into2")
@@ -496,8 +496,8 @@ async def test_fold_project_refuses_an_unknown_dupe(actions: Actions) -> None:
 async def test_fold_project_refuses_a_missing_target_and_names_rename_as_the_right_tool(
     actions: Actions,
 ) -> None:
-    """The redmonth correction (Thoth DM 2310): fold_project NEVER find-or-CREATEs `into`
-    — a missing target means the caller wants a rename, and the refusal says so."""
+    """The redmonth correction: fold_project NEVER find-or-CREATEs `into`.
+    A missing target means the caller wants a rename, and the refusal says so."""
     await _stub_project(actions, "repo:realdupe", "realdupe")
     out = await fold_project(actions, dupe="realdupe", into="does-not-exist-yet",
                              evidence="x", actor="agent:test")
@@ -534,7 +534,7 @@ async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
 ) -> None:
     """The operator's rule (task #102): SAME tag, DIFFERENT data means these may be TWO
     projects, not one under two names. A wrong merge destroys the recorded disagreement,
-    which was data — fold_project must refuse rather than silently pick a winner."""
+    which was data: fold_project must refuse rather than silently pick a winner."""
     await _stub_project(actions, "repo:cd1", "cd1")
     await _stub_project(actions, "repo:cd2", "cd2")
     cd1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cd1'")
@@ -553,11 +553,11 @@ async def test_fold_project_refuses_a_genuine_cross_object_contradiction(
 async def test_fold_project_never_treats_independent_layout_positions_as_contradiction(
     actions: Actions,
 ) -> None:
-    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12453 item b): a
+    """PROJECT IDENTITY DRIFT: a
     stub minted mid-rename picks up its OWN graph_x/graph_y/graph_layout_v the very
-    next cron tick — independently of the real object's own position, by
+    next cron tick, independently of the real object's own position, by
     construction, never a sign these are two different projects. Before this fix, a
-    genuine twin with two cron-assigned positions could never fold at all."""
+    genuine duplicate pair with two cron-assigned positions could never fold at all."""
     await _stub_project(actions, "repo:lp1", "lp1")
     await _stub_project(actions, "repo:lp2", "lp2")
     lp1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:lp1'")
@@ -577,9 +577,9 @@ async def test_fold_project_never_treats_independent_layout_positions_as_contrad
     assert row["status"] == "merged"
 
 
-# ═══ THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07) — self stays open,
+# === THE LIVENESS GUARD: self stays open,
 # third-party-on-live refuses by default, force=True (+ because) overrides and prices
-# the exception with a mandatory `live_session_repointed` signal. ═══
+# the exception with a mandatory `live_session_repointed` signal. ===
 
 _FOLD_LIVE_EXE = "/home/x/.local/share/claude/versions/2.1.210"
 
@@ -611,7 +611,7 @@ async def test_fold_project_refuses_a_third_party_fold_of_a_live_dupe(
 
 
 async def test_fold_project_self_fold_of_a_live_dupe_stays_open(actions: Actions) -> None:
-    """The caller IS the live occupant's own lineage — no change from before this guard."""
+    """The caller IS the live occupant's own lineage, so no change from before this guard."""
     await _stub_project(actions, "repo:tpl2", "tpl2")
     await _stub_project(actions, "repo:tpl2-into", "tpl2-into")
     await save_mount(actions.pool, job_dir="/j/bbbbbbbb", agent_id="agent:tplself",
@@ -654,7 +654,7 @@ async def test_fold_project_force_overrides_and_prices_the_exception(
 
 
 async def test_fold_project_unaffected_when_nobody_live_on_dupe(actions: Actions) -> None:
-    """The common case, unchanged: no live agent_mounts row on dupe at all — the guard's
+    """The common case, unchanged: no live agent_mounts row on dupe at all. The guard's
     own first check (`if not rows: return None`) short-circuits before any census call."""
     await _stub_project(actions, "repo:tpl5", "tpl5")
     await _stub_project(actions, "repo:tpl5-into", "tpl5-into")
@@ -667,35 +667,34 @@ async def test_fold_project_unaffected_when_nobody_live_on_dupe(actions: Actions
 async def test_fold_project_ignores_a_superseded_cross_source_assertion(
     actions: Actions,
 ) -> None:
-    """Sekhmet's ramstein trace (decision 9ae4feee, obligation 114f7ac9's sibling fork,
-    resolved (B)): `assert_property` only supersedes WITHIN the same source, so a stale
+    """A prior trace found: `assert_property` only supersedes WITHIN the same source, so a stale
     disk-census assertion from one source stays live in `current_assertions` forever
     after a later, DIFFERENT-source correction wins belief on confidence/recency. The old
     raw `count(DISTINCT value)` gate saw that stale row as a second "current" value and
-    refused the fold even though both objects genuinely agree once belief is resolved —
-    a real correction must not be permanently blocked by an unexposed, uncleared row."""
+    refused the fold even though both objects genuinely agree once belief is resolved.
+    A real correction must not be permanently blocked by an unexposed, uncleared row."""
     await _stub_project(actions, "repo:cs1", "cs1")
     await _stub_project(actions, "repo:cs2", "cs2")
     cs1_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cs1'")
     cs2_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:cs2'")
-    # a stale disk-census from an OLD, low-confidence source — never superseded on its
+    # a stale disk-census from an OLD, low-confidence source, never superseded on its
     # own row (assert_property only supersedes same-source), but destined to LOSE belief.
     await actions.assert_property(cs1_id, "on_disk_path", "/stale/wrong", "census:old",
                                   NOW - timedelta(days=30), 0.5)
     # the correction, a DIFFERENT source, wins on both confidence and recency.
-    await actions.assert_property(cs1_id, "on_disk_path", "/real/path", "agent:sekhmet",
+    await actions.assert_property(cs1_id, "on_disk_path", "/real/path", "agent:census-writer",
                                   NOW, 0.95)
-    await actions.assert_property(cs2_id, "on_disk_path", "/real/path", "agent:sekhmet",
+    await actions.assert_property(cs2_id, "on_disk_path", "/real/path", "agent:census-writer",
                                   NOW, 0.95)
 
-    out = await fold_project(actions, dupe="cs1", into="cs2", evidence="ramstein twin",
+    out = await fold_project(actions, dupe="cs1", into="cs2", evidence="duplicate pair, same repo",
                              actor="agent:test")
     assert "folded" in out, out
 
 
 async def test_fold_project_does_not_refuse_on_a_differing_name(actions: Actions) -> None:
-    """Two different `name` properties is the fold's own PREMISE (two tags, one referent)
-    — never treated as a conflict, unlike a genuinely differing OTHER property."""
+    """Two different `name` properties is the fold's own PREMISE (two tags, one referent),
+    never treated as a conflict, unlike a genuinely differing OTHER property."""
     await _stub_project(actions, "repo:dn1", "dn1-label")
     await _stub_project(actions, "repo:dn2", "dn2-label")
     out = await fold_project(actions, dupe="dn1", into="dn2",
@@ -704,9 +703,9 @@ async def test_fold_project_does_not_refuse_on_a_differing_name(actions: Actions
 
 
 async def test_fold_project_never_gates_on_commits(actions: Actions) -> None:
-    """Thoth's explicit requirement from redmonth's own warning (DM 2310): unlike
-    retire_project's stub-cull guard, a project WITH commits attached must still fold —
-    graph presence being real is exactly the case this verb has to handle."""
+    """An explicit requirement from the redmonth warning: unlike
+    retire_project's stub-cull guard, a project WITH commits attached must still fold.
+    Graph presence being real is exactly the case this verb has to handle."""
     await _stub_project(actions, "repo:hc1", "hc1")
     await _stub_project(actions, "repo:hc2", "hc2")
     dupe_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:hc1'")
@@ -719,8 +718,8 @@ async def test_fold_project_never_gates_on_commits(actions: Actions) -> None:
 
 
 async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
-    """Reversibility is non-negotiable (Thoth's explicit ask): prove the UNWIND, not just
-    the merge — merged_into + status='merged', never a delete, and unmerge_objects
+    """Reversibility is non-negotiable: prove the UNWIND, not just
+    the merge. merged_into + status='merged', never a delete, and unmerge_objects
     restores the projection exactly."""
     await _stub_project(actions, "repo:rev1", "rev1")
     await _stub_project(actions, "repo:rev2", "rev2")
@@ -738,8 +737,8 @@ async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
     restored_row = await actions.pool.fetchrow(
         "SELECT status, merged_into FROM objects WHERE id=$1", dupe_id)
     assert restored_row["status"] == "active" and restored_row["merged_into"] is None
-    # the merge event and the same_as link both stay — witnesses of the era, never erased
-    # (merge_objects stamps object_id=winner, related_id=loser — core.py:484-492)
+    # the merge event and the same_as link both stay, witnesses of the era, never erased
+    # (merge_objects stamps object_id=winner, related_id=loser: core.py:484-492)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM object_events WHERE object_id=$1 AND related_id=$2 "
         "AND event_type='merge'", into_id, dupe_id) == 1
@@ -748,8 +747,8 @@ async def test_fold_project_is_reversible_via_unmerge(actions: Actions) -> None:
         dupe_id, into_id) == 1
 
 
-# ═══ unfold_project (ruling 31c02dca's PARITY requirement: fold_project had NO reversal
-# before this — a Project fold was permanent, task #127's own named case) ═══
+# === unfold_project (PARITY requirement: fold_project had NO reversal
+# before this. A Project fold was permanent, task #127's own named case) ===
 
 
 async def test_unfold_project_dry_run_plans_the_estate_restore(actions: Actions) -> None:
@@ -764,7 +763,7 @@ async def test_unfold_project_dry_run_plans_the_estate_restore(actions: Actions)
                        actor="agent:test")
 
     out = await unfold_project(actions, dupe="repo:up1dupe0",
-                               because="wrongful fold — a real second project",
+                               because="wrongful fold, a real second project",
                                actor="agent:judge")
     assert out["execute"] is False
     assert out["was_merged_into"] == "repo:up1into0"
@@ -904,9 +903,9 @@ async def test_unfold_project_reports_unreturnable_mounts(actions: Actions) -> N
     assert len(out["estate_unreturnable"]["mounts"]) == 1
 
 
-# ═══ the fold_project MCP wrapper — now `merge` (decision 5dbd4dce closed; collapsed
-# under ruling 31c02dca) — the gate must survive exposure through the tool layer, and the
-# reversibility witnesses must reach the caller, not just the graph. ═══
+# === the fold_project MCP wrapper, now `merge` (the old dedicated tool retired; collapsed
+# under a later ruling). The gate must survive exposure through the tool layer, and the
+# reversibility witnesses must reach the caller, not just the graph. ===
 
 
 class _Ctx:
@@ -929,9 +928,9 @@ async def _mounted(actions: Actions, agent_id: str, project: str) -> _Ctx:
 async def test_fold_project_tool_still_refuses_a_contradiction_through_the_wrapper(
     actions: Actions,
 ) -> None:
-    """The gate must survive exposure — the wrapper is not a second, softer path to the
-    same act. Now reached through `merge`, not a dedicated fold_project tool (ruling
-    31c02dca) — "wcd1"/"wcd2" carry no agent:/seat: prefix, so `merge` routes them to
+    """The gate must survive exposure: the wrapper is not a second, softer path to the
+    same act. Now reached through `merge`, not a dedicated fold_project tool.
+    "wcd1"/"wcd2" carry no agent:/seat: prefix, so `merge` routes them to
     fold_project exactly as the old dedicated tool did."""
     from src import mcp_server as srv
 
@@ -958,9 +957,9 @@ async def test_fold_project_tool_still_refuses_a_contradiction_through_the_wrapp
 async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
     actions: Actions,
 ) -> None:
-    """Reversibility must reach the CALLER, not stay implicit in the graph — the receipt
+    """Reversibility must reach the CALLER, not stay implicit in the graph. The receipt
     names the merge event and the same_as link `merge_objects` mints, the two witnesses
-    an `unmerge_objects` reversal needs. Reached through `merge` now (ruling 31c02dca)."""
+    an `unmerge_objects` reversal needs. Reached through `merge` now."""
     from src import mcp_server as srv
 
     await _stub_project(actions, "repo:wrev1", "wrev1")
@@ -987,12 +986,12 @@ async def test_fold_project_tool_surfaces_the_merge_event_and_same_as_link(
     assert out["same_as_link_id"] == link_id
 
 
-# --- ambiguity refusal (#110, decision 1db1ff41) ------------------------------------------
+# --- ambiguity refusal (#110) ------------------------------------------------------------
 
 async def test_resolve_refuses_a_label_collision_rather_than_guess(actions: Actions) -> None:
     """The ballgem/sutra SHAPE, synthesized: one object findable by canonical alone
     (repo:twin), a SIBLING findable only through its own `name` property (canonicaled
-    something else entirely) — the old fallback was LIMIT 1 with no ORDER BY, whichever
+    something else entirely). The old fallback was LIMIT 1 with no ORDER BY, whichever
     row postgres felt like. Every caller (retire_project here; fold_project/
     correct_project_name share the same wrapper) must refuse and name both, never pick."""
     await _stub_project(actions, "repo:twin", "twin")
@@ -1003,14 +1002,14 @@ async def test_resolve_refuses_a_label_collision_rather_than_guess(actions: Acti
     assert "ambiguous" in out["error"]
     assert "repo:twin" in out["error"] and "repo:twin-elsewhere" in out["error"]
     row = await actions.pool.fetchrow("SELECT status FROM objects WHERE canonical='repo:twin'")
-    assert row["status"] == "active"  # refused — nothing written
+    assert row["status"] == "active"  # refused, nothing written
 
 
 async def test_resolve_by_exact_canonical_is_never_ambiguous_even_with_a_name_collision(
     actions: Actions,
 ) -> None:
     """A caller who names the exact canonical is never blocked by a collision on the
-    FUZZY name lookup alone — an id/canonical reference is a real disambiguation the
+    FUZZY name lookup alone. An id/canonical reference is a real disambiguation the
     caller already did, and the combined check still finds it as one of the matches,
     not zero."""
     await _stub_project(actions, "repo:exactcase", "exactcase")
@@ -1018,7 +1017,7 @@ async def test_resolve_by_exact_canonical_is_never_ambiguous_even_with_a_name_co
 
     out = await retire_project(actions, project="repo:exactcase", actor="agent:test",
                                because="x")
-    assert "ambiguous" in out["error"]  # still correctly caught — canonical alone matched
+    assert "ambiguous" in out["error"]  # still correctly caught, canonical alone matched
     assert "repo:exactcase" in out["error"] and "repo:exactcase-twin" in out["error"]
 
 
@@ -1032,7 +1031,7 @@ async def test_fold_project_refuses_an_ambiguous_dupe_or_into(actions: Actions) 
     assert "ambiguous" in out["error"]
 
 
-# --- correct_project_name (#110, decision 1db1ff41 — the delegated exception) -------------
+# --- correct_project_name (#110, the delegated exception) --------------------------------
 
 async def _name_history(actions: Actions, canon: str, values: list[str]) -> None:
     pid = await actions.create_or_find_object("SoftwareProject", canon, "test")
@@ -1045,11 +1044,10 @@ async def _name_history(actions: Actions, canon: str, values: list[str]) -> None
 async def test_correct_project_name_refuses_the_real_bytebye_pair_its_not_case_drift(
     actions: Actions,
 ) -> None:
-    """THE OPENING TEST, per Thoth's own order — and it does NOT settle. I mischaracterized
-    repo:bytebye's contradiction as case-only drift when I first found it (DM 2441/2443),
-    and Thoth built on that framing too. Building this verb caught the error: 'bytebye'
+    """THE OPENING TEST, and it does NOT settle. repo:bytebye's contradiction was first
+    mischaracterized as case-only drift. Building this verb caught the error: 'bytebye'
     (byte+bye: b-y-t-e-b-y-e) and 'ByeByte' (Bye+Byte: b-y-e-b-y-t-e) are NOT case
-    variants of one string — they differ at the THIRD character even after casefold
+    variants of one string. They differ at the THIRD character even after casefold
     ('t' vs 'e'). It is a genuine transposition, not a flip-flop, and the negative
     control is exactly what stops correct_project_name from settling it wrong. Using the
     real values here, not a synthesized stand-in, because the mistake was in reading the
@@ -1065,7 +1063,7 @@ async def test_correct_project_name_refuses_the_real_bytebye_pair_its_not_case_d
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='repo:bytebyereal' AND a.name='name' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
-    assert winner == "bytebye"  # unchanged — refused, nothing written
+    assert winner == "bytebye"  # unchanged, refused, nothing written
 
 
 async def test_correct_project_name_settles_a_genuine_case_only_flip_flop(
@@ -1094,27 +1092,27 @@ async def test_correct_project_name_settles_a_genuine_case_only_flip_flop(
 async def test_correct_project_name_surfaces_prior_art_never_refuses_on_it(
     actions: Actions, monkeypatch,
 ) -> None:
-    """obligation e4612853's sibling (Thoth DM 3169/3185): this verb's own majority-vote
-    can legitimately re-settle onto a casing a standing operator ruling specifically
-    rejected — the receipt must surface that ruling, never block the settle."""
+    """this verb's own majority-vote
+    can legitimately re-settle onto a casing a standing ruling specifically
+    rejected. The receipt must surface that ruling, never block the settle."""
     await _name_history(
         actions, "repo:byebyte", ["byebyte", "ByeByte", "byebyte", "ByeByte", "byebyte"])
 
     async def _fake_prior_art(pool, *, subject_canonical, field, new_value, actor, because=""):
-        return {"prior_art": [{"id": "1db87191", "type": "Decision"}],
-               "prior_art_flag": f"a standing ruling (1db87191) may already cover "
+        return {"prior_art": [{"id": "priorart01", "type": "Decision"}],
+               "prior_art_flag": f"a standing ruling (priorart01) may already cover "
                                   f"{subject_canonical}'s {field!r}"}
 
     monkeypatch.setattr("src.orchestrator.capture.property_prior_art", _fake_prior_art)
     out = await correct_project_name(actions, project="byebyte", actor="agent:test")
     assert out["corrected"] is True  # the settle still happened
     assert out["prior_art_flag"] == (
-        "a standing ruling (1db87191) may already cover repo:byebyte's 'name'")
+        "a standing ruling (priorart01) may already cover repo:byebyte's 'name'")
 
 
 async def test_correct_project_name_refuses_a_genuine_rename(actions: Actions) -> None:
-    """THE NEGATIVE CONTROL (ruling 1db1ff41's own bar): redmonth vs ballgem is not
-    case/whitespace drift, it is two different names — correct_project_name must refuse
+    """THE NEGATIVE CONTROL: redmonth vs ballgem is not
+    case/whitespace drift, it is two different names. correct_project_name must refuse
     rather than silently pick a majority, or the delegation stops being safe."""
     await _name_history(actions, "repo:driftorfork", ["redmonth", "redmonth", "ballgem"])
 
@@ -1126,7 +1124,7 @@ async def test_correct_project_name_refuses_a_genuine_rename(actions: Actions) -
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='repo:driftorfork' AND a.name='name' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
-    assert winner == "ballgem"  # unchanged — refused, nothing written
+    assert winner == "ballgem"  # unchanged, refused, nothing written
 
 
 async def test_correct_project_name_refuses_a_tie_rather_than_guess(actions: Actions) -> None:
@@ -1154,16 +1152,16 @@ async def test_correct_project_name_refuses_unknown_project(actions: Actions) ->
     assert "no such SoftwareProject" in out["error"]
 
 
-# --- find_case_variant_projects (operator ruling 2026-07-31: "the capitalization "
-# --- merging should be automatic not bottlenecked by me") --------------------------------
+# --- find_case_variant_projects (ruling 2026-07-31: capitalization merging should be
+# --- automatic, not a manual bottleneck) --------------------------------------------------
 
 async def test_find_case_variant_projects_classifies_proven_vs_genuine(
     actions: Actions,
 ) -> None:
-    """The exact split the operator's widened rule depends on: a TRUE case variant is
+    """The exact split the widened rule depends on: a TRUE case variant is
     `proven` (correct_project_name can settle it unaided); a bytebye-shaped
     transposition, or a genuine rename like redmonth/ballgem, is `genuine` and stays
-    the operator's — same proof, same classification, as correct_project_name's own
+    a manual call, same proof, same classification, as correct_project_name's own
     guard, so a caller of this survey never gets a different verdict at settle time."""
     await _name_history(actions, "repo:surveycase", ["surveyname", "SurveyName"])
     await _name_history(actions, "repo:surveytrans", ["bytebye", "ByeByte"])
@@ -1193,13 +1191,13 @@ async def test_find_case_variant_projects_ignores_retired_projects(
     assert "repo:surveydead" not in all_labels
 
 
-# --- reconcile_project_fold (#127, P0 — the fold repair path) ----------------------------
+# --- reconcile_project_fold (#127, P0: the fold repair path) -----------------------------
 
 async def test_reconcile_repairs_an_orphaned_edge_from_a_partial_fold(
     actions: Actions,
 ) -> None:
     """The exact bytebye/ByeByte shape: an OLD-style merge (a raw merge_objects call
-    with no estate-move at all — the pre-fold_project shape) leaves a live governs edge
+    with no link-move at all, the pre-fold_project shape) leaves a live governs edge
     stranded on the now-merged dupe. reconcile repairs it without re-performing the
     merge."""
     await _stub_project(actions, "repo:orphandupe", "orphandupe")
@@ -1210,7 +1208,7 @@ async def test_reconcile_repairs_an_orphaned_edge_from_a_partial_fold(
         "SELECT id FROM objects WHERE canonical='repo:orphaninto'")
     holder = await actions.create_or_find_object("Agent", "agent:0rpha001", "test")
     await actions.create_link(holder, dupe_oid, "governs", "test", NOW, 0.9)
-    # simulate the OLD, estate-blind merge path directly — no fold_project involved
+    # simulate the OLD, link-blind merge path directly, no fold_project involved
     await actions.merge_objects(into_oid, dupe_oid, justification="old-style merge",
                                 actor="agent:test")
     events_before = await actions.pool.fetchval(
@@ -1234,12 +1232,12 @@ async def test_reconcile_repairs_an_orphaned_edge_from_a_partial_fold(
         "SELECT count(*) FROM object_events WHERE event_type='merge'")
     assert events_after == events_before
     status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe_oid)
-    assert status == "merged"  # unchanged — still exactly one merge, ever
+    assert status == "merged"  # unchanged, still exactly one merge, ever
 
 
 async def test_reconcile_is_a_true_noop_on_a_healthy_fold(actions: Actions) -> None:
     """NEGATIVE CONTROL, by construction: a fold_project run that already moved
-    everything must come out UNCHANGED when reconcile runs on it — a repair that
+    everything must come out UNCHANGED when reconcile runs on it. A repair that
     touches a clean fold is worse than the bug it exists to fix."""
     await _stub_project(actions, "repo:cleandupe", "cleandupe")
     await _stub_project(actions, "repo:cleaninto", "cleaninto")
@@ -1260,7 +1258,7 @@ async def test_reconcile_is_a_true_noop_on_a_healthy_fold(actions: Actions) -> N
 
 async def test_reconcile_refuses_a_still_active_dupe(actions: Actions) -> None:
     """REFUSAL CONTROL: reconcile must never become a side door into performing a
-    merge — an active (never-folded) dupe is fold_project's job, not this one's."""
+    merge. An active (never-folded) dupe is fold_project's job, not this one's."""
     await _stub_project(actions, "repo:stillactive", "stillactive")
     await _stub_project(actions, "repo:activeinto", "activeinto")
 
@@ -1274,7 +1272,7 @@ async def test_reconcile_refuses_a_still_active_dupe(actions: Actions) -> None:
 
 
 async def test_reconcile_refuses_to_redirect_a_merge(actions: Actions) -> None:
-    """A dupe already merged into A is not this pair's business if the caller names B —
+    """A dupe already merged into A is not this pair's business if the caller names B.
     reconcile never guesses or redirects which merge a repair applies to."""
     await _stub_project(actions, "repo:redirdupe", "redirdupe")
     await _stub_project(actions, "repo:realtarget", "realtarget")
@@ -1307,13 +1305,13 @@ async def test_reconcile_refuses_unknown_and_ambiguous_refs(actions: Actions) ->
     assert "ambiguous" in ambiguous["error"]
 
 
-# ═══ normalize_project_casing (operator ruling d02f2cdd, thread 3ed5b3d2) — the
-# twin-collapse composition: fold_project + correct_pin_value, atomic-or-refused. Never
-# executed against a real specimen (RAMstein/ramstein, bytebye/byebyte) — every test here
+# === normalize_project_casing: the
+# case-collapse composition: fold_project + correct_pin_value, atomic-or-refused. Never
+# executed against a real specimen (RAMstein/ramstein, bytebye/byebyte). Every test here
 # builds fixtures and proves the verb on those, exactly as instructed.
 
 def _write_pin(tmp_path_factory_dir, project_value: str) -> str:
-    """A real `.osiris` file on disk under a fresh directory, project= as its one key —
+    """A real `.osiris` file on disk under a fresh directory, project= as its one key,
     the shape `_peek_pin_value`/`correct_pin_value` both read."""
     d = tmp_path_factory_dir
     d.mkdir(parents=True, exist_ok=True)
@@ -1334,12 +1332,12 @@ async def test_normalize_project_casing_folds_and_corrects_the_pin(
     seat_path = _write_pin(tmp_path / "till", "RAMstein")
     out = await normalize_project_casing(
         actions, populated="RAMstein", phantom="ramstein", correct_case="ramstein",
-        evidence="operator confirmed: same repo, wrong case", actor="agent:test",
+        evidence="confirmed: same repo, wrong case", actor="agent:test",
         seat_pin_paths=(seat_path,))
 
     assert out["folded"] == "repo:ramstein" and out["into"] == "repo:RAMstein"
-    # the canonical MIGRATES to the corrected case too now (operator ruling, DM 12786) —
-    # rename_project's own receipt names the NEW, correctly-cased canonical
+    # the canonical MIGRATES to the corrected case too now (per ruling): rename_project's
+    # own receipt names the NEW, correctly-cased canonical
     assert out["renamed"] == "repo:ramstein"
     assert out["old_name"] == "RAMstein" and out["new_name"] == "ramstein"
     assert out["edges_moved"] == {}  # the PHANTOM had nothing to move
@@ -1357,13 +1355,13 @@ async def test_normalize_project_casing_folds_and_corrects_the_pin(
     assert populated_row["canonical"] == "repo:ramstein"
     assert await actions.resolve_alias("SoftwareProject", "repo:RAMstein") == populated_id
     # the phantom's own merged canonical was moved aside to free 'repo:ramstein' for
-    # the populated survivor — it is no longer reachable at that string
+    # the populated survivor: it is no longer reachable at that string
     phantom_row = await actions.pool.fetchrow(
         "SELECT status, canonical FROM objects WHERE canonical LIKE 'repo:ramstein~merged-%'")
     assert phantom_row["status"] == "merged", "the empty PHANTOM is what gets retired"
     pin_text = (Path(seat_path) / ".osiris").read_text()
     assert 'project = "ramstein"' in pin_text
-    # the populated object's own works_in edge stays on ITS OWN id — never moved,
+    # the populated object's own works_in edge stays on ITS OWN id, never moved,
     # because it was never the one being retired
     live_edge = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='works_in' "
@@ -1374,7 +1372,7 @@ async def test_normalize_project_casing_folds_and_corrects_the_pin(
 async def test_normalize_project_casing_preserves_the_populated_objects_own_properties(
     actions: Actions,
 ) -> None:
-    """THE FINDING THAT CHANGED THIS FUNCTION'S DIRECTION (Sekhmet's trace, thread 4710):
+    """THE FINDING THAT CHANGED THIS FUNCTION'S DIRECTION:
     fold_project's own merge never copies properties, and current_assertions never
     follows merged_into. Folding the wrong way would silently discard on_disk_path/
     remote_url. This proves the chosen direction actually keeps them."""
@@ -1420,7 +1418,7 @@ async def test_normalize_project_casing_works_with_no_pins_named(actions: Action
     out = await normalize_project_casing(
         actions, populated="NoPin", phantom="nopin", correct_case="nopin",
         evidence="op confirmed", actor="agent:test")
-    # the canonical migrates to the corrected case too (operator ruling, DM 12786)
+    # the canonical migrates to the corrected case too (per ruling)
     assert out["renamed"] == "repo:nopin"
     assert out["pins_written"] == [] and out["pins_already_correct"] == []
 
@@ -1428,7 +1426,7 @@ async def test_normalize_project_casing_works_with_no_pins_named(actions: Action
 async def test_normalize_project_casing_refuses_wholesale_on_a_missing_pin_file(
     actions: Actions, tmp_path,
 ) -> None:
-    """A partial normalization is worse than none — the whole operation refuses, and
+    """A partial normalization is worse than none: the whole operation refuses, and
     NOTHING is written, not even the graph side."""
     await _stub_project(actions, "repo:RAMstein3", "RAMstein3")
     await _stub_project(actions, "repo:ramstein3", "ramstein3")
@@ -1484,7 +1482,7 @@ async def test_normalize_project_casing_dry_run_writes_nothing(
     actions: Actions, tmp_path,
 ) -> None:
     """execute=False (#108 piece 2's own requirement): every precondition runs, proves
-    green, but no fold/rename/pin write happens — a plan is returned instead."""
+    green, but no fold/rename/pin write happens. A plan is returned instead."""
     await _stub_project(actions, "repo:DryRun", "DryRun")
     await _stub_project(actions, "repo:dryrun", "dryrun")
     seat_path = _write_pin(tmp_path / "dryrunseat", "DryRun")
@@ -1512,7 +1510,7 @@ async def test_normalize_project_casing_dry_run_writes_nothing(
 async def test_normalize_project_casing_dry_run_still_refuses_on_a_real_precondition(
     actions: Actions,
 ) -> None:
-    """A preview must never be optimistic about a merge that would actually refuse —
+    """A preview must never be optimistic about a merge that would actually refuse:
     the same contradiction gate fires identically in either mode."""
     await _stub_project(actions, "repo:DryConflict", "DryConflict")
     await actions.assert_property(
@@ -1573,7 +1571,7 @@ async def test_normalize_project_casing_refuses_when_phantom_already_merged(
 async def test_normalize_project_casing_refuses_a_genuine_cross_object_contradiction(
     actions: Actions,
 ) -> None:
-    """Reuses fold_project's own guard verbatim — must never drift from what a bare
+    """Reuses fold_project's own guard verbatim: must never drift from what a bare
     fold_project call would decide."""
     await _stub_project(actions, "repo:ncc1", "ncc1")
     await _stub_project(actions, "repo:ncc2", "ncc2")
@@ -1604,9 +1602,9 @@ async def test_normalize_project_casing_multiple_pins_mixed_state(
     assert out["pins_written"][0]["path"] == str(Path(needs_write) / ".osiris")
 
 
-# ═══ casefold_auto_merge_candidates — #108 piece 2 (obligation 5f7dfebb) ═══════════════
+# === casefold_auto_merge_candidates: #108 piece 2 ======================================
 # the cheap, deterministic, no-model-arbitration blocking signal. NOT a new merge
-# mechanism — every write it can cause is normalize_project_casing's own.
+# mechanism: every write it can cause is normalize_project_casing's own.
 
 
 async def _link_it(actions: Actions, oid) -> None:
@@ -1632,7 +1630,7 @@ async def test_casefold_auto_merge_finds_a_clean_pair_and_defaults_to_dry_run(
     c = out["candidates"][0]
     assert c["populated"] == "repo:CleanTwin" and c["phantom"] == "repo:cleantwin"
     assert c["correct_case"] == "cleantwin"
-    assert "plan" in c["result"]  # nothing written — the preview only
+    assert "plan" in c["result"]  # nothing written, the preview only
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:cleantwin'")
@@ -1649,7 +1647,7 @@ async def test_casefold_auto_merge_executes_when_told_to(actions: Actions) -> No
     out = await casefold_auto_merge_candidates(
         actions, evidence="op confirmed", actor="agent:test", execute=True)
     assert out["executed"] is True
-    # the canonical migrates to the corrected (lowercase) case too now (DM 12786)
+    # the canonical migrates to the corrected (lowercase) case too now (per ruling)
     assert out["candidates"][0]["result"]["renamed"] == "repo:exectwin"
     row = await actions.pool.fetchrow(
         "SELECT status, merged_into FROM objects "
@@ -1660,8 +1658,8 @@ async def test_casefold_auto_merge_executes_when_told_to(actions: Actions) -> No
 async def test_casefold_auto_merge_never_folds_a_path_shaped_basename_collision(
     actions: Actions,
 ) -> None:
-    """Thoth's own explicit warning (msg 4815): coldspot/kast/rotten-apple are NOT case
-    twins — a path-shaped canonical colliding with a bare one on BASENAME alone, the
+    """An explicit warning: coldspot/kast/rotten-apple are NOT case
+    matches. A path-shaped canonical colliding with a bare one on BASENAME alone is the
     #107 disease. Grouping by the full case-folded canonical (never just the basename)
     keeps this structurally unreachable, not merely policy."""
     await _stub_project(actions, "repo:/home/x/code/REPOS/pathcase", "pathcase")
@@ -1670,7 +1668,7 @@ async def test_casefold_auto_merge_never_folds_a_path_shaped_basename_collision(
     out = await casefold_auto_merge_candidates(
         actions, evidence="op confirmed", actor="agent:test")
     assert out["candidates"] == []
-    assert out["skipped"] == []  # never even grouped together — not a silent skip either
+    assert out["skipped"] == []  # never even grouped together, not a silent skip either
 
 
 async def test_casefold_auto_merge_skips_a_three_way_collision_loudly(
@@ -1691,7 +1689,7 @@ async def test_casefold_auto_merge_skips_when_both_sides_are_populated(
     actions: Actions,
 ) -> None:
     """Both sides carrying real graph presence is a genuine two-different-things
-    possibility, never guessed here — the same discrimination fold_project's own
+    possibility, never guessed here. The same discrimination fold_project's own
     contradiction gate holds one layer down, applied before that gate even runs."""
     await _stub_project(actions, "repo:BothPop", "BothPop")
     await _stub_project(actions, "repo:bothpop", "bothpop")
@@ -1723,7 +1721,7 @@ async def test_casefold_auto_merge_skips_when_neither_side_is_populated(
 async def test_casefold_auto_merge_skips_when_neither_side_is_lowercase(
     actions: Actions,
 ) -> None:
-    """LOWERCASE IS LAW needs a clear winner — two mixed-case spellings of the same
+    """Lowercase-preferred normalization needs a clear winner: two mixed-case spellings of the same
     label give it none, a human question, never guessed."""
     await _stub_project(actions, "repo:MixedOne", "MixedOne")
     await _stub_project(actions, "repo:MIXEDone", "MIXEDone")
@@ -1738,10 +1736,10 @@ async def test_casefold_auto_merge_skips_when_neither_side_is_lowercase(
     assert "no single fully-lowercase spelling" in out["skipped"][0]["reason"]
 
 
-# ═══ remote_url_duplicate_candidates — #108 piece 3, conservative first cut (decision
-# 2ee34a9d): SAME-basename SoftwareProject pairs that are NOT case twins (the #107
-# disease piece 2's own full-canonical grouping structurally excludes) — auto-merge only
-# on an exact, non-empty remote_url match on both sides. ═══════════════════════════════
+# === remote_url_duplicate_candidates: #108 piece 3, conservative first cut:
+# SAME-basename SoftwareProject pairs that are NOT case matches (the #107
+# disease piece 2's own full-canonical grouping structurally excludes). Auto-merge only
+# on an exact, non-empty remote_url match on both sides. =================================
 
 
 async def _remote(actions: Actions, oid, url: str) -> None:
@@ -1769,7 +1767,7 @@ async def test_remote_url_automerge_finds_a_clean_pair_and_defaults_to_dry_run(
     assert c["dupe"] == "repo:/home/x/code/REPOS/dupsame"
     assert c["into"] == "repo:dupsame"
     assert c["remote_url"] == "https://github.com/x/dupsame.git"
-    assert "plan" in c["result"]  # nothing written — the preview only
+    assert "plan" in c["result"]  # nothing written, the preview only
 
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='repo:/home/x/code/REPOS/dupsame'")
@@ -1779,7 +1777,7 @@ async def test_remote_url_automerge_finds_a_clean_pair_and_defaults_to_dry_run(
 async def test_remote_url_automerge_executes_when_told_to(actions: Actions) -> None:
     # the path-shaped side's `name` is its own full path, matching the REAL live shape
     # (measured 2026-08-17: rotten-apple/coldspot/kast's path-shaped canonicals all carry
-    # name=<their own path>, never the bare basename) — giving it the bare basename
+    # name=<their own path>, never the bare basename). Giving it the bare basename
     # instead, as an earlier draft of this test did, would make _resolve_software_project
     # (which fold_project itself calls to resolve `into`) hit its own name-property
     # fallback ambiguously, a synthetic-fixture artifact this shape avoids by construction.
@@ -1808,7 +1806,7 @@ async def test_remote_url_automerge_skips_when_remote_url_is_missing_on_one_side
     actions: Actions,
 ) -> None:
     """The exact live shape today (rotten-apple/coldspot/kast, measured 2026-08-17): the
-    bare canonical carries a real remote_url, the path-shaped clone carries none — honest
+    bare canonical carries a real remote_url, the path-shaped clone carries none. Honest
     UNCERTAIN, never a guess from basename alone."""
     await _stub_project(actions, "repo:/home/x/code/REPOS/onesided", "onesided")
     await _stub_project(actions, "repo:onesided", "onesided")
@@ -1847,7 +1845,7 @@ async def test_remote_url_automerge_skips_a_three_way_collision_loudly(
     actions: Actions,
 ) -> None:
     await _stub_project(actions, "repo:/home/x/code/REPOS/triway", "triway")
-    await _stub_project(actions, "repo:/home/x/seats/ra/triway", "triway")
+    await _stub_project(actions, "repo:/home/x/seats/team/triway", "triway")
     await _stub_project(actions, "repo:triway", "triway")
 
     out = await remote_url_duplicate_candidates(
@@ -1861,7 +1859,7 @@ async def test_remote_url_automerge_skips_when_link_counts_are_equal(
     actions: Actions,
 ) -> None:
     """A matching remote_url with no clear survivor (equal live link counts) still
-    refuses to guess a direction — a human question, same discipline as an N-way group."""
+    refuses to guess a direction: a human question, same discipline as an N-way group."""
     await _stub_project(actions, "repo:/home/x/code/REPOS/tiecount", "tiecount")
     await _stub_project(actions, "repo:tiecount", "tiecount")
     path_id = await actions.pool.fetchval(
@@ -1870,7 +1868,7 @@ async def test_remote_url_automerge_skips_when_link_counts_are_equal(
         "SELECT id FROM objects WHERE canonical='repo:tiecount'")
     await _remote(actions, path_id, "https://github.com/x/tiecount.git")
     await _remote(actions, bare_id, "https://github.com/x/tiecount.git")
-    # both zero live links — a genuine tie, not the common "one side is a phantom" shape
+    # both zero live links: a genuine tie, not the common "one side is a phantom" shape
 
     out = await remote_url_duplicate_candidates(
         actions, evidence="op confirmed", actor="agent:test")
@@ -1883,7 +1881,7 @@ async def test_remote_url_automerge_skips_a_genuine_contradiction(
     actions: Actions,
 ) -> None:
     """Even with a matching remote_url and a clear link-count winner, a genuine
-    cross-object contradiction on another property still refuses — the same guard
+    cross-object contradiction on another property still refuses. The same guard
     fold_project itself would apply, preflighted here so a dry-run report is never
     optimistic about a merge that would actually refuse."""
     await _stub_project(actions, "repo:/home/x/code/REPOS/conflicted", "conflicted")
@@ -1908,21 +1906,20 @@ async def test_remote_url_automerge_skips_a_genuine_contradiction(
     assert row["status"] == "active"
 
 
-# ═══ name_alias_duplicate_candidates — #108 piece 4 (Thoth dispatch 6547, addendum to
-# 118a98da): a SURVIVOR's own current `name` alias grounds a fold when the HUSK it names
+# === name_alias_duplicate_candidates: #108 piece 4: a SURVIVOR's own current `name`
+# alias grounds a fold when the HUSK it names
 # carries no contradicting disk evidence. The dtfb/dealer-to-fb specimen that motivated
-# this was already status='merged' by the time it was measured — every test below is a
-# SYNTHETIC fixture, the same discipline the Crush timestamp lane used, since this fleet
-# has zero live targets for the clause today. ═══════════════════════════════════════════
+# this was already status='merged' by the time it was measured. Every test below is a
+# SYNTHETIC fixture, the same discipline the Crush timestamp lane used, since there are
+# zero live targets for the clause today. ===============================================
 
 
 async def _name_alias(actions: Actions, oid, alias: str) -> None:
-    """A SECOND current `name` on an object — the survivor's own "I am also called X".
+    """A SECOND current `name` on an object: the survivor's own "I am also called X".
     A DIFFERENT source than `_stub_project`'s own "test" (assert_property's supersession
-    is same-source-only — two names from the SAME source would collapse to one current
+    is same-source-only, so two names from the SAME source would collapse to one current
     row, exactly the shape the real dtfb specimen does NOT have: its own two current
-    names come from 'disk-census'/'ingest_project:...' and 'agent:226a2695-ii', two
-    distinct sources, confirmed live before writing this fixture)."""
+    names come from two distinct sources, confirmed live before writing this fixture)."""
     await actions.assert_property(oid, "name", alias, "test-alias-source", NOW, 0.9)
 
 
@@ -1968,7 +1965,7 @@ async def test_name_alias_automerge_executes_when_told_to(actions: Actions) -> N
 async def test_name_alias_automerge_skips_a_husk_with_its_own_remote_url(
     actions: Actions,
 ) -> None:
-    """Any disk evidence on the husk CONTRADICTS the alias rather than confirming it —
+    """Any disk evidence on the husk CONTRADICTS the alias rather than confirming it,
     exactly the shape that made the real dtfb/dealer-to-fb pair a genuine (already-
     resolved) fold and would make a husk with its own remote_url a genuine refusal."""
     await _stub_project(actions, "repo:survivor3", "survivor3")
@@ -2011,8 +2008,8 @@ async def test_name_alias_automerge_finds_nothing_when_the_alias_matches_no_obje
     actions: Actions,
 ) -> None:
     """The COMMON case, and the exact reason zero live targets exist today: a
-    self-declared alias with no separate object behind it is not a duplicate pair —
-    silent, correct, never a skip either (nothing was ever a candidate)."""
+    self-declared alias with no separate object behind it is not a duplicate pair.
+    Silent, correct, never a skip either (nothing was ever a candidate)."""
     await _stub_project(actions, "repo:survivor5", "survivor5")
     survivor_id = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical='repo:survivor5'")
@@ -2026,8 +2023,8 @@ async def test_name_alias_automerge_finds_nothing_when_the_alias_matches_no_obje
 async def test_name_alias_automerge_skips_an_already_merged_husk(
     actions: Actions,
 ) -> None:
-    """Thoth's own constraint 1, from his own dtfb/dealer-to-fb correction: a husk that
-    is already status='merged' must never even become a candidate — the husk lookup
+    """Constraint 1, from the dtfb/dealer-to-fb correction: a husk that
+    is already status='merged' must never even become a candidate. The husk lookup
     itself is scoped to status='active', so a merged husk simply never matches, the
     same silent-correctness shape as the no-match case above."""
     await _stub_project(actions, "repo:survivor6", "survivor6")
@@ -2081,7 +2078,7 @@ async def test_name_alias_automerge_skips_a_genuine_contradiction(actions: Actio
     assert "contradicting values on: language" in out["skipped"][0]["reason"]
 
 
-# --- restore_attribution (thread 3f7969a3, operator ruling) ------------------------------
+# --- restore_attribution (standing ruling on attribution repair) ------------------------------
 
 async def _buggy_fold_edge(
     actions: Actions, from_id, dupe_id, into_id, link_type: str, *, original_source: str,
@@ -2089,7 +2086,7 @@ async def _buggy_fold_edge(
 ) -> None:
     """Replicates the OLD `_move_project_estate` (pre-383d548): invalidate the pre-fold
     row, then re-create it on `into_id` stamped with the FOLD'S OWN actor instead of the
-    original writer — exactly the damage restore_attribution exists to repair."""
+    original writer. Exactly the damage restore_attribution exists to repair."""
     await actions.create_link(from_id, dupe_id, link_type, original_source, when, 0.73)
     await actions.invalidate_link(from_id, dupe_id, link_type, fold_actor, when)
     await actions.create_link(from_id, into_id, link_type, fold_actor, when, 0.85,
@@ -2101,7 +2098,7 @@ async def _healed_fold_edge(
     when: datetime,
 ) -> None:
     """A fold that already carried the original writer's attribution forward correctly
-    (the FIXED `_move_project_estate`, or a prior restore_attribution run) — must be left
+    (the FIXED `_move_project_estate`, or a prior restore_attribution run) must be left
     alone."""
     await actions.create_link(from_id, dupe_id, link_type, original_source, when, 0.73)
     await actions.invalidate_link(from_id, dupe_id, link_type, original_source, when)
@@ -2140,13 +2137,13 @@ async def test_restore_attribution_dry_run_finds_exactly_the_damaged_edges(
     orphaned = await actions.create_or_find_object("Commit", "commit:orphaned", "test")
     await actions.create_link(orphaned, dupe_id, "in_repo", "agent:writer-orphaned", when, 0.73)
     await actions.invalidate_link(orphaned, dupe_id, "in_repo", fold_actor, when)
-    # never re-created live on into_id — nothing to restore, must not error or invent one
+    # never re-created live on into_id: nothing to restore, must not error or invent one
 
     reattributed = await actions.create_or_find_object("Commit", "commit:reattributed", "test")
     await _buggy_fold_edge(actions, reattributed, dupe_id, into_id, "in_repo",
                            original_source="agent:writer-reattr", fold_actor=fold_actor,
                            when=when)
-    # a REAL third party (not the fold's own actor) later re-attributed it independently —
+    # a REAL third party (not the fold's own actor) later re-attributed it independently:
     # restore_attribution must never overwrite a genuine post-fold correction
     await actions.invalidate_link(reattributed, into_id, "in_repo", "agent:third-party", NOW)
     await actions.create_link(reattributed, into_id, "in_repo", "agent:third-party", NOW, 0.9)
@@ -2173,7 +2170,7 @@ async def test_restore_attribution_dry_run_finds_exactly_the_damaged_edges(
         assert row["source_id"] == fold_actor, "dry_run wrote a change"
 
     out2 = await restore_attribution(actions, project="into3", actor="agent:restorer",
-                                     dry_run=False, because="operator ruling on 3f7969a3")
+                                     dry_run=False, because="approved attribution repair")
     assert out2["restored"] == 74
 
     for i, c in enumerate(damaged_commits):
@@ -2236,7 +2233,7 @@ async def test_restore_attribution_refuses_unknown_project(actions: Actions) -> 
 async def test_restore_attribution_a_healthy_project_has_nothing_to_restore(
     actions: Actions,
 ) -> None:
-    """Never merged, never damaged — restore_attribution must report zero, not error."""
+    """Never merged, never damaged: restore_attribution must report zero, not error."""
     await _stub_project(actions, "repo:lonely6", "lonely6")
     out = await restore_attribution(actions, project="lonely6", actor="agent:test")
     assert out["edges_to_restore"] == 0

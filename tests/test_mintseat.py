@@ -1,5 +1,5 @@
-"""MINT_SEAT — the org chart trickles (task #50, ruling cabc28f5). One act: ensure_seat +
-office scaffold + intended_model + managed_by (the org chart's first real link type).
+"""MINT_SEAT: the org chart trickles down. One act: ensure_seat plus
+office scaffold plus intended_model plus managed_by (the org chart's first real link type).
 Idempotent two ways (fresh mint vs adopt-an-existing-seat); refuses loud on a Person
 collision or an unauthorized house crossing.
 """
@@ -40,30 +40,30 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     manager = await _seat(actions, "Steward", "osiris")
     offices = tmp_path / "seats"
 
-    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+    out = await mint_seat(actions, manager="Steward", handle="Rook",
                           office_root=offices, actor="agent:steward01")
 
     assert out["seat_minted"] is True
-    assert out["handle"] == "Vajra" and out["house"] == "osiris"
+    assert out["handle"] == "Rook" and out["house"] == "osiris"
     assert out["intended_model"] == "claude-sonnet-5"
     assert out["intended_model_stamped"] is True
     assert out["managed_by"] == "linked"
     assert out["manager_seat_id"] == manager
     # TASK #157 PIECE 1: a fresh mint can never yet have a charter (charter() needs the
-    # Seat object this call just minted) — the receipt says so plainly now, establish_office's
-    # own text reused verbatim, rather than staying silent about it (the exact gap that let
-    # 26 of 33 live seats go unchartered with nothing on record ever having said so).
+    # Seat object this call just minted). The receipt now says so plainly, reusing
+    # establish_office's own text verbatim instead of staying silent about it: the exact
+    # gap that let 26 of 33 live seats go unchartered with nothing on record ever saying so.
     assert out["charter"].startswith("UNDECLARED — call charter(repos=[...])")
 
-    office = offices / "vajra"
+    office = offices / "rook"
     assert office.is_dir()
     pin = (office / ".osiris").read_text()
     assert 'project = "osiris"' in pin and 'model = "claude-sonnet-5"' in pin
     orders = (office / "CLAUDE.md").read_text()
-    assert "Vajra — seat office" in orders and "not yet seated" in orders
+    assert "Rook — seat office" in orders and "not yet seated" in orders
     assert "GRADE EVERY DM" in orders  # every minted worker is born knowing the convention
     charter = (office / "charter.md").read_text()
-    assert "Vajra's charter" in charter and "OFFLOAD TARGET" in charter
+    assert "Rook's charter" in charter and "OFFLOAD TARGET" in charter
     grant = json.loads((office / ".claude" / "settings.local.json").read_text())
     assert grant == {"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}}
 
@@ -73,14 +73,13 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
 async def test_mint_seat_stamps_a_per_seat_founder_source_not_the_shared_manager(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d,
-    msg 7059's own follow-on): mint_seat used to carry the minting manager's own agent
-    id as the source on EVERY worker's `handle` assertion — measured live at
-    production scale: 17 real managed seats share one manager's id this way, all
+    """LINEAGE IS PER SEAT, NOT PER ACTOR: mint_seat used to carry the minting manager's
+    own agent id as the source on EVERY worker's `handle` assertion. Measured live at
+    production scale, 17 real managed seats shared one manager's id this way, all
     resolving to that manager's CURRENT lineage head under _seat_lineage_ancestor.
     Each fresh worker now gets its own `_FOUNDER_SOURCE_PREFIX + handle` source
     instead (handle is globally unique), with the manager kept only as a `founded_by`
-    ATTRIBUTION property — never anything lineage-shaped again."""
+    ATTRIBUTION property, never anything lineage-shaped again."""
     from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX
 
     manager = await _seat(actions, "Steward", "osiris")
@@ -119,11 +118,11 @@ async def test_a_intended_model_is_configurable(actions: Actions, tmp_path: Path
     await _seat(actions, "Steward", "osiris")
     offices = tmp_path / "seats"
 
-    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+    out = await mint_seat(actions, manager="Steward", handle="Rook",
                           intended_model="claude-opus-4-8", office_root=offices)
 
     assert out["intended_model"] == "claude-opus-4-8"
-    pin = (offices / "vajra" / ".osiris").read_text()
+    pin = (offices / "rook" / ".osiris").read_text()
     assert 'model = "claude-opus-4-8"' in pin
 
 
@@ -131,51 +130,51 @@ async def test_a_fresh_mint_stamps_anchor_cwd_to_its_own_office(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """task #68: a fresh mint used to scaffold an office on disk but never told the Seat
-    object where it lived — launch() (which reads anchor_cwd) refused every never-launched
+    object where it lived. launch() (which reads anchor_cwd) refused every never-launched
     seat with 'no anchor_cwd — establish_office first', a circular ask for a room that
     already existed. anchor_cwd must land in the SAME act as the mint, at the exact path
     the office scaffold uses."""
     await _seat(actions, "Steward", "osiris")
 
-    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+    out = await mint_seat(actions, manager="Steward", handle="Rook",
                           office_root=tmp_path / "seats", actor="agent:steward01")
 
     facts = await seat_facts(actions.pool, out["seat_id"])
-    assert facts["anchor_cwd"] == str(tmp_path / "seats" / "vajra")
+    assert facts["anchor_cwd"] == str(tmp_path / "seats" / "rook")
 
 
 async def test_adopted_hollow_seat_backfills_anchor_cwd(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The adopt path (Tantra's shape) never calls ensure_seat, so a pre-existing seat
-    minted before this fix (or hand-made by the operator) can carry no anchor_cwd at all —
-    fill-missing-only backfills it here, the same law intended_model already gets."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    """The adopt path (Bramble's shape) never calls ensure_seat, so a pre-existing seat
+    minted before this fix (or hand-made by the operator) can carry no anchor_cwd at all.
+    Fill-missing-only backfills it here, the same rule intended_model already follows."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "Bramble", "sutrahouse", source="operator")
     offices = tmp_path / "seats"
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+    out = await mint_seat(actions, manager="Warden", handle="Bramble", office_root=offices,
                           actor="operator")
 
     facts = await seat_facts(actions.pool, out["seat_id"])
-    assert facts["anchor_cwd"] == str(offices / "tantra")
+    assert facts["anchor_cwd"] == str(offices / "bramble")
 
 
 # ═══════════ (b) IDEMPOTENT RE-MINT ═══════════
 
-async def test_b_re_minting_adopts_never_twins(actions: Actions, tmp_path: Path) -> None:
+async def test_b_re_minting_adopts_never_duplicates(actions: Actions, tmp_path: Path) -> None:
     await _seat(actions, "Steward", "osiris")
     offices = tmp_path / "seats"
 
-    first = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
-    (offices / "vajra" / "CLAUDE.md").write_text("MY OWN HAND-WRITTEN STANDING ORDERS.\n")
+    first = await mint_seat(actions, manager="Steward", handle="Rook", office_root=offices)
+    (offices / "rook" / "CLAUDE.md").write_text("MY OWN HAND-WRITTEN STANDING ORDERS.\n")
 
-    again = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
+    again = await mint_seat(actions, manager="Steward", handle="Rook", office_root=offices)
 
     assert again["seat_id"] == first["seat_id"]
     assert again["seat_minted"] is False
-    # the fill-missing scaffold runs again (ruling 7cffda8f) but finds nothing missing —
-    # every file this second call sees was already there, so every state reads unchanged
+    # the fill-missing scaffold runs again but finds nothing missing: every file this
+    # second call sees was already there, so every state reads unchanged
     assert again["office"]["osiris_pin"] == "left in place"
     assert again["office"]["standing_orders"] == "left in place"
     assert again["office"]["charter_file"] == "left in place"
@@ -187,84 +186,84 @@ async def test_b_re_minting_adopts_never_twins(actions: Actions, tmp_path: Path)
         "AND canonical=$1", first["seat_id"]) == 1
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE type='managed_by'") == 1
-    # the hand-edit survived — a re-mint never touches an existing office's files
-    assert "MY OWN HAND-WRITTEN" in (offices / "vajra" / "CLAUDE.md").read_text()
+    # the hand-edit survived: a re-mint never touches an existing office's files
+    assert "MY OWN HAND-WRITTEN" in (offices / "rook" / "CLAUDE.md").read_text()
 
 
 async def test_b_re_minting_an_already_chartered_seat_reports_the_real_charter(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """TASK #157 PIECE 1: the ADOPT path (an already-living, possibly already-chartered
-    seat) must not report UNDECLARED just because a fresh mint always would — the receipt
+    seat) must not report UNDECLARED just because a fresh mint always would. The receipt
     reads the seat's real charter_of() state, not a hardcoded assumption."""
     from src.orchestrator.charter import set_charter
 
     await _seat(actions, "Steward", "osiris")
     offices = tmp_path / "seats"
-    first = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
+    first = await mint_seat(actions, manager="Steward", handle="Rook", office_root=offices)
     await actions.create_or_find_object("SoftwareProject", "repo:osiris", "test")
     charter_out = await set_charter(actions, first["seat_id"], ["osiris"], actor="agent:steward")
     assert charter_out["charter"] == ["osiris"]  # the fixture landed before trusting the receipt
 
-    again = await mint_seat(actions, manager="Steward", handle="Vajra", office_root=offices)
+    again = await mint_seat(actions, manager="Steward", handle="Rook", office_root=offices)
 
     assert again["charter"] == ["osiris"]
 
 
-# ═══════════ (c) TANTRA-SHAPED ADOPT — no new identity minted ═══════════
+# ═══════════ (c) BRAMBLE-SHAPED ADOPT: no new identity minted ═══════════
 
 async def test_c_adopting_an_operator_minted_seat_mints_no_new_identity(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Tantra's real shape: a Seat + a named Agent, minted by the operator's own hand
+    """Bramble's real shape: a Seat plus a named Agent, minted by the operator's own hand
     before mint_seat existed, no managed_by edge yet. mint_seat's first act of record for
-    her is asserting managed_by → alfred's seat and filling her hollow office — no new
+    her is asserting managed_by to warden's seat and filling her hollow office: no new
     IDENTITY, which is this test's core claim (the office-fill mechanics get their own
     dedicated tests below)."""
-    alfred_seat = await _seat(actions, "Alfred", "bytebye", source="operator")
-    tantra_seat = await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    warden_seat = await _seat(actions, "Warden", "bytebye", source="operator")
+    bramble_seat = await _seat(actions, "Bramble", "sutrahouse", source="operator")
     agent = await actions.create_or_find_object("Agent", "agent:7a17a000", "operator")
-    await actions.assert_property(agent, "handle", "Tantra", "operator", NOW, 0.9,
+    await actions.assert_property(agent, "handle", "Bramble", "operator", NOW, 0.9,
                                   evidence_class="self_declared")
     before = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra",
+    out = await mint_seat(actions, manager="Warden", handle="Bramble",
                           office_root=tmp_path / "seats", actor="operator")
 
-    assert out["seat_id"] == tantra_seat
+    assert out["seat_id"] == bramble_seat
     assert out["seat_minted"] is False
-    assert out["intended_model_stamped"] is True     # she had none — the missing piece
+    assert out["intended_model_stamped"] is True     # she had none, the missing piece
     assert out["managed_by"] == "linked"
     after = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'")
     assert after == before                           # NO new Seat minted
-    assert await _linked(actions, tantra_seat, alfred_seat)
+    assert await _linked(actions, bramble_seat, warden_seat)
 
 
-# ═══════════ HOLLOW VS POPULATED ADOPTION (ruling 7cffda8f) ═══════════
+# ═══════════ HOLLOW VS POPULATED ADOPTION ═══════════
 
 async def test_hollow_adoption_fills_the_empty_office(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Tantra's exact repro: an operator-made dir with nothing in it. Adoption must not
-    leave a seat hollow when there is nothing to clobber — all three files get written."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    """Bramble's exact repro: an operator-made dir with nothing in it. Adoption must not
+    leave a seat hollow when there is nothing to clobber: all three files get written."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "Bramble", "sutrahouse", source="operator")
     offices = tmp_path / "seats"
-    (offices / "tantra").mkdir(parents=True)  # the operator's bare mkdir, nothing inside
+    (offices / "bramble").mkdir(parents=True)  # the operator's bare mkdir, nothing inside
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+    out = await mint_seat(actions, manager="Warden", handle="Bramble", office_root=offices,
                           actor="operator")
 
     assert out["office"]["osiris_pin"] == "written"
     assert out["office"]["standing_orders"] == "written"
     assert out["office"]["charter_file"] == "written"
     assert out["office"]["permission_grant"] == "written"
-    office = offices / "tantra"
+    office = offices / "bramble"
     assert 'project = "sutrahouse"' in (office / ".osiris").read_text()
-    assert "Tantra — seat office" in (office / "CLAUDE.md").read_text()
-    assert "Tantra's charter" in (office / "charter.md").read_text()
+    assert "Bramble — seat office" in (office / "CLAUDE.md").read_text()
+    assert "Bramble's charter" in (office / "charter.md").read_text()
     grant = json.loads((office / ".claude" / "settings.local.json").read_text())
     assert grant == {"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}}
 
@@ -272,12 +271,12 @@ async def test_hollow_adoption_fills_the_empty_office(
 async def test_adoption_never_touches_a_populated_office(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The never-clobber law, proven under adoption too: a seat that already has all
-    three files keeps every byte of them — fill-missing-only means exactly that."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    """The never-clobber rule, proven under adoption too: a seat that already has all
+    three files keeps every byte of them: fill-missing-only means exactly that."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "Bramble", "sutrahouse", source="operator")
     offices = tmp_path / "seats"
-    office = offices / "tantra"
+    office = offices / "bramble"
     office.mkdir(parents=True)
     (office / ".osiris").write_text('project = "sutrahouse"\nmodel = "claude-opus-4-8"\n')
     (office / "CLAUDE.md").write_text("HER OWN HAND-TUNED ORDERS.\n")
@@ -285,7 +284,7 @@ async def test_adoption_never_touches_a_populated_office(
     (office / ".claude").mkdir()
     (office / ".claude" / "settings.local.json").write_text('{"permissions": {"allow": []}}')
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra", office_root=offices,
+    out = await mint_seat(actions, manager="Warden", handle="Bramble", office_root=offices,
                           actor="operator")
 
     assert out["office"]["osiris_pin"] == "left in place"
@@ -299,37 +298,37 @@ async def test_adoption_never_touches_a_populated_office(
         '{"permissions": {"allow": []}}'
 
 
-# ═══════════ THE NEAR-MISS GUARD (ruling 7cffda8f, Alfred's field pilot) ═══════════
+# ═══════════ THE NEAR-MISS GUARD ═══════════
 
 async def test_near_miss_refuses_a_normalized_collision(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Tantra's real claimed handle is 'tantra 1' — a bare 'Tantra' fresh-mint request
-    never exact-matches it and, before this fix, would have silently minted a twin."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "tantra 1", "sutrahouse", source="operator")
+    """Bramble's real claimed handle is 'bramble 1'. A bare 'Bramble' fresh-mint request
+    never exact-matches it and, before this fix, would have silently minted a duplicate."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "bramble 1", "sutrahouse", source="operator")
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra",
+    out = await mint_seat(actions, manager="Warden", handle="Bramble",
                           office_root=tmp_path / "seats")
 
     assert "error" in out
-    assert "tantra 1" in out["error"] and "near" in out["error"].lower()
-    # no twin: the near-miss refusal minted nothing
+    assert "bramble 1" in out["error"] and "near" in out["error"].lower()
+    # no duplicate: the near-miss refusal minted nothing
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'"
-        ) == 2  # just Alfred + tantra 1, unchanged
+        ) == 2  # just Warden + bramble 1, unchanged
 
 
 async def test_near_miss_covers_generation_suffix_variants(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Space/dash/underscore before a roman numeral or plain digit all normalize away —
-    none of these exact-match 'Vajra' (that's a plain case-insensitive adopt, tested
+    """Space/dash/underscore before a roman numeral or plain digit all normalize away.
+    None of these exact-match 'Rook' (that's a plain case-insensitive adopt, tested
     separately below), so each must refuse as a near-miss."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "Vajra", "bytebye", source="operator")
-    for variant in ("Vajra II", "vajra-2", "vajra_iv", "vajra 1"):
-        out = await mint_seat(actions, manager="Alfred", handle=variant,
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "Rook", "bytebye", source="operator")
+    for variant in ("Rook II", "rook-2", "rook_iv", "rook 1"):
+        out = await mint_seat(actions, manager="Warden", handle=variant,
                               office_root=tmp_path / "seats")
         assert "error" in out, f"{variant!r} should have refused as a near-miss"
 
@@ -337,65 +336,65 @@ async def test_near_miss_covers_generation_suffix_variants(
 async def test_a_pure_case_variant_is_an_exact_match_not_a_near_miss(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """'vajra'/'VAJRA' case-insensitively EXACT-match 'Vajra' via _resolve_seat_ref
-    itself — that's a normal adopt, never even reaching the near-miss guard."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    vajra_seat = await _seat(actions, "Vajra", "bytebye", source="operator")
-    out = await mint_seat(actions, manager="Alfred", handle="vajra",
+    """'rook'/'ROOK' case-insensitively EXACT-match 'Rook' via _resolve_seat_ref
+    itself: that's a normal adopt, never even reaching the near-miss guard."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    rook_seat = await _seat(actions, "Rook", "bytebye", source="operator")
+    out = await mint_seat(actions, manager="Warden", handle="rook",
                           office_root=tmp_path / "seats")
     assert "error" not in out
-    assert out["seat_id"] == vajra_seat and out["seat_minted"] is False
+    assert out["seat_id"] == rook_seat and out["seat_minted"] is False
 
 
 async def test_force_mints_past_a_near_miss_refusal(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    await _seat(actions, "Alfred", "bytebye", source="operator")
-    await _seat(actions, "tantra 1", "sutrahouse", source="operator")
+    await _seat(actions, "Warden", "bytebye", source="operator")
+    await _seat(actions, "bramble 1", "sutrahouse", source="operator")
 
-    out = await mint_seat(actions, manager="Alfred", handle="Tantra", force=True,
+    out = await mint_seat(actions, manager="Warden", handle="Bramble", force=True,
                           office_root=tmp_path / "seats")
 
     assert "error" not in out
-    assert out["seat_minted"] is True and out["handle"] == "Tantra"
+    assert out["seat_minted"] is True and out["handle"] == "Bramble"
 
 
 async def test_adopt_true_refuses_rather_than_falling_through_to_fresh(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The caller SAID adopt — minting on a miss would be the lie."""
-    await _seat(actions, "Alfred", "bytebye", source="operator")
+    """The caller SAID adopt: minting on a miss would be the lie."""
+    await _seat(actions, "Warden", "bytebye", source="operator")
 
-    out = await mint_seat(actions, manager="Alfred", handle="NobodyYet", adopt=True,
+    out = await mint_seat(actions, manager="Warden", handle="NobodyYet", adopt=True,
                           office_root=tmp_path / "seats")
 
     assert "error" in out and "adopt=True" in out["error"]
     assert await actions.pool.fetchval(
-        "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'") == 1  # Alfred only
+        "SELECT count(*) FROM objects WHERE type='Seat' AND status='active'") == 1  # Warden only
 
 
-# ═══════════ (d) OUR OWN PAIR — the same adopt path ═══════════
+# ═══════════ (d) AN EXISTING MANAGER/WORKER PAIR: the same adopt path ═══════════
 
-async def test_d_seshat_thoth_pair_gets_its_edge_the_same_way(
+async def test_d_nadir_ember_pair_gets_its_edge_the_same_way(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Seshat and Thoth both already exist (real, live seats) — managed_by is new only
-    because the link type is new. Same adopt mechanism as Tantra's case, proving it's
+    """Nadir and Ember both already exist (real, live seats), so managed_by is new only
+    because the link type is new. Same adopt mechanism as Bramble's case, proving it's
     general, not special-cased for one pair."""
-    thoth_seat = await _seat(actions, "Thoth", "osiris", source="operator")
-    seshat_seat = await _seat(actions, "Seshat", "osiris", source="operator")
+    ember_seat = await _seat(actions, "Ember", "osiris", source="operator")
+    nadir_seat = await _seat(actions, "Nadir", "osiris", source="operator")
 
-    out = await mint_seat(actions, manager="Thoth", handle="Seshat",
-                          office_root=tmp_path / "unused-seats", actor="agent:thoth01")
+    out = await mint_seat(actions, manager="Ember", handle="Nadir",
+                          office_root=tmp_path / "unused-seats", actor="agent:ember01")
 
-    assert out["seat_id"] == seshat_seat
+    assert out["seat_id"] == nadir_seat
     assert out["seat_minted"] is False
     assert out["managed_by"] == "linked"
-    assert await _linked(actions, seshat_seat, thoth_seat)
+    assert await _linked(actions, nadir_seat, ember_seat)
 
     # idempotent from here too
-    again = await mint_seat(actions, manager="Thoth", handle="Seshat",
-                            office_root=tmp_path / "unused-seats", actor="agent:thoth01")
+    again = await mint_seat(actions, manager="Ember", handle="Nadir",
+                            office_root=tmp_path / "unused-seats", actor="agent:ember01")
     assert again["managed_by"] == "already linked"
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE type='managed_by'") == 1
@@ -410,23 +409,23 @@ async def test_e_census_counts_a_fresh_mint_and_keeps_counting_an_adopted_soul(
     before = await fold_census(actions.pool)
 
     # a brand new seat is census-visible from birth (seat_objects), never a doorbell
-    await mint_seat(actions, manager="Steward", handle="Vajra", office_root=tmp_path / "seats")
+    await mint_seat(actions, manager="Steward", handle="Rook", office_root=tmp_path / "seats")
     mid = await fold_census(actions.pool)
     assert mid["seat_objects"] == before["seat_objects"] + 1
 
     # an ADOPTED worker that's already a named soul (an Agent with a handle) keeps
-    # counting as one — mint_seat's edges/stamps never disturb the census
-    tantra_seat = await _seat(actions, "Tantra", "sutrahouse", source="operator")
+    # counting as one: mint_seat's edges/stamps never disturb the census
+    bramble_seat = await _seat(actions, "Bramble", "sutrahouse", source="operator")
     agent = await actions.create_or_find_object("Agent", "agent:7a17a000", "operator")
-    await actions.assert_property(agent, "handle", "Tantra", "operator", NOW, 0.9,
+    await actions.assert_property(agent, "handle", "Bramble", "operator", NOW, 0.9,
                                   evidence_class="self_declared")
     pre_adopt = await fold_census(actions.pool)
     assert pre_adopt["souls_named"] >= 1
-    out = await mint_seat(actions, manager="Steward", handle="Tantra",
+    out = await mint_seat(actions, manager="Steward", handle="Bramble",
                           office_root=tmp_path / "seats")
     post_adopt = await fold_census(actions.pool)
     assert post_adopt["souls_named"] == pre_adopt["souls_named"]
-    assert out["seat_id"] == tantra_seat and out["seat_minted"] is False
+    assert out["seat_id"] == bramble_seat and out["seat_minted"] is False
 
 
 # ═══════════ (f) THE REFUSALS ═══════════
@@ -471,7 +470,7 @@ async def test_f_the_operator_may_cross_a_house_boundary(
     assert out["house"] == "houseb" and out["seat_minted"] is True
 
 
-# ═══════════ THE MCP TOOL LAYER — the calling seat is always the manager ═══════════
+# ═══════════ THE MCP TOOL LAYER: the calling seat is always the manager ═══════════
 # test_wall.py's _Ctx ritual is the precedent: fake a mounted connection by injecting an
 # AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the test
 # DB, call the tool FUNCTION directly (never the MCP transport).
@@ -489,7 +488,7 @@ async def test_mcp_mint_seat_refuses_an_unmounted_caller(actions: Actions) -> No
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        out = await srv.mint_seat(handle="Vajra", ctx=ctx)
+        out = await srv.mint_seat(handle="Rook", ctx=ctx)
     finally:
         srv._pool = saved_pool
     assert "error" in out and "mount first" in out["error"]
@@ -506,7 +505,7 @@ async def test_mcp_mint_seat_refuses_a_caller_holding_no_seat(actions: Actions) 
         agent_id="agent:un5eated0", session="unseated0", project="osiris",
         model=None, cwd=None)
     try:
-        out = await srv.mint_seat(handle="Vajra", ctx=ctx)
+        out = await srv.mint_seat(handle="Rook", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -516,17 +515,17 @@ async def test_mcp_mint_seat_refuses_a_caller_holding_no_seat(actions: Actions) 
 async def test_mcp_mint_seat_the_caller_is_always_the_manager(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The happy path through the tool layer: a mounted caller who holds 'Thoth' mints
-    'Seshat' with NO manager param at all — the tool resolves the manager from the
-    connection's own identity, exactly the semantics Thoth's amendment asked for."""
+    """The happy path through the tool layer: a mounted caller who holds 'Ember' mints
+    'Nadir' with NO manager param at all. The tool resolves the manager from the
+    connection's own identity, exactly the semantics this amendment asked for."""
     import src.mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.seats import bind_holder
 
-    thoth_seat = await _seat(actions, "Thoth", "osiris", source="operator")
-    await bind_holder(actions, seat_id=thoth_seat, agent_id="agent:th0th0001",
+    ember_seat = await _seat(actions, "Ember", "osiris", source="operator")
+    await bind_holder(actions, seat_id=ember_seat, agent_id="agent:em0er0001",
                       source="operator")
-    # office_root is not a tool param — point the shared default at a scratch dir for
+    # office_root is not a tool param, so point the shared default at a scratch dir for
     # the duration of this one test
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
@@ -534,42 +533,42 @@ async def test_mcp_mint_seat_the_caller_is_always_the_manager(
     saved_pool = srv._pool
     srv._pool = actions.pool
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
-        agent_id="agent:th0th0001", session="thoth0001", project="osiris",
+        agent_id="agent:em0er0001", session="ember0001", project="osiris",
         model=None, cwd=None)
     try:
-        out = await srv.mint_seat(handle="Seshat", ctx=ctx)
+        out = await srv.mint_seat(handle="Nadir", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
 
     assert "error" not in out
-    assert out["manager_seat_id"] == thoth_seat
-    assert out["handle"] == "Seshat" and out["house"] == "osiris"
+    assert out["manager_seat_id"] == ember_seat
+    assert out["handle"] == "Nadir" and out["house"] == "osiris"
     assert out["seat_minted"] is True
-    assert await _linked(actions, out["seat_id"], thoth_seat)
+    assert await _linked(actions, out["seat_id"], ember_seat)
 
 
 async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Live acceptance (msg 926 — Thoth LI's own first call refused HIM): held_seat()
-    needs a `holds` link on the caller's EXACT label, but a succeeded lineage's holds
-    link can sit on an ancestor (mint_heir doesn't always re-link it at every mint — a
-    separate, deeper gap, not fixed here). The handle ASSERTION, unlike the link, IS
-    copied to every new generation (mint_heir's own seat-inheritance step) — the tool
-    must fall back to it, the same way mount's own seat display already does."""
+    """Live acceptance: a succeeded generation's own first call was wrongly refused by
+    held_seat(), which needs a `holds` link on the caller's EXACT label, but a succeeded
+    lineage's holds link can sit on an ancestor (mint_heir doesn't always re-link it at
+    every mint, a separate, deeper gap, not fixed here). The handle ASSERTION, unlike the
+    link, IS copied to every new generation (mint_heir's own seat-inheritance step), so
+    the tool must fall back to it, the same way mount's own seat display already does."""
     import src.mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.seats import bind_holder
 
-    thoth_seat = await _seat(actions, "Thoth", "osiris", source="operator")
-    # the hold sits on an ANCESTOR label — a Great-Fold-deep lineage's real shape
-    await bind_holder(actions, seat_id=thoth_seat, agent_id="agent:th0th0001",
+    ember_seat = await _seat(actions, "Ember", "osiris", source="operator")
+    # the hold sits on an ANCESTOR label: a many-generations-deep lineage's real shape
+    await bind_holder(actions, seat_id=ember_seat, agent_id="agent:em0er0001",
                       source="operator")
     # the CALLER is a SUCCEEDED generation carrying only the inherited handle assertion
     # (mint_heir's seat-inheritance copy), never its own fresh holds link
-    heir = await actions.create_or_find_object("Agent", "agent:th0th0001-xiv", "operator")
-    await actions.assert_property(heir, "handle", "Thoth", "operator", NOW, 0.9,
+    heir = await actions.create_or_find_object("Agent", "agent:em0er0001-xiv", "operator")
+    await actions.assert_property(heir, "handle", "Ember", "operator", NOW, 0.9,
                                   evidence_class="self_declared")
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
@@ -577,75 +576,75 @@ async def test_mcp_mint_seat_resolves_a_succeeded_lineage_via_handle_fallback(
     saved_pool = srv._pool
     srv._pool = actions.pool
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
-        agent_id="agent:th0th0001-xiv", session="thoth0014", project="osiris",
+        agent_id="agent:em0er0001-xiv", session="ember0014", project="osiris",
         model=None, cwd=None)
     try:
-        out = await srv.mint_seat(handle="Seshat", ctx=ctx)
+        out = await srv.mint_seat(handle="Nadir", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
 
     assert "error" not in out
-    assert out["manager_seat_id"] == thoth_seat
-    assert await _linked(actions, out["seat_id"], thoth_seat)
+    assert out["manager_seat_id"] == ember_seat
+    assert await _linked(actions, out["seat_id"], ember_seat)
 
 
-# ═══════════ (g) THE RECEIPT COMPLETES THE LIFECYCLE — occupancy piece A, 9f566244 ═══════
-# mint_seat used to finish HALF the ceremony: a seat, an office, a manager edge, and silence
-# about whether a body exists yet. The receipt now states occupancy plainly (piece B's
-# machinery) and names whose hand the next step needs.
+# ═══════════ (g) THE RECEIPT COMPLETES THE LIFECYCLE ═══════════
+# mint_seat used to finish only HALF the job: a seat, an office, a manager edge, and
+# silence about whether a body exists yet. The receipt now states occupancy plainly and
+# names whose hand the next step needs.
 
 
 async def test_g_fresh_mint_receipt_reads_vacant(actions: Actions, tmp_path: Path) -> None:
     await _seat(actions, "Steward", "osiris")
 
-    out = await mint_seat(actions, manager="Steward", handle="Vajra",
+    out = await mint_seat(actions, manager="Steward", handle="Rook",
                           office_root=tmp_path / "seats")
 
     assert out["occupancy"] == "vacant"
     assert out["holder"] is None
     assert "furniture" in out["next_step"]
-    # TWO AUDIENCES (thread bc11a2d3/msg 6262): next_step stays MCP-native call syntax
-    # for the mint_seat TOOL's own agent callers; next_step_cli is the terminal twin
-    # cmd_mint_seat (the CLI) actually prints.
-    assert "launch(target='Vajra')" in out["next_step"]
+    # TWO AUDIENCES: next_step stays MCP-native call syntax for the mint_seat TOOL's own
+    # agent callers; next_step_cli is the terminal-facing equivalent cmd_mint_seat (the
+    # CLI) actually prints.
+    assert "launch(target='Rook')" in out["next_step"]
     assert "furniture" in out["next_step_cli"]
     assert "launch(target=" not in out["next_step_cli"]
-    assert "osiris launch Vajra" in out["next_step_cli"]
+    assert "osiris launch Rook" in out["next_step_cli"]
 
 
 async def test_g_adopting_a_live_seat_refuses(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Found live 2026-08-02 (decision 2993b4e4): the adopt branch used to write the same
-    office+anchor_cwd effect establish_office's own live-seat guard exists to refuse — for
-    ANY handle already resolving to a living Seat, including one whose session is running
-    right now. It must now refuse, not merely report 'occupied' after the fact — the
-    exact scenario this test used to exercise as a success is the bug."""
+    """Found live 2026-08-02: the adopt branch used to write the same office+anchor_cwd
+    effect establish_office's own live-seat guard exists to refuse, for ANY handle
+    already resolving to a living Seat, including one whose session is running right now.
+    It must now refuse, not merely report 'occupied' after the fact: the exact scenario
+    this test used to exercise as a success is the bug."""
     from src.orchestrator import mounts
     from src.orchestrator.seats import bind_holder
 
     await _seat(actions, "Steward", "osiris")
-    worker_seat = await _seat(actions, "Tantra", "osiris")
-    await actions.create_or_find_object("Agent", "agent:tantra01", "test")
-    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:tantra01")
-    await mounts.save_mount(actions.pool, job_dir="/j/tantra01", agent_id="agent:tantra01",
+    worker_seat = await _seat(actions, "Bramble", "osiris")
+    await actions.create_or_find_object("Agent", "agent:bramble01", "test")
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:bramble01")
+    await mounts.save_mount(actions.pool, job_dir="/j/bramble01", agent_id="agent:bramble01",
                             project="osiris", cwd="/x", model="claude-sonnet-5",
                             session_key=None)
     offices = tmp_path / "seats"
 
-    out = await mint_seat(actions, manager="Steward", handle="Tantra", office_root=offices)
+    out = await mint_seat(actions, manager="Steward", handle="Bramble", office_root=offices)
 
     assert "error" in out
     assert "cannot adopt" in out["error"] and "LIVE" in out["error"]
-    assert "Tantra" in out["error"] and "agent:tantra01" in out["error"]
-    # the vocabulary rule (Khnum's, this reign): this refusal must read differently from
-    # mint_seat's OTHER refusals, never reuse "no such seat"
+    assert "Bramble" in out["error"] and "agent:bramble01" in out["error"]
+    # the vocabulary rule: this refusal must read differently from mint_seat's OTHER
+    # refusals, never reuse "no such seat"
     assert "no such" not in out["error"]
-    # nothing was written — the guard fires before any side effect, not after
+    # nothing was written: the guard fires before any side effect, not after
     facts = await seat_facts(actions.pool, worker_seat)
     assert facts["anchor_cwd"] is None
-    assert not (offices / "tantra").exists()
+    assert not (offices / "bramble").exists()
     assert not await _linked(actions, worker_seat, await _resolve_seat_ref(actions.pool, "Steward"))
 
 
@@ -655,44 +654,43 @@ async def test_g_adopting_a_held_but_quiet_seat_receipt_reads_cold(
     from src.orchestrator.seats import bind_holder
 
     await _seat(actions, "Steward", "osiris")
-    worker_seat = await _seat(actions, "Tantra", "osiris")
-    await actions.create_or_find_object("Agent", "agent:tantra02", "test")
-    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:tantra02")
-    # no mount row at all — held, but nobody's pulse is fresh
+    worker_seat = await _seat(actions, "Bramble", "osiris")
+    await actions.create_or_find_object("Agent", "agent:bramble02", "test")
+    await bind_holder(actions, seat_id=worker_seat, agent_id="agent:bramble02")
+    # no mount row at all: held, but nobody's pulse is fresh
 
-    out = await mint_seat(actions, manager="Steward", handle="Tantra",
+    out = await mint_seat(actions, manager="Steward", handle="Bramble",
                           office_root=tmp_path / "seats")
 
     assert out["occupancy"] == "cold"
-    assert out["holder"] == "agent:tantra02"
+    assert out["holder"] == "agent:bramble02"
     assert "resumes on its own" in out["next_step"]
 
 
-# ═══════════ found_seat: dispatch 3685/3688, Ooblek's own real shape ═══════════
+# ═══════════ found_seat: a self-managed seat's real shape ═══════════
 
 async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
     actions: Actions, tmp_path: Path,
 ) -> None:
     offices = tmp_path / "seats"
-    workspace = tmp_path / "workspace" / "henry"
+    workspace = tmp_path / "workspace" / "milo"
 
-    out = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+    out = await found_seat(actions, handle="Milo", path=str(workspace), actor="console",
                            office_root=offices)
 
     assert out["seat_minted"] is True
-    assert out["handle"] == "Henry"
-    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
-    # chad project" — decision 24e0b761): no --project given, none invented from the
-    # handle. project stays genuinely None/unset. Ruling 68fba2e4/thread ef0e94d5
-    # extends the same law to house: no --house given, none invented from the handle
-    # either — the exact fabrication that made Chad/Jesus/Lilguy/atlas's Seat.house
-    # indistinguishable from a real one.
+    assert out["handle"] == "Milo"
+    # NO FABRICATION: an earlier version falsely invented a project name from the handle
+    # when none was given. project stays genuinely None/unset. The same rule extends to
+    # house: no --house given, none invented from the handle either, the exact
+    # fabrication that made a made-up project's Seat.house indistinguishable from a
+    # real one.
     assert out["project"] is None
     assert out["house"] is None
     assert out["managed_by"] is None
     assert out["intended_model"] == "claude-sonnet-5"
 
-    office = offices / "henry"
+    office = offices / "milo"
     assert office.is_dir()
     orders = (office / "CLAUDE.md").read_text()
     assert "Your role: COORDINATOR" in orders
@@ -712,34 +710,33 @@ async def test_found_seat_founds_a_self_managed_seat_with_no_manager(
         "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now())",
         out["seat_id"])
     assert no_manager is None
-    # NO MCP-SYNTAX LEAK (thread bc11a2d3/msg 6262): found_seat has no MCP tool of its
-    # own — every caller of this next_step is a human at a terminal via cmd_new, so
-    # there is no legitimate audience for `launch(target=...)` here at all, unlike
-    # mint_seat's own (which keeps it, for the mint_seat TOOL's own agent callers).
+    # NO MCP-SYNTAX LEAK: found_seat has no MCP tool of its own, and every caller of this
+    # next_step is a human at a terminal via cmd_new, so there is no legitimate audience
+    # for `launch(target=...)` here at all, unlike mint_seat's own (which keeps it, for
+    # the mint_seat TOOL's own agent callers).
     assert "launch(target=" not in out["next_step"]
-    assert "osiris launch Henry" in out["next_step"]
+    assert "osiris launch Milo" in out["next_step"]
 
 
 async def test_found_seat_stamps_a_per_seat_founder_source_not_the_shared_actor(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
-    two seats founded under the SAME --actor used to carry that actor's own id as the
-    source on BOTH seats' `handle` assertions — the exact property
-    `_seat_lineage_ancestor` (trigger.py) later trusts as each seat's own founding
-    lineage, so the second seat's first launch silently walked the actor's live
+    """LINEAGE IS PER SEAT, NOT PER ACTOR: two seats founded under the SAME --actor used
+    to carry that actor's own id as the source on BOTH seats' `handle` assertions, the
+    exact property `_seat_lineage_ancestor` (trigger.py) later trusts as each seat's own
+    founding lineage, so the second seat's first launch silently walked the actor's live
     lineage forward and adopted whatever generation it found there (measured live in
     the resume_seat acceptance test: seat 3 inherited seat 2's own dormant session).
-    Each seat must get its OWN, seat-unique source instead — `handle` is globally
+    Each seat must get its OWN, seat-unique source instead: `handle` is globally
     unique, so `_FOUNDER_SOURCE_PREFIX + handle` can never collide across seats no
     matter how many times the same actor founds one. `actor` survives only as a
     separate `founded_by` ATTRIBUTION property, never as anything lineage-shaped."""
     from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX
 
     out_a = await found_seat(actions, handle="Lineagea", path=str(tmp_path / "wsa"),
-                             actor="khnum", office_root=tmp_path / "seatsa")
+                             actor="reed", office_root=tmp_path / "seatsa")
     out_b = await found_seat(actions, handle="Lineageb", path=str(tmp_path / "wsb"),
-                             actor="khnum", office_root=tmp_path / "seatsb")
+                             actor="reed", office_root=tmp_path / "seatsb")
 
     async def _handle_source(seat_id: str) -> str:
         return await actions.pool.fetchval(
@@ -759,22 +756,22 @@ async def test_found_seat_stamps_a_per_seat_founder_source_not_the_shared_actor(
             "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o "
             "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='founded_by'", seat_id)
 
-    assert await _founded_by(out_a["seat_id"]) == "khnum"
-    assert await _founded_by(out_b["seat_id"]) == "khnum"  # attribution, kept, just inert
+    assert await _founded_by(out_a["seat_id"]) == "reed"
+    assert await _founded_by(out_b["seat_id"]) == "reed"  # attribution, kept, just inert
 
 
 async def test_found_seat_leaves_project_and_tree_unset_with_no_path_and_no_charter(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE SEAT TREE FABRICATION FIX (Thoth mail 11759): an omitted `path` used to
-    default to `~/code/<handle>` unconditionally — the exact fabrication-from-handle
-    disease `project` was already cured of, one door up. A brand-new seat with no
-    charter yet has nothing real to derive a tree from, so both project AND
+    """THE SEAT TREE FABRICATION FIX: an omitted `path` used to default to
+    `~/code/<handle>` unconditionally, the exact fabrication-from-handle problem
+    `project` was already cured of, elsewhere in this same module. A brand-new seat
+    with no charter yet has nothing real to derive a tree from, so both project AND
     workspace/tree_cwd now stay genuinely unset, never guessed."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
     out = await found_seat(actions, handle="Aster", actor="console",
                            office_root=tmp_path / "seats")
-    # NO FABRICATION (decision 24e0b761, extended to the tree by 11759): project AND
+    # NO FABRICATION, extended here to the tree too: project AND
     # workspace/tree_cwd stay unset because neither a path nor a real charter exists.
     assert out["project"] is None
     assert out["workspace"] is None
@@ -788,7 +785,7 @@ async def test_found_seat_leaves_project_and_tree_unset_with_no_path_and_no_char
 async def test_found_seat_explicit_path_still_binds_the_tree(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """An EXPLICIT path is never second-guessed — only the OMITTED-path default was
+    """An EXPLICIT path is never second-guessed: only the OMITTED-path default was
     ever fabrication; a caller who names a real directory is trusted exactly as
     before this fix."""
     explicit = tmp_path / "explicit-workspace"
@@ -803,9 +800,9 @@ async def test_found_seat_explicit_path_still_binds_the_tree(
 async def test_found_seat_converges_onto_the_seats_own_real_charter(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE REPAIR HALF (Thoth mail 11759): converging on an EXISTING seat (a second
-    `found_seat` call, no path) that already charters exactly one project with a
-    recorded, real git tree derives the workspace from THAT — never the handle."""
+    """THE REPAIR HALF: converging on an EXISTING seat (a second `found_seat` call, no
+    path) that already charters exactly one project with a recorded, real git tree
+    derives the workspace from THAT, never the handle."""
     monkeypatch.setattr(Path, "home", lambda: tmp_path / "fakehome")
     from datetime import UTC, datetime
 
@@ -832,9 +829,8 @@ async def test_found_seat_converges_onto_the_seats_own_real_charter(
 async def test_found_seat_with_explicit_project_writes_it_to_both_pins(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    # THE UNCHANGED DIRECTION (Thoth's acceptance item 2): an explicit --project must
-    # still land exactly as before — the fabrication path is what's removed, not the
-    # deliberate one.
+    # THE UNCHANGED DIRECTION: an explicit --project must still land exactly as before.
+    # The fabrication path is what's removed, not the deliberate one.
     workspace = tmp_path / "workspace"
     out = await found_seat(actions, handle="Bartow", path=str(workspace), project="dtfb",
                            actor="console", office_root=tmp_path / "seats")
@@ -848,9 +844,9 @@ async def test_found_seat_with_explicit_project_writes_it_to_both_pins(
 async def test_found_seat_house_always_equals_project_never_a_second_value(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY": found_seat no longer
-    takes a `house` argument at all — a self-managed seat's own house property is
-    always its own --project value, never a second, independently-given one."""
+    """ONE TAXONOMY: found_seat no longer takes a `house` argument at all. A
+    self-managed seat's own house property is always its own --project value, never
+    a second, independently-given one."""
     workspace = tmp_path / "workspace"
     out = await found_seat(actions, handle="Loom", path=str(workspace), project="dtfb",
                            actor="console", office_root=tmp_path / "seats")
@@ -864,7 +860,7 @@ async def test_found_seat_house_always_equals_project_never_a_second_value(
 async def test_found_seat_is_idempotent_on_house_a_second_call_never_regresses_it(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A second call with no --project given must not read as 'now homeless' — the
+    """A second call with no --project given must not read as 'now homeless'. The
     seat's already-real house (from the first call) survives, read fresh off the
     graph rather than echoing whatever this particular call happened to pass."""
     offices = tmp_path / "seats"
@@ -885,9 +881,9 @@ async def test_found_seat_is_idempotent_on_a_second_call(
     offices = tmp_path / "seats"
     workspace = tmp_path / "workspace"
 
-    first = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+    first = await found_seat(actions, handle="Milo", path=str(workspace), actor="console",
                              office_root=offices)
-    second = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+    second = await found_seat(actions, handle="Milo", path=str(workspace), actor="console",
                               office_root=offices)
 
     assert first["seat_id"] == second["seat_id"]
@@ -900,10 +896,10 @@ async def test_found_seat_refuses_a_handle_already_managed_by_someone_else(
     actions: Actions, tmp_path: Path,
 ) -> None:
     manager = await _seat(actions, "Steward", "osiris")
-    await mint_seat(actions, manager="Steward", handle="Vajra",
+    await mint_seat(actions, manager="Steward", handle="Rook",
                     office_root=tmp_path / "seats1")
 
-    out = await found_seat(actions, handle="Vajra", path=str(tmp_path / "vajra_ws"),
+    out = await found_seat(actions, handle="Rook", path=str(tmp_path / "rook_ws"),
                            actor="console", office_root=tmp_path / "seats2")
 
     assert "error" in out
@@ -914,10 +910,10 @@ async def test_found_seat_refuses_a_handle_already_managed_by_someone_else(
 async def test_found_seat_refuses_a_near_miss_handle(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    await found_seat(actions, handle="Tantra", path=str(tmp_path / "ws1"), actor="console",
+    await found_seat(actions, handle="Bramble", path=str(tmp_path / "ws1"), actor="console",
                      office_root=tmp_path / "seats1")
 
-    out = await found_seat(actions, handle="tantra 1", path=str(tmp_path / "ws2"),
+    out = await found_seat(actions, handle="bramble 1", path=str(tmp_path / "ws2"),
                            actor="console", office_root=tmp_path / "seats2")
 
     assert "error" in out and "near-miss twin refused" in out["error"]
@@ -930,7 +926,7 @@ async def test_found_seat_never_overwrites_an_existing_workspace_pin(
     workspace.mkdir(parents=True)
     (workspace / ".osiris").write_text('project = "already-here"\nmodel = "custom"\n')
 
-    out = await found_seat(actions, handle="Henry", path=str(workspace), actor="console",
+    out = await found_seat(actions, handle="Milo", path=str(workspace), actor="console",
                            office_root=tmp_path / "seats")
 
     assert out["workspace_pin"] == "left in place"
