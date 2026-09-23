@@ -72,7 +72,7 @@ TOOL_CONTRACT_EXPECTED_COUNT = 88
 # Every past raise or lowering of the two constants below is real history, tracked
 # in the commit log, not repeated here as an in-file changelog. See the module
 # docstring above for the rule that governs the next change.
-TOOL_CONTRACT_CEILING_CHARS = 140344
+TOOL_CONTRACT_CEILING_CHARS = 140340
 
 def test_ceiling_has_exactly_one_executable_assignment() -> None:
     """THE RATCHET'S OWN GUARD. This file used to carry every historical
