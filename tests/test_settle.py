@@ -2477,8 +2477,8 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     # unevaluated_boxes already enforces above; it never gates `complete`.
     assert out["unevaluated_boxes"] == ["seat is chartered (governs a repo)"]
     assert out["note"] == (
-        "compaction-safe by construction — could not evaluate: "
-        "seat is chartered (governs a repo) (fog-of-war, not a pass, never gates complete)")
+        "compaction-safe by construction, could not evaluate: "
+        "seat is chartered (governs a repo) (unknown, not a pass, never gates complete)")
 
 
 async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_complete(
@@ -2780,7 +2780,7 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
     assert out["identity_coherence"] == {
         "filed_under": "redmonth", "writes_went_to": ["ballgem", "redmonth"],
         "coherent": False, "spans_multiple": True}
-    assert "John XVI" in out["note"]
+    assert "will not see them" in out["note"]
 
 
 async def test_settle_tool_omits_identity_coherence_when_nothing_written(
@@ -2879,5 +2879,5 @@ async def test_settle_tool_reads_coherent_for_a_charter_declared_multi_repo_spre
         "filed_under": "chartertest", "writes_went_to": ["chartertest", "chartrepo2"],
         "coherent": True, "spans_multiple": True,
         "charter_repos": ["chartertest", "chartrepo2"]}
-    assert "coherent" in out["note"] and "John XVI" not in out["note"]
+    assert "Coherent" in out["note"] and "John XVI" not in out["note"]
     assert "successor mounting under" in out["note"]

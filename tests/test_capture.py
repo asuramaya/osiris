@@ -2556,7 +2556,7 @@ async def test_record_decision_obsoletes_and_orient_announces_fleet_wide(
         _agents.pop(_conn_key(ctx), None)
     recent = res["dead_superstitions"]["recent"]
     assert "NEVER DM AFTER A RESTART" in [k["statement"] for k in recent]
-    assert res["dead_superstitions"]["note"].startswith("workarounds whose bug is FIXED")
+    assert res["dead_superstitions"]["note"].startswith("workarounds whose bug is fixed")
 
 
 async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
@@ -2627,7 +2627,7 @@ async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
     assert any(m["project"] == "repo:mapproj" and m["open_threads"] == 1
                for m in out["fleet_map"])
     assert any("fleet ruling for the map" in d for d in out["recent_decisions"])
-    assert "BOUNDED" in out["note"] and "mount(" in out["note"]
+    assert "bounded" in out["note"] and "mount(" in out["note"]
 
 
 async def test_unmounted_orient_declares_unfiled_repo_less_threads(actions: Actions) -> None:
@@ -2830,7 +2830,7 @@ async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> 
     assert note is not None and note["from"] == ancestor
     texts = " ".join(n["text"] for n in note["notes"])
     assert "HANDOFF" in texts and "LETTER" in texts
-    assert "parting words" in note["note"]
+    assert "parting notes" in note["note"]
 
 
 async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Actions) -> None:
@@ -4171,7 +4171,7 @@ async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
     finally:
         srv._pool = saved_pool
     assert out["resolved_thread"] == (
-        f"{str(t)[:8]} — closed by this decision (answers edge) — "
+        f"{str(t)[:8]}: closed by this decision (answers edge). "
         "the composer needs a live socket for the fleet rail")
     assert "resolved_threads" not in out
 
@@ -4452,8 +4452,8 @@ async def test_record_decision_tool_defaults_repo_to_the_callers_own_project(
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "repodefaultproj",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project rather "
+               "than being left unlinked",
     }
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
@@ -4535,8 +4535,8 @@ async def test_record_decision_tool_falls_back_to_the_lineage_when_identity_has_
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "lwiwireproj",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project rather "
+               "than being left unlinked",
     }
     assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path, no
                                                   # separate derive_or_abstain call needed
@@ -4636,8 +4636,8 @@ async def test_open_thread_tool_falls_back_to_the_lineage_when_identity_has_no_p
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "otlwiwireproj",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project instead "
+               "of being left unlinked.",
     }
     assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
     linked = await actions.pool.fetchval(
@@ -4741,8 +4741,8 @@ async def test_ingest_reference_tool_defaults_repo_to_the_callers_own_project(
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "refdefaultproj",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project instead "
+               "of being left unlinked.",
     }
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects r ON r.id=l.from_id "
@@ -4785,8 +4785,8 @@ async def test_ingest_reference_tool_falls_back_to_the_lineage_when_identity_has
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "irlwiwireproj",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project instead "
+               "of being left unlinked.",
     }
     assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
     linked = await actions.pool.fetchval(
@@ -4957,8 +4957,8 @@ async def test_open_thread_defaulted_repo_link_grades_direct_observation(
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["repo_defaulted"] == {
         "to": "tiergradeproj4",
-        "why": "no repo given — defaulted to the caller's own project rather than "
-               "left unlinked (orphan-door fix, msg 5703/5720)",
+        "why": "no repo given, so it defaulted to the caller's own project instead "
+               "of being left unlinked.",
     }
     row = await _in_repo_grade(actions.pool, "Thread", "tiergradeproj4")
     assert row["evidence_class"] == "direct_observation"
@@ -6079,7 +6079,7 @@ async def test_record_decision_implements_and_ack_prior_art(actions: Actions) ->
             "a totally unrelated one-off decision about lonely widgets", kind="decision",
             ack_prior_art=True, ctx=ctx)
         assert lonely["prior_art_acknowledged"] == (
-            "no prior-art hit was found at all — nothing to acknowledge")
+            "no prior-art hit was found at all. Nothing to acknowledge")
         assert "prior_art" not in lonely
     finally:
         srv._pool = saved_pool
@@ -6551,7 +6551,9 @@ async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_be
         assert any(h["type"] == "Thread" for h in out["prior_art"])
         assert "prior_art_flag" in out
         assert "bears_on=" in out["prior_art_flag"]
-        assert "resolves=" not in out["prior_art_flag"].split("—")[0]  # not presumed as fact
+        # bears_on= is offered first; resolves= only appears later, as a clarifying
+        # note, never presumed as the primary suggestion.
+        assert out["prior_art_flag"].index("bears_on=") < out["prior_art_flag"].index("resolves=")
         assert out["prior_art_polarity"] == "bears_on"
     finally:
         srv._pool = saved_pool
@@ -6699,8 +6701,8 @@ async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
                                      "summary": "a weakly-related hit"}]  # the hit IS in it
         assert "prior_art_flag" not in out   # but not strong enough to flag
         assert out["prior_art_acknowledged"] == (
-            "1 prior-art hit(s) found but none strong enough to flag — "
-            "nothing rises to acknowledge")
+            "1 prior-art hit(s) found but none strong enough to flag. "
+            "Nothing rises to acknowledge")
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)
@@ -6891,7 +6893,7 @@ async def test_record_decision_flags_contradiction_when_reversal_language_matche
             "never batch small commits into one PR for this class of change",
             kind="decision", rationale=f"undoing practice {practice['id']}", ctx=ctx)
         assert out["prior_art_polarity"] == "contradict"
-        assert "CONTRADICT" in out["prior_art_flag"]
+        assert "contradict" in out["prior_art_flag"]
         assert "never" in out["prior_art_flag"]
         assert "confirm it as evidence" not in out["prior_art_flag"]
         row = await actions.pool.fetchrow(
@@ -6931,7 +6933,7 @@ async def test_record_decision_flags_overturning_when_refutes_names_the_matched_
             rationale=f"retiring practice {practice['id']}",
             refutes=practice["id"], ctx=ctx)
         assert out["prior_art_polarity"] == "contradict"
-        assert "OVERTURNS" in out["prior_art_flag"]
+        assert "overturns" in out["prior_art_flag"]
         assert "refuted_practice" in out
         # PIECE 2, GRAPH-VERIFIED (thread 7e8cb735: :5478's own model asserted a PRE-WRITE
         # receipt value, never re-checked against what actually landed) — read the Practice's
@@ -7022,11 +7024,11 @@ async def test_record_decision_flags_obsoletion_when_obsoletes_names_the_matched
             obsoletes=["route every dispatch through the DM lane, not a broadcast reply"],
             ctx=ctx)
         assert out["prior_art_polarity"] == "obsolete"
-        assert "OBSOLETES" in out["prior_art_flag"]
+        assert "obsoletes" in out["prior_art_flag"]
         assert practice["id"][:8] in out["prior_art_flag"]
         # the generic contradiction-cues/re-derivation wording never fires alongside it
         assert "re-derivation" not in out["prior_art_flag"]
-        assert "CONTRADICT" not in out["prior_art_flag"]
+        assert "contradict" not in out["prior_art_flag"]
     finally:
         srv._pool = saved_pool
         _agents.pop(_conn_key(ctx), None)

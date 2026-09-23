@@ -568,7 +568,7 @@ async def test_mount_reports_model_unresolved_as_a_named_state(
         out = await srv.mount(cwd=str(tmp_path / "unresolved-repo"), job_dir=job_dir)
     finally:
         srv._pool = saved_pool
-    assert out.get("model_unresolved") == "model unresolved — pass model= explicitly"
+    assert out.get("model_unresolved") == "model unresolved. Pass model= explicitly."
     assert "model" not in out
 
 
@@ -702,7 +702,7 @@ async def test_mount_refuses_a_truly_unresolvable_arrival_loudly(
         out = await srv.mount(cwd="/nonexistent/nowhere-office")
     finally:
         srv._pool = saved_pool
-    assert out["error"] == "UNRESOLVABLE IDENTITY — mount refused"
+    assert out["error"] == "unresolvable identity: mount refused"
     assert "note" in out
     assert "agent" not in out
 
@@ -975,7 +975,7 @@ async def test_mount_confesses_honestly_when_neither_side_is_a_real_office(
         note = out.get("cwd_corrected")
         assert note is not None
         assert note["declared"] == str(ghost) and note["kept"] == str(container)
-        assert "NOT your home" in note["note"], (
+        assert "not your home" in note["note"], (
             f"the bare-container fallback must confess, never assert a home: {out}")
     finally:
         srv._pool = saved_pool
@@ -1666,7 +1666,7 @@ async def test_retire_will_not_let_the_pile_LEAVE_QUIETLY(actions: Actions, tmp_
 
     assert out["retired"] == "agent:leaver", "the farewell must ALWAYS be allowed to complete"
     assert out["undisposed"] == 1
-    assert "not to the human" in out["you_are_leaving_a_pile"]
+    assert "not to a human" in out["you_are_leaving_a_pile"]
 
 
 async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
@@ -1699,7 +1699,7 @@ async def test_mount_refuses_an_identity_conflict_loudly(actions: Actions,
                               session_anchor=str(tmp_path / "jobs" / "aaaa1111"))
     finally:
         srv._pool = saved_pool
-    assert "IDENTITY CONFLICT" in out.get("error", "")
+    assert "identity conflict" in out.get("error", "")
     assert out["anchor_held_by"] == "agent:ha1c0001"     # the sentence names the holder
     assert out["you_are"] == "agent:fe44a001"            # ...and the caller
     assert "aaaa1111" in out["note"]                     # ...and the way home

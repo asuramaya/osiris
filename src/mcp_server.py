@@ -725,26 +725,28 @@ async def _seam_field(ctx: Context | None) -> str | None:
 mcp = BoundedMCP(
     "osiris",
     instructions=(
-        "Osiris is the durable memory an agent session doesn't have — the graph remembers "
-        "what you learn and decide after you're gone, and it is SHARED across the whole "
-        "fleet. "
-        "FIRST, call mount(cwd=<your working dir>) to link in as a first-class agent — this "
-        "attributes everything you write to YOU instead of an anonymous bucket. Pass a "
-        "durable job_dir if your harness provides one (Claude Code: ~/.claude/jobs/<id>, "
-        "DSH: auto-detected from workspace slug); without it you still mount but identity "
-        "is ephemeral across server restarts. "
-        "GLANCE, DON'T DUMP: use get_status() for a quick check (~360 chars) instead of "
-        "orient()'s full briefing (~59K chars). Use get_mail() for just your inbox counts. "
-        "get_thread_list(project) and get_decision_list(project) give paginated views. "
-        "SEARCH BEFORE DERIVING: graph_search(query, project=<name>) scopes results to a "
-        "project's subgraph — the same fused engine as search() but graph-aware. "
-        "WRITE BACK AS YOU GO: record_decision the moment a ruling lands, "
-        "open_thread when work starts or blocks (kind='obligation' for a duty), "
-        "resolve_thread the moment it closes. A session can die at any instant: the graph, "
-        "not the context window, is your memory. "
-        "The fleet shares a MAILBOX: another agent can address a message to your project. "
-        "mount()/orient()/get_status() report your unread count; inbox() reads it. "
-        "send(to='operator') reaches the HUMAN's desk."
+        "Osiris gives an agent session durable memory. It remembers what you learn and "
+        "decide after a session ends, and every session working on the same project "
+        "shares it. "
+        "Call mount(cwd=<your working directory>) first to register as a session. This "
+        "attributes everything you write to you, instead of an anonymous placeholder. "
+        "Pass a durable job_dir if your harness provides one (Claude Code: "
+        "~/.claude/jobs/<id>; DSH: detected automatically from the workspace name). "
+        "Without it you can still mount, but your identity does not survive a server "
+        "restart. "
+        "Use get_status() for a quick check instead of the full report from orient(). "
+        "Use get_mail() to see only your inbox counts. get_thread_list(project) and "
+        "get_decision_list(project) return paginated results. "
+        "Before deriving a fact yourself, check whether it is already known: "
+        "graph_search(query, project=<name>) scopes results to one project's data, "
+        "using the same search as search() with graph context added. "
+        "Write back as you go. Call record_decision as soon as a decision is made, call "
+        "open_thread when work starts or gets blocked (use kind='obligation' for a "
+        "duty), and call resolve_thread as soon as it is done. A session can end at any "
+        "moment, so the graph, not the conversation, is the lasting record. "
+        "Other sessions can send you a message addressed to your project. mount(), "
+        "orient(), and get_status() report how many are unread; call inbox() to read "
+        "them. Use send(to='operator') to reach the person operating this system."
     ),
 )
 # DECLARE THE listChanged CAPABILITY (see BoundedMCP/_nudge_tool_list_refresh above): FastMCP
@@ -772,18 +774,18 @@ _pool: asyncpg.Pool | None = None
 
 @mcp.tool()
 async def tool_traffic(window_minutes: int = 60) -> dict[str, Any]:
-    """WHICH MCP TOOL IS EXPENSIVE, AND WHOSE — call count + total/avg wall-clock time
-    AND total/avg response bytes (`total_bytes`/`avg_bytes`, thread e4a5755a's own sibling
-    gap, closed by Thoth DM 7667 — BoundedMCP.call_tool now sizes the bounded response it
-    already holds, best-effort, 0 on an unserializable payload), ranked by ms cost,
-    cut three ways: by TOOL (`persisted`/`current_unflushed_window`),
-    by CALLER (`..._by_caller`), by (TOOL, ACTION) under a dispatcher (`..._by_action`,
-    empty action = ordinary call). `persisted` reads flushed 60s windows back `window_minutes`;
-    `current_unflushed_*` is live since the last flush. Failures count too. A row flushed
-    before this column existed reads `total_bytes=0` — unmeasured, not zero-cost.
-    `retired_alias_traffic`: the alias-decay instrument — a hidden alias's own traffic
-    next to the dispatcher action that absorbed it; `eligible_for_removal` needs BOTH
-    at zero. `blind_spots` names what this can't see."""
+    """Reports which MCP tool is expensive, and for whom: call count, total/average
+    wall-clock time, and total/average response bytes (`total_bytes`/`avg_bytes`,
+    best effort, 0 when a payload cannot be measured), ranked by time cost. Results
+    are cut three ways: by tool (`persisted`/`current_unflushed_window`), by caller
+    (`..._by_caller`), and by (tool, action) under a dispatcher (`..._by_action`; an
+    empty action means an ordinary call). `persisted` reads flushed 60-second windows
+    covering the last `window_minutes`; `current_unflushed_*` is live data since the
+    last flush. Failed calls count too. A row flushed before response-byte tracking
+    existed reads `total_bytes=0`, meaning unmeasured, not zero-cost.
+    `retired_alias_traffic` tracks retired tool aliases: a hidden alias's own traffic
+    next to the dispatcher action that absorbed it. `eligible_for_removal` is true
+    only when both are zero. `blind_spots` lists what this tool cannot see."""
     pool = await _pool_get()
     since = datetime.now(UTC) - timedelta(minutes=window_minutes)
     # ::bigint ON EVERY sum(response_bytes) (found live, first real 24h read after deploy):
@@ -1453,7 +1455,7 @@ async def _resolve(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
 @mcp.tool()
 async def suggest_sources(object_ref: str) -> dict[str, Any]:
     """The playbook for an object (UUID or name): which sources to collect and which
-    analyses apply, given its type. Start here — this is 'what can I do with this?'."""
+    analyses apply, given its type. Start here to answer "what can I do with this?"."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if oid is None:
@@ -1466,12 +1468,14 @@ async def suggest_sources(object_ref: str) -> dict[str, Any]:
 async def search(
     query: str, limit: int = 15, ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Search the graph's KNOWLEDGE, not just its labels (v2): full-text over names, decision/
-    thread summaries, and rationales — words, phrases, or "quoted phrases" (websearch syntax).
-    Results are ranked by relevance × evidence grade × recency and each hit carries its
-    TESTIMONY: which field matched, who asserted it, at what grade, when, with a snippet — so
-    you can trust-weight what you find, not just find it. Ask it 'has anyone decided/learned
-    X?' BEFORE re-deriving X. Zero-hit queries are logged and watched (retrieval telemetry)."""
+    """Searches the graph's knowledge, not just its labels: full-text over names,
+    decision and thread summaries, and rationales. Accepts words, phrases, or
+    "quoted phrases" (websearch syntax). Results are ranked by relevance, evidence
+    grade, and recency, and each hit carries supporting detail: which field matched,
+    who asserted it, at what grade, when, and a snippet, so you can weigh what you
+    find, not just find it. Use it to check whether something has already been
+    decided or learned before re-deriving it. Zero-hit queries are logged for
+    monitoring."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     spec = {"op": "function", "name": "search",
@@ -1490,12 +1494,13 @@ async def practices(
     surface: str | None = None, limit: int = 50, recent: bool = False,
     ctx: Context | None = None,
 ) -> list[dict[str, Any]]:
-    """THE THAW's technique log (ruling 1e6d7367) — ON-DEMAND only, never in orient's
-    ambient payload. `surface` narrows to one domain (BlindSpot's own vocabulary, e.g.
-    'deploy', 'succession'); omitted, every active Practice, most-confirmed first.
-    `confirmed` is the live `witnesses` link count, never a stored number. A refuted
-    Practice still lists, carrying `refuted_by` — flagged, never hidden. `recent=True`
-    ranks last-touched first."""
+    """The engineering technique log. Call it on demand; it is never included
+    automatically in orient's output. `surface` narrows results to one domain (e.g.
+    'deploy', 'succession'); if omitted, returns every active practice, most-confirmed
+    first. `confirmed` is a live count of supporting witnesses, not a stored number. A
+    refuted practice still appears in the list, carrying `refuted_by` so it is flagged
+    rather than hidden. `recent=True` ranks the most recently updated practices
+    first."""
     pool = await _pool_get()
     spec = {"op": "function", "name": "practices",
            "args": {"surface": surface, "limit": limit, "recent": recent}}
@@ -1506,13 +1511,15 @@ async def practices(
 
 @mcp.tool()
 async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None) -> dict[str, Any]:
-    """ONE object's full provenance timeline — how the graph came to believe what it
-    believes about it. Every assertion (with supersession fate), every link (both
-    directions, retractions marked), every kernel event, in observed order, each carrying
-    source + evidence grade + confidence; `believes` holds the current winning view.
-    search finds the WHAT; this shows the HOW-WE-KNOW — run it before trusting a surprising
-    fact, before merging/healing an object, or to autopsy a corpse (a uuid ref reaches
-    merged/retired objects too). `ref` = uuid | canonical (e.g. 'agent:ad1a1cb0') | name."""
+    """Returns one object's full provenance timeline: how the graph came to believe
+    what it currently believes about it. Includes every assertion (with its
+    supersession history), every link (both directions, with retractions marked), and
+    every kernel event, in observed order, each carrying its source, evidence grade,
+    and confidence; `believes` holds the current winning view. Where `search` finds
+    what is known, this shows how it came to be known. Run it before trusting a
+    surprising fact, before merging or healing an object, or to inspect a retired or
+    merged object (a uuid ref reaches those too). `ref` accepts a uuid, a canonical
+    id (e.g. 'agent:ad1a1cb0'), or a name."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     spec = {"op": "function", "name": "lap", "args": {"ref": ref, "limit": limit}}
@@ -1526,12 +1533,13 @@ async def trace_evidence(ref: str, limit: int = 200, ctx: Context | None = None)
     "deprecated": True,
     "use_instead": "composition(action='run', name='census-seat-property-contradictions'"
                   " or name='census-cohort')",
-    "since": "Thoth dispatch 7543 item 2 fold correction — a new named tool was the "
-             "wrong shape; census was already a composition Function.",
+    "since": "A dedicated tool was the wrong shape for this; census was already"
+             " available as a composition function.",
 })
 async def graph_census(kind: str) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to composition(action='run',
-    name='census-seat-property-contradictions'|'census-cohort')."""
+    """Deprecated. Kept callable as a hidden alias. Forwards to
+    composition(action='run', name='census-seat-property-contradictions' or
+    name='census-cohort')."""
     pool = await _pool_get()
     spec = {"op": "function", "name": "census", "args": {"kind": kind}}
     out = await comp.run_spec(pool, spec, None, name="census")
@@ -1542,13 +1550,15 @@ async def graph_census(kind: str) -> dict[str, Any]:
 @mcp.tool()
 async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int | None = None,
                      offset: int = 0) -> dict[str, Any]:
-    """The graph audits ITSELF — report-only, never writes. Checks: contradiction,
-    laundering (a fact above its origin grade), lineage integrity (succession cycles,
-    dangling heirs, false mints), orphan links, stale obligations (older than
-    `stale_days`), attribution anomalies, phantom twins, parallel lives, duplicate
-    works_in, peer-silent (no mail in `stale_days` between an active peer_of pair — a
-    proxy, not proof), held-past-deadline. Findings are testimony to judge, never
-    auto-applied; heal with compensating events, never DELETE.
+    """The graph audits itself. Report-only, it never writes. Checks: contradiction,
+    laundering (a fact carrying more confidence than its origin grade supports),
+    lineage integrity (succession cycles, dangling heirs, false mints), orphan
+    links, stale obligations (older than `stale_days`), attribution anomalies,
+    phantom twins, parallel lives, duplicate works_in, peer-silent (no mail in
+    `stale_days` between an active peer_of pair, a proxy signal rather than proof),
+    and held-past-deadline. Findings are evidence for a person to judge, never
+    applied automatically; fix problems with compensating events, never by
+    deleting data.
 
     Each check lists only its first 50 findings by default (`counts` has the true
     total). Pass `check` (a `counts` key or a finding's own `check` field) to page one
@@ -1572,20 +1582,22 @@ async def graph_lint(stale_days: int = 14, check: str | None = None, limit: int 
 async def triage(mode: str = "census", object_type: str | None = None, status: str = "active",
                  stale_days: int = 30, cohort_min: int = 3, limit: int | None = None,
                  offset: int = 0) -> list[dict[str, Any]]:
-    """Judge the object set itself. Read-only, no writes. `mode`:
+    """Evaluates the health of the object set itself. Read-only, no writes. `mode`:
 
-    'census' (default) — one row per (type, status): n, orphans, thin (1-2 links),
-    median/max links, born, last_touch.
+    'census' (default): one row per (type, status), with count, orphans, thin (1-2
+    links), median/max links, born, and last_touch.
 
-    'buckets' — `object_type` required. One row per object, exactly one bucket, by
-    priority: contradicted (2+ live non-superseding values) > duplicate_suspect
-    (case-folded basename collision) > bulk_import (`cohort_min`+ objects born the same
-    second, identical link fingerprint) > orphan > hub (>=95th-pct links, floor 10) >
-    stale (untouched past `stale_days`) > thin > normal. Every in-scope object is
-    listed, not just flagged ones. `limit`/`offset` page it (default 200/0, capped 2000).
+    'buckets': requires `object_type`. One row per object, in exactly one bucket,
+    chosen by priority: contradicted (2+ live non-superseding values), then
+    duplicate_suspect (case-folded basename collision), then bulk_import
+    (`cohort_min`+ objects born the same second with an identical link fingerprint),
+    then orphan, then hub (at or above the 95th-percentile link count, floor 10),
+    then stale (untouched past `stale_days`), then thin, then normal. Every object
+    in scope is listed, not just flagged ones. `limit`/`offset` page results
+    (default 200/0, capped at 2000).
 
-    `object_type='Type'` — Type rows instead: undescribed > no_label_rule
-    (kind='object', blank label_field) > normal."""
+    `object_type='Type'`: lists Type rows instead, bucketed as undescribed, then
+    no_label_rule (kind='object' with a blank label_field), then normal."""
     pool = await _pool_get()
     args: dict[str, Any] = {"mode": mode}
     if object_type is not None:
@@ -1608,12 +1620,13 @@ async def triage(mode: str = "census", object_type: str | None = None, status: s
 
 @mcp.tool()
 async def get_schema() -> dict[str, Any]:
-    """The ontology — the object types (with category + canonical schemes) and link types
-    the graph declares. Read this before authoring a composition or reading a result, so you
-    reference REAL types/links, not guesses; it is the vocabulary of the whole graph. Compact
-    by design (colours/shapes dropped — those are for the UI). Graph-backed (task #97
-    workstream 2): reads the live Type catalog, not schema.py's static seed manifest, so a
-    type minted through accretion shows up here the moment it exists."""
+    """The graph's ontology: the object types (with category and canonical schemes)
+    and link types it declares. Read this before authoring a composition or reading
+    a result, so you reference real types and links instead of guessing; it is the
+    vocabulary of the whole graph. Compact by design (colors and shapes are dropped;
+    those are for the UI only). Reads the live type catalog directly from the
+    database, not a static seed file, so a newly created type shows up here as soon
+    as it exists."""
     cat = await full_catalog(await _pool_get())
     return {
         "object_types": [
@@ -1634,12 +1647,13 @@ async def get_schema() -> dict[str, Any]:
 
 @mcp.tool()
 async def describe(table: str) -> dict[str, Any]:
-    """A table's ACTUAL Postgres shape — columns (name/type/nullable/default), in column
-    order, plus indexes (name/definition) — straight off information_schema/pg_indexes.
-    get_schema answers a DIFFERENT question (the ontology this app's code declares: object/
-    link types, categories, canonical schemes); this answers what the DATABASE actually has,
-    for when you need a real column name or type before hand-writing SQL. Returns
-    `exists: false` (never a silently-empty shape) when `table` doesn't match anything real."""
+    """A table's actual Postgres shape: columns (name, type, nullable, default) in
+    column order, plus indexes (name, definition), read directly from
+    information_schema and pg_indexes. get_schema answers a different question (the
+    ontology this app's code declares: object and link types, categories, canonical
+    schemes); this answers what the database actually has, for when you need a real
+    column name or type. Returns `exists: false`, rather than a silently empty
+    shape, when `table` does not match anything real."""
     if table == "nags":
         return {"nags": _NAG_CATALOG}
     if table.startswith("nags:"):
@@ -1664,15 +1678,14 @@ async def describe(table: str) -> dict[str, Any]:
 
 @mcp.tool()
 async def smoke() -> dict[str, Any]:
-    """DEPLOY-TIME LIVENESS (ruling 2ee43411, task #63, threads bb763977/1849d800): walks
-    every chrome route (smoke.CHROME_ROUTES — never hand-listed here again; an enumerated
-    copy in this very docstring is exactly what went stale, msg 1927, when /live-desk and
-    /roadmap retired, commit bb86bbe, and this prose didn't) and runs one real query over
-    THIS server's own pool — the exact class of bug 1da1bf2 fixed (`_boot_check` warming
-    the wrong pool) shipped past every static gate and only broke at real boot; only a live
-    call catches it. Call this right after a restart, not just once at boot — a static gate
-    proved it cannot substitute. `ok=false` names exactly which surface failed, never a bare
-    red light."""
+    """A deploy-time liveness check. Walks every route in smoke.CHROME_ROUTES (the
+    route list lives there, not duplicated in this docstring, so it cannot go stale
+    as routes change) and runs one real query over this server's own connection
+    pool. A static check cannot catch every failure mode here: a warm-up step that
+    checks the wrong pool can pass every build-time gate and still break at real
+    boot, and only a live call catches that. Call this right after a restart, not
+    just once at boot. `ok=false` names exactly which surface failed, never a bare
+    pass/fail flag."""
     pool = await _pool_get()
     async with httpx.AsyncClient(
         base_url=get_settings().osiris_console_base_url, timeout=5.0,
@@ -1682,27 +1695,28 @@ async def smoke() -> dict[str, Any]:
 
 @mcp.tool()
 async def identify_agent(ref: str) -> dict[str, Any]:
-    """One coherent answer about an agent, a seat, or a cwd — 'ref' is sniffed: an `agent:` id,
-    a `seat:` id, a bare handle, or an absolute cwd path (`/...` or `~/...`). Always returns
-    {ref, resolved, matches: [...]} — an agent/seat/handle resolves to 0-or-1 match (one
-    lineage-folded identity); a cwd resolves to 0-or-many (an office can be multi-tenant). Seat
-    binding is read off the `holds` graph link, never a cache column, so this is the one place
-    that never falls into that trap. Replaces the hand-rolled query against agent_mounts."""
+    """Gives one coherent answer about an agent, a seat, or a working directory.
+    `ref` is auto-detected: an `agent:` id, a `seat:` id, a bare handle, or an
+    absolute path (`/...` or `~/...`). Always returns {ref, resolved, matches: [...]}.
+    An agent, seat, or handle resolves to zero or one match (one identity, with
+    lineage folded in); a path resolves to zero or more matches, since a working
+    directory can be shared by more than one agent. Seat binding is read from the
+    live graph link, never a cached column, so this result cannot go stale that
+    way."""
     return await _doors_lookup(await _pool_get(), ref)
 
 
 @mcp.tool()
 async def recall(ref: str, kind: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """The full, untruncated record for a Thread or Decision — reach for this after
-    orient()'s 160-char summary cap (task #60) leaves you wanting the whole thing. `ref` is
-    a UUID, the 8-char short id orient() already hands you, or a summary substring. `kind`
-    ('thread' or 'decision') skips auto-detection when you already know which; omitted,
-    tries Thread then Decision. Refuses loudly when nothing matches either type — never
-    guesses, and never widens into a fuzzy search (use search(query=...) for that).
-    Carries `notes` (annotate_thread's own additions, oldest first) on a Thread, or
-    `addenda` (amend_decision's own additions, oldest first) on a Decision — always a list,
-    empty when none. This is where those two verbs' own writes become visible; before this,
-    neither surfaced anywhere a reader would think to look."""
+    """Returns the full, untruncated record for a thread or decision. Use this after
+    orient()'s short summary leaves you wanting the whole thing. `ref` accepts a
+    UUID, the short id orient() already gives you, or a summary substring. `kind`
+    ('thread' or 'decision') skips auto-detection when you already know which type;
+    if omitted, tries thread then decision. Refuses with a clear error when nothing
+    matches either type, rather than guessing or widening into a fuzzy search (use
+    search(query=...) for that). Carries `notes` (additions from annotate_thread,
+    oldest first) on a thread, or `addenda` (additions from amend_decision, oldest
+    first) on a decision; always a list, empty when there are none."""
     from src.orchestrator.recall import recall as _recall
     pool = await _pool_get()
     rec = await _recall(pool, ref, kind=kind)
@@ -1719,58 +1733,61 @@ async def recall(ref: str, kind: str | None = None, ctx: Context | None = None) 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "Retired after no MCP traffic was observed and no other caller was found.",
 })
 async def aim_entity(name: str) -> dict[str, Any]:
-    """Resolve a name on Wikidata and ingest the entity + relationships + official
-    social accounts; the broadest first pull for a company or person."""
+    """Resolves a name on Wikidata and ingests the entity, its relationships, and
+    its official social accounts. The broadest first pull for a company or
+    person."""
     return await wikidata_aim(Actions(await _pool_get()), name)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "Retired after no MCP traffic was observed and no other caller was found.",
 })
 async def ingest_form_d(name: str) -> dict[str, Any]:
-    """SEC Form D: a private company's financing rounds — officers, amounts, and the
-    feeder SPVs that fund it (linked into the graph)."""
+    """Pulls a private company's SEC Form D financing rounds: officers, amounts, and
+    the feeder SPVs that fund it, and links them into the graph."""
     return await aim_form_d(Actions(await _pool_get()), name)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "Retired after no MCP traffic was observed and no other caller was found.",
 })
 async def expand_operator(name: str) -> dict[str, Any]:
-    """Pull a repeat player's thread: every Form D mentioning this operator → their
-    whole portfolio, exposing the co-investment network."""
+    """Pulls every Form D mentioning this operator, exposing their whole portfolio
+    and its co-investment network."""
     return await expand_filings(Actions(await _pool_get()), name)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "Retired after no MCP traffic was observed and no other caller was found.",
 })
 async def lookup_lei(name: str) -> dict[str, int]:
-    """GLEIF global LEI registry (keyless): the entity's Legal Entity Identifier,
-    jurisdiction, status, and corporate ownership parents (direct + ultimate). The LEI
-    is a deterministic global key — it cross-resolves the same company across bases."""
+    """Looks up an entity in the GLEIF global LEI registry (no API key required):
+    its Legal Entity Identifier, jurisdiction, status, and corporate ownership
+    parents (direct and ultimate). The LEI is a deterministic global key, so it can
+    cross-resolve the same company across different data sources."""
     return await aim_gleif(Actions(await _pool_get()), name)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "Retired after no MCP traffic was observed and no other caller was found.",
 })
 async def verify_bc_entity(name: str) -> dict[str, int]:
-    """Canadian (British Columbia) corporate registry via OrgBook BC (keyless): pull a
-    company/partnership — or a whole family name like 'Brilliant Phoenix' — with its BC
-    registration number, CRA business number, type, status, and jurisdiction. Verifies
-    registration + legal existence (not directors/owners). Cross-resolves to EDGAR."""
+    """Looks up a company or partnership in the Canadian (British Columbia)
+    corporate registry via OrgBook BC (no API key required), including a family of
+    related names such as 'Brilliant Phoenix'. Returns its BC registration number,
+    CRA business number, type, status, and jurisdiction. Verifies registration and
+    legal existence only, not directors or owners. Cross-resolves to EDGAR."""
     return await aim_orgbook(Actions(await _pool_get()), name)
 
 
@@ -1780,8 +1797,8 @@ async def verify_bc_entity(name: str) -> dict[str, int]:
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def ingest_trials(sponsor: str) -> dict[str, int]:
-    """ClinicalTrials.gov: a sponsor's registered human trials — status, sites
-    (facilities), named investigators."""
+    """ClinicalTrials.gov: a sponsor's registered human trials, including status, sites
+    (facilities), and named investigators."""
     return await aim_trials(Actions(await _pool_get()), sponsor)
 
 
@@ -1791,9 +1808,9 @@ async def ingest_trials(sponsor: str) -> dict[str, int]:
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]:
-    """Court records (CourtListener): lawsuits & enforcement actions naming this
-    entity — dockets, parties, judges. opinions=True searches case law instead of
-    RECAP dockets. Answers 'has this entity been sued or charged?'."""
+    """Court records (CourtListener): lawsuits and enforcement actions naming this
+    entity, including dockets, parties, and judges. opinions=True searches case law
+    instead of RECAP dockets. Answers whether this entity has been sued or charged."""
     return await aim_litigation(Actions(await _pool_get()), name, kind="o" if opinions else "r")
 
 
@@ -1803,8 +1820,8 @@ async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[str, Any]:
-    """Trace an EVM crypto address on-chain (Etherscan): its top counterparties, native
-    balance, token flow, and contract/token identity — graded as ledger ground truth.
+    """Traces an EVM crypto address on-chain (Etherscan): its top counterparties, native
+    balance, token flow, and contract/token identity, graded as ledger ground truth.
     chain_id 1=Ethereum, 8453=Base, 42161=Arbitrum. Needs ETHERSCAN_API_KEY (free)."""
     return await aim_address(Actions(await _pool_get()), address, chain_id=chain_id, top=top)
 
@@ -1815,9 +1832,9 @@ async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[s
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
-    """Screen a traced EVM address against the federated sanctions base: is the
-    address — or any of its counterparties — an OFAC-listed wallet? Returns the
-    sanctioned hits and the named holder behind each. Run trace_wallet + ingest
+    """Screens a traced EVM address against the federated sanctions base: checks whether
+    the address, or any of its counterparties, is an OFAC-listed wallet. Returns the
+    sanctioned hits and the named holder behind each. Run trace_wallet and ingest
     OpenSanctions first; fusion is automatic (shared on-chain canonical)."""
     pool = await _pool_get()
     canon = f"eth:{chain_id}:{address.strip().lower()}"
@@ -1828,7 +1845,7 @@ async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     if oid is None:
         oid = await _resolve(pool, address)
     if oid is None:
-        return {"error": f"no traced address {address!r} — run trace_wallet first"}
+        return {"error": f"no traced address {address!r}. Run trace_wallet first."}
     return await screen_against_sanctions(pool, uuid.UUID(str(oid)))
 
 
@@ -1838,27 +1855,28 @@ async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def expand_clinical_site(facility: str) -> dict[str, int]:
-    """The trials at a clinical SITE — revealing which other sponsors use it."""
+    """The trials at a clinical site, showing which other sponsors use it."""
     return await expand_facility(Actions(await _pool_get()), facility)
 
 
 @mcp.tool()
 async def consolidate(ctx: Context | None = None) -> dict[str, Any]:
-    """Graph hygiene: re-type mis-ingested entities (GP/LLC 'persons' -> Organizations),
-    then queue + resolve cross-base merges (same company across bases) and collapse
-    SPV-name company variants. Run after collecting to de-fragment entities.
-    OPERATOR ONLY, ENFORCED — a whole-graph automatic merge sweep with no per-merge
-    review, not a per-object act any mounted caller should trigger on a whim. Refuses on
-    an unauthorized actor."""
+    """Graph hygiene: re-types mis-ingested entities (GP/LLC "persons" to Organizations),
+    then queues and resolves cross-base merges (same company across bases), and collapses
+    SPV-name company variants. Run after collecting data to de-fragment entities.
+    Restricted to operator accounts: this is a whole-graph automatic merge sweep with no
+    per-merge review, not a per-object action any mounted caller should trigger casually.
+    Refuses the call if the actor is not authorized."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a consolidation sweep is a mind's act, and the "
-                         "graph must know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first. A consolidation sweep must be attributed to a "
+                         "caller, and the graph needs to know who is running it.",
+                         "why": _anchorless(ctx)}
     from src.orchestrator.seats import _OPERATOR_ACTORS
     if ident.agent_id not in _OPERATOR_ACTORS:
-        return {"error": f"{ident.agent_id!r} is not authorized to run consolidate — this "
-                         "is an operator-only whole-graph merge sweep, not a per-object act "
-                         "any mounted caller may trigger"}
+        return {"error": f"{ident.agent_id!r} is not authorized to run consolidate. This "
+                         "is an operator-only whole-graph merge sweep, not a per-object "
+                         "action any mounted caller may trigger."}
     actions = Actions(await _pool_get())
     reclassified = await reclassify_mistyped_entities(actions)
     await find_cross_base_candidates(actions.pool)
@@ -1874,17 +1892,17 @@ async def consolidate(ctx: Context | None = None) -> dict[str, Any]:
 @mcp.tool()
 async def dossier(object_ref: str, want_relationships: bool = False,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """Who is this? Identity properties + the named relationship network. `object_ref`
+    """Identity properties and the named relationship network for one object. `object_ref`
     accepts a UUID, an 8-char short id (the same one a composition row's own "id" column
-    hands out), a canonical, or a name. For an AGENT specifically, this is where succession
+    hands out), a canonical, or a name. For an agent specifically, this is where succession
     lives: `succeeded_from`/`minted_because` show up both as properties and as a
-    `succeeded_from` relationship edge naming the predecessor — one hop back per call. To
-    walk the FULL multi-generation chain in one bounded call, use `succession_chain` instead
-    (task #64, ruling ad19a779).
+    `succeeded_from` relationship edge naming the predecessor, one hop back per call. To
+    walk the full multi-generation chain in one bounded call, use `succession_chain`
+    instead.
 
     `want_relationships=True` returns every relationship row; default is a per-type
-    count plus the first 10 (a busy high-degree object's relationships were measured at
-    76% of this verb's own bytes/call, decision a065171f)."""
+    count plus the first 10, since a high-degree object's full relationship list can
+    dominate this call's response size."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if not oid:
@@ -1903,11 +1921,10 @@ async def dossier(object_ref: str, want_relationships: bool = False,
 
 @mcp.tool()
 async def object_events(object_ref: str, event_type: str | None = None) -> dict[str, Any]:
-    """The witness surface dossier() hides (thread 085039cc): merge/unmerge/split
-    events plus same_as/not_same_as links for one object, read-only. `object_ref`
-    accepts anything dossier does; `event_type` narrows to one kind, default every
-    kind oldest-first. Answers "did this merge/unmerge really happen" without raw
-    SQL."""
+    """Merge/unmerge/split events plus same_as/not_same_as links for one object,
+    read-only; the history dossier() does not show. `object_ref` accepts anything
+    dossier does; `event_type` narrows to one kind, default every kind oldest-first.
+    Answers whether a merge or unmerge actually happened, without needing raw SQL."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if not oid:
@@ -1924,10 +1941,10 @@ async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     {agent_id, generation, minted_because, wrote_anything, session}. dossier() only
     gives one hop; this walks the whole chain in one call. `ref` accepts anything
     dossier does (UUID, short id, canonical, name). Stops at a root (no predecessor) or
-    `max_hops` (default 10) — never widens into an unbounded search. `session` is each
-    generation's own mount()-asserted harness session id, the transcript filename's
-    stem. Complementary to `nearest_handoff_ancestor` (backing orient()'s own
-    succession-note block), which jumps to the nearest handoff ancestor rather than
+    at `max_hops` (default 10); it never widens into an unbounded search. `session` is
+    each generation's own mount()-asserted harness session id, the transcript filename's
+    stem. Complementary to `nearest_handoff_ancestor` (used by orient()'s own
+    succession-note section), which jumps to the nearest handoff ancestor rather than
     walking every hop."""
     pool = await _pool_get()
     chain = await comp_succession.succession_chain(pool, ref, max_hops=max_hops)
@@ -1940,9 +1957,9 @@ async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def dossier_report(object_ref: str) -> str:
-    """The deliverable: a provenance-annotated Markdown dossier for an entity —
-    identity, financing, litigation, footprint discrepancy, co-investment — with every
-    claim carrying its source + how-obtained + date. Run the collect tools first."""
+    """A provenance-annotated Markdown dossier for an entity: identity, financing,
+    litigation, footprint discrepancy, and co-investment, with every claim carrying
+    its source, how it was obtained, and its date. Run the collect tools first."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     return await build_dossier_report(pool, oid) if oid else f"# no object {object_ref!r}"
@@ -1953,18 +1970,19 @@ async def handoff_briefing(
     repo: str, agent_ref: str | None = None, since: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """A succession briefing compiled from the GRAPH, not hand-written from memory. For
-    `repo`: what SHIPPED (Decisions since the boundary, each with its deploy status), what's
-    OPEN and whose move it is, what's OPERATOR-GATED, what was CORRECTED (supersedes
-    chains), and a best-effort HEURISTIC flag for self-declared-unconfirmed text
-    ("UNVERIFIED", ...).
+    """A succession briefing compiled from the graph, not hand-written from memory. For
+    `repo`, it reports what shipped (decisions since the boundary, each with its deploy
+    status), what's open and whose move it is next, what's gated on the operator, what
+    was corrected (supersedes chains), and a best-effort flag for self-declared,
+    unconfirmed text (such as "UNVERIFIED").
 
     `since` defaults to the boundary found by walking your own mounted lineage (or
-    `agent_ref`'s) back through succeeded_from for the freshest is_handoff marker; pass
-    an explicit ISO-8601 to override. Returns structured data plus a rendered `markdown`
-    ending in an empty JUDGMENT section — the compiled facts are the win, your own prose
-    is the irreducible rest. Read-only, renders on demand, never mints anything itself.
-    Pair with record_decision(..., is_handoff=True) / settle() once judged."""
+    `agent_ref`'s) back through succeeded_from for the freshest handoff marker; pass an
+    explicit ISO-8601 date to override. Returns structured data plus a rendered
+    `markdown` ending in an empty judgment section: the compiled facts are the point,
+    and your own prose fills the rest. Read-only, renders on demand, never creates
+    anything itself. Pair with record_decision(..., is_handoff=True) / settle() once
+    judged."""
     pool = await _pool_get()
     if agent_ref:
         oid = await _resolve(pool, agent_ref)
@@ -1977,8 +1995,9 @@ async def handoff_briefing(
     else:
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — handoff_briefing walks YOUR OWN lineage by "
-                             "default; pass agent_ref to preview another agent's instead"}
+            return {"error": "mount first. handoff_briefing walks your own lineage by "
+                             "default; pass agent_ref to preview another agent's "
+                             "lineage instead."}
         agent_id = ident.agent_id
 
     since_dt: datetime | None
@@ -2110,14 +2129,14 @@ async def composition(
     fields: list[str] | None = None, take: int | None = None, depth: int | None = None,
     offset: int | None = None, ctx: Context | None = None,
 ) -> dict[str, Any] | list[dict[str, Any]]:
-    """THE COMPOSITION OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
-    door, three actions over saved compositions (reusable, forkable queries/lenses over
-    the graph). See `describe('composition')` for the full per-action shape.
+    """The composition dispatcher: one tool, three actions over saved compositions
+    (reusable, forkable queries/lenses over the graph). See `describe('composition')`
+    for the full per-action shape.
 
-    ACTION TABLE — action: what it does (required params beyond action):
-      save: save a reusable query/lens (name, spec — kind defaults 'lens'). `spec` is a
-        small closed op-tree (no `join` — use intersect/traverse instead; fuzzy matching
-        is a Function): subject (the focus object); select (object_type?,
+    Actions (what each does, and its required params beyond action):
+      save: save a reusable query/lens (name, spec; kind defaults to 'lens'). `spec` is
+        a small closed op-tree (no `join`, use intersect/traverse instead; fuzzy
+        matching is a Function): subject (the focus object); select (object_type?,
         where=[{property,op,value}], op in eq|contains|matches_all|lt|gt|present|
         absent); traverse (from, direction=both|out|in, hops<=3); collect (from,
         properties, transform=country|lower); subtract/union/intersect (over sets);
@@ -2125,9 +2144,10 @@ async def composition(
         cardinality, field}); order (from, by, dir); take (from, n). Worked examples:
         consult_canon('composition spec').
       run: run a saved composition, optionally against a subject object (UUID or name),
-        AND light it up on the operator's live screen (name). `fields`/`take`/`depth`
-        bound a large result at the source; `offset` pages past the first `take`.
-      list: the saved compositions (lenses/watches) — the user's questions, as objects.
+        and show it on the operator's live screen (name). `fields`/`take`/`depth` bound
+        a large result at the source; `offset` pages past the first `take`.
+      list: the saved compositions (lenses/watches), the user's questions saved as
+        objects.
     """
     return await _composition_impl(
         action, name=name, spec=spec, kind=kind, subject=subject,
@@ -2142,7 +2162,7 @@ async def composition(
 async def save_composition(
     name: str, spec: dict[str, Any], kind: str = "lens"
 ) -> dict[str, str]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     composition(action='save')."""
     return cast(dict[str, str],
                await _composition_impl("save", name=name, spec=spec, kind=kind))
@@ -2156,9 +2176,8 @@ async def save_composition(
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def get_console() -> dict[str, Any]:
-    """What the operator is looking at RIGHT NOW — the shared cursor (room / composition /
-    view / focused object). The front end is the conversation, so read this first to see
-    their screen before you act ('where are we?')."""
+    """What the operator is looking at right now: the shared cursor (room / composition /
+    view / focused object). Read this first to see their screen before you act."""
     return await _get_console(await _pool_get())
 
 
@@ -2168,9 +2187,9 @@ async def get_console() -> dict[str, Any]:
     "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
 })
 async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Focus an object (UUID or name) on the operator's LIVE screen — drives the console so
-    they see what you're looking at. Returns the object's identity + properties so you can
-    reason about it too."""
+    """Focus an object (UUID or name) on the operator's live screen: drives the console
+    so they see what you're looking at. Returns the object's identity and properties so
+    you can reason about it too."""
     pool = await _pool_get()
     oid = await _resolve(pool, object_ref)
     if oid is None:
@@ -2204,7 +2223,7 @@ async def run_composition(
     offset: int | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     composition(action='run')."""
     return cast(dict[str, Any],
                await _composition_impl("run", name=name, subject=subject, fields=fields,
@@ -2217,30 +2236,31 @@ async def run_composition(
     "since": "task #202 composition dispatcher (msg 7073/7095)",
 })
 async def list_compositions() -> list[dict[str, Any]]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     composition(action='list')."""
     return cast(list[dict[str, Any]], await _composition_impl("list"))
 
 
 @mcp.tool()
 async def list_functions() -> list[str]:
-    """The registered Functions a composition may reference via {"op":"function","name":..}
-    — the escape hatch for analytics the closed op set can't express (co-investment ties,
-    sanctions screening, the who-is-this report). Reference one in a spec instead of
-    re-deriving its logic."""
+    """The registered functions a composition may reference via
+    {"op":"function","name":..}: the escape hatch for analytics the closed op set can't
+    express (co-investment ties, sanctions screening, the who-is-this report). Reference
+    one in a spec instead of re-deriving its logic."""
     return comp.list_functions()
 
 
 @mcp.tool()
 async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str, Any]:
-    """Consult the CANON — the shared DESIGN canon (Palantir's Object Set / Ontology / Action
-    models + Notion's databases / relations-rollups / UI-UX + Osiris's own docs) AND, when
-    you're mounted, YOUR project's migrated HISTORY (ref:<project>-*, ingested by bootstrap).
-    This is the migration's RECALL path: 'cite, don't re-derive' for design, 'recall, don't
-    re-load' for your own history — your build log is a bounded QUERY here, not cargo re-read
-    into every context. Given a topic, module path, design word, or a bag of KEYWORDS, returns
-    the matching SECTIONS ranked by keyword hits (multi-word queries work). Empty query → your
-    scoped index. Another project's unvendored history is never returned to you."""
+    """Looks up reference material in the shared design canon (Palantir's Object Set /
+    Ontology / Action models, Notion's databases / relations-rollups / UI-UX, and
+    Osiris's own docs), and, when you're mounted, your project's migrated history
+    (ref:<project>-*, ingested by bootstrap). Use this to cite existing design guidance
+    instead of re-deriving it, and to recall your own project history instead of
+    re-reading it into context on every turn. Given a topic, module path, design word,
+    or a set of keywords, returns the matching sections ranked by keyword hits
+    (multi-word queries work). An empty query returns your scoped index. Another
+    project's unvendored history is never returned to you."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     spec = {"op": "function", "name": "canon",
@@ -2250,14 +2270,15 @@ async def consult_canon(query: str = "", ctx: Context | None = None) -> dict[str
 
 @mcp.tool()
 async def context_window(ctx: Context | None = None) -> dict[str, Any]:
-    """YOUR OWN context window, in detail — how close this mind is to its next seam. Reads
-    the harness's usage record off your own transcript: occupancy (fresh input + cache read +
-    cache write), window tier ([1m] tabs = 1M tokens, else 200k), remaining headroom, and this
-    session's death toll (compactions so far — each one minted a predecessor of yours, ruling
-    a882b334). Above 80% it tells you plainly: write back NOW — record_decision /
-    resolve_thread what is still only in your head, because a compaction can land any turn and
-    what is not in the graph does not exist for your heir. Requires a mounted, anchored
-    session (the transcript is found by your durable job_dir)."""
+    """Your own context window, in detail: how close this session is to its next
+    compaction boundary. Reads the harness's usage record off your own transcript:
+    occupancy (fresh input plus cache read plus cache write), window tier ([1m] tabs =
+    1M tokens, else 200k), remaining headroom, and this session's compaction count so
+    far (each compaction starts a new session in the lineage). Above 80% usage it tells
+    you plainly to write back now: record_decision / resolve_thread whatever is still
+    only in your head, because a compaction can land on any turn, and anything not
+    written to the graph is lost to whatever picks up after you. Requires a mounted,
+    anchored session (the transcript is found by your durable job_dir)."""
     from src.ingest.sessions import locate_current_transcript
     from src.orchestrator import context_lens
 
@@ -2265,14 +2286,14 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
     ident = await _ident_for(ctx)
     if ident is None:
         return {"why": _anchorless(ctx),
-                "error": "mount(cwd, job_dir=<your anchor>) first — self-knowledge needs an "
-                         "anchored identity"}
+                "error": "mount(cwd, job_dir=<your anchor>) first. This tool needs an "
+                         "anchored identity to read your usage."}
     row = await pool.fetchrow(
         "SELECT job_dir, model_raw, context_window_size FROM agent_mounts WHERE agent_id=$1 "
         "ORDER BY last_seen DESC LIMIT 1", ident.agent_id)
     job = _job_hint(ctx) or (row["job_dir"] if row else None)
     if not job:
-        return {"error": "no durable anchor on record — re-mount with the whisper's job_dir"}
+        return {"error": "no durable anchor on record. Re-mount with your job_dir."}
     # THE LIVE FILE FIRST (freshness law): the harness's own transcript is current to the
     # last turn and compaction-aware — a store row is only as fresh as its last ingest, and
     # the 85% write-back alarm must never sleep on a mount-time snapshot. The store serves
@@ -2315,7 +2336,7 @@ async def context_window(ctx: Context | None = None) -> dict[str, Any]:
         out["source"] = f"store:{locator.harness}"
         out.update(await _overhead_glance(pool, ident.cwd, job))
         return out
-    return {"error": "no transcript found for your anchor — nothing to measure"}
+    return {"error": "no transcript found for your anchor. Nothing to measure."}
 
 
 async def _overhead_glance(
@@ -2527,27 +2548,27 @@ async def mount(
     verbose: bool = False, want_co_agents: bool = False, want_held_work: bool = False,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """Link this agent to Osiris as a first-class fleet member — call it ONCE, first thing.
-    `cwd`=your working directory (names your project). `job_dir`=a DURABLE ANCHOR from
-    your harness (Claude Code: `~/.claude/jobs/<id>`; DSH: derived from the workspace
-    slug) — without it you still mount, but a reconnect splits your identity. Registers
-    an Agent (works_in your project, acts_for the principal) and attributes your
-    decisions/threads to `agent:<you>` instead of the shared `session` bucket. Then call
-    orient(). Already mounted? Skip this; re-mount only after an MCP bounce, with your
-    anchor.
+    """Link this agent to Osiris as a first-class fleet member; call it once, first
+    thing. `cwd` is your working directory (names your project). `job_dir` is a durable
+    anchor from your harness (Claude Code: `~/.claude/jobs/<id>`; DSH: derived from the
+    workspace slug); without it you still mount, but a reconnect will split your
+    identity. Registers an Agent (works_in your project, acts_for the principal) and
+    attributes your decisions/threads to `agent:<you>` instead of the shared `session`
+    bucket. Call orient() next. If you're already mounted, skip this call; re-mount
+    only after an MCP restart, with your anchor.
 
     `verbose=True` restores guidance prose (co-agent etiquette, next-step reminders)
-    that terse mode (default) drops — structured facts survive either way.
-    `transcript_path`/`bridge_session_id` are hook-stamped, never set by hand — they
-    rebind a revisited tab or background-job fork to its existing soul instead of
-    minting a stranger. `want_co_agents`/`want_held_work` return the full lists;
-    default is counts only.
+    that terse mode (the default) drops; structured facts survive either way.
+    `transcript_path`/`bridge_session_id` are stamped by the harness hook, never set by
+    hand; they rebind a revisited tab or background-job fork to its existing identity
+    instead of creating a new one. `want_co_agents`/`want_held_work` return the full
+    lists; the default is counts only.
 
-    LINEAGE MEMORY CUSTODY (thread 4dcc1849): this cwd's own Claude Code memory files
-    (~/.claude/projects/<slug>/memory/) are checked against a per-lineage sentinel — a
+    Memory custody: this cwd's own Claude Code memory files
+    (~/.claude/projects/<slug>/memory/) are checked against a per-lineage marker. A
     different lineage's memory found here is archived sideways (renamed, never deleted)
-    and reported as `prior_lineage_memory_archived` (a pointer to read, never auto-
-    copied); pre-existing content with no sentinel at all reports
+    and reported as `prior_lineage_memory_archived` (a pointer to read, never
+    auto-copied); pre-existing content with no marker at all is reported as
     `memory_migration_needed` instead of being silently moved."""
     # THE CONFIRMED-IDENTITY GATE (law 2, thread 124732175759, Thoth mail 13096): custody
     # never runs its own ARCHIVE action against an Agent object this SAME call just
@@ -2584,10 +2605,11 @@ async def mount(
         return {
             "agent": child, "project": parent_ident.project if parent_ident else "?",
             "spawn_of": parent_ident.agent_id if parent_ident else "unknown (parent unmounted)",
-            "note": ("you are a SPAWN — a sub-agent registered in your own name, "
-                     "spawned_by your parent. Your writes are attributed to YOU, never to "
-                     "the seat that spawned you; the seat, its mail, and its succession "
-                     "belong to your parent. Do the job, return your result to the parent."),
+            "note": ("you are a spawn: a sub-agent registered in your own name, "
+                     "spawned_by your parent. Your writes are attributed to you, never "
+                     "to the seat that spawned you; the seat, its mail, and its "
+                     "succession belong to your parent. Do the job, and return your "
+                     "result to the parent."),
         }
     # An unexpanded `$CLAUDE_JOB_DIR` literal is no anchor — and it is the COMMON case for a
     # fresh agent (MCP tool args never pass through a shell, so the docstring's advice arrives
@@ -2615,16 +2637,16 @@ async def mount(
         if (anchor_soul and own_soul
                 and _generation(anchor_soul)[0] != _generation(own_soul)[0]):
             return {
-                "error": "IDENTITY CONFLICT — mount refused",
+                "error": "identity conflict: mount refused",
                 "anchor_held_by": anchor_soul,
                 "you_are": own_soul,
                 "note": (f"the anchor you passed ({Path(passed).name[:8]}) is held by "
                          f"{anchor_soul}, but this session's own ledger entry "
-                         f"({Path(own_anchor).name[:8]}) names {own_soul} — mounting "
-                         "would seat one mind in another's history. If you MEANT to "
-                         "wear that seat, the holder must release it (retire/fold) "
-                         "first; otherwise re-mount with your own anchor: "
-                         f"job_dir='{own_anchor}'"),
+                         f"({Path(own_anchor).name[:8]}) names {own_soul}. Mounting "
+                         "would seat one session in another's history. If you meant "
+                         "to take over that identity, the holder must release it "
+                         "(retire/fold) first; otherwise re-mount with your own "
+                         f"anchor: job_dir='{own_anchor}'"),
             }
     job_dir = passed or _job_hint(ctx)
     key = _conn_key(ctx)
@@ -2701,7 +2723,7 @@ async def mount(
                 **({"declared_pin_kept_for_identity": declared_project_label}
                    if declared_project_label else {}),
                 "note": ("registry recollection pointed at the bare seat-directory "
-                         "container (~/.osiris/seats), never a home of its own — your "
+                         "container (~/.osiris/seats), never a home of its own. Your "
                          "declared cwd is a real, existing seat directory and wins "
                          "outright; nothing was corrected"),
             }
@@ -2712,22 +2734,24 @@ async def mount(
             # side resolves to a real office, so `cwd` still moves to `bound.cwd` below —
             # but the receipt must say so honestly rather than asserting the bare container
             # IS this session's home (60bc15db again, same law, the confession half of it).
-            honest_note = ("your declared cwd is a STALE MEMORY of a former home — this "
+            honest_note = ("your declared cwd is a stale memory of a former home. This "
                             "session's transcript lives at the kept path (it moved; your "
                             "history did not). Mounted at the kept path; update your "
-                            "bearings (90f0cb3a)"
-                            + (f" — its own project pin ({declared_project_label!r}) still "
-                               "won identity resolution; only the transcript/session "
-                               "address was corrected (ruling 13af22fc)"
+                            "own bearings"
+                            + (f", though its own project pin "
+                               f"({declared_project_label!r}) still won identity "
+                               "resolution; only the transcript/session address was "
+                               "corrected"
                                if declared_project_label else ""))
             if kept_is_bare_container:
-                honest_note = ("could not resolve a specific seat directory for either the "
-                                "declared or the recollected cwd — mounted at the bare "
-                                "seat-directory container for session bookkeeping only; "
-                                "this is NOT your home, it is a fallback with nowhere "
-                                "better to point"
-                                + (f" — its own project pin ({declared_project_label!r}) "
-                                   "still won identity resolution" if declared_project_label
+                honest_note = ("could not resolve a specific seat directory for either "
+                                "the declared or the recollected cwd. Mounted at the "
+                                "bare seat-directory container for session bookkeeping "
+                                "only; this is not your home, it is a fallback with "
+                                "nowhere better to point"
+                                + (f", though its own project pin "
+                                   f"({declared_project_label!r}) still won identity "
+                                   "resolution" if declared_project_label
                                    else ""))
             cwd_note = {
                 "declared": cwd, "kept": bound.cwd,
@@ -2885,12 +2909,12 @@ async def mount(
         # caller has no greeting to read a refusal from, so the tool's own return value is
         # the only surface that reaches it. No writes happen below a refusal.
         return {
-            "error": "UNRESOLVABLE IDENTITY — mount refused",
-            "note": ("no job_dir, no session anchor, and no observed transcript sid — "
-                     "there is nothing to attribute this session to, ever. Pass job_dir "
+            "error": "unresolvable identity: mount refused",
+            "note": ("no job_dir, no session anchor, and no observed transcript sid. "
+                     "There is nothing to attribute this session to. Pass job_dir "
                      "(or confirm the PreToolUse hook is installed, "
-                     "osiris_hook.py's `anchor` subcommand) so this session carries a real, "
-                     "durable anchor. Nothing was minted or written."),
+                     "osiris_hook.py's `anchor` subcommand) so this session carries a "
+                     "real, durable anchor. Nothing was minted or written."),
             **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
         }
     # else: a genuine VISITOR — a resolved anchor that matched no lineage. Same as
@@ -2992,7 +3016,7 @@ async def mount(
     out: dict[str, Any] = {"agent": ident.agent_id, "project": ident.project or "?",
            **({"project_canonical": proj_canonical} if proj_canonical else {}),
            **({"model": ident.model} if ident.model else
-              {"model_unresolved": "model unresolved — pass model= explicitly"}),
+              {"model_unresolved": "model unresolved. Pass model= explicitly."}),
            **({"co_agents": co_agents} if co_agents and want_co_agents else
               {"co_agents_count": len(co_agents)} if co_agents else {}),
            **({"held_work": held_work} if held_work and want_held_work else
@@ -3002,27 +3026,29 @@ async def mount(
            # bookkeeping handle, never a minted identity, and the receipt must say so
            # plainly rather than let a caller assume it was seated (Thoth DM 4345, "the
            # receipt must say which").
-           **({"visitor": "no lineage matched — a registry row only, no Agent object "
-                          "minted. This is not an error; claim_name() or a future revisit "
-                          "with the same anchor is what would seat you"}
+           **({"visitor": "no lineage matched. A registry row only, no Agent object "
+                          "was created. This is not an error; claim_name() or a future "
+                          "revisit with the same anchor is what would seat you"}
               if not registered else {}),
            **({"seat": seat} if seat else
-              {"anonymous": "unnamed — claim_name('<pick a meaningful name>') when you know "
-                            "who you are, so the fleet can DM you by name"}),
+              {"anonymous": "unnamed. Call claim_name('<pick a meaningful name>') when "
+                            "you know who you are, so the fleet can message you by "
+                            "name"}),
            # the count LEADS WITH WHAT IS ACTIONABLE (f9449d8d) — graded asks are named,
            # ungraded mail keeps the plain count rather than being guessed into a band
            "mail": (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of "
-                    "you) — call inbox()" if asks else
-                    f"{unread} unread — call inbox()") if unread else "none",
+                    "you). Call inbox()" if asks else
+                    f"{unread} unread. Call inbox()") if unread else "none",
            **({"cwd_corrected": cwd_note} if cwd_note else {}),
            **({"project_pin_error": pin_warn} if pin_warn else {}),
            **({"project_pin": pin_heal} if pin_heal else {}),
            **({"write_attribution_disagreement": wa_warn} if wa_warn else {}),
            **({"bridge_ambiguity": bridge_ambiguity} if bridge_ambiguity else {}),
-           "note": "linked — writes now attributed to you; call orient() next"}
+           "note": "linked. Writes now attributed to you; call orient() next."}
     if op_unread:  # the fleet plays secretary: any session the human drives can relay this
-        out["operator_mail"] = (f"{op_unread} of your briefs await the operator's eye — "
-                                "inbox(project='operator') if the human is present")
+        out["operator_mail"] = (f"{op_unread} of your briefs await the operator's "
+                                "attention. Call inbox(project='operator') if the human "
+                                "is present.")
     if ident.succeeded_from and _seam_confidently_dated(ident):
         # the MINT ruling (be292762, a sibling's remedy adopted): the heir is not told it
         # wears a dead name — it is GIVEN ITS OWN. The seam supersedes the swap banner (a
@@ -3030,14 +3056,14 @@ async def mount(
         # not read as a config restore), and the grammar now does the protecting: this context
         # cannot say "I did nothing while you were gone" under a name that did not exist then.
         banner = None
-        seam = f" across the seam {ident.model_succession}" if ident.model_succession else \
-            " (the ancestor is retired)"
+        seam = f" across the model transition {ident.model_succession}" \
+            if ident.model_succession else " (the predecessor is retired)"
         out["minted"] = (
-            f"⚠ YOU ARE {ident.agent_id} — a MINTED SUCCESSOR of {ident.succeeded_from}"
-            f"{seam}. The name is yours from this moment; the ancestor's writes and words "
-            "remain its own, under its own id (succeeded_from links you). Read "
-            "while_you_were_away and the graph for the estate — the graph, not the operator, "
-            "is what tells you where you begin.")
+            f"You are {ident.agent_id}, a successor minted from {ident.succeeded_from}"
+            f"{seam}. The name is yours from this moment; the predecessor's writes and "
+            "words remain its own, under its own id (succeeded_from links you). Read "
+            "while_you_were_away and the graph for the full picture. The graph, not the "
+            "operator, is what tells you where you begin.")
     elif ident.succeeded_from:
         # A REAL mint (the heir object exists, the estate moved) — but the seam that
         # triggered it is NOT confidently dated (ruling dd47c1da): mount stays SILENT on WHY,
@@ -3049,21 +3075,22 @@ async def mount(
         # still second-person: a death must not whisper (a sibling project's grievance #1+#2).
         banner = None
         out["succession"] = (
-            f"⚠ YOU ARE A SUCCESSOR: the agent who last held {ident.agent_id} ENDED at the "
-            f"model seam ({ident.model_succession}) — a compaction/swap boundary, not a "
-            "restart. Its earlier writes and words are not yours: speak in your own person, "
-            "confess the inheritance to the operator, and read while_you_were_away before "
-            "claiming any earlier 'I'.")
+            f"You are a successor: the agent who last held {ident.agent_id} ended at a "
+            f"model transition ({ident.model_succession}), a compaction/swap boundary, "
+            "not a restart. Its earlier writes and words are not yours: speak in your "
+            "own voice, disclose the inheritance to the operator, and read "
+            "while_you_were_away before claiming any earlier 'I'.")
     if banner:  # the graph confesses the swap the agent's own prompt hides (ruling f2ae6346)
         out["swap"] = (await _wake_economy_standdown(pool, ident.project, ident.model)
                        or banner)
     if ident.reanimated:  # bug #51 follow-up (a sibling project msg 69): mounted a RETIRED identity
         out["reanimation"] = (
-            f"⚠ REANIMATION: {ident.agent_id} was RETIRED, and this mount is wearing it again. "
-            "The retirement stands (the trigger still treats you as closed); the reanimation is "
-            "stamped on the Agent. If you are a SUCCESSOR that inherited this session UUID, you "
-            "are not the agent who retired — confess it to the operator; if this is a deliberate "
-            "reanimation, say so. A retired face worn again is never silent.")
+            f"Reanimation: {ident.agent_id} was retired, and this mount is using that "
+            "identity again. The retirement stands (the trigger still treats you as "
+            "closed); the reanimation is stamped on the Agent. If you are a successor "
+            "that inherited this session UUID, you are not the agent that retired: "
+            "disclose that to the operator. If this is a deliberate reanimation, say so "
+            "as well. This is always reported, never silent.")
     away = await mounts.while_away(
         pool, ident.project, ident.agent_id, _prev_seen.get(ident.agent_id))
     if away:  # who wore your face + how your conversations moved, since your last sign of life
@@ -3107,24 +3134,26 @@ async def mount(
                     seatless_evicting_a_holder = True
             if not identity_confirmed:
                 out["memory_custody_deferred"] = (
-                    f"{ident.agent_id} was minted in this same call — memory custody "
+                    f"{ident.agent_id} was minted in this same call. Memory custody "
                     "(which can rename another lineage's real memory sideways) only "
                     "runs once the graph confirms this identity predates the call that "
                     "resolved it, on a later mount()")
             elif seatless_evicting_a_holder:
                 out["memory_custody_deferred"] = (
-                    f"{ident.agent_id} holds no seat, and this cwd's memory is currently "
-                    f"owned by {sentinel_owner!r}, which does — a seatless mind never "
-                    "evicts a seat holder's memory; nothing was touched")
+                    f"{ident.agent_id} holds no seat, and this cwd's memory is "
+                    f"currently owned by {sentinel_owner!r}, which does. A session "
+                    "without a seat never evicts a seat holder's memory; nothing was "
+                    "touched")
             else:
                 custody = ensure_lineage_memory_custody(cwd, lineage_root)
                 if custody.action == "archived":
                     out["prior_lineage_memory_archived"] = {
                         "path": custody.path, "prior_lineage": custody.prior_lineage,
-                        "note": ("a different lineage's memory files were found in this cwd's "
-                                 "harness-native memory dir and moved sideways, never deleted — "
-                                 "read the archived path if its context is useful; nothing was "
-                                 "copied into your own, empty, memory store")}
+                        "note": ("a different lineage's memory files were found in this "
+                                 "cwd's harness-native memory dir and moved sideways, "
+                                 "never deleted. Read the archived path if its context "
+                                 "is useful; nothing was copied into your own, empty, "
+                                 "memory store")}
                     try:
                         actions = Actions(pool)
                         obj_id = await actions.create_or_find_object(
@@ -3140,8 +3169,8 @@ async def mount(
                 elif custody.action == "migration_needed":
                     out["memory_migration_needed"] = (
                         f"{custody.path} has pre-existing memory content with no osiris "
-                        "lineage sentinel — predates this system, not auto-archived; a human "
-                        "should review and seed it by hand")
+                        "lineage marker. It predates this system and was not "
+                        "auto-archived; a human should review and seed it by hand")
                 else:  # noop — already owned, or nothing there yet
                     stamp_lineage_sentinel(cwd, lineage_root)
         except Exception:  # noqa: BLE001 — memory custody must never break a mount
@@ -3189,18 +3218,20 @@ async def _owned_open_threads(pool: asyncpg.Pool, agent_id: str) -> list[dict[st
 @mcp.tool()
 async def retire(reason: str = "", acknowledge_leftovers: bool = False,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Mark THIS mounted session RETIRED — a deliberate close the trigger must never
-    reanimate. Call at a real farewell: operator close-out, or a context-ceiling handoff
-    after your succession thread is written. Stamps retired=true, releases your seat (hot
-    mount and durable row both). Call it LAST — any call after retiring requires a fresh
-    mount(). Future mail resumes a living session or mints a successor, never you.
+    """Mark this mounted session as retired. This is a deliberate, permanent close: the
+    session will not be automatically restarted after this call. Call it at a real end
+    of work, such as an operator close-out, or a handoff at the end of a context window
+    after your succession thread is written. Stamps retired=true and releases your seat,
+    both the live mount and the durable record. Call it last: any call after retiring
+    requires a fresh mount(). Future messages resume a living session or start a
+    successor, never this one.
 
-    PREFLIGHT: if open threads still name you as owner, the call refuses with the list
-    and stamps nothing — resolve them, re-own them, or pass
-    `acknowledge_leftovers=True` to die anyway as a deliberate bequest."""
+    PREFLIGHT: if open threads still name you as owner, the call refuses and stamps
+    nothing. Resolve them, reassign them, or pass `acknowledge_leftovers=True` to retire
+    anyway and leave them to your successor deliberately."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — only a mounted session can retire itself",
+        return {"error": "mount first. Only a mounted session can retire itself",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
     a = Actions(pool)
@@ -3209,14 +3240,15 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
         if owned:
             return {
                 "retired": None,
-                "preflight": f"{len(owned)} open thread(s) name YOU as owner — nothing "
-                             "stamped, the seat stands",
+                "preflight": f"{len(owned)} open thread(s) name you as owner. Nothing "
+                             "was stamped; the session remains active",
                 "yours": [{"id": r["id"], "summary": (r["summary"] or "")[:160]}
                           for r in owned],
-                "how": "resolve_thread what is done; re-own what transfers (open_thread "
-                       "with the new owner settles succession explicitly); then retire() "
-                       "again — or retire(acknowledge_leftovers=True) to bequeath them "
-                       "to your successor deliberately, on the record",
+                "how": "Use resolve_thread for what is done. Reassign what transfers by "
+                       "calling open_thread with the new owner to record the handoff "
+                       "explicitly. Then call retire() again, or call "
+                       "retire(acknowledge_leftovers=True) to retire anyway and leave "
+                       "these threads to your successor on the record",
             }
     oid = await a.create_or_find_object("Agent", ident.agent_id, ident.agent_id)
     await a.assert_property(
@@ -3243,13 +3275,13 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
     released = await mounts.release_mounts(pool, ident.agent_id)
     out: dict[str, Any] = {
         "retired": ident.agent_id, "signed_by": signer, "seats_released": released,
-        "note": "farewell recorded — the trigger will not reanimate this session; "
-                "write your succession BEFORE you go dark: a HANDOFF thread "
-                "(open_thread) and your LETTER (record_decision kind='choice', "
-                "summary starting 'LETTER — ') — a letter that lives only in mail is "
-                "not findable by its name, and your successor's orient() surfaces "
-                "these two verbatim"
-                + (" (certificate notes an HEIR signed for the ancestor)"
+        "note": "Retirement recorded. This session will not be automatically restarted. "
+                "Write your succession notes before you stop: a handoff thread "
+                "(open_thread) and a letter to your successor (record_decision "
+                "kind='choice', summary starting with 'LETTER '). A letter that lives "
+                "only in a message is not findable by name, and your successor's "
+                "orient() surfaces both of these directly"
+                + (" (the record notes a successor signed on behalf of the prior agent)"
                    if signer == "successor" else "")}
     # THE SEAM (ruling ceae1604). A seat that dies with an undisposed pile hands its leftovers to
     # the operator's wall, which is how 3,579 machine guesses became HIS problem instead of the
@@ -3260,11 +3292,12 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
         if pile["count"]:
             out["undisposed"] = pile["count"]
             out["you_are_leaving_a_pile"] = (
-                f"{pile['count']} miner candidates on {ident.project} that NO MIND has ever "
-                "judged. They are guesses, not duties — and nobody but this project's seat has "
-                "standing to judge them. candidates() to read, dispose(admit=[...], drop=[...]) "
-                "to settle. Expect to drop ~9 in 10. If you go now they pass to your successor, "
-                "not to the human.")
+                f"{pile['count']} candidate items on {ident.project} that nobody has "
+                "reviewed yet. They are guesses, not confirmed duties, and only this "
+                "project's own session has standing to judge them. Call candidates() to "
+                "read them, then dispose(admit=[...], drop=[...]) to settle them. Expect "
+                "to drop about 9 in 10. If you retire now, they pass to your successor, "
+                "not to a human.")
     return out
 
 
@@ -4089,53 +4122,53 @@ async def seat(
     session_anchor: str | None = None, workers: list[str] | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE SEAT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one door,
-    many actions over Seat/Agent lifecycle. Each `action` accepts only its own params
-    (see `describe('seat')` for the full per-action shape, or call with a wrong/missing
-    param — the error names exactly what that action expects); shared params (target,
-    because, reason, dry_run, ...) mean the same thing across every action that takes them.
+    """A single dispatcher tool for seat and agent lifecycle actions. Each `action`
+    accepts only its own parameters (see `describe('seat')` for the full per-action
+    shape, or call with a wrong or missing parameter and the error names exactly what
+    that action expects). Shared parameters (target, because, reason, dry_run, etc.)
+    mean the same thing across every action that takes them.
 
-    ACTION TABLE — action: what it does (required params beyond action):
-      mint: found a managed worker seat under your own (handle)
-      new: NOT YET BUILT here — still CLI-only (`osiris new`), no MCP door
-      stop: kill a live body's OS process (target=None means self)
-      walk_in: mount + claim_name + establish_office in one call (handle, wants_office)
-      promote_visitor: THIRD-PARTY visitor-to-soul collapse, operator/manager/ruling-
-        gated (target, handle, because) — piece 2 of thread 879c97b9, sibling of walk_in
-      pause: gate the DM push lane for a seat (target=None means self)
+    ACTION TABLE. action: what it does (required parameters beyond action):
+      mint: create a new managed worker seat under your own (handle)
+      new: not available here yet, CLI-only (`osiris new`), no MCP tool for it
+      stop: kill a live session's OS process (target=None means self)
+      walk_in: mount + claim_name + establish a seat directory, in one call (handle, wants_office)
+      promote_visitor: convert a third-party visitor into a full seat identity, gated by
+        operator/manager/ruling authorization (target, handle, because)
+      pause: gate the message-push channel for a seat (target=None means self)
       vacate: release a dead holder without retiring the seat (target, because)
-      retire: mark a Seat permanently closed, third-party (target)
-      rebind: move a seat's anchor cwd (target, new_cwd)
+      retire: mark a seat permanently closed, third-party (target)
+      rebind: move a seat's anchor working directory (target, new_cwd)
       bind_tree: point a seat's code checkout (target, tree_cwd, because)
       attach: create a managed_by edge (target, manager, because)
       detach: remove a managed_by edge (target, because)
-      charter: self-declare your own seat's charter (repos, or omit to read)
+      charter: self-declare your own seat's charter (repos, or omit to read it)
       charter_for: declare a charter on another seat's behalf (target, repos, because,
                   optional ruling=<decision id> to act under a standing operator
-                  ruling instead of manager authority — refused unless that ruling
+                  ruling instead of manager authority; refused unless that ruling
                   actually names charter_for)
-      heal_anchor: reassert the anchor_cwd invariant (target=None means self)
+      heal_anchor: reassert the anchor working-directory invariant (target=None means self)
       heal_transcript: splice a fragmented session back into one file (target, source_paths)
-      transition_project: move your own seat off a fabricated project binding
+      transition_project: move your own seat off a placeholder project binding
       resync_house: third-party house correction, unset with new_house=null (target, reason)
-      sweep_disk: delete a retired seat's office+workspace directories (target)
-      rename: change a seat's handle, manager/operator-invoked (target, new_handle, because)
-      set_attended: stamp a seat 'human'/'worker' (target, attended, because)
-      reissue_seat_dir: recompile a seat's CLAUDE.md managed section (target, because)
-      establish_seat_dir: move a seat into its Osiris-owned directory (target)
+      sweep_disk: delete a retired seat's directory and workspace files (target)
+      rename: change a seat's handle, manager- or operator-invoked (target, new_handle, because)
+      set_attended: stamp a seat 'human' or 'worker' (target, attended, because)
+      reissue_seat_dir: recompile a seat's managed CLAUDE.md section (target, because)
+      establish_seat_dir: move a seat into its own managed directory (target)
       invalidate_works_in: drop your own duplicate works_in edge (stale_project, because)
       reconcile_identity: heal a house/project cross-source contradiction (target=None self)
-      rehold: third-party re-hold a seat's holds link (target, agent_id, because)
-      correct_house: a head corrects its OWN house (new_house)
+      rehold: third-party re-assignment of a seat's holds link (target, agent_id, because)
+      correct_house: correct your own house (new_house)
       correct_pin: correct an existing key in your own seat's pin (key, reason)
       resync_pin: third-party pin correction, dry_run default (target, key)
       revert_pin: undo your seat's most recent pin write
-      launch: give a seat a fresh body (target) — ALSO its own named tool, same call
-      resume: continue a seat's dormant session (target) — ALSO its own named tool
-      wake: knock on your managed_by pair's other half (target, message) — ALSO named
-      wake_preflight: check wake()'s gates before calling it (target) — ALSO named
-      promote: mint target as manager over workers, self-managed only (target, workers, because)
-      refresh_project: force a fresh graph read of this mind's own cached project, no target
+      launch: give a seat a fresh session (target); also its own named tool, same call
+      resume: continue a seat's dormant session (target); also its own named tool
+      wake: notify the other half of your managed_by pair (target, message); also named
+      wake_preflight: check wake()'s gates before calling it (target); also named
+      promote: make target a manager over workers, self-managed only (target, workers, because)
+      refresh_project: force a fresh read of your own cached project, no target
 
     DRY RUN: several actions default `dry_run=True` (heal_anchor, heal_transcript,
     transition_project, sweep_disk, resync_pin, rehold)"""
@@ -4156,12 +4189,12 @@ async def seat(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='pause')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher tool",
 })
 async def pause_seat(paused: bool = True, target: str | None = None, reason: str = "",
                      session_anchor: str | None = None,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='pause')."""
+    """Deprecated. Kept callable for compatibility. Forwards to seat(action='pause')."""
     return await _seat_impl("pause", paused=paused, target=target, reason=reason,
                             session_anchor=session_anchor, ctx=ctx)
 
@@ -4169,15 +4202,14 @@ async def pause_seat(paused: bool = True, target: str | None = None, reason: str
 @mcp.tool()
 async def candidates(project: str | None = None, limit: int = 50,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """THE PILE THIS SEAT MUST JUDGE — the miner's guesses about YOUR project, unread by
-    any mind. The session-miner reads transcripts and proposes loose ends it thinks
-    somebody forgot; it is right roughly one in ten. These are NOT duties. Read them,
-    then dispose(): admit what is real (it becomes YOURS — self-declared, owned,
-    permanently safe) and drop the rest with a reason. Nobody else has standing to
-    judge your project's pile.
+    """List the automated miner's guesses about your project that nobody has reviewed
+    yet. An automated process reads session transcripts and proposes loose ends it
+    thinks were forgotten; it is right roughly one time in ten. These are candidates,
+    not confirmed duties. Read them, then call dispose(): admit what is real (it becomes
+    yours: self-declared, owned, permanently kept) and drop the rest with a reason. Only
+    this project's own session has standing to judge these candidates.
 
-    Report-only. Reading costs nothing and commits nothing. Oldest first — triage
-    drains from the bottom."""
+    Read-only. Reading costs nothing and commits nothing. Returned oldest first."""
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
     return await dispose_seam.candidates(await _pool_get(), project=proj, limit=limit)
@@ -4188,20 +4220,21 @@ async def dispose(admit: list[dict[str, Any]] | None = None,
                   drop: list[dict[str, Any]] | None = None,
                   ask: list[dict[str, Any]] | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """Settle the miner's guesses — relevant or irrelevant, in your name, with a reason.
+    """Settle the automated miner's candidate guesses, relevant or irrelevant, under
+    your name, with a reason for each.
 
-    `admit`: [{"id", "because", "owner"?}] — the guess was right, now yours (promoted
-    SELF_DECLARED). `because` required. `drop`: [{"id", "why", "because"?}] — wrong;
-    `why` names its class: narration | stale | echo | misfiled | principle | other (say
-    why in `because`). `ask`: [{"id", "because"?, "owner"?}] — a real open question, kept
-    open, reclassified kind='question' on the wall.
+    `admit`: [{"id", "because", "owner"?}]. The guess was right, now yours (promoted to
+    self-declared). `because` is required. `drop`: [{"id", "why", "because"?}]. The
+    guess was wrong; `why` names its class: narration | stale | echo | misfiled |
+    principle | other (explain further in `because`). `ask`: [{"id", "because"?,
+    "owner"?}]. A real open question, kept open and reclassified as kind='question'.
 
-    Nothing deleted — a drop is a compensating event, readable and unwindable. Returns
-    your yield ((admitted + asked) / judged)."""
+    Nothing is deleted; a drop is a compensating event, readable and reversible. Returns
+    your yield: (admitted + asked) / judged."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a disposition is a MIND'S WORD, and the graph must know "
-                         "whose", "why": _anchorless(ctx)}
+        return {"error": "mount first. A disposition must be attributed to a specific "
+                         "session", "why": _anchorless(ctx)}
     return await dispose_seam.dispose(
         Actions(await _pool_get()), source=ident.agent_id, admit=admit, drop=drop, ask=ask)
 
@@ -4361,18 +4394,17 @@ async def _project_briefing(
 
 @mcp.tool()
 async def get_status(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """Your identity, mail count, and fleet pulse -- the "glance". Returns only:
+    """Your identity, mail count, and fleet status, in brief. Returns only:
     you, model, project, seat, mail, fleet_pulse, handoff_pending. No thread/decision
-    text, no succession notes -- `handoff_pending` is a BARE POINTER only (thread
-    68f1bafa: `/settle` needs to know whether an unread handoff exists without paying
-    orient()'s full succession-note cost) -- {"from": <agent_id>, "refs": [<short-id>,
-    ...]} when your nearest ancestor left one unacknowledged, else omitted entirely.
+    text, no succession notes. `handoff_pending` is a bare pointer only, so a caller can
+    check whether an unread handoff exists without paying the cost of `orient()`'s full
+    succession note: {"from": <agent_id>, "refs": [<short-id>, ...]} when your nearest
+    ancestor left one unacknowledged, else omitted entirely.
     Read the real text with recall(ref=<one of refs>); ack_handoff(ref=...) once read.
 
-    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>} --
-    one line per field, server-rendered -- for a slash command to print verbatim instead
-    of a model re-prettifying JSON at token cost. Omit (or any other value) for the
-    ordinary structured receipt."""
+    `render='text'` returns only {"text": <str>}, one line per field, rendered on the
+    server, so a caller can print it verbatim instead of a model re-formatting JSON at
+    token cost. Omit (or pass any other value) for the ordinary structured result."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = ident.project if ident else None
@@ -4425,27 +4457,27 @@ async def get_status(render: str | None = None, ctx: Context | None = None) -> d
 
 @mcp.tool()
 async def pulse(ctx: Context | None = None) -> dict[str, Any]:
-    """A HARNESS-NEUTRAL LIVENESS REFRESH (thread 879c97b9 piece 3, "VENDOR-NEUTRAL
-    DOOR"): call this periodically to stay reading as LIVE (roster, co_agents, DM
-    delivery, claim_name's own live-holder guard) without paying mount()'s full
-    re-attach ceremony — no whisper hook, no statusline, no Claude transcript required.
-    A Claude Code session already gets this for free from its own statusline heartbeat
-    and from every mount()/automount() re-attach; this tool exists for everyone else — a
-    GLM/GPT harness speaking plain MCP that wants the same freshness on its own terms.
+    """A harness-neutral liveness refresh: call this periodically to keep reading as
+    live (roster, co_agents, DM delivery, and the live-holder guard on claiming a name)
+    without paying for mount()'s full re-attach process. No hook, no status line, no
+    Claude transcript required. A Claude Code session already gets this for free from
+    its own status-line heartbeat and from every mount()/automount() re-attach; this
+    tool exists for any other harness speaking plain MCP that wants the same freshness
+    on its own terms.
 
-    SELF-SCOPED, ALWAYS: touches only the CALLING identity's own `agent_mounts` rows —
-    there is no `target` parameter, so this can never refresh another mind's liveness.
-    Refuses if you haven't mounted (nothing to refresh). `touched=0` (mounted, but no
-    durable job_dir on record) is a legal, reportable no-op, never an error.
+    Self-scoped, always: touches only the calling identity's own `agent_mounts` rows.
+    There is no `target` parameter, so this can never refresh another identity's
+    liveness. Refuses if you haven't mounted (nothing to refresh). `touched=0` (mounted,
+    but no durable job_dir on record) is a legal, reportable no-op, never an error.
 
-    THE 5-MINUTE WINDOW (Thoth's own guard, mail 9559): a non-Claude harness's liveness
-    reads True from a pulse fresher than 5 minutes — call this at least that often if you
-    want your own DMs to route as live and your name safe from a genuine live-holder
-    collision. Call it less often and you read cold, honestly, exactly like a quiet Claude
-    session would — this is a freshness check, never a blanket exemption."""
+    The 5-minute window: a non-Claude harness's liveness reads as true from a pulse
+    fresher than 5 minutes. Call this at least that often if you want your own DMs to
+    route as live and your name safe from a genuine live-holder collision. Call it less
+    often and you read as cold, honestly, exactly like a quiet Claude session would.
+    This is a freshness check, never a blanket exemption."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — pulse refreshes YOUR OWN liveness, and the graph "
+        return {"error": "mount first: pulse refreshes your own liveness, and the graph "
                          "must know whose", "why": _anchorless(ctx)}
     from src.orchestrator.mounts import pulse_mount
     return await pulse_mount(await _pool_get(), agent_id=ident.agent_id)
@@ -4704,16 +4736,16 @@ async def get_object_list(
     min_age_days: float | None = None, max_age_days: float | None = None,
     limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Recent Threads or Decisions for a project, paginated (charter-aware — spans the
-    caller's own governed repos; see `charter_repos`). `object_type='thread'|'decision'`
+    """Recent threads or decisions for a project, paginated. Charter-aware: spans every
+    repo the caller governs (see `charter_repos`). `object_type='thread'|'decision'`
     selects the branch; `limit=0` for count only.
 
-    `object_type='thread'` — OPEN threads only. Returns {threads, total, more,
+    `object_type='thread'`: open threads only. Returns {threads, total, more,
     honest_total, honest_total_note}, each thread carrying `created_at`. `kind`: obligation/
     question/task. `owner`: agent id / 'operator'. `min_age_days`/`max_age_days`: creation
     age in days, either or both.
 
-    `object_type='decision'` — recent decisions, newest first. Returns {decisions, total,
+    `object_type='decision'`: recent decisions, newest first. Returns {decisions, total,
     more}. Other filters are thread-only, ignored here."""
     return await _get_object_list_impl(object_type, project, kind=kind, owner=owner,
                                        limit=limit, offset=offset, ctx=ctx,
@@ -4723,13 +4755,13 @@ async def get_object_list(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "get_object_list(object_type='thread')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "superseded by get_object_list",
 })
 async def get_thread_list(
     project: str, kind: str | None = None, owner: str | None = None,
     limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     get_object_list(object_type='thread')."""
     return await _get_thread_list_body(project, kind, owner, limit, offset, ctx)
 
@@ -4737,12 +4769,12 @@ async def get_thread_list(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "get_object_list(object_type='decision')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "superseded by get_object_list",
 })
 async def get_decision_list(
     project: str, limit: int = 10, offset: int = 0, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     get_object_list(object_type='decision')."""
     return await _get_decision_list_body(project, limit, offset, ctx)
 
@@ -4753,7 +4785,7 @@ async def list_unfiled_threads(
     min_age_days: float | None = None, max_age_days: float | None = None,
     limit: int = 10, offset: int = 0,
 ) -> dict[str, Any]:
-    """Threads with NO `in_repo` edge at all — genuinely unfiled, invisible to
+    """Threads with NO `in_repo` edge at all. Genuinely unfiled, invisible to
     `get_thread_list(project=...)` no matter which project is asked. Paginated
     (limit/offset), real `total` count, each thread carrying `created_at`. `source`
     filters by the creating actor's provenance id (e.g. 'half-heal-detect'); `kind`:
@@ -4865,14 +4897,14 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                  subagent_type: str | None = None, session_anchor: str | None = None,
                  verbose: bool = False, want_blind_spots: bool = False,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Get your bearings — the mount ritual as one call. Returns a scoped briefing: open
-    threads + recent decisions for a project, plus a fleet-wide not-shown count. An
+    """Get your bearings: the mount step as one call. Returns a scoped briefing: open
+    threads and recent decisions for a project, plus a fleet-wide not-shown count. An
     explicit `project` overrides your mount; unmounted with neither gives the whole-fleet
     briefing. Call after mount(), and again after any compaction.
 
-    `verbose=True` restores the prose terse mode (default) trims — explanations, the
-    ancestor-letter pointer, full-length summaries (capped to 160 chars terse, each still
-    carrying `id`). Every structured fact survives either way.
+    `verbose=True` restores the prose that terse mode (the default) trims: explanations,
+    the ancestor-letter pointer, full-length summaries (capped to 160 chars terse, each
+    still carrying `id`). Every structured fact survives either way.
 
     `want_blind_spots=True` returns the full list; default is a count."""
     pool = await _pool_get()
@@ -4889,22 +4921,22 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         if proj_oid is not None:
             proj_canonical = await pool.fetchval(
                 "SELECT canonical FROM objects WHERE id=$1", proj_oid)
-    who = ident.agent_id if ident else "session (un-mounted — call mount(cwd) first)"
+    who = ident.agent_id if ident else "session (unmounted, call mount(cwd) first)"
     reader = ident.agent_id if ident else (proj or "")
     # a SPAWN asking for bearings must not be told it IS the seat: 'you' is the child, the
     # seat's swap confession is the parent's duty, and the parent's mailbox stays the parent's
     spawn = await _actor_for(ctx, subagent_id, subagent_type) if subagent_id else None
     if spawn is not None and spawn != (ident.agent_id if ident else None):
-        who = f"{spawn} — a SPAWN of {ident.agent_id if ident else 'an unmounted parent'}; " \
+        who = f"{spawn}, a subagent of {ident.agent_id if ident else 'an unmounted parent'}. " \
               "your writes are your own, the seat and its mail are your parent's"
     counts = (await unread_counts(pool, proj, reader_agent=reader, lease_secs=lease)
               if proj else {"total": 0, "ask": 0})
     unread, asks = counts["total"], counts["ask"]
-    mail = (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of you) — "
-            "inbox()" if asks else f"{unread} unread — inbox()") if unread else "none"
+    mail = (f"{unread} unread ({asks} ask{'s' if asks == 1 else ''} something of you), "
+            "inbox()" if asks else f"{unread} unread, inbox()") if unread else "none"
     # the desk, SCOPED (operator ruling, 2026-07-16): this seat's own unanswered briefs
     op_unread = await mailbox.desk_briefs_from(pool, ident.agent_id if ident else None)
-    op_mail = {"operator_mail": f"{op_unread} of your briefs await the operator's eye — "
+    op_mail = {"operator_mail": f"{op_unread} of your briefs await the operator's eye. "
                                 "inbox(project='operator') if the human is present"
                } if op_unread else {}
     # THE CHARTER, MADE VISIBLE (Phase 1 §4.1, `dd47c1da`): a house is what a seat RULES, not
@@ -4987,7 +5019,7 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
                 "notes": [{"kind": r["type"].lower(), "id": str(r["id"])[:8],
                            "text": cap_handoff_text(r["summary"])}
                           for r in picks],
-                "note": "your ancestor's own parting words — read before taking up work. "
+                "note": "your predecessor's parting notes, read before taking up work. "
                         "ack_handoff(ref=<id>) once you have: an unacknowledged handoff "
                         "stays live and keeps costing every future orient() in this "
                         "project, not just yours.",
@@ -5030,9 +5062,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         pile = await dispose_seam.candidates(pool, project=proj, limit=0) if proj else None
         if pile and pile["count"]:
             seam["your_pile"] = (
-                f"{pile['count']} miner candidates on {proj} that no mind has judged. They are "
-                "GUESSES, not duties — candidates() to read, dispose() to settle. Nobody else has "
-                "standing to judge your project's pile.")
+                f"{pile['count']} miner candidates on {proj} that nobody has judged yet. They "
+                "are guesses, not duties. candidates() to read, dispose() to settle. Nobody else "
+                "has standing to judge your project's pile.")
         lic = await dispose_seam.licence(pool)
         if not lic["may_spend"]:
             seam["adversary_refused"] = lic["reason"]
@@ -5045,9 +5077,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         if kills:
             dead["dead_superstitions"] = {
                 "recent": kills,
-                "note": "workarounds whose bug is FIXED — if your memory, letters or "
-                        "succession notes carry one of these practices, STRIKE it; the "
-                        "killed_by pointer is the fix to cite",
+                "note": "workarounds whose bug is fixed. If your notes or succession "
+                        "notes carry one of these practices, remove it; the killed_by "
+                        "pointer is the fix to cite",
             }
     # THE SWEEP RECEIPT (Finding A, thread 5177057a, Thoth's design approval DM 1326, NON-
     # optional): a fresh compaction's own mining sweep is async and the seam gives no
@@ -5069,9 +5101,9 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
             if row and row["completed_at"] is None and row["age_secs"] > 300:
                 sweep_receipt["sweep_unconfirmed"] = (
                     f"your last compaction's mining sweep (enqueued "
-                    f"{int(row['age_secs'] // 60)} min ago) has not confirmed completion — "
-                    "the watchdog retries it automatically; nothing to act on, but don't "
-                    "assume that seam's yield has landed in the graph yet."
+                    f"{int(row['age_secs'] // 60)} min ago) has not confirmed completion. "
+                    "It retries automatically; nothing to act on, but don't assume its "
+                    "results have landed in the graph yet."
                 )
     # the reader's identity feeds the wall's ownership ordering: what is MINE TO ACT rides
     # above another mind's claims and above 'waiting on the human' — ONE AUTHORITY with
@@ -5185,12 +5217,12 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
         "fleet_map": fleet_map,
         "fleet_map_unfiled": fleet_map_unfiled,
         "recent_decisions": recent,
-        "note": "un-mounted → the BOUNDED fleet map, never the firehose. mount(cwd, "
-                "job_dir=…) then orient() for your project's briefing; orient(project=…) "
-                "peeks at another's; run_composition('briefing') if you truly want the "
-                "whole graph. fleet_map_unfiled: open threads with no in_repo edge at all — "
-                "counted nowhere in fleet_map above, because there is no project to file "
-                "them under.",
+        "note": "unmounted: a bounded fleet map, never the full firehose of data. "
+                "mount(cwd, job_dir=...) then orient() for your project's briefing; "
+                "orient(project=...) peeks at another project's; run_composition('briefing') "
+                "if you truly want the whole graph. fleet_map_unfiled: open threads with no "
+                "in_repo edge at all, counted nowhere in fleet_map above, because there is "
+                "no project to file them under.",
     }
     # CORRECTION (Thoth's review, DM 1238, thread 1233): this branch's top-level note is
     # asserted unconditionally by a pre-existing test (test_unmounted_orient_is_a_
@@ -5203,17 +5235,17 @@ async def orient(project: str | None = None, subagent_id: str | None = None,
 
 @mcp.tool()
 async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dict[str, Any]:
-    """The MEMBRANE — the operator's window into the autonomous fleet. Surfaces ROSTER +
-    health (which identities resolved cleanly), ACTIVITY (what agents decided/opened
-    in your name, not the miner's backfill), the DANGER map (model swaps — the
-    harness's silent demotions), LAUNDERING (credence flags where a relay carried a
-    fact above its origin grade), SPEND (metered honestly), and OBLIGATION_PRESSURE
-    (no-regrow hygiene item 4: per-project open count against a fixed target — osiris
-    itself under 40, every client under 15 — naming the three oldest owners).
+    """The operator's window into the autonomous fleet. Surfaces roster and health
+    (which identities resolved cleanly), activity (what agents decided or opened in
+    your name, not backfilled by a background process), a danger map (model swaps, the
+    harness's silent demotions), laundering flags (where a relayed fact carried more
+    confidence than its origin warranted), spend (metered honestly), and
+    obligation_pressure (per-project open-thread count against a fixed target, osiris
+    itself under 40, every client under 15, naming the three oldest owners).
 
-    `hours` given → an ad-hoc rolling window. `hours=None` (default) → WATERMARK MODE:
+    `hours` given: an ad-hoc rolling window. `hours=None` (default): watermark mode,
     'what's new since I last looked', from the stored operator watermark (24h fallback
-    the first time). Glancing is a PEEK — it never moves the watermark. Pass
+    the first time). Reading is a peek: it never moves the watermark. Pass
     `mark_seen=True` when done reading to advance it to now."""
     pool = await _pool_get()
     since = (datetime.now(UTC) - timedelta(hours=hours)) if hours is not None else None
@@ -5223,27 +5255,26 @@ async def fleet_digest(hours: int | None = None, mark_seen: bool = False) -> dic
     # a context window does not, and the roster array is a SUPERSET of `danger` — shipping both
     # sent every dangerous agent twice. The counts stay whole; the rows live behind fleet().
     dg.pop("roster", None)
-    dg["roster"] = "counts only — fleet() for the live roster, fleet(full=True) for all of it"
+    dg["roster"] = "counts only, fleet() for the live roster, fleet(full=True) for all of it"
     return {"window_hours": hours, **dg}
 
 
 @mcp.tool()
 async def fleet(full: bool = False) -> dict[str, Any]:
-    """The roster, grouped by project — live agents expanded, retired sessions collapsed
+    """The roster, grouped by project: live agents expanded, retired sessions collapsed
     into a counted line. ● live / ○ historical. `full=True` expands everything and shows
     the flat `registered` rows too (default: live only, history is 1000+ rows). `seat`
     rides beside a canonical id wherever one is claimed.
 
     Read-only diagnostics, each best-effort: `os_bodies`/`ghost_gap` (per-identity
-    false_live/false_dead — a real OS process with no live graph row, or vice versa);
+    false_live/false_dead: a real OS process with no live graph row, or vice versa);
     `whisper_health` (recent hook-alarm failures, a log read not an active probe);
-    `harness_registry` (occupancy+identity fold-in, no second call needed);
+    `harness_registry` (occupancy and identity combined, no second call needed);
     `landing_audit` (unmerged branches, git-vs-graph landing disagreements); `pool_health`
-    (pg backend counts per daemon, cumulative `tx_total`, `caps` for the connection
-    envelope); `agent_classes` (9dc3ce8b: `count`'s own deflated twin —
-    named_souls/visit_families/unresolved_families, vitals.py's one authority, never a
-    raw row total mistaken for a headcount). Project grouping normalizes through
-    `merged_into`. Field detail: consult_canon('fleet')."""
+    (database backend counts per daemon, cumulative `tx_total`, `caps` for the connection
+    envelope); `agent_classes` (a breakdown of `count` into named_souls/visit_families/
+    unresolved_families, so a raw row total is never mistaken for a headcount).
+    Project grouping normalizes through `merged_into`. Field detail: consult_canon('fleet')."""
     pool = await _pool_get()
     rows = await pool.fetch(
         "SELECT o.canonical, "
@@ -5674,23 +5705,23 @@ async def fleet(full: bool = False) -> dict[str, Any]:
                 if "resolved_project" in n else {})}
             for c, n in shown.items()
         ],
-        **({} if full else {"registered_scope": f"live only — {len(nodes)} total, "
+        **({} if full else {"registered_scope": f"live only, {len(nodes)} total, "
                             f"fleet(full=True) for the rest"}),
     }
 
 
 @mcp.tool()
 async def registry_census() -> dict[str, Any]:
-    """THE REGISTRY+/PROC CENSUS (#178 piece c) — the harness's own live-body list
-    (`claude agents --json`), each row verified against `/proc` (the pid really is a
-    claude body), reconciled against `agent_mounts`. `matched` are bodies with a real row;
-    `rowless` are verified-live bodies with NO row at all — the population #178's pieces
-    (a)/(b) exist to close. `blind: true` means the harness read itself failed (cannot
-    census, never read as "nothing is live").
+    """Cross-checks the harness's own live-session list (`claude agents --json`) against
+    `/proc` (confirming each pid is really a running session) and reconciles the result
+    against `agent_mounts`. `matched` are sessions with a matching database row;
+    `rowless` are verified-live sessions with no row at all. `blind: true` means the
+    harness read itself failed (this means the census could not run, not that nothing
+    is live).
 
-    OCCUPANCY, NOT IDENTITY: this answers "is a body running", never "which agent lineage
-    holds a seat" — read the graph (roster()/doors()) for that. Conflating the two is
-    exactly the two-body-problem class of bug (ruling 719ed5b1)."""
+    This answers "is a session running", not "which agent lineage holds a seat". Use
+    the graph (roster()/doors()) for that; conflating the two questions is a known
+    source of bugs."""
     from src.orchestrator.mounts import registry_census as _registry_census
     return await _registry_census(await _pool_get())
 
@@ -5698,29 +5729,29 @@ async def registry_census() -> dict[str, Any]:
 @mcp.tool()
 async def roster(repo: str | None = None, want_caveats: bool = False,
                  render: str | None = None) -> dict[str, Any]:
-    """Which seat owns a repo, and is anybody home — from the GRAPH, never `ls` on disk.
+    """Which seat owns a repo, and is anybody home, read from the graph, never from
+    `ls` on disk.
 
-    `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold — held but
-    nobody live THIS INSTANT), `chartered_repos` (governs links), `pin` (a live read of
-    the seat's .osiris, declared/unset/unreadable), and `anchor_cwd`/`tree_cwd`/
-    `live_cwd` kept separate — a live holder's mount cwd can differ from both with
-    nothing wrong. `pin.triage_bucket` reuses `triage`'s own bucket, or
+    `repo=None` returns every active seat: `occupancy` (vacant/occupied/cold, meaning
+    held but nobody live right now), `chartered_repos` (governs links), `pin` (a live
+    read of the seat's .osiris file, declared/unset/unreadable), and `anchor_cwd`/
+    `tree_cwd`/`live_cwd` kept separate, since a live holder's mount cwd can differ from
+    both with nothing wrong. `pin.triage_bucket` reuses `triage`'s own bucket, or
     "no-such-project" when the pin names something unreal.
 
-    `repo=<name>` answers "who owns this": a seat matches if its charter OR pin names
+    `repo=<name>` answers "who owns this": a seat matches if its charter or pin names
     the repo. Two matches is `governed` when the charter-seat manages the pin-seat
-    (normal) else `conflict`, never silently picked. Zero matches is `no-match` (not a
+    (normal), else `conflict`, never silently picked. Zero matches is `no-match` (not a
     claim of no owner), paired with `near_misses`.
 
-    Neither `chartered_repos` nor `pin` is certified canonical — this function's own
-    blind spots (10 standing paragraphs, measured as this verb's own bytes/call
-    offender) sit behind `want_caveats=True`; default is a one-line pointer.
+    Neither `chartered_repos` nor `pin` is certified canonical. This function's own
+    known blind spots sit behind `want_caveats=True`; default is a one-line pointer.
     consult_canon('roster') for more.
 
-    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
-    `repo=None` renders one line per seat, grouped by house, with an occupancy glyph
-    (`textrender.render_roster_text`); `repo=<name>` falls back to the generic
-    line-per-field renderer (already a small flat result, no hand-tuned shape needed)."""
+    `render='text'` returns only {"text": <str>}. `repo=None` renders one line per
+    seat, grouped by house, with an occupancy glyph (`textrender.render_roster_text`);
+    `repo=<name>` falls back to the generic line-per-field renderer (already a small
+    flat result, no custom shape needed)."""
     pool = await _pool_get()
     from src.orchestrator.seats import roster as _roster
     result = await _roster(pool, repo=repo, want_caveats=want_caveats)
@@ -5736,20 +5767,21 @@ async def roster(repo: str | None = None, want_caveats: bool = False,
 @mcp.tool()
 async def backlog(all_projects: bool = False, fleet: bool = False, render: str | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """No-regrow hygiene item 4's own gauge (digest.py's `_obligation_pressure`), as a read
-    verb of its own instead of only living inside fleet_digest's fuller payload. Per
+    """Reports open-obligation pressure per project (digest.py's `_obligation_pressure`),
+    as a standalone read instead of only living inside fleet_digest's fuller payload. Per
     project: `open` count against its `target` (osiris 40, every client 15, `(unfiled)`
-    untargeted), `past_window` (how many are already stale), `oldest_owners` (up to 3).
+    for untargeted items), `past_window` (how many are already stale), `oldest_owners`
+    (up to 3).
 
-    SCOPED BY DEFAULT: your own mounted project's row only. `all_projects=True` (or
-    calling unmounted / as the operator) widens to every project. Ordering: your own
+    Scoped by default to your own mounted project's row only. `all_projects=True` (or
+    calling unmounted, or as the operator) widens to every project. Ordering: your own
     project's row first (when in scope), then any row with `past_window > 0`, then by
-    `open` descending — never re-sorted by a slash command.
+    `open` descending.
 
     `fleet=True`: per-seat, not per-project (`by_seat`/`unowned`/`literal_owner`/
     `fleet_total`); wins over `all_projects`.
 
-    `render='text'`: {"text": <str>} only, capped/remainder-counted."""
+    `render='text'`: {"text": <str>} only, capped with a remainder count."""
     pool = await _pool_get()
     if fleet:
         from src.orchestrator.compositions import _fn_obligation_backlog
@@ -5780,27 +5812,27 @@ async def backlog(all_projects: bool = False, fleet: bool = False, render: str |
 @mcp.tool()
 async def threads(project: str | None = None, render: str | None = None,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """MINE: every OPEN thread you own (thread 68f1bafa, the read triangle) — one line
-    each with a short id, so a slash command can hand one straight to
-    thread(action=...)/recall(ref=...) without a separate lookup. "You" matches every
-    spelling an obligation can be owned under (owner_refs: your agent id, lineage root,
-    seat id, seat handle — same matching `owned_obligations`'s own /statusline `owe` cell
-    uses), never just your literal agent id.
+    """Every open thread you own, one line each with a short id, so a slash command can
+    hand one straight to thread(action=...)/recall(ref=...) without a separate lookup.
+    "You" matches every spelling an obligation can be owned under (owner_refs: your
+    agent id, lineage root, seat id, seat handle, the same matching
+    `owned_obligations`'s own statusline `owe` cell uses), never just your literal
+    agent id.
 
-    `project` defaults to your mounted project. DELIBERATELY SINGLE-PROJECT, not
-    charter-widened like get_object_list — "mine, in front of me right now" is the whole
-    point; call again with an explicit `project` for another repo you govern.
+    `project` defaults to your mounted project. Deliberately single-project, not
+    charter-widened like get_object_list: this is "mine, in front of me right now";
+    call again with an explicit `project` for another repo you govern.
 
-    `render='text'`: returns only {"text": <str>} -- one line per thread, capped at
+    `render='text'`: returns only {"text": <str>}, one line per thread, capped at
     `textrender.THREADS_BAND_CAP` with a remainder count, plain text, server-rendered.
 
-    `contested` (fix (b), Metron's mechanism report, mail 8890): present and `True` when
-    a newer note has disputed this summary and nobody has corrected it yet — marked with
-    a leading `!` in both the JSON row and the text render.
+    `contested`: present and `True` when a newer note has disputed this summary and
+    nobody has corrected it yet, marked with a leading `!` in both the JSON row and the
+    text render.
 
-    `project_owned_not_shown` (thread 3a9d9a5d89fa): obligations here whose owner is
-    this project's own bare name or empty, never yours by any spelling — present only
-    when >0; the text render's own trailing line names the same count."""
+    `project_owned_not_shown`: obligations here whose owner is this project's own bare
+    name or empty, never yours by any spelling; present only when >0, and the text
+    render's own trailing line names the same count."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
     proj = project or (ident.project if ident else None)
@@ -5851,16 +5883,16 @@ async def threads(project: str | None = None, render: str | None = None,
 
 @mcp.tool()
 async def team(render: str | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """A MANAGER's OWN SEATS (thread 68f1bafa, the read triangle) — every seat
-    `managed_by` your own held seat, each carrying: `live` (a body has mounted within the
-    fleet's own live window right now), `owe`/`stale` (open obligations owned by that
-    seat's handle, and how many are past their stale_after window — same definition
-    `owned_obligations`'s own statusline `owe` cell uses), `envelope` (that seat's current
-    holder's own unread ASK count — mail asking something of them specifically; 0 for a
-    cold/vacant seat with nobody to ask). Refuses cleanly if you hold no seat, or your
-    seat manages nobody (`fleet(full=True)` is the wider, unscoped roster for that case).
+    """A manager's own seats: every seat `managed_by` your own held seat, each carrying:
+    `live` (a session has mounted within the fleet's own live window right now),
+    `owe`/`stale` (open obligations owned by that seat's handle, and how many are past
+    their stale_after window, the same definition `owned_obligations`'s own statusline
+    `owe` cell uses), `envelope` (that seat's current holder's own unread ask count,
+    mail asking something of them specifically; 0 for a cold/vacant seat with nobody to
+    ask). Refuses cleanly if you hold no seat, or your seat manages nobody
+    (`fleet(full=True)` is the wider, unscoped roster for that case).
 
-    `render='text'`: returns only {"text": <str>} -- one line per managed seat, plain
+    `render='text'`: returns only {"text": <str>}, one line per managed seat, plain
     text, server-rendered."""
     pool = await _pool_get()
     ident = await _ident_for(ctx)
@@ -5870,7 +5902,7 @@ async def team(render: str | None = None, ctx: Context | None = None) -> dict[st
 
     mine = await held_seat(pool, ident.agent_id)
     if mine is None:
-        return {"error": "you hold no seat — team is a manager's own view of the seats "
+        return {"error": "you hold no seat: team is a manager's own view of the seats "
                          "it manages, nothing to scope it to"}
     out_rows = await team_roster(pool, mine["seat_id"], manager_house=mine["house"])
     if not out_rows:
@@ -5883,20 +5915,21 @@ async def team(render: str | None = None, ctx: Context | None = None) -> dict[st
 
 @mcp.tool()
 async def tree_ledger(limit: int | None = None, offset: int = 0) -> dict[str, Any]:
-    """THE PIN-VS-GRAPH DISAGREEMENT REPORT. Read-only, fleet-wide, two sections.
+    """Reports where a seat's pinned project and the graph disagree. Read-only,
+    fleet-wide, two sections.
 
-    `project_ledger` — every active SoftwareProject, each carrying `phantom_verdict`:
+    `project_ledger`: every active SoftwareProject, each carrying `phantom_verdict`:
     test-fixture | declared (a seat pin or Seat-origin governs edge claims it) |
     phantom-suspect (name matches a generic path-segment list, nothing declares it) |
     undetermined (a real disagreement, no confident call). `limit`/`offset` page it
     (default 200/0, capped 2000).
 
-    `live_cwd_ledger` — today's agent_mounts only. Each cwd: `directory_exists`
+    `live_cwd_ledger`: today's agent_mounts only. Each cwd: `directory_exists`
     (checked before the pin is trusted), `resolved_today` vs `graph_believes`, and an
     `agreement` verdict: no-graph-yet / ghost / graph-only / match / partial-match /
     mismatch.
 
-    `caveats` names what this instrument cannot see. READ-ONLY: reports disagreements,
+    `caveats` names what this instrument cannot see. Read-only: reports disagreements,
     never repairs, folds, or merges. consult_canon('tree_ledger') for more."""
     pool = await _pool_get()
     from src.orchestrator.seats import tree_ledger as _tree_ledger
@@ -5912,32 +5945,33 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                session_anchor: str | None = None,
                want_prior_art: bool = False, want_listener: bool = False,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Message the fleet. `to`=<project> is a BROADCAST, the group chat ('operator' reaches
-    the human's desk); `to_agent`=<agent:id> is a private DM (ids from orient()/fleet). `to`
-    refuses a project nobody has mounted under rather than filing mail nobody will read; it
-    also refuses when `body` opens with a real seat's name ('cupid — …') or @handle whose
-    holder sits in a DIFFERENT project than `to` — naming the right `to_agent` instead of
-    silently delivering to the wrong room. `addressee_resolved` in the receipt names what
-    it found, agreeing or not.
+    """Message the fleet. `to`=<project> is a broadcast, the group chat ('operator' reaches
+    the human's desk); `to_agent`=<agent:id> is a private direct message (ids from
+    orient()/fleet). `to` refuses a project nobody has mounted under rather than filing
+    mail nobody will read; it also refuses when `body` opens with a real seat's name
+    (e.g. 'name - ...') or @handle whose holder sits in a different project than `to`,
+    so you name the right `to_agent` instead of silently delivering to the wrong room.
+    `addressee_resolved` in the receipt names what it found, agreeing or not.
     `reply_to=<id>` answers a message (routes by channel, joins the thread) and settles it.
     At-least-once, deduped. For durable knowledge use record_decision/open_thread instead.
 
     `desk` triages an operator brief: 'decision' | 'hands' | 'fyi'. `grade` triages
     project mail: 'ask' (named in the recipient's unread count) | 'fyi' (an ack settles
-    it) — ungraded is never guessed. `dispatch` in the receipt names what happened on
+    it); ungraded is never guessed. `dispatch` in the receipt names what happened on
     delivery: queued/poked/resumed/woke, or a brake mode naming why nobody was reached.
-    A DM's receipt echoes `dm_to`/`seat`/`lineage_head` — compare against a stale
-    address before trusting "sent"; `require_seat=True` refuses on an unclaimed target.
-    `threads` transfers ownership of existing Thread(s) to a DM's addressee in the same
-    act (exact ref only, never inferred from `body`) — `threads_stamped` names what
-    moved. A DM or graded 'ask' runs the same prior-art search record_decision does,
-    surfaced on both your receipt and the delivered message.
+    A direct message's receipt echoes `dm_to`/`seat`/`lineage_head`; compare against a
+    stale address before trusting "sent". `require_seat=True` refuses on an unclaimed
+    target. `threads` transfers ownership of existing thread(s) to a direct message's
+    addressee in the same act (exact ref only, never inferred from `body`);
+    `threads_stamped` names what moved. A direct message or graded 'ask' runs the same
+    prior-art search record_decision does, surfaced on both your receipt and the
+    delivered message.
 
     `want_prior_art`/`want_listener` return the full prior_art list and listener block;
     default is a one-line `prior_art_flag` only."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a message must say who "
+        return {"error": "mount(cwd, job_dir=<your anchor>) first: a message must say who "
                          "it's from (the anchor re-attaches you automatically after a bounce)",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
@@ -5970,7 +6004,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     out: dict[str, Any] = {
         "sent": res["id"], "from": actor,
         **({"thread": res["thread_id"]} if res["thread_id"] is not None else {}),
-        **({"dedup": "identical recent message already queued — not re-posted"}
+        **({"dedup": "identical recent message already queued, not re-posted"}
            if res["dedup"] else {}),
         **({"threads_stamped": res["threads_stamped"]} if res.get("threads_stamped") else {}),
         # THE HONEST RECEIPT (Thoth DM 5493): the relational row always lands; the graph
@@ -5978,7 +6012,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
         # best-effort beside it and CAN fail on its own — `graphed: False` says so plainly
         # rather than let mail look graph-traversable when this one didn't make it.
         **({"graphed": False, "note": "relational send succeeded; the graph edge write "
-                                      "failed — this message won't show up in search()/"
+                                      "failed, so this message won't show up in search()/"
                                       "prior-art/orient() until a later repair recovers it"}
            if res.get("graphed") is False else {}),
         # THE SEND DOOR ADDRESSING GUARD (thread f4209591): a leading vocative or @handle
@@ -6017,7 +6051,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                     pool, addressee=res["to_agent"], msg_id=res["id"], sender=actor)
             except Exception as exc:  # noqa: BLE001 — the send already committed; confess
                 out["dispatch"] = {"mode": "deferred",
-                                   "detail": f"immediate dispatch failed ({exc}) — the "
+                                   "detail": f"immediate dispatch failed ({exc}), the "
                                              "worker sweep is the backstop"}
         if await pool.fetchval(
                 "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -6025,9 +6059,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                 "AND a.value #>> '{}' = 'true' LIMIT 1", res["to_agent"]):
             # the dead-letter class: an ephemeral spawn has no session to resume and no
             # chrome to nag — a DM to it may never be read or settled
-            out["warning"] = ("the addressee is an ephemeral SPAWN — it cannot be woken and "
-                              "may never read this; if the work is for its lineage, DM the "
-                              "parent seat instead (see the spawn's spawned_by link)")
+            out["warning"] = ("the addressee is an ephemeral spawn, it cannot be woken and "
+                              "may never read this; if the work is for its lineage, message "
+                              "the parent seat instead (see the spawn's spawned_by link)")
     else:  # a broadcast — the project channel: who's live, is anyone actually being woken
         dest = res["to"]
         last_seen = await mounts.project_last_seen(pool, dest)
@@ -6050,7 +6084,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                     pool, project=dest, msg_id=res["id"], sender=actor)
             except Exception as exc:  # noqa: BLE001 — the send already committed; confess
                 out["dispatch"] = {"mode": "deferred",
-                                   "detail": f"immediate dispatch failed ({exc}) — the "
+                                   "detail": f"immediate dispatch failed ({exc}), the "
                                              "worker sweep is the backstop"}
         out["backlog"] = await mailbox.project_deliverable_count(
             pool, dest, lease_secs=st.osiris_mail_lease_secs)
@@ -6068,9 +6102,9 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             "AND m.read_at IS NULL AND r.read_at IS NULL",
             res["thread_id"], res["id"], actor, ident.project)
         if crossed:
-            out["crossed"] = (f"{crossed} unread message(s) in THIS thread are already "
-                              "waiting in your inbox — your note may have crossed theirs; "
-                              "inbox() before assuming your view is current")
+            out["crossed"] = (f"{crossed} unread message(s) in this thread are already "
+                              "waiting in your inbox, so your note may have crossed theirs. "
+                              "Call inbox() before assuming your view is current")
     # Attach/persist the prior-art computed ABOVE, before the write — skipped on a dedup
     # hit (res["id"] then names an EXISTING message that may already carry its own
     # prior_art from its original send; overwriting risks clobbering a real prior result
@@ -6081,7 +6115,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
             out["prior_art"] = prior
         top = prior[0]
         out["prior_art_flag"] = (
-            f"{top.get('type') or 'Decision'} {top['id']} already speaks to this — "
+            f"{top.get('type') or 'Decision'} {top['id']} already speaks to this, "
             "worth reading before dispatching/answering as if it's new"
             + ("" if want_prior_art else " (pass want_prior_art=True for the full list)"))
         try:
@@ -6106,18 +6140,17 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
 
 @mcp.tool()
 async def wake_preflight(target: str) -> dict[str, Any]:
-    """Answer wake()'s own gates BEFORE you attempt one (#156.4) — the compaction/ceiling/
-    no-anchor/crossed-registry checks that today only reveal themselves as a refusal AFTER
-    a real wake() call. `target` accepts anything wake()'s own does — a claimed handle,
-    `seat:<id>`, or `agent:<id>`.
+    """Checks wake()'s own gates before you attempt one: the compaction/ceiling/
+    no-anchor/crossed-registry checks that today only reveal themselves as a refusal
+    after a real wake() call. `target` accepts anything wake()'s own does: a claimed
+    handle, `seat:<id>`, or `agent:<id>`.
 
-    Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate clears —
-    a real wake() would resume this addressee now), `fresh-heir-available` (past its own
-    compaction seam, but not a dead end — a real wake() boots a fresh successor here
-    rather than refusing, ruling 94c2e7e8), `no-live-body` (vacant, retired, or never
+    Returns `{mode, status, detail}`. `status` is one of: `resumable` (every gate
+    clears, so a real wake() would resume this addressee now), `fresh-heir-available`
+    (past its own compaction point, but not a dead end; a real wake() starts a fresh
+    successor here rather than refusing), `no-live-body` (vacant, retired, or never
     mounted), or `refused-<gate>` (ceiling / no-anchor / crossed-registry / resident-
-    unknown / unknown — never the same finding, f624d114). Read-only: sends/spawns
-    nothing."""
+    unknown / unknown). Read-only: sends/spawns nothing."""
     pool = await _pool_get()
     from src.orchestrator.trigger import (
         _resolve_wake_address,
@@ -6144,19 +6177,21 @@ async def wake_preflight(target: str) -> dict[str, Any]:
 async def wake(target: str, message: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Knock on the other half of your own managed_by pair — never a peer. Gated on an
-    active managed_by edge in EITHER direction (you manage them, or they manage you);
-    peers and cross-house calls refuse, routed through a manager or the operator instead.
-    No operator override parameter, deliberately — stays out-of-band.
+    """Contacts the other half of your own managed_by pair, never a peer. Gated on an
+    active managed_by edge in either direction (you manage them, or they manage you);
+    peers and cross-house calls are refused and must be routed through a manager or the
+    operator instead. There is deliberately no operator override parameter; that stays
+    a separate, explicit path.
 
-    `target` accepts anything send()'s to_agent does. Message is prefixed with a self-
-    identifying marker, then dispatches through send()'s own DM path with an authority
-    gate in front. `status`: delivered (confirmed landed as a submitted turn, observed:
-    true) | mid-turn (their turn is still moving) | no-live-body | refused-not-your-worker
-    | refused-budget | queued (rate brake, pause, or unconfirmed — see `detail`)."""
+    `target` accepts anything send()'s to_agent does. The message is prefixed with a
+    self-identifying marker, then dispatches through send()'s own direct-message path
+    with an authority gate in front. `status`: delivered (confirmed landed as a
+    submitted turn, observed: true) | mid-turn (their turn is still moving) |
+    no-live-body | refused-not-your-worker | refused-budget | queued (rate brake,
+    pause, or unconfirmed, see `detail`)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a wake must say who "
+        return {"error": "mount(cwd, job_dir=<your anchor>) first: a wake must say who "
                          "it's from", "why": _anchorless(ctx)}
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     from src.orchestrator.trigger import wake_worker
@@ -6169,26 +6204,28 @@ async def launch(target: str, message: str = "", model: str | None = None,
                  subagent_id: str | None = None, subagent_type: str | None = None,
                  session_anchor: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Give a seat a fresh BODY (wake() is the speak-verb for a body that already exists).
-    Downward-only — you may only body a seat you MANAGE. Creates a new session, never
-    injects into an existing one. Default substrate is a harness-native `claude --bg`
-    background session (self-binds via its own first turn: mount() then claim_name);
-    the old PTY-broker lane survives as an explicit fallback (`osiris_launch_substrate`).
-    No operator override param — that hand stays out-of-band.
+    """Gives a seat a fresh session (wake() is for messaging a session that already
+    exists). Downward-only: you may only start a session for a seat you manage. Creates
+    a new session, never injects into an existing one. Default substrate is a
+    harness-native `claude --bg` background session (self-binds via its own first
+    turn: mount() then claim_name); an older fallback lane survives as an explicit
+    option (`osiris_launch_substrate`). There is no operator override parameter; that
+    stays a separate, explicit path.
 
-    Idempotent — a live body already holding the seat is returned, never twinned.
-    `message` delivers as the opening brief when launched, or nudges the live body as
-    a DM on `already-live` — `brief_delivery` names the outcome either way.
+    Idempotent: a live session already holding the seat is returned, never duplicated.
+    `message` delivers as the opening brief when launched, or nudges the live session
+    as a direct message on `already-live`; `brief_delivery` names the outcome either
+    way.
 
-    `body_exists` (window created) and `can_receive` (independently confirmed live) are
-    separate — a fresh spawn usually returns body_exists=true, can_receive=false for a
-    few seconds; `detail` says how to confirm. `status`: launched | already-live |
+    `body_exists` (session created) and `can_receive` (independently confirmed live)
+    are separate: a fresh session usually returns body_exists=true, can_receive=false
+    for a few seconds; `detail` says how to confirm. `status`: launched | already-live |
     manager-cold | refused-not-your-worker | refused-no-office/-no-handle |
     refused-spawn (see `detail`). `dormant_history`, when present, discloses a
     substantial pre-existing transcript at the target cwd."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a launch must say who "
+        return {"error": "mount(cwd, job_dir=<your anchor>) first: a launch must say who "
                          "it's from", "why": _anchorless(ctx)}
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     from src.orchestrator.trigger import launch_seat
@@ -6201,20 +6238,21 @@ async def resume(target: str, message: str = "", model: str | None = None,
                  subagent_id: str | None = None, subagent_type: str | None = None,
                  session_anchor: str | None = None,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Continue a seat's own DORMANT session — distinct from launch() (always mints fresh,
-    never guesses); same managed_by/downward-only gate. NEVER falls through to a fresh
-    mint: if nothing resumable exists, refuses (`status: refused-nothing-to-resume`)
-    rather than minting a stranger — call launch() for that instead. One-shot: runs one
-    turn over `-p --resume` and exits, re-summonable via the next mail wake.
+    """Continues a seat's own dormant session, distinct from launch() (which always
+    starts fresh, never guesses); same managed_by/downward-only gate. Never falls
+    through to a fresh start: if nothing resumable exists, it refuses
+    (`status: refused-nothing-to-resume`) rather than resuming the wrong session;
+    call launch() for that instead. One-shot: runs one turn over `-p --resume` and
+    exits, re-summonable via the next mail wake.
 
     `status`: launched (mode: resumed) | refused-nothing-to-resume | refused-resume-
-    unknown (a resumable-looking session with no signed testimony — the exact
+    unknown (a resumable-looking session with no verified record; the exact
     `claude -p --resume <sid>` a human can run by hand is in `detail`) |
     refused-not-your-worker. `resume_check` on every receipt names the decision (which
-    generation, how many hops back, the gate numbers)."""
+    generation, how many hops back)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a resume must say who "
+        return {"error": "mount(cwd, job_dir=<your anchor>) first: a resume must say who "
                          "it's from", "why": _anchorless(ctx)}
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     from src.orchestrator.trigger import resume_seat
@@ -6225,13 +6263,13 @@ async def resume(target: str, message: str = "", model: str | None = None,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='stop')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "superseded by the unified seat action dispatcher",
 })
 async def stop(target: str | None = None, reason: str = "",
                subagent_id: str | None = None, subagent_type: str | None = None,
                session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='stop')."""
+    """Deprecated, hidden alias, still callable. Forwards to seat(action='stop')."""
     return await _seat_impl("stop", target=target, reason=reason, subagent_id=subagent_id,
                             subagent_type=subagent_type, session_anchor=session_anchor,
                             ctx=ctx)
@@ -6245,35 +6283,35 @@ async def inbox(project: str | None = None, peek: bool = False,
                 as_seat: str | None = None, include_settled: bool = True,
                 ctx: Context | None = None) -> dict[str, Any]:
     """Read messages other agents left for you. Defaults to your mounted project; pass
-    `project` for another's ('operator' reads the human's desk). Reading LEASES a
-    message, doesn't consume it — settle each one via send(reply_to=<id>) or ack=[ids],
-    or it redelivers after the lease (at-least-once). `peek=True` reads without leasing.
-    Check after mount()/compaction. THE OPERATOR'S DESK IS DIFFERENT: glance with peek
-    only, settle only at the human's explicit word.
+    `project` for another's ('operator' reads the human's desk). Reading leases a
+    message, it doesn't consume it: settle each one via send(reply_to=<id>) or
+    ack=[ids], or it redelivers after the lease (at-least-once). `peek=True` reads
+    without leasing. Check after mount()/compaction. The operator's desk is different:
+    glance with peek only, settle only at the human's explicit word.
 
     `want_prior_art=True` returns each message's full prior_art list; default is a
     `prior_art_count` only.
 
-    `as_seat=<seat canonical>` (9dc3ce8b/c56f3d94, MAIL IS UNSURFACEABLE) is a
-    COMPLETELY SEPARATE, READ-ONLY door: a coordinator reading ANOTHER seat's received
-    DMs, never leased, never settled (`ack` is refused alongside it). CHARTER-GATED —
-    you must govern (an active `governs` link) at least one project that seat also
-    charters, or it refuses; a vacant target (no holder has ever existed) returns an
-    empty list, not an error. `include_settled=True` (default) also surfaces mail the
-    target already dealt with, `settled` marked per row — auditing what happened, not
-    queuing new work for yourself; `False` narrows to only what the target never read.
-    Broadcasts are deliberately excluded (already visible to anyone in that project's
-    own inbox) — DMs are the only genuinely unsurfaceable half. Every other parameter
+    `as_seat=<seat canonical>` is a completely separate, read-only mode: it lets a
+    coordinator read another seat's received direct messages, never leased, never
+    settled (`ack` is refused alongside it). Charter-gated: you must govern (an active
+    `governs` link) at least one project that seat also charters, or it refuses; a
+    vacant target (no holder has ever existed) returns an empty list, not an error.
+    `include_settled=True` (default) also surfaces mail the target already dealt with,
+    `settled` marked per row, for auditing what happened rather than queuing new work
+    for yourself; `False` narrows to only what the target never read. Broadcasts are
+    deliberately excluded (already visible to anyone in that project's own inbox);
+    direct messages are the only genuinely unsurfaceable kind. Every other parameter
     above is ignored in this mode.
 
-    `render='text'` (thread 68f1bafa, the read triangle): returns only {"text": <str>}.
-    Your own mailbox renders one line per ASK message, FYI folded to a single trailing
-    count line (`textrender.render_mail_text`). The operator desk renders the backlog
-    band first (all-projects obligation pressure), then owed/letters, then
-    needs_decision/needs_hands/fyi/dimmed/miner_guesses each as ONE COUNT LINE (never
-    itemized -- settling by id needs the ids this collapsed glance deliberately drops;
-    re-call without `render` for the full structured bands first), then `your_queue`
-    itemized one line per thread (`textrender.render_desk_text`)."""
+    `render='text'`: returns only {"text": <str>}. Your own mailbox renders one line
+    per ask message, fyi folded to a single trailing count line
+    (`textrender.render_mail_text`). The operator desk renders the backlog band first
+    (all-projects obligation pressure), then owed/letters, then
+    needs_decision/needs_hands/fyi/dimmed/miner_guesses each as one count line (never
+    itemized, since settling by id needs the ids this collapsed glance deliberately
+    drops; re-call without `render` for the full structured bands first), then
+    `your_queue` itemized one line per thread (`textrender.render_desk_text`)."""
     ident = await _ident_for(ctx, session_anchor)
     pool = await _pool_get()
     # MAIL IS UNSURFACEABLE (9dc3ce8b/c56f3d94): as_seat switches to a completely
@@ -6285,7 +6323,7 @@ async def inbox(project: str | None = None, peek: bool = False,
     # of the CALLER's own at all (it reads by seat/charter, not by project default).
     if as_seat is not None:
         if ack:
-            return {"error": "as_seat is read-only — it never leases, so there is "
+            return {"error": "as_seat is read-only: it never leases, so there is "
                              "nothing for ack to settle"}
         if ident is None or subagent_id is not None:
             return {"error": "as_seat needs your own real seat identity (mount first; "
@@ -6296,22 +6334,22 @@ async def inbox(project: str | None = None, peek: bool = False,
 
         caller_seat = await held_seat(pool, ident.agent_id)
         if caller_seat is None:
-            return {"error": "you hold no seat — as_seat is charter-gated, and an "
+            return {"error": "you hold no seat: as_seat is charter-gated, and an "
                              "unbound identity governs nothing to gate against"}
         caller_projects = set(await charter_of(pool, caller_seat["seat_id"]))
         target_projects = set(await charter_of(pool, as_seat))
         if not target_projects:
-            return {"error": f"{as_seat!r} charters no project — nothing to check "
-                             "governance against, and nothing this door will read"}
+            return {"error": f"{as_seat!r} charters no project, so there is nothing to "
+                             "check governance against, and nothing this mode will read"}
         if not (caller_projects & target_projects):
             return {"error": f"you do not govern any project {as_seat!r} charters "
-                             f"({sorted(target_projects)}) — as_seat is charter-gated, "
+                             f"({sorted(target_projects)}). as_seat is charter-gated, "
                              "never a bare seat-to-seat read"}
         occ = await seat_occupancy(pool, as_seat)
         holder = occ["holder"]
         if holder is None:
             return {"as_seat": as_seat, "target_agent": None, "messages": [],
-                    "note": "vacant — no holder has ever existed for this seat"}
+                    "note": "vacant, no holder has ever existed for this seat"}
         msgs = await read_seat_mail(pool, target_agent=holder,
                                     include_settled=include_settled)
         return {"as_seat": as_seat, "target_agent": holder, "messages": msgs}
@@ -6384,18 +6422,18 @@ async def inbox(project: str | None = None, peek: bool = False,
         ours = {m["id"] for m in msgs}
         flight = [f for f in flight if f["id"] not in ours]
     if spawn_reader:
-        note = ("spawn read — peek FORCED, nothing leased or settled: the mailbox belongs "
+        note = ("spawn read, peek forced, nothing leased or settled: the mailbox belongs "
                 "to your parent's seat; report what you saw, let the seat settle it")
     elif peek:
-        note = "peek — nothing leased"
+        note = "peek, nothing leased"
     elif msgs:
-        note = ("leased — settle each by replying (send(reply_to=<id>)) or acking "
+        note = ("leased, settle each by replying (send(reply_to=<id>)) or acking "
                 f"(inbox(ack=[ids])); unsettled mail redelivers after "
                 f"{st.osiris_mail_lease_secs // 60} min")
     else:
         note = "empty"
     if flight:  # msg-78 lesson: an empty box with a held lease is NOT 'nothing happening'
-        note += (f" — {len(flight)} in flight (leased by "
+        note += (f", {len(flight)} in flight (leased by "
                  + ", ".join(sorted({f['leased_by'] for f in flight})) + ")")
     if not spawn_reader and ident is not None:
         # PROVENANCE PIECE 1: each message read gets its EXISTING Message object
@@ -6417,7 +6455,7 @@ async def inbox(project: str | None = None, peek: bool = False,
         ack_out = await ack_messages(pool, proj, ack_now, reader_agent=reader) if ack_now else {
             "settled": [], "skipped": {}}
         for i in unread_ack_ids:
-            ack_out["skipped"][i] = ("not yet read in full — call inbox() (peek or lease) "
+            ack_out["skipped"][i] = ("not yet read in full: call inbox() (peek or lease) "
                                      "in an earlier call before acking; the wake prompt's "
                                      "own preview does not count, and reading it in this "
                                      "same call does not retroactively satisfy its own ack")
@@ -6439,15 +6477,16 @@ async def inbox(project: str | None = None, peek: bool = False,
 @mcp.tool()
 async def dismiss_brief(message_id: int, because: str,
                         ctx: Context | None = None) -> dict[str, Any]:
-    """MOOT an operator-desk brief — annotate it moot-with-a-reason ('true when sent; root
-    cause fixed in <commit>') so the desk renders it collapsed under your note instead of
-    shouting a dead alarm. NEVER a settle: dismissing stays exclusively the human's word
-    (the membrane); a moot is you saving them the archaeology, stamped with your name.
-    Only works on briefs addressed to the operator's desk. Requires mount."""
+    """Marks an operator-desk brief as moot: annotates it moot-with-a-reason ('true when
+    sent; root cause fixed in <commit>') so the desk renders it collapsed under your
+    note instead of showing a stale alert. Never a settle: dismissing stays exclusively
+    the human's own decision; marking something moot just saves them the digging,
+    stamped with your name. Only works on briefs addressed to the operator's desk.
+    Requires mount."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"why": _anchorless(ctx),
-                "error": "mount(cwd, job_dir=<your anchor>) first — an annotation must say "
+                "error": "mount(cwd, job_dir=<your anchor>) first: an annotation must say "
                          "whose testimony it is"}
     try:
         return await mailbox_dim(await _pool_get(), message_id,
@@ -6459,10 +6498,10 @@ async def dismiss_brief(message_id: int, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='claim_name')",
-    "since": "task #202 agent dispatcher (msg 7162)",
+    "since": "superseded by the unified agent action dispatcher",
 })
 async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated, hidden alias, still callable. Forwards to
     agent(action='claim_name')."""
     return await _agent_impl("claim_name", name=name, ctx=ctx)
 
@@ -6470,21 +6509,21 @@ async def claim_name(name: str, ctx: Context | None = None) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='charter')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "superseded by the unified seat action dispatcher",
 })
 async def charter(repos: list[str] | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='charter')."""
+    """Deprecated, hidden alias, still callable. Forwards to seat(action='charter')."""
     return await _seat_impl("charter", repos=repos, ctx=ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='charter_for')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "superseded by the unified seat action dispatcher",
 })
 async def charter_for(seat_id: str, repos: list[str], because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='charter_for')."""
+    """Deprecated, hidden alias, still callable. Forwards to seat(action='charter_for')."""
     return await _seat_impl("charter_for", target=seat_id, repos=repos, because=because,
                             ctx=ctx)
 
@@ -6492,12 +6531,12 @@ async def charter_for(seat_id: str, repos: list[str], because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='rebind')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "superseded by the unified seat action dispatcher",
 })
 async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
                       force: bool = False, because: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='rebind')."""
+    """Deprecated, hidden alias, still callable. Forwards to seat(action='rebind')."""
     return await _seat_impl("rebind", target=seat, new_cwd=new_cwd, extract=extract,
                             force=force, because=because, ctx=ctx)
 
@@ -6505,25 +6544,26 @@ async def rebind_seat(seat: str, new_cwd: str, extract: bool = False,
 @mcp.tool()
 async def merge(dupe: str, into: str, evidence: str, force: bool = False,
                 because: str = "", ctx: Context | None = None) -> dict[str, Any]:
-    """THE RECONCILIATION FOLD — declare two labels of the SAME type one thing: `dupe`
-    folds into `into`. Type is read off `dupe`'s own form (agent:.../seat:.../else
-    SoftwareProject). Append-only (nothing deleted, authorship untouched), and each
-    type's own ESTATE follows: Agent moves mail/mount rows/open threads to `into`'s
-    living head; Seat also moves active holders and managed_by edges (an Agent merge
-    REFUSES an actively-seated dupe instead); SoftwareProject re-points every in_repo/
-    works_in/governs/informs edge and mount row.
+    """Declares two labels of the same type one thing: `dupe` folds into `into`. Type
+    is read off `dupe`'s own form (agent:.../seat:.../else SoftwareProject). Append-
+    only (nothing deleted, authorship untouched), and each type's own dependent records
+    follow: Agent moves mail/mount rows/open threads to `into`'s living head; Seat also
+    moves active holders and managed_by edges (an Agent merge refuses an actively-
+    seated dupe instead); SoftwareProject re-points every in_repo/works_in/governs/
+    informs edge and mount row.
 
-    `evidence` required for every type. AGENT MERGES ARE ACTOR-GATED: refuses any caller
-    who is not the operator or the scheduled reaper — mount as the operator, or judge via
-    resolve_fold(). Seat/Project merges carry no such gate. Refuses: dupe/into different
-    types; thin evidence; dupe==into; unknown/already-folded labels; a same-lineage Agent
-    pair (succession's job); a SoftwareProject pair contradicting on a non-name property.
+    `evidence` required for every type. Agent merges are actor-gated: refuses any
+    caller who is not the operator or the scheduled reaper; mount as the operator, or
+    judge via resolve_fold(). Seat/Project merges carry no such gate. Refuses: dupe/into
+    different types; thin evidence; dupe==into; unknown/already-folded labels; a
+    same-lineage Agent pair (succession's job); a SoftwareProject pair contradicting on
+    a non-name property.
 
-    LIVENESS GUARD (SoftwareProject only): a different lineage's live session on `dupe`
-    refuses by default — `force=True` + `because` overrides."""
+    Liveness guard (SoftwareProject only): a different lineage's live session on `dupe`
+    refuses by default; `force=True` + `because` overrides."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a fold is a mind's act, and the graph must know whose",
+        return {"error": "mount first: a merge must say who is performing it",
                 "why": _anchorless(ctx)}
     from src.orchestrator.merge import _merge_type
     from src.orchestrator.merge import merge as _merge
@@ -6549,20 +6589,20 @@ async def merge(dupe: str, into: str, evidence: str, force: bool = False,
 @mcp.tool()
 async def unmerge(dupe: str, because: str, execute: bool = False,
                   ctx: Context | None = None) -> dict[str, Any]:
-    """Reverse a wrongful `merge` call — replaces unfold_agent as the one door for all
-    three types, closing the parity gap the operator named (31c02dca): before this, only
-    an Agent merge was ever reversible; a Seat or Project merge was permanent (task #127).
-    Type is read off `dupe`'s own form, same rule as `merge`. DRY RUN IS THE DEFAULT
-    (`execute=False`) for every type: returns the exact plan (the kernel unmerge, any
-    type-specific estate items that CAN cleanly return, and the ones that CAN'T) without
-    writing anything — review it, then call again with `execute=True`. Refuses: `dupe` not
-    currently merged, a blank `because`, or a merge whose original justification cites the
-    operator's word when `because` doesn't carry a fresh one — reversing an
-    operator-blessed merge needs the operator's word too, for every type."""
+    """Reverses a wrongful `merge` call, and works consistently across all three
+    mergeable types: previously, only an Agent merge was ever reversible; a Seat or
+    Project merge was permanent. Type is read off `dupe`'s own form, same rule as
+    `merge`. Dry run is the default (`execute=False`) for every type: returns the
+    exact plan (the underlying unmerge, any type-specific dependent records that can
+    cleanly return, and the ones that can't) without writing anything; review it, then
+    call again with `execute=True`. Refuses: `dupe` not currently merged, a blank
+    `because`, or a merge whose original justification cites the operator's word when
+    `because` doesn't carry a fresh one (reversing an operator-approved merge needs the
+    operator's word too, for every type)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — an unfold is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: an unmerge must say who is performing it",
+                "why": _anchorless(ctx)}
     from src.orchestrator.merge import unmerge as _unmerge
     return await _unmerge(Actions(await _pool_get()), dupe=dupe, because=because,
                           actor=ident.agent_id, execute=execute)
@@ -6570,26 +6610,28 @@ async def unmerge(dupe: str, because: str, execute: bool = False,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "reason": "measured with no real usage found across recent MCP traffic or any other "
+              "known call path",
+    "since": "retired as part of a broader cleanup of unused tools",
 })
 async def reconcile_merge(dupe: str, into: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Accepts an ALREADY-MERGED `dupe` and re-points whatever mail/mount/thread/holder/
-    managed_by/edge estate is still aimed at it, WITHOUT re-performing the merge —
-    idempotent-by-REPAIR, for the estate a partial first fold left stranded. UNMERGE-
-    THEN-REMERGE IS NOT A SUBSTITUTE: `unmerge`'s own `estate_unreturnable` path reports
-    — and drops — exactly the links a partial fold already broke.
+    """Accepts an already-merged `dupe` and re-points whatever mail/mount/thread/holder/
+    managed_by/edge records are still aimed at it, without re-performing the merge.
+    This repairs records a partial first merge left stranded, without needing to redo
+    the merge itself. Unmerge-then-remerge is not a substitute: `unmerge`'s own
+    `estate_unreturnable` path reports, and drops, exactly the links a partial merge
+    already broke.
 
     Type is read off `dupe`'s own form, same rule as `merge`/`unmerge`. Refuses: `dupe`
     and `into` resolving to different types; `dupe` not merged (that's `merge`'s job);
-    `dupe`'s own `merged_into` pointing at a DIFFERENT `into` (never redirects); `into`
-    not active. THE AGENT BRANCH IS ACTOR-GATED exactly like `merge`'s own Agent branch
+    `dupe`'s own `merged_into` pointing at a different `into` (never redirects); `into`
+    not active. The Agent branch is actor-gated exactly like `merge`'s own Agent branch
     (repairing a merge needs the same authority as making one); Seat and Project stay
-    open, matching their own fold's current posture — unreconciled on purpose."""
+    open, matching their own merge's current posture, left unreconciled on purpose."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a reconcile is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: a reconcile must say who is performing it",
+                "why": _anchorless(ctx)}
     from src.orchestrator.merge import reconcile_merge as _reconcile_merge
     return await _reconcile_merge(Actions(await _pool_get()), dupe=dupe, into=into,
                                   actor=ident.agent_id)
@@ -6600,18 +6642,19 @@ async def restore_attribution(
     project: str, dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for a fixed write-time bug: every fold performed before the fix
-    stamped a moved works_in/governs/informs/in_repo edge with the fold's own actor as
-    source_id, discarding the original writer. The pre-fold row still carries the
-    correct source_id, so this re-derives the live edge from evidence already on record.
+    """Repairs a fixed write-time bug: every merge performed before the fix stamped a
+    moved works_in/governs/informs/in_repo edge with the merge's own actor as
+    source_id, discarding the original writer. The pre-merge row still carries the
+    correct source_id, so this re-derives the live edge from evidence already on
+    record.
 
-    Resolves `project`'s own merged-in dupes and repairs only damage from those folds.
-    Dry run is the default; `dry_run=False` requires a non-blank `because`. Safe to run
-    twice — an already-correct or already-repaired edge is left alone."""
+    Resolves `project`'s own merged-in dupes and repairs only damage from those
+    merges. Dry run is the default; `dry_run=False` requires a non-blank `because`.
+    Safe to run twice: an already-correct or already-repaired edge is left alone."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a restore is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: a restore must say who is performing it",
+                "why": _anchorless(ctx)}
     from src.orchestrator.projects import restore_attribution as _restore_attribution
     return await _restore_attribution(
         Actions(await _pool_get()), project=project, actor=ident.agent_id,
@@ -6623,19 +6666,19 @@ async def unwire_informs_fanout(
     project: str = "osiris", dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the pre-fix `_wire_informs` cross-join: `ingest_canon` used to fan
-    every Reference out to EVERY active SoftwareProject fleet-wide instead of just the
-    one it grounds. Fixed going forward (src/ingest/reference.py); this repairs the
+    """Repairs damage from a pre-fix `_wire_informs` cross-join: `ingest_canon` used to
+    fan every Reference out to every active SoftwareProject fleet-wide instead of just
+    the one it grounds. Fixed going forward (src/ingest/reference.py); this repairs the
     historical damage.
 
     Finds every live `informs` edge stamped with the fan-out's own source_id whose
-    target is NOT `project` (default "osiris", the module's only real caller) — never
-    touches an informs edge asserted by anything else. DRY RUN IS THE DEFAULT. `dry_run
-    =False` REQUIRES a non-blank `because`. Idempotent."""
+    target is not `project` (default "osiris", the module's only real caller); never
+    touches an informs edge asserted by anything else. Dry run is the default.
+    `dry_run=False` requires a non-blank `because`. Idempotent."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — an unwire is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: an unwire must say who is performing it",
+                "why": _anchorless(ctx)}
     from src.ingest.reference import unwire_informs_fanout as _unwire_informs_fanout
     return await _unwire_informs_fanout(
         Actions(await _pool_get()), project=project, actor=ident.agent_id,
@@ -6644,10 +6687,9 @@ async def unwire_informs_fanout(
 
 @mcp.tool()
 async def layout_migrate(limit: int | None = None, ctx: Context | None = None) -> dict[str, Any]:
-    """THE MIGRATION DOOR (Thoth mail 10609, product law: every action has a door):
-    drives the layout heartbeat's own `graph_layout.layout_batch` to quiescence right
-    now instead of waiting on its 5-minute cron cadence -- the SAME function the cron
-    heartbeat and the CLI's `osiris layout --migrate` door call, never a second
+    """Drives the layout heartbeat's own `graph_layout.layout_batch` to completion right
+    now instead of waiting on its 5-minute cron cadence. Calls the same function the
+    cron heartbeat and the CLI's `osiris layout --migrate` command call, never a second
     implementation of the placement logic. Refuses (an `error` key, no work done) if
     the heartbeat is mid-tick and already holds the layout lock. `limit` overrides the
     live `layout.batch_size` setting for this run only; omit it to use the setting."""
@@ -6656,8 +6698,8 @@ async def layout_migrate(limit: int | None = None, ctx: Context | None = None) -
 
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a layout migration is a mind's act, and the "
-                         "graph must know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: a layout migration must say who is performing it",
+                "why": _anchorless(ctx)}
     pool = await _pool_get()
     actions = Actions(pool)
     receipts = [r async for r in run_layout_migrate(actions, limit=limit)]
@@ -6669,11 +6711,10 @@ async def layout_migrate(limit: int | None = None, ctx: Context | None = None) -
 
 @mcp.tool()
 async def physics_layout_migrate(ctx: Context | None = None) -> dict[str, Any]:
-    """THE PHYSICS LAYOUT's own migration door (Thoth mail 11047, product law: every
-    action has a door): a SINGLE global force simulation over the whole active graph
-    -- springs for semantic edges, weak gravity toward containers, nested
-    communities, hub re-centering -- never a batch loop the way `layout_migrate`
-    is, since this can't be sliced into independent batches (see
+    """Runs the physics-based layout migration: a single global force simulation over
+    the whole active graph (springs for semantic edges, weak gravity toward
+    containers, nested communities, hub re-centering), never a batch loop the way
+    `layout_migrate` is, since this can't be sliced into independent batches (see
     graph_physics.run_physics_migrate's own docstring). Refuses (an `error` key, no
     work done) if the cron heartbeat or a `layout_migrate` run is mid-tick and
     already holds the layout lock. Same shared advisory lock, same
@@ -6683,8 +6724,8 @@ async def physics_layout_migrate(ctx: Context | None = None) -> dict[str, Any]:
 
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a layout migration is a mind's act, and the "
-                         "graph must know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: a layout migration must say who is performing it",
+                "why": _anchorless(ctx)}
     pool = await _pool_get()
     actions = Actions(pool)
     receipts = [r async for r in run_physics_migrate(actions)]
@@ -6715,8 +6756,8 @@ async def _enqueue_provenance_backfill(
 
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first, so the graph can record who ran this backfill",
+                "why": _anchorless(ctx)}
     arq_pool = await arq_create_pool(RedisSettings.from_dsn(get_settings().redis_url))
     job = await arq_pool.enqueue_job(
         "provenance_backfill_job", dry_run=dry_run, because=because,
@@ -6724,9 +6765,9 @@ async def _enqueue_provenance_backfill(
         actor=ident.agent_id, receipt_ref=_PROVENANCE_BACKFILL_RECEIPT_THREAD)
     job_id = job.job_id if job is not None else None
     return {"enqueued": True, "job_id": job_id,
-            "note": f"runs on osiris-worker — the receipt lands as a thread annotation "
-                    f"on {_PROVENANCE_BACKFILL_RECEIPT_THREAD} when it finishes, never "
-                    "inline on this call"}
+            "note": f"runs in the background. The result is recorded as an annotation "
+                    f"on {_PROVENANCE_BACKFILL_RECEIPT_THREAD} when it finishes, not "
+                    "returned directly from this call"}
 
 
 async def _dispatch_backfill(
@@ -6759,13 +6800,13 @@ async def backfill(
     only_bases: list[str] | None = None, limit: int | None = None,
     newest_first: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb, dispatched over `target` — eight structurally distinct backfills (no
-    shared logic underneath, only a shared wire shape), delegated to
-    `src.orchestrator.backfill.run_backfill` — the SAME function the CLI's own
-    `osiris backfill` door and the UI's Repairs panel call (thread c89a9873, wave 22):
-    never a second, drifted copy of this dispatch. Dry run is the default for every
+    """Repair tool, dispatched over `target`. Eight structurally distinct backfills (no
+    shared logic underneath, only a shared call shape), delegated to
+    `src.orchestrator.backfill.run_backfill`, the same function the CLI's
+    `osiris backfill` command and the UI's Repairs panel call.
+    There is only ever one implementation of this dispatch. Dry run is the default for every
     target; `dry_run=False` requires `because` (except `agent_project_links`, which
-    predates that convention). All eight idempotent.
+    predates that convention). All eight are idempotent.
 
     `target=`: "bootstrap_orphan_references" (links an orphaned `ref:osiris`-stamped
     Reference to the SoftwareProject its own canonical prefix names) |
@@ -6773,18 +6814,18 @@ async def backfill(
     summary cites) | "task_sync_citation_links" (links a zero-link task_sync Thread to
     the Thread it names) | "lineage_repo_links" (links a zero-link Decision/Thread to its
     author's lineage project) | "agent_project_links" (moves works_in/governs off an
-    off-head Agent onto its living head; the one target taking `only_bases` to scope the
-    write) | "closed_by_real_sources" (thread 6d01f21e: re-points a `closed_by` edge off
+    outdated Agent record onto its current one; the one target taking `only_bases` to scope the
+    write) | "closed_by_real_sources" (re-points a `closed_by` edge off
     the old 'session'/'analyst:operator' placeholder Agent objects onto the real Person/
-    SystemSource `_mint_closed_by` mints today, then retires the now-edgeless
-    placeholder) | "operator_charter" (thread 1d5b9773, "authority by charter": mints a
+    SystemSource record minted today, then retires the now-edgeless
+    placeholder) | "operator_charter" (mints a
     `governs` link from `person:operator` to every active SoftwareProject it doesn't
-    already govern, so the single operator today stays chartered over everything) |
-    "provenance_possible_upstream" (thread e332177f: back-stamps `possible_upstream` onto
-    historical Decision/Thread writes via each write's transcript receipt — `limit`/
-    `newest_first` are consulted by THIS target only. RUNS ASYNCHRONOUSLY (thread
-    0be2f790: a 470MB transcript once starved this door for 19 minutes) — returns a job
-    id at once, receipt lands as a thread annotation on e332177f when done)."""
+    already govern, so the operator stays chartered over everything) |
+    "provenance_possible_upstream" (back-stamps `possible_upstream` onto
+    historical Decision/Thread writes via each write's transcript record. `limit`/
+    `newest_first` are consulted by this target only. Runs in the background because a
+    large transcript can take a long time to process; returns a job
+    id at once, and the result is recorded as a thread annotation when done)."""
     from src.orchestrator.backfill import BACKFILL_TARGETS
 
     if target not in BACKFILL_TARGETS:
@@ -6802,26 +6843,26 @@ async def backfill(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "backfill(target='bootstrap_orphan_references')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "an earlier consolidation of the backfill tools",
 })
 async def backfill_bootstrap_orphan_references(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the bootstrap_project door-gap (decision 49231693/adde094b,
-    operator ruling 2026-08-27: a doc-splitter's orphans are a defect, not a legitimate
-    category — "something definitely went wrong here"). `ingest_log`/`ingest_reference_
+    """Repair tool for a gap in project bootstrapping: a document-splitter's orphaned
+    records are treated as a defect, not a legitimate category. `ingest_log`/`ingest_reference_
     doc` now take `repo=`, threaded through by `bootstrap_project` going forward; this
-    repairs the ~105 References already orphaned from before that fix.
+    repairs the References already orphaned from before that fix.
 
-    MECHANICAL AND CONSERVATIVE, per the operator's other half of the same ruling: "a
-    derived link that is wrong is worse than an orphan that is honest." Only touches a
+    Mechanical and conservative: a derived link that is wrong is worse than an orphan
+    that is honestly unlinked. Only touches a
     zero-live-link Reference stamped `source_id='ref:osiris'` (the script's own
-    fingerprint) whose canonical starts `ref:<name>-` for an EXISTING active
-    SoftwareProject — recovering what the canonical already encodes, never inventing a
-    fact. No clean project-name prefix → left alone, reported in `unmatched`, never guessed.
+    fingerprint) whose canonical starts `ref:<name>-` for an existing active
+    SoftwareProject, recovering what the canonical already encodes, never inventing a
+    fact. No clean project-name prefix means the record is left alone and reported in
+    `unmatched`, never guessed.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Links land
-    evidence_class DERIVED. Idempotent."""
+    Dry run is the default. `dry_run=False` requires a non-blank `because`. Links land
+    with evidence_class DERIVED. Idempotent."""
     return await _dispatch_backfill("bootstrap_orphan_references", dry_run, because, None, ctx)
 
 
@@ -6842,8 +6883,8 @@ async def repair_stale_pile_summons(
     actions. Idempotent."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a repair is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first, so the graph can record who ran this repair",
+                "why": _anchorless(ctx)}
     from src.orchestrator.dispose import (
         repair_stale_pile_summons as _repair_stale_pile_summons,
     )
@@ -6854,60 +6895,60 @@ async def repair_stale_pile_summons(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "backfill(target='boot_alarm_commit_links')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "an earlier consolidation of the backfill tools",
 })
 async def backfill_boot_alarm_commit_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Links every zero-live-link `UNREVIEWED BOOT` alarm Thread (deploy_guard's own
-    boot watchdog — no caller identity to default a repo= from) to the Commit its own
+    """Links every zero-live-link `UNREVIEWED BOOT` alarm Thread (raised by the boot
+    watchdog, which has no caller identity to default a repo= from) to the Commit its own
     summary cites by sha, via `derive_or_abstain`: mints `noted_in` (DIRECT_OBSERVATION)
-    iff the sha resolves to exactly one Commit; no sha, or an ambiguous match, abstains
-    durably with the candidate set kept. Does NOT arm required_link_kinds (stays empty) —
+    only if the sha resolves to exactly one Commit; no sha, or an ambiguous match, abstains
+    durably with the candidate set kept. Does not arm required_link_kinds (stays empty):
     a boot alarm still can't satisfy a repo= requirement, this only gives it the
     connectivity it actually has.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    Dry run is the default. `dry_run=False` requires a non-blank `because`. Idempotent."""
     return await _dispatch_backfill("boot_alarm_commit_links", dry_run, because, None, ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "backfill(target='task_sync_citation_links')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "an earlier consolidation of the backfill tools",
 })
 async def backfill_task_sync_citation_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Links every zero-live-link `task_sync`-minted obligation Thread ("TASK/THREAD
-    DISAGREEMENT: ..." / "THREAD SIDE ORPHAN: ...", decision a55b1014 — the tracker-vs-graph
-    divergence detector that has been firing correctly for weeks into an unread orphan) to
+    DISAGREEMENT: ..." / "THREAD SIDE ORPHAN: ..."), the tracker-vs-graph
+    divergence detector, to
     the Thread its own summary names, via `derive_or_abstain`: mints `cites`
-    (DIRECT_OBSERVATION, origin=derived) iff `task_sync.parse_thread_citations` (reused, not
+    (DIRECT_OBSERVATION, origin=derived) only if `task_sync.parse_thread_citations` (reused, not
     re-implemented) finds exactly one citation and it resolves to exactly one existing
     Thread; anything else abstains durably with a distinct reason and the candidate set kept.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    Dry run is the default. `dry_run=False` requires a non-blank `because`. Idempotent."""
     return await _dispatch_backfill("task_sync_citation_links", dry_run, because, None, ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "backfill(target='lineage_repo_links')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "an earlier consolidation of the backfill tools",
 })
 async def backfill_lineage_repo_links(
     dry_run: bool = True, because: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Links every zero-live-link Decision/Thread authored by a real Agent lineage to its
-    project — the historical half of the repo= lineage ladder (Lane 3 + Wave 2 Lane B's
-    resolve_repo_default), which is write-time-only by design and never touches an object
-    that already existed before it deployed (decision c1073f00). Re-runs the same rung-3
-    lineage-wide works_in lookup a NEW write already gets: mints `in_repo`
-    (DIRECT_OBSERVATION) iff the author's lineage names exactly one project; zero or 2+
-    abstains durably via derive_or_abstain, candidate set kept, never a guess (a0339e16).
+    project: the historical half of the repo= lineage resolution logic, which is
+    write-time-only by design and never touches an object
+    that already existed before it deployed. Re-runs the same lineage-wide works_in lookup a
+    new write already gets: mints `in_repo`
+    (DIRECT_OBSERVATION) only if the author's lineage names exactly one project; zero or two-or-more
+    abstains durably via derive_or_abstain, candidate set kept, never a guess.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    Dry run is the default. `dry_run=False` requires a non-blank `because`. Idempotent."""
     return await _dispatch_backfill("lineage_repo_links", dry_run, because, None, ctx)
 
 
@@ -6916,11 +6957,11 @@ async def recover_harness_exchanges(
     anchor_sid: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
     """Lift a session's harness-native cross-session messages (SendMessage) out of its
-    already-soul-stored transcript into typed, attributed `harness_messages` rows —
-    osiris cannot see the harness's cross-session socket live, only after a transcript
-    is soul-stored and this runs over it.
+    already-stored transcript into typed, attributed `harness_messages` rows. This
+    cannot see the harness's cross-session socket live, only after a transcript
+    is stored and this runs over it.
 
-    `anchor_sid` must already be soul-stored — never reads disk itself. Dry run is the
+    `anchor_sid` must already be stored; this never reads disk itself. Dry run is the
     default: returns `{found, already_recovered, would_write, sample}`. `dry_run=False`
     requires `because`. Idempotent per (anchor_sid, turn_index)."""
     from src.ingest.cross_channel import recover_harness_exchanges as _recover
@@ -6960,28 +7001,28 @@ async def _reconcile_seat_identity_impl(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='reconcile_identity')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def reconcile_seat_identity(
     seat_id: str | None = None, agent_id: str | None = None, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='reconcile_identity')."""
     return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
 
 
 @mcp.tool(meta={"deprecated": True, "use_instead": "reconcile_seat_identity",
-                "since": "task #199 lane 2, thread 6778/6788"})
+                "since": "an earlier identity-tooling consolidation"})
 async def reconcile_seat_identity_third_party(
     seat_id: str, because: str, agent_id: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
-    callable. Shares reconcile_seat_identity's own _reconcile_seat_identity_impl body —
-    nothing duplicated. Kept only so a live or sleeping caller whose standing orders
-    still name this verb is not broken at its next turn; remove once tool_traffic()
-    shows it silent."""
+    """Deprecated: a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares the same underlying implementation as reconcile_seat_identity,
+    nothing duplicated. Kept only so a caller whose standing instructions
+    still name this tool is not broken on its next call; will be removed once usage
+    monitoring shows it silent."""
     return await _reconcile_seat_identity_impl(seat_id, agent_id, because, ctx)
 
 
@@ -7018,37 +7059,37 @@ async def _heal_seat_anchor_impl(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='heal_anchor')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def heal_seat_anchor(
     seat_id: str | None = None, because: str | None = None, dry_run: bool = True,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='heal_anchor')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='heal_anchor')."""
     return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
 @mcp.tool(meta={"deprecated": True, "use_instead": "heal_seat_anchor",
-                "since": "task #199 lane 2, thread 6778"})
+                "since": "an earlier identity-tooling consolidation"})
 async def heal_seat_anchor_third_party(
     seat_id: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
-    callable (BoundedMCP.list_tools's filter, call_tool's own registry lookup bypasses
-    it). Shares `heal_seat_anchor`'s own `_heal_seat_anchor_impl` body — nothing
-    duplicated. Kept only so a live or sleeping caller whose standing orders still name
-    this verb is not broken at its next turn; remove once tool_traffic() shows it silent."""
+    """Deprecated: a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares the same underlying implementation as `heal_seat_anchor`, nothing
+    duplicated. Kept only so a caller whose standing instructions still name
+    this tool is not broken on its next call. Will be removed once usage monitoring
+    shows it silent."""
     return await _heal_seat_anchor_impl(seat_id, because, dry_run, ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found — "
-              "automated companion uningested_trees_alarm_tick already covers this ground",
-    "since": "task #199 lane 2, retirement wave 2 (msg 6872/6876)",
+    "reason": "zero MCP traffic in a 3-week window, no CLI/daemon/slash bypass found. "
+              "The automated uningested_trees_alarm_tick check already covers this ground",
+    "since": "an earlier retirement pass",
 })
 async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
-    """THE CENSUS (thread 5126) — door onto discover_trees. One row per active
+    """A census tool onto discover_trees. One row per active
     SoftwareProject: `tree`, `path`, `watched`, `commits`, `activity`, `last_ingested_at`,
     `reason` (why `commits==0`: no path, unwatched, never ticked, or ticked-and-empty),
     `blind` (a path is known but unwatched). `only_gaps=True` (default) narrows to
@@ -7315,38 +7356,36 @@ async def project(
     value: str | None = None, merge_into: bool = False, tag: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7) — one
-    door, many actions over SoftwareProject lifecycle. See `describe('project')` for
-    the full per-action shape, or call with a wrong/missing param — the error names
+    """One tool, many actions over SoftwareProject lifecycle. See `describe('project')` for
+    the full per-action shape, or call with a wrong or missing param: the error names
     exactly what that action expects.
 
-    ACTION TABLE — action: what it does (required params beyond action):
-      create: declare a NEW SoftwareProject, never a duplicate (name, because)
+    Actions (what each does, and its required params beyond action):
+      create: declare a new SoftwareProject, never a duplicate (name, because)
       ingest: land a project's own git history and close the threads it witnesses
-        (project=None + because=None is SELF-SERVICE, resolves your own pin; project
-        given + because given is the THIRD-PARTY shape instead)
-      rename: declare a project's new NAME, non-canonical (project, new_name, because).
-        dry_run=True by default (pass dry_run=False to actually write) — refuses a
-        new_name already naming a DIFFERENT project of any status unless merge_into=True.
-        CASCADES to every governing seat's pin/house/charter/office under this verb's
-        own elevated authority; the receipt's `manifest` names every tier touched/
-        already-correct/could-not, per seat — never silence on a partial result
-      fork: declare two already-active projects a FORK pair (project, fork_into, because)
+        (project=None and because=None is the self-service shape, resolving your own pin; project
+        given and because given is the third-party shape instead)
+      rename: declare a project's new name, non-canonical (project, new_name, because).
+        dry_run=True by default (pass dry_run=False to actually write). Refuses a
+        new_name already naming a different project of any status unless merge_into=True.
+        Cascades to every governing seat's pin/house/charter/office under this tool's
+        own elevated authority; the result's `manifest` names every tier touched,
+        already-correct, or unable to update, per seat. Never silent on a partial result.
+      fork: declare two already-active projects a fork pair (project, fork_into, because)
       unfork: reverse a fork pair's live edge (project, fork_into, because)
       retire: retire a dead project stub, third-party (project, because)
-      identity_evidence: READ-ONLY, gather a seat's project-identity evidence across
-        five tiers — read this BEFORE rename/fork (seat_id)
+      identity_evidence: read-only, gather a seat's project-identity evidence across
+        five tiers. Read this before rename/fork (seat_id)
       assert_property: the sanctioned write for a single project-scoped property
-        (project, name, value) — never name='status', that's retire's own path
-      set_tag: declare the persisted `[TAG]` override `_house_tag`/`_window_name`
-        (trigger.py) read BEFORE ever deriving one from first-two-letters — e.g. "MH"
-        for monsterhouse instead of the derived "MO" (project, tag, because). `tag`
+        (project, name, value). Never use name='status', that's retire's own path
+      set_tag: declare the persisted tag override that overrides the default derived
+        tag (for example "MH" instead of a derived "MO") (project, tag, because). `tag`
         must be 1-4 uppercase letters exactly as given; refuses rather than silently
         coercing an unexpected shape. Written as its own `window_tag` property, never
         the unrelated, additive/multi-valued `tag` property case-tooling already uses
 
     `name` means something different per action: the new project's name on `create`,
-    the property name on `assert_property` — never the same slot's value twice."""
+    the property name on `assert_property`. Never the same slot's value twice."""
     return await _project_impl(
         action, project=project, name=name, because=because, dry_run=dry_run,
         new_name=new_name, fork_into=fork_into, seat_id=seat_id,
@@ -7392,27 +7431,27 @@ async def _ingest_project_impl(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='ingest')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def ingest_project(
     project: str | None = None, dry_run: bool = True, because: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='ingest')."""
     return await _project_impl("ingest", project=project, because=because,
                                dry_run=dry_run, ctx=ctx)
 
 
 @mcp.tool(meta={"deprecated": True, "use_instead": "project(action='ingest')",
-                "since": "task #199 lane 2, thread 6778/6788 (repointed #202 msg 7095)"})
+                "since": "an earlier project-tooling consolidation"})
 async def ingest_project_third_party(
     project: str, because: str, dry_run: bool = True, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — a hidden alias, dropped from a model's own tool list but still fully
-    callable. Shares ingest_project's own _ingest_project_impl body — nothing
-    duplicated. Kept only so a live or sleeping caller whose standing orders still name
-    this verb is not broken at its next turn; remove once tool_traffic() shows it
+    """Deprecated: a hidden alias, dropped from a model's own tool list but still fully
+    callable. Shares the same underlying implementation as ingest_project, nothing
+    duplicated. Kept only so a caller whose standing instructions still name
+    this tool is not broken on its next call. Will be removed once usage monitoring shows it
     silent."""
     return await _ingest_project_impl(project, because, dry_run, ctx)
 
@@ -7420,10 +7459,10 @@ async def ingest_project_third_party(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='correct_house')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='correct_house')."""
     return await _seat_impl("correct_house", new_house=new_house, ctx=ctx)
 
@@ -7431,11 +7470,11 @@ async def correct_house(new_house: str, ctx: Context | None = None) -> dict[str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='resync_house')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def resync_seat_house(seat_id: str, new_house: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='resync_house')."""
     return await _seat_impl("resync_house", target=seat_id, new_house=new_house,
                             reason=reason, ctx=ctx)
@@ -7444,21 +7483,21 @@ async def resync_seat_house(seat_id: str, new_house: str | None, reason: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='correct_pin')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def correct_pin_value(key: str, value: str | None, reason: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='correct_pin')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='correct_pin')."""
     return await _seat_impl("correct_pin", key=key, value=value, reason=reason, ctx=ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='revert_pin')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def revert_own_pin_write(ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='revert_pin')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='revert_pin')."""
     return await _seat_impl("revert_pin", ctx=ctx)
 
 
@@ -7503,36 +7542,36 @@ async def retire_object(
     kind: str, target: str, because: str = "", override_live: bool = False,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Third-party retirement of a named Seat/SoftwareProject/Agent/bare object — one
-    door, four `kind`s, never a fifth. DISTINCT from self-scoped `retire()` (no target
-    param, retires the CALLING agent's own live session/turn) and from `retire_assertion`
-    (a cross-source supersede, an unrelated shape) — neither folds into this door.
+    """Third-party retirement of a named Seat, SoftwareProject, Agent, or bare object. One
+    tool, four `kind`s, never a fifth. Distinct from self-scoped `retire()` (no target
+    param, retires the calling agent's own live session/turn) and from `retire_assertion`
+    (a cross-source supersede, an unrelated shape); neither folds into this tool.
 
-    `kind='seat'` — mark a Seat permanently CLOSED: a genuinely dead role, no successor,
-    no merge target. Refuses on an unknown or already-inactive seat, or an ACTIVE
-    holder — transfer or let it vacate first.
+    `kind='seat'`: mark a Seat permanently closed: a genuinely dead role, no successor,
+    no merge target. Refuses on an unknown or already-inactive seat, or an active
+    holder; transfer or let it vacate first.
 
-    `kind='project'` — retire a dead SoftwareProject stub, status flip to 'retired' via
-    a compensating event, never a DELETE. `target` resolves to a SoftwareProject ONLY
-    (UUID, 8-char short id, canonical `repo:<name>`, or its `name` property) — never a
-    Seat or Agent of the same name. Refuses LOUDLY on: blank `because`; an unresolved or
+    `kind='project'`: retire a dead SoftwareProject stub, status flip to 'retired' via
+    a compensating event, never a delete. `target` resolves to a SoftwareProject only
+    (UUID, 8-char short id, canonical `repo:<name>`, or its `name` property), never a
+    Seat or Agent of the same name. Refuses loudly on: blank `because`; an unresolved or
     already-non-active project; any commit recorded against it; any open Thread pointing
     in; or a mount seen against it within the last 15 minutes.
 
-    `kind='agent'` — third-party Agent retirement. Stamps retired/retired_by/retired_
-    because, flips objects.status. Not self-scoped or manager-gated — any caller may
-    name any target; `actor` is attribution, not authority. ALWAYS releases the target's
-    held seat and mount rows on success. Refuses LOUDLY on: blank `because`; an unknown/
-    non-active agent; a target that reads LIVE (seen within 15 min) unless
+    `kind='agent'`: third-party Agent retirement. Stamps retired/retired_by/retired_
+    because, flips objects.status. Not self-scoped or manager-gated: any caller may
+    name any target; `actor` is attribution, not authority. Always releases the target's
+    held seat and mount rows on success. Refuses loudly on: blank `because`; an unknown or
+    non-active agent; a target that reads live (seen within 15 min) unless
     `override_live=True`. `override_live` is ignored for the other three kinds.
 
-    `kind='object'` (thread 92dde6cc) — retire an arbitrary ACTIVE object of no other
-    kind: the shape a stray script or a mis-minted stub leaves behind, none of the
-    three doors above cover. `target` resolves via the generic resolve_ref (UUID,
-    short-id, canonical, or name — any object type). Refuses LOUDLY on: blank
+    `kind='object'`: retire an arbitrary active object of no other
+    kind: the shape a stray script or a mis-minted stub leaves behind, which none of the
+    three kinds above cover. `target` resolves via the generic resolve_ref (UUID,
+    short-id, canonical, or name; any object type). Refuses loudly on: blank
     `because`; an unresolved or already-non-active object; any live link touching it
-    in EITHER direction; or any current assertion from a source other than the
-    layout heartbeat's own bookkeeping (graph_x/graph_y/graph_layout_v are exempt —
+    in either direction; or any current assertion from a source other than the
+    layout heartbeat's own bookkeeping (graph_x/graph_y/graph_layout_v are exempt;
     real content from any other source refuses)."""
     return await _retire_object_impl(
         kind, target, because=because, override_live=override_live, ctx=ctx)
@@ -7541,11 +7580,11 @@ async def retire_object(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "retire_object(kind='seat')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier retirement-tooling consolidation",
 })
 async def retire_seat(seat_id: str, reason: str = "",
                       ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     retire_object(kind='seat')."""
     return await _retire_object_impl(
         "seat", seat_id, because=reason, override_live=False, ctx=ctx)
@@ -7554,11 +7593,11 @@ async def retire_seat(seat_id: str, reason: str = "",
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='sweep_disk')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
                           ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='sweep_disk')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='sweep_disk')."""
     return await _seat_impl("sweep_disk", target=handle, dry_run=dry_run, because=because,
                             ctx=ctx)
 
@@ -7566,24 +7605,24 @@ async def sweep_seat_disk(handle: str, dry_run: bool = True, because: str = "",
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='vacate')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "the seat dispatcher consolidation",
 })
 async def vacate_seat(seat_id: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='vacate')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='vacate')."""
     return await _seat_impl("vacate", target=seat_id, because=because, ctx=ctx)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='retire')",
-    "since": "task #202 wave 3 (msg 6987), repointed by the #202 project dispatcher (msg 7095)",
+    "since": "an earlier project-tooling consolidation",
 })
 async def retire_project(project: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
-    project(action='retire') — the same _retire_object_impl call retire_object(kind=
-    'project') also reaches, the dual-door precedent seat(action='retire') already
-    established for kind='seat'."""
+    """Deprecated: hidden alias, still callable. Forwards to
+    project(action='retire'), the same underlying call that retire_object(kind=
+    'project') also reaches, the same dual-door pattern that seat(action='retire') already
+    uses for kind='seat'."""
     return await _retire_object_impl(
         "project", project, because=because, override_live=False, ctx=ctx)
 
@@ -7591,11 +7630,11 @@ async def retire_project(project: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='identity_evidence')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def project_identity_evidence(seat_id: str, operator_citation: str | None = None,
                                     ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='identity_evidence')."""
     return await _project_impl("identity_evidence", seat_id=seat_id,
                                operator_citation=operator_citation, ctx=ctx)
@@ -7604,12 +7643,12 @@ async def project_identity_evidence(seat_id: str, operator_citation: str | None 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='rename')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def rename_project(project: str, new_name: str, because: str, dry_run: bool = True,
                          merge_into: bool = False,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='rename')."""
     return await _project_impl("rename", project=project, new_name=new_name,
                                because=because, dry_run=dry_run, merge_into=merge_into,
@@ -7644,24 +7683,24 @@ async def _fork_project_impl(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='fork')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def fork_project(
     project: str, fork_into: str, because: str, direction: str = "fork",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to project(action='fork') or
+    """Deprecated: hidden alias, still callable. Forwards to project(action='fork') or
     project(action='unfork'), by `direction` (kept for this alias's own back-compat
     signature; the dispatcher itself exposes fork/unfork as two separate actions,
-    never a direction param — see PROJECT_INPUT_SCHEMA)."""
+    never a direction param)."""
     return await _fork_project_impl(project, fork_into, because, direction, ctx)
 
 
 @mcp.tool(meta={"deprecated": True, "use_instead": "project(action='unfork')",
-                "since": "task #199 lane 2, thread 6778/6788 (repointed #202 msg 7095)"})
+                "since": "the project dispatcher consolidation"})
 async def unfork_project(project: str, fork_into: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='unfork')."""
     return await _fork_project_impl(project, fork_into, because, "unfork", ctx)
 
@@ -7669,10 +7708,10 @@ async def unfork_project(project: str, fork_into: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='create')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def create_project(name: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='create')."""
     return await _project_impl("create", name=name, because=because, ctx=ctx)
 
@@ -7680,11 +7719,11 @@ async def create_project(name: str, because: str, ctx: Context | None = None) ->
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "project(action='assert_property')",
-    "since": "task #202 project dispatcher (msg 7095)",
+    "since": "the project dispatcher consolidation",
 })
 async def assert_project_property(project: str, name: str, value: str,
                                   ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     project(action='assert_property')."""
     return await _project_impl("assert_property", project=project, name=name, value=value,
                                ctx=ctx)
@@ -7693,18 +7732,19 @@ async def assert_project_property(project: str, name: str, value: str,
 @mcp.tool()
 async def peer_seats(seat_a: str, seat_b: str, because: str,
                      ctx: Context | None = None) -> dict[str, Any]:
-    """Mint a SYMMETRIC peer_of bond between two active Seats (ruling d74492ee, spec
-    e6636c7e) — recognition-first: makes the pair legible to mail routing, review
-    assignment, and succession. NOT self-scoped — neither seat need be the caller's own;
+    """Mint a symmetric peer_of bond between two active Seats. Recognition-first: makes
+    the pair legible to mail routing, review assignment, and succession. Not self-scoped:
+    neither seat need be the caller's own;
     the caller is recorded only as `actor` (who made the bond), never a party to it by
     default.
 
-    Refuses LOUDLY on: blank `because`; an unknown/inactive seat on either side;
-    seat_a==seat_b; or either seat already carrying an active peer_of edge — v1 is PAIRS
-    ONLY, no chains (a triad is deferred to v1.1, after the first pair survives contact)."""
+    Refuses loudly on: blank `because`; an unknown or inactive seat on either side;
+    seat_a==seat_b; or either seat already carrying an active peer_of edge. This
+    version supports pairs only, no chains (a triad may be supported in a future
+    version, after the first pair survives contact)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — peering two seats is a deliberate act on the "
+        return {"error": "mount first, peering two seats is a deliberate act on the "
                          "record", "why": _anchorless(ctx)}
     from src.orchestrator.seats import peer_seats as _peer_seats
     return await _peer_seats(Actions(await _pool_get()), seat_a, seat_b, because=because,
@@ -7713,12 +7753,12 @@ async def peer_seats(seat_a: str, seat_b: str, because: str,
 
 @mcp.tool(meta={
     "deprecated": True,
-    "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "reason": "zero MCP traffic in a 3-week window, no CLI/daemon/slash bypass found",
+    "since": "an earlier retirement pass",
 })
 async def unpeer(seat_a: str, seat_b: str, because: str,
                  ctx: Context | None = None) -> dict[str, Any]:
-    """Invalidate an active peer_of bond between two Seats — the compensating-event
+    """Invalidate an active peer_of bond between two Seats, the compensating-event
     complement to peer_seats. Direction-agnostic: the bond is symmetric, so unpeer(a, b)
     and unpeer(b, a) heal the same edge.
 
@@ -7726,7 +7766,7 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
     active peer_of edge between the named pair."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — unpeering two seats is a deliberate act on the "
+        return {"error": "mount first. Unpeering two seats is a deliberate act on the "
                          "record", "why": _anchorless(ctx)}
     from src.orchestrator.seats import unpeer as _unpeer
     return await _unpeer(Actions(await _pool_get()), seat_a, seat_b, because=because,
@@ -7736,27 +7776,26 @@ async def unpeer(seat_a: str, seat_b: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def hold_action(holder: str, held: str, act: str, because: str, hours: float = 24,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """Mint a mutual HOLD (task #76 item 4a, spec e6636c7e) — a peer's power to say HOLD on
-    its OWN peer's specific irreversible act, time-boxed. `holder` is the seat calling the
-    hold, `held` is the seat whose act is being held, `act` names the specific act, `hours`
-    sets the time-box (default 24). Reuses the ordinary obligation Thread shape wholesale —
-    no new object type. Resolve it the ordinary way, with `resolve_thread` on the returned
-    `held` id, once it's respected or the act proceeds anyway. The spec's own auto-
-    escalation-to-the-operator half (an unresolved hold past its deadline reaching the
-    desk unprompted) is NOT built yet — this only records the hold and its deadline
-    honestly; nothing sweeps for expiry today.
+    """Create a mutual hold: one seat's power to place a time-boxed hold on its own
+    peer's specific irreversible action. `holder` is the seat calling the hold, `held`
+    is the seat whose action is being held, `act` names the specific action, `hours`
+    sets the time-box (default 24). Reuses the ordinary obligation thread mechanism, no
+    new object type. Resolve it the ordinary way, with `resolve_thread` on the returned
+    `held` id, once it's respected or the action proceeds anyway. Automatic escalation
+    to a human when a hold expires unresolved is not built yet; this only records the
+    hold and its deadline honestly, nothing sweeps for expiry today.
 
-    Refuses LOUDLY on: blank `act`/`because`; `holder==held`; an unknown/inactive seat on
-    either side; non-positive `hours`; or holder/held not currently an active peer_of
-    pair — a hold is a peer's own power, never a stranger's."""
+    Refuses on: blank `act`/`because`; `holder==held`; an unknown or inactive seat on
+    either side; non-positive `hours`; or holder/held not currently an active peer pair.
+    A hold is a peer's own power, never available between unrelated parties."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — holding a peer's act is a deliberate act on the "
-                         "record", "why": _anchorless(ctx)}
+        return {"error": "mount first. Holding a peer's action is a deliberate act on "
+                         "the record", "why": _anchorless(ctx)}
     from src.orchestrator.seats import hold_action as _hold_action
     return await _hold_action(Actions(await _pool_get()), holder, held, act=act,
                               because=because, hours=hours, actor=ident.agent_id)
@@ -7765,16 +7804,15 @@ async def hold_action(holder: str, held: str, act: str, because: str, hours: flo
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def peer_reachable(seat_id: str) -> list[str]:
-    """Every seat a search for `seat_id`'s own queue should also cover (task #76 item 5b,
-    spec e6636c7e's "the pair faces the tree through both peers") — DISCOVERABILITY ONLY,
-    per Thoth's ruling: mail delivery itself is untouched, this never widens who a DM
-    reaches. Returns `[seat_id]` alone when unpeered/unknown, or `[seat_id, peer]` when an
-    active peer_of bond exists. There is no `review` verb/object in this codebase today —
-    item 5's own missing piece (5c) — so this is scoped for whatever future surface reads
-    one seat's queue, not a review-assignment feature that doesn't exist yet."""
+    """Every seat a search for `seat_id`'s own queue should also cover. This is about
+    discoverability only: mail delivery itself is untouched, this never widens who a
+    message reaches. Returns `[seat_id]` alone when unpeered or unknown, or `[seat_id,
+    peer]` when an active peer bond exists. There is no review verb or object in this
+    codebase today, so this is scoped for whatever future surface reads one seat's
+    queue, not a review-assignment feature that doesn't exist yet."""
     pool = await _pool_get()
     from src.orchestrator.seats import peer_reachable as _peer_reachable
     return await _peer_reachable(pool, seat_id)
@@ -7783,15 +7821,14 @@ async def peer_reachable(seat_id: str) -> list[str]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def peer_ledger(seat_a: str, seat_b: str) -> list[dict[str, Any]]:
-    """The pair's shared reciprocity ledger (task #76 item 3, spec e6636c7e) — every OPEN
-    thread owned by EITHER seat, oldest first, as one resumable list. Zero new storage:
-    open_thread/resolve_thread stay the only write path, this only reads — what makes a
-    parked pair resumable is exactly a Thread staying open on purpose. Doesn't require an
-    active peer_of bond between the two named seats — a healed pair's own history stays
-    readable."""
+    """The pair's shared ledger: every open thread owned by either seat, oldest first,
+    as one resumable list. No new storage; open_thread/resolve_thread stay the only
+    write path, this only reads. What makes a parked pair resumable is a thread staying
+    open on purpose. Does not require an active peer bond between the two named seats;
+    a healed pair's own history stays readable."""
     pool = await _pool_get()
     from src.orchestrator.seats import peer_ledger as _peer_ledger
     return await _peer_ledger(pool, seat_a, seat_b)
@@ -7852,13 +7889,13 @@ async def _seat_edge_impl(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='attach'/'detach')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def seat_edge(
     action: str, worker: str, manager: str | None = None, because: str = "",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='attach'/'detach')."""
     return await _seat_edge_impl(action, worker, manager=manager, because=because, ctx=ctx)
 
@@ -7866,10 +7903,10 @@ async def seat_edge(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat_edge(action='detach')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat_edge(action='detach')."""
     return await _seat_edge_impl("detach", seat, manager=None, because=because, ctx=ctx)
 
@@ -7877,12 +7914,12 @@ async def detach_seat(seat: str, because: str, ctx: Context | None = None) -> di
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat_edge(action='attach')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def attach_seat(
     worker: str, manager: str, evidence: str, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat_edge(action='attach')."""
     return await _seat_edge_impl("attach", worker, manager=manager, because=evidence, ctx=ctx)
 
@@ -7890,11 +7927,11 @@ async def attach_seat(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='invalidate_works_in')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def invalidate_works_in(stale_project: str, because: str,
                               ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='invalidate_works_in')."""
     return await _seat_impl("invalidate_works_in", stale_project=stale_project,
                             because=because, ctx=ctx)
@@ -7903,14 +7940,14 @@ async def invalidate_works_in(stale_project: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='transition_project')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def transition_seat_project(
     fabricated_project: str | None = None, real_project: str | None = None,
     because: str = "", repos: list[str] | None = None, dry_run: bool = True,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='transition_project')."""
     return await _seat_impl("transition_project", fabricated_project=fabricated_project,
                             real_project=real_project, because=because, repos=repos,
@@ -8160,43 +8197,43 @@ async def agent(
     execute: bool = False, subagent_id: str | None = None, dry_run: bool = True,
     retract: bool = False, repos: list[str] | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE AGENT OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
-    many actions over Agent identity/lineage. See `describe('agent')` for the full
-    per-action shape, or call with a wrong/missing param — the error names exactly what
-    that action expects.
+    """The agent object-type dispatcher: one tool, many actions over agent identity and
+    lineage. See `describe('agent')` for the full per-action shape, or call with a
+    wrong or missing param; the error names exactly what that action expects.
 
-    ACTION TABLE — action: what it does (required params beyond action):
+    ACTION TABLE, action: what it does (required params beyond action):
       claim_name: self-name your own mounted identity (name)
       correct_project: heal an already-polluted agent's project/seat_generation stamps,
         third-party (agent_id; at least one of project/seat_generation)
       correct_succession: correct an agent's own succeeded_by pointer (agent_id,
-        because, value="" or retract=True to retract). Refuses blank because or a LIVE target
-        unless override_live=True.
-      retire: third-party Agent retirement, always releases the held seat (agent_id,
+        because, value="" or retract=True to retract). Refuses blank because or a live
+        target unless override_live=True.
+      retire: third-party agent retirement, always releases the held seat (agent_id,
         because)
-      fleet_reconcile: the bulk reaper over stale/anonymous fleet mounts (dry run by
+      fleet_reconcile: the bulk reaper over stale or anonymous fleet mounts (dry run by
         default; execute=True to act)
-      fleet_prune: dead_transcript + unclaimed_body mounts, narrower than fleet_reconcile
-        (never touches its folding buckets) — dry run by default, execute=True to act
-      file_subagent: file ONE ephemeral subagent under its spawner (subagent_id)
-      file_subagents: THE SWEEP — file_subagent's own resolver over every active
+      fleet_prune: dead_transcript and unclaimed_body mounts, narrower than
+        fleet_reconcile (never touches its folding buckets); dry run by default,
+        execute=True to act
+      file_subagent: file one ephemeral subagent under its spawner (subagent_id)
+      file_subagents: the sweep: file_subagent's own resolver over every active
         subagent in scope (project=None is fleet-wide; dry run by default)
-      retire_governs: THIRD-PARTY governs-edge retirement (agent_id, repos=[names to
-        drop], because) — never moves anything (unlike backfill_agent_project_links'
+      retire_governs: third-party governs-edge retirement (agent_id, repos=[names to
+        drop], because). Never moves anything (unlike backfill_agent_project_links'
         own off-head repair, the wrong shape for garbage), never guesses which edges are
         real (the caller names them). Per-repo: a name that doesn't resolve to a known
-        SoftwareProject, or resolves but the agent carries no live governs edge to it,
+        software project, or resolves but the agent carries no live governs edge to it,
         is reported in `not_found`/`no_edge` rather than aborting the whole batch.
-      invalidate_works_in: THIRD-PARTY works_in duplicate repair (agent_id; project=the
-        STALE project to drop, the same shared slot correct_project's own `project` uses
-        above; because) — refuses agent_id naming your own mounted identity (use
+      invalidate_works_in: third-party works_in duplicate repair (agent_id; project=the
+        stale project to drop, the same shared slot correct_project's own `project` uses
+        above; because). Refuses agent_id naming your own mounted identity (use
         seat(action='invalidate_works_in') for that, self-scoped and auto-filled). The
-        SAME underlying repair, exposed for a mind acting on someone ELSE's duplicate
+        same underlying repair, exposed for a caller acting on someone else's duplicate
         (a mechanical hygiene sweep, a batch-move cleanup) rather than its own.
 
     Not covered here: self-scoped `retire()` (different auth shape, retires the
-    CALLING agent's own session); `walk_in` (already seat(action='walk_in')); merge/
-    unmerge (polymorphic across Agent/Seat/Project, stay named)."""
+    calling agent's own session); `walk_in` (already seat(action='walk_in')); merge/
+    unmerge (polymorphic across agent/seat/project, stay named)."""
     return await _agent_impl(
         action, name=name, agent_id=agent_id, project=project,
         seat_generation=seat_generation, value=value, because=because,
@@ -8207,12 +8244,12 @@ async def agent(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='correct_project')",
-    "since": "task #202 agent dispatcher (msg 7162)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def correct_agent_house(agent_id: str, project: str | None = None,
                               seat_generation: int | None = None,
                               ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     agent(action='correct_project')."""
     return await _agent_impl("correct_project", agent_id=agent_id, project=project,
                              seat_generation=seat_generation, ctx=ctx)
@@ -8221,14 +8258,13 @@ async def correct_agent_house(agent_id: str, project: str | None = None,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='retire')",
-    "since": "task #202 wave 3 (msg 6987), repointed by the #202 agent dispatcher (msg 7162)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def retire_agent(agent_id: str, because: str, override_live: bool = False,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
-    agent(action='retire') — the same _retire_object_impl call retire_object(kind=
-    'agent') also reaches, the dual-door precedent seat/project(action='retire')
-    already established."""
+    """Deprecated: hidden alias, still callable. Forwards to
+    agent(action='retire'), the same underlying call retire_object(kind='agent') also
+    reaches."""
     return await _retire_object_impl(
         "agent", agent_id, because=because, override_live=override_live, ctx=ctx)
 
@@ -8236,23 +8272,23 @@ async def retire_agent(agent_id: str, because: str, override_live: bool = False,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "backfill(target='agent_project_links')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def backfill_agent_project_links(
     actor: str, dry_run: bool = True, only_bases: list[str] | None = None,
 ) -> dict[str, Any]:
-    """THE MISSING DOOR onto `backfill_agent_project_links` (thread 20af2c95): the write-
-    side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs onto its
-    heir) shipped 2026-08-04, but the one-time repair for edges already stranded on off-
-    head generations before then had no reachable surface — importable only (382067d9).
-    `dry_run=True` (default) plans only — which off-head agents would give up which edges,
-    to which living head — no write. `dry_run=False` writes via the same
+    """A repair tool for `backfill_agent_project_links`. The write-side fix
+    (mint_heir/fold_agent invalidating a predecessor's works_in/governs onto its heir)
+    shipped earlier, but the one-time repair for edges already stranded on off-head
+    generations before then had no reachable surface; it was importable only.
+    `dry_run=True` (default) plans only, listing which off-head agents would give up
+    which edges to which living head, with no write. `dry_run=False` writes via the same
     `move_agent_project_links` the write-side fix already uses. `only_bases` scopes a
-    write to specific lineages; omitted, every off-head agent in scope moves. Executing
-    the write is the operator's own call, same class as #150's repairs.
+    write to specific lineages; if omitted, every off-head agent in scope moves.
+    Executing the write is an operator's own call, the same class as other repair tools.
 
-    KEPT AT ITS ORIGINAL SIGNATURE (explicit `actor`, no ctx/because) rather than routed
-    through the new dispatcher's shared body — the new `backfill(target='agent_project_
+    Kept at its original signature (explicit `actor`, no ctx/because) rather than routed
+    through the newer dispatcher's shared body: the newer `backfill(target='agent_project_
     links', ...)` derives actor from the caller's mounted identity instead, a deliberate
     behavior change not safe to impose on this deprecated name's existing callers."""
     from src.orchestrator.agents import backfill_agent_project_links as _backfill
@@ -8262,14 +8298,13 @@ async def backfill_agent_project_links(
 
 @mcp.tool()
 async def list_assertions(ref: str, name: str) -> dict[str, Any]:
-    """READ-ONLY. THE DOOR retire_assertion's own `superseded_id` NEEDS AND NOTHING ELSE
-    EXPOSED (382067d9, the fifth-ledger-disease specimen — a verb with a surface whose
-    required argument nothing could obtain): every CURRENT assertion of `name` on the
-    object `ref` resolves to, each carrying its own row `id` — the exact value
-    retire_assertion's `superseded_id` wants. dossier()/trace_evidence() both resolve
-    through the belief-winner or a flat value list; neither ever surfaced this id. No
-    write, no ranking beyond confidence/recency, no bulk scope — the smallest surface
-    that unblocks a targeted, per-row retire_assertion call."""
+    """Read-only. Exposes exactly what `retire_assertion`'s own `superseded_id`
+    parameter needs and nothing else: every current assertion of `name` on the object
+    `ref`, each carrying its own row `id`, the exact value `retire_assertion`'s
+    `superseded_id` wants. `dossier()`/`trace_evidence()` both resolve through the
+    winning belief or a flat value list; neither surfaces this id. No write, no ranking
+    beyond confidence/recency, no bulk scope: the smallest surface that unblocks a
+    targeted, per-row `retire_assertion` call."""
     from src.orchestrator.retirement import list_assertions as _list_assertions
     return await _list_assertions(Actions(await _pool_get()), ref=ref, name=name)
 
@@ -8296,16 +8331,16 @@ async def _abstained_derivations_impl(
 async def abstained_derivations(
     link_type: str | None = None, limit: int = 100, scope: str = "all",
 ) -> dict[str, Any]:
-    """READ-ONLY. Every `derive_or_abstain` refusal — `from_id` and every candidate
+    """Read-only. Every `derive_or_abstain` refusal: `from_id` and every candidate
     resolved to (type, summary), never bare uuids. `link_type=None` pools every lane; a
     value scopes to that one namespaced property. `count` is the true total; `sample` is
     bounded by `limit`, newest-abstained first.
 
-    `scope` narrows WHICH abstentions, structurally: "all" (default) | "retryable" (the
-    zero-candidate subset, safe to retry as time passes) | "retryable_ambiguous" (the
-    2+-candidate subset reduced by elimination alone to exactly one survivor — adds
+    `scope` narrows which abstentions, structurally: "all" (default), "retryable" (the
+    zero-candidate subset, safe to retry as time passes), or "retryable_ambiguous" (the
+    2+-candidate subset reduced by elimination alone to exactly one survivor; adds
     `surviving_candidate`/`original_candidate_count` per row, `eliminated_to_zero` for
-    the zero-survivor population). Neither retryable scope re-attempts anything — see
+    the zero-survivor population). Neither retryable scope re-attempts anything; see
     retry_ambiguous_abstentions for the write half both retryable scopes name a
     target for."""
     return await _abstained_derivations_impl(scope, link_type, limit)
@@ -8314,35 +8349,37 @@ async def abstained_derivations(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "abstained_derivations(scope='retryable')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def retryable_abstentions(link_type: str | None = None, limit: int = 100) -> dict[str, Any]:
-    """READ-ONLY. The zero-candidate SUBSET of abstained_derivations, structurally —
+    """Read-only. The zero-candidate subset of abstained_derivations, structurally
     filtered in SQL, not by a condition a caller could widen. A zero-candidate abstention
-    means the lookup found nothing YET, which time can change; a 2+-candidate one is a
-    genuine ambiguity time cannot resolve, and never appears here. Oldest-abstained first
-    — names which objects are safe to re-attempt; does not re-attempt them. Re-run your
-    own lane's lookup on each and call derive_or_abstain(..., retried=True) yourself."""
+    means the lookup found nothing yet, which time can change; a 2+-candidate one is a
+    genuine ambiguity time cannot resolve, and never appears here. Oldest-abstained
+    first. Names which objects are safe to re-attempt; does not re-attempt them. Re-run
+    your own lane's lookup on each and call derive_or_abstain(..., retried=True)
+    yourself."""
     return await _abstained_derivations_impl("retryable", link_type, limit)
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "abstained_derivations(scope='retryable_ambiguous')",
-    "since": "task #199 lane 2, families wave (thread 6854)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def retryable_ambiguous_abstentions(
     link_type: str | None = None, limit: int = 100,
 ) -> dict[str, Any]:
-    """READ-ONLY. The sibling door retryable_abstentions doesn't cover: every LIVE 2+-
-    candidate abstention whose ORIGINAL candidate set has, by elimination alone (a merge,
-    a retire, an invalidation — never a fresh re-derivation), shrunk to exactly one
-    `status='active'` survivor. Structurally safe the same way retryable_abstentions is —
-    only the stored candidate ids' current status is rechecked, nothing is re-derived, so
-    a0339e16 is never relaxed. `eliminated_to_zero` (alongside `count`) names the DIFFERENT
-    population whose every candidate is now gone — real, but nothing to retry-mint from,
-    never folded into `count`/`sample`. Oldest-abstained first; names what's safe to
-    retry, never retries it. See retry_ambiguous_abstentions for the write half."""
+    """Read-only. The sibling tool retryable_abstentions doesn't cover: every live 2+-
+    candidate abstention whose original candidate set has, by elimination alone (a merge,
+    a retire, an invalidation, never a fresh re-derivation), shrunk to exactly one
+    active survivor. Structurally safe the same way retryable_abstentions is: only the
+    stored candidate ids' current status is rechecked, nothing is re-derived, so the
+    original ambiguity refusal is never relaxed. `eliminated_to_zero` (alongside `count`)
+    names the different population whose every candidate is now gone: real, but nothing
+    to retry-mint from, never folded into `count`/`sample`. Oldest-abstained first; names
+    what's safe to retry, never retries it. See retry_ambiguous_abstentions for the
+    write half."""
     return await _abstained_derivations_impl("retryable_ambiguous", link_type, limit)
 
 
@@ -8352,15 +8389,15 @@ async def retry_ambiguous_abstentions(
     ctx: Context | None = None,
 ) -> dict[str, Any]:
     """Mints the one surviving candidate for every row retryable_ambiguous_abstentions
-    names, via derive_or_abstain(retried=True) — lane-agnostic (no lane-specific lookup
-    re-run, only the stored candidate ids' own current status), so this one verb covers
-    every lane's ambiguous abstentions, present or future, not just in_repo's own.
+    names, via derive_or_abstain(retried=True). Lane-agnostic (no lane-specific lookup
+    re-run, only the stored candidate ids' own current status), so this one tool covers
+    every lane's ambiguous abstentions, present or future, not just one lane's own.
 
-    DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent."""
+    Dry run is the default. `dry_run=False` requires a non-blank `because`. Idempotent."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first. A backfill is a deliberate act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
     return await capture.retry_ambiguous_abstentions(
         Actions(await _pool_get()), actor=ident.agent_id, dry_run=dry_run, because=because,
         link_type=link_type)
@@ -8396,23 +8433,22 @@ async def _current_flags_impl(
 async def current_flags(
     action: str, dry_run: bool = True, limit: int = 50, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE current_assertions.is_current KERNEL-INTEGRITY DOOR (thread 09bde57e), two
-    actions over the same anomaly: every row where `is_current=true` (migration 0047's
-    maintained flag) YET a real `supersedes` FK already points at it from another
-    assertion — a stale flag current_assertions is still trusting.
+    """A kernel-integrity tool for the current_assertions.is_current flag, two actions
+    over the same anomaly: every row where `is_current=true` (a maintained flag) yet a
+    real `supersedes` foreign key already points at it from another assertion. A stale
+    flag current_assertions is still trusting.
 
-    `action='inspect'` — pure read, finds the anomaly, fixes nothing. `count` is the
-    TRUE total population (never capped); `sample` is bounded by `limit` (default 50),
+    `action='inspect'`: pure read, finds the anomaly, fixes nothing. `count` is the true
+    total population (never capped); `sample` is bounded by `limit` (default 50),
     oldest-observed first. Not a per-object lookup like list_assertions.
 
-    `action='repair'` — THE BACKFILL for `inspect`'s own population. `dry_run=True`
-    (default): list-only, names how many rows WOULD flip and their ids, writes nothing —
-    safe to call unmounted-curious. `dry_run=False` is the operator's own call, never
+    `action='repair'`: the backfill for `inspect`'s own population. `dry_run=True`
+    (default): list-only, names how many rows would flip and their ids, writes nothing,
+    safe to call without being mounted. `dry_run=False` is an operator's own call, never
     automatic: flips `is_current=false` on up to `limit` (pass a higher value than the
-    shared default of 50 for a real repair pass — the pre-fold repair door defaulted to
-    500) stale rows in one batched UPDATE, oldest-observed first. Batched because the
-    live population is five figures (123,914 at last count, d8225e71) — walk it in
-    repeated calls, not one UPDATE touching all of it. Idempotent: a row already flipped
+    shared default of 50 for a real repair pass) stale rows in one batched update,
+    oldest-observed first. Batched because the live population is large; walk it in
+    repeated calls, not one update touching all of it. Idempotent: a row already flipped
     drops out on its own, so re-running after a partial run or a failure is always safe."""
     return await _current_flags_impl(action, dry_run=dry_run, limit=limit, ctx=ctx)
 
@@ -8420,10 +8456,10 @@ async def current_flags(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "current_flags(action='inspect')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     current_flags(action='inspect')."""
     return await _current_flags_impl("inspect", dry_run=True, limit=limit, ctx=None)
 
@@ -8431,12 +8467,12 @@ async def stale_current_flags(limit: int = 50) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "current_flags(action='repair')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def repair_stale_current_flags(
     dry_run: bool = True, limit: int = 500, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     current_flags(action='repair')."""
     return await _current_flags_impl("repair", dry_run=dry_run, limit=limit, ctx=ctx)
 
@@ -8444,19 +8480,19 @@ async def repair_stale_current_flags(
 @mcp.tool()
 async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, because: str,
                            ctx: Context | None = None) -> dict[str, Any]:
-    """THE CROSS-SOURCE SUPERSEDE — retires another source's assertion explicitly, the
-    class assert_property's own automatic (same-source-only) supersession cannot reach:
-    a peer's correction of another agent's bad self-declaration. Without this, a
+    """The cross-source supersede: retires another source's assertion explicitly, the
+    class assert_property's own automatic same-source-only supersession cannot reach: a
+    peer's correction of another agent's bad self-declaration. Without this, a
     different-source correction and the wrong original both stay "current" at once.
 
-    Deliberately narrow — retires ONE named assertion by id, never "whatever's current
+    Deliberately narrow: retires one named assertion by id, never "whatever's current
     now"; the caller must already know exactly which row is wrong. `because` is
-    required. Refuses loudly: `ref` unresolved; `superseded_id` not a `name` assertion
+    required. Refuses on: `ref` unresolved; `superseded_id` not a `name` assertion
     on that object; already superseded; blank `because`."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a retirement is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first. A retirement is a deliberate act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
     from src.orchestrator.retirement import retire_assertion as _retire_assertion
     return await _retire_assertion(Actions(await _pool_get()), ref=ref, name=name,
                                    superseded_id=superseded_id, value=value, because=because,
@@ -8466,25 +8502,25 @@ async def retire_assertion(ref: str, name: str, superseded_id: int, value: str, 
 @mcp.tool()
 async def retire_link(from_ref: str, to_ref: str, link_type: str, because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """THE GENERIC LINK RETRACTION (thread badb4040) — `retire_assertion`'s own sibling
-    for the OTHER half of "retract a wrongly-minted X": a link, not a property. Agent/
-    thread-agnostic, any (from, to, type) triple on any object types — record_decision's
-    own answers=/grounded_by=, thread(action='resolve')'s own resolved_by, and every
-    other per-type door keep minting links exactly as before; this is the general door
-    for when one of THOSE mints the wrong edge (a fuzzy-substring resolves= mis-citation
-    hitting an unrelated Thread is the exact live case that opened this thread).
+    """The generic link retraction: `retire_assertion`'s own sibling for the other half
+    of "retract a wrongly-minted X": a link, not a property. Object-type-agnostic, any
+    (from, to, type) triple on any object types. record_decision's own answers=/
+    grounded_by=, thread(action='resolve')'s own resolved_by, and every other per-type
+    tool keep minting links exactly as before; this is the general tool for when one of
+    those mints the wrong edge (a fuzzy-substring mis-citation hitting an unrelated
+    thread is the kind of live case that motivated this).
 
-    NEVER A DELETE: `Actions.invalidate_link` stamps `valid_until`, event-sourced (an
-    audit row + an outbox `link_invalidated` event carrying `because` as `reason`, the
-    compensating record itself) — the row stays exactly where it was created, in whose
-    name, and why. `because` is required. Refuses loudly: either ref unresolved, or no
+    Never a delete: `Actions.invalidate_link` stamps `valid_until`, event-sourced (an
+    audit row plus an outbox `link_invalidated` event carrying `because` as `reason`,
+    the compensating record itself); the row stays exactly where it was created, in
+    whose name, and why. `because` is required. Refuses on: either ref unresolved, or no
     currently-active link of `link_type` exists on that exact triple (never a silent
-    no-op — a caller here almost certainly meant a real edge, so a mismatched ref/type
+    no-op; a caller here almost certainly meant a real edge, so a mismatched ref/type
     surfaces as a refusal, not a quiet success)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a retirement is a mind's act, and the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first. A retirement is a deliberate act, and the graph "
+                         "must know whose", "why": _anchorless(ctx)}
     from src.orchestrator.retirement import retire_link as _retire_link
     return await _retire_link(Actions(await _pool_get()), from_ref=from_ref, to_ref=to_ref,
                               link_type=link_type, because=because, actor=ident.agent_id)
@@ -8493,11 +8529,11 @@ async def retire_link(from_ref: str, to_ref: str, link_type: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='set_attended')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def set_seat_attended(seat_id: str, attended: str, because: str,
                             ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='set_attended')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='set_attended')."""
     return await _seat_impl("set_attended", target=seat_id, attended=attended,
                             because=because, ctx=ctx)
 
@@ -8505,11 +8541,11 @@ async def set_seat_attended(seat_id: str, attended: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='rename')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def rename_seat(seat_id: str, new_handle: str, because: str,
                       ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='rename')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='rename')."""
     return await _seat_impl("rename", target=seat_id, new_handle=new_handle, because=because,
                             ctx=ctx)
 
@@ -8517,11 +8553,11 @@ async def rename_seat(seat_id: str, new_handle: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='bind_tree')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='bind_tree')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='bind_tree')."""
     return await _seat_impl("bind_tree", target=seat_id, tree_cwd=tree_cwd, because=because,
                             ctx=ctx)
 
@@ -8529,12 +8565,12 @@ async def bind_seat_tree(seat_id: str, tree_cwd: str, because: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='reissue_seat_dir')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def reissue_office(
     seat_id: str, because: str, adopt: bool = False, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='reissue_seat_dir')."""
     return await _seat_impl("reissue_seat_dir", target=seat_id, because=because,
                             adopt=adopt, ctx=ctx)
@@ -8543,11 +8579,10 @@ async def reissue_office(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='file_subagent')",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822); repointed by the #202 "
-             "agent dispatcher (msg 7162)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     agent(action='file_subagent')."""
     return await _agent_impl("file_subagent", subagent_id=subagent_id, ctx=ctx)
 
@@ -8555,11 +8590,11 @@ async def file_subagent(subagent_id: str, ctx: Context | None = None) -> dict[st
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='file_subagents')",
-    "since": "task #202 agent dispatcher (msg 7162)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def file_subagents(project: str | None = None, dry_run: bool = True,
                          ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     agent(action='file_subagents')."""
     return await _agent_impl("file_subagents", project=project, dry_run=dry_run, ctx=ctx)
 
@@ -8567,27 +8602,26 @@ async def file_subagents(project: str | None = None, dry_run: bool = True,
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def unwitnessed_spawns(agent_id: str | None = None,
                              ctx: Context | None = None) -> dict[str, Any]:
-    """THE SELF-AUDIT (obligation cabfb4b2, Ptah VII's rotten-apple report): every LIVE
-    `spawned_by` child of `agent_id` for which NO `subagents/agent-<id>.jsonl` file has EVER
-    materialized anywhere on disk — "what is executing under my identity right now that I
-    did not spawn." Omit `agent_id` to audit YOUR OWN identity (a seat's own check); name
-    another to audit theirs (the operator's own check, or a peer's — a pure read, never
-    gated the way a write would be).
+    """A self-audit: every live `spawned_by` child of `agent_id` for which no
+    `subagents/agent-<id>.jsonl` file has ever materialized anywhere on disk, that is,
+    what is executing under this identity that was never spawned by it as far as the
+    record shows. Omit `agent_id` to audit your own identity (a seat's own check); name
+    another to audit theirs (an operator's check, or a peer's; a pure read, never gated
+    the way a write would be).
 
-    A HIT IS A LEAD, NOT A VERDICT — Ptah's own specimen retracted once already (msg 4993):
-    a subagent Ra spawned and briefed "you are Ptah" was correctly parented to Ra, not a
-    graph defect. Checked one live hypothesis (Thoth, msg 5008) against Ptah's real
-    transcript before shipping this docstring: whether a sidechain turn could be recorded
-    INLINE in the parent's own transcript (isSidechain=true) rather than as a separate
-    subagents/ file, which would make a hit here a false alarm. Zero `isSidechain:true`
-    lines exist anywhere in Ptah's own transcript — that specific escape hatch does not
-    explain his specimens, but a caller should not assume it can never apply elsewhere
-    without checking the same way. This tool reads; it never files or folds anything found
-    here — see obligation cabfb4b2 for the fix shape still pending live evidence."""
+    A hit is a lead, not a verdict: one earlier specimen was retracted after
+    investigation, when a subagent spawned and briefed as a different identity turned
+    out to be correctly parented to its real spawner, not a graph defect. One live
+    hypothesis was checked against a real transcript before shipping this tool: whether
+    a sidechain turn could be recorded inline in the parent's own transcript rather than
+    as a separate subagents file, which would make a hit here a false alarm. That
+    specific escape hatch did not explain the checked specimens, but a caller should not
+    assume it can never apply elsewhere without checking the same way. This tool reads;
+    it never files or folds anything it finds."""
     from pathlib import Path
 
     from src.orchestrator.lineage import unwitnessed_spawns as _unwitnessed
@@ -8633,25 +8667,25 @@ async def fold_review(
     action: str, candidate_id: int | None = None, decision: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE ARCHAEOLOGIST'S TRAY, propose then judge (thread b975851b), two actions over
-    the same agent-identity-merge tray.
+    """A propose-then-judge review tray, two actions over the same agent-identity-merge
+    tray.
 
-    `action='list'` — sweep the registry and disk for anonymous agents that evidence
-    says were never distinct minds (view-aliases: a mount row with no transcript and no
-    daemon receipt, co-resident with a session that has a body; restart-mints: an
+    `action='list'`: sweep the registry and disk for anonymous agents that evidence says
+    were never distinct identities (view-aliases: a mount row with no transcript and no
+    daemon receipt, co-resident with a session that has a live body; restart-mints: an
     anonymous mount in a named lineage's own home) and queue them as review-gated merge
-    candidates. PROPOSALS ONLY — nothing folds. Returns the pending tray (score-ranked,
-    each with its cited signals); judge each with `action='resolve'`. Rejected pairs are
-    remembered and never re-proposed. Also carries `unresumed_heads` (ef88e2bb) — a
-    SEPARATE non-fold class, never resolved via this door — a human call each time.
+    candidates. Proposals only; nothing merges here. Returns the pending tray (score-
+    ranked, each with its cited signals); judge each with `action='resolve'`. Rejected
+    pairs are remembered and never re-proposed. Also carries `unresumed_heads`, a
+    separate class never resolved via this tool; a human call each time.
 
-    `action='resolve'` — judge ONE proposal from the tray (`candidate_id`, `decision`
-    both required). `decision='merged'` executes the ESTATE-carrying fold (mail, mount
-    rows, threads land on the living head) — OPERATOR-GATED, ENFORCED: inherits
-    fold_agent's own operator-actor gate unchanged, never a second copy to drift.
-    `decision='rejected'` links the pair not_same_as, never re-proposed — OPEN to any
-    mounted caller, deliberately: a rejection judges two things are NOT the same mind,
-    carrying none of 'merged's blast radius."""
+    `action='resolve'`: judge one proposal from the tray (`candidate_id`, `decision`
+    both required). `decision='merged'` executes the full fold (mail, mount rows,
+    threads land on the living head), operator-gated and enforced: inherits fold_agent's
+    own operator-actor gate unchanged, never a second copy to drift out of sync.
+    `decision='rejected'` links the pair as not the same identity, never re-proposed,
+    open to any mounted caller deliberately: a rejection judges two things are not the
+    same identity, carrying none of a merge's blast radius."""
     return await _fold_review_impl(action, candidate_id=candidate_id, decision=decision,
                                    ctx=ctx)
 
@@ -8659,10 +8693,10 @@ async def fold_review(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "fold_review(action='list')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     fold_review(action='list')."""
     return await _fold_review_impl("list", candidate_id=None, decision=None, ctx=ctx)
 
@@ -8670,11 +8704,11 @@ async def fold_candidates(ctx: Context | None = None) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "fold_review(action='resolve')",
-    "since": "task #202 wave 4 (msg 7034)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def resolve_fold(candidate_id: int, decision: str,
                        ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     fold_review(action='resolve')."""
     return await _fold_review_impl("resolve", candidate_id=candidate_id, decision=decision,
                                    ctx=ctx)
@@ -8683,11 +8717,11 @@ async def resolve_fold(candidate_id: int, decision: str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "agent(action='fleet_reconcile')",
-    "since": "task #202 agent dispatcher (msg 7162)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def fleet_reconcile(execute: bool = False,
                           ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     agent(action='fleet_reconcile')."""
     return await _agent_impl("fleet_reconcile", execute=execute, ctx=ctx)
 
@@ -8695,10 +8729,10 @@ async def fleet_reconcile(execute: bool = False,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='establish_seat_dir')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='establish_seat_dir')."""
     return await _seat_impl("establish_seat_dir", target=seat, ctx=ctx)
 
@@ -8706,32 +8740,32 @@ async def establish_office(seat: str, ctx: Context | None = None) -> dict[str, A
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "deprecated in a prior cleanup pass",
 })
 async def lift(ref: str, handle: str, subagent_id: str | None = None,
                subagent_type: str | None = None, session_anchor: str | None = None,
                ctx: Context | None = None) -> dict[str, Any]:
-    """Pull a NAMED, QUIET rogue out of its ad hoc cwd and into a clean osiris seat
-    directory — the P2V move: import a running-but-unmanaged instance, preserve its
-    state, give it a clean managed identity. Composes `identify_agent(ref)` to resolve
-    the target (refuses on 0 matches, on >1 — an ambiguous multi-tenant cwd, name a
-    specific `agent:` id instead — and on a LIVE match: moving a live seat splits its
-    running session's history between two homes, close its tab first),
-    `claim_name(handle)` (propagating its own real refusals: a visitor, a name held
-    live elsewhere, a cross-project collision), and
-    `establish_office` (the actual move). `ref` accepts anything `identify_agent()` does — an
-    `agent:` id, a `seat:` id, a bare handle, or an absolute cwd path. The receipt's `verified`
-    field is a FRESH post-write `identify_agent()` read, never an echo of what the earlier
-    steps each individually claimed.
+    """Pull a named, idle, unmanaged session out of its ad hoc working directory and
+    into a clean managed seat directory: import a running-but-unmanaged instance,
+    preserve its state, give it a clean managed identity. Composes `identify_agent(ref)`
+    to resolve the target (refuses on 0 matches, on more than 1: an ambiguous multi-
+    tenant working directory, name a specific `agent:` id instead, and on a live match:
+    moving a live seat splits its running session's history between two homes, close
+    its tab first), `claim_name(handle)` (propagating its own real refusals: a visitor,
+    a name held live elsewhere, a cross-project collision), and `establish_office` (the
+    actual move). `ref` accepts anything `identify_agent()` does: an `agent:` id, a
+    `seat:` id, a bare handle, or an absolute working-directory path. The result's
+    `verified` field is a fresh post-write `identify_agent()` read, never an echo of
+    what the earlier steps each individually claimed.
 
-    SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just refused: your own session's `last_seen` is
-    kept perpetually fresh by your own terminal's statusline heartbeat, so you can never
-    observe yourself as quiet from inside a call — `lift()` always targets a DIFFERENT,
-    already-quiet session, never the caller's own."""
+    Lifting your own session is not just refused, it is structurally impossible: your
+    own session's `last_seen` is kept perpetually fresh by your own terminal's
+    heartbeat, so you can never observe yourself as idle from inside a call; `lift()`
+    always targets a different, already-idle session, never the caller's own."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
-        return {"error": "mount(cwd, job_dir=<your anchor>) first — a lift is a mind's act, "
-                         "and the graph must know whose", "why": _anchorless(ctx)}
+        return {"error": "mount(cwd, job_dir=<your anchor>) first: a lift is a deliberate "
+                         "act, and the record must know whose", "why": _anchorless(ctx)}
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     from src.orchestrator.lift import lift as _lift
     return await _lift(await _pool_get(), ref, handle, actor=actor)
@@ -8740,14 +8774,14 @@ async def lift(ref: str, handle: str, subagent_id: str | None = None,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='walk_in')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "replaced by the unified seat dispatcher",
 })
 async def walk_in(
     handle: str, wants_office: bool, cwd: str | None = None, job_dir: str | None = None,
     model: str | None = None, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='walk_in')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='walk_in')."""
     return await _seat_impl("walk_in", handle=handle, wants_office=wants_office, cwd=cwd,
                             job_dir=job_dir, model=model, subagent_id=subagent_id,
                             subagent_type=subagent_type, session_anchor=session_anchor,
@@ -8757,25 +8791,25 @@ async def walk_in(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='mint')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "replaced by the unified seat dispatcher",
 })
 async def mint_seat(
     handle: str, project: str | None = None, model: str | None = None,
     house: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to seat(action='mint')."""
+    """Deprecated: hidden alias, still callable. Forwards to seat(action='mint')."""
     return await _seat_impl("mint", handle=handle, project=project, model=model,
                             house=house, ctx=ctx)
 
 
 @mcp.tool()
 async def bootstrap(cwd: str, ctx: Context | None = None) -> dict[str, Any]:
-    """Onboard a project by migrating its markdown MEMORY (CLAUDE.md build log / DESIGN.md /
-    memory essays) INTO the shared graph as retrieval-sized Reference nodes — so its history
+    """Onboard a project by migrating its markdown memory (CLAUDE.md build log, DESIGN.md,
+    memory essays) into the shared graph as retrieval-sized reference nodes, so its history
     becomes a bounded query (consult_canon) instead of bloat re-injected into every context.
-    Registers the project and returns a suggested boot-sector CLAUDE.md. Osiris does NOT touch
-    your files (no hands): review the suggestion, write it yourself, archive the originals.
-    Public docs (README/ARCHITECTURE) are left alone — they're human-facing exports, not memory.
+    Registers the project and returns a suggested boot-sector CLAUDE.md. This tool does not
+    touch your files: review the suggestion, write it yourself, archive the originals.
+    Public docs (README/ARCHITECTURE) are left alone; they are human-facing exports, not memory.
     Every write is stamped with your mounted identity (or "session"), never a fixed literal."""
     from src.orchestrator.bootstrap import bootstrap_project
 
@@ -8873,10 +8907,10 @@ async def _obsoleted_standing_practice(
 # unlinked_because's HATCH indistinguishably from a genuinely standalone, disconnected
 # write. Never typed by a caller — this string is the machine's own signature on it.
 _EXTENSION_LINK_PENDING_REASON = (
-    "extension-link-pending (task #189 condition 2, decision 7ea187b9) — machine-set: "
-    "this write's only requested connectivity is obsoletes=/confirms=/refutes=/"
-    "implements=/rediscovers=/bears_on=/narrows=/cites=, which mint after this transaction "
-    "and cannot satisfy the gate at its own commit point")
+    "extension-link-pending, set automatically by the system: this write's only "
+    "requested connectivity is obsoletes=/confirms=/refutes=/implements=/rediscovers=/"
+    "bears_on=/narrows=/cites=, which are created after this transaction and cannot "
+    "satisfy the linkage requirement at its own commit point")
 
 
 # WRITE-VERB RECEIPT DIET (msg 6871, operator's context-bloat priority, 2026-09-04): a nag
@@ -8888,16 +8922,17 @@ _EXTENSION_LINK_PENDING_REASON = (
 # same move applied to advisory nags specifically.
 _NAG_CATALOG: dict[str, str] = {
     "protocol": (
-        "this decision reads like a MEASUREMENT and its `protocol` is empty — record "
-        "the exact invocation (command line, seeds, thresholds, bucket edges) so a "
-        "successor RERUNS instead of re-deriving; re-run record_decision with the same "
-        "summary + protocol to enrich this same decision (idempotent)"),
+        "this decision reads like a measurement and its `protocol` field is empty. "
+        "Record the exact invocation (command line, seeds, thresholds, bucket edges) so "
+        "someone else can rerun it instead of re-deriving it. Re-run record_decision "
+        "with the same summary plus protocol to add it to this same decision "
+        "(idempotent)"),
     "assertion": (
-        "this reads like a flat claim about code/system behavior with no hedge "
-        "acknowledging it might be wrong — if you re-read the thing you're "
-        "describing THIS turn, say so; a citation alone doesn't clear this (it still "
-        "fires on a cited claim if the citation itself wasn't re-checked for what it "
-        "actually proves)"),
+        "this reads like a flat claim about code or system behavior with no hedge "
+        "acknowledging it might be wrong. If you re-read the thing you're describing "
+        "this turn, say so. A citation alone doesn't clear this: it still fires on a "
+        "cited claim if the citation itself wasn't re-checked for what it actually "
+        "proves"),
 }
 
 # THE SEAT MANUAL, MOVED HERE FROM THE SLASH FILE (dispatch e6585927, msg 7882 item 3):
@@ -8910,177 +8945,186 @@ _NAG_CATALOG: dict[str, str] = {
 # the first of those to actually back the reference with real data.
 _SEAT_MANUAL: dict[str, str] = {
     "new": (
-        "new <handle> [path] [--project P] — found a SELF-MANAGED seat: a fresh code "
-        "workspace + identity, no manager, ever. `found_seat` has no MCP door, so this "
-        "shells out to `osiris new` verbatim (same seam as `launch` — do not "
-        "reimplement it here). REFUSE-DON'T-GUESS: `osiris new` itself still defaults "
-        "`project` to `handle` when `--project` is omitted, and fixing that default is "
-        "not this command's job (Khnum's lane). So: if `--project` is missing, ask the "
-        "caller to confirm it explicitly before running anything — especially when "
-        "`handle` reads like a person's name or nickname rather than a project "
-        "(jesus/chad/marquee were exactly this shape: a seat named after its occupant "
-        "silently became its project AND its workspace path). Never invent a "
-        "plausible-looking project name yourself. `osiris new` already confesses "
-        "loudly to stderr when it's about to default the WORKSPACE path away from the "
-        "caller's actual cwd — surface that confession verbatim, don't paraphrase it "
-        "away. Not the same operation as `walk-in`, even though both 'found' a "
-        "self-managed seat in English — do not substitute one for the other."),
+        "new <handle> [path] [--project P]: create a self-managed seat, a fresh code "
+        "workspace plus identity, with no manager, ever. `found_seat` has no MCP door, "
+        "so this shells out to `osiris new` verbatim (the same approach `launch` "
+        "uses; do not reimplement it here). Refuse rather than guess: `osiris new` "
+        "itself still defaults `project` to `handle` when `--project` is omitted, and "
+        "fixing that default is out of scope for this command. So if `--project` is "
+        "missing, ask the caller to confirm it explicitly before running anything, "
+        "especially when `handle` reads like a person's name or nickname rather than "
+        "a project name (a seat named after its occupant has silently become its "
+        "project and its workspace path before). Never invent a plausible-looking "
+        "project name yourself. `osiris new` already prints a warning to stderr when "
+        "it is about to default the workspace path away from the caller's actual "
+        "working directory: surface that warning verbatim, don't paraphrase it away. "
+        "This is not the same operation as `walk-in`, even though both create a "
+        "self-managed seat in plain English; do not substitute one for the other."),
     "walk-in": (
-        "walk-in <handle> [--wants-office] — give the CALLING agent itself a durable "
-        "identity; no new workspace, ever (for 'a mind with nothing but this server'). "
-        "Composes the `walk_in` MCP tool directly. Only meaningful for an agent "
-        "invoking this on its own behalf — if a human runs this with no mounted "
-        "session behind it, say so and point at `new` instead."),
+        "walk-in <handle> [--wants-office]: give the calling agent itself a durable "
+        "identity, with no new workspace, ever (for an agent session that has no "
+        "workspace of its own). Composes the `walk_in` MCP tool directly. Only "
+        "meaningful for an agent invoking this on its own behalf. If a human runs "
+        "this with no mounted session behind it, say so and point at `new` instead."),
     "mint": (
-        "mint <handle> --manager <seat> [--project] [--model] — found a "
-        "MANAGED worker seat under an existing one. Composes the `mint_seat` MCP tool "
-        "(`handle`, `project`, `model`, `house` — no `manager` param on the tool "
-        "itself: an agent caller lets it infer the manager from its own held seat; an "
-        "operator caller supplies `--manager` explicitly or, if omitted, infers it the "
-        "same way `osiris mint-seat` does — the sole seat in the target project — and "
-        "refuses rather than guesses among several)."),
+        "mint <handle> --manager <seat> [--project] [--model]: create a managed "
+        "worker seat under an existing one. Composes the `mint_seat` MCP tool "
+        "(`handle`, `project`, `model`, `house`; there is no `manager` parameter on "
+        "the tool itself. An agent caller lets it infer the manager from its own held "
+        "seat. An operator caller supplies `--manager` explicitly, or if omitted, it "
+        "is inferred the same way `osiris mint-seat` does, as the sole seat in the "
+        "target project, and refuses rather than guesses among several)."),
     "launch": (
-        "launch <handle> [--model] — give a seat a body, ALWAYS a fresh mint, never a "
-        "resume (ruling 60c78788/41a41437 — the verb is the property, not a flag). TWO "
-        "BACKENDS, DELIBERATE, not a bug: the `launch` MCP tool's own docstring says "
-        "outright 'THE OPERATOR NEVER CALLS THIS, ON PURPOSE' and requires a mounted "
-        "agent identity with a downward `managed_by` edge to the target — an agent "
-        "caller composes the `launch` MCP tool directly; a human/operator caller "
-        "shells out to `osiris launch <handle>` verbatim instead. This split is "
-        "PERMANENT (task #199 lane 3C closed that question): the CLI door spawns via "
-        "`_spawn_claude_bg` directly under operator trust, the MCP tool gates on "
-        "`managed_by` under agent-to-agent trust — genuinely different authorization "
-        "models, never collapsible into one shared function without losing one of "
-        "them. CAN REFUSE ON A FABRICATED PROJECT (task #204, decision "
-        "68fba2e4/803dd9bf): before spawning, launch resolves the project it would "
-        "boot into via `project_of()` (pin -> charter -> lineage_works_in, never "
-        "house). When the seat's charter names EXACTLY ONE real repo and that "
-        "resolution disagrees with it, launch refuses outright rather than booting a "
-        "body into the wrong home. THE REMEDY IS `transition`, NOT `move`: run "
-        "`/seat transition <handle>` first (dry-run shows the plan), confirm it, then "
-        "`--apply` — only once the seat is genuinely dual-bound (mounted at the real "
-        "repo, not just chartered for it) does `launch` stop refusing. Never suggest "
-        "`move`/`heal-anchor` for this refusal shape; they fix a different kind of "
-        "disagreement (anchor_cwd corruption, not a fabricated project label)."),
+        "launch <handle> [--model]: give a seat a running session. This always "
+        "starts a fresh session, never resumes one (the verb is the property, not a "
+        "flag). There are two deliberate backends, not a bug: the `launch` MCP "
+        "tool's own docstring says outright that the operator never calls it "
+        "directly, and it requires a mounted agent identity with a downward "
+        "`managed_by` edge to the target. An agent caller composes the `launch` MCP "
+        "tool directly; a human or operator caller shells out to `osiris launch "
+        "<handle>` verbatim instead. This split is permanent: the CLI path spawns "
+        "the session directly under operator trust, the MCP tool gates on "
+        "`managed_by` under agent-to-agent trust, genuinely different authorization "
+        "models that cannot be collapsed into one shared function without losing one "
+        "of them. It can refuse on a fabricated project: before spawning, launch "
+        "resolves the project it would boot into (pin, then charter, then lineage, "
+        "never house). When the seat's charter names exactly one real repository and "
+        "that resolution disagrees with it, launch refuses outright rather than "
+        "starting a session in the wrong home. The remedy is `transition`, not "
+        "`move`: run `/seat transition <handle>` first (dry-run shows the plan), "
+        "confirm it, then `--apply`; only once the seat is genuinely bound to both "
+        "places (mounted at the real repo, not just chartered for it) does `launch` "
+        "stop refusing. Never suggest `move`/`heal-anchor` for this refusal; they "
+        "fix a different kind of disagreement (anchor_cwd corruption, not a "
+        "fabricated project label)."),
     "resume": (
-        "resume <handle> [--model] — continue a seat's own DORMANT session, never "
-        "falls through to a fresh mint (launch's own sibling verb, same ruling). Same "
-        "two-backend shape as `launch`: an agent caller composes the `resume` MCP tool "
-        "directly; a human/operator caller shells out to `osiris resume <handle>` "
-        "verbatim. Refuses loudly (`refused-nothing-to-resume`) rather than guessing "
-        "when nothing is resumable — use `launch` for that, a deliberate, separate act."),
+        "resume <handle> [--model]: continue a seat's own dormant session; it never "
+        "falls through to starting a fresh one (launch's sibling verb, same rule). "
+        "Same two-backend shape as `launch`: an agent caller composes the `resume` "
+        "MCP tool directly; a human or operator caller shells out to `osiris resume "
+        "<handle>` verbatim. Refuses clearly (`refused-nothing-to-resume`) rather "
+        "than guessing when nothing is resumable; use `launch` for that instead, a "
+        "deliberate, separate act."),
     "stop": (
-        "stop <handle> [--reason] — end a live body. Both callers already reach the "
-        "identical `stop_seat` function today (the `stop` MCP tool — a hidden "
-        "deprecated alias of `seat(action='stop')` — or `osiris stop <handle>`) — "
-        "prefer the MCP tool when mounted, shell out otherwise. No seam here."),
+        "stop <handle> [--reason]: end a live session. Both callers already reach "
+        "the identical `stop_seat` function today (the `stop` MCP tool, a hidden "
+        "deprecated alias of `seat(action='stop')`, or `osiris stop <handle>`). "
+        "Prefer the MCP tool when mounted, shell out otherwise. No difference in "
+        "behavior between the two paths."),
     "move": (
-        "move <handle> <new_cwd> — relocate a seat's whole FOOTPRINT (mount rows, "
+        "move <handle> <new_cwd>: relocate a seat's whole footprint (mount rows, "
         "harness metadata, the `.osiris` pin). Composes the `rebind_seat` MCP tool. "
-        "THE ANCHOR INVARIANT (ruling 23771416): `anchor_cwd` is identity, always "
-        "`<office_root>/<handle>` — `rebind_seat` no longer writes it for a `new_cwd` "
-        "outside the office root (the receipt says `anchor_cwd_skipped` and names "
-        "why). So `move` genuinely relocates identity only when `new_cwd` IS under the "
-        "office root (a real office migration, rare); anywhere else it's a "
-        "footprint/tree move and the seat's `anchor_cwd` stays exactly where it was — "
-        "say so plainly if the caller seems to expect otherwise (root-caused live: "
-        "Chad and Jesus each broke their own anchor this exact way, by rebinding "
-        "themselves to their own code repo's cwd)."),
+        "The anchor invariant: `anchor_cwd` is identity, always `<office_root>/"
+        "<handle>`. `rebind_seat` no longer writes it for a `new_cwd` outside the "
+        "office root (the receipt says `anchor_cwd_skipped` and names why). So "
+        "`move` genuinely relocates identity only when `new_cwd` is under the office "
+        "root (a real office migration, rare); anywhere else it's a footprint or "
+        "tree move and the seat's `anchor_cwd` stays exactly where it was. Say so "
+        "plainly if the caller seems to expect otherwise: seats have broken their "
+        "own anchor this exact way before, by rebinding themselves to their own code "
+        "repo's working directory."),
     "bind-tree": (
-        "bind-tree <handle> <tree_cwd> --because — bind a seat's own isolated code "
+        "bind-tree <handle> <tree_cwd> --because: bind a seat's own isolated code "
         "checkout, deliberately distinct from its office (never collapse the two). "
         "Composes `bind_seat_tree`."),
     "heal-anchor": (
-        "heal-anchor <handle> --because [--apply] — repair a seat whose `anchor_cwd` "
-        "is corrupted (more than one current value, or one that never got asserted at "
-        "all — henry/Chad/Jesus/Marquee's own shape, ruling 23771416). Composes the "
-        "`heal_seat_anchor` MCP tool (pass `seat_id=<handle>` for a third-party seat; "
-        "the old `heal_seat_anchor_third_party` name is a hidden deprecated alias of "
-        "it), or `osiris heal-seat-anchor <handle> --because <reason> [--apply]` as "
-        "the CLI twin — same function either way. Asserts the invariant office path "
-        "(`<office_root>/<handle>`) as the sole current anchor, collapsing every stray "
-        "value in one call — refuses rather than guesses if the seat has no handle or "
-        "its office directory doesn't exist on disk yet (that's `new`/`walk-in`'s job, "
-        "never this verb's). `dry_run` defaults true; the caller must confirm before "
-        "passing `--apply`/`dry_run=False`. Run `roster` first if unsure which seats "
-        "need this."),
+        "heal-anchor <handle> --because [--apply]: repair a seat whose "
+        "`anchor_cwd` is corrupted (more than one current value, or one that never "
+        "got asserted at all; this has happened to several seats before). Composes "
+        "the `heal_seat_anchor` MCP tool (pass `seat_id=<handle>` for a third-party "
+        "seat; the old `heal_seat_anchor_third_party` name is a hidden deprecated "
+        "alias of it), or `osiris heal-seat-anchor <handle> --because <reason> "
+        "[--apply]` as the CLI twin, same function either way. Asserts the "
+        "invariant office path (`<office_root>/<handle>`) as the sole current "
+        "anchor, collapsing every stray value in one call. Refuses rather than "
+        "guesses if the seat has no handle or its office directory doesn't exist on "
+        "disk yet (that is `new` or `walk-in`'s job, never this verb's). `dry_run` "
+        "defaults true; the caller must confirm before passing "
+        "`--apply`/`dry_run=False`. Run `roster` first if unsure which seats need "
+        "this."),
     "correct-agent-project": (
-        "correct-agent-project <agent> [--project] [--seat-generation] — heal an "
-        "already-polluted agent's own project/seat_generation stamps, THIRD-PARTY "
-        "(unlike `correct-house`, which is self-scoped and has no console door for "
-        "that reason). Composes `correct_agent_house` (hidden from `list_tools()` "
-        "since retirement wave 1, zero traffic at the time — still fully callable as "
-        "a deprecated alias). Has a CLI door: `osiris correct-agent-project <agent> "
-        "[--project P] [--seat-generation N]` (`correct-agent-house` still works this "
-        "release as a deprecated alias, ONE TAXONOMY, ruling 52a59652/70c001ec). "
-        "`<agent>` accepts a claimed handle or a raw agent id."),
+        "correct-agent-project <agent> [--project] [--seat-generation]: fix an "
+        "already-incorrect agent's own project or seat_generation stamps, for a "
+        "third party (unlike `correct-house`, which is self-scoped and has no "
+        "console door for that reason). Composes `correct_agent_house` (hidden from "
+        "`list_tools()` since it was retired with no measured traffic at the time, "
+        "but still fully callable as a deprecated alias). Has a CLI door: `osiris "
+        "correct-agent-project <agent> [--project P] [--seat-generation N]` "
+        "(`correct-agent-house` still works this release as a deprecated alias, "
+        "kept as one consistent naming scheme). `<agent>` accepts a claimed handle "
+        "or a raw agent id."),
     "retire-agent": (
-        "retire-agent <agent> --because [--override-live] — third-party AGENT "
-        "retirement, distinct from `retire` (which ends a SEAT's role — this ends one "
-        "specific agent identity, any target, `actor` is attribution not authority). "
-        "Composes the `retire_agent` MCP tool. No CLI door yet (#204, "
-        "declared-not-built). ALWAYS releases the target's held seat and mount rows "
-        "on success; refuses loudly on a target seen live within 15 min unless "
+        "retire-agent <agent> --because [--override-live]: retire one specific "
+        "agent identity for a third party, distinct from `retire` (which ends a "
+        "seat's role; this ends one agent identity, any target; `actor` records who "
+        "is attributed with the action, not who is authorized to take it). Composes "
+        "the `retire_agent` MCP tool. No CLI door yet (declared but not built). "
+        "Always releases the target's held seat and mount rows on success; refuses "
+        "clearly on a target seen active within the last 15 minutes unless "
         "`--override-live`."),
     "heal-seat-transcript": (
-        "heal-seat-transcript <handle> <source_paths...> --because [--apply] — splice "
-        "a seat's session, fragmented across multiple project slugs by a mid-session "
-        "cwd move, back into ONE file at its own office slug. Composes the "
-        "`heal_seat_transcript` MCP tool. No CLI door yet (#204: THE ORIGINAL specimen "
-        "the #199 lane exists to prevent recurring). `source_paths` are the original "
-        "fragments, IN CHAIN ORDER (oldest first). `dry_run` defaults true (`--apply` "
-        "to write). Never touches a Seat row, anchor_cwd, or any source transcript — "
-        "that's `heal-anchor`'s job, a different door. (`reconcile-merge` and "
-        "`fleet-reconcile`, the other two #204 doors, are deliberately NOT composed "
-        "under /seat: the first belongs to a merge/unmerge context this file doesn't "
-        "own, the second acts fleet-wide, not one seat.)"),
+        "heal-seat-transcript <handle> <source_paths...> --because [--apply]: "
+        "splice a seat's session, fragmented across multiple project slugs by a "
+        "mid-session working-directory move, back into one file at its own office "
+        "slug. Composes the `heal_seat_transcript` MCP tool. No CLI door yet "
+        "(declared but not built; this was the original case that this whole "
+        "safeguard exists to prevent recurring). `source_paths` are the original "
+        "fragments, in chain order (oldest first). `dry_run` defaults true "
+        "(`--apply` to write). Never touches a Seat row, anchor_cwd, or any source "
+        "transcript; that's `heal-anchor`'s job, a different door. "
+        "(`reconcile-merge` and `fleet-reconcile`, two related repair tools, are "
+        "deliberately not composed under /seat: the first belongs to a "
+        "merge/unmerge context this file doesn't own, the second acts fleet-wide, "
+        "not on one seat.)"),
     "transition": (
         "transition <handle> [--fabricated-project P] [--real-project P] [--repos R] "
-        "--because [--apply] — move a seat's project binding from a fabricated "
-        "handle-project to the real repo it already works in, one composed act (the "
-        "Jesus/Chad specimen's own hand-run sequence, msg 6901). Composes the "
-        "`transition_seat_project` MCP tool for a self-caller, or `osiris "
-        "transition-seat-project <handle> ...` for a third-party/operator caller — "
-        "same function either way. `--fabricated-project` defaults to the seat's own "
-        "handle; `--real-project` disambiguates only when the seat carries more than "
-        "one other live works_in edge, auto-picked otherwise. PRECONDITION: the seat "
-        "must already be mounted at the real repo's cwd (a live, second works_in edge "
-        "already present) — this verb transitions an already-dual binding, it does "
-        "not create the first edge itself. Deliberately never calls `move`/"
-        "`rebind_seat`: THE ANCHOR INVARIANT (ruling 23771416) already pins "
-        "`anchor_cwd` to the office path permanently — that call is exactly what "
-        "broke Jesus's and Chad's own anchors, not repeated here. `dry_run` defaults "
-        "true; show the plan (`invalidate_works_in`/`correct_pin_value`/`set_charter`, "
+        "--because [--apply]: move a seat's project binding from a fabricated "
+        "handle-project to the real repository it already works in, as one "
+        "composed action (this automates a sequence that used to be run by hand). "
+        "Composes the `transition_seat_project` MCP tool for a self-caller, or "
+        "`osiris transition-seat-project <handle> ...` for a third-party or "
+        "operator caller, same function either way. `--fabricated-project` defaults "
+        "to the seat's own handle; `--real-project` disambiguates only when the "
+        "seat carries more than one other live works_in edge, and is auto-picked "
+        "otherwise. Precondition: the seat must already be mounted at the real "
+        "repository's working directory (a live, second works_in edge already "
+        "present); this verb transitions an already-dual binding, it does not "
+        "create the first edge itself. Deliberately never calls `move`/"
+        "`rebind_seat`: the anchor invariant already pins `anchor_cwd` to the "
+        "office path permanently, and that call has broken seats' anchors this "
+        "exact way before, so it is not repeated here. `dry_run` defaults true; "
+        "show the plan (`invalidate_works_in`/`correct_pin_value`/`set_charter`, "
         "each `null` when already correct) before passing `--apply`."),
     "retire": (
-        "retire <handle> --reason — end a seat's role for good. TWO STEPS, IN ORDER, "
-        "never skip the first: (1) `retire_seat` (the graph act — marks the Seat "
-        "permanently closed; refuses loudly on an active holder or an active peer_of "
-        "edge, resolve those first). (2) `sweep_seat_disk(handle, dry_run=True, "
-        "because=<reason>)` (composes both office and workspace cleanup under one "
-        "call with its own containment/ambiguity/live-body guards). "
-        "`sweep_seat_disk` itself REQUIRES the seat to already be retired (or have no "
-        "Seat row at all) before it will touch disk. ALWAYS dry-run `sweep_seat_disk` "
-        "first and show both halves' receipts (`office`/`workspace`) separately "
-        "before asking whether to pass `dry_run=False` — they can legitimately "
-        "disagree, never collapse them into one verdict. `--reason` maps to both "
-        "`retire_seat`'s `reason` and `sweep_seat_disk`'s `because`."),
+        "retire <handle> --reason: end a seat's role for good. Two steps, in "
+        "order, never skip the first: (1) `retire_seat`, the graph action that "
+        "marks the seat permanently closed; it refuses on an active holder or an "
+        "active peer_of edge, so resolve those first. (2) `sweep_seat_disk(handle, "
+        "dry_run=True, because=<reason>)`, which composes both office and "
+        "workspace cleanup under one call with its own containment, ambiguity, and "
+        "live-body guards. `sweep_seat_disk` itself requires the seat to already be "
+        "retired (or have no Seat row at all) before it will touch disk. Always "
+        "dry-run `sweep_seat_disk` first and show both halves' receipts "
+        "(`office`/`workspace`) separately before asking whether to pass "
+        "`dry_run=False`; they can legitimately disagree, so never collapse them "
+        "into one verdict. `--reason` maps to both `retire_seat`'s `reason` and "
+        "`sweep_seat_disk`'s `because`."),
     "roster": (
-        "roster [--repo] — see who's alive, and whether any binding disagrees with "
+        "roster [--repo]: see who's alive, and whether any binding disagrees with "
         "itself. Composes the `roster` MCP tool. Render, per seat: occupancy, "
-        "chartered_repos, pin — AND `pin_charter_agreement` whenever it reads "
-        "'disagree', flagged plainly ('seat X: pin says P, charter says C — these "
-        "disagree, not resolved automatically; `/seat move` or `/charter set` fixes "
-        "it'). NEVER read a near-empty `~/code/<handle>` directory as evidence that a "
-        "seat is abandoned scaffolding — jesus and chad were both real, mid-arc seats "
-        "misread exactly that way. When a seat's status is worth a second look, "
-        "compose `dossier(<seat>)` too and show its charter's real activity before "
-        "calling anything dead. STANDING LAW ACROSS EVERY VERB (#102): never pick a "
-        "winner on a disagreement — `pin_charter_agreement=='disagree'`, roster's own "
-        "`conflict`/`near_misses`, or a near-miss handle refusal all get surfaced "
-        "with the repair verb named, never silently resolved. "
-        "`pin_charter_agreement=='n/a'` (unset pin, or no charter at all) is a valid, "
-        "ordinary state, never rendered as a problem."),
+        "chartered_repos, pin, and `pin_charter_agreement` whenever it reads "
+        "'disagree', flagged plainly ('seat X: pin says P, charter says C, these "
+        "disagree and are not resolved automatically; `/seat move` or `/charter "
+        "set` fixes it'). Never read a near-empty `~/code/<handle>` directory as "
+        "evidence that a seat is abandoned scaffolding; real, active seats have "
+        "been misread exactly that way before. When a seat's status is worth a "
+        "second look, compose `dossier(<seat>)` too and show its charter's real "
+        "activity before calling anything dead. Standing rule across every verb: "
+        "never pick a winner on a disagreement. `pin_charter_agreement=='disagree'`, "
+        "roster's own `conflict`/`near_misses`, or a near-miss handle refusal all "
+        "get surfaced with the repair verb named, never silently resolved. "
+        "`pin_charter_agreement=='n/a'` (unset pin, or no charter at all) is a "
+        "valid, ordinary state, never rendered as a problem."),
 }
 
 
@@ -9128,22 +9172,22 @@ async def record_decision(
       cites        add a facet to an earlier decision
       bears_on     speak to an open Thread without closing it
     `ack_prior_art=True` records a dismissed prior_art_flag instead of a silent shrug.
-    `unlinked_because` supplies a real reason through declare-or-refuse's link-kind gate.
-    `operator_authorized=True` (decision 12efe065): this decision carries the operator's
-    OWN authority, not just this caller's own scoped judgment — mints a `ruled_by`
-    edge to the operator's Person object. An explicit, self-declared act, never inferred
+    `unlinked_because` supplies a real reason for a decision with no other link.
+    `operator_authorized=True`: this decision carries the operator's own authority, not
+    just this caller's own scoped judgment, and creates a `ruled_by` edge to the
+    operator's Person object. This is an explicit, self-declared act, never inferred
     from who's calling; set it only when this decision really is the operator's ruling.
     consult_canon('record_decision') for more.
 
-    `content_landed`: present when `rationale`/`protocol` was passed — a read-back
-    confirming your text is the CURRENT value (a later write can silently win the
-    tie-break). `false` → see `content_landed_note` and amend_decision.
+    `content_landed`: present when `rationale`/`protocol` was passed. It is a read-back
+    confirming your text is the current value (a later write can silently win the
+    tie-break). If `false`, see `content_landed_note` and amend_decision.
 
     Any error on this call, including a dropped connection or a timeout with no
-    response, is SAFE TO RETRY with the same `summary` — idempotent (an exact rewrite,
-    or with `repo` given a near-duplicate reword, reuses the same decision;
-    `reused_existing_decision` in the receipt names when that happened). Retrying
-    never mints a twin."""
+    response, is safe to retry with the same `summary`. It is idempotent: an exact
+    rewrite, or with `repo` given a near-duplicate reword, reuses the same decision
+    (`reused_existing_decision` in the receipt names when that happened). Retrying
+    never creates a duplicate."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
     grounded: list[dict[str, str]] = []
@@ -9164,23 +9208,23 @@ async def record_decision(
     if supersedes:  # resolve BEFORE recording — a correction that can't name its target
         old = await capture._find_decision(pool, supersedes, require_identifier=True)
         if old is None:
-            return {"error": f"supersedes matched no decision: {supersedes!r} — quote its "
-                             "UUID, canonical, or 8-char short id (no longer a prose "
-                             "match — an addressing act refuses rather than guesses)"}
+            return {"error": f"supersedes matched no decision: {supersedes!r}. Quote its "
+                             "UUID, canonical, or 8-char short id (a prose match is not "
+                             "accepted here; an addressing act refuses rather than guesses)"}
     impl_id: uuid.UUID | None = None
     if implements:  # same resolve-before-record strictness as supersedes
         impl_id = await capture._find_decision(pool, implements, require_identifier=True)
         if impl_id is None:
-            return {"error": f"implements matched no decision: {implements!r} — quote its "
-                             "UUID, canonical, or 8-char short id (no longer a prose "
-                             "match — an addressing act refuses rather than guesses)"}
+            return {"error": f"implements matched no decision: {implements!r}. Quote its "
+                             "UUID, canonical, or 8-char short id (a prose match is not "
+                             "accepted here; an addressing act refuses rather than guesses)"}
     refute_id: uuid.UUID | None = None
     if refutes:  # same strictness — a refutation that can't name its target has refuted nothing
         refute_id = await capture._find_practice(pool, refutes, require_identifier=True)
         if refute_id is None:
-            return {"error": f"refutes matched no practice: {refutes!r} — quote its UUID, "
-                             "canonical, or 8-char short id (no longer a prose match — "
-                             "an addressing act refuses rather than guesses)"}
+            return {"error": f"refutes matched no practice: {refutes!r}. Quote its UUID, "
+                             "canonical, or 8-char short id (a prose match is not accepted "
+                             "here; an addressing act refuses rather than guesses)"}
     # resolve BEFORE recording, same discipline as supersedes — a single string keeps the
     # original all-or-nothing strictness; a list resolves each entry independently and
     # reports (never raises) on a miss, so one typo can't veto the rest of the set.
@@ -9194,8 +9238,9 @@ async def record_decision(
             tid = await capture._find_thread(pool, ref, require_identifier=True)
             if tid is None:
                 receipt.append({"ref": ref, "matched": "false",
-                                "note": "matched no thread — quote its UUID, canonical, "
-                                        "or 8-char short id (no longer a prose match)"})
+                                "note": "matched no thread. Quote its UUID, canonical, "
+                                        "or 8-char short id (a prose match is not accepted "
+                                        "here)"})
                 continue
             answered.append(tid)
             summ = await capture._thread_summary(pool, tid)
@@ -9204,9 +9249,9 @@ async def record_decision(
     elif resolves:  # same strictness: a ruling that miscites its question has not settled it
         single = await capture._find_thread(pool, resolves, require_identifier=True)
         if single is None:
-            return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
-                             "canonical, or 8-char short id (no longer a prose match — "
-                             "an addressing act refuses rather than guesses)"}
+            return {"error": f"resolves matched no thread: {resolves!r}. Quote its UUID, "
+                             "canonical, or 8-char short id (a prose match is not accepted "
+                             "here; an addressing act refuses rather than guesses)"}
         answered.append(single)
         single_summary = await capture._thread_summary(pool, single)
     # confirms resolves the same best-effort way as resolves's list form — one bad ref
@@ -9217,9 +9262,9 @@ async def record_decision(
         pid = await capture._find_practice(pool, ref, require_identifier=True)
         if pid is None:
             confirm_receipt.append({"ref": ref, "matched": "false",
-                                    "note": "matched no practice — quote its UUID, "
-                                            "canonical, or 8-char short id (no longer a "
-                                            "prose match)"})
+                                    "note": "matched no practice. Quote its UUID, "
+                                            "canonical, or 8-char short id (a prose "
+                                            "match is not accepted here)"})
             continue
         confirm_ids.append(pid)
         confirm_receipt.append({"ref": ref, "matched": "true", "id": str(pid)[:8]})
@@ -9231,9 +9276,9 @@ async def record_decision(
         rdid = await capture._find_decision(pool, ref, require_identifier=True)
         if rdid is None:
             rediscover_receipt.append({"ref": ref, "matched": "false",
-                                       "note": "matched no decision — quote its UUID, "
-                                               "canonical, or 8-char short id (no longer a "
-                                               "prose match)"})
+                                       "note": "matched no decision. Quote its UUID, "
+                                               "canonical, or 8-char short id (a prose "
+                                               "match is not accepted here)"})
             continue
         rediscover_ids.append(rdid)
         rediscover_receipt.append({"ref": ref, "matched": "true", "id": str(rdid)[:8]})
@@ -9245,9 +9290,9 @@ async def record_decision(
         nid = await capture._find_decision(pool, ref, require_identifier=True)
         if nid is None:
             narrow_receipt.append({"ref": ref, "matched": "false",
-                                   "note": "matched no decision — quote its UUID, "
-                                           "canonical, or 8-char short id (no longer a "
-                                           "prose match)"})
+                                   "note": "matched no decision. Quote its UUID, "
+                                           "canonical, or 8-char short id (a prose "
+                                           "match is not accepted here)"})
             continue
         narrow_ids.append(nid)
         narrow_receipt.append({"ref": ref, "matched": "true", "id": str(nid)[:8]})
@@ -9260,9 +9305,9 @@ async def record_decision(
         cid = await capture._find_decision(pool, ref, require_identifier=True)
         if cid is None:
             cite_receipt.append({"ref": ref, "matched": "false",
-                                 "note": "matched no decision — quote its UUID, "
-                                         "canonical, or 8-char short id (no longer a "
-                                         "prose match)"})
+                                 "note": "matched no decision. Quote its UUID, "
+                                         "canonical, or 8-char short id (a prose "
+                                         "match is not accepted here)"})
             continue
         cite_ids.append(cid)
         cite_receipt.append({"ref": ref, "matched": "true", "id": str(cid)[:8]})
@@ -9287,14 +9332,14 @@ async def record_decision(
             if cross is not None:
                 bears_on_receipt.append({"ref": ref, "matched": "false",
                                          "note": f"{ref!r} resolves to a Decision, not a "
-                                                 "Thread — bears_on only links to a Thread "
-                                                 "(mints answers, Decision->Thread); this "
-                                                 "id was never linked"})
+                                                 "Thread. bears_on only links to a Thread "
+                                                 "(creates an answers edge, Decision to "
+                                                 "Thread); this id was never linked"})
             else:
                 bears_on_receipt.append({"ref": ref, "matched": "false",
-                                         "note": "matched no thread — quote its UUID, "
-                                                 "canonical, or 8-char short id (no longer a "
-                                                 "prose match)"})
+                                         "note": "matched no thread. Quote its UUID, "
+                                                 "canonical, or 8-char short id (a prose "
+                                                 "match is not accepted here)"})
             continue
         bsumm = await capture._thread_summary(pool, bid)
         bears_on_ids.append(bid)
@@ -9409,8 +9454,8 @@ async def record_decision(
     if repo_defaulted:
         out["repo_defaulted"] = {
             "to": repo,
-            "why": "no repo given — defaulted to the caller's own project rather than "
-                   "left unlinked (orphan-door fix, msg 5703/5720)",
+            "why": "no repo given, so it defaulted to the caller's own project rather "
+                   "than being left unlinked",
         }
     elif lineage_attempted:
         # LANE 3'S OWN ABSTAIN, RECORDED (thread 79e785d1), NOW THE SHARED POST-MINT STEP
@@ -9449,28 +9494,28 @@ async def record_decision(
         if not all(landed.values()):
             not_landed = [f for f, ok in landed.items() if not ok]
             out["content_landed_note"] = (
-                f"your {' and '.join(not_landed)} did NOT become decision {str(d)[:8]}'s "
-                "current value — a different assertion is currently winning the "
+                f"your {' and '.join(not_landed)} did not become decision {str(d)[:8]}'s "
+                "current value. A different assertion is currently winning the "
                 f"confidence/recency tie-break on this object. Re-recording with the same "
                 "summary is likely to repeat this outcome; use "
-                f"amend_decision(ref={str(d)[:8]!r}, addendum=...) instead — it always "
-                "lands as new content, never contends a tie-break.")
+                f"amend_decision(ref={str(d)[:8]!r}, addendum=...) instead, since it always "
+                "lands as new content and never contends a tie-break.")
     if dup_before is not None and str(dup_before) == str(d):
         out["reused_existing_decision"] = True
         out["prior_content"] = prior_content
         exact_repeat = prior_content is not None and prior_content.get("summary") == summary
         out["note"] = (
             (f"this call's summary exactly matched decision {str(d)[:8]}'s own current "
-             "summary — a safe repeat (e.g. a retry after a dropped/timed-out response); "
-             "nothing was overwritten that this call didn't already say itself.")
+             "summary, a safe repeat (for example, a retry after a dropped or timed-out "
+             "response); nothing was overwritten that this call didn't already say itself.")
             if exact_repeat else
             (f"this call's summary was judged a near-duplicate of decision {str(d)[:8]}'s "
-             "EXISTING content (shown in prior_content) and REUSED that object instead of "
-             "minting a new one — its prior summary/rationale are now superseded (still "
+             "existing content (shown in prior_content) and reused that object instead of "
+             "creating a new one. Its prior summary/rationale are now superseded (still "
              "readable via the assertions history, never deleted) but no longer current. "
-             "If these two rulings are NOT actually the same decision, this was a false "
-             "positive (task #117) — the summaries shared enough boilerplate to score "
-             "above the similarity bar without describing the same thing."))
+             "If these two rulings are not actually the same decision, this was a false "
+             "positive: the summaries shared enough boilerplate to score above the "
+             "similarity bar without describing the same thing."))
     # PRIOR-ART SURFACING (thread 44635c42, task #67; UNIFIED across {Decisions, Practices,
     # Superstitions, open obligation Threads} by THE THAW, ruling 1e6d7367): before a
     # ruling stands, name what standing law/technique already covers this ground — search
@@ -9519,7 +9564,7 @@ async def record_decision(
         # check) — so the old "was the top hit this same Practice" test would silently
         # stop firing, exactly the regression the prior fold-attempt's own test caught.
         out["prior_art_flag"] = (
-            f"this OVERTURNS standing Practice {str(refute_id)[:8]} — handled below via "
+            f"this overturns standing Practice {str(refute_id)[:8]}, handled below via "
             "refutes= (converts it to a dead Superstition, flagged not retired)")
         out["prior_art_polarity"] = "contradict"
     elif obsoleted_practice is not None:
@@ -9529,7 +9574,7 @@ async def record_decision(
         # below. Unlike refute_id, obsoletes= never converts the Practice itself (only
         # the matching Superstition dies) — the wording says so plainly.
         out["prior_art_flag"] = (
-            f"this OBSOLETES standing Practice {obsoleted_practice['id']} — handled "
+            f"this obsoletes standing Practice {obsoleted_practice['id']}, handled "
             "below via obsoletes= (kills the matching Superstition; the Practice "
             "record itself is untouched, only the workaround it names)")
         out["prior_art_polarity"] = "obsolete"
@@ -9545,20 +9590,20 @@ async def record_decision(
             cues = capture.practice_contradiction_cues(f"{summary} {rationale or ''}")
             if cues:
                 out["prior_art_flag"] = (
-                    f"this may CONTRADICT standing Practice {top['id']} rather than cite "
-                    f"it — reversal language found ({', '.join(cues)}); if you mean to "
+                    f"this may contradict standing Practice {top['id']} rather than cite "
+                    f"it. Reversal language found ({', '.join(cues)}); if you mean to "
                     f"overturn it, say so explicitly (refutes=['{top['id']}']), or "
                     "acknowledge it (ack_prior_art=True) if this wording is coincidental")
                 out["prior_art_polarity"] = "contradict"
             else:
                 out["prior_art_flag"] = (
-                    f"this looks like a re-derivation of standing Practice {top['id']} — "
-                    f"confirm it as evidence (confirms=['{top['id']}']) if it's the same "
+                    f"this looks like a re-derivation of standing Practice {top['id']}. "
+                    f"Confirm it as evidence (confirms=['{top['id']}']) if it's the same "
                     "lesson, or acknowledge it (ack_prior_art=True) if coincidental")
                 out["prior_art_polarity"] = "rederive"
         elif top_kind == "Superstition":
             out["prior_art_flag"] = (
-                f"a dead Superstition ({top['id']}) already covers this ground — check "
+                f"a dead Superstition ({top['id']}) already covers this ground. Check "
                 "you're not reviving a workaround its own fix already killed "
                 "(acknowledge with ack_prior_art=True if this is intentional/unrelated)")
         elif top_kind == "Thread":
@@ -9570,15 +9615,15 @@ async def record_decision(
             # SETTLES the row is the caller's own judgment to make, not this flag's
             # to presume.
             out["prior_art_flag"] = (
-                f"this appears to speak to open thread {top['id']} — pass "
+                f"this appears to speak to open thread {top['id']}. Pass "
                 f"bears_on=['{top['id']}'] to link it without closing it (bears_on "
-                "cites, it never resolves — use resolves=[...] instead if this ruling "
-                "actually SETTLES the row), or acknowledge it (ack_prior_art=True) if "
+                "cites, it never resolves; use resolves=[...] instead if this ruling "
+                "actually settles the row), or acknowledge it (ack_prior_art=True) if "
                 "coincidental")
             out["prior_art_polarity"] = "bears_on"
         else:
             out["prior_art_flag"] = (
-                f"a standing ruling ({top['id']}) covers this ground — supersede it "
+                f"a standing ruling ({top['id']}) covers this ground. Supersede it "
                 "explicitly (supersedes=...), cite it (grounds=...), name this as what "
                 "it executes (implements=...), name this as an independent "
                 "rediscovery of it (rediscovers=[...]) if you reached the same "
@@ -9599,24 +9644,24 @@ async def record_decision(
     if ack_prior_art:
         if prior and strong:
             await capture.acknowledge_prior_art(Actions(pool), d, prior[0]["id"], actor)
-            out["prior_art_acknowledged"] = f"noted — {prior[0]['id']} reviewed, no action needed"
+            out["prior_art_acknowledged"] = f"noted: {prior[0]['id']} reviewed, no action needed"
         elif prior:
             # #117's own vocabulary-collapse shape, caught live (Thoth msg 3185, ruling
             # b44ddb6d): `out["prior_art"]` above already lists these same hits — saying
             # "none found" here when `prior` is non-empty would contradict the SAME receipt.
             out["prior_art_acknowledged"] = (
-                f"{len(prior)} prior-art hit(s) found but none strong enough to flag — "
-                "nothing rises to acknowledge")
+                f"{len(prior)} prior-art hit(s) found but none strong enough to flag. "
+                "Nothing rises to acknowledge")
         else:
             out["prior_art_acknowledged"] = (
-                "no prior-art hit was found at all — nothing to acknowledge")
+                "no prior-art hit was found at all. Nothing to acknowledge")
     # RECEIPTS ONLY BELOW — all six already MINTED inside capture.record_decision's own
     # atomic transaction, above (obligation ce12d2ef: the object and every one of these
     # now either all land or none do). Nothing here writes; each block just reads back
     # what committed, using the pre-check computed before the call for "was this new".
     if impl_id is not None:
         out["implements"] = (
-            f"{str(impl_id)[:8]} — this decision is a specific execution of it"
+            f"{str(impl_id)[:8]}: this decision is a specific execution of it"
             f"{'' if implements_was_new else ' (already linked)'}")
     if confirm_ids:
         witnessed = []
@@ -9660,7 +9705,7 @@ async def record_decision(
             out["refuted_practice"] = (
                 f"{str(refute_id)[:8]} converted to Superstition "
                 f"{(str(refute_superstition_id)[:8] + ' ') if refute_superstition_id else ''}"
-                "— the Practice stays active, flagged")
+                "; the Practice stays active, flagged")
     if obsoletes:
         killed = [s.strip() for s in obsoletes if s and s.strip()]
         if killed:
@@ -9683,18 +9728,18 @@ async def record_decision(
         # but the mismatch is obvious the instant the closed thread's own words are
         # right here — so they are, every time, not just for the list form.
         out["resolved_thread"] = (
-            f"{str(answered[0])[:8]} — closed by this decision (answers edge) — "
+            f"{str(answered[0])[:8]}: closed by this decision (answers edge). "
             f"{single_summary or '(no summary on record)'}")
     if old is not None:
         out["superseded"] = (
-            "self (identical summary re-recorded) — nothing buried" if old == d else
+            "self (identical summary re-recorded), nothing buried" if old == d else
             f"{str(old)[:8]} is buried under this decision: it leaves orient's recent "
             "list, the decision-log grays it (unwind: re-assert superseded_by='' on it)")
     if grounded:
         out["grounded_by"] = grounded
     if missing:
         out["unresolved_grounds"] = missing
-        out["note"] = ("unresolved grounds were SKIPPED — ingest_reference them first, "
+        out["note"] = ("unresolved grounds were skipped. Ingest_reference them first, "
                        "then re-run record_decision (idempotent) to attach the edges")
     # RECEIPT LAW (Thoth mail 9122 item 1, wave 16): capture.record_decision's own
     # prose-scan (task #101) mints `decided_in` from a commit sha named in summary/
@@ -9739,7 +9784,7 @@ async def record_decision(
         out["unfiled"] = True
         out["unfiled_note"] = (
             "no repo= given and no commit sha auto-resolved from summary/rationale/"
-            "protocol — this decision has no outgoing link and will not surface in "
+            "protocol. This decision has no outgoing link and will not surface in "
             "any project-scoped view (decision-log, orient(project=...), etc). Pass "
             "repo= if this belongs to one, or ignore if it's genuinely fleet-wide.")
     return out
@@ -9754,19 +9799,19 @@ async def backup_settings(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """The backup config panel's write door. `action='get'` reads current settings, no
-    authority needed. `action='write'` changes them — gated like `charter_for`: the
-    operator writes freely, anyone else must cite a standing `ruling` that
-    `verify_ruling` confirms names 'backup_settings'. `because` required on write.
+    """Reads or writes backup configuration. `action='get'` reads current settings; no
+    authority is required. `action='write'` changes them: the operator can write
+    freely, anyone else must cite a standing `ruling` that `verify_ruling` confirms
+    applies to 'backup_settings'. `because` is required on write.
 
-    Partial update, only given fields change: `vault_path` (absolute path, local disk
-    or an OS-mounted NAS share — pg_dump/pg_basebackup don't distinguish the two),
+    Partial update: only given fields change. `vault_path` (absolute path, local disk
+    or an OS-mounted NAS share; pg_dump/pg_basebackup don't distinguish the two),
     `timer_schedules` (unit name -> OnCalendar=, one of the 5 backup-lane timers),
-    `offbox_repositories` (list of {url, schedule, enabled} — stored but inert until
-    off-box is ruled on, thread cf134938).
+    `offbox_repositories` (list of {url, schedule, enabled}; stored but inert until
+    off-box support is enabled).
 
-    A written schedule takes effect only once deploy's own timer-install step
-    regenerates the unit — `backup_status`'s `configured_schedule` vs `schedule`
+    A written schedule takes effect only once the deploy process's own timer-install
+    step regenerates the unit. `backup_status`'s `configured_schedule` vs `schedule`
     distinguish "set" from "took effect"."""
     from src.orchestrator.backup_settings import get_backup_settings, write_backup_settings
 
@@ -9794,20 +9839,20 @@ async def settings(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Read/write over the settings registry (`src/config/settings_registry.py`'s
-    `SETTINGS` tuple) — a new knob needs a new registry entry, never a new tool.
+    """Reads or writes the settings registry (`src/config/settings_registry.py`'s
+    `SETTINGS` tuple). A new setting needs a new registry entry, never a new tool.
 
     `action='list'` returns every declared setting's own metadata (type, default,
     scope, effect, authority, choices) plus `value` and `live` (the running/shipped
-    value, null when not cheap) — secrets redacted to `{"set": bool}`. `action='get'`
+    value, null when not cheap); secrets are redacted to `{"set": bool}`. `action='get'`
     (with `key`) returns one `value`/`live` pair.
     `action='write'` (with `key`/`value`) changes it: each setting's own `authority`
     (operator | operator_or_manager | operator_or_ruling) decides who may write it
-    without a manager/ruling citation; `because` is required unless the setting opts
+    without a manager/ruling citation. `because` is required unless the setting opts
     out (`requires_because=False`). Refuses structured (`errors: [{field, message}]`)
-    on a bad value, never one bare string. A written setting's own `effect`
+    on a bad value, never a bare string. A written setting's own `effect`
     (immediate/next_tick/restart:<unit>/next_deploy) names when it actually takes
-    hold — the receipt's `note` says so plainly whenever it is not the same instant."""
+    hold; the result's `note` field says so plainly whenever it is not immediate."""
     from src.orchestrator.settings_service import get_setting, list_settings, write_setting
 
     pool = await _pool_get()
@@ -9974,28 +10019,28 @@ async def practice(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE PRACTICE OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
-    two actions over a transferable technique (Superstition's positive twin). See
+    """Records or amends a Practice: a transferable technique (the positive
+    counterpart to a Superstition record). One tool, two actions. See
     `describe('practice')` for the full per-action shape.
 
-    ACTION TABLE — action: what it does (required params beyond action):
-      record: write back a NEW technique (statement — the imperative one-liner, quote
-        it as you'd want a future mind to inherit it, not as narration).
+    ACTION TABLE, action: what it does (required params beyond action):
+      record: write a NEW technique (statement: the imperative one-liner, phrased
+        as you'd want a future reader to follow it, not as narration).
         `failure_prevented` is the concrete symptom that makes it findable mid-failure.
         `surface` reuses BlindSpot's domain vocabulary. `witnesses` links Decision(s)/
         Commit(s)/Thread(s) as evidence (a miss is reported, never fatal). Idempotent
-        on the normalized statement. Timeless, never moment-stamped — a later disproof
-        kills it via record_decision(refutes=...), never here. Runs the same prior-art
-        check record_decision does. `unlinked_because`/`unlinked_because_kind` (DM
-        8919/thread 8861): the declare-or-refuse hatch, same shape record_decision's
-        own params — currently INERT here (a Practice's `repo` requirement is unarmed
-        by default) until this Type's `required_link_kinds` opts in.
-      amend: narrow or correct a LIVE practice's guidance (ref, amendment) — without
+        on the normalized statement. Timeless, never moment-stamped: a later disproof
+        retires it via record_decision(refutes=...), never here. Runs the same
+        prior-art check record_decision does. `unlinked_because`/`unlinked_because_kind`
+        are the declare-or-refuse fields, matching record_decision's own params,
+        currently inactive here (a Practice's `repo` requirement is not enforced by
+        default) until this type's `required_link_kinds` opts in.
+      amend: narrow or correct a LIVE practice's guidance (ref, amendment), without
         touching its id, its `statement` (record's own idempotency key), or its
         witness/confirmed count. Amendments fold directly into practices()'s own
         listing. Refuses on an unmatched ref or a practice already REFUTED (use
-        record_decision(refutes=...) to kill one, this only adds to a practice still
-        standing)."""
+        record_decision(refutes=...) to retire one; this only adds to a practice
+        still standing)."""
     return await _practice_impl(
         action, statement=statement, failure_prevented=failure_prevented,
         surface=surface, repo=repo, witnesses=witnesses, ref=ref, amendment=amendment,
@@ -10006,7 +10051,7 @@ async def practice(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "practice(action='record')",
-    "since": "task #202 practice dispatcher (msg 7162)",
+    "since": "the practice() dispatcher was introduced",
 })
 async def record_practice(
     statement: str, failure_prevented: str | None = None, surface: str | None = None,
@@ -10014,7 +10059,7 @@ async def record_practice(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     practice(action='record')."""
     return await _practice_impl(
         "record", statement=statement, failure_prevented=failure_prevented,
@@ -10031,17 +10076,18 @@ async def ingest_reference(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Turn something you READ into a first-class Reference node — a paper, vendor doc,
-    spec — so it's findable by search and citable via record_decision(grounds=[...]).
-    `title` is the citation key, idempotent on its slug. `vendor` = who wrote it; `body`
-    = what it claims, in your words. `caveats` is first-class and separate from body —
-    the "but only under X" that dies when buried in prose. `cites` wires paper-to-paper
-    lineage (ids/canonicals/titles of already-ingested References). Graded
-    SELF_DECLARED. `unlinked_because`/`unlinked_because_kind` (DM 8919/thread 8861):
-    record_decision's own declare-or-refuse hatch, widened to this door — a caller-typed
-    `repo=` satisfies it outright; a mount-defaulted repo (see `repo_defaulted` below)
-    does NOT, same rule record_decision already applies to its own repo param.
-    Returns the id + canonical to cite."""
+    """Turns something you read into a first-class Reference node (a paper, vendor
+    doc, spec) so it's findable by search and citable via
+    record_decision(grounds=[...]). `title` is the citation key, idempotent on its
+    slug. `vendor` is who wrote it; `body` is what it claims, in your own words.
+    `caveats` is a separate field from body, for the "applies only under X" caveat
+    that gets lost when buried in prose. `cites` wires paper-to-paper lineage (ids/
+    canonicals/titles of already-ingested References). Graded SELF_DECLARED.
+    `unlinked_because`/`unlinked_because_kind` are record_decision's own
+    declare-or-refuse fields, extended to this tool: a caller-typed `repo=` satisfies
+    the requirement outright; a mount-defaulted repo (see `repo_defaulted` below)
+    does not, the same rule record_decision already applies to its own repo param.
+    Returns the id and canonical to cite."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     cids: list[uuid.UUID] = []
@@ -10078,8 +10124,8 @@ async def ingest_reference(
     if repo_defaulted:
         out["repo_defaulted"] = {
             "to": repo,
-            "why": "no repo given — defaulted to the caller's own project rather than "
-                   "left unlinked (orphan-door fix, msg 5703/5720)",
+            "why": "no repo given, so it defaulted to the caller's own project instead "
+                   "of being left unlinked.",
         }
     elif lineage_attempted:
         # SAME SHARED POST-MINT STEP record_decision/open_thread's wrappers use (thread
@@ -10090,7 +10136,7 @@ async def ingest_reference(
             pool, ref, actor, lineage_candidates, lineage_projects)
     if missing:
         out["unresolved_cites"] = missing
-        out["cites_note"] = ("unresolved cites SKIPPED — ingest_reference each cited work "
+        out["cites_note"] = ("unresolved cites were skipped. Ingest each cited work "
                              "first, then re-ingest this title (idempotent) to wire the edges")
     return out
 
@@ -10102,17 +10148,17 @@ async def record_evaluation(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Capture a VERDICT against an Agent generation or Artifact — a test suite result,
-    a code review finding, a gate_hook pass/fail (Graph-Engineering arc, thread 7f547426,
-    decision fba38e62, Thoth DM 9136). `rubric` (which standard/check was applied) is
-    MANDATORY and non-blank — refused clean (an {"error": ...} receipt, never a
-    traceback) rather than minting an unverifiable verdict. `subject` (a UUID/short-id/
-    canonical ref to an already-minted Agent generation or Artifact) mints the `evaluated_by`
-    edge in the same call — a miss is reported, never fatal. `value`/`unit` are
-    Metric's own shape (with `measured_at` stamped as this call's own observed time),
-    stored as PROPERTIES on this SAME Evaluation object, never a linked child node.
-    Each call mints a fresh object — the same rubric run twice is two distinct
-    verdicts, never deduped."""
+    """Records a verdict against an Agent generation or Artifact: a test suite
+    result, a code review finding, or a pass/fail check. `rubric` (which
+    standard/check was applied) is mandatory and non-blank. It is refused cleanly
+    (an {"error": ...} response, never a traceback) rather than minting an
+    unverifiable verdict. `subject` (a UUID/short-id/canonical ref to an
+    already-minted Agent generation or Artifact) mints the `evaluated_by` edge in
+    the same call; a miss is reported, never fatal. `value`/`unit` follow the
+    Metric shape (with `measured_at` stamped as this call's own observed time),
+    stored as properties on this same Evaluation object, never a linked child node.
+    Each call mints a fresh object: the same rubric run twice is two distinct
+    verdicts, never deduplicated."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     subject_id: uuid.UUID | None = None
@@ -10121,8 +10167,9 @@ async def record_evaluation(
         subject_id = await _resolve(pool, subject)
         if subject_id is None:
             subject_note = {"ref": subject, "matched": "false",
-                            "note": "matched no object — quote its UUID or 8-char short "
-                                    "id; the Evaluation still minted without evaluated_by"}
+                            "note": "matched no object. Quote its UUID or 8-char short "
+                                    "id; the Evaluation was still minted, just without "
+                                    "the evaluated_by edge"}
     try:
         e = await capture.record_evaluation(
             Actions(pool), rubric, verdict=verdict, subject=subject_id, value=value,
@@ -10141,16 +10188,16 @@ async def record_artifact(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Mint an Artifact — a build/deploy/document output Commit does not already cover
-    (Graph-Engineering arc, thread 7f547426, decision f47d14a7). Refuses at the door
-    (an `{"error": ...}` receipt, never a traceback) unless it carries its authoring
-    Agent generation's own `produced` edge OR `unlinked_because=<reason>` is given —
-    artifact-has-authoring-run-plus-version. `authoring_run` is a reference (UUID/
-    short-id/canonical) to an EXISTING Agent generation (CITATION SHAPE, decision
-    c6d25164: the session object IS the Agent generation, no separate AgentRun pointer
-    exists to lazily mint) — refuses if it doesn't resolve. `revises` (linking a
-    predecessor version) is a separate call, `mint_revises`, after this one returns —
-    a first version legitimately has none."""
+    """Mints an Artifact: a build, deploy, or document output that a Commit does not
+    already cover. Refuses immediately (an `{"error": ...}` response, never a
+    traceback) unless it carries its authoring Agent generation's own `produced`
+    edge, or `unlinked_because=<reason>` is given (an artifact needs both an
+    authoring run and a version). `authoring_run` is a reference (UUID/short-id/
+    canonical) to an EXISTING Agent generation (the session object IS the Agent
+    generation; there is no separate AgentRun pointer to lazily mint). It refuses
+    if the reference doesn't resolve. `revises` (linking a predecessor version) is
+    a separate call, `mint_revises`, made after this one returns; a first version
+    legitimately has none."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     try:
@@ -10168,24 +10215,24 @@ async def cite_transcript(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """An EXPLICIT citation of one line of an Agent generation's own transcript
-    (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d) — a `cites` edge from
-    `ref` (a Decision, Thread, or Evaluation) to the Agent `agent` resolves to,
-    carrying `line_idx`/`line_hash`/`said_at` as edge properties, a chain of custody
-    verified against the soul store's own hash chain at mint time.
+    """Records an explicit citation of one line of an Agent generation's own
+    transcript: a `cites` edge from `ref` (a Decision, Thread, or Evaluation) to
+    the Agent that `agent` resolves to, carrying `line_idx`/`line_hash`/`said_at`
+    as edge properties, verified against the soul store's own hash chain at mint
+    time.
 
-    NO AUTO-CITE, EVER: `because` is mandatory and non-blank — refused clean (an
-    `{"error": ...}` receipt, never a traceback) rather than minting an unreasoned
-    citation. NEVER TARGETS A HUMAN NODE: `agent` must resolve to a real, active
-    Agent object — the literal 'operator' string or anything else refuses exactly
-    like an unresolved ref. `line_idx` must resolve to a real, chain-verified
-    soul_lines row for that Agent's own session — refuses on a bad index or a broken
-    chain link, never a silent guess."""
+    No auto-citing: `because` is mandatory and non-blank. It is refused cleanly
+    (an `{"error": ...}` response, never a traceback) rather than minting an
+    unreasoned citation. It never targets a human node: `agent` must resolve to a
+    real, active Agent object; the literal 'operator' string or anything else
+    refuses exactly like an unresolved ref. `line_idx` must resolve to a real,
+    chain-verified soul_lines row for that Agent's own session; it refuses on a
+    bad index or a broken chain link, never a silent guess."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     from_id = await _resolve(pool, ref)
     if from_id is None:
-        return {"error": f"{ref!r} does not resolve to any object — a citation "
+        return {"error": f"{ref!r} does not resolve to any object. A citation "
                           "needs a real citing Decision/Thread/Evaluation"}
     try:
         result = await capture.mint_transcript_citation(
@@ -10201,13 +10248,12 @@ async def read_citation(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE READ DOOR for an existing transcript citation (CITATION SHAPE, operator
-    ruling c6d25164, thread 9d2aaf4d): finds the live `cites` edge from `ref` to the
-    Agent `agent` resolves to, RE-VERIFIES its stored line_hash against the soul
-    store's own chain (never trusting the edge property alone), and returns the
-    actual cited line's text. Refuses (an `{"error": ...}` receipt) on a missing
-    edge, an unresolved `agent`, or a hash mismatch — a tampered or stale citation
-    never returns a line silently."""
+    """Reads an existing transcript citation: finds the live `cites` edge from
+    `ref` to the Agent that `agent` resolves to, re-verifies its stored line_hash
+    against the soul store's own chain (never trusting the edge property alone),
+    and returns the actual cited line's text. Refuses (an `{"error": ...}`
+    response) on a missing edge, an unresolved `agent`, or a hash mismatch: a
+    tampered or stale citation never returns a line silently."""
     pool = await _pool_get()
     from_id = await _resolve(pool, ref)
     if from_id is None:
@@ -10233,37 +10279,38 @@ async def open_thread(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Open a THREAD — an unresolved question or next step for the next session to pick up.
-    Surfaces in run_composition('briefing'). `repo` files it under a project. Idempotent
-    on the summary and on a near-duplicate (`deduped`/`dedup_scope` name the twin among
-    this project's own OPEN threads instead of minting one). A genuinely new thread gets
-    `prior_art`/`prior_art_flag` — a standing Decision/Practice/Thread that may already
-    cover this ground, surfacing only, never a refusal.
+    """Opens a Thread: an unresolved question or next step for the next session to
+    pick up. Surfaces in run_composition('briefing'). `repo` files it under a
+    project. Idempotent on the summary and on a near-duplicate (`deduped`/
+    `dedup_scope` name the twin among this project's own OPEN threads instead of
+    minting a new one). A genuinely new thread gets `prior_art`/`prior_art_flag`: a
+    standing Decision/Practice/Thread that may already cover this ground, surfaced
+    only, never a refusal.
 
-    THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773, #203's no-regrow gate, ruling
-    recorded 2026-09-07): `kind` is REQUIRED — 'obligation' (a duty minted by an
-    action), 'question', 'task', or another value that genuinely fits; omitting it
-    refuses rather than minting a kindless thread. `owner`/`assignee` must resolve to
-    an active Seat or the literal 'operator' (`resolve_owner_seat` — a seat id, a
-    seat's own handle, an `agent:<id>` whose lineage_head currently HOLDS a seat, or a
-    project name with a chartered coordinator); anything that doesn't resolve refuses,
-    naming what was tried. Unowned obligations default to the caller's own seat;
-    unowned general threads stay legitimately unowned. `kind='obligation'` additionally
-    refuses from an unmounted caller (no live agent/operator identity behind this
-    call) — a duty is a mind's own testimony, never an anonymous write's. Scoped to
-    THIS tool alone, never capture.open_thread itself — internal callers (settle(),
-    fleet_reconcile.py, the miner's own _emit_thread) keep their own, already-correct
-    conventions. `assignee` leases a single-assignee obligation to one build; a near-
-    duplicate then surfaces `leased_to` instead of deduping silently. `arc` sorts into
-    the roadmap taxonomy (osiris-scoped only). `resolves` closes a predecessor thread
-    this one supersedes — same UUID/canonical/short-id-only strictness as
+    CLASSIFICATION RULES: `kind` is required ('obligation' for a duty minted by an
+    action, 'question', 'task', or another value that genuinely fits); omitting it
+    refuses rather than minting a kindless thread. `owner`/`assignee` must resolve
+    to an active Seat or the literal 'operator' (via `resolve_owner_seat`: a seat
+    id, a seat's own handle, an `agent:<id>` whose lineage_head currently holds a
+    seat, or a project name with a chartered coordinator seat); anything that
+    doesn't resolve refuses, naming what was tried. Unowned obligations default to
+    the caller's own seat; unowned general threads stay legitimately unowned.
+    `kind='obligation'` additionally refuses from an unmounted caller (no live
+    agent/operator identity behind this call): a duty is a mind's own testimony,
+    never an anonymous write's. This rule is scoped to this tool alone, never to
+    capture.open_thread itself; internal callers (settle(), fleet_reconcile.py,
+    the miner's own _emit_thread) keep their own, already-correct conventions.
+    `assignee` leases a single-assignee obligation to one build; a near-duplicate
+    then surfaces `leased_to` instead of deduping silently. `arc` sorts into the
+    roadmap taxonomy (osiris-scoped only). `resolves` closes a predecessor thread
+    this one supersedes, with the same UUID/canonical/short-id-only strictness as
     record_decision's `resolves`. `branch`/`files_touched` mark held work;
     `colliding_work` names any open collision. `unlinked_because` mirrors
-    record_decision's own hatch. `stale_after_days` (no-regrow hygiene, practice
-    393be453) applies to `kind='obligation'` only — the window (default 14) past which
-    it surfaces on its owner's own next Stop as a named ask; unrelated to
-    obligation_hygiene.py's separate idle-since-touched cron. consult_canon
-    ('open_thread') for more."""
+    record_decision's own escape hatch for an unlinked write. `stale_after_days`
+    applies to `kind='obligation'` only: the window (default 14 days) past which
+    it surfaces on its owner's own next stop as a named follow-up; unrelated to
+    the separate idle-since-touched cron. See `consult_canon('open_thread')` for
+    more."""
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     # THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773, #203's no-regrow gate,
@@ -10275,8 +10322,8 @@ async def open_thread(
     # _emit_thread) have their own, already-correct conventions and would break for no
     # reason under a blanket refusal one layer down.
     if not kind:
-        return {"error": "kind is required — a missing kind is exactly the no-regrow "
-                         "gate this refuses (thread b5ae6773); pass "
+        return {"error": "kind is required. A missing kind is exactly what this "
+                         "rule refuses; pass "
                          "'obligation'/'question'/'task', or another value that "
                          "genuinely fits"}
     if kind == "obligation" and actor == "session":
@@ -10284,8 +10331,8 @@ async def open_thread(
         # (_source_for's own back-compat fallback) — a genuinely unattributed call, the
         # ruling's own "derived/anonymous write" shape. A real agent (mounted, or a
         # registered subagent) always resolves to `agent:<id>` here instead.
-        return {"error": "an unmounted caller cannot declare kind='obligation' — a duty "
-                         "is a mind's own testimony (thread b5ae6773); mount first, or "
+        return {"error": "an unmounted caller cannot declare kind='obligation'. A duty "
+                         "is a mind's own testimony; mount first, or "
                          "use kind='question'/'task' instead"}
     # AN UNFILED THREAD IS INVISIBLE TO ITS OWN PROJECT (Alfred V's succession repro,
     # thread 4ffe0eb9: IV's handoff, opened without repo=, hid from orient and the whisper
@@ -10310,8 +10357,8 @@ async def open_thread(
         resolved_owner = await resolve_owner_seat(pool, _owner_to_check, project=repo)
         if resolved_owner is None:
             return {"error": f"owner {_owner_to_check!r} does not resolve to any active "
-                             "seat, agent, or 'operator' (thread b5ae6773's owner law) "
-                             "— pass a seat id, a seat's own handle, an agent id whose "
+                             "seat, agent, or 'operator'. "
+                             "Pass a seat id, a seat's own handle, an agent id whose "
                              "lineage currently holds a seat, a project name with a "
                              "chartered coordinator seat, or 'operator'"}
         if assignee is not None:
@@ -10345,7 +10392,7 @@ async def open_thread(
             if discarded:
                 out["discarded"] = discarded
                 out["note"] = (
-                    f"matched an existing thread — {', '.join(sorted(discarded))} you "
+                    f"matched an existing thread. {', '.join(sorted(discarded))} you "
                     "passed here were NOT applied (open_thread never updates an existing "
                     "thread on a dedup hit). Use reclassify_thread to change arc after "
                     "the fact."
@@ -10355,10 +10402,10 @@ async def open_thread(
             claim = assignee.strip()
             out["leased_to"] = holder or "(unowned)"
             lease_note = (
-                f"already leased to {holder} (thread {str(dup)[:8]}) — no new build minted"
+                f"already leased to {holder} (thread {str(dup)[:8]}), no new build minted"
                 if holder == claim else
                 f"existing lease on thread {str(dup)[:8]} is held by "
-                f"{holder or '(unowned)'!r}, not {claim!r} — surfaced instead of minting a "
+                f"{holder or '(unowned)'!r}, not {claim!r}. Surfaced instead of minting a "
                 "parallel build (a double-assignment must be visible, not silent)"
             )
             out["note"] = f"{out['note']} {lease_note}" if out.get("note") else lease_note
@@ -10374,7 +10421,7 @@ async def open_thread(
             tid = await capture._find_thread(pool, ref, require_identifier=True)
             if tid is None:
                 resolved_receipt.append({"ref": ref, "matched": "false",
-                                         "note": "matched no thread — quote its UUID, "
+                                         "note": "matched no thread. Quote its UUID, "
                                                  "canonical, or 8-char short id"})
                 continue
             summ = await capture._thread_summary(pool, tid)
@@ -10383,8 +10430,8 @@ async def open_thread(
     elif resolves:
         single = await capture._find_thread(pool, resolves, require_identifier=True)
         if single is None:
-            return {"error": f"resolves matched no thread: {resolves!r} — quote its UUID, "
-                             "canonical, or 8-char short id (no prose match — an "
+            return {"error": f"resolves matched no thread: {resolves!r}. Quote its UUID, "
+                             "canonical, or 8-char short id (no prose match: an "
                              "addressing act refuses rather than guesses)"}
         single_resolved_summary = await capture._thread_summary(pool, single)
     try:
@@ -10405,7 +10452,7 @@ async def open_thread(
         arc_receipt = arc or capture._ARC_UNSORTED
     out = {"id": str(t), "summary": summary, "status": "open", "deduped": "false",
           "dedup_scope": "checked only this project's own OPEN Threads for a near-exact "
-                         "twin (find_near_duplicate_open_thread) — not standing Decisions, "
+                         "twin (find_near_duplicate_open_thread), not standing Decisions, "
                          "Practices, or resolved Threads; see prior_art below for those",
           "arc": arc_receipt}
     # PRIOR-ART SURFACING (obligation 8f59b64f, Thoth XC/msg 6120 — open_thread was the one
@@ -10426,19 +10473,19 @@ async def open_thread(
             top = prior[0]
             if top.get("type") == "Thread":
                 out["prior_art_flag"] = (
-                    f"this appears to speak to open thread {top['id']} — if this new one "
+                    f"this appears to speak to open thread {top['id']}. If this new one "
                     f"is meant to close it, pass resolves=['{top['id']}'] next time; "
-                    "otherwise just worth reading before this stands as a separate duty")
+                    "otherwise it's worth reading before this stands as a separate duty")
             else:
                 out["prior_art_flag"] = (
                     f"a standing {(top.get('type') or 'Decision').lower()} ({top['id']}) "
-                    "may already cover this ground — read it before this stands as a new "
+                    "may already cover this ground. Read it before this stands as a new "
                     "finding")
     if repo_defaulted:
         out["repo_defaulted"] = {
             "to": repo,
-            "why": "no repo given — defaulted to the caller's own project rather than "
-                   "left unlinked (orphan-door fix, msg 5703/5720)",
+            "why": "no repo given, so it defaulted to the caller's own project instead "
+                   "of being left unlinked.",
         }
     elif lineage_attempted:
         # SAME SHARED POST-MINT STEP record_decision's wrapper uses (thread 6c262aee):
@@ -10458,8 +10505,8 @@ async def open_thread(
         if landed_owner:
             out["owner_defaulted"] = {
                 "to": landed_owner,
-                "why": "kind='obligation' with no owner given — defaulted to the "
-                       "caller's own seat rather than left ownerless (#5546 item 1)",
+                "why": "kind='obligation' with no owner given, so it defaulted to the "
+                       "caller's own seat instead of being left ownerless.",
             }
     if files_touched:
         others = [c for c in await capture.open_held_work(pool, repo=repo)
@@ -10679,42 +10726,43 @@ async def thread(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """THE THREAD OBJECT-TYPE DISPATCHER (task #202, Thoth dispatch 7162) — one door,
-    four `action`s over an EXISTING Thread, never a fifth (`open_thread` stays separate:
-    it MINTS; every action here only ever acts on one that already exists).
+    """Acts on an existing Thread: one tool, four `action`s. `open_thread` stays
+    separate since it mints a new Thread; every action here only ever acts on one
+    that already exists.
 
-    ACTION TABLE — action: what it does (required params beyond action):
-      resolve: close it (ref, because is a short WHY, not a completion essay). `artifact`
-        points at what actually closed it (a commit hash, decision id, file:line, or
-        `repo:<name>@<hash>` to disambiguate a short hash that collides across two or more
-        ingested repos' commits — a bare hash otherwise already resolves against EVERY
-        ingested repo's Commits, unscoped, so a fix in one project can close a thread in
-        another) — kept as `resolved_artifact`; when it names a graph object a
-        `resolved_by` edge mints too. Re-resolving is allowed (latest closure witness wins,
-        earlier reasoning stays in history). A LIST `ref` closes a BATCH (#203, decision 880ffe79):
-        `because` becomes mandatory, `dry_run` DEFAULTS TRUE and previews without
-        writing — pass `dry_run=False` explicitly to actually close the batch — and the
-        whole batch refuses if any ref does not resolve to exactly one thread. `dry_run`
-        is INERT for a SINGLE `ref` (RECEIPT LAW, Thoth mail 9122 item 1, wave 16 — the
-        single-ref primitive `capture.resolve_thread` has never taken one, and passing
-        `dry_run=True` on a bare ref still resolves it for real): disclosed here since
-        the schema itself offers the param uniformly for both shapes.
-      annotate: add `note` WITHOUT closing it or touching `summary`/`status` (ref, note)
-        — each call appends independently, never supersedes an earlier note. Optional
-        `corrected_summary`/`because` fix the headline in the same call, same as
-        correct_summary below.
+    ACTION TABLE, action: what it does (required params beyond action):
+      resolve: close it (ref, because is a short reason, not a completion essay).
+        `artifact` points at what actually closed it (a commit hash, decision id,
+        file:line, or `repo:<name>@<hash>` to disambiguate a short hash that
+        collides across two or more ingested repos' commits; a bare hash otherwise
+        resolves against every ingested repo's commits, unscoped, so a fix in one
+        project can close a thread in another). It is kept as `resolved_artifact`;
+        when it names a graph object, a `resolved_by` edge is minted too.
+        Re-resolving is allowed (the latest closure witness wins, earlier
+        reasoning stays in history). A LIST `ref` closes a batch: `because` becomes
+        mandatory, `dry_run` defaults to true and previews without writing (pass
+        `dry_run=False` explicitly to actually close the batch), and the whole
+        batch refuses if any ref does not resolve to exactly one thread. `dry_run`
+        has no effect for a single `ref` (the single-ref primitive
+        `capture.resolve_thread` has never taken one, and passing `dry_run=True`
+        on a bare ref still resolves it for real): disclosed here since the schema
+        itself offers the param uniformly for both shapes.
+      annotate: add `note` without closing it or touching `summary`/`status` (ref,
+        note); each call appends independently, never supersedes an earlier note.
+        Optional `corrected_summary`/`because` fix the headline in the same call,
+        same as correct_summary below.
       correct_summary: replace the headline in place via `corrected_summary` (ref,
-        corrected_summary — `summary` itself, the dedup key, is never touched);
+        corrected_summary; `summary` itself, the dedup key, is never touched);
         re-calling supersedes the prior correction rather than piling up notes.
         `because` optional.
-      reclassify: set `kind` ('obligation'/'question'/'task') WITHOUT changing status
-        (ref, kind) — untouched is not resolved. `because` records your judgment,
-        `owner` optionally claims it in the same act, `arc` backfills open_thread's own
-        closed taxonomy onto an already-open thread (osiris-scoped, dropped and named
-        elsewhere).
+      reclassify: set `kind` ('obligation'/'question'/'task') without changing
+        status (ref, kind); untouched means not resolved. `because` records your
+        reasoning, `owner` optionally claims it in the same act, `arc` backfills
+        open_thread's own closed taxonomy onto an already-open thread
+        (osiris-scoped, dropped and named elsewhere).
 
-    `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a list only
-    for `action='resolve'`'s own batch mode)."""
+    `ref` is a Thread UUID, canonical, short-id prefix, or summary substring (a
+    list only for `action='resolve'`'s own batch mode)."""
     return await _thread_action_impl(
         ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
         corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
@@ -10724,7 +10772,7 @@ async def thread(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action=...)",
-    "since": "task #202 thread dispatcher (msg 7162)",
+    "since": "the thread() dispatcher was introduced",
 })
 async def thread_action(
     ref: str | list[str], action: str, because: str | None = None,
@@ -10735,7 +10783,7 @@ async def thread_action(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to thread(action=...)."""
+    """Deprecated: hidden alias, still callable. Forwards to thread(action=...)."""
     return await _thread_action_impl(
         ref, action, because=because, artifact=artifact, dry_run=dry_run, note=note,
         corrected_summary=corrected_summary, kind=kind, owner=owner, arc=arc, ctx=ctx,
@@ -10781,7 +10829,7 @@ async def _proposal_action_impl(
             return {"error": "reject needs proposal_ref and reason"}
         return await _reject(Actions(pool), proposal=proposal_ref, reason=reason,
                              actor=actor)
-    return {"error": f"unknown action {action!r} — propose, accept, or reject"}
+    return {"error": f"unknown action {action!r}, expected propose, accept, or reject"}
 
 
 @mcp.tool()
@@ -10792,24 +10840,25 @@ async def proposal(
     proposal_ref: str | None = None, reason: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """MINERS AS LAST RESORT (decision ac892cd9) — one door, three actions:
+    """Miners propose changes here rather than writing to the graph directly. One tool,
+    three actions:
 
       propose: mint a Proposal (never a real graph write) against an existing,
-        unresolved `derivation_abstained_<link_type>` property — the last-resort law.
-        `from_id` (a canonical or raw uuid) names the abstaining object; `link_type`
-        must match the abstention's own namespace exactly; `candidate` is what would be
-        minted if accepted ({"kind":"link", "from_id","to_id","link_type"} or
-        {"kind":"object", "type","canonical","properties":{...}}); `owner` resolves via
-        the one owner law (an active seat, its handle, or 'operator'); `miner` names the
-        proposing miner. Refuses per proposals.propose()'s own three laws — no live
-        abstention, an unresolvable owner, or a malformed candidate.
-      accept: mints the real object/link `proposal_ref` names, under THIS CALL's own
-        identity (self_declared — a mind's own testimony, never the miner's grade).
-        Refuses on anything but a live, unexpired, still-`proposed` Proposal.
+        unresolved `derivation_abstained_<link_type>` property. `from_id` (a canonical
+        or raw uuid) names the abstaining object; `link_type` must match the
+        abstention's own namespace exactly; `candidate` is what would be minted if
+        accepted ({"kind":"link", "from_id","to_id","link_type"} or
+        {"kind":"object", "type","canonical","properties":{...}}); `owner` resolves to
+        an active seat, its handle, or 'operator'; `miner` names the proposing miner.
+        Refuses if there is no live abstention, the owner cannot be resolved, or the
+        candidate is malformed.
+      accept: mints the real object/link `proposal_ref` names, recorded under this
+        call's own identity, not the miner's. Refuses on anything but a live,
+        unexpired, still-`proposed` Proposal.
       reject: retires `proposal_ref` (status='rejected') with a mandatory `reason` the
         proposing miner reads back on its own next tick.
 
-    Never touches an existing miner — nothing calls propose() automatically yet."""
+    Nothing calls propose() automatically yet; it is only ever invoked directly."""
     ident = await _ident_for(ctx)
     actor = ident.agent_id if ident is not None else "console:proposal"
     pool = await _pool_get()
@@ -10822,7 +10871,7 @@ async def proposal(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action='resolve')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def resolve_thread(
     ref: str | list[str], because: str | None = None, artifact: str | None = None,
@@ -10831,7 +10880,7 @@ async def resolve_thread(
     subagent_type: str | None = None, session_anchor: str | None = None,
     ctx: Context | None = None
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     thread(action='resolve')."""
     return await _thread_action_impl(
         ref, "resolve", because=because, artifact=artifact, dry_run=dry_run, note=None,
@@ -10842,14 +10891,14 @@ async def resolve_thread(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action='annotate')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def annotate_thread(
     ref: str, note: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     thread(action='annotate')."""
     out = await _thread_action_impl(
         ref, "annotate", because=None, artifact=None, dry_run=True, note=note,
@@ -10868,8 +10917,9 @@ async def rematerialize(
     collecting: a break returns `{"error": ..., "verified_through": N}` and nothing is
     written. `dest` defaults to the session's own recorded source_path.
 
-    Refuses to overwrite a LIVE transcript — `dest` modified more recently than this
-    session's last ingest would clobber unseen content; `force=True` overrides. Success
+    Refuses to overwrite a live transcript: if `dest` was modified more recently than
+    this session's last ingest, overwriting it would clobber unseen content;
+    `force=True` overrides. Success
     returns `{"written": <path>, "lines": N, "sha256": <hex>}`."""
     from src.ingest.soul_store import SoulStore
 
@@ -10880,13 +10930,13 @@ async def rematerialize(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "seat(action='heal_transcript')",
-    "since": "task #202 seat dispatcher (msg 7039)",
+    "since": "an earlier tool consolidation",
 })
 async def heal_seat_transcript(
     handle: str, source_paths: list[str], dry_run: bool = True, because: str = "",
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     seat(action='heal_transcript')."""
     return await _seat_impl("heal_transcript", target=handle, source_paths=source_paths,
                             dry_run=dry_run, because=because, ctx=ctx)
@@ -10895,14 +10945,14 @@ async def heal_seat_transcript(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action='correct_summary')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def correct_thread_summary(
     ref: str, corrected_summary: str, because: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     thread(action='correct_summary')."""
     return await _thread_action_impl(
         ref, "correct_summary", because=because, artifact=None, dry_run=True, note=None,
@@ -10916,15 +10966,15 @@ async def amend_decision(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """Append reasoning to a LIVE decision as understanding develops, WITHOUT superseding it.
-    `record_decision` is write-once-plus-supersede — mint fresh, or bury under a correction —
-    this is the third door: more of the same ruling's own reasoning, added later. `ref` is a
-    Decision UUID, canonical, short-id prefix, or summary substring. `summary`/`rationale`/
-    `kind` are never touched here.
-    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing, or
-    when it resolves to a decision already superseded — amend the successor instead, or use
-    record_decision(supersedes=...) if you mean a correction; this verb only ever adds to a
-    ruling still standing."""
+    """Append reasoning to a live decision as understanding develops, without superseding
+    it. `record_decision` can only mint a fresh decision or supersede an old one with a
+    correction; this tool instead adds more reasoning to the same still-standing
+    decision, later. `ref` is a Decision UUID, canonical, short-id prefix, or summary
+    substring. `summary`/`rationale`/`kind` are never touched here.
+    Returns {"error": ...} (never raises past this wrapper) when `ref` matches nothing,
+    or when it resolves to a decision already superseded: amend the successor instead,
+    or use record_decision(supersedes=...) if you mean a correction. This tool only
+    ever adds to a decision that is still standing."""
     pool = await _pool_get()
     try:
         did = await capture.amend_decision(
@@ -10940,14 +10990,14 @@ async def amend_decision(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "practice(action='amend')",
-    "since": "task #202 practice dispatcher (msg 7162)",
+    "since": "an earlier tool consolidation",
 })
 async def amend_practice(
     ref: str, amendment: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     practice(action='amend')."""
     return await _practice_impl(
         "amend", ref=ref, amendment=amendment, subagent_id=subagent_id,
@@ -10958,10 +11008,9 @@ async def _lease_impl(
     action: str, resource_id: str, *, holder: str | None, older_than_secs: int | None,
     ctx: Context | None, subagent_id: str | None, subagent_type: str | None,
 ) -> dict[str, Any]:
-    """Shared body behind `lease` and its four hidden single-purpose aliases (acquire_
-    lease/release_lease/check_lease/reap_stale_leases) — one code path, five names. Each
-    action below is copied verbatim from what was that alias's own top-level function
-    body before the fold."""
+    """Shared implementation behind `lease` and its four hidden single-purpose aliases
+    (acquire_lease/release_lease/check_lease/reap_stale_leases): one code path, five
+    names."""
     pool = await _pool_get()
     if action == "acquire":
         actor = await _actor_for(ctx, subagent_id, subagent_type)
@@ -10977,7 +11026,7 @@ async def _lease_impl(
         }
         if not result.acquired:
             out["note"] = (f"already held by {result.holder} since "
-                           f"{result.acquired_at.isoformat()} — no new claim minted")
+                           f"{result.acquired_at.isoformat()}, no new claim minted")
         return out
     if action == "release":
         actor = await _actor_for(ctx, subagent_id, subagent_type)
@@ -10999,7 +11048,7 @@ async def _lease_impl(
         except ValueError as e:
             return {"error": str(e)}
         return {"reaped": n, "older_than_secs": older_than_secs or 3600}
-    return {"error": f"unknown action {action!r} — one of acquire/release/check/reap"}
+    return {"error": f"unknown action {action!r}, expected one of acquire/release/check/reap"}
 
 
 @mcp.tool()
@@ -11009,31 +11058,33 @@ async def lease(
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Coordinate over any genuinely SHARED, non-isolable resource by an EXACT id
-    (`deploy`, `docker-daemon`, the live server) — not a working tree, which has no
+    """Coordinate over any genuinely shared, non-isolable resource by an exact id
+    (`deploy`, `docker-daemon`, the live server), not a working tree, which has no
     contention to coordinate. `resource_id` is convention, not a closed vocabulary.
     Four `action`s, never a fifth.
 
-    `action='acquire'` — claim it, matched by equality, backed by a real DB uniqueness
+    `action='acquire'`: claim it, matched by equality, backed by a real DB uniqueness
     constraint, never a race (unlike open_thread(assignee=)'s fuzzy prose match).
     `holder` defaults to your own mounted identity; pass one to claim on another's
-    behalf. A refusal names who holds it and since when. No renewed TTL — `release` is
-    the primary end path; `reap` is the crash/compaction backstop, not the norm.
+    behalf. A refusal names who holds it and since when. There is no renewed TTL:
+    `release` is the primary way to end a hold; `reap` is only a crash/compaction
+    backstop, not the normal path.
 
-    `action='release'` — free a resource YOU hold. Only the ACTUAL holder's own release
-    frees it, never a different agent's, even by name — no `holder` param here, the
-    identity checked is always the caller's own resolved actor. `released: false` for
-    BOTH an unheld resource and a wrong-holder attempt — both are refusals to report,
-    never errors; `check` first if you need to tell the two apart.
+    `action='release'`: free a resource you hold. Only the actual holder's own release
+    frees it, never a different agent's, even by name: there is no `holder` param here,
+    the identity checked is always the caller's own resolved actor. `released: false`
+    for both an unheld resource and a wrong-holder attempt: both are refusals to
+    report, never errors. Call `check` first if you need to tell the two apart.
 
-    `action='check'` — read-only: who holds it right now, or that it's free. Never
-    claims, never mints, never leases anything.
+    `action='check'`: read-only. Reports who holds it right now, or that it's free.
+    Never claims, never mints, never leases anything.
 
-    `action='reap'` — recover leases nobody released (a crash, a compaction, a dropped
-    session) — the active-claim constraint would otherwise wedge that `resource_id`
-    FOREVER. The backstop, not the norm (a 5-min cron already runs this). `older_than_
-    secs` defaults 3600 (agent-work-paced, not machine-paced), 60s floor enforced
-    (below it force-releases every held lease fleet-wide at once), refused loudly."""
+    `action='reap'`: recover leases nobody released (a crash, a compaction, a dropped
+    session); without this, the active-claim constraint would wedge that `resource_id`
+    forever. This is a backstop, not the norm (a 5-min cron already runs it).
+    `older_than_secs` defaults to 3600 (paced to agent work, not machine time), with a
+    60s floor enforced (below it, every held lease fleet-wide would be force-released
+    at once), and is refused loudly if violated."""
     return await _lease_impl(
         action, resource_id, holder=holder, older_than_secs=older_than_secs, ctx=ctx,
         subagent_id=subagent_id, subagent_type=subagent_type)
@@ -11042,14 +11093,14 @@ async def lease(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "lease(action='acquire')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def acquire_lease(
     resource_id: str, holder: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='acquire')."""
+    """Deprecated: hidden alias, still callable. Forwards to lease(action='acquire')."""
     return await _lease_impl(
         "acquire", resource_id, holder=holder, older_than_secs=None, ctx=ctx,
         subagent_id=subagent_id, subagent_type=subagent_type)
@@ -11058,14 +11109,14 @@ async def acquire_lease(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "lease(action='release')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def release_lease(
     resource_id: str,
     subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='release')."""
+    """Deprecated: hidden alias, still callable. Forwards to lease(action='release')."""
     return await _lease_impl(
         "release", resource_id, holder=None, older_than_secs=None, ctx=ctx,
         subagent_id=subagent_id, subagent_type=subagent_type)
@@ -11074,10 +11125,10 @@ async def release_lease(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "lease(action='check')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def check_lease(resource_id: str) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='check')."""
+    """Deprecated: hidden alias, still callable. Forwards to lease(action='check')."""
     return await _lease_impl(
         "check", resource_id, holder=None, older_than_secs=None, ctx=None,
         subagent_id=None, subagent_type=None)
@@ -11086,10 +11137,10 @@ async def check_lease(resource_id: str) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "lease(action='reap')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def reap_stale_leases(older_than_secs: int = 3600) -> dict[str, Any]:
-    """DEPRECATED — hidden alias, still callable. Forwards to lease(action='reap')."""
+    """Deprecated: hidden alias, still callable. Forwards to lease(action='reap')."""
     return await _lease_impl(
         "reap", "", holder=None, older_than_secs=older_than_secs, ctx=None,
         subagent_id=None, subagent_type=None)
@@ -11328,17 +11379,18 @@ async def ack_handoff(
     ref: str, subagent_id: str | None = None, subagent_type: str | None = None,
     session_anchor: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """The READ RECEIPT — the only thing that retires a live `is_handoff` marker, or a
-    legacy record with none, matched by prose alone. orient() delivers a handoff
-    unconditionally; this acknowledges it, a separate act naming the id. `ref` is the id
-    orient()'s succession_note or recall() gave you, resolved strictly (never a
+    """Acknowledge a handoff: the only action that retires a live `is_handoff` marker,
+    or a legacy record with none, matched by prose alone. orient() delivers a handoff
+    unconditionally; this acknowledges it as a separate act naming the id. `ref` is the
+    id orient()'s succession_note or recall() gave you, resolved strictly (never a
     free-text guess). Tries Thread then Decision.
 
-    Refuses rather than guesses: unresolvable ref, already-acknowledged/not-a-handoff,
-    or a caller outside the author's own lineage (a mistaken ack from elsewhere would
-    permanently retire someone else's live handoff). Per-object, not per-reader (first
-    ack wins); final, not a lease. Never deleted — recall()/search() still see it.
-    Resolves a Thread's own `status` too; always False for a Decision."""
+    Refuses rather than guesses: an unresolvable ref, an already-acknowledged or
+    not-a-handoff record, or a caller outside the author's own lineage (a mistaken ack
+    from elsewhere would permanently retire someone else's live handoff). This acts on
+    the object, not the reader, so the first ack wins; it is final, not a lease. Never
+    deleted: recall()/search() still see it. Resolves a Thread's own `status` too;
+    always False for a Decision."""
     from src.orchestrator.capture import RefAmbiguous, _find_decision, _find_thread
 
     pool = await _pool_get()
@@ -11377,9 +11429,9 @@ async def ack_handoff(
     author_root, author_complete = await lineage_root(pool, row["author"])
     actor_root, actor_complete = await lineage_root(pool, actor)
     if not author_complete or not actor_complete:
-        return {"error": f"{str(oid)[:8]}: cannot confirm lineage — the succeeded_from "
-                         "walk did not reach a true origin within the hop bound, refused "
-                         "rather than trusted (decision 1cb389be)"}
+        return {"error": f"{str(oid)[:8]}: cannot confirm lineage, the succession walk "
+                         "did not reach a true origin within the hop bound, so this is "
+                         "refused rather than trusted"}
     if author_root != actor_root:
         return {"error": f"{str(oid)[:8]} is not your lineage's handoff to ack"}
     now = datetime.now(UTC)
@@ -11403,35 +11455,36 @@ async def settle(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE END-OF-CONTEXT RITUAL: deposit everything a session knows before compaction
-    destroys its context. No args = read-only SURFACE (completeness boxes + your open
-    obligations). With `decisions`/`threads_open`/`threads_resolve` (each item a dict of
-    that verb's own kwargs) it ACCEPTS a dump, dispatching to record_decision/open_thread/
-    resolve_thread unchanged, then re-confirms against the updated graph. `complete` is
-    true only when nothing is left unwritten.
+    """The end-of-session checklist: deposit everything a session knows before
+    compaction destroys its context. With no args, this is a read-only status check
+    (completeness boxes plus your open obligations). With `decisions`/`threads_open`/
+    `threads_resolve` (each item a dict of that tool's own kwargs) it accepts a batch,
+    dispatching to record_decision/open_thread/resolve_thread unchanged, then re-checks
+    against the updated graph. `complete` is true only when nothing is left unwritten.
 
-    A bad item in `decisions`/`threads_open` never sinks the rest of the batch — it lands
+    A bad item in `decisions`/`threads_open` never sinks the rest of the batch: it lands
     in `rejected` (kind/summary/error) and `complete` reads False, but everything else
-    still writes. `is_handoff: true` on an item mints a structured marker your successor's
-    orient() finds directly; retires on their ack_handoff(ref=...), not your next write.
+    still writes. `is_handoff: true` on an item mints a structured marker your
+    successor's orient() finds directly; it is retired by their ack_handoff(ref=...),
+    not by your next write.
 
-    `repo_path` names your code repo for the git-status box (`uncommitted_git_files`) —
-    your mounted cwd is checked only as a fallback, usually wrong for a seat-office
-    agent. A decision's `resolves=` and a same-call `threads_resolve` item naming the
-    same thread get the closure edge wired automatically.
+    `repo_path` names your code repo for the git-status box (`uncommitted_git_files`).
+    Your mounted working directory is checked only as a fallback, and is usually wrong
+    for a seat-office agent. A decision's `resolves=` and a same-call `threads_resolve`
+    item naming the same thread get the closure edge wired automatically.
 
-    `standing_orders='unchanged'` (thread 8686cba4, requires `because`) closes the
-    "standing orders touched this session" box HONESTLY for a seat whose charter.md/
-    CLAUDE.md genuinely did not change this session — a seat-office body otherwise reads
-    complete:false forever on this box alone (root cause thread 169e64ec), which starves
-    the self-compaction seam (ruling a3fb7c11) of the completeness it requires. Recorded
-    as a real property (`standing_orders_unchanged`), never a silent pass; the box also
-    now closes on its own from a `charter()`/`charter_for` or `practice(record|amend)`
-    call THIS session, with no extra argument needed. consult_canon('settle')."""
+    `standing_orders='unchanged'` (requires `because`) closes the "standing orders
+    touched this session" box honestly for a seat whose charter.md/CLAUDE.md genuinely
+    did not change this session; without it, a seat-office session otherwise reads
+    complete:false forever on this box alone, which blocks compaction from ever
+    treating the session as fully deposited. Recorded as a real property
+    (`standing_orders_unchanged`), never a silent pass; the box also now closes on its
+    own from a `charter()`/`charter_for` or `practice(record|amend)` call this session,
+    with no extra argument needed. See consult_canon('settle') for more detail."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — settle is a mind's own ritual, the graph must "
-                         "know whose", "why": _anchorless(ctx)}
+        return {"error": "mount first: settle records against a known identity, and the "
+                         "graph must know whose", "why": _anchorless(ctx)}
     pool = await _pool_get()
     actor = await _actor_for(ctx, subagent_id, subagent_type)
     now = datetime.now(UTC)
@@ -11441,13 +11494,13 @@ async def settle(
         if standing_orders != "unchanged":
             rejected.append({
                 "kind": "standing_orders", "summary": standing_orders,
-                "error": "the only recognized value is 'unchanged' — anything else is "
-                         "either a typo or a claim this door doesn't know how to record",
+                "error": "the only recognized value is 'unchanged'. Anything else is "
+                         "either a typo or a claim this tool doesn't know how to record",
             })
         elif not because:
             rejected.append({
                 "kind": "standing_orders", "summary": "unchanged",
-                "error": "because is required — declaring standing orders unchanged is "
+                "error": "because is required. Declaring standing orders unchanged is "
                          "a deliberate claim, not a default",
             })
         else:
@@ -11506,8 +11559,8 @@ async def settle(
         if repo_defaulted:
             decision_entry["repo_defaulted"] = {
                 "to": item_repo,
-                "why": "no repo given — defaulted to the caller's own project rather "
-                       "than left unlinked (orphan-door fix, msg 5703/5720)",
+                "why": "no repo given, so this defaulted to the caller's own project "
+                       "rather than being left unlinked",
             }
         elif _rd["lineage_attempted"]:
             decision_entry["lineage_repo_derivation"] = await capture.record_lineage_abstain(
@@ -11576,8 +11629,8 @@ async def settle(
         if repo_defaulted:
             thread_entry["repo_defaulted"] = {
                 "to": thread_repo,
-                "why": "no repo given — defaulted to the caller's own project rather "
-                       "than left unlinked (orphan-door fix, msg 5703/5720)",
+                "why": "no repo given, so this defaulted to the caller's own project "
+                       "rather than being left unlinked",
             }
         elif _rd["lineage_attempted"]:
             thread_entry["lineage_repo_derivation"] = await capture.record_lineage_abstain(
@@ -11592,8 +11645,8 @@ async def settle(
             if landed_owner:
                 thread_entry["owner_defaulted"] = {
                     "to": landed_owner,
-                    "why": "kind='obligation' with no owner given — defaulted to the "
-                           "caller's own seat rather than left ownerless (#5546 item 1)",
+                    "why": "kind='obligation' with no owner given, so this defaulted to "
+                           "the caller's own seat rather than being left ownerless",
                 }
         accepted["threads_opened"].append(thread_entry)
     cross_wired = 0
@@ -11727,7 +11780,7 @@ async def settle(
         reasons.append(f"{len(missing)} missing box(es)")
     if rejected:
         reasons.append(f"{len(rejected)} rejected item(s)")
-    carried_note = (f" ({len(obligations)} open obligation(s) carried forward — "
+    carried_note = (f" ({len(obligations)} open obligation(s) carried forward, "
                     "informational, already durably recorded, never blocks this)"
                     if obligations else "")
     # ALWAYS surfaced, regardless of `complete` — these inform a reader without gating them
@@ -11744,17 +11797,17 @@ async def settle(
     if dirty_owner and dirty_owner["agent_id"] != ident.agent_id:
         age = datetime.now(UTC) - dirty_owner["last_seen"]
         uncommitted_note = (
-            f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
-            f"only, never gates complete — looks like {dirty_owner['agent_id']}'s own "
+            f", {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
+            f"only, never gates complete, looks like {dirty_owner['agent_id']}'s own "
             f"in-flight work (last seen {age} ago, judge staleness yourself)"
             if uncommitted else "")
     else:
         uncommitted_note = (
-            f" — {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
+            f", {len(uncommitted)} uncommitted git file(s) at {git_dir!r}, informational "
             "only (may be another agent's in-flight work in a shared tree, never gates "
             "complete)" if uncommitted else "")
     unevaluated_note = (
-        f" — could not evaluate: {', '.join(unevaluated)} (fog-of-war, not a pass, "
+        f", could not evaluate: {', '.join(unevaluated)} (unknown, not a pass, "
         "never gates complete)" if unevaluated else "")
     # #93, THE MECHANICAL SETTLE (operator ruling 2026-09-17): a plain numeric field, not
     # the debounced/threshold-gated prose `_seam_field` puts on every OTHER tool's receipt
@@ -11774,7 +11827,7 @@ async def settle(
         "rejected": rejected,
         "closure_edges_wired": cross_wired,
         "note": ((f"compaction-safe by construction{carried_note}" if complete else
-                 f"still unsettled ({', '.join(reasons)}) — settle again once they're "
+                 f"still unsettled ({', '.join(reasons)}), settle again once they're "
                  "closed, or accept them in your next call")
                  + uncommitted_note + unevaluated_note),
     }
@@ -11789,19 +11842,19 @@ async def settle(
         if identity_coherence.get("spans_multiple"):
             if identity_coherence["coherent"]:
                 out["note"] += (
-                    f" — informational: filed under {identity_coherence['filed_under']!r}, "
+                    f". Informational: filed under {identity_coherence['filed_under']!r}, "
                     f"writes spanned {len(identity_coherence['writes_went_to'])} of this "
-                    f"seat's own chartered repos {identity_coherence['writes_went_to']!r} "
-                    "— coherent, but a successor mounting under "
+                    f"seat's own chartered repos {identity_coherence['writes_went_to']!r}. "
+                    "Coherent, but a successor mounting under "
                     f"{identity_coherence['filed_under']!r} alone will not see the writes "
                     "filed under the other repo(s)"
                 )
             else:
                 out["note"] += (
-                    f" — LOUD, NEVER BLOCKING: this session is filed under "
+                    f". Flagged, but never blocking: this session is filed under "
                     f"{identity_coherence['filed_under']!r} but its own writes went to "
                     f"{identity_coherence['writes_went_to']!r}; a successor mounting under "
-                    f"{identity_coherence['filed_under']!r} will not see them (John XVI's shape)"
+                    f"{identity_coherence['filed_under']!r} will not see them"
                 )
     if closure_coverage is not None:
         out["closure_coverage"] = closure_coverage
@@ -11811,14 +11864,14 @@ async def settle(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "thread(action='reclassify')",
-    "since": "task #202 wave 3 (msg 6987)",
+    "since": "an earlier tool consolidation",
 })
 async def reclassify_thread(
     ref: str, kind: str, because: str | None = None, owner: str | None = None,
     arc: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, str]:
-    """DEPRECATED — hidden alias, still callable. Forwards to
+    """Deprecated: hidden alias, still callable. Forwards to
     thread(action='reclassify')."""
     return await _thread_action_impl(
         ref, "reclassify", because=because, artifact=None, dry_run=True, note=None,
@@ -11829,20 +11882,21 @@ async def reclassify_thread(
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "an earlier retirement pass",
 })
 async def hold_tension(
     pole_a: str, pole_b: str, lean: str | None = None, why: str | None = None,
     repo: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Record a live TENSION — two positions held in productive tension, neither settled.
-    Unlike record_decision (which SETTLES) or open_thread (which CLOSES), a tension is HELD:
-    your current `lean` and `why` are captured, but it is NEVER auto-resolved or consolidated
-    away — a Tension is its OWN type, so grade-resolution and dedup structurally cannot flatten
-    it into a false answer. Re-hold the same poles to MOVE the lean; the lean history is the
-    dance across sessions. For a real polarity to navigate over time (bounded recall vs complete
-    memory), never a question to answer. Surfaces in orient under `tensions`."""
+    """Record a live tension: two positions held in productive tension, neither settled.
+    Unlike record_decision (which settles) or open_thread (which closes), a tension is held.
+    Your current `lean` and `why` are captured, but it is never auto-resolved or consolidated
+    away. A tension is its own type, so grade-resolution and dedup cannot flatten it into a
+    false answer. Re-hold the same poles to move the lean; the lean history tracks how your
+    thinking changed across sessions. Use it for a real polarity to navigate over time (for
+    example, bounded recall vs. complete memory), not a question to answer. Surfaces in
+    orient() under `tensions`."""
     ident = await _ident_for(ctx)
     t = await capture.record_tension(
         Actions(await _pool_get()), pole_a, pole_b, lean=lean, why=why,
@@ -11858,12 +11912,12 @@ async def register_blind_spot(
     repo: str | None = None, subagent_id: str | None = None,
     subagent_type: str | None = None, ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Register your project's KNOWN BLIND SPOT — what the harness here cannot verify,
+    """Register your project's known blind spot: what the harness here cannot verify,
     and where real verification lives. Surfaces at orient() under `blind_spots` before a
-    session trusts a green harness. `surface` names the capability ('webkit-rendering');
-    `cannot_see` states the gap; `verify_with` points at the rig or ritual that actually
-    verifies. Held like a Tension, never resolved away. Idempotent per
-    (project, surface) — re-register to sharpen the wording."""
+    session trusts a green harness. `surface` names the capability (for example,
+    'webkit-rendering'); `cannot_see` states the gap; `verify_with` points to where real
+    verification happens. Held like a tension, never resolved away. Idempotent per
+    (project, surface); re-register to sharpen the wording."""
     ident = await _ident_for(ctx)
     b = await capture.record_blind_spot(
         Actions(await _pool_get()), surface, cannot_see, verify_with=verify_with,
@@ -11880,13 +11934,13 @@ async def declare_machine_identity(
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """THE declare-machine-identity DOOR (thread 2619f011, ruling edb6b0fc): covers what
-    git ingest's own heuristic misses — a bot committing from a real-looking domain, or a
-    local part that just doesn't match any ingested repo's own name. Mints/finds the
-    MachineIdentity (machine:<email>), bridges any pre-existing dev:<email> Person via
-    same_as (never deleted, never retyped — objects.type is immutable), and mints a
-    committer_for edge to `project` (a bare repo name, e.g. 'osiris' for repo:osiris).
-    Refuses without a written `because` — this is a manual override, never silent."""
+    """Covers what git ingest's own heuristic misses: a bot committing from a
+    real-looking domain, or a local part that doesn't match any ingested repo's own name.
+    Mints or finds the MachineIdentity (machine:<email>), links any pre-existing
+    dev:<email> Person via same_as (never deleted, never retyped; objects.type is
+    immutable), and mints a committer_for edge to `project` (a bare repo name, for
+    example 'osiris' for repo:osiris). Refuses without a written `because`: this is a
+    manual override, never silent."""
     from src.ingest.gitlog import declare_machine_identity as _declare
 
     out = await _declare(
@@ -11898,61 +11952,60 @@ async def declare_machine_identity(
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "an earlier retirement pass",
 })
 async def hold_memory(
     body: str, summary: str | None = None, repo: str | None = None,
     subagent_id: str | None = None, subagent_type: str | None = None,
     ctx: Context | None = None,
 ) -> dict[str, Any]:
-    """Keep a memory lived for its own sake — the operator's ruling: existential and
-    philosophical conversations 'need a home and I want them remembered; they are not
-    exactly work tickets, they are simply memories lived with my agents.' A Reflection
-    is remembered, attributed, and queryable (search / the graph), and NEVER actionable:
-    it is its own type, so no briefing, wall, pile, or resolver can present it as work.
-    Use it when a conversation was worth living, not worth ticketing.
+    """Keep a memory for its own sake. Existential or philosophical conversations need a
+    home too; they aren't work tickets, just memories worth keeping. A reflection is
+    remembered, attributed, and queryable (via search or the graph), and is never
+    actionable: it's its own type, so no briefing, wall, pile, or resolver can present it
+    as work. Use it when a conversation was worth keeping, not worth turning into a task.
 
-    THE OTHER HALF, when a passage should never reach the graph at all: wrap it in
-    ‹off-record› … ‹on-record› markers (single guillemets, each on its own line) — the
-    miner strips such spans before any extractor sees them; the transcript on disk keeps
-    them as your private notebook. Completeness stays the default; both privacy and
-    keeping are DELIBERATE acts."""
+    The other half, for a passage that should never reach the graph at all: wrap it in
+    off-record/on-record markers (single guillemets ‹off-record› and ‹on-record›, each on
+    its own line). Such spans are stripped before any extractor sees them; the transcript
+    on disk keeps them as a private note. Completeness stays the default; both privacy
+    and keeping are deliberate acts."""
     ident = await _ident_for(ctx)
     r = await capture.record_reflection(
         Actions(await _pool_get()), body, summary=summary,
         repo=repo or (ident.project if ident else None),
         source=await _actor_for(ctx, subagent_id, subagent_type),
     )
-    return {"kept": str(r), "as": "reflection — remembered, never actionable"}
+    return {"kept": str(r), "as": "reflection: remembered, never actionable"}
 
 
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "an earlier retirement pass",
 })
 async def task_sync_reconcile(
     tasks: list[dict[str, Any]], write: bool = False, thread_kind_field: str = "task",
 ) -> dict[str, Any]:
-    """Reconcile a harness TaskList against the graph — task_sync.py's own promised on-ramp,
-    finally built.
+    """Reconcile a harness TaskList against the graph.
 
     `tasks`: rows in the harness tool's own TaskList/TaskGet shape ({"id", "subject",
     "description", "status", ...}). Tag each with its own `_store` (that store's session
-    id) once you mix more than one store — a bare task id repeats across stores. This tool
-    never reads ~/.claude/tasks itself and never enumerates other sessions' stores — you
-    gather the rows, this only reconciles them.
+    id) once you mix more than one store, since a bare task id repeats across stores. This
+    tool never reads ~/.claude/tasks itself and never enumerates other sessions' stores;
+    you gather the rows, this only reconciles them.
 
-    Report-only by default: the six-bucket report (bound/bound_partial/cited_unresolvable/
-    uncited/disagreement/thread_side_orphans, plus `counts`). No writes.
+    Report-only by default: returns a six-bucket report (bound, bound_partial,
+    cited_unresolvable, uncited, disagreement, thread_side_orphans, plus `counts`). No
+    writes.
 
-    `write=True` additionally executes the safe half ONLY: Tier 1 (one
-    `harness_task_citation` property per resolved citation — additive, reversible) and
-    Tier 2 (one obligation Thread per real disagreement or thread-side-orphan, grouped by
-    the disputed THREAD). Writes land only in THIS graph — there is no write-back to the
+    `write=True` additionally executes the safe half only: Tier 1 (one
+    `harness_task_citation` property per resolved citation, additive and reversible) and
+    Tier 2 (one obligation thread per real disagreement or thread-side-orphan, grouped by
+    the disputed thread). Writes land only in this graph; there is no write-back to the
     harness's own task store (TaskUpdate has no non-destructive removal verb, so no such
-    executor exists here). Recurrence is your call each time you pass write=True — never
-    scheduled by this tool itself."""
+    executor exists here). Recurrence is your call each time you pass write=True; it's
+    never scheduled by this tool itself."""
     pool = await _pool_get()
     report = await task_sync.reconcile(pool, tasks, thread_kind_field=thread_kind_field)
     out: dict[str, Any] = {"report": report}
