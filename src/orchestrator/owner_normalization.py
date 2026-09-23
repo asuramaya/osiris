@@ -1,39 +1,38 @@
-"""OWNER NORMALIZATION (thread 6d8f87a3, decision 0d863363 item 2, ruling 0d863363's own
-"ships mechanically, never a coordinator's hand pass" mandate) -- every OPEN obligation
-Thread whose `owner` is one of three recognizable non-durable shapes gets a compensating
-assertion pointing it at a durable one:
+"""OWNER NORMALIZATION: ships mechanically, never via a coordinator's hand pass. Every
+OPEN obligation Thread whose `owner` is one of three recognizable non-durable shapes
+gets a compensating assertion pointing it at a durable one:
 
   (a) a bare PROJECT NAME (e.g. "ballgem", not "seat:..." or a seat handle) resolves to
-      that project's COORDINATING SEAT -- reuses roster()'s own hard-won agreement
-      classification (governed/shared-house/single-match/conflict/no-match, obligation_
-      hygiene.py's resolve_owner_target ladder rung 1's own precedent) rather than a
-      second, cheaper, and inevitably drifting re-derivation of the same judgment calls.
+      that project's COORDINATING SEAT. Reuses roster()'s own hard-won agreement
+      classification (governed/shared-house/single-match/conflict/no-match, the same
+      precedent obligation_hygiene.py's resolve_owner_target ladder rung 1 already
+      established) rather than a second, cheaper, and inevitably drifting re-derivation
+      of the same judgment calls.
   (b) a DEAD/RETIRED agent id resolves to that lineage's live head (agents.py's own
       `lineage_head`, the same forward succeeded_by walk send_message's reply-routing
-      already trusts) -- "dead" is never read off objects.status (a superseded ancestor
+      already trusts). "Dead" is never read off objects.status (a superseded ancestor
       can stay status='active' forever, lineage_head's own documented husk gap), only
       whether lineage_head's own walk lands somewhere else.
   (c) an EMPTY owner (no current assertion, or an empty string) on a thread that DOES
       carry a `repo` property resolves the same way as (a), via that repo.
 
 A row this can't resolve a coordinator for (no-match/conflict/shared-house-with-no-
-manager, or an empty owner with no repo to resolve from at all) is never guessed at --
-it folds into ONE Thread on the operator's own backlog per affected project (never one
-row-per-obligation; the whole point is the desk stops being the pile, obligation_hygiene.
-py's own "128 of 151 nudges landing on the operator's desk" specimen is exactly the
-failure this folding avoids), with a STABLE summary text carrying no live count (today's
-own landing-auditor lesson, commit 81fcad6: an embedded count breaks open_thread's own
-dedup-on-summary and mints one thread per run instead of one, ever).
+manager, or an empty owner with no repo to resolve from at all) is never guessed at.
+It folds into ONE Thread on the operator's own backlog per affected project (never one
+row-per-obligation; the whole point is that the desk stops being the pile, exactly the
+failure a prior specimen of dozens of individual nudges landing on the operator's desk
+showed), with a STABLE summary text carrying no live count: an embedded count breaks
+open_thread's own dedup-on-summary and mints one thread per run instead of one, ever.
 
 Compensating, never destructive: `assert_property` at the SAME evidence class the prior
 owner almost always carries (self_declared) writes a NEW current row from a NEW source
-(`migration:<name>`) -- the prior owner's own assertion stays exactly where it was, under
-its own source, in history (constitution's own compensating-event law); this is ordinary
-multi-source corroboration, the same shape decision d873301c's own census/retire pass
-already normalized 4,922 other (object,name) pairs through this session.
+(`migration:<name>`). The prior owner's own assertion stays exactly where it was, under
+its own source, in history (the constitution's own compensating-event law); this is
+ordinary multi-source corroboration, the same shape a prior census/retire pass already
+used to normalize thousands of other (object,name) pairs.
 
 A live agent id, a `seat:` canonical, a bare seat HANDLE (checked before the project-name
-rung -- resolve_owner_target's own rung 0 correction, msg 7425: a seat's bare handle and a
+rung: resolve_owner_target's own rung 0 correction, since a seat's bare handle and a
 project's bare name are indistinguishable strings), or the literal 'operator' are already
 durable or already-routed and are left untouched.
 """
@@ -56,15 +55,15 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 async def _coordinating_seat_for_project(
     pool: asyncpg.Pool, project: str,
 ) -> tuple[str | None, str | None]:
-    """The durable SEAT that coordinates `project` -- roster()'s own agreement
-    classification, stopped at the seat id (never descended to a live holder: this writes
-    a permanent owner, not a DM target, so occupancy must never enter the choice).
-    (seat_id, None) on a clean resolution; (None, reason) otherwise, never guessed --
-    EXCEPT the operator ruling's own peer-pair-with-no-manager case, which resolves to
+    """The durable SEAT that coordinates `project`: roster()'s own agreement
+    classification, stopped at the seat id (never descended to a live holder, since this
+    writes a permanent owner, not a DM target, so occupancy must never enter the choice).
+    (seat_id, None) on a clean resolution; (None, reason) otherwise, never guessed,
+    EXCEPT the operator's own peer-pair-with-no-manager case, which resolves to
     the literal `("operator", None)` (see the `agreement == "conflict"` branch below):
     a project two PEER-BONDED seats jointly govern, with NEITHER carrying any manager
     edge at all, ships mechanically to the operator's own queue rather than folding into
-    a "needs a human call" surfacing thread -- the operator already IS that human call,
+    a "needs a human call" surfacing thread. The operator already IS that human call,
     named durably instead of via an extra hop through a thread."""
     from src.orchestrator.seats import manager_of_seat, peer_of_seat, roster
 
@@ -76,13 +75,12 @@ async def _coordinating_seat_for_project(
         if await peer_of_seat(pool, seat_a) == seat_b:
             if (await manager_of_seat(pool, seat_a) is None
                     and await manager_of_seat(pool, seat_b) is None):
-                # PEER-GOVERNED PROJECT OWNS TO THE OPERATOR (operator ruling, thread
-                # 614680c6): "when a project's governors are peers with no manager,
-                # resolve_owner_seat's project rung answers 'operator', never None and
-                # never a fold thread." "No manager" is read literally -- NEITHER peer
+                # PEER-GOVERNED PROJECT OWNS TO THE OPERATOR: when a project's governors
+                # are peers with no manager, this rung answers 'operator', never None and
+                # never a fold thread. "No manager" is read literally: NEITHER peer
                 # carries an active managed_by edge to ANYONE (manager_of_seat's own
                 # None-means-genuinely-unmanaged contract), not merely "neither manages
-                # the other" -- that narrower question is exactly what the manager_seat
+                # the other". That narrower question is exactly what the manager_seat
                 # branch immediately below already answers, for the (rarer) case where
                 # peer_of_seat itself doesn't hold and a real manager edge exists between
                 # the two contested seats. A peer pair where one of them happens to
@@ -91,7 +89,7 @@ async def _coordinating_seat_for_project(
                 # a human call via the ambiguous branch below rather than short-
                 # circuiting to the operator.
                 return "operator", None
-            return None, (f"peer pair for project {project!r} ({seat_a}, {seat_b}) -- "
+            return None, (f"peer pair for project {project!r} ({seat_a}, {seat_b}), "
                           "shared ownership, no single coordinator to pick")
         manager_seat = (
             seat_b if await manager_of_seat(pool, seat_a) == seat_b else
@@ -128,44 +126,42 @@ async def _coordinating_seat_for_project(
 async def resolve_owner_seat(
     pool: asyncpg.Pool, raw: str, *, project: str | None = None,
 ) -> str | None:
-    """THE SHARED OWNER RESOLVER (thread b5ae6773/0af7b202, #203's write-time laws AND
-    migration 0060 — one function, per Thoth's own instruction, not two copies deriving
-    the same three rules twice; msg 7949, Khnum's own catch — this is the ONE gap
-    `classify_thread_owner` deliberately left alone, since a bare handle is already
-    durable enough for the MIGRATION's own purposes and it never needed the resolved
-    canonical back, only "leave it alone"). An owner is a Seat's own canonical or the
-    literal 'operator', nothing else. This resolves everything short of that ON ENTRY,
+    """THE SHARED OWNER RESOLVER, covering both the write-time laws and this migration:
+    one function, not two copies deriving the same three rules twice. This is the ONE
+    gap `classify_thread_owner` deliberately left alone, since a bare handle is already
+    durable enough for the migration's own purposes and it never needed the resolved
+    canonical back, only "leave it alone". An owner is a Seat's own canonical or the
+    literal 'operator', nothing else. This resolves everything short of that on entry,
     never guesses past what it can prove:
-      - 'operator' -> itself, unchanged (the literal string only — `_OPERATOR_ACTORS`'s
+      - 'operator' -> itself, unchanged (the literal string only; `_OPERATOR_ACTORS`'s
         other sentinels, 'analyst:operator'/'console', identify a CALLER's actor, not a
         thread's owner, and are deliberately not accepted here).
       - `seat:<...>` already active -> itself, confirmed live via `_resolve_active_seat`.
       - `agent:<...>` -> `lineage_head`'s own currently-held seat (a dead generation
         resolves through its lineage to whoever is holding the seat now, not a grave).
       - anything else -> a bare handle, matched CASE-INSENSITIVELY against an active
-        Seat's own `handle` property — the exact query `obligation_hygiene.
-        resolve_owner_target`'s own rung 0 already uses (msg 7425's correction: a
-        seat's bare handle and a project's bare name are indistinguishable strings, so
-        this is checked BEFORE any project-name attempt). Deliberately NOT
-        `binding_of_handle` (which also requires a currently-active HOLDER): an owner
-        names the ROLE a thread belongs to, not who happens to be answering mail for it
-        at this exact instant — a briefly-vacant seat is still a valid owner.
+        Seat's own `handle` property, the exact query `obligation_hygiene.
+        resolve_owner_target`'s own rung 0 already uses (a seat's bare handle and a
+        project's bare name are indistinguishable strings, so this is checked BEFORE
+        any project-name attempt). Deliberately NOT `binding_of_handle` (which also
+        requires a currently-active HOLDER): an owner names the ROLE a thread belongs
+        to, not who happens to be answering mail for it at this exact instant. A
+        briefly-vacant seat is still a valid owner.
       - if the handle match also fails and `project` is given, `_coordinating_seat_for_
-        project` — the SAME agreement-classification (governed/shared-house/single-
-        match/conflict/no-match) migration 0059's own owner-normalization already
+        project`: the SAME agreement-classification (governed/shared-house/single-
+        match/conflict/no-match) this migration's own owner-normalization already
         trusts, not a second, cheaper re-derivation via a bare governs-edge lookup.
         This can itself answer the literal 'operator' (never a `seat:...` canonical) for
-        a peer-governed project with no manager on record (operator ruling, thread
-        614680c6) — already one of this function's own four accepted owner shapes, so
-        nothing downstream needs to special-case it.
-    None when nothing above resolves — the caller's own job to refuse (the write-time
-    gate) or fall back further (migration 0060's own project-coordinator default),
+        a peer-governed project with no manager on record, already one of this
+        function's own four accepted owner shapes, so nothing downstream needs to
+        special-case it.
+    None when nothing above resolves: the caller's own job to refuse (the write-time
+    gate) or fall back further (this migration's own project-coordinator default),
     never this function's job to guess past its four rules.
 
-    A MALFORMED `agent:<...>` (migration 0061, census 583e2669: agent:deckard,
-    agent:d00dbe16 — strings shaped like an agent id that were never one, so
+    A MALFORMED `agent:<...>` (strings shaped like an agent id that were never one, so
     `lineage_head`/`held_seat` finds nothing) used to return None immediately here,
-    never reaching the handle or project rungs a bare string gets — the ONE prefix
+    never reaching the handle or project rungs a bare string gets: the ONE prefix
     that couldn't fall through. It now falls through same as everything else: no
     seat holds that lineage, so try it as a bare handle, then as a project's
     coordinator, before finally giving up."""
@@ -205,7 +201,7 @@ async def classify_thread_owner(
     `{"class": "ok"|"project_name"|"dead_agent"|"empty", "new_owner": <seat canonical>|
     None, "project": <the project this verdict resolved against, for no-coordinator
     folding>|None, "reason": <why new_owner is None, when class != "ok">|None}`. "ok"
-    covers everything already durable or intentionally left alone -- never touched."""
+    covers everything already durable or intentionally left alone, never touched."""
     from src.orchestrator.agents import lineage_head
     from src.orchestrator.obligation_hygiene import _project_name_for
 
@@ -214,7 +210,7 @@ async def classify_thread_owner(
     if not raw:
         if not repo:
             return {"class": "empty", "new_owner": None, "project": None,
-                    "reason": "no repo on this thread -- nothing to resolve a coordinator "
+                    "reason": "no repo on this thread, nothing to resolve a coordinator "
                              "from"}
         seat, reason = await _coordinating_seat_for_project(pool, repo)
         return {"class": "empty", "new_owner": seat, "project": repo, "reason": reason}
@@ -223,10 +219,10 @@ async def classify_thread_owner(
         return {"class": "ok", "new_owner": None, "project": None, "reason": None}
 
     if raw.startswith("agent:"):
-        # "dead/retired generation" is never read off objects.status -- a superseded
+        # "dead/retired generation" is never read off objects.status, a superseded
         # ancestor can stay status='active' forever (lineage_head's own documented husk
         # gap: false_mint healing never flips it). lineage_head's own forward walk is the
-        # one authority for "is this id still the name a live mind answers to."
+        # one authority for "is this id still the name a live agent answers to."
         head = await lineage_head(pool, raw)
         if head != raw:
             return {"class": "dead_agent", "new_owner": head, "project": None, "reason": None}
@@ -266,7 +262,7 @@ _OPEN_OBLIGATIONS_SQL = """
 
 
 async def plan_owner_normalization(pool: asyncpg.Pool) -> dict[str, Any]:
-    """DRY RUN -- never writes. Every open obligation whose owner needs normalizing, plus
+    """DRY RUN, never writes. Every open obligation whose owner needs normalizing, plus
     the folded no-coordinator surfacing grouped by project (or, for an empty owner with no
     repo at all, grouped under `None`)."""
     rows = await pool.fetch(_OPEN_OBLIGATIONS_SQL)
@@ -295,18 +291,18 @@ async def apply_owner_normalization(
 ) -> dict[str, Any]:
     """Applies `plan_owner_normalization`'s own plan: a compensating owner assertion per
     resolved row, and one folded Thread per project with no resolvable coordinator (never
-    one per obligation -- the desk-is-the-pile failure this exists to avoid). Idempotent
+    one per obligation, the desk-is-the-pile failure this exists to avoid). Idempotent
     in RESULT (the winning owner value never drifts on a re-run) though not in ROW COUNT
-    (assert_property mints a fresh same-value row at a later observed_at each run --
+    (assert_property mints a fresh same-value row at a later observed_at each run:
     "confirmed still true at T2" is real information, assert_property's own documented
     law, never a reason to special-case a skip here).
 
-    `skip_projects` (operator ruling via Thoth DM 8650, 2026-09-09: rotten-apple's own
-    peer_of/managed_by data defect between its two governing seats is "that project's own
-    data defect, for the operator, not ours to touch" -- no resolver patch, no --apply on
-    it) drops matching entries from BOTH halves before writing/folding anything for them --
+    `skip_projects` (a known data defect in one project's own peer_of/managed_by edges
+    between its two governing seats, which the operator judged that project's own data
+    defect to own, not this migration's to touch, so no resolver patch, no --apply on
+    it) drops matching entries from BOTH halves before writing/folding anything for them,
     a caller-scoped exclusion, never a change to what the resolver itself concludes.
-    `None` (the default) applies the full plan unchanged, exactly as migration 0059's own
+    `None` (the default) applies the full plan unchanged, exactly as this migration's own
     one-time run and every prior call here already did."""
     from src.orchestrator.capture import open_thread
 
@@ -328,13 +324,13 @@ async def apply_owner_normalization(
             continue
         label = project or "(no project on record)"
         summary = (f"OWNER NORMALIZATION: no coordinating seat resolves for {label}'s "
-                   "open obligations -- migration 0059 could not pick one mechanically, "
+                   "open obligations, this migration could not pick one mechanically, "
                    "needs a human call")
         thread_id = await open_thread(
             actions, summary, kind="question", owner="operator", repo=project,
             source=MIGRATION_SOURCE,
             unlinked_because="owner-normalization migration surfacing a gap it "
-                             "deliberately refuses to guess at (thread 6d8f87a3)")
+                             "deliberately refuses to guess at")
         surfaced.append({"project": project, "thread": str(thread_id),
                          "obligation_count": len(entries)})
     return {"written": written, "surfaced": surfaced,

@@ -1,16 +1,15 @@
-"""THE READ TRIANGLE, WAVE 1 (thread 68f1bafa, Thoth DM 7883): server-rendered plain text
-for read verbs, so a slash command prints one string verbatim instead of the model
-receiving JSON and re-prettifying it at token cost (operator's own complaint, 2026-09-07:
-"that cost tokens, it barfed it out into the model, then the model tries to prettify it").
+"""THE READ TRIANGLE: server-rendered plain text for read verbs, so a slash command
+prints one string verbatim instead of the model receiving JSON and re-prettifying it at
+token cost (that cost tokens: the JSON was dumped into the model, and the model then
+tried to prettify it).
 
-WAVE 1 SCOPE: only `get_status`'s render='text' ships this pass — a single generic
-line-per-field renderer, deliberately NOT a hand-tuned layout per verb (that is real
-design work per verb: backlog's bands, threads' one-liners, roster's occupancy glyphs,
-mail's fyi-folding, team's live/owe/envelope split). Reusing this same generic renderer
-for those verbs without designing their own compact shape would just move the JSON-dump
-problem one layer down. Scoped deliberately, not an oversight — see decision recorded
-alongside this file's own introduction, and follow-up thread for the remaining five verbs
-+ slash faces + console faces.
+INITIAL SCOPE: only `get_status`'s render='text' shipped in the first pass, a single
+generic line-per-field renderer, deliberately NOT a hand-tuned layout per verb (that is
+real design work per verb: backlog's bands, threads' one-liners, roster's occupancy
+glyphs, mail's fyi-folding, team's live/owe/envelope split). Reusing this same generic
+renderer for those verbs without designing their own compact shape would just move the
+JSON-dump problem one layer down. Scoped deliberately, not an oversight; the remaining
+verbs plus slash faces and console faces followed as a separate pass.
 """
 from __future__ import annotations
 
@@ -22,7 +21,7 @@ _STATUS_FIELD_ORDER = ("you", "project", "model", "seat", "mail")
 
 def render_status_text(result: dict[str, Any]) -> str:
     """One line per field, ordered fields first, then whatever else is present (e.g.
-    `fleet_pulse`, a vacant-seats note) — never drops a key silently, same rule
+    `fleet_pulse`, a vacant-seats note): never drops a key silently, the same rule
     cli_render.py holds itself to. Nested values render as compact (no-space) JSON on
     their own line rather than being expanded, since this is a glance, not a dump."""
     lines: list[str] = []
@@ -49,7 +48,7 @@ BACKLOG_BAND_CAP = 20
 
 def render_backlog_text(rows: list[dict[str, Any]]) -> str:
     """One line per project, already ordered by the caller (backlog()'s own sort: the
-    caller's own project first, then past-window projects, then by open count) — this
+    caller's own project first, then past-window projects, then by open count): this
     function only CAPS and FORMATS, never reorders. Caps at `BACKLOG_BAND_CAP`, the
     remainder folded into one trailing count line rather than silently dropped."""
     shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
@@ -65,20 +64,20 @@ def _render_backlog_row(row: dict[str, Any]) -> str:
     target = f"/{row['target']}" if row.get("target") is not None else ""
     past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
     owners = ", ".join(row.get("oldest_owners") or [])
-    return f"{row['project']}: {row['open']}{target} open{past} — oldest: {owners}"
+    return f"{row['project']}: {row['open']}{target} open{past}, oldest: {owners}"
 
 
 def render_obligation_backlog_text(result: dict[str, Any]) -> str:
-    """THE BACKLOG BAND, `--fleet` view (thread 8608): one line per carrying seat instead
-    of `render_backlog_text`'s per-project rows — `backlog(fleet=True)`'s own shape, so
-    the crunch is visible per body without a hand-run query. Same cap/remainder
-    convention as `render_backlog_text` (`BACKLOG_BAND_CAP`), plus a trailing line for
-    `unowned`/`operator_owned`/`literal_owner` (hidden at zero — a clean fleet with
-    nothing to reassign should read that way). `operator_owned` (Thoth's correction, msg
-    8670: 'operator' is a LEGAL literal owner, not a filing miss) gets its own count,
-    kept apart from `literal_owner` — every OTHER unresolved owner string, now a NAMED
-    list (`{"owner", "count"}`) rather than a bare count, capped at 5 named entries with
-    a remainder fold, so the line points at exactly which names to chase."""
+    """THE BACKLOG BAND, `--fleet` view: one line per carrying seat instead of
+    `render_backlog_text`'s per-project rows, `backlog(fleet=True)`'s own shape, so the
+    crunch is visible per body without a hand-run query. Same cap/remainder convention as
+    `render_backlog_text` (`BACKLOG_BAND_CAP`), plus a trailing line for
+    `unowned`/`operator_owned`/`literal_owner` (hidden at zero: a clean fleet with nothing
+    to reassign should read that way). `operator_owned` gets its own count, kept apart
+    from `literal_owner` ('operator' is a LEGAL literal owner, not a filing miss), every
+    OTHER unresolved owner string is now a NAMED list (`{"owner", "count"}`) rather than a
+    bare count, capped at 5 named entries with a remainder fold, so the line points at
+    exactly which names to chase."""
     rows = result.get("by_seat") or []
     shown, remainder = rows[:BACKLOG_BAND_CAP], max(0, len(rows) - BACKLOG_BAND_CAP)
     lines = [f"fleet total: {result.get('fleet_total', 0)} open"]
@@ -101,17 +100,17 @@ def render_obligation_backlog_text(result: dict[str, Any]) -> str:
             named += f", +{lit_remainder} more"
         tail.append(f"literal, no seat: {named}")
     if tail:
-        lines.append(" — ".join(tail))
+        lines.append("; ".join(tail))
     return "\n".join(lines)
 
 
 def _render_seat_backlog_row(row: dict[str, Any]) -> str:
     past = f" [{row['past_window']} past window]" if row.get("past_window") else ""
-    # a leading `!` marks a CONTESTED oldest item (fix (b), mail 8890): a note newer than
-    # its own last summary correction disputes that headline.
+    # a leading `!` marks a CONTESTED oldest item: a note newer than its own last summary
+    # correction disputes that headline.
     oldest = ", ".join(f"{'!' if o.get('contested') else ''}{o['id']}"
                        for o in (row.get("oldest") or []))
-    return f"  {row['seat']}: {row['open']} open{past} — oldest: {oldest}"
+    return f"  {row['seat']}: {row['open']} open{past}, oldest: {oldest}"
 
 
 _OCCUPANCY_GLYPH = {"occupied": "●", "cold": "○", "vacant": "·"}
@@ -119,18 +118,18 @@ _OCCUPANCY_GLYPH = {"occupied": "●", "cold": "○", "vacant": "·"}
 
 def render_roster_text(rows: list[dict[str, Any]]) -> str:
     """One line per seat, grouped by house (a blank line between houses), an occupancy
-    glyph (thread 68f1bafa's own ask: "roster (house-scoped)") -- ● occupied, ○ cold
-    (held, nobody live this instant -- NOT vacant), · vacant (never held). No cap: a
-    fleet's seat count is bounded by the fleet itself, not an open-ended query.
+    glyph (house-scoped roster): ● occupied, ○ cold (held, nobody live this instant, NOT
+    vacant), · vacant (never held). No cap: a fleet's seat count is bounded by the fleet
+    itself, not an open-ended query.
 
-    `manager` (operator ruling, thread d575e68c) prints as a trailing `-> <handle>` suffix
-    rather than restructuring this house-grouped flat list into a tree indented under each
-    manager's own line: this render is already a flat sorted-by-handle list within a house
-    block, and a manager can sit in a DIFFERENT house than its worker (a coordinator
-    governing across houses is the normal `governed` shape roster() itself documents), so
-    grouping by manager would either fight the existing house grouping or require a second
-    axis of nesting for a field that's usually absent. A suffix costs one line-format branch
-    and is silent (no extra line, no restructuring) when the seat is unmanaged."""
+    `manager` prints as a trailing `-> <handle>` suffix rather than restructuring this
+    house-grouped flat list into a tree indented under each manager's own line: this
+    render is already a flat sorted-by-handle list within a house block, and a manager can
+    sit in a DIFFERENT house than its worker (a coordinator governing across houses is the
+    normal `governed` shape roster() itself documents), so grouping by manager would
+    either fight the existing house grouping or require a second axis of nesting for a
+    field that's usually absent. A suffix costs one line-format branch and is silent (no
+    extra line, no restructuring) when the seat is unmanaged."""
     if not rows:
         return "roster: no active seats"
     by_house: dict[str, list[dict[str, Any]]] = {}
@@ -143,7 +142,7 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
             glyph = _OCCUPANCY_GLYPH.get(r["occupancy"], "?")
             holder = f" ({r['holder']})" if r.get("holder") else ""
             governs = ", ".join(r.get("chartered_repos_display") or r.get("chartered_repos") or [])
-            tail = f" — governs: {governs}" if governs else ""
+            tail = f", governs: {governs}" if governs else ""
             manager = f" -> {r['manager']}" if r.get("manager") else ""
             lines.append(f"  {glyph} {r['handle']}{holder}{tail}{manager}")
         blocks.append("\n".join(lines))
@@ -152,16 +151,15 @@ def render_roster_text(rows: list[dict[str, Any]]) -> str:
 
 def render_mail_text(messages: list[dict[str, Any]]) -> str:
     """One line per ASK message (needs a reply/ack), FYI messages folded into a single
-    trailing count line rather than itemized (thread 68f1bafa's own "mail (fyi folded to
-    one line)" spec) — an inbox full of fyi noise must never bury the handful of asks
-    that actually need a decision."""
+    trailing count line rather than itemized: an inbox full of fyi noise must never bury
+    the handful of asks that actually need a decision."""
     if not messages:
         return "mail: empty"
     asks = [m for m in messages if m.get("grade") == "ask"]
     fyi = [m for m in messages if m.get("grade") != "ask"]
     lines = [_render_mail_row(m) for m in asks]
     if fyi:
-        lines.append(f"{len(fyi)} fyi message(s) — ack to settle")
+        lines.append(f"{len(fyi)} fyi message(s), ack to settle")
     if not lines:
         return "mail: empty"
     return "\n".join(lines)
@@ -170,17 +168,16 @@ def render_mail_text(messages: list[dict[str, Any]]) -> str:
 def _render_mail_row(m: dict[str, Any]) -> str:
     thread = m.get("thread")
     snippet = (m.get("body") or "")[:100]
-    return f"{m.get('id')} ask from:{m.get('from')} thread:{thread} — {snippet}"
+    return f"{m.get('id')} ask from:{m.get('from')} thread:{thread}: {snippet}"
 
 
 def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -> str:
-    """The operator desk (thread 68f1bafa's own "/desk with the backlog band first and
-    briefs collapsed to one count line"): the backlog view first (all-projects debt
-    pressure, when given), then owed/letters headline, then needs_decision/needs_hands/
-    fyi/dimmed/miner_guesses each folded to ONE COUNT LINE (never itemized -- a card's
-    real text is only in the structured receipt, since settling by id needs the ids the
-    collapsed view deliberately drops), then `your_queue` itemized one line per thread
-    (the canonical debt list, not a "brief" -- kept legible, not collapsed)."""
+    """The operator desk: the backlog view first (all-projects debt pressure, when
+    given), then owed/letters headline, then needs_decision/needs_hands/fyi/dimmed/
+    miner_guesses each folded to ONE COUNT LINE (never itemized: a card's real text is
+    only in the structured receipt, since settling by id needs the ids the collapsed view
+    deliberately drops), then `your_queue` itemized one line per thread (the canonical
+    debt list, not a summary, kept legible, not collapsed)."""
     lines: list[str] = []
     if backlog_text:
         lines.append(backlog_text)
@@ -205,7 +202,7 @@ def render_desk_text(desk: dict[str, Any], *, backlog_text: str | None = None) -
     if queue:
         lines.append("your_queue:")
         for t in queue:
-            lines.append(f"  {t.get('id')} — {t.get('summary')}")
+            lines.append(f"  {t.get('id')}: {t.get('summary')}")
     if len(lines) == 1:  # only the owed/letters headline, nothing else at all
         lines.append("desk clear")
     return "\n".join(lines)
@@ -230,17 +227,16 @@ THREADS_BAND_CAP = 30
 
 def render_threads_text(rows: list[dict[str, Any]], project_owned_count: int = 0) -> str:
     """One line per thread, already ordered by the caller (threads()'s own oldest-first
-    query) — caps and formats only, never reorders. Caps at `THREADS_BAND_CAP`, the
+    query): caps and formats only, never reorders. Caps at `THREADS_BAND_CAP`, the
     remainder folded into one trailing count line.
 
-    A leading `!` marks a CONTESTED thread (fix (b), Metron's mechanism report, mail
-    8890): a note newer than the last summary correction disputes this headline — read
-    it as disputed, not as settled fact.
+    A leading `!` marks a CONTESTED thread: a note newer than the last summary correction
+    disputes this headline, read it as disputed, not as settled fact.
 
-    `project_owned_count` (thread 3a9d9a5d89fa, Ra XL's measured report, mail 10351/
-    10358): obligations in this SAME project whose owner is the project's own bare
-    name or empty — invisible to the owner-spelling match above, named on their own
-    trailing line so "nothing under MY name" is never read as "nothing open here."""
+    `project_owned_count` covers obligations in this SAME project whose owner is the
+    project's own bare name or empty: invisible to the owner-spelling match above, named
+    on their own trailing line so "nothing under MY name" is never read as "nothing open
+    here."""
     shown, remainder = rows[:THREADS_BAND_CAP], max(0, len(rows) - THREADS_BAND_CAP)
     if not shown and not project_owned_count:
         return "threads: none open in your name here"
@@ -250,5 +246,5 @@ def render_threads_text(rows: list[dict[str, Any]], project_owned_count: int = 0
         lines.append(f"+{remainder} more thread(s)")
     if project_owned_count:
         lines.append(f"+{project_owned_count} project-owned/unowned obligation(s) here, "
-                     "owner is this project's own name or empty — not shown above")
+                     "owner is this project's own name or empty, not shown above")
     return "\n".join(lines)

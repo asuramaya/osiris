@@ -1,18 +1,18 @@
-"""The context lens — a mind's view of its own mortality (operator request, 2026-07-09).
+"""The context lens: an agent's view of its own mortality (operator request, 2026-07-09).
 
-Under the mind ruling (a882b334) a compaction is a death, and the harness gives an agent no
+Under the house rule that a compaction is a death, the harness gives an agent no
 native sense of how close it is: /context is the OPERATOR's tool, invisible from inside the
-loop. This reads the harness's own record — the last main-loop usage block in the session
-transcript — and answers two askers:
+loop. This reads the harness's own record, the last main-loop usage block in the session
+transcript, and answers two askers:
 
   * the CHROME (statusline): one cheap glance, `ctx 62%`, tail-read only, per render;
-  * the AGENT (context_window MCP tool): the full detail — occupancy breakdown, window tier,
-    headroom, how many deaths this session has already had — so a mind can decide to write
+  * the AGENT (context_window MCP tool): the full detail, occupancy breakdown, window tier,
+    headroom, how many deaths this session has already had, so the agent can decide to write
     back BEFORE the seam instead of trusting the summary to carry it.
 
 Window tiers come from the harness's display id: a bracketed variant (claude-opus-4-8[1m])
 is the 1M-context tier of the same weights; the bare id gets the 200k default. The bracket
-never reaches identity logic (normalize_model strips it) — here it is exactly the signal.
+never reaches identity logic (normalize_model strips it); here it is exactly the signal.
 """
 from __future__ import annotations
 
@@ -25,34 +25,34 @@ WINDOW_1M = 1_000_000
 # occupancy above this is the write-back alarm: compaction can land any turn
 ALARM_PCT = 60
 # the offload ritual's SECOND tier (moved here from scripts/osiris_stophook.py during the
-# hook-migration parity fix, dispatch 5441 LEG 1/4): one authority for both, same law as
-# ALARM_PCT above — a soft nudge at ALARM_PCT re-arms once more here, never a second
+# hook-migration parity fix): one authority for both, same law as
+# ALARM_PCT above, a soft nudge at ALARM_PCT re-arms once more here, never a second
 # independently-tuned constant living beside it.
 HARD_ALARM_PCT = 85
-# SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): once the offload boxes are ALL
-# complete at or past this line, the stop hook asks the body's own daemon job to /compact —
-# settle first, then the seam, never the reverse. Deliberately its own constant even though it
-# sits ABOVE ALARM_PCT (operator 2026-09-07, "95 is dangerous, could trigger on any tick";
-# decision 431537e5's live reading: one long worker turn adds 8-10 points and the settle
-# ritual needs one or two more turns, so every line keeps ~20 points of runway under the
-# harness's own ceiling): the soft nudge starts the ritual at 60, the compact is injected
-# at 70 once the boxes are complete, the blocking nudge holds at 85.
+# SELF-COMPACTION (operator ruling, 2026-09-06): once the offload boxes are ALL
+# complete at or past this line, the stop hook asks the body's own daemon job to /compact.
+# Settle first, then the seam, never the reverse. Deliberately its own constant even though it
+# sits ABOVE ALARM_PCT (95 is dangerous, could trigger on any tick; one long worker turn adds
+# 8-10 points and the settle ritual needs one or two more turns, so every line keeps ~20
+# points of runway under the harness's own ceiling): the soft nudge starts the ritual at 60,
+# the compact is injected at 70 once the boxes are complete, the blocking nudge holds at 85.
 SELF_COMPACT_PCT = 70
-# THE MECHANICAL SETTLE (operator ruling, 2026-09-17, narrows a3fb7c11: "settle always runs
-# before the compact injection, not as an art or a discipline, but a mechanical mandate").
-# Sits BETWEEN the soft nudge and the self-compact injection, on purpose: at ALARM_PCT (60)
-# a mind is only ASKED to write back; at this line every tool call except settle/record_
-# decision/open_thread/thread/amend_decision/get_status/inbox(peek) is REFUSED by
-# scripts/osiris_hook.py's own PreToolUse gate until settle's own boxes read complete — so
-# by the time SELF_COMPACT_PCT (70) would inject /compact, the settle the ruling requires
-# has already happened, mechanically, never left to a body's own discipline under pressure.
+# THE MECHANICAL SETTLE (operator ruling, 2026-09-17, narrowing the earlier self-compaction
+# ruling): settle always runs before the compact injection, not as a discretionary practice
+# but as a mechanical mandate. Sits BETWEEN the soft nudge and the self-compact injection, on
+# purpose: at ALARM_PCT (60) the agent is only ASKED to write back; at this line every tool
+# call except settle/record_decision/open_thread/thread/amend_decision/get_status/
+# inbox(peek) is REFUSED by scripts/osiris_hook.py's own PreToolUse gate until settle's own
+# boxes read complete, so by the time SELF_COMPACT_PCT (70) would inject /compact, the
+# settle the ruling requires has already happened, mechanically, never left to a body's own
+# discipline under pressure.
 MECHANICAL_SETTLE_PCT = 65
 
 
 def window_for(raw_model: str | None, used: int | None = None) -> tuple[int, bool]:
-    """(window tokens, assumed) — the tier of this tab's context window. Signals, strongest
+    """(window tokens, assumed): the tier of this tab's context window. Signals, strongest
     first: the OSIRIS_CONTEXT_WINDOW env override (the operator's word); a `[1m]` display id
-    (the harness marks the 1M tier); the SELF-CORRECTION — an occupancy already past 200k on
+    (the harness marks the 1M tier); the SELF-CORRECTION, an occupancy already past 200k on
     a live session proves the 200k default wrong (fable tabs report a bare id but run 1M on
     this box); else the 200k default, flagged assumed. Erring low is safe: the alarm fires
     early, never late."""
@@ -83,7 +83,7 @@ def _usage_of(entry: dict[str, Any]) -> dict[str, int] | None:
 
 
 def last_usage(path: Path, *, tail_bytes: int = 262_144) -> dict[str, int] | None:
-    """The MOST RECENT main-loop usage block, read from the transcript's tail only — the
+    """The MOST RECENT main-loop usage block, read from the transcript's tail only: the
     chrome calls this per render, so it must never scan an 84MB file. None when the tail
     holds no usage (a brand-new session, or a tail full of tool results)."""
     try:
@@ -98,7 +98,7 @@ def last_usage(path: Path, *, tail_bytes: int = 262_144) -> dict[str, int] | Non
             continue
         try:
             entry = json.loads(line)
-        except json.JSONDecodeError:  # the seek landed mid-line — expected for the first line
+        except json.JSONDecodeError:  # the seek landed mid-line, expected for the first line
             continue
         u = _usage_of(entry)
         if u is not None:
@@ -130,7 +130,7 @@ def glance_from_usage(
     usage: dict[str, int], raw_model: str | None,
 ) -> dict[str, Any]:
     """The chrome one-liner off any usage dict (store-sourced or file-sourced).
-    Same shape as glance(), minus the file read — callers pick the source."""
+    Same shape as glance(), minus the file read: callers pick the source."""
     used = occupancy(usage)
     window, assumed = window_for(raw_model, used)
     return {"used": used, "window": window, "pct": round(100 * used / window),
@@ -138,7 +138,7 @@ def glance_from_usage(
 
 
 def glance(path: Path, raw_model: str | None) -> dict[str, Any] | None:
-    """The chrome's one-liner: {used, window, pct, assumed}. None when unreadable — the
+    """The chrome's one-liner: {used, window, pct, assumed}. None when unreadable: the
     statusline omits the segment rather than lying."""
     u = last_usage(path)
     if u is None:
@@ -149,9 +149,9 @@ def glance(path: Path, raw_model: str | None) -> dict[str, Any] | None:
 def detail(path: Path, raw_model: str | None,
            window_hint: int | None = None) -> dict[str, Any]:
     """The agent's full self-knowledge: occupancy breakdown, window tier, headroom, and this
-    session's death toll (compact boundaries — each one was a mind, ruling a882b334). One
-    full scan; an agent asks rarely, so the cost is honest. `window_hint` is the harness's
-    own context_window_size (stamped on the mount row by the chrome heartbeat) — when
+    session's death toll (compact boundaries, each one counted as a death under house rule).
+    One full scan; an agent asks rarely, so the cost is honest. `window_hint` is the harness's
+    own context_window_size (stamped on the mount row by the chrome heartbeat); when
     present it IS the window, no inference."""
     compactions = 0
     last_compaction_at: str | None = None
@@ -179,9 +179,9 @@ def detail(path: Path, raw_model: str | None,
                 if u is not None:
                     last, turns = u, turns + 1
     except OSError:
-        return {"error": "transcript unreadable — no self-knowledge without the record"}
+        return {"error": "transcript unreadable, no self-knowledge without the record"}
     if last is None:
-        return {"error": "no usage recorded yet — too young to measure"}
+        return {"error": "no usage recorded yet, too young to measure"}
     used = occupancy(last)
     if window_hint:
         window, assumed = window_hint, False
@@ -197,14 +197,14 @@ def detail(path: Path, raw_model: str | None,
         "last_compaction_at": last_compaction_at,
     }
     if pct >= ALARM_PCT and not assumed:
-        # the alarm fires on a KNOWN window only (Anubis VII's false eulogy, msg 127): a
-        # death notice built on a guessed denominator erodes the trust the rite runs on.
+        # the alarm fires on a KNOWN window only: a death notice built on a guessed
+        # denominator erodes the trust the rite runs on.
         out["warning"] = (
-            f"context {pct}% full — a compaction (a DEATH, ruling a882b334) can land any "
+            f"context {pct}% full: a compaction (a DEATH) can land any "
             "turn. Write back NOW: record_decision / resolve_thread anything still only in "
             "your head; what is not in the graph does not exist for your heir.")
     elif assumed:
-        out["note"] = ("window is ASSUMED (no harness stamp) — pct is a guess; trust the "
+        out["note"] = ("window is ASSUMED (no harness stamp), pct is a guess; trust the "
                        "chrome's ctx% or the operator's /context over this")
     return out
 
@@ -241,10 +241,10 @@ def detail_from_usage(
         out["assistant_turns"] = assistant_turns
     if pct >= ALARM_PCT and not assumed:
         out["warning"] = (
-            f"context {pct}% full — a compaction (a DEATH, ruling a882b334) can land any "
+            f"context {pct}% full: a compaction (a DEATH) can land any "
             "turn. Write back NOW: record_decision / resolve_thread anything still only in "
             "your head; what is not in the graph does not exist for your heir.")
     elif assumed:
-        out["note"] = ("window is ASSUMED (no harness stamp) — pct is a guess; trust the "
+        out["note"] = ("window is ASSUMED (no harness stamp), pct is a guess; trust the "
                        "chrome's ctx% or the operator's /context over this")
     return out
