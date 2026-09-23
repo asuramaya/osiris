@@ -8,7 +8,7 @@
   "docs/INSTALL.md": 1,
   "docs/REFERENCE.md": 4,
   "docs/SPEC-agent-manager.md": 2,
-  "src/cli.py": 79,
+  "src/cli.py": 76,
   "src/mcp_server.py": 42,
   "src/orchestrator/graph_layout.py": 31,
   "src/orchestrator/graph_migrations.py": 20,

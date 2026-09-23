@@ -1558,73 +1558,73 @@ async def _cmd_launch_pty(
     handle: str, *, model: str | None, pool: asyncpg.Pool, manager: ManagerCall,
     wake_default: str | None,
 ) -> int:
-    """`--debug`'s FALLBACK LANE: bodies a seat via the manager daemon DIRECTLY (pty_spawn),
-    never trigger.py's launch_seat(), same trust-boundary reasoning as the harness lane
-    above. Kept alive for an incident, or a build with no `claude --bg`, attachable via
-    `osiris attach`, which the harness-native lane's own body is not. Reports the model it
-    actually confirms mounted, honestly and within a bounded wait, never a bare
-    'launched: true'."""
+    """`--debug`'s FALLBACK LANE: bodies a seat via the manager daemon's `pty_spawn`, kept
+    alive for an incident, or a build with no `claude --bg`, attachable via `osiris attach`,
+    which the harness-native lane's own body is not.
+
+    NO LONGER A SEPARATE IMPLEMENTATION ("UNIFY LAUNCH", part 2 of the same close this
+    door's own harness-lane sibling already made: see `_cmd_launch_harness`'s own docstring
+    for the full history): calls `trigger.launch_seat(substrate='pty', ...)` directly,
+    with `operator_authorized=True`, the same local-execution trust boundary the harness
+    lane sets. Deferred out of the first pass because `launch_seat`'s own PTY lane wanted
+    two separate injectable primitives (`manager`, a single RPC dict callable, and
+    `windows`, a no-arg roster-list callable) while this door only ever carried one: `_windows`
+    below is that adapter, built once here rather than forcing every future PTY-lane caller
+    to build their own.
+
+    ONE GUARD STAYS CLI-SIDE, ON PURPOSE, same reasoning as the harness lane: `_resolve_
+    launch_target`'s unknown-handle/ambiguous-handle/no-anchor_cwd checks run before
+    `launch_seat` is ever called, so those refusals stay this door's own honest, specific
+    messages rather than launch_seat's own internal (and differently-worded) resolution.
+
+    THE BOUNDED POST-SPAWN POLL ALSO STAYS CLI-SIDE, same deliberate divergence as the
+    harness lane: `launch_seat`'s own `can_receive` is a single instant-of-return read,
+    right for a receipt that must never lie about right now, wrong for a human at a
+    terminal, whom a fresh claude often has not yet self-bound for. Re-polls the manager
+    directly (`_await_launch_confirmation`), never re-invokes `launch_seat` (that would risk
+    a second real spawn). Reports the model it actually confirms mounted, honestly and
+    within a bounded wait, never a bare 'launched: true'."""
     facts = await _resolve_launch_target(pool, handle)
     if facts is None:
         return 1
 
-    try:
-        roster = await manager({"op": "pty_list"})
-    except (OSError, TimeoutError) as exc:
-        print(f"osiris launch: the manager daemon is unreachable ({exc}). Is "
-              "osiris-manager running?", file=sys.stderr)
-        return 1
-    sessions = roster.get("sessions")
-    sessions = sessions if isinstance(sessions, list) else []
-    existing, _ = match_session(sessions, handle)
-    if existing:
-        print(f"osiris launch: a live session already holds {handle!r}: {existing!r}. Not "
-              f"minting a twin (attach to it: `osiris attach {handle}`).")
-        return 0
+    async def _windows() -> list[dict[str, Any]]:
+        try:
+            roster = await manager({"op": "pty_list"})
+        except (OSError, TimeoutError):
+            return []
+        sessions = roster.get("sessions")
+        return [s for s in sessions if isinstance(s, dict)] if isinstance(sessions, list) else []
 
-    # THE SPEND GAP: see _cmd_launch_harness's own comment on this same check, above: a
-    # separate entry point, an independent gate, placed after the idempotency check and
-    # before the real spawn.
+    from src.actions.core import Actions
     from src.config.settings import get_settings
-    from src.ingest.providers import spend_is_metered
-    from src.orchestrator.ceiling import may_spend
+    from src.orchestrator.trigger import launch_seat
 
     st = get_settings()
-    ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
-    if not ok:
-        print(f"osiris launch: refused: {why}", file=sys.stderr)
+    out = await launch_seat(
+        Actions(pool), caller="operator", target=handle, model=model, settings=st,
+        substrate="pty", manager=manager, windows=_windows, operator_authorized=True)
+
+    status = out.get("status")
+    if status == "already-live":
+        print(f"osiris launch: a live session already holds {handle!r}: "
+              f"{out.get('window')!r}. Not minting a twin (attach to it: "
+              f"`osiris attach {handle}`).")
+        return 0
+    if status == "manager-cold":
+        print(f"osiris launch: the manager daemon is unreachable ({out.get('detail')}). Is "
+              "osiris-manager running?", file=sys.stderr)
+        return 1
+    if status != "launched":
+        print(f"osiris launch: refused: {out.get('detail', status)}", file=sys.stderr)
         return 1
 
-    resolved_model = resolve_model(model, facts["intended_model"], wake_default)
-    from src.orchestrator.harness_process import claude_pty_argv
-    argv = claude_pty_argv(resolved_model)
-    from src.orchestrator.trigger import _governed_project_name, _window_name
-    name = await _window_name(pool, facts["house"], facts["handle"],
-                              await _governed_project_name(
-                                  pool, facts["seat_id"], cwd=facts["anchor_cwd"]))
-    anchor = str(Path.home() / ".claude" / "jobs" / facts["seat_id"].replace(":", "-"))
-    child_env = {k: v for k, v in os.environ.items() if k != "CLAUDE_JOB_DIR"}
-    child_env["CLAUDE_JOB_DIR"] = anchor
-
-    try:
-        res = await manager(
-            {"op": "pty_spawn", "name": name, "argv": argv, "cwd": facts["anchor_cwd"],
-             "seat": {"handle": facts["handle"], "house": facts["house"]},
-             "job_dir": anchor, "env": child_env})
-    except (OSError, TimeoutError) as exc:
-        print(f"osiris launch: manager unreachable mid-spawn ({exc}). Nothing confirmed "
-              "spawned.", file=sys.stderr)
-        return 1
-    if not isinstance(res, dict) or res.get("error"):
-        detail = res.get("error") if isinstance(res, dict) else str(res)
-        print(f"osiris launch: spawn refused: {detail}", file=sys.stderr)
-        return 1
-
-    spawned = res.get("spawned")
+    spawned = out.get("window")
     if not isinstance(spawned, str):
-        print(f"osiris launch: manager accepted the spawn but named no window ({res!r}). "
+        print(f"osiris launch: manager accepted the spawn but named no window ({out!r}). "
               "Cannot confirm anything; check with `osiris fleet`.", file=sys.stderr)
         return 1
+    resolved_model = out.get("spawned_model")
     print(f"osiris launch: spawned {spawned!r}, requested model="
           f"{resolved_model or '(claude CLI default)'}")
     alive, mounted_model = await _await_launch_confirmation(
