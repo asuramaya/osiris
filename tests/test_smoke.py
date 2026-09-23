@@ -267,7 +267,7 @@ def test_summarize_failures_names_a_whisper_alarm() -> None:
                             "last_error": {"surface": "hook/stophook", "text": "boom",
                                           "when": "2026-08-18T00:00:00+00:00"}}}
     fails = summarize_failures(_green_chrome(), mcp_result)
-    assert fails == ["whisper/hook alarms: 2 in 24h — last: hook/stophook: boom"]
+    assert fails == ["whisper/hook alarms: 2 in 24h, last: hook/stophook: boom"]
 
 
 def test_summarize_failures_says_nothing_when_whisper_is_healthy() -> None:
@@ -396,5 +396,5 @@ async def test_smoke_carries_the_embed_warning_without_failing_ok(
 
 def test_summarize_warnings_passes_through_the_embed_line_too() -> None:
     mcp_result = {"chrome": _green_chrome(), "db": "ok", "ok": True,
-                 "warnings": ["embed door closed: 3 in 24h — last: timeout"]}
-    assert summarize_warnings(mcp_result) == ["embed door closed: 3 in 24h — last: timeout"]
+                 "warnings": ["embed door closed: 3 in 24h, last: timeout"]}
+    assert summarize_warnings(mcp_result) == ["embed door closed: 3 in 24h, last: timeout"]

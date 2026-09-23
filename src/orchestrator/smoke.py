@@ -192,7 +192,7 @@ def _embed_warning(embed: dict[str, Any]) -> str | None:
     if embed.get("ok"):
         return None
     last = embed.get("last_error")
-    detail = f" — last: {last['text']}" if isinstance(last, dict) else ""
+    detail = f", last: {last['text']}" if isinstance(last, dict) else ""
     n = embed.get("error_count", "?")
     h = embed.get("window_hours", "?")
     return f"embed door closed: {n} in {h}h{detail}"
@@ -224,7 +224,7 @@ def summarize_failures(chrome: dict[str, str], mcp_result: dict[str, Any] | str)
         whisper = mcp_result.get("whisper")
         if isinstance(whisper, dict) and not whisper.get("ok"):
             last = whisper.get("last_error")
-            detail = f" — last: {last['surface']}: {last['text']}" if last else ""
+            detail = f", last: {last['surface']}: {last['text']}" if last else ""
             fails.append(f"whisper/hook alarms: {whisper.get('error_count', '?')} in "
                         f"{whisper.get('window_hours', '?')}h{detail}")
     return fails
