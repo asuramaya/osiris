@@ -540,6 +540,12 @@ async function runMailboxComposition(name, args) {
       container.innerHTML = '<div class="o-empty" style="padding:40px">' + esc(res.error) + '</div>';
       return;
     }
+    if (!isFunctionDrill && res.count === 0) {
+      container.innerHTML = '<div class="o-empty" style="padding:40px">Nothing here yet. Mail shows up once an ' +
+        'agent working in a project sends or receives a message. Run <code>osiris launch &lt;name&gt;</code> to ' +
+        'start one.</div>';
+      return;
+    }
     var panel = document.createElement('div');
     panel.style.padding = '16px';
     await Osiris.renderResult(res, { panel: panel }, Osiris.defaultView(res), null, null, null);
@@ -580,7 +586,8 @@ async function renderPane() {
   container.innerHTML = '<div class="o-empty" style="padding:40px">Loading live seats…</div>';
   try {
     var agents = await fetch('/pane/live').then(function(r){ return r.json(); });
-    if (!agents.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No live seated agents right now.</div>'; return; }
+    if (!agents.length) { container.innerHTML = '<div class="o-empty" style="padding:40px">No live seated agents right now. ' +
+      'Run <code>osiris launch &lt;name&gt;</code> to start one, then come back here to watch it.</div>'; return; }
     var picker = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
       '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:12px">Pick a live seat (' + agents.length + ')</h2>' +
       agents.map(function(a){ return '<button class="iconbtn" style="margin:0 8px 8px 0" onclick="openPaneStream(' + JSON.stringify(a.agent_id) + ')">' + esc(a.seat) + ' <span class="o-faint">(' + esc(a.project) + ')</span></button>'; }).join('') +
