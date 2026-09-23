@@ -1,4 +1,4 @@
-"""PROVENANCE BACKFILL (thread e332177f, wave 24 dispatch) — back-stamping
+"""PROVENANCE BACKFILL: back-stamping
 `possible_upstream` onto historical Decision/Thread writes by finding each write's own
 receipt in its writer's transcript and reusing piece 2's own tool_result scan. Hermetic:
 synthetic JSONL files under tmp_path (never the live fleet's own transcript root), real
@@ -92,7 +92,7 @@ async def test_live_mints_the_edge_sourced_to_the_original_writer_and_is_idempot
         "agent:writer-b", now, 0.9)
 
     report = await backfill_possible_upstream(
-        actions, dry_run=False, because="thread e332177f, testing the live path",
+        actions, dry_run=False, because="testing the live path",
         transcript_root=tmp_path)
     assert report["minted"] == 1
     edges = await _links_from(actions, decision)
@@ -132,7 +132,7 @@ async def test_writer_with_no_anchor_sid_ledger_is_reported_skipped_not_silently
     assert "anchor_sid" in report["skipped"][0]["reason"]
 
 
-# --- thread e332177f, Thoth msg 10525: newest_first + per-writer summary + runtime ----
+# --- newest_first + per-writer summary + runtime ----
 
 async def test_summary_classifies_matched_no_ledger_and_no_transcript(
     actions: Actions, tmp_path: Path,
@@ -205,13 +205,13 @@ async def test_runtime_seconds_is_reported(actions: Actions, tmp_path: Path) -> 
     assert report["runtime_seconds"] >= 0
 
 
-# --- thread e332177f, decision b677fd14: anchor_sid is looked up lineage-wide ---------
+# --- anchor_sid is looked up lineage-wide ---------
 
 async def test_a_successor_generation_matches_via_its_ancestors_anchor_sid(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """record_session_anchor's own "first writer wins, forever" law means only the FIRST
-    generation ever mounted under a shared job_dir gets the anchor_sid ledger entry —
+    generation ever mounted under a shared job_dir gets the anchor_sid ledger entry;
     every successor generation of the SAME lineage must still resolve through it."""
     now = datetime.now(UTC)
     upstream = await actions.create_or_find_object("Decision", "decision:b00000b00000", "x")
@@ -240,7 +240,7 @@ async def test_a_successor_generation_matches_via_its_ancestors_anchor_sid(
     assert report["summary"]["candidates"]["matched"] == 1
 
 
-# --- thread 0be2f790, Thoth mail 10626: THE STALL's own fix -----------------------------
+# --- THE STALL's own fix -----------------------------
 
 def _sidecar_for(transcript: Path) -> Path:
     return transcript.with_name(transcript.name + ".providx.json")
@@ -249,7 +249,7 @@ def _sidecar_for(transcript: Path) -> Path:
 async def test_a_transcript_over_the_cap_is_skipped_unopened(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A 100MB transcript never gets opened at all when it exceeds max_scan_bytes — the
+    """A 100MB transcript never gets opened at all when it exceeds max_scan_bytes; the
     fix for the 469MB/222MB real transcripts that stalled osiris-mcp for 19 minutes."""
     now = datetime.now(UTC)
     proj_dir = tmp_path / "-home-someone-code-testrepo"
@@ -257,7 +257,7 @@ async def test_a_transcript_over_the_cap_is_skipped_unopened(
     sid = "sidbig001deadbeef"
     big = proj_dir / f"{sid}.jsonl"
     with big.open("wb") as f:
-        f.truncate(100 * 1024 * 1024)  # sparse — instant, never actually written
+        f.truncate(100 * 1024 * 1024)  # sparse, instant, never actually written
     obj = await actions.create_or_find_object("Agent", "agent:writer-huge", "test")
     await actions.assert_property(
         obj, f"anchor_sid:{sid[:8]}", sid, "test", now, 0.9,
@@ -280,12 +280,12 @@ async def test_a_transcript_over_the_cap_is_skipped_unopened(
 async def test_a_settle_minted_write_matches_via_its_short_id(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth mail 10791/10975, specimen decision ab991412: a Decision minted via
+    """A specimen decision: a Decision minted via
     settle(decisions=[...]) never gets its own `"canonical"` key echoed to the writer's
-    transcript — only settle()'s own report does, keyed by the object's SHORT id under
+    transcript, only settle()'s own report does, keyed by the object's SHORT id under
     `accepted.decisions[].id`, never the full canonical string. Real-world specimen
     proved the receipt line genuinely exists (`grep` found it) while the old matcher,
-    which only recognized the direct record_decision `"canonical"` shape, missed it —
+    which only recognized the direct record_decision `"canonical"` shape, missed it,
     this is the fix, not a hypothetical."""
     now = datetime.now(UTC)
     settle_report = json.dumps({
@@ -314,8 +314,8 @@ async def test_a_settle_minted_write_matches_via_its_short_id(
 async def test_a_writer_with_three_sessions_matches_via_the_second(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth mail 10716, "looked up, not searched": a writer with THREE session
-    transcripts, none the freshest, carries the write's own receipt — the per-writer
+    """"Looked up, not searched": a writer with THREE session
+    transcripts, none the freshest, carries the write's own receipt; the per-writer
     receipt index (built once, merging every one of the writer's resolvable files) must
     find it regardless of which sid is tried first, never give up after one miss."""
     now = datetime.now(UTC)
@@ -334,7 +334,7 @@ async def test_a_writer_with_three_sessions_matches_via_the_second(
     (proj_dir / f"{sid3}.jsonl").write_text(
         _tool_result(json.dumps({"canonical": "decision:unrelated333333"})) + "\n")
 
-    # Distinct, explicitly ordered timestamps — sid1 freshest, sid3 oldest — so
+    # Distinct, explicitly ordered timestamps: sid1 freshest, sid3 oldest, so
     # `_anchor_sids`' own freshest-first ordering tries sid1, then sid2, then sid3;
     # the receipt sits only in the MIDDLE one.
     await actions.assert_property(
@@ -401,7 +401,7 @@ async def test_the_sidecar_cache_is_used_on_a_second_visit(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A second call against an UNCHANGED transcript reuses the sidecar's own index
-    instead of re-scanning — proven by corrupting the transcript's own content (while
+    instead of re-scanning, proven by corrupting the transcript's own content (while
     preserving its stat signature) between calls and confirming the cached answer
     survives the corruption."""
     now = datetime.now(UTC)
@@ -426,18 +426,18 @@ async def test_the_sidecar_cache_is_used_on_a_second_visit(
 
     st = transcript.stat()
     garbage = ("no receipt in here at all " * (st.st_size // 27 + 1))[:st.st_size]
-    transcript.write_bytes(garbage.encode())  # SAME byte length — size+mtime both preserved
+    transcript.write_bytes(garbage.encode())  # SAME byte length, size+mtime both preserved
     os.utime(transcript, (st.st_atime, st.st_mtime))  # preserve the cache's own key
 
     second = await backfill_possible_upstream(actions, dry_run=True, transcript_root=tmp_path)
-    assert second["edges_to_mint"] == 1  # still found — via the sidecar, not a re-scan
+    assert second["edges_to_mint"] == 1  # still found, via the sidecar, not a re-scan
     assert second["plan"][0]["to"] == str(upstream)
 
 
 async def test_a_tight_budget_returns_a_partial_receipt(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 0be2f790: a caller must never be left waiting on a call that could hang —
+    """A caller must never be left waiting on a call that could hang;
     an exhausted wall-clock budget stops between candidates and says so, honestly."""
     now = datetime.now(UTC)
     for i in range(3):

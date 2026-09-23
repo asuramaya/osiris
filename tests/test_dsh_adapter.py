@@ -1,9 +1,9 @@
-"""DshSessionAdapter's discovery walk — the bug found live 2026-08-24 (Thoth msg 5467,
-Imhotep's own find while working the provenance reconciliation): the on-disk DSH layout
-moved out from under `_session_file_in`'s one-level-only assumption TWICE over, and
-neither `discover()` nor `enumerate()` noticed. This was the FIRST test file for this
-adapter — a gap the adapter contract note in src/ingest/harness/__init__.py now names
-explicitly rather than leaving implicit."""
+"""DshSessionAdapter's discovery walk: the bug found live 2026-08-24, while working the
+provenance reconciliation. The on-disk DSH layout moved out from under
+`_session_file_in`'s one-level-only assumption TWICE over, and neither `discover()`
+nor `enumerate()` noticed. This was the FIRST test file for this adapter, a gap the
+adapter contract note in src/ingest/harness/__init__.py now names explicitly rather
+than leaving implicit."""
 from __future__ import annotations
 
 import json
@@ -26,7 +26,7 @@ def _write_session(path: Path, *, session_id: str, cwd: str) -> None:
 
 
 def test_cwd_to_slug_carries_the_real_terminator(tmp_path: Path) -> None:
-    # The trailing '--' is a load-bearing terminator, not decoration — see the function's
+    # The trailing '--' is a load-bearing terminator, not decoration, see the function's
     # own docstring for the live incident this specimen guards against regressing.
     assert _cwd_to_slug("/home/user/code/project") == "--home-user-code-project--"
     assert _cwd_to_slug("/home/user/code/dsh-deepseek-harness") == (
@@ -61,7 +61,7 @@ def test_enumerate_finds_the_old_flat_layout_too(tmp_path: Path) -> None:
 
 
 def test_enumerate_finds_every_session_under_a_slug_with_more_than_one(tmp_path: Path) -> None:
-    # The exact shape found live: a single project slug carrying TWO nested sessions —
+    # The exact shape found live: a single project slug carrying TWO nested sessions,
     # the bug this file exists to pin returned only the first, or none at all.
     root = tmp_path / "sessions"
     slug = root / "--home-user-code-proj--"
@@ -85,8 +85,8 @@ def test_discover_finds_a_nested_session_for_a_matching_cwd(tmp_path: Path) -> N
         session_id="session-dddddddd-0000-0000-0000-000000000000",
         cwd="/home/user/code/proj")
     # discover() resolves the sessions root at CALL time (`_dsh_sessions()`, never the
-    # frozen-at-import `_DSH_SESSIONS` module constant — a test's tmp HOME must not be
-    # baked in) — its own `root=` param is the seam, same shape enumerate()'s already
+    # frozen-at-import `_DSH_SESSIONS` module constant, a test's tmp HOME must not be
+    # baked in), its own `root=` param is the seam, same shape enumerate()'s already
     # has.
     loc = DshSessionAdapter().discover(cwd="/home/user/code/proj", job_dir=None, root=root)
     assert loc is not None

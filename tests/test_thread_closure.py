@@ -1,6 +1,5 @@
-"""Migration 0043's `thread_closure_edges` view + its read function (Phase 2, Thoth DM
-2508, decision cb38d922) — closure derived from topology, never from the multi-source
-`status` property alone."""
+"""Migration 0043's `thread_closure_edges` view + its read function (Phase 2): closure
+derived from topology, never from the multi-source `status` property alone."""
 from __future__ import annotations
 
 import uuid
@@ -57,11 +56,11 @@ async def test_resolve_thread_with_artifact_mints_a_strong_resolved_by_edge(
 async def test_record_decision_bears_on_never_counts_as_a_closure_edge(
     actions: Actions,
 ) -> None:
-    """The mint_bears_on conflation fix (0055, Thoth DM 6230/6234, decision 36cbec2f): a
-    bears_on citation mints the identical `answers` link type resolves= uses, but never
-    writes `status` — so it must NOT satisfy the view's same-source status='resolved'
+    """The mint_bears_on conflation fix: a bears_on citation mints the identical
+    `answers` link type resolves= uses, but never writes `status`, so it must NOT
+    satisfy the view's same-source status='resolved'
     corroboration check. Measured live: 9 of closure_health's 10 repo=osiris disagree rows
-    were exactly this specimen, including one Thoth minted on her own coordinator thread."""
+    were exactly this specimen, including one minted on a coordinator thread."""
     await _repo(actions, "tc3b")
     tid = await open_thread(actions, "cited but not closed", repo="tc3b", source="agent:me")
     await record_decision(
@@ -71,17 +70,17 @@ async def test_record_decision_bears_on_never_counts_as_a_closure_edge(
     row = rows[0]
     assert row["closed_by_topology"] is False   # no corroborated closure edge
     assert row["closure_edges"] == []
-    assert row["property_status"] == "open"      # untouched — bears_on never writes status
+    assert row["property_status"] == "open"      # untouched, bears_on never writes status
     assert row["topology_property_disagreement"] is False  # no false signal left to flag
 
 
 async def test_bears_on_and_resolves_on_the_same_thread_still_reports_the_real_edge(
     actions: Actions,
 ) -> None:
-    """A thread can be cited in passing AND later genuinely closed — the bears_on edge
+    """A thread can be cited in passing AND later genuinely closed: the bears_on edge
     stays uncorroborated and invisible to the view, the resolves= edge still counts.
     Distinct sources on purpose: the corroboration check is scoped to (object, source_id),
-    which is exactly the real specimens measured tonight — a coordinator's own bears_on
+    which is exactly the real specimens measured, a coordinator's own bears_on
     citation and a different mind's later resolves= call are never the same source."""
     await _repo(actions, "tc3c")
     tid = await open_thread(actions, "cited then actually closed", repo="tc3c",
@@ -119,9 +118,9 @@ async def test_record_decision_resolves_mints_a_strong_answers_edge(actions: Act
 async def test_resolve_thread_without_artifact_now_mints_a_weak_closed_by_edge(
     actions: Actions,
 ) -> None:
-    """Khnum's Phase 1a fix (commit 23c5991): resolve_thread() with no artifact at all no
-    longer leaves the thread edgeless — it mints `closed_by` (weak) to the resolving agent
-    instead. This is the forward-looking half of cb38d922's fix; the residual gap is only
+    """The Phase 1a fix: resolve_thread() with no artifact at all no
+    longer leaves the thread edgeless, it mints `closed_by` (weak) to the resolving agent
+    instead. This is the forward-looking half of that fix; the residual gap is only
     threads closed BEFORE that commit (see the next test)."""
     await _repo(actions, "tc4")
     tid = await open_thread(actions, "closed with no artifact", repo="tc4", source="agent:me")
@@ -140,8 +139,8 @@ async def test_resolve_thread_without_artifact_now_mints_a_weak_closed_by_edge(
 async def test_pre_cutover_closure_with_no_edge_at_all_still_reads_false(
     actions: Actions,
 ) -> None:
-    """The residual gap this migration does NOT heal: a thread closed before Khnum's
-    Phase 1a landed has status='resolved' but never went through resolve_thread()'s new
+    """The residual gap this migration does NOT heal: a thread closed before the
+    Phase 1a fix landed has status='resolved' but never went through resolve_thread()'s new
     unconditional-edge path, so no edge of any kind exists. Simulated here by writing the
     status assertion directly (bypassing resolve_thread entirely) rather than via the verb,
     since the verb itself no longer produces an edgeless closure. closed_by_topology must
@@ -150,7 +149,7 @@ async def test_pre_cutover_closure_with_no_edge_at_all_still_reads_false(
     await _repo(actions, "tc4b")
     tid = await open_thread(actions, "closed before the fix existed", repo="tc4b",
                             source="agent:me")
-    # confidence must match (or beat) open_thread's own 0.9 write — the winning-status read
+    # confidence must match (or beat) open_thread's own 0.9 write, the winning-status read
     # orders by confidence DESC first, observed_at DESC only as the tie-break.
     later = datetime.now(UTC) + timedelta(seconds=1)
     await actions.assert_property(tid, "status", "resolved", "session-miner", later, 0.9,
@@ -167,14 +166,14 @@ async def test_pre_cutover_closure_with_no_edge_at_all_still_reads_false(
 async def test_closure_edge_with_a_later_open_reassert_is_flagged_not_resolved(
     actions: Actions,
 ) -> None:
-    """The transition-period case Thoth named directly: a strong closure edge exists AND
+    """The transition-period case: a strong closure edge exists AND
     a different source's freshest write says 'open'. The read function must not pick a
-    winner — it flags the disagreement, same law _fn_lint's contradiction check follows."""
+    winner, it flags the disagreement, same law _fn_lint's contradiction check follows."""
     await _repo(actions, "tc5")
     tid = await open_thread(actions, "closed then re-touched open", repo="tc5",
                             source="agent:me")
     decision_id = await record_decision(actions, "settles it", repo="tc5", resolves=str(tid))
-    # a SEPARATE source reopens (e.g. a miner or another agent) without touching the edge —
+    # a SEPARATE source reopens (e.g. a miner or another agent) without touching the edge,
     # record_decision stamps its own status='resolved' write at real wall-clock time
     # (datetime.now(UTC) internally), so this reassert must be strictly later to win the
     # winning-status tie-break (confidence is equal; observed_at DESC decides).
@@ -190,7 +189,7 @@ async def test_closure_edge_with_a_later_open_reassert_is_flagged_not_resolved(
 
 
 async def test_a_healed_edge_no_longer_counts(actions: Actions) -> None:
-    """valid_until is the kernel's universal heal marker (never DELETE) — a closure edge
+    """valid_until is the kernel's universal heal marker (never DELETE): a closure edge
     that's been invalidated must drop out of the view exactly like every other reader
     already filters healed links."""
     await _repo(actions, "tc6")
@@ -225,7 +224,7 @@ async def test_empty_scope_returns_empty_list(actions: Actions) -> None:
 
 async def test_two_strong_edges_still_report_strong(actions: Actions) -> None:
     """Both an `answers` and a `resolved_by` edge can land on the same thread (a decision
-    resolved it, and a session separately named an artifact) — strength stays 'strong',
+    resolved it, and a session separately named an artifact): strength stays 'strong',
     never downgraded by the presence of a second witness."""
     await _repo(actions, "tc8")
     tid = await open_thread(actions, "double-closed", repo="tc8", source="agent:me")
@@ -245,9 +244,9 @@ async def test_two_strong_edges_still_report_strong(actions: Actions) -> None:
 
 
 async def test_closure_buckets_sorts_one_thread_into_each_of_the_five(actions: Actions) -> None:
-    """closure_buckets (thread 0ae050d8, Thoth DM 6243: the cheap half of _fn_closure_
+    """closure_buckets (the cheap half of _fn_closure_
     health's own five-way split, shared so orient()/get_thread_list() never re-derive a
-    second counting mechanism, #139) — one thread engineered into each bucket, asserting
+    second counting mechanism, #139): one thread engineered into each bucket, asserting
     the SAME mutually-exclusive-by-construction classification _fn_closure_health's own
     docstring specifies, with none of its per-thread artifact-resolution enrichment."""
     await _repo(actions, "tc9")
@@ -284,7 +283,7 @@ async def test_closure_buckets_sorts_one_thread_into_each_of_the_five(actions: A
     assert [r["thread_id"] for r in buckets["disagree"]] == [disagree_tid]
     assert [r["thread_id"] for r in buckets["resolved_edgeless"]] == [edgeless_tid]
     assert [r["thread_id"] for r in buckets["retracted_or_no_status"]] == [retracted_tid]
-    # no edgeless-artifact enrichment fields on these rows — that stays _fn_closure_health's
+    # no edgeless-artifact enrichment fields on these rows, that stays _fn_closure_health's
     # own, deliberately richer, deliberately not-hot-path job
     assert set(buckets["resolved_edgeless"][0].keys()) == {
         "thread_id", "closed_by_topology", "strength", "closure_edges",
@@ -306,7 +305,7 @@ async def test_enumerate_threads_single_page_no_projection(actions: Actions) -> 
 async def test_enumerate_threads_pagination_covers_every_row_exactly_once(
     actions: Actions,
 ) -> None:
-    """The property Thoth cares about most: no reshuffling, no duplicates, no drops —
+    """The property that matters most: no reshuffling, no duplicates, no drops,
     paging by cursor over o.id must reconstruct the exact scope, one row each."""
     await _repo(actions, "en2")
     ids = {await open_thread(actions, f"en2 thread {i}", repo="en2", source="agent:me")

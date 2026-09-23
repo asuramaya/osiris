@@ -1,6 +1,6 @@
-"""PROSE-ID -> EDGE (task #189's derivation lane, Thoth's dispatch msg 5865/5878,
-Seshat's measurement: 37.5% of active osiris Decision+Thread objects carry at least one
-recoverable citation, zero same-type collisions at 8-hex length). Two things proven
+"""PROSE-ID -> EDGE: a measurement found
+37.5% of active osiris Decision+Thread objects carry at least one
+recoverable citation, zero same-type collisions at 8-hex length. Two things proven
 here: the extraction/resolution mechanism in isolation, and the real wiring through
 record_decision/open_thread/acknowledge_prior_art."""
 from __future__ import annotations
@@ -17,7 +17,7 @@ def test_cited_object_refs_requires_the_qualifier_word_immediately_before_the_id
 
 
 def test_cited_object_refs_ignores_a_bare_id_with_no_qualifier() -> None:
-    """The exact negative control Seshat's own measurement used: an 8-hex string quoted
+    """The exact negative control that measurement used: an 8-hex string quoted
     for some other reason, never preceded by one of the qualifier words, must not mint."""
     refs = capture._cited_object_refs("see d68c57e5 for context")
     assert refs == []
@@ -42,9 +42,9 @@ def test_cited_object_refs_recognizes_all_four_qualifiers() -> None:
 async def test_resolve_cited_object_matches_the_uuid_prefix_not_the_canonical(
     actions: Actions,
 ) -> None:
-    """Seshat's own catch (msg 5878): the house's 8-char short id is a prefix of the
-    object's UUID, not its `_canon()` hash — building against the wrong scheme
-    undercounted 27x before she found it."""
+    """A prior catch: the house's 8-char short id is a prefix of the
+    object's UUID, not its `_canon()` hash. Building against the wrong scheme
+    undercounted 27x before that was found."""
     d = await capture.record_decision(actions, "a decision to be cited by uuid prefix")
     short_id = str(d)[:8]
     hit, reason = await capture._resolve_cited_object(actions.pool, "Decision", short_id)
@@ -57,7 +57,7 @@ async def test_resolve_cited_object_skips_and_names_a_real_type_mismatch(
 ) -> None:
     """A citation whose qualifier claimed the wrong type resolves to nothing under that
     type, but the code checks the OTHER type too so the skip reason names what actually
-    happened — never a silent guess, per Thoth's explicit instruction."""
+    happened, never a silent guess, per the explicit instruction to never guess."""
     t = await capture.open_thread(actions, "a thread wrongly cited as a decision")
     short_id = str(t)[:8]
     hit, reason = await capture._resolve_cited_object(actions.pool, "Decision", short_id)
@@ -138,7 +138,7 @@ async def test_record_decision_records_a_skip_reason_for_an_unresolvable_citatio
     assert skips is not None and any(s["ref"] == "decision deadbeef" for s in skips)
 
 
-# --- self-referential flagging (Thoth's condition, same discipline as the #189 hatch) -
+# --- self-referential flagging (same discipline as elsewhere) -
 
 async def test_cites_link_flags_a_same_source_citation_as_self_referential(
     actions: Actions,
@@ -183,7 +183,7 @@ async def test_acknowledge_prior_art_mints_a_cites_edge_never_self_referential(
         d, other)
     assert exists is not None and exists["self_referential"] is False
     assert exists["origin"] == "declared"
-    # the property write survives too — additive, not a replacement
+    # the property write survives too, additive, not a replacement
     prop = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='prior_art_acknowledged'", d)
@@ -193,7 +193,7 @@ async def test_acknowledge_prior_art_mints_a_cites_edge_never_self_referential(
 async def test_prose_citation_is_marked_origin_prose_ingest_reference_marked_declared(
     actions: Actions,
 ) -> None:
-    """Thoth's second caution (msg 5881): a prose-derived cite and a caller-declared
+    """A second caution: a prose-derived cite and a caller-declared
     one must stay queryable apart, not merely inferable from context."""
     parent = await capture.record_decision(actions, "a ruling a prose citation will mark")
     short_id = str(parent)[:8]

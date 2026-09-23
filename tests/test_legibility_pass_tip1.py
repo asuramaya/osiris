@@ -1,17 +1,15 @@
-"""THE LEGIBILITY PASS, TIP 1 (ruling e1cb9e3b, Thoth DM 10708, thread 71c4ca0d). The
-operator's own screenshots plus Thoth's own live measurement at fit (9 world units/px,
+"""THE LEGIBILITY PASS, TIP 1. Screenshots plus live measurement at fit (9 world units/px,
 median nearest-neighbour 19 units = 2px, average node radius 8.4px = 75 units -- every node
 covering ~60 neighbours; a focus on a degree-8 Decision reaching only itself and fitting the
-camera to a point at 300x). Six pieces, all off d0d50d2: (a) world-unit node size with a
+camera to a point at 300x). Six pieces: (a) world-unit node size with a
 screen floor/cap, (b) a log-scale degree curve, (c) labels are real names not a wall of
 garbage text, (d) focus hides (not dims) and is never empty, (e) one search (the header
 omnibox) plus a shared type-visibility flag for header pills and the legend, (f) canvas
 controls move off the table drawer's bottom edge. Mirrors the existing static-source-guard
 convention -- no browser test harness exists in this repo; the live render (before/after at
-fit and at one cluster) was verified via claude-in-chrome and reported on thread 71c4ca0d,
-not re-proven here.
+fit and at one cluster) was verified via claude-in-chrome, not re-proven here.
 
-AMENDED (operator via Thoth mail 10726, ruling amending e1cb9e3b) before this tip even
+AMENDED before this tip even
 shipped its first review: (1) a single CLICK on a node is the WHOLE gesture -- select,
 inspector, hide, fit, one act; no double-click, no Enter, click on empty canvas clears;
 (2) the hidden/fitted state renders within 100ms of the click from the client-side edge
@@ -37,7 +35,7 @@ _OSIRIS_CSS = (_STATIC / "osiris.css").read_text()
 # --- (a)+(b): world-unit radius, floor/cap in screen px, log-scale degree curve -----------
 
 def test_node_size_is_a_constant_screen_px_degree_curve_not_world_units() -> None:
-    # THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066) retired the world-unit
+    # THE LAST RENDERER retired the world-unit
     # sizing scheme this test used to assert -- "points at a constant SCREEN size in px on a
     # steep degree curve... no world-unit sizing, no 48px cap." See
     # test_legibility_pass_tip5.py for the new nodeScreenPx curve's own tests.
@@ -49,9 +47,9 @@ def test_node_size_is_a_constant_screen_px_degree_curve_not_world_units() -> Non
 # --- (c): labels are names, per-type formatting, hard truncation, a hover card ------------
 
 def test_labels_resolve_real_names_off_the_wire_header_now() -> None:
-    # TIP 1b (Thoth mail 10755): "swap the client label fallback for the header labels" --
-    # Khnum's own `labels` array (graph_stream.py's _short_label, tip 2g, fixed live in
-    # mail 10892/commit 0496a7d to resolve a real title for every type, Commit included)
+    # TIP 1b: "swap the client label fallback for the header labels" --
+    # the `labels` array (graph_stream.py's _short_label, tip 2g, fixed live
+    # to resolve a real title for every type, Commit included)
     # is the source now, synchronous off nd.label, no per-node fetch for any type at all --
     # the earlier Commit-only client-side upgrade (review flaw #6) is retired outright now
     # that the gap it patched closed at the source.
@@ -88,8 +86,8 @@ def test_focus_uses_a_per_instance_visibility_flag_not_a_dim_scalar() -> None:
 
 
 def test_a_focused_node_with_no_semantic_edges_still_lights_its_structural_neighbours() -> None:
-    # THE DRILL (ruling d7d55257) inserted a container-focus dispatch and clearDrillState()
-    # call at the top of focusObject, pushing this fallback further into the body. WAVE 27,
+    # THE DRILL inserted a container-focus dispatch and clearDrillState()
+    # call at the top of focusObject, pushing this fallback further into the body.
     # THE LENS PANEL: the literal "structural" check became isStructuralLike() so a genuine
     # "container"-class edge (now distinct from "structural") still widens this fallback the
     # same as before.
@@ -102,9 +100,9 @@ def test_a_focused_node_with_no_semantic_edges_still_lights_its_structural_neigh
 def test_base_edge_layer_hides_edges_touching_an_invisible_node() -> None:
     body = _SPACE_JS.split("function nodeVisible(nd)", 1)[1][:600]
     assert "hiddenNodeTypes.has(nd.type)" in body
-    # CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7): the repo selector's own
+    # CONSOLE CHROME CLEANUP piece 2: the repo selector's own
     # hidden-set must ALSO gate edge-geometry visibility here, the same as applyDim's
-    # own per-instance flag — an edge touching a project-hidden node must not still draw.
+    # own per-instance flag: an edge touching a project-hidden node must not still draw.
     assert "hiddenProjects.has(nd.project)" in body
     assert "pathReachable.has(nd.id)" in body
     build_body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2300]
@@ -123,7 +121,7 @@ def test_the_in_canvas_find_a_node_box_is_gone() -> None:
 
 
 def test_header_omnibox_graph_hits_always_focus() -> None:
-    # SUPERSEDED by THE LEGIBILITY PASS TIP 1's own amendment (mail 10726): select-vs-focus
+    # SUPERSEDED by THE LEGIBILITY PASS TIP 1's own amendment: select-vs-focus
     # (click selects, Enter focuses) is retired -- a Graph hit focuses either way now.
     body = _CONSOLE_JS.split("const graphHits = hits.filter", 1)[1][:700]
     assert "run: () => { switchSurface('browse'); focus(h.id); }" in body
@@ -141,10 +139,9 @@ def test_header_type_filters_and_the_legend_drive_the_same_visibility_flag() -> 
 
 
 def test_header_repo_selector_drives_the_same_visibility_flag_by_project() -> None:
-    """CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7, thread 0be2f790's own operator-
-    finding follow-up): setHiddenProjects is the repo pill's own sibling to
-    setHiddenTypes above — same per-instance aVisible flag, filtered by nd.project
-    instead of nd.type."""
+    """CONSOLE CHROME CLEANUP piece 2, a follow-up finding: setHiddenProjects is the
+    repo pill's own sibling to setHiddenTypes above, same per-instance aVisible flag,
+    filtered by nd.project instead of nd.type."""
     assert "function setHiddenProjects(projects)" in _SPACE_JS
     assert "function syncSpaceProjectFilter()" in _CONSOLE_JS
     body = _CONSOLE_JS.split("function applyRepoFilter()", 1)[1][:400]
@@ -187,10 +184,10 @@ def test_the_visual_work_is_synchronous_the_inspector_fetch_is_awaited_last() ->
     # every `await` inside focusObject's own body must be the final `await inspect(id);` --
     # no earlier await (a network call) can gate the synchronous select/hide/fit work above.
     fn_body = body.split("\n  async function inspect(id)", 1)[0]
-    # THE DRILL (ruling d7d55257) inserted an early-exit container dispatch at the top -- a
+    # THE DRILL inserted an early-exit container dispatch at the top -- a
     # SEPARATE branch (renderContainerDrill owns its own synchronous-then-one-await shape)
     # that returns before any of the ordinary ego-walk work below ever runs, excluded here.
-    # WAVE 26, THE STORYLINE (mail 11534) added a second, sibling early-exit branch
+    # THE STORYLINE added a second, sibling early-exit branch
     # (renderStoryline, same shape) for an Agent focus -- excluded for the identical reason.
     awaits = [ln.strip() for ln in fn_body.splitlines()
               if "await " in ln and "renderContainerDrill" not in ln
@@ -225,7 +222,7 @@ def test_ego_relayout_exists_and_ranks_ancestors_leftward_roots_farthest() -> No
     # negative = further left; downstream (hopsDown) gets a positive rank, mirrored right.
     assert "(byRank.get(-hop) || (byRank.set(-hop, []), byRank.get(-hop))).push(id);" in body
     assert "(byRank.get(hop) || (byRank.set(hop, []), byRank.get(hop))).push(id);" in body
-    # THE SUCCESSION CHAIN COLUMN COMPRESSION (mail 11272 items 2/4) replaced the old flat
+    # THE SUCCESSION CHAIN COLUMN COMPRESSION (items 2/4) replaced the old flat
     # `const x = cx + signedHop * colW;` with a progressive per-side accumulation (colX) so
     # a pure succession run can use the tighter chain width instead of the full column
     # width every hop -- still ranks ancestors leftward/roots farthest, just not at a fixed
@@ -235,7 +232,7 @@ def test_ego_relayout_exists_and_ranks_ancestors_leftward_roots_farthest() -> No
 
 
 def test_ego_layout_spacing_is_screen_pixels_converted_to_world_at_a_stable_scale() -> None:
-    # TIP 1c review flaw #6 (Thoth mail 10891): the CURRENT (pre-focus) worldPerPx made the
+    # TIP 1c review flaw #6: the CURRENT (pre-focus) worldPerPx made the
     # ego layout's own scale track whatever zoom the camera happened to already be at -- a
     # small reachable set following a tight prior focus could spiral the fit down to a
     # near-empty viewSize. maxViewSize (the whole graph's own stable fitted scale) fixes it.
@@ -259,7 +256,7 @@ def test_ego_layout_is_temporary_clear_restores_the_stored_positions() -> None:
 
 
 def test_ego_layout_moves_only_gpu_instances_for_the_moved_nodes_not_a_full_rebuild() -> None:
-    # O(moved), never O(49k) -- the perf discipline this whole arc has held since mail 10581.
+    # O(moved), never O(49k) -- the perf discipline this whole arc has held throughout.
     assert "function syncMovedInstancePositions(movedIds)" in _SPACE_JS
     body = _SPACE_JS.split("function syncMovedInstancePositions(movedIds)", 1)[1][:700]
     assert "if (!movedIds.has(nd.id)) continue;" in body

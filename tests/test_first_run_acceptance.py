@@ -1,31 +1,31 @@
-"""THE FIRST-RUN ACCEPTANCE TEST (Thoth mail, thread fa3a4d42's own sibling): the
-operator runs one sequence by hand on a fresh box — `osiris soul-key init --restart`
+"""THE FIRST-RUN ACCEPTANCE TEST: the
+operator runs one sequence by hand on a fresh box. `osiris soul-key init --restart`
 -> `soul-key enroll-recovery` -> `osiris restic-key init` -> `osiris backup-settings
 write --offload-add` for the NAS (restic, off-box) and the docked drive (local, an
 `expected_mountpoint`) -> `osiris offload-runner tick` -> a restore drill proving the
 backup is actually recoverable. This test walks that EXACT sequence through the real
 async CLI entry points this session already built/gates (`cmd_soul_key`,
-`cmd_restic_key`, `cmd_backup_settings`, `cmd_offload_runner`, `cmd_backup_status`) —
-never a shell subprocess, never the underlying orchestrator functions directly — in an
+`cmd_restic_key`, `cmd_backup_settings`, `cmd_offload_runner`, `cmd_backup_status`),
+never a shell subprocess, never the underlying orchestrator functions directly, in an
 `XDG_CONFIG_HOME`-isolated credstore so this developer's own real credentials are never
 touched (the same isolation `test_soul_crypto.py`/`test_restic_credential.py` already
 use).
 
 BACKEND SELECTION STAYS HONEST: `backend=None` (auto) on every mint call below, never
-forced — this box genuinely has `systemd-creds` (confirmed: `systemd-creds --version`
+forced; this box genuinely has `systemd-creds` (confirmed: `systemd-creds --version`
 reports systemd 259 with the FIDO2/TPM2 feature flags), so the real host-cred/host+tpm2
 ladder resolves for real, asserted conditionally on `shutil.which("systemd-creds")` so
 this file still means something honest on a box that lacks it (the file-backend branch,
 `_resolve_backend`'s own documented "warned escape hatch").
 
 FIDO2 is stubbed at the exact boundary `test_soul_crypto.py` already established
-(`soul_crypto._find_fido2_device`/`soul_crypto._fido2_client`) — copied here rather than
+(`soul_crypto._find_fido2_device`/`soul_crypto._fido2_client`), copied here rather than
 imported cross-file, matching this suite's own convention of keeping each test file's
 fixtures self-contained.
 
 THE ONE NAMED GAP (worth stating, not silently working around): `scripts.
 osiris_offbox_restore_drill.run_drill` reads `RESTIC_PASSWORD` from the ambient process
-environment directly (restic's own env contract) — it does NOT go through `restic_
+environment directly (restic's own env contract); it does NOT go through `restic_
 credential.get_restic_password()`'s systemd-creds-aware resolution the offload runner
 itself uses. This test bridges that gap explicitly (reads the real credential `restic-
 key init` just minted, sets it as `RESTIC_PASSWORD` before the drill) rather than
@@ -94,7 +94,7 @@ class _FakeAssertionSelection:
 
 class _FakeFido2Client:
     """PIN + touch faked outright; PRF bytes are DETERMINISTIC per credential+salt (an
-    HMAC over the salt keyed by a fixed per-instance secret) — matching the real
+    HMAC over the salt keyed by a fixed per-instance secret), matching the real
     extension's own contract closely enough to prove the wrap/unwrap plumbing without
     physical hardware, the same fake `test_soul_crypto.py` already established."""
 
@@ -113,9 +113,9 @@ class _FakeFido2Client:
 
 @pytest.fixture(autouse=True)
 def _isolate_credential_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every mint call
-    below uses the DEFAULT (no explicit --path) credstore location — the box's own real
-    per-user credstore unless redirected — so `XDG_CONFIG_HOME` isolation is not
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI: every mint call
+    below uses the DEFAULT (no explicit --path) credstore location, the box's own real
+    per-user credstore unless redirected, so `XDG_CONFIG_HOME` isolation is not
     optional here, it is the whole point (the same real-credential-pollution incident
     `test_soul_crypto.py`'s own fixture docstring names)."""
     monkeypatch.delenv("OSIRIS_SOUL_KEY", raising=False)
@@ -130,7 +130,7 @@ def _isolate_credential_stores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) 
 
 
 def _last_json_line(captured_out: str) -> dict[str, Any]:
-    """`cli_render.emit(..., as_json=True)` prints one compact JSON line — reading it
+    """`cli_render.emit(..., as_json=True)` prints one compact JSON line; reading it
     back through stdout (never the underlying dict directly) is what keeps this test
     honestly exercising the REAL CLI entry point's own output contract, not a shortcut
     around it."""
@@ -161,7 +161,7 @@ async def test_first_run_acceptance_sequence(
     init_out = _last_json_line(capsys.readouterr().out)
     assert restart_calls == [cli._SOUL_KEY_RESTART_UNITS]
     assert init_out["restarted"] is True
-    # BACKEND SELECTION STAYS HONEST — never forced, asserted against what this box
+    # BACKEND SELECTION STAYS HONEST: never forced, asserted against what this box
     # genuinely has.
     if shutil.which("systemd-creds"):
         assert init_out["backend"] in ("host-cred", "host+tpm2")
@@ -200,7 +200,7 @@ async def test_first_run_acceptance_sequence(
     assert "already exists" in restic_twice_out["error"]
 
     # ── 4. `osiris backup-settings write --offload-add` (NAS + docked drive) ───────
-    # THE DOCKED DRIVE — kind=local, a real `expected_mountpoint` this test controls
+    # THE DOCKED DRIVE: kind=local, a real `expected_mountpoint` this test controls
     # directly (create/remove the directory to flip presence), backed by a genuine
     # local restic repository under it.
     drive_mount = tmp_path / "drive-mount"
@@ -214,9 +214,9 @@ async def test_first_run_acceptance_sequence(
     assert rc == 0
     capsys.readouterr()
 
-    # THE NAS — kind=restic, off-box, no mountpoint to check. A REAL sftp target has
+    # THE NAS: kind=restic, off-box, no mountpoint to check. A REAL sftp target has
     # no server in a hermetic test; substituted with a REST-backend URL pointing at a
-    # closed local port (127.0.0.1:1 — connection refused near-instantly, no DNS
+    # closed local port (127.0.0.1:1, connection refused near-instantly, no DNS
     # lookup, no timeout wait) so the runner's own "reachability failure is treated
     # identically to an absent mountpoint: skip, record, never raise" law (offload_
     # runner.py's own module docstring) is exercised with a REAL, fast subprocess
@@ -229,11 +229,11 @@ async def test_first_run_acceptance_sequence(
     assert rc == 0
     capsys.readouterr()
 
-    # ── 5. `osiris offload-runner tick` — tick #1, the drive's mountpoint present ──
+    # ── 5. `osiris offload-runner tick`: tick #1, the drive's mountpoint present ──
     receipts_file = tmp_path / "receipts.json"
     monkeypatch.setenv(offload_runner_module._RECEIPTS_ENV, str(receipts_file))
     # THE PRESENCE CHECK: real `findmnt` finds no genuine kernel mountpoint under a
-    # tmp_path directory (there IS no real docked drive on a CI/dev box) — the real
+    # tmp_path directory (there IS no real docked drive on a CI/dev box); the real
     # branching logic in run_offload_tick is still exercised for real; only the
     # kernel-mount PROBE itself is substituted for a plain existence check, matching
     # what this test can actually control without root.
@@ -267,9 +267,9 @@ async def test_first_run_acceptance_sequence(
 
     # THE NAMED GAP (this module's own docstring): run_drill reads RESTIC_PASSWORD
     # from the ambient environment directly, never through restic_credential's own
-    # systemd-creds-aware resolution — bridged here explicitly, not silently.
+    # systemd-creds-aware resolution; bridged here explicitly, not silently.
     monkeypatch.setenv("RESTIC_PASSWORD", get_restic_password().decode())
-    # `run_drill` returns a failure STRING, or None on success (its own docstring) —
+    # `run_drill` returns a failure STRING, or None on success (its own docstring),
     # and cleans up its own scratch directory in a `finally` regardless of outcome,
     # so success is proved by the None return alone: internally it already refuses
     # to call a check-clean-but-empty repository a pass (zero restored files is its
@@ -288,7 +288,7 @@ async def test_first_run_acceptance_sequence(
     assert status_targets["docked-drive"]["last_error"] is None
     assert status_targets["nas"]["last_error"] == receipts["nas"]["last_error"]
 
-    # ── 8. tick #2 — the drive's mountpoint is now ABSENT: SKIPPED, never an error ─
+    # ── 8. tick #2: the drive's mountpoint is now ABSENT: SKIPPED, never an error ─
     shutil.rmtree(drive_mount)
     rc = await cmd_offload_runner("tick", vault=str(vault), pool=actions.pool, as_json=True)
     assert rc == 0
@@ -297,7 +297,7 @@ async def test_first_run_acceptance_sequence(
     assert tick2_by_name["docked-drive"] == {
         "name": "docked-drive", "skipped": "not present (mountpoint absent)"}
     # THE SKIP NEVER CLOBBERS THE PRIOR SUCCESS (offload_runner._write_receipt's own
-    # merge law) — no _write_receipt call happens at all on a skip, so the receipt
+    # merge law); no _write_receipt call happens at all on a skip, so the receipt
     # from tick #1 survives byte-for-byte.
     receipts_after = offload_runner_module.offload_receipts()
     assert (receipts_after["docked-drive"]["last_successful_offload"]
@@ -311,7 +311,7 @@ async def test_offload_tick_with_no_restic_password_names_it(
     degrades the WHOLE tick with `ResticPasswordMissing` named directly in the
     returned dict's `error` key, rather than a confusing per-target failure repeated
     N times (`run_offload_tick`'s own module docstring). No restic-key init ever ran
-    in this test's own isolated XDG_CONFIG_HOME — genuinely no credential exists.
+    in this test's own isolated XDG_CONFIG_HOME; genuinely no credential exists.
     The sibling test below proves the SAME thing through the real CLI entry point."""
     from src.orchestrator.offload_runner import run_offload_tick
     from src.orchestrator.restic_credential import ResticPasswordMissing
@@ -319,12 +319,12 @@ async def test_offload_tick_with_no_restic_password_names_it(
     out = await run_offload_tick(actions.pool, vault=tmp_path)
     assert out["targets"] == []
     assert "error" in out
-    # the exception's own str() is what "named" means here — the same message
+    # the exception's own str() is what "named" means here, the same message
     # ResticPasswordMissing itself raises, never re-worded in transit.
     try:
         from src.orchestrator.restic_credential import get_restic_password
         get_restic_password()
-        pytest.fail("expected ResticPasswordMissing — a real credential was found")
+        pytest.fail("expected ResticPasswordMissing, a real credential was found")
     except ResticPasswordMissing as exc:
         assert out["error"] == str(exc)
 
@@ -333,8 +333,8 @@ async def test_cmd_offload_runner_tick_with_no_restic_password_names_it_in_the_r
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """THE REAL CLI-LAYER CONTRACT: `cmd_offload_runner` never raises — it reports
-    `out["error"]` naming `ResticPasswordMissing`'s own message and exits 1 — because
+    """THE REAL CLI-LAYER CONTRACT: `cmd_offload_runner` never raises; it reports
+    `out["error"]` naming `ResticPasswordMissing`'s own message and exits 1, because
     nothing here ever ran `osiris restic-key init`, so genuinely no credential exists
     under this test's own isolated XDG_CONFIG_HOME."""
     from src.orchestrator import offload_runner as offload_runner_module
@@ -354,9 +354,9 @@ async def test_cmd_offload_runner_tick_with_restic_absent_from_path_names_it(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """THE NAMED REFUSAL: restic absent from PATH surfaces per-target (never a whole-
-    tick error — the runner has no separate "is restic installed" probe; the SAME
+    tick error; the runner has no separate "is restic installed" probe; the SAME
     subprocess call that would run the backup fails with FileNotFoundError, caught and
-    named in the receipt, exactly like any other restic failure — never a special
+    named in the receipt, exactly like any other restic failure, never a special
     case, per run_offload_tick's own module docstring)."""
     from src.orchestrator import backup_validation
     from src.orchestrator import offload_runner as offload_runner_module
@@ -366,7 +366,7 @@ async def test_cmd_offload_runner_tick_with_restic_absent_from_path_names_it(
     capsys.readouterr()
 
     # THE PASSWORD RESOLVES *BEFORE* PATH GOES DARK: `get_restic_password()`'s own
-    # systemd-creds read is a subprocess call too — stripping PATH would blind THAT
+    # systemd-creds read is a subprocess call too; stripping PATH would blind THAT
     # as well, testing "no systemd-creds" instead of the "no restic binary" this test
     # actually names. Read the real credential now, hand it back via the SAME
     # `OSIRIS_RESTIC_PASSWORD` env override `get_restic_password`'s own ladder already

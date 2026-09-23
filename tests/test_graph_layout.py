@@ -1,7 +1,5 @@
-"""THE GRAPH VISUALIZER (wave B item 1) + NAVIGABLE SPACE, THE SERVER piece A (rulings
-f832c3a4 + 0a3d6719, thread b6cb1d7c0b36), the DECLUMP FIX (Thoth mail 10582,
-PRIORITY), THE READING LAYER (Thoth mail 10595, ruling c5953bb1), and THE LEGIBILITY
-PASS (ruling e1cb9e3b, tip 2h): the layout heartbeat places every object under a
+"""THE GRAPH VISUALIZER + NAVIGABLE SPACE, THE SERVER piece A, the DECLUMP FIX,
+THE READING LAYER, and THE LEGIBILITY PASS: the layout heartbeat places every object under a
 rank-based sunflower rule (never a hash-into-a-fixed-circle), nudged by a bounded
 intra-project SEMANTIC-only relax that ends with a hard minimum-separation pass;
 project centers come from a weighted force layout over the contracted project graph,
@@ -104,7 +102,7 @@ def test_intra_project_neighbors_drops_cross_project_edges() -> None:
     assert out[a] == {b}
 
 
-# --- _declump: the hard minimum-separation pass (Thoth mail 10582) -------------------
+# --- _declump: the hard minimum-separation pass -------------------
 
 
 def test_declump_separates_two_coincident_points() -> None:
@@ -137,9 +135,9 @@ def test_declump_pushes_a_node_away_from_a_fixed_anchor() -> None:
 
 
 def test_declump_60000_random_points_completes_fast_with_bounded_memory() -> None:
-    """THE PHYSICS LAYOUT OOM (Thoth mail 11097): the OLD form built a full (n,n,2)
+    """THE PHYSICS LAYOUT OOM: the OLD form built a full (n,n,2)
     pairwise array -- 40 GB at n=50,087, kernel-confirmed OOM kill. The KD-tree
-    rewrite (THE DECLUMP REWRITE, operator's word 2026-09-18) must handle a
+    rewrite (THE DECLUMP REWRITE) must handle a
     real-scale population (60,000, comfortably over the 50,087 that actually killed
     the process) in bounded MEMORY and a bounded, DETERMINISTIC amount of WORK --
     this is the acceptance test named in that same dispatch.
@@ -193,7 +191,7 @@ def test_declump_60000_random_points_completes_fast_with_bounded_memory() -> Non
 
 
 def test_declump_one_dense_cluster_of_6000_coincident_points_stays_fast() -> None:
-    """THE DENSE-CELL FIX (Thoth mail 11109/11110): a live specimen on THE PHYSICS
+    """THE DENSE-CELL FIX: a live specimen on THE PHYSICS
     LAYOUT's real migration -- one grid cell held 6,131 post-FR points (many
     container-only siblings pulled to the same weak-gravity target with no semantic
     edge differentiating them), 634 million candidate pair checks on the FIRST
@@ -222,7 +220,7 @@ def test_declump_one_dense_cluster_of_6000_coincident_points_stays_fast() -> Non
 
 
 def test_relax_never_leaves_two_strongly_attracted_nodes_stacked() -> None:
-    """The exact regression Thoth's mail described: strong mutual attraction (many
+    """The exact regression once observed: strong mutual attraction (many
     shared edges, tight ideal length) used to be able to collapse two nodes onto
     (almost) the same point; the declump pass now guarantees it can't."""
     a, b = uuid.uuid4(), uuid.uuid4()
@@ -287,7 +285,7 @@ async def test_layout_batch_returns_zero_when_the_graph_is_fully_positioned(
 async def test_layout_batch_with_no_explicit_limit_reads_the_settings_table(
     actions: Actions,
 ) -> None:
-    """`layout.batch_size` (Thoth mail 10609) genuinely reads live -- not the env-
+    """`layout.batch_size` genuinely reads live -- not the env-
     overlay path, which only covers effect='immediate' keys."""
     from src.orchestrator.settings_service import write_setting
 
@@ -299,7 +297,7 @@ async def test_layout_batch_with_no_explicit_limit_reads_the_settings_table(
     assert n == 1  # capped to the stored batch_size regardless of total population
 
 
-# --- THE MIGRATION DOOR (Thoth mail 10609) --------------------------------------------
+# --- THE MIGRATION DOOR --------------------------------------------
 
 
 async def test_layout_lock_round_trips(actions: Actions) -> None:
@@ -414,7 +412,7 @@ async def test_layout_batch_migrates_an_object_placed_under_a_prior_version(
     assert oid not in await unplaced_batch(actions)
 
 
-# --- THE READING LAYER (Thoth mail 10595, ruling c5953bb1) ---------------------------
+# --- THE READING LAYER ---------------------------
 
 
 async def test_neighbors_of_semantic_only_drops_structural_edges(actions: Actions) -> None:
@@ -435,7 +433,7 @@ async def test_neighbors_of_semantic_only_drops_structural_edges(actions: Action
 async def test_layout_batch_container_only_members_seed_near_their_container(
     actions: Actions,
 ) -> None:
-    """THE PHYSICS LAYOUT (Thoth mail 11047, item 6): a member with ONLY a container
+    """THE PHYSICS LAYOUT (item 6): a member with ONLY a container
     edge (in_repo) and no semantic edge of its own now seeds at its container's own
     centroid -- reversing THE READING LAYER's old "structural edges never attract"
     rule for this one subset (container is a real, if weak, gravity source in the
@@ -535,7 +533,7 @@ async def test_hub_ids_finds_a_structural_high_degree_object(actions: Actions) -
 async def test_hub_ids_excludes_a_high_degree_membership_container(
     actions: Actions,
 ) -> None:
-    """THE LONG EDGES RULING tip (d) (operator, grounds d7d55257): a
+    """THE LONG EDGES RULING tip (d): a
     SoftwareProject with high structural degree (every member's own in_repo
     edge counts toward it) must NEVER be classified as a hub -- pulling its
     own identity vertex into the hub zone would break every one of its
@@ -564,7 +562,7 @@ async def test_hub_ids_excludes_an_ordinary_low_degree_object(actions: Actions) 
 async def test_layout_batch_still_places_a_structural_hub(
     actions: Actions,
 ) -> None:
-    """THE PHYSICS LAYOUT (Thoth mail 11047, item 6) dropped explicit hub-rank-0
+    """THE PHYSICS LAYOUT (item 6) dropped explicit hub-rank-0
     pinning from layout_batch's own INCREMENTAL new-object path -- that guarantee
     now lives only in graph_physics._physics_positions' own hub-recentering step
     for the one-shot migration (test_physics_positions_recenter_hubs_to_the_center_
@@ -590,7 +588,7 @@ async def test_layout_batch_still_places_a_structural_hub(
 async def test_project_and_type_falls_back_to_the_project_assertion(
     actions: Actions,
 ) -> None:
-    """THE MEMBERSHIP UNION FIX (ruling d7d55257, Thoth mail 11221): a member with
+    """THE MEMBERSHIP UNION FIX: a member with
     NO in_repo link but a `project` assertion naming the repo must still resolve
     to that project's own object id -- the incremental heartbeat's own placement
     door, not just the physics migration's."""

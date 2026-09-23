@@ -1,7 +1,7 @@
-"""The PTY broker (`src/manager/pty_broker.py`) — tmux-with-a-graph's "tmux" half, tested
+"""The PTY broker (`src/manager/pty_broker.py`): tmux-with-a-graph's "tmux" half, tested
 against REAL PTYs and REAL children throughout (never a fake subprocess: the whole point of
 this module is that a raw fd behaves like a terminal, which a fake cannot prove). No Postgres,
-no Redis — this module doesn't touch the graph at all.
+no Redis; this module doesn't touch the graph at all.
 """
 from __future__ import annotations
 
@@ -41,7 +41,7 @@ async def _collect_until(
     queue: asyncio.Queue[bytes | None], predicate: Callable[[bytes], bool],
 ) -> bytes:
     """Reads from an attach queue, accumulating, until `predicate(accumulated)` holds or the
-    exited sentinel arrives first. Bounded by the CALLER's `asyncio.timeout` — a timeout means
+    exited sentinel arrives first. Bounded by the CALLER's `asyncio.timeout`; a timeout means
     the expected output never showed up, which is a test failure, not a thing to swallow."""
     buf = bytearray()
     while not predicate(bytes(buf)):
@@ -57,14 +57,14 @@ async def _await_in_ring(
 ) -> None:
     """Attaches, waits for `needle` to appear in the live stream (or is already in the replay),
     detaches. After this returns, `session.attach()`'s replay is guaranteed to contain `needle`
-    too — ring writes happen before fan-out inside `_on_readable`, never after.
+    too, ring writes happen before fan-out inside `_on_readable`, never after.
 
     `deadline_secs` (task #197): 2.0s is generous for a single short round trip on a quiet box,
-    but this is a REAL wall-clock bound on REAL subprocess/PTY scheduling — no logic here
+    but this is a REAL wall-clock bound on REAL subprocess/PTY scheduling; no logic here
     ever slows it down, only host contention does (this box is shared fleet-wide; other
     agents' concurrent activity is normal load, not a hypothetical). A caller doing MORE
     real work per wait (a longer payload, two round trips in one test) has strictly less
-    margin under the same fixed bound than a caller doing less — raise it explicitly for
+    margin under the same fixed bound than a caller doing less, raise it explicitly for
     those, never globally, so a bound going slack elsewhere doesn't quietly hide a genuine
     regression in the common case."""
     replay, queue = session.attach()
@@ -204,20 +204,20 @@ async def test_second_attach_gets_full_replay_while_first_stays_live() -> None:
 @requires_pty
 async def test_poke_types_one_bracketed_message_and_submits() -> None:
     """THE POKE (the wake law): a multi-line prompt lands as ONE bracketed paste
-    (ESC[200~ … ESC[201~) followed by CR — the tty's echo puts the typed bytes in the
+    (ESC[200~ … ESC[201~) followed by CR, the tty's echo puts the typed bytes in the
     ring, so the poke is witnessed by the same scrollback every face replays."""
     session = await PtySession.spawn(["sh", "-c", "echo ready; cat"])
     try:
         await _await_in_ring(session, b"ready")
         session.poke("new mail waiting\ninbox() and settle it")
         # task #197: this test's own second wait is the heaviest _await_in_ring call in
-        # this file — a longer payload AND the second of two round trips in one test, so
+        # this file, a longer payload AND the second of two round trips in one test, so
         # under real host contention it has the least margin of any sibling still using
         # the 2.0s default. Widened, not the shared default (see that param's own doc).
         await _await_in_ring(session, b"settle it", deadline_secs=5.0)
         replay, queue = session.attach()
         try:
-            # the echo renders ESC as caret notation (^[), so match the marker's tail —
+            # the echo renders ESC as caret notation (^[), so match the marker's tail,
             # present either way: one paste envelope, not N separately-submitted lines
             assert b"[200~" in replay and b"[201~" in replay
             assert b"new mail waiting" in replay
@@ -230,14 +230,14 @@ async def test_poke_types_one_bracketed_message_and_submits() -> None:
 @requires_pty
 async def test_idle_seconds_is_reset_by_output() -> None:
     """The busy-signal for the poke gate: output (streaming, or the echo of typing) resets
-    the idle clock; silence grows it. Coarse bounds only — this is a clock, not a stopwatch."""
+    the idle clock; silence grows it. Coarse bounds only, this is a clock, not a stopwatch."""
     session = await PtySession.spawn(["sh", "-c", "echo hello; cat"])
     try:
         await _await_in_ring(session, b"hello")
         await asyncio.sleep(0.6)
         assert session.idle_seconds >= 0.5      # silence accrued
         session.write(b"tick\n")
-        await _await_in_ring(session, b"tick")  # the echo is output — the clock resets
+        await _await_in_ring(session, b"tick")  # the echo is output, the clock resets
         assert session.idle_seconds < 0.5
     finally:
         await session.close()
@@ -252,14 +252,14 @@ async def test_detach_leaves_the_child_running() -> None:
         session.detach(queue)
         assert session.attach_count == 0
         await asyncio.sleep(0.1)
-        assert session.returncode is None  # detach never kills the child — that's the point
+        assert session.returncode is None  # detach never kills the child, that's the point
     finally:
         await session.close()
 
 
 @requires_pty
 async def test_resize_changes_the_pty_size_observed_inside_the_session() -> None:
-    # a genuinely interactive shell — `sh -c "stty size; cat"` would only run `stty` ONCE at
+    # a genuinely interactive shell; `sh -c "stty size; cat"` would only run `stty` ONCE at
     # startup and become plain `cat` forever after, so a second "stty size\n" would just get
     # echoed back as literal text instead of executed.
     session = await PtySession.spawn(["sh"], rows=24, cols=80)
@@ -315,7 +315,7 @@ async def test_close_reaps_a_long_running_child() -> None:
 async def test_close_escalates_to_sigkill_when_the_child_ignores_sighup() -> None:
     # The child echoes a marker AFTER installing its HUP trap; the test waits for it before
     # signalling. Without this sync, close()'s SIGHUP can race ahead of the shell's `trap`
-    # and hit the DEFAULT action — the child dies with -SIGHUP (-1), not the -SIGKILL this
+    # and hit the DEFAULT action; the child dies with -SIGHUP (-1), not the -SIGKILL this
     # test is about. A load-sensitive flake (reproduced ~11% under full-file load,
     # 2026-07-15): the escalation logic was never wrong, the test was racing child readiness.
     session = await PtySession.spawn(
@@ -366,7 +366,7 @@ async def test_broker_spawn_get_list_close_and_name_collisions() -> None:
 @requires_pty
 async def test_broker_spawn_reaps_a_dead_registration_and_respawns() -> None:
     """finding #8 (mint-lane wave, task #68): a body killed outside pty_close (or one that
-    simply exits on its own) leaves its name registered with returncode set — list()'s own
+    simply exits on its own) leaves its name registered with returncode set; list()'s own
     `alive` already reports it dead. A same-name respawn used to refuse with
     SessionExistsError forever, even though nothing live holds the name; it must reap the
     corpse and spawn fresh instead."""
@@ -387,7 +387,7 @@ async def test_broker_spawn_reaps_a_dead_registration_and_respawns() -> None:
 
 @requires_pty
 async def test_broker_spawn_still_refuses_a_live_name_collision() -> None:
-    """The other half of the same fix: a LIVE session under the name is still untouchable —
+    """The other half of the same fix: a LIVE session under the name is still untouchable,
     only a corpse gets reaped, never a working body twinned or clobbered."""
     broker = PtyBroker()
     await broker.spawn("seat-3", ["sh", "-c", "cat"])
@@ -398,14 +398,14 @@ async def test_broker_spawn_still_refuses_a_live_name_collision() -> None:
         await broker.close("seat-3")
 
 
-# --- backpressure: bounded queues + force-detach (doctrine 3 — nothing in the sacred proc ---
+# --- backpressure: bounded queues + force-detach (doctrine 3: nothing in the sacred proc ---
 # --- may grow without bound; a stalled face is disconnected, never accumulated)            ---
 
 
 @requires_pty
 async def test_attach_queues_are_bounded() -> None:
     """The regression guard the whole backpressure discipline hangs on: `asyncio.Queue(0)` is
-    UNBOUNDED, so maxsize must be provably positive — asserted on the actual queue object a
+    UNBOUNDED, so maxsize must be provably positive, asserted on the actual queue object a
     real attach() hands out, not on a constant a refactor could silently disconnect from it."""
     session = await PtySession.spawn(["sh", "-c", "cat"])
     try:
@@ -423,15 +423,15 @@ async def test_attach_queues_are_bounded() -> None:
 @requires_pty
 async def test_flooding_child_force_detaches_only_the_stalled_attachment() -> None:
     """The daemon-OOM scenario, exactly: a chatty child (`yes`), one attachment that never
-    drains. The stalled queue must cap at maxsize and get force-detached ALONE — child alive,
+    drains. The stalled queue must cap at maxsize and get force-detached ALONE, child alive,
     sibling attachment streaming, and the ring replay waiting for the casualty's reattach.
     queue_maxsize deliberately exceeds `_MAX_CHUNKS_PER_WAKEUP`: the per-wakeup drain budget is
     what guarantees the well-behaved sibling gets scheduled between bursts and never overflows
-    alongside the guilty one — the margin below is that invariant, asserted."""
+    alongside the guilty one; the margin below is that invariant, asserted."""
     session = await PtySession.spawn(["sh", "-c", "yes"], queue_maxsize=32)
     try:
         assert 32 > _MAX_CHUNKS_PER_WAKEUP  # one burst can never fill a healthy queue outright
-        _, stalled = session.attach()  # never drained — the slow consumer
+        _, stalled = session.attach()  # never drained, the slow consumer
         _, live = session.attach()  # well-behaved sibling
         assert stalled.maxsize == 32
         assert session.attach_count == 2
@@ -450,17 +450,17 @@ async def test_flooding_child_force_detaches_only_the_stalled_attachment() -> No
         assert stalled.get_nowait() is None
         # the child and the well-behaved sibling are untouched
         assert session.returncode is None
-        # THE #197 FLAKE, ROOT-CAUSED (not a timing tolerance — CI's own failed run pinned
+        # THE #197 FLAKE, ROOT-CAUSED (not a timing tolerance; CI's own failed run pinned
         # the exact assertion: `more == b'\r\n'`, no 'y' at all, `AssertionError: assert
         # (b'\r\n' is not None and b'y' in b'\r\n')`): a single next chunk is not a valid
         # unit to assert content on. `os.read()` on the master fd returns WHATEVER is
-        # currently buffered, with no regard for the child's own line boundaries — under
+        # currently buffered, with no regard for the child's own line boundaries; under
         # tighter scheduling a "y\r\n" line lands in one chunk; under looser scheduling
         # (exactly what real host contention produces, never specifically CI) the read can
         # land mid-line, so the very next chunk can legitimately be a bare "\r\n" tail with
         # its own "y" already delivered in the PRIOR chunk. The invariant this assertion
         # actually wants is "the live stream keeps flowing with real data after the
-        # casualty is gone", not "the immediate next chunk is that data" — so accumulate
+        # casualty is gone", not "the immediate next chunk is that data", so accumulate
         # across chunks (still bounded by the SAME 2.0s ceiling, never widened) until a
         # real "y" is actually seen, rather than asserting on an arbitrary one-chunk slice
         # of a byte stream whose own boundaries were never guaranteed to align with it.
@@ -487,9 +487,9 @@ async def test_serve_session_closes_the_socket_of_a_force_detached_client(
 ) -> None:
     """The full recovery loop over the wire: a client that connects and never reads parks the
     server's pump in drain(); the session-side queue fills and force-detaches it; when the
-    client finally reads again it gets the buffered frames, then a clean EOF (no 'X' — the
+    client finally reads again it gets the buffered frames, then a clean EOF (no 'X', the
     child is alive); a reconnect gets the ring replay. Force-detach is detected via the
-    broker's own log line (event-driven — the warning IS the observable), which also proves
+    broker's own log line (event-driven; the warning IS the observable), which also proves
     the honest-log requirement."""
     detached = asyncio.Event()
 
@@ -511,14 +511,14 @@ async def test_serve_session_closes_the_socket_of_a_force_detached_client(
             # deliberately read NOTHING: kernel buffers fill, the pump parks in drain(),
             # the queue caps out, the session force-detaches this attachment.
             # (This log-based observable went dark for a WEEK because alembic's fileConfig
-            # disabled every existing logger at the test session's first migration — thread
-            # bbca30a9; cured at the source in alembic/env.py, disable_existing_loggers=False.)
+            # disabled every existing logger at the test session's first migration;
+            # cured at the source in alembic/env.py, disable_existing_loggers=False.)
             async with asyncio.timeout(10.0):
                 await detached.wait()
             assert session.attach_count == 0
             assert session.returncode is None  # the child never paid for its client's stall
 
-            # the client resumes reading: buffered 'O' frames, then clean EOF — never an 'X'
+            # the client resumes reading: buffered 'O' frames, then clean EOF, never an 'X'
             # (the child is alive; the EOF is the force-detach notification)
             async with asyncio.timeout(10.0):
                 while True:
@@ -553,7 +553,7 @@ async def test_serve_session_closes_the_socket_of_a_force_detached_client(
 
 
 async def _read_output_until(reader: asyncio.StreamReader, needle: bytes) -> None:
-    """Reads framed 'O' output from the socket until `needle` shows up — an event-driven wait
+    """Reads framed 'O' output from the socket until `needle` shows up, an event-driven wait
     (each iteration blocks on the next frame, never on a sleep), bounded by the caller's own
     `asyncio.timeout`."""
     buf = bytearray()
@@ -567,7 +567,7 @@ async def _read_output_until(reader: asyncio.StreamReader, needle: bytes) -> Non
 
 @requires_pty
 async def test_serve_session_end_to_end_over_a_unix_socket(tmp_path: Path) -> None:
-    # a real interactive shell (not `sh -c ...; cat`) so it keeps taking commands — this test
+    # a real interactive shell (not `sh -c ...; cat`) so it keeps taking commands; this test
     # drives BOTH an echo and a resize-sensitive `stty size` through the wire protocol.
     session = await PtySession.spawn(["sh"], rows=30, cols=100)
     socket_path = str(tmp_path / "seat.sock")
@@ -585,7 +585,7 @@ async def test_serve_session_end_to_end_over_a_unix_socket(tmp_path: Path) -> No
             async with asyncio.timeout(2.0):
                 await _read_output_until(reader, b"hello-marker")
 
-            # resize, as an OOB frame, through the socket — then prove the CHILD saw it too
+            # resize, as an OOB frame, through the socket, then prove the CHILD saw it too
             resize_payload = json.dumps({"rows": 40, "cols": 110}).encode()
             writer.write(pack_frame(FRAME_TYPE_RESIZE, resize_payload))
             writer.write(pack_frame(FRAME_TYPE_INPUT, b"stty size\n"))
