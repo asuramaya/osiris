@@ -1,6 +1,6 @@
-"""The semantic layer + the max-level search doors (operator ruling a0cfcca1).
+"""The semantic layer + the max-level search doors.
 
-The embedder is a SEAM: these tests inject a fake (3-axis keyword vectors) — CI never
+The embedder is a SEAM: these tests inject a fake (3-axis keyword vectors); CI never
 downloads a model. What they prove: the backfill is incremental by hash watermark and
 forgets inactive objects; cosine candidates respect the floor; the semantic door surfaces
 a lexically-disjoint hit end-to-end with honest via/telemetry; the trigram door forgives
@@ -52,11 +52,11 @@ async def fake_embedder() -> AsyncIterator[FakeEmbedder]:
     semantics.set_embedder_for_tests(None)  # leave the door force-closed for other tests
 
 
-# --- Model2VecEmbedder's own load must be BOUNDED and STICKY (task #149, Imhotep's 300s
-# record_decision timeouts, thread 9f08b027): a hung first-load never raises, so no
-# try/except anywhere in the search pipeline could ever have caught it — only a timeout
+# --- Model2VecEmbedder's own load must be BOUNDED and STICKY (task #149, a run of 300s
+# record_decision timeouts): a hung first-load never raises, so no
+# try/except anywhere in the search pipeline could ever have caught it, only a timeout
 # can. Measured live before this fix: StaticModel.from_pretrained() exceeded 120s with no
-# exception at all. These tests never touch model2vec or the network — they prove the
+# exception at all. These tests never touch model2vec or the network, they prove the
 # wrapper's own timeout/latch behavior in isolation. ---
 
 
@@ -74,7 +74,7 @@ async def test_model2vec_embedder_embed_bounds_a_hung_load(monkeypatch: pytest.M
 
 async def test_model2vec_embedder_load_refuses_fast_once_latched() -> None:
     """The specimen this guards: three record_decision calls in a row each independently
-    hung — this is what stops call 2 and 3 from re-running the same doomed fetch, WITHIN
+    hung, this is what stops call 2 and 3 from re-running the same doomed fetch, WITHIN
     the cooldown window (see the self-heal tests below for what happens past it)."""
     embedder = semantics.Model2VecEmbedder("fake/model")
     embedder._load_failed = True
@@ -83,8 +83,8 @@ async def test_model2vec_embedder_load_refuses_fast_once_latched() -> None:
         embedder._load()
 
 
-# --- the latch self-heals past a cooldown (thread 5cd49217, Thoth DM 5287): #149's original
-# design stayed closed for the whole process life — the operator's own "no babysitting"
+# --- the latch self-heals past a cooldown: #149's original
+# design stayed closed for the whole process life, prompting a "no babysitting"
 # complaint once the root cause (HF_HUB_OFFLINE missing on osiris-worker's unit) turned out
 # to be transient/fixable without a restart. ---
 
@@ -109,8 +109,8 @@ async def test_model2vec_embedder_latch_stays_shut_inside_the_cooldown() -> None
 
 
 async def test_embed_pass_files_an_alarm_on_a_load_failure(actions: Actions) -> None:
-    """thread 5cd49217 (Thoth DM 5287): embed_pass's own generic except-block used to
-    log-and-swallow a load failure with nothing else watching — this proves the new alarm
+    """embed_pass's own generic except-block used to
+    log-and-swallow a load failure with nothing else watching, this proves the new alarm
     wiring lands the confession where smoke.embed_health can find it."""
     from src.orchestrator.capture import EMBED_ALARM_SURFACE
     from src.workers.arq_worker import embed_pass
@@ -151,7 +151,7 @@ async def _search(actions: Actions, q: str) -> dict:
 async def test_backfill_is_incremental_and_forgets_the_dead(
     actions: Actions, fake_embedder: FakeEmbedder
 ) -> None:
-    # drain whatever the persistent Type catalog (task #97) already needs embedded —
+    # drain whatever the persistent Type catalog (task #97) already needs embedded:
     # search_vectors resets every test but the Type objects themselves don't, so
     # they legitimately look "new" to the very first backfill call of any test that
     # hasn't already indexed them; not what THIS test is about
@@ -179,8 +179,8 @@ async def test_backfill_is_incremental_and_forgets_the_dead(
 async def test_backfill_never_returns_an_unchanged_winner_to_python(
     actions: Actions, fake_embedder: FakeEmbedder,
 ) -> None:
-    """THE BOOT SPIKE (thread 0c03a685): the corpus query used to fetch every winner text
-    (up to ~218k rows fleet-wide) into Python on EVERY pass, diffing hashes in a dict —
+    """THE BOOT SPIKE: the corpus query used to fetch every winner text
+    (up to ~218k rows fleet-wide) into Python on EVERY pass, diffing hashes in a dict,
     even a steady-state pass with nothing to embed paid the full fetch. The diff now runs
     server-side (a CTE join against search_vectors, comparing md5(left(text,N)) directly)
     so a no-change pass returns zero rows, not the whole corpus filtered down to zero in
@@ -207,12 +207,12 @@ async def test_backfill_never_returns_an_unchanged_winner_to_python(
 async def test_matrix_cache_never_rebuilds_on_a_wall_clock_only_on_the_fingerprint(
     actions: Actions, fake_embedder: FakeEmbedder, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE MEMORY BUG (thread 4746e7f4, operator "why osiris uses so much ram"
-    2026-09-06): _matrix used to force a full ~39,097-row rebuild every 120s of wall
-    clock regardless of whether the fingerprint had moved — this module's own docstring
-    promises a refresh "when the table's fingerprint moves", never on a timer. Simulates
-    121 real seconds passing between two calls (via `time.monotonic`, jumped forward —
-    harmless against the fixed code, which no longer reads the clock at all here) and
+    """THE MEMORY BUG (found 2026-09-06): _matrix used to force a full ~39,097-row
+    rebuild every 120s of wall clock regardless of whether the fingerprint had moved,
+    this module's own docstring promises a refresh "when the table's fingerprint moves",
+    never on a timer. Simulates 121 real seconds passing between two calls
+    (via `time.monotonic`, jumped forward, harmless against the fixed code, which no
+    longer reads the clock at all here) and
     counts the expensive full-row query: only the first call may fetch, even though the
     OLD 120s window would have elapsed by the second."""
     await _decision(actions, "decision:matrixcache1", "the warm swap demotion ruling stands")
@@ -239,7 +239,7 @@ async def test_matrix_cache_rebuilds_the_moment_the_fingerprint_moves(
     actions: Actions, fake_embedder: FakeEmbedder,
 ) -> None:
     """The OTHER half of the same guarantee: a real change (a new embedding) must still
-    invalidate the cache immediately — the fingerprint alone carries this, with nothing
+    invalidate the cache immediately, the fingerprint alone carries this, with nothing
     else needed."""
     await _decision(actions, "decision:matrixcache2", "the warm swap demotion ruling stands")
     await semantics.embed_backfill(actions.pool, fake_embedder)
@@ -275,7 +275,7 @@ async def test_search_semantic_door_end_to_end(
     actions: Actions, fake_embedder: FakeEmbedder
 ) -> None:
     """A lexically-DISJOINT query surfaces the meaning-neighbor: 'model downgrade
-    confession' shares zero words with 'the warm swap demotion ruling stands' — every
+    confession' shares zero words with 'the warm swap demotion ruling stands', every
     lexical door misses, the semantic door answers, and the telemetry says so."""
     await _decision(actions, "decision:swap", "the warm swap demotion ruling stands")
     await semantics.embed_backfill(actions.pool, fake_embedder)
@@ -299,7 +299,7 @@ async def test_search_degrades_honestly_when_the_door_is_closed(actions: Actions
 
 
 async def test_search_trigram_door_forgives_typos(actions: Actions) -> None:
-    """'compositon breifings' matches no tsquery ever — the trigram door is strict-AND
+    """'compositon breifings' matches no tsquery ever, the trigram door is strict-AND
     with typo tolerance, and the note confesses which door answered."""
     semantics.set_embedder_for_tests(None)
     await _decision(actions, "decision:lens", "the composition lens renders briefings")

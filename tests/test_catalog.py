@@ -1,7 +1,7 @@
-"""THE CATALOG STORE (task #97 workstream 1) — Type as a first-class graph object.
+"""THE CATALOG STORE (task #97 workstream 1): Type as a first-class graph object.
 Every test proves ONE contract: idempotent stub-on-miss, keep-prior-on-omission, the
 bootstrap axiom, warn/strict enforcement, and the fingerprint cache actually seeing a
-fresh write. Nothing here touches conftest.py's shared fixtures — each test seeds
+fresh write. Nothing here touches conftest.py's shared fixtures, each test seeds
 exactly what it needs.
 """
 from __future__ import annotations
@@ -53,12 +53,12 @@ async def test_ensure_type_is_idempotent(actions: Actions) -> None:
 
 
 async def test_ensure_type_keeps_prior_value_on_omission(actions: Actions) -> None:
-    """The section/room_id discipline (89e67c49), generalized: a bare call must never
+    """The section/room_id discipline, generalized: a bare call must never
     blank an already-rich Type's fields."""
     await ensure_type(actions, name="Rich", kind="object", actor="human",
                       description="carefully written", category=["Software"],
                       label_field="handle")
-    # Seshat's accretion call site — bare, on a type someone already described
+    # an accretion call site: bare, on a type someone already described
     stub_call = await ensure_type(actions, name="Rich", kind="object", actor="accretion")
     assert stub_call.description == "carefully written"
     assert stub_call.category == ("Software",)
@@ -76,7 +76,7 @@ async def test_ensure_type_link_kind_round_trips_domain_range(actions: Actions) 
 async def test_ensure_type_object_kind_round_trips_required_link_kinds(
     actions: Actions,
 ) -> None:
-    """task #189, decision 7ea187b9 — the declare-or-refuse gate's own declaration
+    """task #189: the declare-or-refuse gate's own declaration
     surface, same shape as domain/range's round-trip above."""
     rec = await ensure_type(actions, name="GatedThing", kind="object", actor="test",
                             required_link_kinds=["repo", "grounds"])
@@ -103,7 +103,7 @@ async def test_is_known_reports_true_only_after_ensure_type(actions: Actions) ->
 
 
 async def test_bootstrap_axiom_type_is_always_valid_even_unseeded(actions: Actions) -> None:
-    """check_object_type("Type") must never consult the (possibly empty) catalog —
+    """check_object_type("Type") must never consult the (possibly empty) catalog:
     the one axiom the self-describing meta-schema needs."""
     set_strict(True)
     try:
@@ -144,7 +144,7 @@ async def test_check_object_type_passes_silently_once_declared(actions: Actions)
 async def test_check_object_type_accretes_when_actions_and_actor_given(
     actions: Actions,
 ) -> None:
-    """Task #97 workstream 2: the accretion hook — check_object_type mints a bare stub
+    """Task #97 workstream 2: the accretion hook, check_object_type mints a bare stub
     instead of warning once an Actions instance and an actor are available."""
     set_strict(False)
     try:
@@ -157,7 +157,7 @@ async def test_check_object_type_accretes_when_actions_and_actor_given(
 
 
 async def test_check_object_type_strict_mode_wins_over_accretion(actions: Actions) -> None:
-    """Strict mode must never be silently bypassed by supplying actions/actor — it is
+    """Strict mode must never be silently bypassed by supplying actions/actor: it is
     CI's hard-failure net, and accretion swallowing that defeats its whole purpose."""
     with pytest.raises(UnknownTypeError):
         await check_object_type(actions.pool, "ShouldRaiseToo", actions=actions,
@@ -210,7 +210,7 @@ async def test_categories_dedupes_across_types(actions: Actions) -> None:
     await ensure_type(actions, name="B", kind="object", actor="test", category=["Y", "Z"])
     cats = await categories(actions.pool)
     # a subset check, not equality: the catalog is deliberately session-persistent
-    # (task #97 — Type rows survive the per-test reset), so the seeded 96 entries'
+    # (task #97: Type rows survive the per-test reset), so the seeded 96 entries'
     # own categories are also present by the time this test runs
     assert {"X", "Y", "Z"} <= set(cats)
 
@@ -229,7 +229,7 @@ async def test_full_catalog_shape(actions: Actions) -> None:
 async def test_full_catalog_ranks_object_types_by_live_instance_count(
     actions: Actions,
 ) -> None:
-    """Task #121 (ruling a4bd555c): RELEVANCE OBSERVED, NOT DECLARED — the catalog
+    """Task #121: RELEVANCE OBSERVED, NOT DECLARED. The catalog
     ranks by live usage in THIS graph, never a declared category/domain tag."""
     await ensure_type(actions, name="PopularKind", kind="object", actor="test")
     await ensure_type(actions, name="RareKind", kind="object", actor="test")
@@ -249,9 +249,9 @@ async def test_full_catalog_ranks_object_types_by_live_instance_count(
 async def test_full_catalog_keeps_a_zero_instance_type_present_but_ranked_last(
     actions: Actions,
 ) -> None:
-    """COMPLETE AT THE RECORD (ruling a4bd555c, the operator's refusal of Thoth's
-    retire-the-unused-types instinct): a type with zero live instances in THIS graph
-    is never trimmed — it still ships, just last in the observed-relevance order."""
+    """COMPLETE AT THE RECORD: a deliberate refusal of the
+    retire-the-unused-types instinct. A type with zero live instances in THIS graph
+    is never trimmed, it still ships, just last in the observed-relevance order."""
     await ensure_type(actions, name="UsedKind", kind="object", actor="test")
     await ensure_type(actions, name="UnusedKind", kind="object", actor="test")
     await actions.create_or_find_object("UsedKind", "used:0", "test")
@@ -269,7 +269,7 @@ async def test_full_catalog_object_count_excludes_a_merged_away_object(
     actions: Actions,
 ) -> None:
     """A merge doesn't delete the loser (status='merged', never gone) but it must not
-    keep inflating its type's apparent relevance — the same status='active' discipline
+    keep inflating its type's apparent relevance: the same status='active' discipline
     used everywhere else in this codebase."""
     await ensure_type(actions, name="MergeCountKind", kind="object", actor="test")
     winner = await actions.create_or_find_object("MergeCountKind", "mc:winner", "test")
@@ -305,7 +305,7 @@ async def test_usage_count_cache_does_not_see_a_fresh_write_within_the_ttl(
     actions: Actions,
 ) -> None:
     """Deliberately the OPPOSITE contract from the Type catalog's own fingerprint gate
-    (test_cache_sees_a_fresh_write_immediately_same_process below) — a usage count
+    (test_cache_sees_a_fresh_write_immediately_same_process below): a usage count
     backs a RANKING, not a validation check, so trading a few seconds of staleness for
     one fewer query per full_catalog call is the intended tradeoff, not a bug."""
     await ensure_type(actions, name="TtlKind", kind="object", actor="test")
@@ -314,7 +314,7 @@ async def test_usage_count_cache_does_not_see_a_fresh_write_within_the_ttl(
     await actions.create_or_find_object("TtlKind", "ttl:0", "test")
     second = await full_catalog(actions.pool)
     after = next(t for t in second["object_types"] if t["name"] == "TtlKind")["count"]
-    assert after == before  # still cached — the write hasn't crossed the TTL yet
+    assert after == before  # still cached, the write hasn't crossed the TTL yet
 
 
 async def test_usage_count_cache_refreshes_once_cleared(actions: Actions) -> None:
@@ -329,7 +329,7 @@ async def test_usage_count_cache_refreshes_once_cleared(actions: Actions) -> Non
 
 async def test_cache_sees_a_fresh_write_immediately_same_process(actions: Actions) -> None:
     """The fingerprint check, not a stale TTL window, is what a same-process caller
-    must see — mint, then read, with no cache priming in between."""
+    must see: mint, then read, with no cache priming in between."""
     assert await object_type(actions.pool, "JustMinted") == catalog._DEFAULT_OBJECT
     await ensure_type(actions, name="JustMinted", kind="object", actor="test",
                       description="fresh")
@@ -355,7 +355,7 @@ async def test_seed_catalog_is_idempotent(actions: Actions) -> None:
     n_after = await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type='Type'")
     assert first == second
     # not a total-row assertion (the catalog is deliberately session-persistent, so
-    # other tests' ad-hoc types may already share the table) — idempotency means a
+    # other tests' ad-hoc types may already share the table): idempotency means a
     # repeat seed adds NOTHING, whatever the starting count was
     assert n_before == n_after
 

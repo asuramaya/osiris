@@ -1,6 +1,6 @@
-"""MECHANICAL FLEET PRUNE (thread 07ca68ca, wave 8). Every test proves ONE new bucket
+"""MECHANICAL FLEET PRUNE. Every test proves ONE new bucket
 lands the right row for the right reason, and that `prune_execute` acts ONLY on the two
-new buckets (dead_transcript, unclaimed_body) — never on fleet_reconcile's own
+new buckets (dead_transcript, unclaimed_body), never on fleet_reconcile's own
 identity-folding buckets, which stay behind their own kill switch.
 """
 from __future__ import annotations
@@ -33,7 +33,7 @@ async def test_dead_transcript_bucket_reports_gone_job_dir(
     p = actions.pool
     live_dir = tmp_path / "jobs" / "aaaaaaaa"
     live_dir.mkdir(parents=True)
-    gone_dir = tmp_path / "jobs" / "bbbbbbbb"  # never created — a dead anchor
+    gone_dir = tmp_path / "jobs" / "bbbbbbbb"  # never created, a dead anchor
     await _mk_agent(actions, "agent:transcript-live")
     await _mk_agent(actions, "agent:transcript-gone")
     await save_mount(p, job_dir=str(live_dir), agent_id="agent:transcript-live",
@@ -66,7 +66,7 @@ async def test_dead_transcript_drop_is_reversible_and_row_scoped(
     assert len(dropped) == 1 and dropped[0]["dropped"] == 1
     row = await p.fetchrow("SELECT 1 FROM agent_mounts WHERE job_dir=$1", str(gone_dir))
     assert row is None
-    # reversible + audited, same shape drop_dead_project_mount already proves
+    # reversible and audited, same shape drop_dead_project_mount already proves
     audit = await p.fetchrow(
         "SELECT action FROM audit_log WHERE id=$1", dropped[0]["audit_id"])
     assert audit["action"] == "drop_dead_transcript_mount"
@@ -135,7 +135,7 @@ async def test_unclaimed_body_never_binds_without_a_resolution(actions: Actions)
 async def test_prune_execute_never_touches_reconcile_buckets(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A high-confidence bulk_fold_swarm candidate must survive prune_execute untouched —
+    """A high-confidence bulk_fold_swarm candidate must survive prune_execute untouched,
     fleet_reconcile's own identity-folding buckets stay behind their own kill switch."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -156,7 +156,7 @@ async def test_prune_execute_never_touches_reconcile_buckets(
                               projects_root=root, jobs_home=jobs,
                               live_bodies_by_cwd=_bodies("/w/prune-swarm-repo"))
 
-    # the candidate is untouched by THIS call (no fold, no unfold) — still active
+    # the candidate is untouched by THIS call (no fold, no unfold), still active
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:pa115000'")
     assert st == "active"
     assert out["reconcile_buckets_untouched"]["bulk_fold_swarm"] == 1
@@ -176,7 +176,7 @@ async def test_swarm_root_retired_flag_augments_bulk_fold_swarm(
     await save_mount(p, job_dir=str(jobs / "pa225001"), agent_id="agent:pa225001",
                      project="prunehouse", cwd="/w/retired-root-repo", model=None,
                      session_key="whisper:pa225001")
-    # the root's own mount row is suspended (last_seen far in the past) -- no live mount
+    # the root's own mount row is suspended (last_seen far in the past): no live mount
     await save_mount(p, job_dir=str(jobs / "fa1baaa1"), agent_id="agent:fa1baaa1",
                      project="prunehouse", cwd="/w/retired-root-repo", model=None,
                      session_key="sid:conn", alive=False)
@@ -188,15 +188,14 @@ async def test_swarm_root_retired_flag_augments_bulk_fold_swarm(
     assert mine and mine[0].get("swarm_root_retired") is True
 
 
-# ═══ include_reconcile=False (thread cc82a8e7, classification_laws_heartbeat's own
-# heavy-sweep follow-up to 9150aec2): the caller that never reads fleet_reconcile's own
+# ═══ include_reconcile=False: the caller that never reads fleet_reconcile's own
 # five buckets should never pay for computing them ═════════════════════════════════════
 
 async def test_include_reconcile_false_skips_reconcile_dry_run_entirely(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The dominant cost fleet_prune's own heartbeat sub-sweep pays every tick for
-    buckets it never acts on — `include_reconcile=False` must never call
+    buckets it never acts on: `include_reconcile=False` must never call
     `fleet_reconcile.reconcile_dry_run` at all, not just discard its result."""
     from src.orchestrator import fleet_prune as fp
 
@@ -222,7 +221,7 @@ async def test_include_reconcile_false_skips_reconcile_dry_run_entirely(
 async def test_include_reconcile_defaults_true_for_every_other_caller(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The default must stay `True` — the MCP tool, the CLI door, and every existing
+    """The default must stay `True`: the MCP tool, the CLI door, and every existing
     caller keep computing the full picture unless they explicitly opt out."""
     from src.orchestrator import fleet_prune as fp
 
@@ -246,7 +245,7 @@ async def test_prune_execute_include_reconcile_false_still_acts_on_its_two_bucke
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """`include_reconcile=False` must change NOTHING about what prune_execute actually
-    acts on — dead_transcript still drops, unclaimed_body still binds."""
+    acts on: dead_transcript still drops, unclaimed_body still binds."""
     from src.orchestrator import fleet_prune as fp
 
     async def _boom(*args: object, **kwargs: object) -> dict[str, Any]:
@@ -256,7 +255,7 @@ async def test_prune_execute_include_reconcile_false_still_acts_on_its_two_bucke
 
     p = actions.pool
     live_dir = tmp_path / "jobs" / "cccccccc"
-    gone_dir = tmp_path / "jobs" / "dddddddd"  # never created — a dead anchor
+    gone_dir = tmp_path / "jobs" / "dddddddd"  # never created, a dead anchor
     live_dir.mkdir(parents=True)
     await _mk_agent(actions, "agent:increcon-live")
     await _mk_agent(actions, "agent:increcon-gone")

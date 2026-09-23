@@ -1,4 +1,4 @@
-"""THE PRODUCT-VOICE RATCHET (ruling 6c510acbd80b): osiris is a product for a stranger,
+"""THE PRODUCT-VOICE RATCHET: osiris is a product for a stranger,
 not a private log of who built what. The live Settings pane review found internal
 working-agent language leaking straight into the interface ("over Khnum's soul-key
 door") and the same voice runs through CLI help, MCP docstrings and the docs -- fleet
@@ -11,7 +11,7 @@ without blocking the gate, but any NEW occurrence fails it. Provenance citations
 in code comments and commit messages -- the repo's own history -- which stay OUT of
 this ratchet's scope by the ruling's own words.
 
-GROWTH-ONLY (decision 3a858fd3, fixing gate w398's failure): the ratchet fails on
+GROWTH-ONLY (fixing gate w398's failure): the ratchet fails on
 growth only, never on shrinkage. An exact-match baseline cannot survive a merge with any
 concurrent cleanup tip, since a baseline generated on one branch is stale the instant
 another branch's tip touches the same file or bucket first. A count going down prints a
@@ -28,7 +28,7 @@ SIX PATTERN CLASSES, matched independently and summed per file:
   - an operator quotation ("operator's word(s)", "operator said")
   - the em dash character (U+2014) -- replaced with a sentence, a comma, or a colon
 
-SURFACES, the five reader-facing groups ruling 6c510acbd80b names, plus one added since
+SURFACES, the five reader-facing groups this ratchet names, plus one added since
 (the pages src/api/chrome.py itself renders at /desk, /fleet, /overhead are just as
 reader-facing as the routes app.py describes, so their own string literals joined tier 1
 too): console UI strings (src/ui/static/*.js, *.html), CLI help/receipt/error strings
@@ -39,7 +39,7 @@ docs/*.md + README/INSTALL. Reuses test_taxonomy_drift.py's own scanning shapes 
 whole-line scan for .md) -- the same coarse-but-sufficient tradeoff, not a perfect
 classifier, disclosed there and not repeated here.
 
-TIER 2 (scope widened to the whole codebase, decision a4aa0ba4, amending 1e2ef5c3's own
+TIER 2 (scope widened to the whole codebase, amending an earlier
 code-comment exemption): comments, docstrings, and test names are product code too, not
 just the reader-facing surfaces above. Tier 2 runs the same six-pattern count as a plain
 whole-file text scan (matching the census that sized this problem) over ten directory
@@ -229,9 +229,9 @@ def test_product_voice_tier2_baseline_file_is_valid_json() -> None:
 
 
 def test_product_voice_tier2_matches_the_committed_baseline_exactly() -> None:
-    """THE WHOLE-TREE RATCHET (decision a4aa0ba4): a per-directory count over comments,
+    """THE WHOLE-TREE RATCHET: a per-directory count over comments,
     docstrings and test names too, not just the reader-facing surfaces tier 1 covers.
-    GROWTH-ONLY (decision 3a858fd3, fixing gate w398): an exact-match baseline can never
+    GROWTH-ONLY (fixing gate w398): an exact-match baseline can never
     survive a merge with any concurrent cleanup tip, since a baseline generated on one
     branch is stale the instant another branch's tip changes the same bucket. A
     directory's count going up fails, meaning new working-agent language crept in
@@ -287,7 +287,7 @@ def test_product_voice_baseline_file_is_valid_json() -> None:
 
 
 def test_product_voice_matches_the_committed_baseline_exactly() -> None:
-    """THE RATCHET ITSELF, GROWTH-ONLY (decision 3a858fd3, fixing gate w398): an
+    """THE RATCHET ITSELF, GROWTH-ONLY (fixing gate w398): an
     exact-match baseline can never survive a merge with any concurrent cleanup tip, since
     a baseline generated on one branch is stale the instant another branch's tip changes
     the same file. A file gaining a mention FAILS: someone reintroduced working-agent

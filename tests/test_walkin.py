@@ -1,6 +1,6 @@
-"""walk_in — the door for a mind with nothing but this server, walking in cold. Pure
+"""walk_in: the door for a mind with nothing but this server, walking in cold. Pure
 `walk_in_named` core first (name + office, skip-detected, stop-on-refusal), then the MCP
-tool layer's own mount half — same split as test_lift.py."""
+tool layer's own mount half, same split as test_lift.py."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,13 +13,13 @@ from src.orchestrator.walkin import promote_visitor, walk_in_named
 
 
 async def _mounted(actions: Actions, agent_id: str, *, project: str = "stopslop") -> None:
-    """A bare mounted-but-anonymous Agent — walk_in_named's own starting shape (the mount
+    """A bare mounted-but-anonymous Agent: walk_in_named's own starting shape (the mount
     half is out of scope for this module; the MCP wrapper owns it).
 
     Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
-    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    register_agent flow always pairs the two): project_of (agents.py) resolves through
     lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
-    edge is a fixture lying about how mints actually work (thread 19d6bdcb7fa9/c5a91ea1)."""
+    edge is a fixture lying about how mints actually work."""
     from datetime import UTC, datetime
 
     now = datetime.now(UTC)
@@ -83,7 +83,7 @@ async def test_walk_in_named_skips_an_already_claimed_name(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Re-running (the Ooblek shape: two compactions deep, name already claimed from an
-    earlier turn) never re-claims — it reports the skip honestly and still runs the office
+    earlier turn) never re-claims: it reports the skip honestly and still runs the office
     half fresh if asked."""
 
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
@@ -101,7 +101,7 @@ async def test_walk_in_named_skips_an_already_claimed_name(
 
 async def test_walk_in_named_refuses_a_mismatched_re_claim(actions: Actions) -> None:
     """Asking to claim a DIFFERENT name than the one already held refuses rather than
-    guessing which one was meant — walk_in never renames."""
+    guessing which one was meant: walk_in never renames."""
     await _mounted(actions, "agent:already02")
     await claim_name(actions, "agent:already02", "FirstName", source="test")
 
@@ -118,7 +118,7 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A name already live-held by someone else refuses at claim_name, and walk_in_named
-    stops there — never proceeds to establish_office under a name that never landed."""
+    stops there: never proceeds to establish_office under a name that never landed."""
 
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     await _mounted(actions, "agent:holder0001")
@@ -129,8 +129,8 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
     await actions.assert_property(h, "handle", "Taken", "agent:holder0001", now, 0.9,
                                   evidence_class="self_declared")
     from src.orchestrator.mounts import save_mount
-    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
-    # refusal now cross-checks is_occupied_by_a_live_body — job_dir's basename is exactly
+    # ONE LIVENESS AUTHORITY, FOURTH DOOR (2026-08-26): claim_name's own
+    # refusal now cross-checks is_occupied_by_a_live_body: job_dir's basename is exactly
     # 8 chars ("holder01") so a fake harness census can confirm this row (registry_census
     # keys agent_mounts.job_dir's basename against sessionId[:8]).
     await save_mount(actions.pool, job_dir="/j/holder01", agent_id="agent:holder0001",
@@ -152,12 +152,12 @@ async def test_walk_in_named_propagates_claim_name_refusals_and_stops(
     assert not (tmp_path / "seats").exists()                 # never reached establish_office
 
 
-# ═══════════ PIECE 2 (thread 879c97b9): promote_visitor, the THIRD-PARTY collapse ═══════════
+# ═══════════ PIECE 2: promote_visitor, the THIRD-PARTY collapse ═══════════
 
 async def _visitor_seen(
     actions: Actions, agent_id: str, *, project: str = "stopslop", job_dir: str | None = None,
 ) -> None:
-    """A genuine VISITOR's own real shape: an `agent_mounts` row and NOTHING ELSE — no
+    """A genuine VISITOR's own real shape: an `agent_mounts` row and NOTHING ELSE, no
     `objects` row of type Agent at all (the #48-gate's own third state). Also mints the
     SoftwareProject `charter_for` needs to find real (its own `_resolve_repo` refusal)."""
     from datetime import UTC, datetime
@@ -173,7 +173,7 @@ async def _visitor_seen(
 
 
 async def _a_manager(actions: Actions, agent_id: str) -> None:
-    """Seats `agent_id` as the manager of a real worker seat — `promote_visitor`'s own
+    """Seats `agent_id` as the manager of a real worker seat: `promote_visitor`'s own
     "manager's word" authorization leg (`seats.seats_managed_by` non-empty)."""
     from src.orchestrator.seats import bind_holder, ensure_seat
 
@@ -240,7 +240,7 @@ async def test_promote_visitor_authorizes_via_a_managers_word(
 
     out = await promote_visitor(
         actions.pool, target="agent:vis00004", handle="Newbie2",
-        because="a manager's own call — welcoming a recurring visitor", actor="agent:mgr00001")
+        because="a manager's own call: welcoming a recurring visitor", actor="agent:mgr00001")
 
     assert "error" not in out
     assert out["authorized_by"]["via"] == "manager"
@@ -283,7 +283,7 @@ async def test_promote_visitor_refuses_a_ruling_that_does_not_name_the_write(
     actions: Actions,
 ) -> None:
     """A real ruling, about something else entirely, cannot silently authorize this
-    write just because a caller cited it — verify_ruling's own third check."""
+    write just because a caller cited it: verify_ruling's own third check."""
     from src.orchestrator.capture import record_decision
 
     await _visitor_seen(actions, "agent:vis00010")
@@ -332,8 +332,8 @@ async def test_promote_visitor_refuses_when_no_project_is_known_and_none_given(
 async def test_promote_visitor_stops_on_claim_name_refusal(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A SEAT-LABEL name (a numeral suffix, e.g. "Newbie VIII") refuses at claim_name —
-    the substrate assigns generations, a caller may not claim one — and promote_visitor
+    """A SEAT-LABEL name (a numeral suffix, e.g. "Newbie VIII") refuses at claim_name:
+    the substrate assigns generations, a caller may not claim one, and promote_visitor
     stops there, never proceeding to charter_for/establish_office under a name that never
     landed (same stop-on-refusal law walk_in_named already keeps)."""
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
@@ -349,7 +349,7 @@ async def test_promote_visitor_stops_on_claim_name_refusal(
     assert not (tmp_path / "seats").exists()
 
 
-# ═══════════ THE MCP TOOL LAYER — THE MOUNT HALF ═══════════
+# ═══════════ THE MCP TOOL LAYER: THE MOUNT HALF ═══════════
 # Same technique test_lift.py already established: fake a mounted connection by injecting
 # an AgentIdentity into srv._agents keyed by srv._conn_key(ctx), point srv._pool at the
 # test DB, call the tool FUNCTION directly.
@@ -408,7 +408,7 @@ async def test_mcp_seat_promote_visitor_end_to_end(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The dispatcher door itself (`seat(action='promote_visitor')`), mounted as the
-    operator, promoting a THIRD-PARTY visitor — not itself."""
+    operator, promoting a THIRD-PARTY visitor, not itself."""
     import src.mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 

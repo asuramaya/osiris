@@ -1,6 +1,6 @@
-"""Cross-channel recovery (task #181, Thoth DM 5320): Ptah measured that during a routing
-defect he and Ra sent 3 messages through osiris and ~24 through the harness's own
-SendMessage tool — 90% of a day's reasoning existed only in two jsonl files. These tests
+"""Cross-channel recovery (task #181): a measurement found that during a routing
+defect two seats sent 3 messages through osiris and ~24 through the harness's own
+SendMessage tool, 90% of a day's reasoning existed only in two jsonl files. These tests
 prove: the pure parser finds exactly the SendMessage blocks (nothing else); the repair
 verb is dry-run-first, idempotent, and refuses an unattributed write; adoption_share
 reports "unknown" (never a false zero) for a session that was never recovered.
@@ -70,7 +70,7 @@ def test_extract_skips_unparseable_lines_without_raising() -> None:
 
 
 def test_extract_never_reindexes_around_a_skipped_line() -> None:
-    """turn_index must track the RAW line position, not the filtered output position —
+    """turn_index must track the RAW line position, not the filtered output position,
     otherwise a recovered row's turn_index couldn't be joined back to soul_lines.line_idx."""
     lines = [_USER_TURN, _ASSISTANT_WITH_SEND]
     out = extract_harness_sends(lines)
@@ -82,9 +82,9 @@ def test_extract_never_reindexes_around_a_skipped_line() -> None:
 async def _seed_soul(
     actions: Actions, anchor_sid: str, lines: list[str], *, source_path: str = "fake",
 ) -> None:
-    """Inserts a REAL hash chain via `_hash_rows` — the same construction `ingest_path`
-    itself uses — not stub `hash{i}`/`prev_hash=NULL` placeholders. The consolidated
-    `_iter_verified_lines` (Thoth mail 9134) now chain-verifies every hot read, including
+    """Inserts a REAL hash chain via `_hash_rows`, the same construction `ingest_path`
+    itself uses, not stub `hash{i}`/`prev_hash=NULL` placeholders. The consolidated
+    `_iter_verified_lines` now chain-verifies every hot read, including
     the once-unverified `raw_lines()` this module's `recover_harness_exchanges` calls;
     a fixture that never chained its own rows reads as a broken chain post-consolidation
     (caught live: every recover_harness_exchanges call here returned `{"error": ...}`
@@ -132,7 +132,7 @@ async def test_recover_execute_requires_a_because(actions: Actions) -> None:
 async def test_recover_execute_writes_and_is_idempotent(actions: Actions) -> None:
     await _seed_soul(actions, "anchorA3", [_ASSISTANT_WITH_SEND, _ASSISTANT_PLAIN])
     out = await recover_harness_exchanges(
-        actions.pool, "anchorA3", dry_run=False, because="recovering the Ptah/Ra day")
+        actions.pool, "anchorA3", dry_run=False, because="recovering the routing-defect day")
     assert out["written"] == 1
     row = await actions.pool.fetchrow(
         "SELECT anchor_sid, turn_index, harness_to, summary, message FROM harness_messages "
@@ -141,7 +141,7 @@ async def test_recover_execute_writes_and_is_idempotent(actions: Actions) -> Non
     assert row["harness_to"] == "adbf9df793f4d1264"
     assert row["message"] == "pick up here"
 
-    # re-running (still no new soul lines) writes nothing new — idempotent per (anchor, turn)
+    # re-running (still no new soul lines) writes nothing new: idempotent per (anchor, turn)
     out2 = await recover_harness_exchanges(
         actions.pool, "anchorA3", dry_run=False, because="re-run")
     assert out2["written"] == 0
@@ -232,8 +232,8 @@ async def test_adoption_share_is_unknown_when_the_session_was_never_recovered(
 
 
 async def test_adoption_share_computes_the_real_split(actions: Actions) -> None:
-    # NOT _ASSISTANT_WITH_SEND (Thoth DM 5442 leg 1c): its shared module-level fixture
-    # carries a FIXED 2026-08-18 timestamp that other tests assert on literally — reused
+    # NOT _ASSISTANT_WITH_SEND: its shared module-level fixture
+    # carries a FIXED 2026-08-18 timestamp that other tests assert on literally, reused
     # here it drifts stale as the session clock advances (default window_hours=24 in
     # adoption_share started excluding it, silently undercounting harness_count 2 vs the
     # expected 3; nothing to do with graphed mail, a plain fixture-date-rot bug). A local

@@ -1,19 +1,18 @@
-"""THE DRAWING TIP (Thoth mail 11408, operator ruling 4a51cab1/1178e7d9, thread 325ef660):
-"nothing hidden, nothing drawn twice" -- membership (in_repo/works_in/holds/member_of, plus
-Sekhmet's new owned_by) is a fill (a project fill, never a spoke), the two universal
-fans (acts_for -> the operator Person, authored_by -> the git identity) are HIGH-DEGREE
-OBJECTS with a count, every other edge draws at rest: same-project as a line, cross-project
-aggregated into a per-(projectA,projectB,type) ribbon that resolves to individual lines once
-that SPECIFIC ribbon's own two project centroids are far enough apart on screen (not one
-global viewSize scalar -- the flaw the spike's own single median-radius threshold had).
-Project labels earn a slot in the SAME N_LABELS pool/declutter pass object labels already
-use, gated by project size; a project below that gate stays an unlabeled fill (the "other"
-wash). Builds on two numbers-first spikes (Seshat 57992143, Khnum 5f6c4db3) that decided the
-build per the operator's own ruling. Mirrors the repo's existing static-source-guard
-convention: string/substring proofs against the served JS, no browser harness.
+"""THE DRAWING TIP: "nothing hidden, nothing drawn twice" -- membership
+(in_repo/works_in/holds/member_of, plus owned_by) is a fill (a project fill, never a spoke),
+the two universal fans (acts_for -> the operator Person, authored_by -> the git identity) are
+HIGH-DEGREE OBJECTS with a count, every other edge draws at rest: same-project as a line,
+cross-project aggregated into a per-(projectA,projectB,type) ribbon that resolves to
+individual lines once that SPECIFIC ribbon's own two project centroids are far enough apart
+on screen (not one global viewSize scalar -- the flaw the spike's own single median-radius
+threshold had). Project labels earn a slot in the SAME N_LABELS pool/declutter pass object
+labels already use, gated by project size; a project below that gate stays an unlabeled fill
+(the "other" wash). Builds on two numbers-first spikes that decided the build. Mirrors the
+repo's existing static-source-guard convention: string/substring proofs against the served
+JS, no browser harness.
 
-WAVE 28, THE TAXONOMY SWEEP (ruling 70c001ec): district -> project, landmark/hub ->
-high-degree object, renamed here in step with space.js itself.
+THE TAXONOMY SWEEP: district -> project, landmark/hub -> high-degree object, renamed here
+in step with space.js itself.
 """
 from __future__ import annotations
 
@@ -50,7 +49,7 @@ def test_ribbons_aggregate_by_project_pair_and_type_excluding_fills_and_high_deg
 
 
 def test_ribbon_resolve_is_per_ribbon_screen_distance_not_one_global_scalar() -> None:
-    # the spike's own flaw (Thoth mail 11408 item 2): a single median-radius viewSize
+    # the spike's own flaw (item 2 above): a single median-radius viewSize
     # threshold flipped every ribbon at once. Each ribbon's own two project centroids are
     # now projected to real screen pixels and compared against a per-ribbon distance.
     assert "const RIBBON_RESOLVE_SCREEN_PX = 900;" in _SPACE_JS
@@ -88,7 +87,7 @@ def test_high_degree_edge_types_are_acts_for_and_authored_by_found_data_driven()
 
 
 def test_a_high_degree_targets_incoming_edge_is_excluded_from_lines_folded_into_its_badge() -> None:
-    # WAVE 27, THE LENS PANEL: the flat `return false` became conditional on the lens --
+    # THE LENS PANEL: the flat `return false` became conditional on the lens --
     # folded into the badge (high-degree bucket, no line) when shown, an ordinary line when
     # the reader has toggled the badge off (see tests/test_lens_panel.py for the toggle
     # itself).
@@ -97,7 +96,7 @@ def test_a_high_degree_targets_incoming_edge_is_excluded_from_lines_folded_into_
     assert "if (lm && e.target === lm.id) {" in edge_body
     assert "if (!highDegreeBadgesHiddenByLens) return false;" in edge_body
     badge_body = _SPACE_JS.split("function buildHighDegreeBadges()", 1)[1][:900]
-    # PRODUCT VOICE (ruling 1e2ef5c3): em dash replaced with a colon.
+    # PRODUCT VOICE: em dash replaced with a colon.
     assert "div.textContent = `${nd ? labelTextFor(nd) : lm.id}: ${lm.count} ${t}`;" \
         in badge_body
 
@@ -125,7 +124,7 @@ def test_a_project_label_declutters_like_an_ordinary_label_and_keeps_its_own_cla
 
 
 def test_declutter_uses_each_labels_own_real_rendered_width_not_a_fixed_box() -> None:
-    # live-verification finding (mail 11471's own "overlap pairs" acceptance line): a long
+    # live-verification finding (the "overlap pairs" acceptance line): a long
     # label (a full Decision title can render 200px+ wide) was always boxed at the same
     # fixed LABEL_W=90 for overlap purposes regardless of its own real width -- a genuine
     # visual overlap the old fixed-box declutter had no way to catch. Caught live (1 overlap
@@ -148,7 +147,7 @@ def test_a_project_below_the_label_gate_stays_an_unlabeled_fill() -> None:
 
 # --- item 5: the new structural types flow through focus like any other; supersedes stays
 # part of the path walk, its class read off the header (already true since the wire-class
-# tip, mail 11291) ---------------------------------------------------------------------------
+# tip) ---------------------------------------------------------------------------
 
 def test_one_hop_grouping_never_filters_by_edge_type_or_class() -> None:
     # recorded_by/owned_by/admitted_by/vendor_of need no special-casing here --
@@ -188,8 +187,8 @@ def test_project_label_candidates_state_is_declared_before_its_first_write() -> 
 
 
 def test_the_hidden_by_default_structural_rule_is_retired() -> None:
-    # ruling c5953bb1's own "structural hidden at rest" is the OLD answer to density this
-    # tip replaces outright (operator ruling 4a51cab1/1178e7d9, "caps and hides are escape
+    # "structural hidden at rest" is the OLD answer to density this
+    # tip replaces outright ("caps and hides are escape
     # hatches") -- hiddenEdgeClasses starts empty, not seeded with "structural".
     assert 'const hiddenEdgeClasses = new Set();' in _SPACE_JS
     assert 'const hiddenEdgeClasses = new Set(["structural"]);' not in _SPACE_JS

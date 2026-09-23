@@ -5,5 +5,5 @@
   "src/ingest": 6,
   "src/mcp_server.py": 3,
   "src/orchestrator": 82,
-  "tests": 3789
+  "tests": 3214
 }

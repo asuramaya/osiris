@@ -1,5 +1,5 @@
 """THE SETTINGS REGISTRY's own service layer (THE SETTINGS MENU, thread f4498ab304e4
-piece 1) — list/get/write over the `settings` table (migration 0067), the authority
+piece 1): list/get/write over the `settings` table (migration 0067), the authority
 gate `write_setting` copies from `backup_settings.write_backup_settings`/`charter_for`,
 and the opt-in-per-field overlay `settings_with_overlay`."""
 from __future__ import annotations
@@ -55,10 +55,10 @@ async def test_write_setting_the_operator_writes_freely_and_bumps_rev(
 async def test_write_setting_requires_because_only_when_the_spec_asks(
     actions: Actions,
 ) -> None:
-    # pit_watch: requires_because=False — no `because` needed
+    # pit_watch: requires_because=False, no `because` needed
     ok = await write_setting(actions.pool, "daemon.pit_watch.enabled", True, actor="operator")
     assert "error" not in ok
-    # retention_heartbeat: requires_because=True — refused without one
+    # retention_heartbeat: requires_because=True, refused without one
     refused = await write_setting(
         actions.pool, "daemon.retention_heartbeat.enabled", False, actor="operator")
     assert "error" in refused and "because" in refused["error"]
@@ -130,7 +130,7 @@ async def test_write_setting_names_the_effect_and_a_note_for_non_immediate_knobs
 async def test_overlay_leaves_settings_untouched_when_nothing_is_registered_immediate(
     actions: Actions,
 ) -> None:
-    """A registered-but-untouched key reads its own env/default — the overlay is a
+    """A registered-but-untouched key reads its own env/default: the overlay is a
     no-op until something is actually written."""
     st = await settings_with_overlay(actions.pool)
     assert st.osiris_pit_watch_enabled is False  # settings.py's own default
@@ -145,7 +145,7 @@ async def test_overlay_reflects_a_write_immediately_after_invalidation(
 
 
 async def test_overlay_only_touches_registered_env_fields(actions: Actions) -> None:
-    """Opt-in per field (Thoth's own words, mail 10040): writing a registered knob
+    """Opt-in per field: writing a registered knob
     must never leak into an UNRELATED Settings attribute the overlay never touches."""
     await write_setting(actions.pool, "daemon.pit_watch.enabled", True, actor="operator")
     st = await settings_with_overlay(actions.pool)
@@ -169,7 +169,7 @@ def test_invalidate_overlay_cache_is_idempotent_on_an_empty_cache() -> None:
 
 
 # --- THE SECRETS ROTATE ACT: a write on a secret_ref key IS a rotate (thread ----------
-# --- f4498ab304e4's own follow-up, Thoth mail 10441) — the real value goes into the ---
+# --- f4498ab304e4's own follow-up): the real value goes into the ---------------------
 # --- spec's own backing_file, never the settings table, never echoed back -------------
 
 # --- `live`: the running/shipped counterpart, null when not cheap (thread c5ba8681) ---
@@ -203,7 +203,7 @@ async def test_live_value_next_deploy_reads_the_shipped_timer_file(actions: Acti
 
 
 async def test_live_value_next_deploy_is_null_with_no_rendered_file(actions: Actions) -> None:
-    """`backup.vault_path` has no shipped-file counterpart at all — never a guess."""
+    """`backup.vault_path` has no shipped-file counterpart at all: never a guess."""
     from src.config.settings_registry import spec_by_key
 
     spec = spec_by_key("backup.vault_path")
@@ -233,7 +233,7 @@ async def test_live_value_restart_unit_fails_open_with_no_env_field(actions: Act
 async def test_live_value_restart_unit_fails_open_when_systemd_is_unavailable(
     actions: Actions,
 ) -> None:
-    """CI/dev-worktree law: no systemd, no unit installed — 'unavailable', not raised."""
+    """CI/dev-worktree law: no systemd, no unit installed: 'unavailable', not raised."""
     from dataclasses import replace
 
     from src.config import settings_registry
@@ -248,7 +248,7 @@ async def test_live_value_the_real_registered_restart_unit_spec_fails_open_in_ci
     actions: Actions,
 ) -> None:
     """`diag.worker_boot_memtrace.enabled` is the one REAL registered restart:<unit>
-    knob (Wave 22 piece 2) — this test env has no osiris-worker unit installed, so it
+    knob (this build's piece 2) - this test env has no osiris-worker unit installed, so it
     must degrade to null rather than raise, same law as the synthetic fakes above."""
     from src.config.settings_registry import spec_by_key
 
@@ -278,7 +278,7 @@ def _fake_secret_spec(key: str = "test.fake_secret", **overrides: Any) -> Any:
 async def test_write_setting_secret_ref_refuses_with_no_backing_file(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A secret_ref spec declared with no backing_file (a registry mistake — every real
+    """A secret_ref spec declared with no backing_file (a registry mistake: every real
     one must carry one) refuses loudly rather than silently doing nothing or crashing."""
     from src.orchestrator import settings_service as svc
 
@@ -308,7 +308,7 @@ async def test_write_setting_secret_ref_rotates_into_the_file_never_the_table(
     """The full round trip: the real value lands in the backing file (a KEY=value line,
     0600), a bare {"rotated": true} marker lands in the `settings` table (queried
     directly here, bypassing get_setting/list_settings, to prove the REAL value never
-    reaches the table at all — not merely that it isn't returned), and the receipt
+    reaches the table at all, not merely that it isn't returned), and the receipt
     never echoes `value`."""
     import stat
 
@@ -340,7 +340,7 @@ async def test_write_setting_secret_ref_rotate_updates_not_appends(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """A second rotation replaces the existing KEY= line rather than appending a
-    duplicate — the file stays exactly one line for this key."""
+    duplicate, the file stays exactly one line for this key."""
     from src.orchestrator import settings_service as svc
 
     backing = tmp_path / "secrets.env"
@@ -357,7 +357,7 @@ async def test_write_setting_secret_ref_rotate_updates_not_appends(
 async def test_write_setting_secret_ref_preserves_unrelated_lines(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
-    """The rotate never re-serializes the whole file — an unrelated line already
+    """The rotate never re-serializes the whole file: an unrelated line already
     present (another daemon's own secret/config) survives untouched."""
     from src.orchestrator import settings_service as svc
 
@@ -378,7 +378,7 @@ async def test_write_setting_secret_ref_names_the_daemon_that_must_restart(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """Same `effect.startswith("restart:")` -> `result["note"]` convention every other
-    write receipt already uses — reused, not duplicated, for a rotate."""
+    write receipt already uses, reused not duplicated, for a rotate."""
     from src.orchestrator import settings_service as svc
 
     fake = _fake_secret_spec(
@@ -393,9 +393,9 @@ async def test_the_real_registered_secret_spec_rotates_live(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """`secrets.etherscan_api_key` is the one real secret_ref spec registered today
-    (SECRETS ROTATE ACT) — proves the LIVE registry entry's own key/env_field/effect/
+    (SECRETS ROTATE ACT) proves the LIVE registry entry's own key/env_field/effect/
     authority, not just a synthetic fake, exercised against a scratch copy of its
-    backing_file (never the box's real one — `backing_file` is the only field
+    backing_file (never the box's real one: `backing_file` is the only field
     redirected here, everything else about the spec is exactly what ships)."""
     from dataclasses import replace
 
@@ -423,11 +423,11 @@ async def test_settings_with_overlay_never_substitutes_a_secret_marker(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
 ) -> None:
     """The type-mismatch guard in `settings_with_overlay` itself: an `effect='immediate'`
-    secret_ref (synthetic — every real one registered today is `restart:<unit>`, so this
+    secret_ref (synthetic: every real one registered today is `restart:<unit>`, so this
     proves the filter holds even for a shape that isn't registered) never lands its
     boolean `{"rotated": true}` marker on a str-typed Settings attribute.
 
-    Patches `svc.SETTINGS` directly (never `settings_registry.SETTINGS`) — this
+    Patches `svc.SETTINGS` directly (never `settings_registry.SETTINGS`): this
     module's own docstring on `settings_with_overlay` names exactly why a source-module
     patch would be silently ignored: the name was already bound at import time."""
     from src.orchestrator import settings_service as svc

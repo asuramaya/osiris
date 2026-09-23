@@ -1,8 +1,9 @@
-"""THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066) -- explicitly the LAST/
-frozen renderer tip, replacing BOTH DM 11048 (THE DRILL) and DM 11060 (5 live-review flaws)
-in one shot. "Kill LOD entirely" -- retires TIP 3/TIP 4's own zoomLOD/tier-label/cluster-
-edge/halo/cluster-ring machinery outright, replaces it with one renderer, three rules at
-every zoom: (1) constant SCREEN-px point sizing on a steep degree curve with a tone-mapped
+"""THE LAST RENDERER (operator ruling) -- explicitly the LAST/
+frozen renderer tip, replacing BOTH an earlier drill design and a follow-up review of five
+live-review flaws in one shot. "Kill LOD entirely" -- retires TIP 3/TIP 4's own zoomLOD/
+tier-label/cluster-edge/halo/cluster-ring machinery outright, replaces it with one
+renderer, three rules at every zoom: (1) constant SCREEN-px point sizing on a steep
+degree curve with a tone-mapped
 saturation cap, (2) an edge draws only when both ends are visible, no structural-hop
 exception, alpha floor ~0.06, (3) labels for the top-N objects by degree inside the current
 viewport, de-overlapped, at every zoom. "Focus is a separate scene" (implemented here via
@@ -12,7 +13,7 @@ anchor/stub model, reframed to work without the tier system. Mirrors the repo's 
 static-source-guard convention: string/substring proofs against the served JS, no browser
 harness (these tests prove the code shape, not a rendered frame).
 
-Live-verified over Khnum's physics layout (main 39a31702, mail 11222) via claude-in-chrome
+Live-verified over the current physics layout via claude-in-chrome
 against a real local server on the ~50k-node/134k-edge graph: whole-graph load at fit, the
 tone-map saturation cap (max channel 254/255, zero pure-white pixels), a repo:osiris
 container focus (14 nodes total, inspector follows focus), the header repo dropdown closing
@@ -76,7 +77,7 @@ def test_tip4_own_tests_were_deleted_not_left_to_rot() -> None:
 # --- rule 1: constant screen-px sizing on the steep degree curve, uncapped -----------------
 
 def test_point_size_is_a_constant_screen_px_degree_curve() -> None:
-    # px = 2 * degree^log10(2) -- verified against Thoth's own four anchors: degree 1 -> 2px,
+    # px = 2 * degree^log10(2) -- verified against four known anchors: degree 1 -> 2px,
     # 100 -> 8px, 1,000 -> 16px, 10,000 -> 32px (d^log10(2) = 2^log10(d), so at d=10^k the
     # curve is exactly 2*2^k).
     assert "const DEGREE_PX_BASE = 2;" in _SPACE_JS
@@ -85,7 +86,7 @@ def test_point_size_is_a_constant_screen_px_degree_curve() -> None:
     assert "DEGREE_PX_BASE * Math.pow(Math.max(nd.degree || 0, 1), DEGREE_PX_EXPONENT)" in body
 
 
-def test_degree_px_curve_hits_thoths_own_anchors() -> None:
+def test_degree_px_curve_hits_the_known_anchors() -> None:
     base, exponent = 2.0, __import__("math").log10(2.0)
     for degree, expected_px in ((1, 2.0), (100, 8.0), (1000, 16.0), (10000, 32.0)):
         px = base * (max(degree, 1) ** exponent)
@@ -160,7 +161,7 @@ def test_edges_are_no_longer_bundled_or_density_scaled() -> None:
 
 def test_labels_are_top_n_by_degree_within_the_viewport_no_tier_gating() -> None:
     body = _SPACE_JS.split("function pickLabels()", 1)[1][:2500]
-    # THE DRAWING TIP (mail 11408) factored the viewport bounds check into a shared `inView`
+    # THE DRAWING TIP factored the viewport bounds check into a shared `inView`
     # predicate (project labels reuse it too) -- the underlying rule is unchanged: a node
     # must be nodeVisible AND genuinely on screen to be a label candidate.
     assert "const inView = (nd) => nd.x >= minX && nd.x <= maxX && nd.y >= minY && " \
@@ -248,10 +249,10 @@ def test_drill_and_anchor_labels_accept_pointer_events_unlike_the_base_tier_clas
         assert ".ego-drill-label { pointer-events: auto;" in html
 
 
-# --- two confirms Thoth asked for by DM (mail 11087) before gating this tip ----------------
+# --- two confirms asked for by DM before gating this tip ----------------
 
 def test_the_header_repo_dropdown_closes_on_pick() -> None:
-    # confirmed by live review (mail 11087): a pick used to leave the dropdown open and
+    # confirmed by live review: a pick used to leave the dropdown open and
     # just re-render it in place (renderRepoDropdown), reading as though the click did
     # nothing. toggleRepo now closes it via the same closeAllDropdowns() every other
     # dropdown-dismiss path already uses.
@@ -261,14 +262,14 @@ def test_the_header_repo_dropdown_closes_on_pick() -> None:
 
 
 def test_the_inspector_follows_a_container_focus_too() -> None:
-    # mail 11087's own second confirm ("the table drawer and the inspector follow the
+    # the second confirm ("the table drawer and the inspector follow the
     # focus set") -- the inspector half: renderContainerDrill's own trailing await mirrors
     # the ordinary focusObject's own trailing inspect(id) call.
     body = _SPACE_JS.split("async function renderContainerDrill(id, opts)", 1)[1][:5000]
     assert "await inspect(id);" in body
 
 
-# --- three real bugs live verification caught (mail 11222), invisible to every other test
+# --- three real bugs live verification caught, invisible to every other test
 # in this file since none of them ever execute the JS against real data at real scale -----
 
 def test_project_object_index_is_declared_before_build_scene_ever_calls_it() -> None:
@@ -315,7 +316,7 @@ def test_project_stubs_are_capped_not_one_dom_div_per_boundary_node() -> None:
     # exactly this declutter problem (pickLabels' top-N-by-degree-in-viewport); stubs now
     # get the same bounded-and-sorted treatment -- keep the biggest, most-informative
     # counts, drop the rest, same "small counted stub" the doc comment always promised.
-    # Capped again to 20 (from 80) once THE STUB AGGREGATION FIX (mail 11241) made
+    # Capped again to 20 (from 80) once THE STUB AGGREGATION FIX made
     # aggregation do most of the decluttering itself.
     assert "const MAX_PROJECT_STUBS = 20;" in _SPACE_JS
     body = _SPACE_JS.split("function buildProjectStubs()", 1)[1][:3900]
@@ -323,7 +324,7 @@ def test_project_stubs_are_capped_not_one_dom_div_per_boundary_node() -> None:
     assert "projectStubEntries = all.slice(0, MAX_PROJECT_STUBS);" in body
 
 
-# --- Thoth's live review of w299 (mail 11240/11241): four more real bugs live -------------
+# --- a live review of an earlier tip: four more real bugs live -------------
 # verification caught, all invisible to a synthetic string-presence test until now ---------
 
 def test_drill_expand_click_no_longer_wipes_its_own_just_set_state() -> None:
@@ -411,7 +412,7 @@ def test_table_drawer_hydrates_real_objects_for_reachable_ids_not_in_set() -> No
 
 
 def test_edges_are_a_live_verification_debug_hook_too() -> None:
-    # added while chasing mail 11240's own "identify its link type and class" ask -- every
+    # added while chasing an earlier "identify its link type and class" ask -- every
     # other per-node debug fact (idToNode, drillNodeEntries, ...) was already a live getter;
     # edges (edgeClass included) was the one live-verification kept having to reach for and
     # not have, forcing a decodeSnapshot reimplementation each time. Same convention as the
@@ -421,7 +422,7 @@ def test_edges_are_a_live_verification_debug_hook_too() -> None:
 
 
 def test_wheel_timing_instrumentation_is_gated_never_runs_for_a_real_user() -> None:
-    # THE WHEEL HANG INVESTIGATION (Thoth mail 11248): live-verification's own proof, not a
+    # THE WHEEL HANG INVESTIGATION: live-verification's own proof, not a
     # code fix -- there was no application bug to fix. A raw dispatched wheel event, given a
     # full uninterrupted 40 real seconds, produced zero renders and zero worldPerPx change;
     # requestAnimationFrame simply never fired in the claude-in-chrome sandbox tab (document
@@ -438,7 +439,7 @@ def test_wheel_timing_instrumentation_is_gated_never_runs_for_a_real_user() -> N
         assert "window.__spaceWheelTiming" in body
 
 
-# --- two minors from Thoth's own review of w300 (mail 11249) ------------------------------
+# --- two minors from a follow-up review ------------------------------
 
 def test_fit_trims_the_outermost_percentile_not_the_exact_min_max_bbox() -> None:
     # live-verified: a handful of far outliers in the visible set stretched the exact bbox

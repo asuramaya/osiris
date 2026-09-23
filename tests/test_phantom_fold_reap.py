@@ -1,6 +1,6 @@
-"""PHANTOM/FOLD BACKLOG REAP (dispatch #185 item (e), ruling 696d302c). Every test proves
+"""PHANTOM/FOLD BACKLOG REAP (dispatch #185 item (e)). Every test proves
 ONE bucket lands the right row for the right reason, with special attention to the ZERO
-FALSE DROPS bar — the boundary conditions between "auto-act" and "leave_for_human" for
+FALSE DROPS bar: the boundary conditions between "auto-act" and "leave_for_human" for
 each of the two auto-act buckets, since #59's own reaper found a real false drop in its
 first cut and this module is asked to hold the same bar.
 """
@@ -27,7 +27,7 @@ async def _mk_agent(actions: Actions, canonical: str, *, false_mint: bool = Fals
                     retired: bool = False) -> None:
     a = await actions.create_or_find_object("Agent", canonical, canonical)
     # direct_observation (confidence 0.6), matching the REAL fold write site
-    # (_fold_zero_turn_ancestors, agents.py) — reinstate_generation writes at the SAME
+    # (_fold_zero_turn_ancestors, agents.py): reinstate_generation writes at the SAME
     # tier, so a fixture stamped at self_declared's higher 0.9 would let the ORIGINAL
     # false_mint=true assertion keep winning the confidence-ranked tiebreak forever,
     # masking a real reinstate from ever being visible to a later read.
@@ -54,7 +54,7 @@ async def _live_works_in(actions: Actions, agent: str, project: str) -> None:
 
 def _census_confirms(agent_job_dir_key: str, pid: int = 4242) -> Any:
     """A fake agents_json + read_exe/read_cwd trio confirming a live, harness/proc-
-    verified body for exactly this 8-char job_dir key — registry_census's own matching
+    verified body for exactly this 8-char job_dir key: registry_census's own matching
     convention (Path(job_dir).name against sessionId[:8], both exactly 8 chars)."""
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [{"sessionId": f"{agent_job_dir_key}-0000-4000-8000-000000000000",
@@ -80,7 +80,7 @@ async def test_false_mint_live_auto_acts_only_when_registry_census_confirms(
     actions: Actions,
 ) -> None:
     """THE HIGH-CONFIDENCE CASE: false_mint=true, a fresh agent_mounts row, AND
-    registry_census independently confirms a harness/proc-verified live body — both
+    registry_census independently confirms a harness/proc-verified live body: both
     signals agree, this is the ONE case narrow enough to auto-reinstate."""
     await _mk_agent(actions, "agent:pf000001", false_mint=True)
     await save_mount(actions.pool, job_dir="/x/jobs/pf000001", agent_id="agent:pf000001",
@@ -98,7 +98,7 @@ async def test_false_mint_live_never_auto_acts_when_census_disagrees(
     actions: Actions,
 ) -> None:
     """ZERO FALSE DROPS: the graph says false_mint=true with a fresh mount, but
-    registry_census finds NO real harness/proc body backing it — a graph-live claim
+    registry_census finds NO real harness/proc body backing it: a graph-live claim
     alone is never proof (ghost_gap's own law). Held for a human, never reinstated."""
     await _mk_agent(actions, "agent:pf000002", false_mint=True)
     await save_mount(actions.pool, job_dir="/x/jobs/pf000002", agent_id="agent:pf000002",
@@ -116,7 +116,7 @@ async def test_false_mint_live_never_auto_acts_when_census_disagrees(
 async def test_false_mint_live_holds_everything_when_census_is_blind(
     actions: Actions,
 ) -> None:
-    """A blind OS census (pgrep/harness read failure) must never read as 'no ghosts' —
+    """A blind OS census (pgrep/harness read failure) must never read as 'no ghosts':
     every reinstate_false_mint_live candidate is held instead of trusted."""
     await _mk_agent(actions, "agent:pf000003", false_mint=True)
     await save_mount(actions.pool, job_dir="/x/jobs/pf000003", agent_id="agent:pf000003",
@@ -135,9 +135,9 @@ async def test_false_mint_live_ignores_a_stale_mount_past_the_live_window(
     actions: Actions,
 ) -> None:
     """A false_mint agent with NO fresh agent_mounts row at all never enters the
-    candidate set in the first place — this bucket is scoped to LIVE claims only."""
+    candidate set in the first place: this bucket is scoped to LIVE claims only."""
     await _mk_agent(actions, "agent:pf000004", false_mint=True)
-    # no save_mount call at all — no agent_mounts row, so no live claim exists to check
+    # no save_mount call at all: no agent_mounts row, so no live claim exists to check
 
     out = await phantom_fold_dry_run(actions.pool, agents_json=_empty_census)
 
@@ -185,7 +185,7 @@ async def test_phantom_fold_execute_dry_run_is_the_default_and_writes_nothing(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id="
         "(SELECT id FROM objects WHERE canonical='agent:pf000006') "
         "AND name='false_mint' ORDER BY confidence DESC, observed_at DESC LIMIT 1")
-    assert fm == "true"  # untouched — a plan, never an act
+    assert fm == "true"  # untouched: a plan, never an act
 
 
 # ═══ duplicate-works-in cleanup ═════════════════════════════════════════════════════
@@ -194,7 +194,7 @@ async def test_duplicate_works_in_auto_acts_on_the_one_unambiguous_dead_target(
     actions: Actions,
 ) -> None:
     """The ONE safe auto-act shape: exactly one of an agent's live duplicate works_in
-    targets is a non-active/non-merged SoftwareProject — unambiguous residue."""
+    targets is a non-active/non-merged SoftwareProject: unambiguous residue."""
     await _mk_agent(actions, "agent:pf100001")
     await _mk_project(actions, "repo:pf-alive")
     await _mk_project(actions, "repo:pf-dead", status="retired")
@@ -212,9 +212,9 @@ async def test_duplicate_works_in_auto_acts_on_the_one_unambiguous_dead_target(
 
 
 async def test_duplicate_works_in_never_treats_a_merge_as_a_death(actions: Actions) -> None:
-    """fleet_reconcile's own corrected rule (Werner/repo:bytebye, d1775472): a project
-    renamed via merge is not a death — status NOT IN ('active','merged'), never bare
-    <> 'active'. Two live targets, one merged, zero dead — leave for human, not
+    """fleet_reconcile's own corrected rule: a project
+    renamed via merge is not a death: status NOT IN ('active','merged'), never bare
+    <> 'active'. Two live targets, one merged, zero dead, leave for human, not
     auto-act."""
     await _mk_agent(actions, "agent:pf100002")
     await _mk_project(actions, "repo:pf-alive2")
@@ -235,7 +235,7 @@ async def test_duplicate_works_in_never_treats_a_merge_as_a_death(actions: Actio
 async def test_duplicate_works_in_never_guesses_among_two_dead_targets(
     actions: Actions,
 ) -> None:
-    """ZERO FALSE DROPS: two or more dead-project targets is ambiguous — which one is
+    """ZERO FALSE DROPS: two or more dead-project targets is ambiguous: which one is
     the RIGHT one to invalidate is not this sweep's call, ever."""
     await _mk_agent(actions, "agent:pf100003")
     await _mk_project(actions, "repo:pf-dead-a", status="retired")
@@ -254,14 +254,14 @@ async def test_duplicate_works_in_never_guesses_among_two_dead_targets(
 
 
 async def test_duplicate_works_in_ignores_a_dead_agent(actions: Actions) -> None:
-    """Scoped to LIVE agents only (the same liveness window every check here shares) —
+    """Scoped to LIVE agents only (the same liveness window every check here shares):
     no agent_mounts row, no candidate, regardless of how many works_in edges it carries."""
     await _mk_agent(actions, "agent:pf100004")
     await _mk_project(actions, "repo:pf-alive3")
     await _mk_project(actions, "repo:pf-dead3", status="retired")
     await _live_works_in(actions, "agent:pf100004", "repo:pf-alive3")
     await _live_works_in(actions, "agent:pf100004", "repo:pf-dead3")
-    # no save_mount — this agent is not live
+    # no save_mount: this agent is not live
 
     out = await phantom_fold_dry_run(actions.pool, agents_json=_empty_census)
 
@@ -314,12 +314,12 @@ async def test_parallel_lives_is_always_report_only(actions: Actions) -> None:
 async def test_report_half_healed_phantom_never_reasserts_an_already_open_thread(
     actions: Actions,
 ) -> None:
-    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
+    """Source-level fix (operator ruling, "fix the sources"):
     `_report_half_healed_phantom` used to call `open_thread` on EVERY sweep, live-measured
     at 1,119 identical kind/summary/owner/status rows on one Thread (the detector runs
     every 15 minutes, forever, for as long as the condition stays true). A repeat sighting
-    of an ALREADY-OPEN thread must annotate, never re-call open_thread — mirroring the
-    resolved-thread branch this module already carried (thread 672972a2)."""
+    of an ALREADY-OPEN thread must annotate, never re-call open_thread, mirroring the
+    resolved-thread branch this module already carried."""
     from src.orchestrator.agents import _report_half_healed_phantom
 
     await _report_half_healed_phantom(
@@ -339,12 +339,12 @@ async def test_report_half_healed_phantom_never_reasserts_an_already_open_thread
     for prop in ("kind", "summary", "owner", "status"):
         assert await actions.pool.fetchval(
             "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2",
-            thread_id, prop) == 1  # unchanged — no reassertion on the repeat sweep
+            thread_id, prop) == 1  # unchanged: no reassertion on the repeat sweep
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         thread_id)
-    assert status == "open"  # still open — the repeat sweep annotated, never closed/reopened
+    assert status == "open"  # still open: the repeat sweep annotated, never closed/reopened
 
 
 async def test_half_healed_phantom_threads_are_counted_and_never_acted_on(
@@ -371,7 +371,7 @@ async def test_over_cap_holds_both_auto_act_buckets(actions: Actions) -> None:
         aid = f"agent:pfcap{i:04d}"
         await _mk_agent(actions, aid, false_mint=True)
         # 8-char job_dir basename EXACTLY (registry_census's own match key: Path(job_dir)
-        # .name against sessionId[:8]) — "pfcap0000" is 9 chars and silently fails to
+        # .name against sessionId[:8]): "pfcap0000" is 9 chars and silently fails to
         # match, the recurring 8-char trap this house's own tests keep hitting.
         await save_mount(actions.pool, job_dir=f"/x/jobs/pfcp{i:04d}", agent_id=aid,
                          project="demo", cwd="/repo/demo", model=None, session_key=None)

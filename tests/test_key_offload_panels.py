@@ -1,16 +1,14 @@
-"""THE KEY PANEL and THE OFFLOAD TARGETS PANEL (Thoth mail 12811/12814/12838/12985),
-built off KEY CUSTODY REWRITTEN (Khnum, gated checks-only at 7b0dccaf/ff05d50e, mail
-12979's own confirmed /soul-key/* JSON) and the deployed backup_settings offload_targets
-shape (3aa65e9b, src/orchestrator/backup_settings.py's own `get_backup_settings`).
+"""THE KEY PANEL and THE OFFLOAD TARGETS PANEL, built off KEY CUSTODY REWRITTEN (gated
+checks-only) and the deployed backup_settings offload_targets shape
+(src/orchestrator/backup_settings.py's own `get_backup_settings`).
 
-Piece 1 only: status card + init/rotate/restore-drill over Khnum's soul-key door, and
+Piece 1 only: status card + init/rotate/restore-drill over the soul-key door, and
 one row per offload target with live presence off GET /backup-settings. Browser-side
-WebAuthn/PRF recovery enrollment (the key panel's own piece 2) is a separate later tip
-per mail 12838's explicit sequencing -- this panel never renders an enroll button, only
-Khnum's own CLI pointer (mail 12979: no REST route, no MCP tool, deliberately terminal-
-only). The /soul-key routes are not deployed yet (checks-only gate w370c) -- the panel
-degrades to a plain notice on a 404 rather than erroring, since "not deployed yet" is
-the expected common case today.
+WebAuthn/PRF recovery enrollment (the key panel's own piece 2) is a separate later tip:
+this panel never renders an enroll button, only a CLI pointer (no REST route, no MCP
+tool, deliberately terminal-only). The /soul-key routes are not deployed yet
+(checks-only gate): the panel degrades to a plain notice on a 404 rather than erroring,
+since "not deployed yet" is the expected common case today.
 
 Mirrors the repo's existing static-source-guard convention: string/substring proofs
 against the served JS, no browser harness.
@@ -25,8 +23,8 @@ _CONSOLE_JS = (Path(__file__).parent.parent / "src" / "ui" / "static" / "console
 # --- the key panel: status fetch degrades cleanly when the door isn't deployed --------
 
 def test_key_panel_degrades_to_a_plain_notice_on_404_not_an_error() -> None:
-    # THE SETTINGS PANE (Thoth mail 13350) embeds this same fetch+render into more than
-    # one container, so the shared implementation lives in renderKeyInto now -- both the
+    # THE SETTINGS PANE embeds this same fetch+render into more than
+    # one container, so the shared implementation lives in renderKeyInto now, both the
     # standalone renderKeyPanel() and a pane's own embedded section call it.
     body = _CONSOLE_JS.split("async function renderKeyInto(containerId) {", 1)[1][:900]
     assert "res.status === 404" in body
@@ -47,7 +45,7 @@ def test_key_panel_status_card_shows_backend_path_and_recovery_paths() -> None:
 def test_key_panel_warns_when_recovery_has_at_most_one_path() -> None:
     body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2000]
     assert "s.recovery_warning" in body
-    # points at the CLI, never a browser button -- mail 12979/12838's own law
+    # points at the CLI, never a browser button, per policy
     assert "osiris soul-key enroll-recovery" in body
 
 
@@ -57,7 +55,7 @@ def test_key_panel_flags_outstanding_legacy_plaintext_rows() -> None:
 
 
 def test_key_panel_never_renders_a_browser_enrollment_button() -> None:
-    # piece 2 (WebAuthn/PRF) is a separate, later, gated tip -- this panel must not
+    # piece 2 (WebAuthn/PRF) is a separate, later, gated tip, this panel must not
     # invent an /soul-key/enroll-recovery or /soul-key/recover fetch call.
     assert "/soul-key/enroll-recovery" not in _CONSOLE_JS
     assert "/soul-key/recover'" not in _CONSOLE_JS
@@ -65,8 +63,8 @@ def test_key_panel_never_renders_a_browser_enrollment_button() -> None:
 
 
 def test_init_key_posts_backend_only_no_invented_secret_reveal() -> None:
-    # GUI PARITY (thread dd11ab34) added a confirm() gate before the fetch (restart:
-    # true is consequential) -- window widened to clear it.
+    # GUI PARITY added a confirm() gate before the fetch (restart:
+    # true is consequential); window widened to clear it.
     body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1400]
     assert "'/soul-key/init'" in body
     assert "backend: backend" in body
@@ -91,7 +89,7 @@ def test_restore_drill_posts_and_reports_all_ok() -> None:
 # --- the offload targets panel: rows read from the deployed backup-settings shape -----
 
 def test_offload_panel_loads_rows_from_backup_settings() -> None:
-    # THE SETTINGS PANE (Thoth mail 13350) embeds this section too -- the shared
+    # THE SETTINGS PANE embeds this section too, the shared
     # fetch+render lives in renderOffloadInto(containerId) now.
     body = _CONSOLE_JS.split("async function renderOffloadInto(containerId) {", 1)[1][:700]
     assert "fetch('/backup-settings')" in body
@@ -136,7 +134,7 @@ def test_add_and_remove_offload_rows_sync_the_dom_first() -> None:
 
 
 def test_save_offload_targets_is_a_single_full_array_replace_through_backup_settings() -> None:
-    # no separate add/remove REST endpoint exists -- one write door, the same one the
+    # no separate add/remove REST endpoint exists, one write door, the same one the
     # Settings panel's own backup section already uses.
     body = _CONSOLE_JS.split("async function saveOffloadTargets() {", 1)[1][:600]
     assert "fetch('/backup-settings'" in body
@@ -154,8 +152,8 @@ def test_offload_panel_shows_vault_path_read_only_not_a_second_write_path() -> N
 # --- both panels reachable from CMD-K -------------------------------------------------
 
 def test_both_panels_are_reachable_from_the_command_palette() -> None:
-    # THE SETTINGS PANE (Thoth mail 13350) consolidated the three formerly-separate
-    # palette rows (Key…/Offload Targets…/Settings…) into ONE "Settings" entry — both
+    # THE SETTINGS PANE consolidated the three formerly-separate
+    # palette rows (Key…/Offload Targets…/Settings…) into ONE "Settings" entry, both
     # panels below are still reachable, now embedded as that pane's own sections
     # (see tests/test_settings_pane_ui.py for the full consolidation proof) rather
     # than each carrying its own standalone palette row.

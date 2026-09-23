@@ -1,12 +1,11 @@
-"""compute_heartbeat's project-label resolution (operator bug, msg 6934, thread
-19d6bdcb7fa9): the PIN wins outright the instant it resolves to anything — the old (A)/(B)
-split (thread 6483/6487/6492) let a seat's own mechanical pin copies (office / anchor_cwd
-courtesy copy / `~/code/<handle>` scratch convention) lose to `seat.house` on the premise
-that nobody ever DECLARES a value there, which broke the day found_seat/mint_seat stopped
-fabricating `project` from the handle (decision 24e0b761/commit cf201a9) — the office pin
-became exactly where a seat's project IS deliberately declared. Absent a pin, the fallback
-is charter (exactly one governed repo) then lineage_works_in (merge-normalized, whole-
-lineage-agrees) — `house` NEVER stands in for `project` anywhere in this order.
+"""compute_heartbeat's project-label resolution: the PIN wins outright the instant it
+resolves to anything. The old (A)/(B) split let a seat's own mechanical pin copies
+(office / anchor_cwd courtesy copy / `~/code/<handle>` scratch convention) lose to
+`seat.house` on the premise that nobody ever DECLARES a value there, which broke the day
+found_seat/mint_seat stopped fabricating `project` from the handle (commit cf201a9). The
+office pin became exactly where a seat's project IS deliberately declared. Absent a pin,
+the fallback is charter (exactly one governed repo) then lineage_works_in (merge-normalized,
+whole-lineage-agrees): `house` NEVER stands in for `project` anywhere in this order.
 """
 from __future__ import annotations
 
@@ -33,7 +32,7 @@ def test_seat_owns_cwd_matches_the_anchor_cwd_exactly(tmp_path: Path) -> None:
 
 
 def test_seat_owns_cwd_matches_a_subdirectory_of_the_anchor_cwd(tmp_path: Path) -> None:
-    """Containment, not exact match — read_project_label's own climb-to-repo-root means a
+    """Containment, not exact match: read_project_label's own climb-to-repo-root means a
     cwd inside the anchor's own tree is still answered by the anchor's `.osiris`."""
     anchor = tmp_path / "anchor-b"
     sub = anchor / "nested" / "deeper"
@@ -70,7 +69,7 @@ def test_seat_owns_cwd_false_for_a_nonexistent_cwd(tmp_path: Path) -> None:
 async def _seated(actions: Actions, *, handle: str, house: str, anchor_cwd: str,
                   session_id: str) -> str:
     """Seats `handle` and mounts it under a job_dir find_session_row's own lane 1 actually
-    matches (`%/jobs/<sid8>`, mounts.py:427) — a job_dir that doesn't fit that shape leaves
+    matches (`%/jobs/<sid8>`, mounts.py:427), a job_dir that doesn't fit that shape leaves
     `agent` unresolved and every downstream assertion in a caller's test passes VACUOUSLY
     (resolved_project just echoes project_hint straight through, proving nothing)."""
     agent = f"agent:{handle.lower()}"
@@ -88,9 +87,9 @@ async def _seated(actions: Actions, *, handle: str, house: str, anchor_cwd: str,
 async def test_a_pin_at_the_seats_own_anchor_wins_over_house(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE LIVE SPECIMEN THIS FIX CLOSES (operator bug, msg 6934): a seat's own OFFICE pin
+    """THE LIVE SPECIMEN THIS FIX CLOSES: a seat's own OFFICE pin
     is exactly where found_seat/mint_seat now writes a DELIBERATELY declared project
-    (cf201a9) — house (here "Godel", itself the mint-time handle fabrication for a
+    (cf201a9), house (here "Godel", itself the mint-time handle fabrication for a
     self-managed seat) must never override it, even though this cwd is the seat's own
     mechanical pin copy."""
     anchor = tmp_path / "jesuslike"
@@ -103,7 +102,7 @@ async def test_a_pin_at_the_seats_own_anchor_wins_over_house(
         actions.pool, project_hint="Jesus", session_id="jesuslike01",
         model_id="claude-fable-5", lease_secs=3600, cwd=str(anchor))
     assert out.resolved_seat_handle == "Jesuslike"  # agent resolution actually ran
-    assert out.resolved_project == "Jesus"  # the pin wins outright — house never overrides
+    assert out.resolved_project == "Jesus"  # the pin wins outright, house never overrides
 
 
 async def test_case_b_a_pin_at_a_genuinely_separate_checkout_still_wins(
@@ -121,14 +120,14 @@ async def test_case_b_a_pin_at_a_genuinely_separate_checkout_still_wins(
         actions.pool, project_hint="Somewhere", session_id="jesushome01",
         model_id="claude-fable-5", lease_secs=3600, cwd=str(checkout))
     assert out.resolved_seat_handle == "Jesushome"  # agent resolution actually ran
-    assert out.resolved_project == "Somewhere"  # 577988ed: a separate checkout's own word stands
+    assert out.resolved_project == "Somewhere"  # a separate checkout's own word stands
 
 
 async def test_no_cwd_given_keeps_the_old_file_wins_behavior(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Backward compatible: an old caller (or a body with no cwd resolvable) gets exactly
-    the pre-existing precedence — file wins when present."""
+    the pre-existing precedence: file wins when present."""
     anchor = tmp_path / "nocwdcase"
     anchor.mkdir()
     await _seated(actions, handle="Nocwdcase", house="Godel", anchor_cwd=str(anchor),
@@ -144,7 +143,7 @@ async def test_no_cwd_given_keeps_the_old_file_wins_behavior(
 async def test_case_a_a_matching_pin_at_the_anchor_is_a_no_op(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The pin already agrees with the graph — case (A) still resolves to the same value,
+    """The pin already agrees with the graph: case (A) still resolves to the same value,
     never a spurious change."""
     anchor = tmp_path / "agreeing"
     anchor.mkdir()
@@ -158,7 +157,7 @@ async def test_case_a_a_matching_pin_at_the_anchor_is_a_no_op(
     assert out.resolved_project == "Godel"
 
 
-# --- no pin: charter, then lineage works_in, then nothing — house NEVER appears ----------
+# --- no pin: charter, then lineage works_in, then nothing, house NEVER appears -----------
 
 async def test_no_pin_falls_back_to_a_single_chartered_repo_never_house(
     actions: Actions, tmp_path: Path,
@@ -166,7 +165,7 @@ async def test_no_pin_falls_back_to_a_single_chartered_repo_never_house(
     from src.orchestrator.charter import set_charter
 
     anchor = tmp_path / "chartered"
-    anchor.mkdir()  # no .osiris here at all — project_hint resolves to None
+    anchor.mkdir()  # no .osiris here at all, project_hint resolves to None
     agent = await _seated(actions, handle="Chartered", house="Chartered",
                           anchor_cwd=str(anchor), session_id="chartered01")
     proj = await actions.create_or_find_object("SoftwareProject", "repo:cdking", "test")
@@ -209,7 +208,7 @@ async def test_no_pin_no_charter_falls_back_to_lineage_works_in_never_house(
 async def test_no_pin_no_charter_no_works_in_stays_unresolved_never_house(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Absent every real signal, the answer is honest absence — NOT the seat's own house,
+    """Absent every real signal, the answer is honest absence: NOT the seat's own house,
     which is exactly the fabrication this whole fix exists to stop propagating."""
     anchor = tmp_path / "nosignal"
     anchor.mkdir()
