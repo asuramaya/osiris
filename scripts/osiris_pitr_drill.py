@@ -124,7 +124,7 @@ def _soul_round_trip_check(container: str) -> str | None:
         get_soul_fernet().decrypt(encrypted)
     except InvalidToken:
         return ("soul-store round-trip FAILED: a real row from the restored copy does "
-                "not decrypt under the key currently configured on this box — a "
+                "not decrypt under the key currently configured here. This is a "
                 "genuine decryption-proof failure, not just a presence check")
     return None
 
@@ -148,7 +148,7 @@ def run_drill(
     container name would be catastrophic, not just a WAL-backlog nuisance."""
     if drill_name == container:
         return (f"REFUSING: drill_name {drill_name!r} equals the source container "
-                f"{container!r} — a drill must restore into its own separate scratch "
+                f"{container!r}. A drill must restore into its own separate scratch "
                 "container, never the one being drilled")
     scratch = scratch or Path(f"/var/tmp/osiris-scratch/pitr-drill-{int(time.time())}")
     pgdata = scratch / "pgdata"
@@ -161,7 +161,7 @@ def run_drill(
         n_wal = _gather_wal_segments(
             container, Path.home() / "osiris-vault" / "wal_archive", wal_dir)
         if n_wal == 0:
-            return "no WAL segments available anywhere — cannot replay past the base backup"
+            return "no WAL segments available anywhere: cannot replay past the base backup"
 
         (pgdata / "recovery.signal").touch()
         conf = postgresql_auto_conf_pitr(f"cp {wal_dir}/%f %p", target_time)
@@ -186,7 +186,7 @@ def run_drill(
         else:
             logs = subprocess.run(["docker", "logs", "--tail", "40", drill_name],
                                   capture_output=True, text=True, timeout=10)
-            return (f"drill container never became ready — recovery may have stalled:\n"
+            return (f"drill container never became ready, recovery may have stalled:\n"
                     f"{logs.stdout}\n{logs.stderr}")
 
         out = subprocess.run(
@@ -196,7 +196,7 @@ def run_drill(
         n = int((out.stdout or "0").strip() or 0)
         if n < 1:
             return (f"restored copy is missing the post-base-backup marker "
-                    f"({marker_canonical!r}) — WAL replay did not reach it")
+                    f"({marker_canonical!r}): WAL replay did not reach it")
         return _soul_round_trip_check(drill_name)
     except Exception as e:  # noqa: BLE001
         return f"PITR drill failed: {type(e).__name__}: {e}"
@@ -245,27 +245,27 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault", type=Path, default=Path.home() / "osiris-vault")
     parser.add_argument("--marker", default=None,
                         help="canonical of an object known to exist AFTER the base "
-                             "backup completed — the drill's own pass condition. "
+                             "backup completed: the drill's own pass condition. "
                              "Default: auto-pick the live DB's newest object "
-                             "(pick_and_ensure_marker) — an unattended weekly run "
-                             "needs no operator-authored marker.")
+                             "(pick_and_ensure_marker), so an unattended weekly run "
+                             "needs no manually-authored marker.")
     parser.add_argument("--target-time", default=None,
                         help="an EXACT recovery_target_time to demand (Postgres does NOT "
                              "accept the bare word 'now' here, unlike most other "
-                             "timestamp contexts). Default: no target at all — replay "
+                             "timestamp contexts). Default: no target at all, replay "
                              "every WAL segment the archive can actually produce and "
                              "promote there, the honest 'as-current-as-provable' drill.")
     args = parser.parse_args(argv)
 
     backups = _scan(args.vault / "basebackups")
     if not backups:
-        print("osiris_pitr_drill: no base backups found — nothing to drill", file=sys.stderr)
+        print("osiris_pitr_drill: no base backups found, nothing to drill", file=sys.stderr)
         return 1
     newest = max(backups, key=lambda f: f.when)
     target_time = args.target_time
     marker = args.marker or pick_and_ensure_marker()
     if marker is None:
-        print("osiris_pitr_drill: no objects in the live DB — nothing to prove",
+        print("osiris_pitr_drill: no objects in the live DB, nothing to prove",
               file=sys.stderr)
         return 1
     print(f"osiris_pitr_drill: restoring {newest.path} to target_time={target_time!r}, "
@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     if fail:
         print(f"PITR DRILL FAILED: {fail}", file=sys.stderr)
         return 1
-    print("PITR drill: PASS — the marker written after the base backup is present in "
+    print("PITR drill: PASS, the marker written after the base backup is present in "
           "the restored copy")
     return 0
 

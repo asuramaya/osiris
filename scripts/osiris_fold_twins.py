@@ -50,10 +50,10 @@ async def survey(pool: asyncpg.Pool, root: Path) -> list[dict[str, str]]:
     on a guess. The rehearsal is the only reason it did not happen.
 
     THE DISTINCTION:
-      SAME lineage  (ad1a1cb0-xxvi -> ad1a1cb0-xxix)  a GENERATION. The mind died at a compact
+      SAME lineage  (seat-A-xxvi -> seat-A-xxix)  a GENERATION. The mind died at a compact
                     and its heir was minted deliberately, by rite. The succession machinery
                     already handled it. There is nothing here to fix and everything to lose.
-      OTHER lineage (d6b28b9c      -> a8c15486-xii)   a TWIN. One mind, seated twice under two
+      OTHER lineage (seat-B      -> seat-C-xii)   a TWIN. One mind, seated twice under two
                     unrelated names, because nothing told the graph the fork was it.
 
     Every fork looks like the first. Only the second is the bug.
@@ -161,13 +161,13 @@ async def main() -> None:
     named = [t for t in found if t["handle"]]
 
     print(f"{len(found)} seat(s) are a FORK of a mind that already had one.\n")
-    print(f"ANONYMOUS — the machine's own droppings; mine to sweep ({len(anon)}):")
+    print(f"ANONYMOUS, unclaimed: this script's to sweep ({len(anon)}):")
     for t in sorted(anon, key=lambda x: x["project"]):
         print(f"  [{t['project']:14s}] {t['sid']}  {t['twin']:22s} -> {t['seat']}")
     if not anon:
         print("  (none)")
 
-    print(f"\nNAMED — TESTIMONY. A mind claimed this. REVIEW-GATED, NOT MINE ({len(named)}):")
+    print(f"\nNAMED, claimed by a mind: review-gated, not folded automatically ({len(named)}):")
     for t in sorted(named, key=lambda x: x["project"]):
         print(f"  [{t['project']:14s}] {t['sid']}  {t['twin']:22s} ({t['handle']})"
               f"  is a fork of {t['seat']}")
@@ -178,12 +178,12 @@ async def main() -> None:
         await fold(pool, anon)
         print(f"\nFOLDED {len(anon)} anonymous twin(s): anchors re-pointed, unread mail carried "
               f"across, no longer counted among the living. Nothing deleted.")
-        print(f"LEFT {len(named)} named seat(s) UNTOUCHED — an identity merge is the operator's "
-              f"call, always.")
+        print(f"LEFT {len(named)} named seat(s) untouched: an identity merge is always the "
+              f"operator's call.")
     elif args.apply:
         print("\nNothing anonymous to fold.")
     else:
-        print("\nDRY RUN — nothing written. Re-run with --apply.")
+        print("\nDRY RUN: nothing written. Re-run with --apply.")
     await pool.close()
 
 

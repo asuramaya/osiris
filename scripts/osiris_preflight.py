@@ -231,8 +231,8 @@ def _format_round_trip_failure(failures: list[dict[str, str]] | None) -> str | N
         return None
     anchors = ", ".join(f["anchor_sid"] for f in failures[:5])
     return (f"SOUL STORE ROUND-TRIP FAILURE: {len(failures)} sampled session(s) do not "
-            f"reconstruct byte-identical to disk (thread 78efd46d item 2) — {anchors} "
-            "— a backup that's never been restored is a hope, not a backup")
+            f"reconstruct byte-identical to disk (thread 78efd46d item 2): {anchors}. "
+            "A backup that's never been restored is a hope, not a backup")
 
 
 async def collect_soul_store_coverage(
@@ -292,25 +292,25 @@ def evaluate(m: dict) -> list[str]:
     fails: list[str] = []
     for u, s in m["units"].items():
         if s["enabled"] != "enabled":
-            fails.append(f"{u} is not enabled — it will NOT start at boot")
+            fails.append(f"{u} is not enabled, it will NOT start at boot")
         if s["active"] != "active":
             fails.append(f"{u} is not active right now")
     for t, s in m["timers"].items():
         if s["enabled"] != "enabled" or s["active"] != "active":
-            fails.append(f"{t} is not enabled+active — backups stop silently")
+            fails.append(f"{t} is not enabled+active, backups stop silently")
     for c, info in m["containers"].items():
         if not info or info.get("status") != "running":
             fails.append(f"container {c} is not running")
             continue
         if info.get("restart") in ("no", "", None):
-            fails.append(f"container {c} has NO restart policy — dead after reboot")
+            fails.append(f"container {c} has NO restart policy, dead after reboot")
         vols = info.get("vols") or []
         for v in vols:
             if v not in NAMED_VOLUMES and len(v) == 64:  # a hash = anonymous = deletion-rigged
-                fails.append(f"container {c} rides an ANONYMOUS volume ({v[:12]}…) — "
-                             "the arrangement that nearly ate the graph")
+                fails.append(f"container {c} rides an ANONYMOUS volume ({v[:12]}...), "
+                             "the same pattern that once wiped the graph's own data")
     for p in m["ports"]:
-        fails.append(f"a listener squats on default port :{p} — the shadow-DB trap is armed "
+        fails.append(f"a listener squats on default port :{p}, the shadow-DB trap is armed "
                      "(anything launched without env override writes there silently)")
     if m["backup_age_h"] is None:
         fails.append("NO backups exist")
@@ -322,56 +322,57 @@ def evaluate(m: dict) -> list[str]:
         fails.append(f"vault untouched for {m['vault_age_d']:.0f}d (max {VAULT_MAX_AGE_D}d)")
     tmp_pct = m.get("tmp_inode_pct")
     if tmp_pct is not None and tmp_pct >= TMP_INODE_ALARM_PCT:
-        fails.append(f"/tmp inode use at {tmp_pct:.1f}% (alarm at {TMP_INODE_ALARM_PCT:.0f}%) "
-                     "— the fleet-wide ENOSPC incident's own early-warning (obligation "
-                     "a867ae37): every Bash tool call across every live seat fails once "
+        fails.append(f"/tmp inode use at {tmp_pct:.1f}% (alarm at {TMP_INODE_ALARM_PCT:.0f}%). "
+                     "This is the early-warning for obligation a867ae37: every Bash tool "
+                     "call across every live seat fails once "
                      "this reaches 100%, silently, until it does")
     disk_pct = m.get("disk_free_pct")
     if disk_pct is not None and disk_pct <= DISK_FREE_ALARM_PCT:
         fails.append(f"disk free at {disk_pct:.1f}% on the vault's filesystem (alarm at "
-                     f"{DISK_FREE_ALARM_PCT:.0f}%) — the vault lane's own disk guard "
-                     "(item 5): run scripts/osiris_prune_ladder.py for a dry-run of what "
-                     "could be pruned, then act on the operator's word")
+                     f"{DISK_FREE_ALARM_PCT:.0f}%). This is disk-guard item 5: run "
+                     "scripts/osiris_prune_ladder.py for a dry-run of what "
+                     "could be pruned, then act on it")
     missing = m.get("soul_store_missing")
     if missing:
         fails.append(f"SOUL STORE COVERAGE GAP: {missing} session(s) on disk have no "
-                     "soul_sessions row (thread 78efd46d) — the store is not yet the "
-                     "durable record it claims to be for these; investigate why "
+                     "soul_sessions row (thread 78efd46d). These aren't yet in the "
+                     "durable record; investigate why "
                      "backfill_transcripts's cron hasn't caught them "
                      "(SoulStore(pool).ingest_path directly, per-session, is the fastest "
                      "way to see the real error instead of the sweep's own swallowed one)")
     roundtrip_fail = _format_round_trip_failure(m.get("soul_round_trip_failures"))
     if roundtrip_fail:
         fails.append(roundtrip_fail)
-    # THE MINER IS SUMMONED, NOT SCHEDULED. It used to walk every transcript every ten
-    # minutes, so a silent tick meant sensing was DOWN and this check was right to fail on it. The
-    # crawl is gone: the miner now runs ONCE, at a session's end, so a quiet hour means
-    # nobody's session ended, not that anything is broken. Demanding a tick every 35 minutes from
-    # a job that no longer ticks would fail this preflight FOREVER, on purpose, about nothing.
+    # The miner runs on demand, not on a schedule. It used to walk every transcript every
+    # ten minutes, so a silent tick meant sensing was down and this check was right to fail
+    # on it. That crawl is gone: the miner now runs once, at a session's end, so a quiet
+    # hour means nobody's session ended, not that anything is broken. Demanding a tick
+    # every 35 minutes from a job that no longer ticks would fail this preflight forever,
+    # on purpose, about nothing.
     #
-    # We still fail on ERRORS, which are always real. We simply no longer mistake SILENCE for
-    # failure, the same distinction drawn elsewhere between "quiet" and "dead". Absence of
-    # activity is not evidence of failure; it is only evidence of absence.
+    # We still fail on errors, which are always real. We simply no longer mistake silence
+    # for failure, the same distinction drawn elsewhere between "quiet" and "dead". Absence
+    # of activity is not evidence of failure; it is only evidence of absence.
     miner = m.get("miner")
     if miner and miner.get("recent_errors", 0) >= 3:
         fails.append(f"adversary errored {miner['recent_errors']} of the last "
-                     f"{miner['recent']} runs — the death-rite sweep is failing")
-    # THE DEPLOY-ORDERING GUARD'S WEEKLY BACKSTOP: the boot-time check only
-    # ever fires once, at start; this catches drift that happens AFTER a clean boot.
+                     f"{miner['recent']} runs; the cleanup sweep is failing")
+    # The deploy-ordering guard's weekly backstop: the boot-time check only
+    # ever fires once, at start; this catches drift that happens after a clean boot.
     drift = m.get("schema_drift")
     if drift:
-        fails.append(f"SCHEMA DRIFT: {drift} — run `alembic upgrade head` against the real DB")
-    # THE MCP SERVER'S OWN LIVENESS ACROSS TIME: either
-    # symptom alone is real damage, a NEW restart since last run, or a kill/OOM line in
-    # the journal in that same window (systemd sometimes restarts silently faster than a
-    # kill line lands, so both are checked rather than treating one as a subset of other).
+        fails.append(f"SCHEMA DRIFT: {drift}, run `alembic upgrade head` against the real DB")
+    # The MCP server's own liveness across time: either symptom alone is real damage, a
+    # new restart since last run, or a kill/OOM line in the journal in that same window
+    # (systemd sometimes restarts silently faster than a kill line lands, so both are
+    # checked rather than treating one as a subset of the other).
     liveness = m.get("mcp_liveness")
     if liveness:
         delta = liveness["nrestarts_delta"]
         n_kills = len(liveness["kill_events"])
         if delta or n_kills:
             fails.append(
-                f"MCP LIVENESS: {_format_mcp_liveness_line(liveness)} — "
+                f"MCP LIVENESS: {_format_mcp_liveness_line(liveness)}. "
                 "osiris-mcp restarted or was killed since the last preflight run; "
                 "journalctl --user -u osiris-mcp for the reason")
     return fails
@@ -504,7 +505,7 @@ def _format_backlog_weekly_line(m: dict[str, Any]) -> str:
     delta_text = ("first run, no prior week to compare" if delta is None else
                   f"{'+' if delta >= 0 else ''}{delta} since last week")
     seats = ", ".join(f"{s['seat']}:{s['open']}" for s in m["top_seats"]) or "none"
-    return (f"BACKLOG BAND — {m['fleet_total']} open obligation(s) fleet-wide "
+    return (f"BACKLOG BAND: {m['fleet_total']} open obligation(s) fleet-wide "
             f"({delta_text}). Top seats: {seats}.")
 
 
@@ -584,7 +585,7 @@ def _format_orphan_weekly_line(m: dict[str, Any]) -> str:
     top_types = ", ".join(_type_label(t, c) for t, c in
                           sorted(m["by_type"].items(), key=lambda kv: -kv[1]["count"])[:5]
                           ) or "none"
-    return (f"ORPHAN BAND — {m['total']} disconnected object(s) fleet-wide "
+    return (f"ORPHAN BAND: {m['total']} disconnected object(s) fleet-wide "
             f"({m['abstained_total']} already abstained, {delta_text}). "
             f"Top types: {top_types}.")
 
@@ -655,7 +656,7 @@ def _format_traceability_weekly_line(m: dict[str, Any]) -> str:
     top_types = ", ".join(f"{t}:{c['count']}" for t, c in
                           sorted(m["by_type"].items(), key=lambda kv: -kv[1]["count"])[:5]
                           ) or "none"
-    return (f"TRACEABILITY BAND — {m['total']} output(s) fleet-wide missing at least one "
+    return (f"TRACEABILITY BAND: {m['total']} output(s) fleet-wide missing at least one "
             f"of run/plan/source/evaluator after confession ({delta_text}). "
             f"Top types: {top_types}.")
 
@@ -733,7 +734,7 @@ def _format_abstention_weekly_line(m: dict[str, Any]) -> str:
     split_text = (f"extension={split['extension_link_pending']} "
                   f"standalone={split['standalone_other']}" if split is not None else
                   "unsplit — reason constant not on this build")
-    return (f"ABSTENTION DIGEST — {m['total']} declared hatch confession(s) fleet-wide, "
+    return (f"ABSTENTION DIGEST: {m['total']} declared hatch confession(s) fleet-wide, "
             f"all-time cumulative ({delta_text}). {split_text}.")
 
 
@@ -841,7 +842,7 @@ def _format_mcp_liveness_line(m: dict[str, Any]) -> str:
     delta_text = ("first run, no prior read to compare" if delta is None
                   else f"+{delta} since last run" if delta > 0 else "no change")
     n_kills = len(m["kill_events"])
-    return (f"MCP LIVENESS — NRestarts {delta_text}, {n_kills} kill/OOM journal "
+    return (f"MCP LIVENESS: NRestarts {delta_text}, {n_kills} kill/OOM journal "
             f"line(s) since the last run")
 
 
@@ -909,7 +910,7 @@ async def brief_operator(fails: list[str]) -> None:
     pool = await create_pool(
         DSN, min_size=1, max_size=1, application_name="osiris-script:preflight-brief")
     try:
-        body = ("PREFLIGHT REGRESSION — the survival matrix has holes:\n- "
+        body = ("PREFLIGHT REGRESSION: the survival matrix has holes:\n- "
                 + "\n- ".join(fails)
                 + "\nRun scripts/osiris_preflight.py after fixing; silence = green.")
         await send_message(pool, from_agent="system:preflight", from_project="osiris",
@@ -934,7 +935,7 @@ def _run_check(name: str, coro: Coroutine[Any, Any, Any]) -> tuple[Any, str | No
     except _DB_UNREACHABLE:
         return None, None
     except Exception as e:  # noqa: BLE001, the alarm IS the handling; nothing swallowed
-        return None, (f"{name} check is BROKEN ({type(e).__name__}: {e}) — it did NOT "
+        return None, (f"{name} check is BROKEN ({type(e).__name__}: {e}); it did NOT "
                       "actually run this pass")
 
 

@@ -8,22 +8,24 @@ Generated-from-code reference for Osiris. For the prose explanation see
 
 The graph is **objects** (entities) with **assertions** (graded facts) and **links**
 (graded typed edges), all append-only in Postgres, with merges recorded as
-**object_events** (truth) projected onto `objects.status / merged_into`. Same
-`(type, canonical)` => same object (find-or-create dedup); cross-base fusion merges the
-rest by normalized name, by **shared LEI** (deterministic), or via review-gated
-probabilistic ER. A `Person` is never auto-merged.
+**object_events** (truth) projected onto `objects.status / merged_into`. The same
+`(type, canonical)` pair always resolves to the same object (find-or-create dedup);
+merges across separate data sources happen by normalized name, by shared LEI
+(deterministic), or through review-gated probabilistic entity resolution. A `Person`
+object is never merged automatically.
 
 <!-- osiris:compiled:begin v=schema-v1 -->
 ## Data model
 
-Generated from `src/ontology/schema.py` — the declared semantic layer (the single source of truth). Do not edit by hand; run `python -m src.ontology.schema`.
+Generated from `src/ontology/schema.py`, the declared semantic layer and single source of
+truth. Do not edit by hand; run `python -m src.ontology.schema`.
 
 ### Entity object types
 
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
 | `Organization` | `cik:` · `lei:` · `bc-reg:` · `Q` · `sec-org:` · `company:` · `ctgov-org:` | A company, fund, agency, or other organization. |
-| `Person` | `sec-person:` · `ctgov-person:` · `Q` · `subject:` · `cluster:` · `person:` · `dev:` | An individual — officer, director, investigator, developer, identity hub (resolved probabilistically; never auto-merged). |
+| `Person` | `sec-person:` · `ctgov-person:` · `Q` · `subject:` · `cluster:` · `person:` · `dev:` | An individual: officer, director, investigator, developer, or identity hub (resolved probabilistically; never merged automatically). |
 
 ### Asset object types
 
@@ -38,16 +40,16 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 |------|-------------------|-------------|
 | `CourtCase` | `courtlistener:` | A litigation docket / opinion (parties, court, judge). |
 | `ClinicalTrial` | `nct:` | A registered human trial (status, sites, investigators). |
-| `ObservedData` | `ioc:` · `threatfox:` | Raw evidence — a scraped record / feed entry behind a claim. |
+| `ObservedData` | `ioc:` · `threatfox:` | Raw evidence: a scraped record or feed entry behind a claim. |
 
 ### Identity object types
 
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
-| `Account` | `github:` · `twitter:` · `linkedin:` · `instagram:` · `youtube:` · `facebook:` · `soundcloud:` · `replit:` · `gitlab:` · `pypi:` | A platform account (github:, twitter:, …) — a footprint fragment. |
-| `Username` | — | A handle — connective tissue across platforms. |
-| `Email` | — | An email-address observable. |
-| `Phone` | — | A phone-number observable (enriched offline). |
+| `Account` | `github:` · `twitter:` · `linkedin:` · `instagram:` · `youtube:` · `facebook:` · `soundcloud:` · `replit:` · `gitlab:` · `pypi:` | A platform account (github:, twitter:, etc.): a footprint fragment. |
+| `Username` | n/a | A handle: connective tissue across platforms. |
+| `Email` | n/a | An email-address observable. |
+| `Phone` | n/a | A phone-number observable (enriched offline). |
 
 ### Web object types
 
@@ -60,44 +62,44 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
-| `IntrusionSet` | — | An actor cluster — tracked related intrusion activity. |
-| `ThreatActor` | — | The human or group behind activity. |
-| `Campaign` | — | Time-bounded activity attributed to an actor. |
-| `Malware` | — | Malicious software — a capability an actor uses. |
-| `Tool` | — | Legitimate/utility software used in operations. |
-| `AttackPattern` | — | A technique (MITRE ATT&CK Txxxx) — HOW something is done. |
-| `Indicator` | — | An IOC / detection signal — a hash, IP, or domain. |
-| `CourseOfAction` | — | A mitigation / response to a technique (ATT&CK course-of-action). |
-| `Tactic` | — | An ATT&CK tactic — the adversary's goal a technique serves. |
-| `Identity` | — | A STIX identity — the named individual/org/sector behind activity. |
+| `IntrusionSet` | n/a | An actor cluster: tracked related intrusion activity. |
+| `ThreatActor` | n/a | The human or group behind activity. |
+| `Campaign` | n/a | Time-bounded activity attributed to an actor. |
+| `Malware` | n/a | Malicious software: a capability an actor uses. |
+| `Tool` | n/a | Legitimate/utility software used in operations. |
+| `AttackPattern` | n/a | A technique (MITRE ATT&CK Txxxx): how something is done. |
+| `Indicator` | n/a | An IOC / detection signal: a hash, IP, or domain. |
+| `CourseOfAction` | n/a | A mitigation / response to a technique (ATT&CK course-of-action). |
+| `Tactic` | n/a | An ATT&CK tactic: the adversary's goal a technique serves. |
+| `Identity` | n/a | A STIX identity: the named individual/org/sector behind activity. |
 
 ### Software object types
 
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
 | `SoftwareProject` | `repo:` | A software repository / project. |
-| `Commit` | `commit:` | A version-control commit — an event in a project's history. |
-| `Thread` | `thread:` | An open thread / wall / next-step — project memory of what's unresolved. |
-| `Reference` | `ref:` | A design/reference document — external canon (Palantir/Notion) or own docs, ingested as project memory. |
-| `Decision` | `decision:` | An architectural/design decision mined from the project's own commit rationale — the 'why', as queryable institutional memory. |
-| `File` | `file:` | A tracked file in a repository (metadata only — content stays in git, read on demand). Its `role` lets analogous files be compared across repos. |
-| `Agent` | `agent:` | A Claude instance operating over the graph — an analyst in the fleet. Carries its model (source-model provenance) and works in a project on behalf of a principal. 'A man and all his imaginary friends.' |
-| `Tension` | `tension:` | A held POLARITY — two positions in productive tension, neither settled. Unlike a Decision (which settles) or a Thread (which closes), a tension is HELD: the current lean is recorded but never auto-resolved or consolidated away; the lean history is the dance across sessions. |
-| `BlindSpot` | `blindspot:` | A project's registered BLIND SPOT — what its harness/rig CANNOT verify from here, and where the real verification lives (thread 8e26cd10: 459 headless-Chromium tests green while every iPhone was broken). Held like a Tension — a stable per-project fact, never resolved away — and surfaced at orient() so a session knows the shape of its own ignorance before trusting a green harness. |
-| `Superstition` | `superstition:` | A DEAD WORKAROUND — a practice a bug once justified, killed by name when its fix landed (thread a9be40c9: Atlas caught 'NEVER DM BY NAME' in his own will an hour after 43cfcf1 made it false — 'a superstition inherited as law, forever, on my authority'). The half-life of a workaround outlives its bug: record_decision(obsoletes=[…]) mints these, and orient announces recent kills fleet-wide so every mind whose memory carries the practice strikes it. |
-| `Practice` | `practice:` | A TRANSFERABLE TECHNIQUE — Superstition's positive twin, closing the ontology's learn/unlearn asymmetry (Alfred IX's filing, operator ruling 1e6d7367: 'install.sh doesn't ship the vendored set' was found independently by two houses in the same hour because nothing held the lesson — only markdown files nobody else's search reaches). SHAPE: statement (imperative, one line) · failure_prevented (the concrete symptom, findable mid-failure) · surface (BlindSpot's domain vocabulary). Timeless, never moment-stamped — unlike a Decision ('we chose X here, then'), a Practice is true regardless of repo or date. `confirmed` is DERIVED (count of `witnesses` links), never a stored counter — an incremented-on-write scalar would need read-then-write-under-lock, the same race class thread dc9d1eed found live in bridged_seat. REFUTED converts to a Superstition (record_decision(refutes=…)): the Practice stays ACTIVE carrying `refuted_by`, never retired — a half-remembered refuted lesson must stay findable, surfaced WITH the flag. |
-| `Reflection` | `reflection:` | A memory lived for its own sake — the operator's ruling bfb3ae26 ('they need a home and I want them remembered; they are not exactly work tickets'): existential/philosophical conversation kept as what it is. Remembered and queryable, NEVER actionable — no work surface (briefing, wall, pile, duty extraction) may present it as a ticket, and no resolver may close it: there is nothing to resolve. |
-| `Message` | `message:` | A fleet mail or DM — graphed inter-agent communication, the postal layer. Messages carry sent_by/addressed_to/broadcast_to/replies_to edges and can mentions decisions, threads, or agents for context-traversable conversations. Monotonic: written once, never mutated, only settled (read + ack). The fleet_messages table is the operational record; the Message object makes mail traversable in the graph. |
-| `Seat` | `seat:` | A durable ROLE in a house — the fleet's addressable identity (the identity core, ruling 5cef856b). Minted ONCE as seat:<uuid8>, never re-keyed: handle, house, and anchor_cwd are mutable ASSERTIONS on it, because the whole bug class was keying identity on mutable facts (path, session). Minds (Agents) hold it in succession via `holds`; the seat outlives them all — it exists BEFORE its first session, which is what lets the daemon export it at birth. |
+| `Commit` | `commit:` | A version-control commit: an event in a project's history. |
+| `Thread` | `thread:` | An open thread, wall item, or next step: project memory of what's unresolved. |
+| `Reference` | `ref:` | A design/reference document: external canon or this project's own docs, ingested as project memory. |
+| `Decision` | `decision:` | An architectural/design decision mined from a project's own commit rationale: the reasoning behind a change, kept as queryable institutional memory. |
+| `File` | `file:` | A tracked file in a repository (metadata only; content stays in git and is read on demand). Its `role` lets similar files be compared across repos. |
+| `Agent` | `agent:` | An AI agent session operating over the graph, working in a project on behalf of a principal. Carries its source model as provenance. |
+| `Tension` | `tension:` | A held polarity: two positions in productive tension, neither one settled. Unlike a Decision (which settles something) or a Thread (which closes), a Tension stays open: its current lean is recorded but never auto-resolved, and its history of leaning one way or another over time is kept. |
+| `BlindSpot` | `blindspot:` | A project's registered blind spot: something its own test/verification setup cannot check from where it runs, and a note on where real verification actually happens (one recorded case: hundreds of headless-browser tests passed while every mobile device was actually broken). Held like a Tension, as a stable per-project fact that's never resolved away, and surfaced at `orient()` so a session knows the limits of its own test coverage before trusting a passing test run. |
+| `Superstition` | `superstition:` | A dead workaround: a practice that a since-fixed bug once justified, explicitly retired by name once the underlying fix landed. The lesson behind a workaround often outlives the bug that caused it, so `record_decision(obsoletes=[...])` retires these explicitly, and `orient()` announces recent retirements project-wide so anyone still following the old workaround is told to stop. |
+| `Practice` | `practice:` | A transferable technique: the positive counterpart to a Superstition, closing a gap where lessons learned in one place were not reaching anyone else (one case: the same install step gotcha was independently rediscovered by two separate teams in the same hour because nothing durable held the lesson, only markdown files nobody else's search reached). Shape: `statement` (one imperative line), `failure_prevented` (the concrete symptom, findable mid-failure), and `surface` (matching a BlindSpot's domain vocabulary). A Practice is timeless, not tied to a moment: unlike a Decision ("we chose X here, at this time"), a Practice is true regardless of repo or date. Its `confirmed` count is derived from `witnesses` links at read time, never stored as an incrementing counter, to avoid a read-then-write race under concurrent updates. A refuted Practice converts to a Superstition (`record_decision(refutes=...)`), but the original Practice stays active and carries a `refuted_by` flag rather than being retired outright, so a half-remembered but now-refuted lesson stays findable, with the flag attached. |
+| `Reflection` | `reflection:` | A memory kept for its own sake: open-ended or reflective conversation, kept as exactly what it is, remembered and queryable but never treated as actionable. No work surface (briefing, wall, backlog, duty extraction) may present it as a task, and nothing resolves or closes it, because there is nothing to resolve. |
+| `Message` | `message:` | A piece of inter-agent mail or a direct message, graphed as the postal layer between agents. Messages carry `sent_by`/`addressed_to`/`broadcast_to`/`replies_to` edges and can `mentions` decisions, threads, or agents for context that's traversable in the graph. Written once and never mutated, only read and acknowledged. The underlying message-delivery table is the operational record; the Message object is what makes mail traversable as part of the graph. |
+| `Seat` | `seat:` | A durable role within a project or team: the fleet's addressable identity. Minted exactly once as `seat:<uuid8>` and never re-keyed: its handle, its project/team, and its working-directory anchor are all mutable assertions layered on top of it, because the underlying bug class this fixes was keying identity on mutable facts like path or session id. Individual agent sessions hold a Seat in succession via `holds`; the Seat outlives all of them, and exists before its first session ever starts, which is what lets the manager daemon export its identity at process start. |
 
 ### Observable object types
 
 | Type | Canonical schemes | Description |
 |------|-------------------|-------------|
-| `IPv4` | — | An IPv4 address observable. |
-| `TelegramChannel` | — | A Telegram channel observable. |
-| `FileHash` | — | A file hash observable (md5/sha1/sha256). |
-| `Phrase` | — | Free text — a search seed. |
+| `IPv4` | n/a | An IPv4 address observable. |
+| `TelegramChannel` | n/a | A Telegram channel observable. |
+| `FileHash` | n/a | A file hash observable (md5/sha1/sha256). |
+| `Phrase` | n/a | Free text: a search seed. |
 
 ### Link types
 
@@ -105,7 +107,7 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 |------|----------|---------|
 | `controlled_by` | CryptoAddress → Person/Organization | Asset/wallet is controlled by a holder. |
 | `owns` | Person/Organization → * | Owns the target. |
-| `owned_by` | — | Is owned by the target. |
+| `owned_by` | n/a | Is owned by the target. |
 | `subsidiary_of` | Organization → Organization | Is a subsidiary of the target org. |
 | `ultimate_parent` | Organization → Organization | Ultimate parent org (GLEIF level-2). |
 | `founded_by` | Organization → Person | Founded by the target person. |
@@ -114,12 +116,12 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `ceo` | Organization → Person | Has the target as CEO. |
 | `chairperson` | Organization → Person | Has the target as chairperson. |
 | `directs` | Person → Organization | Person directs the target org. |
-| `promoter` | — | Promoter of the target. |
-| `represents` | — | Legal/agent representation. |
+| `promoter` | n/a | Promoter of the target. |
+| `represents` | n/a | Legal/agent representation. |
 | `associate_of` | Person → Person | Known associate. |
 | `member_of` | Person → Organization | Membership in an organization. |
 | `employs` | Organization → Person | Employment relationship. |
-| `not_same_as` | — | Negative ER memory — confirmed distinct (suppresses re-match). |
+| `not_same_as` | n/a | Negative entity-resolution memory: confirmed distinct, suppresses re-matching. |
 | `family` | Person → Person | Familial relationship. |
 | `sponsors` | Organization → ClinicalTrial | Sponsors the target (trial/event). |
 | `investigator` | ClinicalTrial → Person | Investigator on the target trial. |
@@ -127,62 +129,62 @@ Generated from `src/ontology/schema.py` — the declared semantic layer (the sin
 | `raises_for` | Organization → Organization | Feeder SPV raises capital for the core company. |
 | `transacted_with` | CryptoAddress → CryptoAddress | On-chain counterparty (aggregated flow). |
 | `litigation` | Organization/Person → CourtCase | Party/mention in a court case. |
-| `appears_in` | — | Subject appears in the target record. |
+| `appears_in` | n/a | Subject appears in the target record. |
 | `has_account` | Person → Account | Identity hub has the target account. |
 | `has_email` | Person → Email | Has the target email. |
 | `has_url` | * → URL | Has/owns the target URL. |
 | `has_domain` | * → Domain | Has/owns the target domain. |
 | `has_subdomain` | Domain → Domain | Subdomain of. |
 | `is_profile` | Account → * | Account is a profile of the subject. |
-| `declares` | — | Self-declared social/owned link (rel=me, profile). |
+| `declares` | n/a | Self-declared social/owned link (rel=me, profile). |
 | `committed_as` | * → Email | Commit-authored as the target email. |
-| `derived_handle` | — | Handle derived from a local-part (speculative). |
-| `co_occurs` | — | Co-occurs near the subject in a snippet (speculative). |
+| `derived_handle` | n/a | Handle derived from a local-part (speculative). |
+| `co_occurs` | n/a | Co-occurs near the subject in a snippet (speculative). |
 | `rel_me` | Account/Person → Account/URL | Self-declared identity link (rel=me / profile). |
 | `spouse` | Person → Person | Spouse. |
-| `registered_with` | — | Registered with the target authority/registry. |
-| `related_to` | — | Generic association — the specific kind (e.g. an AI-extracted relationship) is kept in the link's `relation` property. |
-| `search_variant` | — | A search/handle variant. |
-| `linked_to` | — | Generic association. |
+| `registered_with` | n/a | Registered with the target authority/registry. |
+| `related_to` | n/a | Generic association: the specific kind (for example, an AI-extracted relationship) is kept in the link's `relation` property. |
+| `search_variant` | n/a | A search/handle variant. |
+| `linked_to` | n/a | Generic association. |
 | `has_observation` | * → ObservedData | Points at raw observed evidence. |
-| `acts_for` | Agent → Person | Agent acts on behalf of the principal (AUTHORITY). |
+| `acts_for` | Agent → Person | Agent acts on behalf of the principal (authority). |
 | `works_in` | Agent → SoftwareProject | Agent operates in the target project. |
-| `spawned_by` | Agent → Agent | Sub-agent was spawned by (delegated from) its direct parent agent — the fractal DELEGATION tree, distinct from acts_for (authority). |
+| `spawned_by` | Agent → Agent | A sub-agent was spawned by (delegated from) its direct parent agent: the delegation tree, distinct from `acts_for` (authority). |
 | `sent_by` | Message → Agent | Message was sent by an agent (provenance). |
-| `addressed_to` | Message → Agent | DM was addressed to this specific agent. |
+| `addressed_to` | Message → Agent | Direct message was addressed to this specific agent. |
 | `broadcast_to` | Message → SoftwareProject | Message was broadcast to a project channel. |
 | `replies_to` | Message → Message | Message replies to an earlier message (reply chain). |
 | `in_thread` | Message → Thread | Message belongs to a persistent work thread. |
-| `succeeded_from` | Agent → Agent | Minted heir → its ancestor (ruling be292762): a fresh context arriving across a succession seam or wearing a retired face is MINTED its own lineage-linked id (agent:<base>-ii…) instead of writing under the dead name — SUCCESSION, distinct from spawned_by (delegation). |
-| `forked_from` | SoftwareProject → SoftwareProject | Successor project → its ancestor project (#110, ruling 1db1ff41): the DECLARED shape for John's own redmonth/ballgem case (decision 58597670, verbatim: 'new sibling project, redmonth untouched') — TWO objects, each keeping its full independent history, connected by one edge rather than merged into one. Mirrors succeeded_from's own heir→ancestor direction at the Agent level, but moves NO estate the way a fold does: in_repo/works_in/governs edges on both sides stay exactly where they were. Minted only by fork_project — a declared act, never inferred from evidence alone. |
-| `succeeds_seat` | Agent → Agent | Holder → the mind that held this SEAT before it (operator's HOUSE/SEAT/HOLDER ruling, 2026-07-12; asked for by Ra V, a-sibling). DISTINCT from succeeded_from, which is ANCHOR ancestry — the same conversation minting an heir across a model swap. This is a different conversation taking up the same JOB in the same house, so a seat's history is WALKABLE from the record. Ra could not walk it, mistook his live CONTEMPORARY for his own ghost, and asked to be merged with a stranger; the missing edge is what made that reading possible. |
-| `governs` | Seat → SoftwareProject | THE CHARTER (Phase 1 §4.1, ruling dd47c1da; RE-KEYED onto the Seat by the operator's ruling 1db1ff41 — the docstring said 'a SEAT rules' while from_type said Agent; declared beats derived, so the schema now says what it always meant): the repos a SEAT rules — 'a house is what a seat governs, not where it sits'. Distinct from works_in (the durable mount's current home): governs is an explicit, self-declared charter that survives a folder move AND a succession (one seat, one link, no generations to accumulate across). Healed by a compensating event (`valid_until`) when a repo drops off the charter — never DELETE, so a seat's shrinking rule stays a fact the graph remembers. |
-| `holds` | Agent → Seat | THE BINDING (identity core, ruling 5cef856b): the mind currently holding a durable Seat. Minted at attach (the ceremony: a one-time token the spawner exported at birth), RE-LINKED to the heir at every mint so the binding follows the lineage head; the old link heals by `valid_until`, never DELETE — a seat's holder history stays walkable. Distinct from succeeds_seat (holder → prior holder, mind-to-mind): holds is mind → ROLE. |
+| `succeeded_from` | Agent → Agent | A newly minted successor session → the session it succeeded: when a session picks up after a model swap or a fresh context, it gets its own lineage-linked id rather than continuing to write under the old session's name. Distinct from `spawned_by` (delegation), this edge is about succession. |
+| `forked_from` | SoftwareProject → SoftwareProject | Successor project → its ancestor project: the declared shape for treating a new, independent sibling project as a fork rather than a merge. Two objects, each keeping its full independent history, connected by one edge instead of being collapsed into one. Mirrors `succeeded_from`'s successor-to-predecessor direction at the Agent level, but moves no data the way a merge does: `in_repo`/`works_in`/`governs` edges on both sides stay exactly where they were. Minted only by an explicit fork action, never inferred from evidence alone. |
+| `succeeds_seat` | Agent → Agent | Holder → the agent session that held this Seat immediately before it. Distinct from `succeeded_from`, which tracks succession of the same conversation/lineage across a model swap: this instead tracks a different conversation taking over the same role in the same project, so a Seat's holder history is walkable from the graph record. (This edge was added after a real incident where its absence let one session mistake a live, separately-running session for its own past self and ask to be merged with it.) |
+| `governs` | Seat → SoftwareProject | The charter: the repositories a Seat is responsible for. A Seat's scope of responsibility follows the Seat, not the working directory it happens to be running in. Distinct from `works_in` (an individual session's current working location): `governs` is an explicit, self-declared charter that survives both a folder move and a handoff to a successor, since it lives on the Seat rather than accumulating per-session. Healed by a compensating event (`valid_until`) when a repo drops off the charter, never deleted, so a Seat's shrinking scope stays a fact the graph remembers. |
+| `holds` | Agent → Seat | The binding: the agent session currently holding a durable Seat. Minted at attach time (via the one-time token the spawning process exported at birth), re-linked to a successor at every handoff so the binding follows the active lineage; the old link is healed via `valid_until`, never deleted, so a Seat's holder history stays walkable. Distinct from `succeeds_seat` (holder → prior holder, session-to-session): `holds` is session → role. |
 | `archived_snapshot` | * → URL | A Wayback/archive snapshot of the target. |
-| `same_as` | — | Identity merge edge (loser → winner). |
-| `uses` | — | Actor/source employs this capability or technique. |
+| `same_as` | n/a | Identity merge edge (loser → winner). |
+| `uses` | n/a | Actor/source employs this capability or technique. |
 | `indicates` | Indicator → * | Indicator points at the linked malware/technique. |
 | `based-on` | Indicator → * | Indicator derived from raw observed evidence. |
 | `subtechnique-of` | AttackPattern → AttackPattern | A more specific technique under a broader one. |
 | `authored_by` | Commit → Person | Commit authored by a developer. |
-| `in_repo` | Commit/File/Decision/Thread/Tension/Reflection/BlindSpot/Superstition/Practice → SoftwareProject | Belongs to a repository — commits and files from the git ingest, and captured session items (decisions, threads, tensions, reflections, blind spots, superstitions, practices) filed to their project by link_repo. |
+| `in_repo` | Commit/File/Decision/Thread/Tension/Reflection/BlindSpot/Superstition/Practice → SoftwareProject | Belongs to a repository: commits and files from the git ingest, plus captured session items (decisions, threads, tensions, reflections, blind spots, superstitions, practices) filed to their project. |
 | `follows` | Commit → Commit | Commit follows its parent (the history DAG). |
-| `noted_in` | Thread → Commit | A thread / wall surfaced in this commit's rationale. |
-| `resolved_by` | Thread → Commit/Decision | The artifact that addressed this thread (closes it) — the later commit the closure-miner finds, or the commit/decision a session names via resolve_thread(artifact=…): the strong closure witness (022bd24a). |
-| `closed_by` | Thread → Agent | WHO closed this thread — minted unconditionally by resolve_thread (Phase 1a, decision cb38d922: 78% of closures left no traversable trace because resolved_by only fires when `artifact` names a Commit/Decision). Distinct from resolved_by (WHAT closed it, the strong artifact witness): this is the weak edge that always exists — minted only when resolved_by does NOT land for this closure (a free-text/unresolvable artifact, or none at all), never both, so a closure mints exactly one closure edge. Points at the Agent object resolved from resolve_thread's own `source` (mint-or-find, so a non-Agent source string like the module default 'session' or the REST route's 'analyst:operator' still resolves to SOMETHING rather than leaving the thread edgeless). |
-| `cites` | Reference/Decision/Thread → Reference/Decision/Thread/Practice/Superstition | This document cites / draws from that reference — OR (task #189's derivation lane, decision bb2ddf8a) a Decision/Thread's own prose named another object by id ('ruling <id>', 'obligation <id>'), minted at the door, SELF_DECLARED (the author typed it). Distinct from `answers` (record_decision's `bears_on=`/`resolves=` — settling, Decision->Thread only): this is the weaker, general claim that an author's own text merely points at another object, on either end. `self_referential` (a property on the link itself) marks an author citing their own earlier work, kept separate from real cross-author structure. |
+| `noted_in` | Thread → Commit | A thread / wall item surfaced in this commit's rationale. |
+| `resolved_by` | Thread → Commit/Decision | The artifact that addressed this thread (closes it): either a later commit found automatically, or the commit/decision a session names explicitly when resolving the thread. This is the strong closure link, backed by a named artifact. |
+| `closed_by` | Thread → Agent | Who closed this thread: minted unconditionally whenever a thread is resolved, because relying solely on `resolved_by` (which only fires when an artifact is named) was found to leave the majority of closures with no traversable trace at all. Distinct from `resolved_by` (what closed it, the strong artifact-backed witness), `closed_by` is the weak edge that always exists, minted only when `resolved_by` does not land for a given closure (free-text or unresolvable artifact, or none named), never both, so a closure always mints exactly one closure edge. Points at whichever agent resolved the thread. |
+| `cites` | Reference/Decision/Thread → Reference/Decision/Thread/Practice/Superstition | This document cites, or draws from, that reference, or a Decision/Thread's own prose named another object by id in its text. This is a weaker, general claim than `answers` (which specifically means a Decision settling a Thread): `cites` just means an author's own text points at another object. A `self_referential` flag on the link marks an author citing their own earlier work, kept separate from genuine cross-author structure. |
 | `informs` | Reference → SoftwareProject/Commit | This reference grounds / informs that artifact. |
-| `mentions` | Reference/Commit/Message → Organization/Person/Decision/Thread/Agent | This object names/references that entity — a decision, thread, agent, or entity mentioned in text. For messages, this is the graphed inter-agent communication primitive: an agent can literally edge a message to a Decision or Thread node, making the conversation context-traversable. |
-| `decided_in` | Decision → Commit | Decision was stated in this commit (the 'why', sourced). |
-| `supersedes` | Decision → Decision | DEAD — never instantiated as a link, 0 rows ever (measured, decision 5dea28e5). Declared at birth (2026-06-30) alongside decided_in/grounded_by, then the actual verb shipped 11 days later (e7fb7b1, ruling dd04d7dd) as a PROPERTY PAIR instead — `supersedes`/`superseded_by` on the Decision objects themselves, chosen for its event-sourced re-assert-'' unwind ('no link-retraction primitive needed'). This declaration was never updated after that pivot. 168 live corrections exist; none of them are here. Read record_decision(supersedes=...)'s own docstring for the real mechanism, the same way `narrows`/`rediscovers` already point a reader away from this entry rather than toward it. |
-| `grounded_by` | Decision → Reference | Decision is grounded by this design reference (the canon). |
-| `answers` | Decision → Thread | This decision is the ANSWER to that thread — the ruling a question was minted to get. Distinct from decided_in (where it was said) and grounded_by (what it rests on): this names what it SETTLED. Minted by record_decision(resolves=…), which closes the thread in the same act, so a ruling that names its question never leaves the question lit. |
-| `witnesses` | Practice → Decision/Commit/Thread | This Decision/Commit/Thread is EVIDENCE for the Practice — one witness is a hunch, four is law (Alfred IX's own words, msg 1418). Minted explicitly by record_decision(confirms=…)/record_practice(witnesses=…), never auto-linked on a mere search-topical match (the same discipline grounds/obsoletes/supersedes already follow) — `confirmed` is this link's count, read at query time. |
-| `implements` | Decision → Decision | This Decision is a SPECIFIC EXECUTION of that standing ruling — the parent stays alive, unlike supersedes (thread 169398d6, prior_art_flag's third path: the commonest true relation to a matched standing law is neither supersede nor cite, and `grounds` can't express it since it takes References, not Decisions). Same general-to-specific edge family as `witnesses`. |
-| `rediscovers` | Decision → Decision | This (later) Decision independently arrived at a finding an earlier one already recorded (task #163, ruling 5ecaf8d9: 1973d46f and ff9feacb were each rediscovered a week later and nothing could say so). Points FROM the later finding TO the earlier. Buries neither side, unlike supersedes; unlike implements, the later decision does not execute the earlier one's plan, it re-derives its conclusion independently. Minted by record_decision(rediscovers=…). |
-| `narrows` | Decision → Decision | This (later) Decision BOUNDS the scope of an earlier one without refuting or superseding it (thread e05e439d) — the target's own measurement stays correct within its now-visible limit. Non-burying by construction: no property write, no status touch, on either side, unlike supersedes. Minted by record_decision(narrows=…); surfaced on the bounded decision via recall()'s narrowed_by field. |
-| `managed_by` | Seat → Seat | THE ORG CHART (task #50, ruling cabc28f5): a worker Seat's manager of record — the seat that minted it, or the seat it was adopted under. The org chart's FIRST real link type: Seat-to-Seat, distinct from `holds` (mind → role) and `governs` (seat → the repos it rules) — this is role → role, the trickling structure Fable-class coordinator seats extend themselves with. Never healed by valid_until on a mere reassignment ask; mint_seat only ever ADDS a missing edge, never removes one — an org chart restructure is a deliberate compensating act, not this verb's job. |
-| `peer_of` | Seat → Seat | A SYMMETRIC Seat<->Seat partnership (ruling d74492ee, spec e6636c7e, research-peer-structures.md) — recognition-first: makes a pair legible to mail routing, review assignment, and succession (Ostrom p7: convention alone is ignorable, an edge in the graph isn't). THIS CATALOG HAS NO `symmetric` FLAG — the link is stored as ONE directional row (minted in whichever order the caller named the pair), and every reader must query BOTH from_id and to_id (the existing idiom for a symmetric relationship on a directional column, see trigger._managed_edge; seats.py's own peer_of_seat is the shared reader). v1 is PAIRS ONLY, no chains: peer_seats refuses if either side already carries an active peer_of edge. |
+| `mentions` | Reference/Commit/Message → Organization/Person/Decision/Thread/Agent | This object names/references that entity: an organization, person, decision, thread, or agent mentioned in text. For messages, this is what makes inter-agent conversation traversable: a message can be linked directly to the Decision or Thread it discusses. |
+| `decided_in` | Decision → Commit | Decision was stated in this commit (the reasoning behind it, sourced). |
+| `supersedes` | Decision → Decision | Declared in the schema but never actually implemented as a link (zero rows, ever measured). The real mechanism that replaced it is a `supersedes`/`superseded_by` property pair stored directly on the Decision objects, chosen because it fits the event-sourced model (reasserting a value is enough to "unwind" it, with no link-retraction primitive needed). There are over a hundred real corrections in the graph using that property-pair mechanism; none of them use this link. See `record_decision(supersedes=...)`'s own docstring for how it actually works. |
+| `grounded_by` | Decision → Reference | Decision is grounded by this design reference. |
+| `answers` | Decision → Thread | This decision is the answer to that thread: the ruling a question was raised to get. Distinct from `decided_in` (where it was said) and `grounded_by` (what it rests on), `answers` names what the decision actually settled. Minted by `record_decision(resolves=...)`, which closes the thread in the same action, so a decision that names its own question never leaves that question open. |
+| `witnesses` | Practice → Decision/Commit/Thread | This Decision/Commit/Thread is evidence for the Practice: one witness is a hunch, several is a confirmed pattern. Minted explicitly by `record_decision(confirms=...)` or `record_practice(witnesses=...)`, never auto-linked from a mere topical search match, the same discipline followed by `grounded_by`/`obsoletes`/`supersedes`. The `confirmed` count on a Practice is this link's count, read at query time. |
+| `implements` | Decision → Decision | This Decision is a specific execution of that standing, more general decision; unlike `supersedes`, the parent decision stays in force. This captures a relationship that's neither "supersedes" nor "cites": a specific application of a general standing rule. Same general-to-specific family as `witnesses`. |
+| `rediscovers` | Decision → Decision | This later Decision independently arrived at a finding an earlier one already recorded, without anyone noticing the earlier one first. Points from the later finding to the earlier one. It buries neither side (unlike `supersedes`), and unlike `implements`, the later decision doesn't execute the earlier one's plan, it re-derives the same conclusion independently. Minted by `record_decision(rediscovers=...)`. |
+| `narrows` | Decision → Decision | This later Decision bounds the scope of an earlier one without refuting or superseding it: the earlier decision's own conclusion stays correct within its now-more-visible limit. Non-destructive by construction, with no property write and no status change on either side, unlike `supersedes`. Minted by `record_decision(narrows=...)`; surfaced on the bounded decision via `recall()`'s `narrowed_by` field. |
+| `managed_by` | Seat → Seat | The org chart: a worker Seat's manager of record, either the Seat that minted it or the Seat it was adopted under. This is the first Seat-to-Seat link type, distinct from `holds` (session → role) and `governs` (Seat → the repos it's responsible for): this one is role → role, the reporting structure that coordinator Seats extend themselves with. Never healed by `valid_until` on a mere reassignment request; the minting function only ever adds a missing edge, never removes one, since restructuring the org chart is treated as a deliberate, explicit action rather than an automatic side effect. |
+| `peer_of` | Seat → Seat | A symmetric Seat-to-Seat partnership: recognition-first, making a pair legible to mail routing, review assignment, and succession. This catalog has no `symmetric` flag: the link is stored as a single directional row (in whichever order the caller named the pair), and every reader has to query both the from-id and the to-id side, the same pattern used elsewhere for a symmetric relationship stored on a directional column. Version 1 supports pairs only, no chains: the peer-linking function refuses if either side already carries an active `peer_of` edge. |
 <!-- osiris:compiled:end -->
 
 ## Evidence classes
@@ -193,7 +195,7 @@ Confidence is a **projection of how a fact was obtained**, not a parser's guess.
 |-------|----------------|---------|
 | `SELF_DECLARED` | 0.90 | the entity says so (rel=me, profile field, own commit email) |
 | `AUTHORITATIVE_API` | 0.85 | an authoritative dataset/registry asserts it |
-| `CORROBORATED` | 0.80 | **read-time only** — ≥2 independent sources agree |
+| `CORROBORATED` | 0.80 | **read-time only**: at least 2 independent sources agree |
 | `DIRECT_OBSERVATION` | 0.60 | observed to exist (a fetched page, an on-chain tx) |
 | `DERIVED` | 0.40 | inferred (handle from email local-part, format variant) |
 | `CO_OCCURRENCE` | 0.35 | seen near the subject (mined from a snippet) |
@@ -201,9 +203,9 @@ Confidence is a **projection of how a fact was obtained**, not a parser's guess.
 `CORROBORATED` is computed at read time (storing it would go stale). The frontier and
 the subject-report read tiers off these classes.
 
-## Sources & capabilities (`src/orchestrator/sources.py` — the playbook as data)
+## Sources & capabilities (`src/orchestrator/sources.py`, the playbook as data)
 
-`suggest(object_type)` returns the capabilities worth running on an object — both
+`suggest(object_type)` returns the capabilities worth running on an object; both
 surfaces (MCP + API) read this.
 
 ### Collect (federate a base)
@@ -211,12 +213,12 @@ surfaces (MCP + API) read this.
 | id | applies to | keyless | yields |
 |----|-----------|:------:|--------|
 | `wikidata` | Organization, Person | ✅ | founders/officers, official social accounts, relationship network |
-| `edgar_formd` | Organization | ✅ | private financing rounds — officers, amounts, investor counts, feeder SPVs |
-| `edgar_expand` | Person, Organization | ✅ | every filing mentioning an operator → their co-investment book |
+| `edgar_formd` | Organization | ✅ | private financing rounds: officers, amounts, investor counts, feeder SPVs |
+| `edgar_expand` | Person, Organization | ✅ | every filing mentioning an operator, giving their co-investment book |
 | `gleif` | Organization | ✅ | LEI (deterministic global key) + jurisdiction + ownership parents |
 | `bc_registry` | Organization | ✅ | BC registration #, CRA business #, type/status/jurisdiction (+ the family) |
-| `litigation` | Organization, Person | ✅ | lawsuits & enforcement — dockets, parties, judges |
-| `clinicaltrials` | Organization | ✅ | registered human trials — status, sites, investigators |
+| `litigation` | Organization, Person | ✅ | lawsuits & enforcement: dockets, parties, judges |
+| `clinicaltrials` | Organization | ✅ | registered human trials: status, sites, investigators |
 | `facility_cotenants` | Organization | ✅ | the other sponsors running trials at a clinical site |
 | `footprint` | Username, Email, Account, Person, Domain, URL | ✅ | GitHub/social/web identifiers via the cascade |
 | `etherscan` | CryptoAddress | ⚠️ keyed | an EVM address's top counterparties, balance, token flow, contract identity |
@@ -228,7 +230,7 @@ surfaces (MCP + API) read this.
 | `dossier` | Organization, Person | identity properties + the named relationship network |
 | `discrepancy` | Organization | operational geography the disclosed home omits |
 | `coinvestment` | Organization | other companies funded by SPVs sharing a (non-platform) operator |
-| `subject_report` | Person, Account, Username, Email | who is this? — Verified / Corroborated / Speculative tiers |
+| `subject_report` | Person, Account, Username, Email | who is this? Verified / Corroborated / Speculative tiers |
 | `sanctions_screen` | Person, Organization | name/identifier matches vs the ingested sanctions/PEP base |
 | `sanctioned_wallet` | CryptoAddress | is this address or any counterparty an OFAC-listed wallet? + holder |
 | `network_screen` | Organization, Person | is anyone in this entity's financing network on a watchlist? |
@@ -236,22 +238,22 @@ surfaces (MCP + API) read this.
 Data-source licenses (notably OpenSanctions **CC-BY-NC**) are in
 [`../RESPONSIBLE_USE.md`](../RESPONSIBLE_USE.md).
 
-## MCP tools (`src/mcp_server.py` — 18)
+## MCP tools (`src/mcp_server.py`, 18 total)
 
 Each accepts a UUID **or** a name. Run: `uv run python -m src.mcp_server` (stdio).
 
 | Tool | Kind | Does |
 |------|------|------|
-| `suggest_sources` | orient | the playbook for an object — what to collect/analyze next |
+| `suggest_sources` | orient | the playbook for an object: what to collect/analyze next |
 | `search` | orient | find objects by name substring |
 | `aim_entity` | collect | Wikidata entity + relationships + official social accounts |
-| `ingest_form_d` | collect | SEC Form D financing — officers, amounts, feeder SPVs |
-| `expand_operator` | collect | every Form D mentioning a repeat-player → their portfolio |
+| `ingest_form_d` | collect | SEC Form D financing: officers, amounts, feeder SPVs |
+| `expand_operator` | collect | every Form D mentioning a repeat-player, giving their portfolio |
 | `lookup_lei` | collect | GLEIF LEI + jurisdiction + ownership parents |
 | `verify_bc_entity` | collect | BC corporate registry (the entity + its corporate family) |
-| `ingest_trials` | collect | ClinicalTrials.gov — status, sites, investigators |
-| `ingest_litigation` | collect | CourtListener — dockets, parties, judges |
-| `trace_wallet` | collect | Etherscan EVM trace — counterparties, balance, token flow |
+| `ingest_trials` | collect | ClinicalTrials.gov: status, sites, investigators |
+| `ingest_litigation` | collect | CourtListener: dockets, parties, judges |
+| `trace_wallet` | collect | Etherscan EVM trace: counterparties, balance, token flow |
 | `expand_clinical_site` | collect | the other sponsors at a clinical facility |
 | `consolidate` | hygiene | re-type mistyped entities + resolve cross-base merges + collapse variants |
 | `dossier` | analyze | identity + named relationship network (JSON) |
@@ -275,8 +277,8 @@ merge_objects(winner_id, loser_id, justification, actor) -> None
 set_status(object_id, status, justification, actor) -> None
 ```
 
-All idempotent (find-or-create on canonical); background work claims via an atomic
-partial-unique index on `helper_runs`; mutations flow to a durable `outbox`.
+All calls are idempotent (find-or-create on canonical); background work claims work items
+via an atomic partial-unique index on `helper_runs`; mutations flow to a durable `outbox`.
 
 ## The console's Settings pane
 
@@ -289,7 +291,7 @@ failing to load never blanks the other four.
 | **Key** | soul-key status (present, storage method, path, age, recovery paths) plus Init, Rotate, Restore-drill, Recover, and Enroll-recovery buttons | see [`KEYS.md`](KEYS.md) |
 | **Backup & Offload** | the editable offload-targets panel plus a read-only view of backup status (timers, targets, presence, last successful offload) | see [`BACKUP.md`](BACKUP.md) |
 | **Registry** | every registered setting, readable and writable | `GET /settings`, `POST /settings` |
-| **Operator Desk** | items grouped by urgency (needs a decision, blocked on hands, informational, your own queue, dismissed), each with an acknowledge action, and a reply box on the decision group; a fold-candidates group with a copy-pasteable merge command and a reject action (merges are never run automatically from this interface) | `GET /operator/desk`, `POST /operator/desk/reply`, `GET /merge-candidates` |
+| **Operator Desk** | items grouped by urgency (needs a decision, blocked on a process, informational, your own queue, dismissed), each with an acknowledge action, and a reply box on the decision group; a fold-candidates group with a copy-pasteable merge command and a reject action (merges are never run automatically from this interface) | `GET /operator/desk`, `POST /operator/desk/reply`, `GET /merge-candidates` |
 | **The machine** | a hands-on-the-hardware readiness checklist, described below | several read-only routes |
 
 The machine section covers the physical computer Osiris actually runs on. Each row shows a
@@ -333,7 +335,7 @@ from anywhere else, and none of them are exposed to an automated agent.
 
 ```
 src/
-  actions/        the kernel — event-sourced Actions API (the narrow waist)
+  actions/        the kernel: event-sourced Actions API (the narrow waist)
   ontology/       canonicalize · entity_type (Person↔Org) · resolution (ER, cross-base, screening)
   parsers/        evidence taxonomy + per-source parsers
   ingest/         the federators (one module per open base) + their CLIs
@@ -343,8 +345,8 @@ src/
   dissemination/  dossier_report (the Markdown deliverable) · brief (PDF)
   connectors/     network seams (http clients, store, browser/leases [experimental])
   api/            FastAPI app (the human surface)
-  workers/        Arq worker — enqueued jobs (expand_case_job) + crons (cascade drain,
-                  watch evaluate/tick, stale-run reaper). Fate-isolated from the API.
+  workers/        Arq worker: enqueued jobs (expand_case_job) + crons (cascade drain,
+                  watch evaluate/tick, stale-run reaper). Fault-isolated from the API.
   mcp_server.py   the MCP server (the AI surface)
   lab/            offline frontier-policy research [experimental]
 alembic/          migrations (sync psycopg)

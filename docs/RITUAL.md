@@ -75,7 +75,7 @@ Avoid context-window bloat by using bounded, high-efficiency tools:
 
 ---
 
-## 3. `settle()` — The Pre-Compaction Seal
+## 3. `settle()`: The Pre-Compaction Seal
 
 Before a context boundary or session close:
 

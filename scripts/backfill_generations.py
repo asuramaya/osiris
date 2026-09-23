@@ -10,7 +10,7 @@ change AT a boundary merged into one death), and mints the deficit of heirs with
 own timestamp and succession string, then moves the durable mount row to the true head.
 
 Scope: lineages with a durable mount row or a claimed handle, whose base session id is a real
-8-hex transcript anchor. Sub-agent (full-UUID) canonicals never mint — the wall stands.
+8-hex transcript anchor. Sub-agent (full-UUID) canonicals never mint; that boundary holds.
 Where a lineage already holds minted generations (a session-death heir), only the DEFICIT is
 minted: existing numerals are assumed to cover the earliest seams, so the head count lands
 true even when per-heir seam attribution is best-effort (each backfilled heir says so in its

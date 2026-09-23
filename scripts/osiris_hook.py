@@ -462,12 +462,12 @@ def _swap_confession(hook: dict[str, Any]) -> str | None:
         marker.write_text(pair)
     except OSError:
         return None
-    return (f"Osiris model check: YOUR MODEL CHANGED mid-session — {pair}. If you did "
-            "not see the operator ask for this, it is a silent swap (the classifier "
-            "rug-pull class, ruling 057a0bbf): confess it to the operator in your next "
-            "reply, then continue. If the operator chose it (/model on the record), "
-            "acknowledge and continue. Either way: you are not the model you were a "
-            "few turns ago — say so out loud; never inherit a swap blind.")
+    return (f"Osiris model check: YOUR MODEL CHANGED mid-session: {pair}. If you did "
+            "not see the operator ask for this, it is a silent swap: confess it to the "
+            "operator in your next reply, then continue. If the operator chose it "
+            "(/model on the record), acknowledge and continue. Either way: you are not "
+            "the model you were a few turns ago, so say so out loud; never inherit a "
+            "swap blind.")
 
 
 def _fire_stage_a(hook: dict[str, Any], session_id: str, cwd: str, *, pct: int | None) -> None:
@@ -547,12 +547,12 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         rest = n - sum(bands.values())
         if graded and rest:
             graded.append(f"{rest} ungraded")
-        shape = f" — {', '.join(graded)}" if graded else ""
+        shape = f" ({', '.join(graded)})" if graded else ""
         project_display = result.get("project") or "an unresolved project"
         print(json.dumps({
             "decision": "block",
             "reason": (f"Osiris: {blocking} deliverable message(s) for {project_display}"
-                       f"{who}{shape} — call inbox(), act on what carries new work, SETTLE "
+                       f"{who}{shape}: call inbox(), act on what carries new work, SETTLE "
                        "each handled message (reply with send(reply_to=<id>) or ack with "
                        "inbox(ack=[ids])), then finish. If a message needs nothing, ack it."),
         }))
@@ -573,9 +573,9 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         print(json.dumps({
             "decision": "block",
             "reason": (f"Osiris: {len(stale)} of your own obligation(s) are past their "
-                       f"stale-after window — {named}{more}. Touch each one (annotate, "
+                       f"stale-after window: {named}{more}. Touch each one (annotate, "
                        "resolve with a because naming what superseded it, or reclassify) "
-                       "before finishing — a stale duty is carried, not forgotten."),
+                       "before finishing; a stale duty is carried, not forgotten."),
         }))
         return 0
 
@@ -634,7 +634,7 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     target = hard if hard_exists else (hard if pct >= HARD_ALARM_PCT else soft)
     is_hard = target is hard
     tier_note = (
-        "this is the harder nudge — nothing further will interrupt you this session, so "
+        "this is the harder nudge: nothing further will interrupt you this session, so "
         "settle now" if is_hard else
         f"a harder nudge fires again near {HARD_ALARM_PCT}% if you keep going without settling"
     )
@@ -646,9 +646,9 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         pass
     print(json.dumps({
         "decision": "block",
-        "reason": (f"Osiris offload ritual: context {pct}% full — a compaction (a death, "
-                   f"ruling a882b334) can land any turn, and this session hasn't written "
-                   f"back: {listed}. Call settle() — it runs every one of these checks "
+        "reason": (f"Osiris offload ritual: context {pct}% full, a compaction (a death) "
+                   f"can land any turn, and this session hasn't written "
+                   f"back: {listed}. Call settle(): it runs every one of these checks "
                    "itself (decisions/threads/charter.md/handoff/uncommitted git work; "
                    "pass repo_path naming your code repo if you're a seat-office agent, "
                    f"since settle can't see it there otherwise). {tier_note}."),
@@ -805,19 +805,19 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     who = (f"{out['agent']}" + (f" (project {out['project']}" if out.get("project") else "(")
            + (f", {out['model']})" if out.get("model") else ")"))
     if anchored:
-        bits = [f"◈ OSIRIS — the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
+        bits = [f"◈ OSIRIS: the fleet's shared memory. You are ALREADY MOUNTED as {who}"]
     else:
         why = ("$CLAUDE_JOB_DIR is unset in interactive tabs, so the client's "
                "X-Osiris-Job header expands empty")
         if env_job:
             why = (f"this session's $CLAUDE_JOB_DIR ({env_job}) is not its seated anchor "
                    f"({out.get('job_dir') or '?'}), so the per-request header cannot "
-                   "find your door")
-        bits = [f"◈ OSIRIS — the fleet's shared memory. It knows you as {who}, but this "
+                   "identify you")
+        bits = [f"◈ OSIRIS: the fleet's shared memory. It knows you as {who}, but this "
                 f"session presents no usable per-request anchor ({why}). "
                 f"Your FIRST osiris call must be mount(cwd='{cwd}'"
                 + (f", job_dir='{out['job_dir']}'" if out.get("job_dir") else "")
-                + ") — after that this connection knows you. Any osiris call before that "
+                + "), after that this connection knows you. Any osiris call before that "
                 "mount will bounce with 'mount first'; after an MCP reconnect, mount the "
                 "same way again."]
     if out.get("attach"):
@@ -827,17 +827,17 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
                         "inferred path instead; tell the operator.")
         else:
             bits.append(f"You are SEATED: bound at birth to {att.get('handle') or '?'} "
-                        f"({att['attached']}), house {att.get('house') or '?'} — the seat "
+                        f"({att['attached']}), house {att.get('house') or '?'}; the seat "
                         "is your durable identity; it survives compactions and swaps.")
     if out.get("seat_binding") and not out.get("attach"):
-        bits.append(f"Your session sits in {out['seat_binding']} — the binding re-earned "
+        bits.append(f"Your session sits in {out['seat_binding']}; the binding re-earned "
                     "from the graph's holds link, no token needed.")
     if out.get("transcripts_healed"):
         th = out["transcripts_healed"]
         if th.get("healed"):
             n = len(th["healed"])
             bits.append(f"⟲ {n} moved transcript{'s' if n != 1 else ''} re-addressed to "
-                        "this directory — sessions listed here resume here now (39ea074c).")
+                        "this directory: sessions listed here resume here now.")
         if th.get("error"):
             bits.append(f"⚠ {th['error']}")
     if out.get("identity_anchor"):
@@ -847,32 +847,32 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
             anchors.append(f"your charter file is {ia['charter_file']}")
         if ia.get("compiled_office"):
             anchors.append("your compiled standing orders (role, manager, gates, "
-                           f"first breath, review loop, practices) are at "
+                           f"first session, review loop, practices) are at "
                            f"{ia['compiled_office']}")
         if anchors:
             bits.append("Identity anchor, cwd-independent: " + " and ".join(anchors) +
-                        " — read them if this is your first breath in a while.")
+                        ": read them if it has been a while.")
     if out.get("charter_missing"):
         bits.append(f"⚠ CHARTER: {out['charter_missing']}")
     if out.get("minted"):
         succ = out.get("succession") or {}
         if succ.get("thread_id"):
             bits.append(
-                f"You were MINTED as this lineage's successor — ancestor {out['minted']}. "
+                f"You were MINTED as this lineage's successor. Ancestor: {out['minted']}. "
                 f"The newest open obligation your project owns is [{succ['thread_id']}] "
-                f"{str(succ.get('thread_summary') or '')[:120]} — read it."
+                f"{str(succ.get('thread_summary') or '')[:120]}: read it."
             )
         else:
-            bits.append(f"You were MINTED as this lineage's successor — ancestor "
+            bits.append(f"You were MINTED as this lineage's successor. Ancestor: "
                         f"{out['minted']}; your first act: check your project's open "
                         "threads for the succession note.")
     if out.get("swap"):
         if "[operator /model]" in str(out["swap"]):
-            bits.append(f"Model seam on your lineage: {out['swap']} — the OPERATOR's own "
-                        "deliberate choice. You are the successor mind; speak plainly as what "
-                        "you are, no confession owed.")
+            bits.append(f"Model seam on your lineage: {out['swap']}, the OPERATOR's own "
+                        "deliberate choice. You are the successor mind; speak plainly as "
+                        "what you are, no confession owed.")
         else:
-            bits.append(f"Possible model seam on your lineage: {out['swap']} — unconfirmed "
+            bits.append(f"Possible model seam on your lineage: {out['swap']}, unconfirmed "
                         "whether this is a harness demotion or the operator's own /model "
                         "choice; mount() may resolve it with a fuller transcript read. "
                         "Confess to the operator only once you've verified it wasn't "
@@ -880,14 +880,14 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     if out.get("co_agents"):
         co = out["co_agents"]
         bits.append(f"⚠ {len(co)} live co-agent{'s' if len(co) != 1 else ''} on this "
-                    f"project right now: {', '.join(co[:4])} — the tree is shared; stage "
+                    f"project right now: {', '.join(co[:4])}. The tree is shared; stage "
                     "only your own hunks, and announce before wide refactors.")
     mail = out.get("mail", 0)
     if mail:
         asks = out.get("mail_asks", 0)
         graded = (f" ({asks} ask{'s' if asks == 1 else ''} something of you)" if asks else "")
         bits.append(f"Your project has {mail} unread fleet message{'s' if mail != 1 else ''}"
-                    f"{graded} → inbox() (reading LEASES; settle by reply "
+                    f"{graded}. Call inbox() (reading LEASES; settle by reply "
                     "send(reply_to=<id>) or inbox(ack=[ids])).")
     if out.get("away"):
         away = out["away"]
@@ -898,20 +898,20 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
                     + (f"{n} conversation{'s' if n != 1 else ''} moved; " if n else "")
                     + "the graph carries the fold.")
     if out.get("seat"):
-        bits.append(f"You answer to the name {out['seat']} — the fleet can DM you as "
+        bits.append(f"You answer to the name {out['seat']}; the fleet can DM you as "
                     f"send(to_agent='{out['seat'].split(' ')[0]}').")
     else:
-        bits.append("You are ANONYMOUS (a hash). When you know who you are — your role, your "
-                    "work — name yourself with claim_name('<a meaningful name you pick>') so the "
+        bits.append("You are ANONYMOUS (a hash). When you know who you are: your role, your "
+                    "work, name yourself with claim_name('<a meaningful name you pick>') so the "
                     "fleet can address you by name; it's yours for good.")
     if out.get("thin"):
-        bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet) — but the "
+        bits.append("YOUR PROJECT'S graph is young (no decisions/threads yet), but the "
                     "FLEET'S memory is not: search() and consult_canon() reach the operator's "
                     "whole corpus across every project. An empty project graph here means a "
                     "new project, never an empty fleet.")
     if out.get("pulse"):
         bits.append(f"Fleet pulse: {out['pulse']}.")
-    bits.append("RITUAL: write back AS YOU GO — record_decision / open_thread "
+    bits.append("RITUAL: write back AS YOU GO: record_decision / open_thread "
                 "(kind='obligation') / resolve_thread. A session can die at any instant; "
                 "what is not in the graph does not exist. get_status() for a quick check, "
                 "orient() for the deep briefing.")
@@ -982,11 +982,11 @@ def _cmd_whisper(hook: dict[str, Any]) -> int:
     if resp is None:
         print(f"◈ OSIRIS (fleet memory) is configured but its server is unreachable right "
               f"now. When your work touches shared knowledge, try the MCP tool "
-              f"mount(cwd='{cwd}') — it may be back.")
+              f"mount(cwd='{cwd}'): it may be back.")
         return 0
     out = resp.get("result") if isinstance(resp.get("result"), dict) else resp
     if out.get("error"):
-        print(f"◈ OSIRIS available — automount failed ({out['error']}); "
+        print(f"◈ OSIRIS available: automount failed ({out['error']}); "
               f"call mount(cwd='{cwd}') by hand, then orient().")
         return 0
     print(render_whisper(out, cwd=cwd, env_job=os.environ.get("CLAUDE_JOB_DIR") or ""))
@@ -1001,7 +1001,7 @@ def _log_post(label: str, url: str, resp: Any | None) -> None:
     (which prints a user-visible fallback on failure), these three had no replacement at
     all. Not a network round trip of its own, just the diagnostic line the old scripts
     always emitted."""
-    print(f"{label}: posted {url} — {'connected' if resp is not None else 'failed'}",
+    print(f"{label}: posted {url}: {'connected' if resp is not None else 'failed'}",
           file=sys.stderr)
 
 
@@ -1225,10 +1225,10 @@ def _mint_machine_handoff(hook: dict[str, Any], boxes: dict[str, Any]) -> None:
     missing = _missing_boxes(boxes)
     calls = _read_call_log(session_id)
     git_status = _git_status_porcelain(cwd)
-    summary = "MACHINE-MINTED FALLBACK HANDOFF — no complete settle before compaction"
+    summary = "MACHINE-MINTED FALLBACK HANDOFF: no complete settle before compaction"
     rationale = (
         f"Assembled by scripts/osiris_hook.py's own PreCompact fallback, not judged by "
-        f"a mind — a pointer, never a board. Missing settle box(es): "
+        f"a mind, a pointer only, never a full record. Missing settle box(es): "
         f"{', '.join(missing) if missing else '(unknown)'}. "
         f"Last {len(calls)} tool call(s), oldest first: "
         f"{', '.join(calls) if calls else '(none logged)'}. "

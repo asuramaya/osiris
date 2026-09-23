@@ -5,7 +5,7 @@ on already encrypts itself; this is the one-time backward pass over what was alr
 the table before this build landed.
 
 Dry-run by default, writes nothing. Idempotent: a second run (or a run interrupted
-mid-way) finds only what genuinely still needs migrating — each row is decrypted first
+mid-way) finds only what genuinely still needs migrating. Each row is decrypted first
 under the CURRENT key, and a row that already opens is skipped, never re-encrypted.
 Batched (default 2000 rows/UPDATE), keyset-paginated so a box still ingesting live
 sessions during the run is never at risk of a skipped or duplicated row.
