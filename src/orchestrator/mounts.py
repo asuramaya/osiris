@@ -740,6 +740,8 @@ async def sweep_ghost_doors(
     (action='sweep_ghost_doors') records is provably the row that was actually removed, not
     a belief about it from a moment earlier. Undoable through `undrop_dead_project_mount`.
     Returns rows released."""
+    from src.orchestrator.offices import is_bare_office_root
+
     rows = await actions.pool.fetch(
         f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
         "WHERE COALESCE(last_seen, mounted_at) >= now() - make_interval(secs => $1) "
@@ -748,6 +750,23 @@ async def sweep_ghost_doors(
     released = 0
     for r in rows:
         cwd = _normed(r["cwd"])
+        # THE BARE-CONTAINER EXEMPTION (thread 7558740d, Thoth mail 13351): a live
+        # coordinator tab mounted at the seats container ITSELF (~/.osiris/seats, never
+        # a seat's own office subdirectory) is never released by the ghost rule — traced
+        # against six weeks of audit_log for Thoth's own job_dir/a93f82b4: dozens of
+        # sweeps, every single one at this exact cwd, none at any OTHER cwd Thoth's
+        # lineage ever carried. `_normed`'s own docstring already concedes the cwd
+        # witness can miss (its documented fallback is the PROJECT witness) — but
+        # `live_bodies()`'s own bare-root skip (msg 1888, avoiding a phantom "seats"
+        # project) means that fallback is structurally unreachable for exactly this
+        # population, so a cwd-witness miss here has no safety net at all, unlike every
+        # other row. The ghost rule (fast, census-only release) simply does not apply to
+        # a bare-container cwd; `sweep_stale_doors`'s own pile rule (staleness AND the
+        # graph's own belief the lineage is still active) is the correct, slower
+        # mechanism for this population — it already protects a fresh row for an agent
+        # the graph still calls active, exactly what a live coordinator tab is.
+        if is_bare_office_root(cwd):
+            continue
         project = r["project"] or (Path(cwd).name if cwd else "")
         if cwd in body_cwds or (project and project in body_projects):
             continue
@@ -776,6 +795,28 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
         return None
     return MountRecord(job_dir=r["job_dir"], agent_id=r["agent_id"], project=r["project"],
                        cwd=r["cwd"], model=r["model"])
+
+
+async def borrowed_job_dir_owner(pool: asyncpg.Pool, agent_id: str) -> str | None:
+    """Is `agent_id` actually a DIFFERENT agent's own live job_dir slug, borrowed rather
+    than minted (thread b33fa26b/17819e83, Nebbercracker findings ab59c731/a0fd7e5b —
+    the jenny/dustin crossing)? The fingerprint, not a guess: a LIVE `agent_mounts` row
+    exists whose `job_dir` basename is this exact bare id, and whose OWN `agent_id` is a
+    DIFFERENT canonical — proof this string was never minted as an identity of its own,
+    it is borrowed from a real, currently-mounted OTHER mind. Returns that other mind's
+    own canonical (the real owner, for a caller's own error/finding text) or None (not
+    borrowed — a real identity, however sparsely provenanced, or a genuinely dead job_dir
+    nobody currently mounts).
+
+    Shared by `trigger._trustworthy_fallback_ancestor` (bind-before-spawn's own fallback
+    guard), `seats.rehold_seat` (the third-party correction door — the SAME shape can
+    reach a seat's holds edge through an explicit rehold, not just a launch), and
+    `compositions.seat_holder_census` (the `osiris lint --check seat-holders` report) —
+    one fingerprint, never three independently-drifting copies of the same query."""
+    bare = agent_id.removeprefix("agent:")
+    return await pool.fetchval(  # type: ignore[no-any-return]
+        "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/' || $1 AND agent_id <> $2 "
+        "LIMIT 1", bare, agent_id)
 
 
 async def _active_seat_for_lineage_base(pool: asyncpg.Pool, base: str) -> dict[str, Any] | None:

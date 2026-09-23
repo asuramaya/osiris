@@ -2145,6 +2145,37 @@ async def test_sweep_ghost_doors_leaves_an_undoable_witness(
     assert mounts._mount_snapshot(restored_row) == original_snapshot
 
 
+async def test_sweep_ghost_doors_never_releases_a_bare_container_coordinator_row(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    """THE BARE-CONTAINER EXEMPTION (thread 7558740d, Thoth mail 13351 — the Thoth
+    specimen): a live coordinator tab mounted at ~/.osiris/seats itself, never a seat's
+    own office subdirectory, must never be released by the ghost rule — traced against
+    six weeks of audit_log showing dozens of exactly this misjudgement, none at any
+    other cwd the same lineage ever carried. Proven with an EMPTY census (the
+    strongest possible negative signal a real census could ever hand back) and the row
+    still survives, unlike an ordinary row at any other cwd (the sibling test just
+    above, same empty-census inputs, released cleanly)."""
+    p = actions.pool
+    office_root = tmp_path / "seats"
+    office_root.mkdir()
+    monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(office_root))
+    await mounts.save_mount(p, job_dir="/x/jobs/barecoord1", agent_id="agent:barecoord1",
+                            project="osiris", cwd=str(office_root), model=None,
+                            session_key=None)
+    await p.execute(
+        "UPDATE agent_mounts SET last_seen = now() - interval '5 minutes' "
+        "WHERE job_dir='/x/jobs/barecoord1'")
+
+    released = await mounts.sweep_ghost_doors(
+        actions, body_cwds=set(), body_projects=set(), actor="cron:test")
+    assert released == 0
+    assert await mounts.find_mount(p, job_dir="/x/jobs/barecoord1") is not None
+    assert await p.fetchval(
+        "SELECT count(*) FROM audit_log WHERE action='sweep_ghost_doors' "
+        "AND payload->>'job_dir' = '/x/jobs/barecoord1'") == 0
+
+
 async def test_sweep_stale_doors_writes_no_witness_when_nothing_is_doomed(
     actions: Actions,
 ) -> None:

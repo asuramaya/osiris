@@ -3409,6 +3409,104 @@ async def test_lint_a_clean_run_carries_no_could_not_evaluate_key_at_all(
     assert "could_not_evaluate" not in result
 
 
+async def test_seat_holder_census_flags_a_borrowed_job_dir(
+    actions: Actions,
+) -> None:
+    """`osiris lint --check seat-holders` (thread b33fa26b, Thoth mail 13351 — the
+    jenny/dustin crossing): a seat whose holder is actually a different agent's own
+    live job_dir slug is flagged in the `borrowed` arm, naming the real owner."""
+    from src.orchestrator import mounts as mounts_module
+    from src.orchestrator.compositions import seat_holder_census
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Censusborrowed1",
+                             source="test")
+    borrowed_id = "agent:censusborrowed1"
+    await actions.create_or_find_object("Agent", borrowed_id, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=borrowed_id)
+    await actions.create_or_find_object("Agent", "agent:censusrealowner-vii", "test")
+    await mounts_module.save_mount(
+        actions.pool, job_dir="/home/asuramaya/.claude/jobs/censusborrowed1",
+        agent_id="agent:censusrealowner-vii", project="osiris",
+        cwd="/home/asuramaya/code/osiris", model=None, session_key=None)
+
+    census = await seat_holder_census(actions.pool)
+    hit = next((r for r in census["borrowed"] if r["seat"] == seat["seat_id"]), None)
+    assert hit is not None
+    assert hit["holder"] == borrowed_id
+    assert hit["borrowed_from"] == "agent:censusrealowner-vii"
+    assert not any(r["seat"] == seat["seat_id"] for r in census["unprovenanced"])
+
+
+async def test_seat_holder_census_flags_an_unprovenanced_holder(
+    actions: Actions,
+) -> None:
+    """A holder with no minted_because/handle/succeeded_from of its own — never
+    borrowed from anyone, just never actually minted — lands in the `unprovenanced`
+    arm, a WARN for a human to verify, not proof of corruption."""
+    from src.orchestrator.compositions import seat_holder_census
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Censusbare1", source="test")
+    bare_id = "agent:censusbare1"
+    await actions.create_or_find_object("Agent", bare_id, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=bare_id)
+
+    census = await seat_holder_census(actions.pool)
+    assert not any(r["seat"] == seat["seat_id"] for r in census["borrowed"])
+    hit = next((r for r in census["unprovenanced"] if r["seat"] == seat["seat_id"]), None)
+    assert hit is not None
+    assert hit["holder"] == bare_id
+
+
+async def test_seat_holder_census_clears_a_genuinely_minted_holder(
+    actions: Actions,
+) -> None:
+    """A holder with real provenance (minted_because, the ordinary _bind_before_spawn
+    no-ancestor shape) and no job_dir collision with anyone else — the healthy case,
+    flagged in neither arm."""
+    from datetime import UTC, datetime
+
+    from src.orchestrator.compositions import seat_holder_census
+    from src.orchestrator.seats import bind_holder, ensure_seat
+    from src.parsers.base import EvidenceClass
+
+    seat = await ensure_seat(actions, house="osiris", handle="Censusclean1", source="test")
+    clean_id = "agent:censusclean1"
+    oid = await actions.create_or_find_object("Agent", clean_id, "test")
+    await actions.assert_property(
+        oid, "minted_because", "launch_seat: bind-before-spawn, no prior holder",
+        "test", datetime.now(UTC), 0.9, evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=clean_id)
+
+    census = await seat_holder_census(actions.pool)
+    assert not any(r["seat"] == seat["seat_id"] for r in census["borrowed"])
+    assert not any(r["seat"] == seat["seat_id"] for r in census["unprovenanced"])
+
+
+async def test_lint_check_seat_holders_reaches_the_composition(actions: Actions) -> None:
+    """The `_LINT_CHECK_NAMES` wiring end to end: `osiris lint --check seat-holders`
+    (graph_lint's own `--check` filter) surfaces a borrowed-job_dir finding."""
+    from src.orchestrator import mounts as mounts_module
+    from src.orchestrator.compositions import _fn_lint
+    from src.orchestrator.seats import bind_holder, ensure_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="Censuswired1", source="test")
+    borrowed_id = "agent:censuswired1"
+    await actions.create_or_find_object("Agent", borrowed_id, "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id=borrowed_id)
+    await actions.create_or_find_object("Agent", "agent:censuswiredowner-vii", "test")
+    await mounts_module.save_mount(
+        actions.pool, job_dir="/home/asuramaya/.claude/jobs/censuswired1",
+        agent_id="agent:censuswiredowner-vii", project="osiris",
+        cwd="/home/asuramaya/code/osiris", model=None, session_key=None)
+
+    result = await _fn_lint(actions.pool, None, {"check": "seat-holders"})
+    assert result["counts"]["seat-holders"] >= 1
+    assert any(f["subject"] == seat["seat_id"] and "borrowed" in f["detail"]
+              for f in result["findings"])
+
+
 async def test_lint_isolates_one_broken_check_from_every_other(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3417,8 +3515,8 @@ async def test_lint_isolates_one_broken_check_from_every_other(
     pass) — it lands in `could_not_evaluate` with the real exception as its reason.
     Every check that already ran before the break (contradiction, first in run order)
     keeps its real findings; the broken check itself (orphan) AND every check still to
-    come after it (contested-summary, last in run order) are both named — genuinely
-    true, since neither one ever got the chance to run."""
+    come after it (contested-summary, one of several later in run order) are both
+    named — genuinely true, since neither one ever got the chance to run."""
     import src.orchestrator.compositions as compositions_mod
 
     async def boom(pool: object) -> None:

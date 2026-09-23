@@ -2288,6 +2288,23 @@ async def rehold_seat(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
     if agent_row is None:
         return {"error": f"no such agent: {agent_id!r}"}
+    # NEVER REHOLD ONTO A BORROWED JOB_DIR (thread b33fa26b/17819e83, jenny/dustin
+    # crossing, Nebbercracker findings ab59c731/a0fd7e5b): the exact door that kept
+    # re-corrupting jenny's seat AFTER _bind_before_spawn's own equivalent guard
+    # shipped — a caller (human or script) explicitly reholding a seat onto whatever
+    # the newest live session in a project happens to be, not realizing that session's
+    # own job-id-derived agent_id is a fresh stranger, not the seat's real lineage.
+    # `agent_id` is real (agent_row above), but if it is ACTUALLY a different, real
+    # agent's own live job_dir slug, this is never a legitimate correction target — a
+    # real correction names the seat's own established lineage, never a borrowed id.
+    from src.orchestrator.mounts import borrowed_job_dir_owner
+
+    borrowed_from = await borrowed_job_dir_owner(actions.pool, agent_id)
+    if borrowed_from is not None:
+        return {"error": f"{agent_id!r} is not a real identity — it is {borrowed_from}'s "
+                         "own live job_dir slug, borrowed. A rehold must name the seat's "
+                         "actual lineage (its own succeeded_from chain), never a fresh "
+                         "session's job-id-derived id."}
 
     from src.orchestrator.agents import _generation
 
