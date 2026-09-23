@@ -517,8 +517,8 @@ async def _retrieval(actions: Actions, since: datetime) -> dict[str, Any]:
     missed = await actions.pool.fetch(
         "SELECT query, count(*) AS n FROM search_log "
         "WHERE searched_at >= $1 AND hits = 0 GROUP BY query ORDER BY n DESC LIMIT 3", since)
-    # relaxed/fuzzy = searches that only survived on a fallback door; semantic = the
-    # embedding door contributed to the final answer. Together they say which doors
+    # relaxed/fuzzy = searches that only survived on a fallback path; semantic = the
+    # embedding path contributed to the final answer. Together they say which paths
     # actually carry recall — the quality telemetry the max-level engine is judged by
     # (ruling a0cfcca1; zero-hits retired as the tripwire in 40e68cb1).
     return {"queries": int(row["queries"]), "zero_hits": int(row["zero_hits"]),

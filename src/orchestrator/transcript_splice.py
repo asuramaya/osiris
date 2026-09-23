@@ -1,6 +1,6 @@
 """Splice a seat's session, fragmented across multiple project slugs by a mid-session cwd
 move, back into ONE file at its own office slug (#204: extracted from mcp_server.py's own
-heal_seat_transcript tool body, unchanged, so the CLI door added alongside it wraps the SAME
+heal_seat_transcript tool body, unchanged, so the CLI command added alongside it wraps the SAME
 function rather than a second copy of this logic)."""
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ async def heal_seat_transcript(
     `dry_run=True` (default) reports clean/refused per pair and where the result would
     land — nothing written. `dry_run=False` requires `because` and performs the real
     splice + rematerialize. Never touches a Seat row, anchor_cwd, or any source transcript
-    — the anchor-repoint half is heal_seat_anchor, a different door."""
+    — the anchor-repoint half is heal_seat_anchor, a different entry point."""
     handle = (handle or "").strip()
     if not handle:
         return {"error": "a handle is required"}

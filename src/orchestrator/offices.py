@@ -350,7 +350,7 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
     a missing key — but until this, nothing on the CORRECTION side could ever reach that
     state for a seat minted BEFORE that fix, only for one founded after it. A transition
     verb moving a seat's project off a fabricated value onto "no project, genuinely" needs
-    this as a legal target, not just the mint-time door.)
+    this as a legal target, not just the mint-time entry point.)
 
     Same backup discipline as write_pin_additions (`.osiris.bak` captures the exact pre-write
     bytes, overwritten each real write): a caller who mis-corrects can revert_pin_write same
@@ -427,7 +427,7 @@ def _correct_or_add_pin_value(
 
     THE FALLBACK RESULT CARRIES `old_value`/`new_value` TOO (never a bare `write_pin_
     additions` shape standing in unannounced): every existing caller of `correct_
-    pin_value`'s own return contract — cmd_correct_pin_value's own CLI door among
+    pin_value`'s own return contract — cmd_correct_pin_value's own CLI command among
     them — reads `old_value`/`new_value` unconditionally once `written` is true;
     `write_pin_additions` never carried those keys (it has no "old" value, only
     `added`/`skipped`/`discarded`), so returning it bare would trade one caller's
@@ -446,7 +446,7 @@ async def correct_own_pin_value(
     office_root: Path | None = None, workspace_root: Path | None = None,
     tree_cwd: str | None = None,
 ) -> dict[str, Any]:
-    """THE SELF-SCOPED DOOR onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
+    """THE SELF-SCOPED ENTRY POINT onto `correct_pin_value` (msg 4761, obligation 114f7ac9): the raw
     function takes an arbitrary filesystem `path`, which is exactly the wrong shape for a
     seat-facing surface — an MCP caller has no path to hand it that isn't either a guess or a
     trust exercise. This composes `correct_pin_value` with `held_seat` (the SAME lookup
@@ -466,7 +466,7 @@ async def correct_own_pin_value(
     its own courtesy `.osiris` at the seat's ANCHOR path — a second, independent pin copy
     this function used to never reach, so a fully-correct transition (fold + rebind +
     THIS call) still left the anchor copy reading the pre-transition project forever,
-    with no sanctioned door onto it at all. Still self-scoped, never a caller-supplied
+    with no sanctioned entry point onto it at all. Still self-scoped, never a caller-supplied
     path: the anchor is read fresh off the SAME held seat's own `anchor_cwd` property —
     the seat's other self-owned location, not an arbitrary one. Corrected WHEN IT EXISTS,
     DECLARES `key` ALREADY, AND DIFFERS FROM THE OFFICE PATH; skipped silently (never an
@@ -547,7 +547,7 @@ async def correct_pin_value_third_party(
     tree_cwd: str | None = None,
 ) -> dict[str, Any]:
     """THE THIRD-PARTY SIBLING of `correct_own_pin_value` — decision fff496fe22b0's own
-    named gap ("correct_pin_value has NO third-party door on any surface... an operator/
+    named gap ("correct_pin_value has NO third-party entry point on any surface... an operator/
     manager cannot fix another seat's pin at all"), closed the same way task #152 closed
     the identical gap for Seat.house: `resync_seat_house_third_party` is the precedent —
     NOT self-scoped, NOT headship-gated, `reason` required to actually write (same law
@@ -559,8 +559,8 @@ async def correct_pin_value_third_party(
     pin copies (office, anchor, workspace — ruling b30e2b38) correctly and is not
     actually self-scoped in its own code — it is self-scoped only by every existing
     caller's CONVENTION of always passing the caller's own `agent_id` (`cmd_correct_
-    pin_value`'s own CLI door already exploits this identical seam, passing an
-    explicitly-named agent instead). This door does the same: resolves `seat_id`'s own
+    pin_value`'s own CLI command already exploits this identical seam, passing an
+    explicitly-named agent instead). This entry point does the same: resolves `seat_id`'s own
     HOLDER agent via `seat_occupancy` (the one authority for who holds a seat, live or
     cold — never a caller-supplied agent id) and hands that off to `correct_own_pin_
     value` unchanged for the real write. Refuses when the seat has no holder on record
@@ -575,7 +575,7 @@ async def correct_pin_value_third_party(
     `correct_own_pin_value`.
 
     `tree_cwd` (Marquee's blind spot, Thoth dispatch relayed 2026-09-05, operator "one
-    more round" — the first sweep of this door could never reach a seat whose real
+    more round" — the first sweep of this entry point could never reach a seat whose real
     workspace isn't named after its own handle, exactly Marquee's shape: her tree lives
     at the DTFB project's own checkout): an explicit override for the THIRD copy's own
     location. When not given, this reads the seat's own `bind_seat_tree`-declared
@@ -667,7 +667,7 @@ async def revert_own_pin_write(
     pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
     workspace_root: Path | None = None,
 ) -> dict[str, Any]:
-    """THE SELF-SCOPED DOOR onto `revert_pin_write` (ruling b30e2b38): built the same day
+    """THE SELF-SCOPED ENTRY POINT onto `revert_pin_write` (ruling b30e2b38): built the same day
     its absence was found live — a seat that follows the rules into a bad pin state had
     no sanctioned way back out. `revert_pin_write` (above) has existed, tested, since
     write_pin_additions's own constraint 3; it simply had no MCP surface a seat could
@@ -744,7 +744,7 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
 
     The write itself goes through `write_pin_additions` unchanged (additive-only, backup-
     first, idempotent) — this function only ever supplies ITS OWN candidate value to that
-    door, never bypasses it. `revert_pin_write` undoes it exactly as it would any other
+    write path, never bypasses it. `revert_pin_write` undoes it exactly as it would any other
     write there."""
     from src.orchestrator.agents import read_project_pin
     from src.orchestrator.charter import charter_of
@@ -854,7 +854,7 @@ IN-PROGRESS state a typed object can't hold on its own.
 # THE ONE UNDECLARED SENTINEL (task #157 piece 1, operator's own words "fix the slop"): the
 # GRAPH declaration (a Seat's own `governs` edges, charter_of's own read) never had a single
 # word for "nothing there yet" — mint_seat's receipt said nothing at all about it while this
-# ceremony, one door over, already spoke plainly. Centralized so every caller that reports
+# ceremony, one call over, already spoke plainly. Centralized so every caller that reports
 # charter state says the SAME thing, not a copy that can drift the moment one side is edited.
 #
 # THE VERB, NAMED IN THE SENTINEL ITSELF (operator's self-chartering ruling, "each agent
@@ -1063,10 +1063,10 @@ async def establish_office(
     # quiet seat (lineage-wide: a live heir blocks moving the base); close the tab,
     # establish, relaunch at the office.
     #
-    # A NINTH SPECIMEN OF THE SAME ATLAS SHAPE, found live while fixing door census item 4
+    # A NINTH SPECIMEN OF THE SAME ATLAS SHAPE, found live while fixing entry-point census item 4
     # (Thoth msg 5772/5741, thread 2c3c2b9a): a fresh/refreshing agent_mounts row alone
     # used to be enough to refuse this whole ceremony — even with no harness-confirmed
-    # body behind it. This door was not in the original count; found because it was
+    # body behind it. This entry point was not in the original count; found because it was
     # masking doors.py's own `_record` fix inside lift()'s own call chain (establish_office
     # runs its own, separate liveness check AFTER lift()'s pre-claim check already passed).
     # establish_office is a rare, deliberate ceremony (never a hot per-mount path), so the
@@ -1159,7 +1159,7 @@ async def establish_office(
         projects_root=projects_root, claude_json=claude_json, extract=True,
         office_root=root)
     # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH — the
-    # fourth door must survive the seat's death, and mount rows don't (SessionEnd
+    # fourth entry point must survive the seat's death, and mount rows don't (SessionEnd
     # releases them; Ra's ended lineage held none, so every fresh launch at his own
     # office minted a stranger). The deed is what office_seat reads first.
     from src.orchestrator.handshake import file_office_deed

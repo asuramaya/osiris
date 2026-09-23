@@ -42,7 +42,7 @@ async def check_apply_authority(
     pool: asyncpg.Pool, target: str, *, actor: str, ruling: str | None = None,
     surface: str = "rest",
 ) -> str | None:
-    """THE UI/REST DOOR'S OWN AUTHORITY GATE (thread c89a9873) — `operator_or_ruling`,
+    """THE UI/REST ENTRY POINT'S OWN AUTHORITY GATE (thread c89a9873) — `operator_or_ruling`,
     the same shape `settings_service._authorized` already runs for a settings write:
     the caller must be a recognized operator actor (`seats._OPERATOR_ACTORS`), or cite a
     standing ruling naming this exact write via `verify_ruling`. Returns an error string,
@@ -51,7 +51,7 @@ async def check_apply_authority(
     `surface='ui'` (or any REST-originated call) additionally refuses `target ==
     'operator_charter'` OUTRIGHT — never merely gated behind confirm, structurally
     excluded regardless of the caller's own authority, per this house's own scope note.
-    The CLI door does not call this function at all (it has its own, separate --because
+    The CLI command does not call this function at all (it has its own, separate --because
     gate) — this check exists ONLY for the UI/REST surface's own write path."""
     if target in UI_APPLY_EXCLUDED_TARGETS:
         return (f"{target!r} cannot be applied from the UI/REST surface — its blast "
@@ -79,7 +79,7 @@ async def run_backfill(
     """Repair verb, dispatched over `target` — see `BACKFILL_TARGETS` for the full set.
     Dry run is the default for every target; `dry_run=False` requires `because` (except
     `agent_project_links`, which predates that convention — callers that want a stricter
-    contract than this function's own must enforce it themselves, e.g. the CLI/UI doors
+    contract than this function's own must enforce it themselves, e.g. the CLI/UI entry points
     built for wave 22 impose `because` unconditionally at their own layer). All seven
     idempotent.
 

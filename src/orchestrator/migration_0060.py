@@ -32,7 +32,7 @@ touch.
   (3) EXPIRY: a derived thread (summary evidence_class='derived'), still open, older than
       30 days (the object's own `created_at` -- the same "observed_at of the thread"
       proxy migration 0058 already established), with no `cites` or `noted_in` link
-      touching it in EITHER direction, closes via the real `resolve_thread` door (status
+      touching it in EITHER direction, closes via the real `resolve_thread` call (status
       ='resolved', matching every other closure in this graph -- 'closed' is not a status
       this kernel uses anywhere) with because='expired unclaimed'. Compensating, nothing
       deleted.
@@ -91,7 +91,7 @@ _OPEN_THREADS_SQL = """
 def _kind_for_evidence(evidence_class: str | None) -> str:
     """The law's own two-case mapping. Anything that isn't literally 'derived' -- self_
     declared, or any other class this graph might carry -- has no third rule to reach
-    for, so it takes the same door self_declared does: 'task'."""
+    for, so it takes the same path self_declared does: 'task'."""
     return "finding" if evidence_class == "derived" else "task"
 
 
@@ -177,7 +177,7 @@ async def plan_migration_0060(pool: asyncpg.Pool) -> dict[str, Any]:
 
 async def apply_migration_0060(actions: Actions) -> dict[str, Any]:
     """Applies `plan_migration_0060`'s own plan. Owner/kind: compensating `assert_
-    property` writes from `MIGRATION_SOURCE`. Expiry: the real `resolve_thread` door,
+    property` writes from `MIGRATION_SOURCE`. Expiry: the real `resolve_thread` call,
     never a hand-written status assertion -- matches every other closure in this graph
     exactly (resolved_in/resolved_because, the closed_by witness edge)."""
     from src.orchestrator.capture import resolve_thread

@@ -7,7 +7,7 @@ reboot). This lives in each service's OWN startup.
 
 LOUD ALARM, NEVER REFUSE-TO-SERVE (Thoth's ruling, DM 1339, after the operator drew the
 identical lesson on the mount-guard the same day): `osiris-mcp` is a fleet-wide single point
-of failure — one process, one shared pool, the whole fleet's only door in. A FALSE POSITIVE
+of failure — one process, one shared pool, the whole fleet's only entry point in. A FALSE POSITIVE
 from a buggy check refusing to serve would self-inflict a total outage on every boot, forever,
 strictly worse than the silent drift this guard exists to catch. A loud alarm carries no such
 asymmetry: a false positive costs one spurious alarm, a true positive achieves exactly the

@@ -162,7 +162,7 @@ async def bootstrap_project(
         # trace of Reference's 37% orphan rate): `proj` was just resolved/created above in
         # THIS SAME CALL — every log-chunk Reference this loop mints used to be written
         # with that identity in scope and then discarded it. `repo=project` links each one
-        # `in_repo` at the door instead.
+        # `in_repo` at the call site instead.
         r = await ingest_log(actions, fpath, topic=f"{project}-{topic}", source=source,
                              repo=project)
         total += r["entries"]

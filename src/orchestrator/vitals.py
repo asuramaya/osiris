@@ -41,7 +41,7 @@ _SEATED_ROW = (
     "      AND so.status='active'))"
 )
 
-# A SOUL is the lineage, not the row: a seat with three doors — its anchor, a tab view,
+# A SOUL is the lineage, not the row: a seat with three entry points — its anchor, a tab view,
 # a resume bridge — is ONE mind (operator, 2026-07-17: 'fleet is showing 7 agents when
 # really its 4 live'). The suffix strip folds generations to their base — SOUL_SQL_TEMPLATE
 # (agents.py, thread 25b57dca) so this shares the roman-AND-g<N> alternation with every
@@ -52,7 +52,7 @@ _SOUL = SOUL_SQL_TEMPLATE.format(col="m2.agent_id")
 async def live_souls(db: _DB, *, live_secs: int = 900) -> dict[str, int]:
     """{souls, visitors} — distinct live minds (seated) and distinct live strangers.
 
-    CACHE-BASED, CONFESSED, DELIBERATELY NOT ROUTED THROUGH THE HARNESS AUTHORITY (door
+    CACHE-BASED, CONFESSED, DELIBERATELY NOT ROUTED THROUGH THE HARNESS AUTHORITY (entry-point
     census item 2, Thoth msg 5772/5741, thread 2c3c2b9a): `agent_mounts.last_seen`
     freshness only, never cross-checked against registry_census/is_occupied_by_a_live_body.
     This feeds fleet_pulse's "N live" — read by EVERY agent on EVERY mount/orient call

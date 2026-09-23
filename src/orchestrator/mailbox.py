@@ -145,7 +145,7 @@ def _norm(project: str) -> str:
     return project.removeprefix("repo:").strip()
 
 
-# THE SEND-DOOR ADDRESSING GUARD'S OWN VOCABULARY: a leading vocative (e.g.
+# THE SEND-CALL ADDRESSING GUARD'S OWN VOCABULARY: a leading vocative (e.g.
 # 'name: spin down...', 'name, spin down...') or an @handle anywhere in the body: the
 # two shapes a human types when they mean a specific seat, not the room at large. This
 # is intentionally narrow (a leading word immediately followed by one of these four
@@ -306,7 +306,7 @@ async def send_message(
     open_thread(assignee=...) already covers dispatch-time minting on the recipient's
     own end.
 
-    THE SEND DOOR ADDRESSING GUARD: a broadcast (`to_project` set, `to_agent` absent)
+    THE SEND-CALL ADDRESSING GUARD: a broadcast (`to_project` set, `to_agent` absent)
     whose body opens with a leading vocative (e.g. 'name: ...', 'name, ...') or names
     an @handle is checked against `binding_of_handle`'s own authoritative Seat
     resolution (never the wider assertion fallback: a coincidence must never trigger
@@ -410,7 +410,7 @@ async def send_message(
                     f"no such project: {to_project!r} — nobody has ever mounted there, so "
                     f"no inbox() call would ever see this broadcast{hint}")
             else:
-                # THE SEND DOOR ADDRESSING GUARD: a sender in one project once sent
+                # THE SEND-CALL ADDRESSING GUARD: a sender in one project once sent
                 # `send(to='<that project>', body='<name>: spin down the demo...')`
                 # where <name> held a seat in a different project: nobody in the
                 # sending project was <name>, and the guard-less code filed it as an

@@ -4,7 +4,7 @@ mail 12836/12813, THE OFFLOAD RUNNER). Reuses `src.ingest.systemd_credential`'s 
 subprocess boundary (the same module `soul_crypto.py` was refactored onto for this
 exact reason) rather than a second hand-copy of the systemd-creds invocation.
 
-DELIBERATELY SMALLER THAN THE SOUL-STORE DOOR: this password is a restic repository
+DELIBERATELY SMALLER THAN THE SOUL-STORE API: this password is a restic repository
 passphrase, not a Fernet key — any bytes restic accepts as `RESTIC_PASSWORD` (no
 fixed shape to validate), so there is no `MultiFernet`/legacy-key-rotation-window
 concept here at all. THIS FIRST CUT SHIPS `init`/`status` ONLY — no `rotate`,

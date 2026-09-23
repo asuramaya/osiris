@@ -992,7 +992,7 @@ async def layout_batch(actions: Actions, *, limit: int | None = None) -> int:
 
     `limit=None` (every real caller -- the cron heartbeat and `run_layout_migrate`)
     reads `layout.batch_size` off the LIVE settings table (Thoth mail 10609, product
-    law: every action has a door) via `current_stored_value` -- effect='next_tick' is
+    law: every action has an entry point) via `current_stored_value` -- effect='next_tick' is
     genuine here, not the env-overlay path that only covers effect='immediate' keys --
     falling back to `_BATCH_SIZE` when the key has never been written. Passing an
     explicit `limit` (every test in this module) bypasses the settings lookup
@@ -1075,7 +1075,7 @@ async def _release_layout_lock(conn: asyncpg.Connection) -> None:
 async def run_layout_migrate(
     actions: Actions, *, limit: int | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
-    """THE MIGRATION DOOR (Thoth mail 10609): loop `layout_batch` until
+    """THE MIGRATION ENTRY POINT (Thoth mail 10609): loop `layout_batch` until
     `unplaced_batch` runs dry, yielding one receipt per batch as it happens rather
     than collecting a final report -- a `graph_layout_v` bump otherwise waits on the
     cron heartbeat's own 1000-objects/5-minute pace (hours for a real migration).

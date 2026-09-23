@@ -8,13 +8,13 @@ EXISTING verb rather than re-deriving it:
                                      the operator was handed before this build)
   osiris smoke                      the same probe src.orchestrator.smoke runs for the fleet
   osiris seed [--compositions-only] src.init's seeder (task #63's own deploy-step flag)
-  osiris soul-key <status|init|     THE KEY DOOR (Thoth mail 12810/12830, wave 17):
+  osiris soul-key <status|init|     THE KEY ENTRY POINT (Thoth mail 12810/12830, wave 17):
        rotate|restore-drill>        status/init/rotate the soul-store encryption key,
                                      or drill an off-box backup's restorability —
                                      init/rotate run once, by a human, in their own
                                      terminal, before/after (re)starting
                                      osiris-worker/osiris-mcp
-  osiris restic-key <status|init>   the offload runner's own credential door (ruling
+  osiris restic-key <status|init>   the offload runner's own credential entry point (ruling
                                      e0b98ff2's "same shape for the restic repository
                                      password"), the same systemd-creds custody as
                                      soul-key above
@@ -54,7 +54,7 @@ EXISTING verb rather than re-deriving it:
                                      per dispatch 3683 — fold_project no longer exists as an
                                      MCP tool, ruling 31c02dca/decision a926a8d0, and the CLI
                                      had silently kept the old name) — the sanctioned second
-                                     door for a worker whose sandbox classifier permits an
+                                     entry point for a worker whose sandbox classifier permits an
                                      installed entrypoint but refuses a raw DATABASE_URL
                                      script, or when a client's MCP tool index is stale.
                                      `osiris fold-project` still works (identical args,
@@ -67,7 +67,7 @@ EXISTING verb rather than re-deriving it:
                                      an MCP pair had no reason to stay asymmetric here.
   osiris charter-for <seat>         the same manager/operator-enforced charter.charter_for
              --repos --because      the charter_for MCP tool wraps (thread 2474) — same
-             --actor                second-door reasoning as fold-project, same guard,
+             --actor                second-entry-point reasoning as fold-project, same guard,
                                      untouched
   osiris amend-practice <ref>       the same capture.amend_practice the amend_practice MCP
              <amendment> --actor    tool wraps (thread 06c3529b) — narrows a LIVE practice's
@@ -93,8 +93,8 @@ EXISTING verb rather than re-deriving it:
                                      above) — appends reasoning to a LIVE decision without
                                      superseding it. Same pattern, same reason.
   osiris mint-seat <handle>         the same mintseat.mint_seat the mint_seat MCP tool wraps —
-             --manager <seat>       a DIFFERENT shape of gap than the four doors above: the MCP
-             [--project] [--house]  tool has no `manager` parameter at all, it infers the
+             --manager <seat>       a DIFFERENT shape of gap than the four entry points above:
+                                     the MCP tool has no `manager` parameter at all, it infers the
              [--model] --actor      manager from the CALLING agent's own held seat, which a raw
              [--adopt] [--force]    terminal doesn't have. Takes `manager` explicitly instead —
                                      closes the "brand-new seat needs a hand-rolled python -c
@@ -136,7 +136,7 @@ AgentsJson = Callable[..., Awaitable[list[dict[str, Any]]]]
 ResumeSpawn = Callable[..., Awaitable[None]]
 ClearStaleRecord = Callable[..., Awaitable[bool]]
 
-# dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-door
+# dispatch 3678, the operator's own "make the cli friendly": every sanctioned-second-entry-point
 # command below used to REQUIRE --actor, forcing a human at a raw terminal to type a value
 # that is always going to be the same one anyway. `console` is already a member of
 # `_OPERATOR_ACTORS` (src/orchestrator/seats.py) — a raw terminal call IS a console act by
@@ -601,11 +601,11 @@ def _lint_project_match(finding: dict[str, Any], project: str) -> bool:
 
 async def cmd_lint_triage(pool: asyncpg.Pool, *, as_json: bool) -> int:
     """`osiris lint --check triage`'s own branch (WAVE 27, PARITY GAP 2, Thoth mail
-    11752: "a headless door onto graph_lint and its sibling audits (triage, ...)"):
+    11752: "a headless entry point onto graph_lint and its sibling audits (triage, ...)"):
     the SAME `triage(mode='census')` MCP call, one row per (type, status). Pass/fail
     signal: any row carrying a live orphan or thin count -- the two columns census
     mode itself flags as worth a mind's attention; a real bucket-mode dig is what a
-    human reaches for next, this door only needs to say whether the fleet has
+    human reaches for next, this call only needs to say whether the fleet has
     anything to look at."""
     from src import cli_render as render
     from src.orchestrator import compositions as comp
@@ -633,7 +633,7 @@ async def cmd_lint_audit(pool: asyncpg.Pool, name: str, *, as_json: bool) -> int
     reports four summary numbers, not a findings list) -- exit 1 only on the
     composition's OWN error (an unknown name, a query failure), never on content,
     exactly `osiris audit`'s own contract. Reached through `osiris lint` purely so
-    the whole graph-health namespace (checks + triage + audits) has one door,
+    the whole graph-health namespace (checks + triage + audits) has one entry point,
     per Thoth's own wording; `osiris audit <name>` stays the direct, unaggregated
     way to run just one."""
     from src import cli_render as render
@@ -649,7 +649,7 @@ async def cmd_lint(
     stale_days: int = 14, limit: int | None = None, offset: int = 0,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris lint [--check NAME] [--project P] [--json] — the console-script door onto
+    """osiris lint [--check NAME] [--project P] [--json] — the console-script entry point onto
     graph_lint's own orchestrator function, the SAME call graph_lint's MCP tool makes
     (mcp_server.py:1379: `comp.run_spec(pool, {"op": "function", "name": "lint", ...},
     None, name="graph-lint")`) — never a second implementation of the 32 checks
@@ -666,7 +666,7 @@ async def cmd_lint(
 
     THE SIBLING-AUDITS WIDENING (WAVE 27, PARITY GAP 2, Thoth mail 11752): `--check`
     now also accepts `"triage"` (delegates to `cmd_lint_triage`) or any of
-    `AUDIT_NAMES` (delegates to `cmd_lint_audit`) — one door onto the whole graph-
+    `AUDIT_NAMES` (delegates to `cmd_lint_audit`) — one entry point onto the whole graph-
     health namespace her own dispatch named, rather than a fourth-through-eighth
     subcommand. `--project`/`--stale-days`/`--limit`/`--offset` are inert on either
     branch (graph_lint-only concepts); a caller mixing them with a widened `--check`
@@ -759,7 +759,7 @@ async def cmd_graph_export(
     Postgres and headless (this command owns its own pool, no MCP/HTTP round trip) —
     the same Pattern B shape as `osiris lint`, chosen because bulk-exporting tens of
     thousands of positioned objects through an MCP round trip is the wrong shape for
-    this door. `--json` prints a header-only summary (schema_version/count/edge_count/
+    this call. `--json` prints a header-only summary (schema_version/count/edge_count/
     types/projects, no array bodies); `--out FILE` writes the exact binary payload
     /graph/stream itself would have returned — pass both to get the summary AND the
     file."""
@@ -812,8 +812,8 @@ async def cmd_layout(
     *, limit: int | None = None, physics: bool = False, verify_only: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris layout --migrate — THE MIGRATION DOOR (Thoth mail 10609, product law:
-    every action has a door): loops the SAME `graph_layout.layout_batch` the cron
+    """osiris layout --migrate — THE MIGRATION ENTRY POINT (Thoth mail 10609, product law:
+    every action has an entry point): loops the SAME `graph_layout.layout_batch` the cron
     heartbeat calls until every object carries the current `graph_layout_v`, printing
     one receipt per batch as it runs rather than waiting on the cron's own 5-minute
     cadence (a real migration otherwise takes hours). Refuses cleanly (exit 1) if the
@@ -949,10 +949,10 @@ async def cmd_layout(
 
 # The 5 audit-shaped siblings graph_lint keeps beside it in the CMD-K palette (WAVE 22 scope
 # note, thread bf10608b — console.js's own POWER_TOOLS, lines 840-857), EXCLUDING graph_lint
-# itself (its own door, `osiris lint`) and the palette's non-audit analysis tools (Who Is This/
-# Co-Investment Ties/Screen Financing/Op vs Disclosed Geo/LAP/Overhead/Echoes — reporting lenses,
-# not health checks). Each name is a DEFAULT_COMPOSITIONS entry already, resolved by
-# `comp.run_composition` exactly as the `composition(action='run')` MCP door resolves it.
+# itself (its own entry point, `osiris lint`) and the palette's non-audit analysis tools (Who
+# Is This/Co-Investment Ties/Screen Financing/Op vs Disclosed Geo/LAP/Overhead/Echoes — reporting
+# lenses, not health checks). Each name is a DEFAULT_COMPOSITIONS entry already, resolved by
+# `comp.run_composition` exactly as the `composition(action='run')` MCP route resolves it.
 AUDIT_NAMES: tuple[str, ...] = (
     "closure-health", "the-wall", "type-census", "family-consistency", "family-drift",
 )
@@ -961,11 +961,11 @@ AUDIT_NAMES: tuple[str, ...] = (
 async def cmd_audit(
     name: str, *, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris audit <name> [--json] — one console-script door onto graph_lint's audit
+    """osiris audit <name> [--json] — one console-script entry point onto graph_lint's audit
     siblings (see `AUDIT_NAMES`), calling `comp.run_composition` directly, the SAME
-    function the `composition(action='run', name=...)` MCP door calls (mcp_server.py's
+    function the `composition(action='run', name=...)` MCP route calls (mcp_server.py's
     `_composition_impl`) — never a second implementation, and never one subcommand per
-    audit (five near-identical CLI doors drifting independently is exactly the class of
+    audit (five near-identical CLI entry points drifting independently is exactly the class of
     bug graph_lint's own history (#48) already taught this house to avoid).
 
     No subject binding (every one of these five runs fleet-wide, matching what the CMD-K
@@ -1059,9 +1059,9 @@ async def cmd_soul_key(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> —
-    THE KEY DOOR (Thoth mail 12810/12836, operator's word "keys and backup setup
+    THE KEY ENTRY POINT (Thoth mail 12810/12836, operator's word "keys and backup setup
     configurable from UI or CLI so a user does not need an agent"; KEY CUSTODY
-    REWRITTEN, ruling e0b98ff2). A thin console-script door, matching `osiris
+    REWRITTEN, ruling e0b98ff2). A thin console-script entry point, matching `osiris
     composition <action>`'s own shape.
 
     `init` stays POOL-FREE and calls `src.ingest.soul_crypto` directly.
@@ -1074,14 +1074,14 @@ async def cmd_soul_key(
 
     status/rotate/restore-drill compose a pool and call `src.orchestrator.
     soul_key` — the SAME three functions the `/soul-key/*` REST routes call,
-    never a duplicated implementation between the two doors.
+    never a duplicated implementation between the two entry points.
 
     `restart` (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065):
     `init` only — both daemons start in a loudly-degraded state with no key
     (mcp_server.py/arq_worker.py's own boot gates), so minting the key alone
     changes nothing until they restart and pick it up. Without `--restart`, the
     return dict's own `restart_units`/`restart_hint` name the exact `systemctl
-    --user restart ...` to run by hand; with it, this door runs that itself —
+    --user restart ...` to run by hand; with it, this command runs that itself —
     `_real_restart_services`, the SAME primitive `osiris deploy` already uses,
     never a second restart implementation. `--restart` is a no-op on any other
     action (only `init` ever needs a restart to take effect)."""
@@ -1169,10 +1169,10 @@ async def cmd_restic_key(
     action: str, *, path: str | None = None, backend: str | None = None,
     as_json: bool = False,
 ) -> int:
-    """osiris restic-key <status|init> — THE OFFLOAD RUNNER's own credential door (Thoth
+    """osiris restic-key <status|init> — THE OFFLOAD RUNNER's own credential entry point (Thoth
     mail 12813, KEY CUSTODY REWRITTEN ruling e0b98ff2's "same shape for the restic
     repository password"), mirroring `osiris soul-key`'s init/status shape. Pool-free
-    (the restic password never touches Postgres) — a smaller door than soul-key's:
+    (the restic password never touches Postgres) — a smaller entry point than soul-key's:
     no rotate/enroll-recovery/recover yet, a deliberate scope cut named in `src.
     orchestrator.restic_credential`'s own module docstring, not an oversight."""
     from src import cli_render as render
@@ -1288,7 +1288,7 @@ async def _resolve_launch_target(
 ) -> dict[str, Any] | None:
     """Handle -> seat facts (with `seat_id` folded in), or None with an honest stderr message
     already printed. Shared by launch AND resume (thread 60c78788, the operator's verb
-    split) — the seat lookup and its error cases don't change with the door, only what
+    split) — the seat lookup and its error cases don't change with the command, only what
     happens once a target is found. `verb` names the actual caller in every printed line
     ('launch' or 'resume') so one function serves both without a second copy."""
     from src.orchestrator.seats import seat_facts, seats_by_handle
@@ -1429,11 +1429,11 @@ async def _resolve_and_guard_launch(
             return 1
         launch_cwd = tree_cwd
 
-    # THE SHARED TWIN GUARD (task #148's contested seam 4, ruling 983ec87a "two doors, one
+    # THE SHARED TWIN GUARD (task #148's contested seam 4, ruling 983ec87a "two entry points, one
     # receipt"): reads BOTH claude agents --json (the harness's own, known-incomplete roster
     # — invisible to a resumed non-bg body by construction) AND agent_mounts (osiris's own
     # registry, which a resumed body's mid-turn mount() call DOES reach), same helper
-    # launch_seat's own harness-native lane calls, so the two doors can never drift.
+    # launch_seat's own harness-native lane calls, so the two entry points can never drift.
     twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=facts["seat_id"])
     if twin["harness"] or twin["mounts"]:
         seen_via = [s for s in (
@@ -1482,15 +1482,15 @@ async def _cmd_launch_harness(
     BY CONSTRUCTION.
 
     NO LONGER A SEPARATE IMPLEMENTATION (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH",
-    closing #48's "two doors, one receipt" lesson for launch itself, not just its
-    sub-pieces): this door now calls `trigger.launch_seat` directly, with
+    closing #48's "two entry points, one receipt" lesson for launch itself, not just its
+    sub-pieces): this entry point now calls `trigger.launch_seat` directly, with
     `operator_authorized=True` — the ONE flag only this CLI's own local-execution trust
     boundary can set (see `launch_seat`'s own docstring). `wake_default` stays in the
     signature for the two tests that call this function directly by keyword, but is no
     longer read here: launch_seat's own `_resolve_launch_model` already resolves the same
     precedence (explicit -> stamped intended_model -> last holder's own source_model ->
     the trigger's global default) from the `settings` this call passes through, one tier
-    RICHER than this door's own former `resolve_model` call ever was.
+    RICHER than this entry point's own former `resolve_model` call ever was.
 
     ONE GUARD STAYS CLI-SIDE, ON PURPOSE (decision 27259e4d, thread bc11a2d3): office/
     anchor_cwd existing ON DISK. Porting it into the shared `_launch_target_setup` would
@@ -1504,7 +1504,7 @@ async def _cmd_launch_harness(
     current instant, wrong for a human at a terminal, whom a fresh claude often has not yet
     self-bound for. Never re-invokes launch_seat (that would risk a second real spawn) —
     only re-polls the SAME already-injected `agents_json` this call already holds, the exact
-    8x/1s bound this door has always used."""
+    8x/1s bound this entry point has always used."""
     from src.actions.core import Actions
     from src.orchestrator.trigger import _tree_exists, launch_seat
 
@@ -1605,7 +1605,7 @@ async def _cmd_launch_pty(
         return 0
 
     # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d) — see
-    # _cmd_launch_harness's own comment on this same check, above: a separate door, an
+    # _cmd_launch_harness's own comment on this same check, above: a separate entry point, an
     # independent gate, placed after the idempotency check and before the real spawn.
     from src.config.settings import get_settings
     from src.ingest.providers import spend_is_metered
@@ -1780,7 +1780,7 @@ async def _cmd_resume_harness(
         # should be loud, never a quiet skip of the identity gate.
         assert holder is not None
         # hop count (#173a, mirrored from launch_seat's own identical wiring — ruling
-        # 983ec87a, two doors must return the same receipt): READ DIRECTLY off `resume`'s
+        # 983ec87a, two entry points must return the same receipt): READ DIRECTLY off `resume`'s
         # own 6th field now (task #200 residual, decision 6a0b1236/6d6bf4e8) — never
         # re-derived from `len(resume_log) - 1`, which silently miscounts whenever
         # `_lineage_resume_candidate` appends a second log line for the winning hop (e.g.
@@ -1790,7 +1790,7 @@ async def _cmd_resume_harness(
             seat_id=facts["seat_id"], st=st, hop=resume[5], launch_cwd=launch_cwd)
         if gate == "resident-unknown":
             # THE FIX FOR ef88e2bb (operator, 2026-08-17, ruling 7d6815bb) — mirrors
-            # launch_seat's own fix exactly (ruling 983ec87a, two doors one receipt): an
+            # launch_seat's own fix exactly (ruling 983ec87a, two entry points one receipt): an
             # ABSENCE of signed testimony is not evidence this head belongs to someone
             # else. "crossed-registry" (a POSITIVE finding) still refuses too (below) —
             # osiris resume never mints, whatever the registry finding is; "resident-
@@ -1818,7 +1818,7 @@ async def _cmd_resume_harness(
     # THE SPAWN CWD IS THE OFFICE, ALWAYS — never the tree/launch cwd (operator, 2026-09-03:
     # ~/.osiris is the anchor; the harness resumes the copy in the SPAWN cwd's own slug, so
     # spawning anywhere the canon was not emitted resumes a stale partial). Mirrors
-    # trigger.py's dispatch_dm/launch_seat lines exactly (two doors, one receipt).
+    # trigger.py's dispatch_dm/launch_seat lines exactly (two entry points, one receipt).
     spawn_cwd = materialized_at or await _resume_office(
         pool, facts["seat_id"], fallback=facts["anchor_cwd"])
     from src.orchestrator.trigger import _governed_project_name, _window_name
@@ -1910,7 +1910,7 @@ async def cmd_resume(
 
 async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
                    pool: asyncpg.Pool | None = None) -> int:
-    """`osiris launch`'s INVERSE, and the reason it exists: launch has had a terminal door
+    """`osiris launch`'s INVERSE, and the reason it exists: launch has had a terminal command
     since task #72 and stop had none, so a human could start a body from the shell and had
     no way to end one from the shell. Every other exit was a raw kill by hand — untracked,
     unaudited, and exactly the "dead ends and corpses" the operator named.
@@ -1919,7 +1919,7 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
     `stop` tool calls, never a second implementation. The operator lane skips ONE check
     (the managed_by edge, which governs agent-to-agent authority and has nothing to say
     about the human); the seat must still resolve, still have a holder, and the body must
-    still be /proc-confirmed by the same census every other door reads."""
+    still be /proc-confirmed by the same census every other entry point reads."""
     from src import cli_render as render
     from src.actions.core import Actions
     from src.orchestrator.trigger import stop_seat
@@ -1988,16 +1988,16 @@ async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False,
 
 
 # --- CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832) --------------------
-# Four read doors over the wire (dossier/object_events/succession_chain/candidates — no
+# Four read entry points over the wire (dossier/object_events/succession_chain/candidates — no
 # single MCP tool named "inspect" exists to mirror, and candidates() has no ref param at
-# all, so this ships as four flat 1:1 mirrors rather than one dispatcher door), plus
-# composition's own CLI face, plus the two genuinely-uncovered write doors
+# all, so this ships as four flat 1:1 mirrors rather than one dispatcher entry point), plus
+# composition's own CLI face, plus the two genuinely-uncovered write entry points
 # (retire-assertion/retire-link) and the two short citation names Thoth's dispatch asked
 # for by name (cite/citation, CLI_TO_MCP_NAME-mapped onto cite_transcript/read_citation).
 
 async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
                       as_json: bool = False, text: bool = False) -> int:
-    """osiris dossier <ref> [--want-relationships] — the console-script door onto the
+    """osiris dossier <ref> [--want-relationships] — the console-script entry point onto the
     dossier MCP tool, called over the wire (same object_ref/want_relationships params,
     no duplicated resolve/relationship logic)."""
     from src import cli_render as render
@@ -2018,7 +2018,7 @@ async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
 
 async def cmd_object_events(object_ref: str, *, event_type: str | None = None,
                             as_json: bool = False) -> int:
-    """osiris object-events <ref> [--event-type T] — the console-script door onto the
+    """osiris object-events <ref> [--event-type T] — the console-script entry point onto the
     object_events MCP tool, called over the wire (same object_ref/event_type params)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
@@ -2036,7 +2036,7 @@ async def cmd_object_events(object_ref: str, *, event_type: str | None = None,
 
 async def cmd_succession_chain(ref: str, *, max_hops: int = 10,
                                as_json: bool = False) -> int:
-    """osiris succession-chain <ref> [--max-hops N] — the console-script door onto the
+    """osiris succession-chain <ref> [--max-hops N] — the console-script entry point onto the
     succession_chain MCP tool, called over the wire (same ref/max_hops params)."""
     from src import cli_render as render
     from src.orchestrator.mcp_client import call_mcp_tool
@@ -2053,7 +2053,7 @@ async def cmd_succession_chain(ref: str, *, max_hops: int = 10,
 
 async def cmd_candidates(*, project: str | None = None, limit: int = 50,
                          as_json: bool = False) -> int:
-    """osiris candidates [--project P] [--limit N] — the console-script door onto the
+    """osiris candidates [--project P] [--limit N] — the console-script entry point onto the
     candidates MCP tool, called over the wire (same project/limit params). Omitting
     --project matches the orchestrator's own fleet-wide default: a COUNT you may look
     at, not a pile a bare terminal can act on."""
@@ -2080,7 +2080,7 @@ async def cmd_inspect(
     object" convenience over dossier / object_events / succession_chain / candidates.
     NOT a fifth MCP tool -- an earlier pass at this exact gap (the block comment
     above this function) found no single tool named "inspect" to mirror and shipped
-    four flat 1:1 doors instead; this is a CLI-side aggregator sitting on top of
+    four flat 1:1 entry points instead; this is a CLI-side aggregator sitting on top of
     those same four wire calls (dossier always, the other three opt-in), never a
     second implementation and never requiring a new MCP tool of its own -- the
     concern that stopped the earlier attempt doesn't apply to a pure client-side
@@ -2135,12 +2135,12 @@ async def cmd_inspect(
 
 
 # --- digest (#92, THE ZERO-TOKEN READ HOOK, Thoth mail 11780 item B): fleet_digest had no
-# CLI door at all until now — needed so the hook's static `osiris digest --text` invocation
+# CLI entry point at all until now — needed so the hook's static `osiris digest --text` invocation
 # has a real subcommand to shell out to, same as every other verb it serves.
 
 async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
                      as_json: bool = False, text: bool = False) -> int:
-    """osiris digest [--hours N] [--mark-seen] — the console-script door onto the
+    """osiris digest [--hours N] [--mark-seen] — the console-script entry point onto the
     fleet_digest MCP tool, called over the wire (same hours/mark_seen params). Omitting
     --hours matches the tool's own watermark-mode default: what's new since the operator
     last looked, never advancing the watermark unless --mark-seen says so explicitly."""
@@ -2173,7 +2173,7 @@ async def cmd_composition(
     correction (mail 10448): "author" was his own error for `save`; `run-spec` IS
     legitimate as a FOURTH, CLI-only mirror straight onto compositions.run_spec — a
     plain orchestrator function with no MCP tool of its own, the SAME one
-    `osiris lint`/`osiris audit`'s own CLI doors already call directly (no duplicated
+    `osiris lint`/`osiris audit`'s own CLI entry points already call directly (no duplicated
     implementation, same class as lint/audit's own NO_MCP_EQUIVALENT entries).
 
     save/run/list go over the wire (call_mcp_tool), the same composition MCP tool a
@@ -2248,7 +2248,7 @@ async def cmd_retire_assertion(
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris retire-assertion <ref> <name> <superseded_id> <value> <because> --actor W —
-    the console-script door onto orchestrator.retirement.retire_assertion, the SAME
+    the console-script entry point onto orchestrator.retirement.retire_assertion, the SAME
     function the retire_assertion MCP tool wraps (no duplicated guard: the blank-because,
     blank-name, unresolved-ref, and superseded_id-mismatch refusals are exactly
     retire_assertion's own, all before any write)."""
@@ -2292,7 +2292,7 @@ async def cmd_retire_link(
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris retire-link <from_ref> <to_ref> <link_type> <because> --actor W — the
-    console-script door onto orchestrator.retirement.retire_link, the SAME function the
+    console-script entry point onto orchestrator.retirement.retire_link, the SAME function the
     retire_link MCP tool wraps (no duplicated guard: the blank-because, blank-link_type,
     unresolved-ref, and no-active-link refusals are exactly retire_link's own, all
     before any write)."""
@@ -2335,9 +2335,9 @@ async def cmd_cite(
     ref: str, agent: str, line_idx: int, because: str, *, actor: str,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris cite <ref> <agent> <line_idx> <because> --actor W — the console-script door
+    """osiris cite <ref> <agent> <line_idx> <because> --actor W — the console-script entry point
     onto capture.mint_transcript_citation, the SAME function the cite_transcript MCP tool
-    wraps. Thoth's dispatch (mail 10441) named this door "cite" rather than
+    wraps. Thoth's dispatch (mail 10441) named this command "cite" rather than
     "cite-transcript" — real target declared in CLI_TO_MCP_NAME. Resolves `ref` via the
     shared resolve_ref the MCP tool itself uses before minting, so an unresolved ref
     refuses before any write, same as the MCP tool's own {"error": ...} shape."""
@@ -2384,9 +2384,9 @@ async def cmd_cite(
 async def cmd_citation(
     ref: str, agent: str, *, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris citation <ref> <agent> — the console-script door onto
+    """osiris citation <ref> <agent> — the console-script entry point onto
     capture.read_transcript_citation, the SAME function the read_citation MCP tool
-    wraps. Thoth's dispatch (mail 10441) named this door "citation" rather than
+    wraps. Thoth's dispatch (mail 10441) named this command "citation" rather than
     "read-citation" — real target declared in CLI_TO_MCP_NAME. Pure read: never
     writes."""
     from src.orchestrator.capture import read_transcript_citation
@@ -2478,7 +2478,7 @@ async def _call_and_emit_text(
     """Shared body for the read triangle's human-paint commands (thread bad45d61, wave 10:
     backlog/threads/roster/team). `--json` gets the full structured response, unchanged.
     Human mode asks the server for its OWN `render='text'` shape and paints that verbatim
-    (cli_render.emit's own `text=` door) — never re-derives grouping from the structured
+    (cli_render.emit's own `text=` path) — never re-derives grouping from the structured
     rows client-side, the exact fleet-render regression (msg 8160: 3 sections where the
     server tree has 36, from re-deriving off a capped field) this thread names by way of
     the rule it exists to generalize.
@@ -2592,7 +2592,7 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool
     if not rows:
         print(f"osiris team: {mgr['handle']} manages no seats", file=sys.stderr)
         return 1
-    # SAME TEXT SHAPE THE MCP DOOR RENDERS (thread bad45d61): render_team_text is the one
+    # SAME TEXT SHAPE THE MCP ROUTE RENDERS (thread bad45d61): render_team_text is the one
     # hand-designed shape for this row set, called from mcp_server.py's own team() — reused
     # here verbatim rather than re-derived, exactly the discipline this thread names.
     from src.orchestrator.textrender import render_team_text
@@ -2626,7 +2626,7 @@ async def cmd_inbox(*, project: str, as_json: bool = False, text: bool = False) 
 # could not read his own desk. #138's own lesson applied: both capabilities already existed
 # as MCP tools (inbox(project='operator', peek=True) already IS the organized desk;
 # recall(ref) already IS the untruncated single-object read) — this only NAMES them as CLI
-# doors, the same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new
+# entry points, the same call_mcp_tool + render.emit shape fleet/roster already use. Nothing new
 # was built underneath; the surface decision was which two, not which seven. --------------
 
 async def cmd_desk(*, as_json: bool = False, text: bool = False) -> int:
@@ -3331,7 +3331,7 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
     invoked with no wrapper/cron to hang a "set it in the deploy env" on, so the flip is
     the default itself: OSIRIS_CASEFOLD_AUTOMERGE=0 opts a run OUT (any other value,
     including unset, executes). Either way every candidate goes through the SAME
-    normalize_project_casing/merge() door with its own belief-gate — this function never
+    normalize_project_casing/merge() call with its own belief-gate — this function never
     re-derives that logic, only decides whether to pass execute."""
     from src.actions.core import Actions
     from src.orchestrator.projects import casefold_auto_merge_candidates
@@ -3397,7 +3397,7 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
     the same standing autonomy ruling (22d47acb) over the same class of act (a
     deterministic-signal SoftwareProject merge with its own belief-gate), so a second
     knob would only be a second thing to forget to set. Every candidate still goes
-    through the SAME fold_project door with its own contradiction gate — this wiring
+    through the SAME fold_project call with its own contradiction gate — this wiring
     never re-derives that logic, only decides whether to pass execute."""
     from src.actions.core import Actions
     from src.orchestrator.projects import remote_url_duplicate_candidates
@@ -3422,7 +3422,7 @@ async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
     OSIRIS_CASEFOLD_AUTOMERGE default (0 opts out; every other value, including unset,
     executes) — one standing autonomy ruling (22d47acb) over one class of act, never a
     third env var to forget. Every candidate still goes through the SAME fold_project
-    door with its own contradiction gate.
+    call with its own contradiction gate.
 
     THE RECEIPT NAMES THE STANDING PROCEDURE (item 4, Thoth's own ask): a fold that
     executes here is also the specimen that would have made dsh00001's own
@@ -3708,17 +3708,17 @@ async def _real_check_false_mint_live(
     plain, fast, single-purpose query rather than routing a deploy gate through the full
     lint composition machinery for one check.
 
-    ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26, thread 2c3c2b9a): a
+    ONE LIVENESS AUTHORITY, FOURTH ENTRY POINT (Thoth msg 5719, 2026-08-26, thread 2c3c2b9a): a
     fresh/refreshing `agent_mounts` row is NOT proof of a live body — the SAME "cache in
     both directions" law `is_occupied_by_a_live_body` exists to enforce everywhere else
     (register_agent/mount, FleetView claim, launch_seat, mailbox's send-to-lineage check,
-    phantom_fold_reap's own reinstate bucket). This door used to trust the mount row
+    phantom_fold_reap's own reinstate bucket). This check used to trust the mount row
     alone; a real incident (agent:0123dec2-ii, project atlas) proved that wrong — the
     flagged id's own mount row was fresh, but registry_census showed NO body under it;
     the real live body sat under a DIFFERENT generation id entirely. Each candidate is now
     cross-checked against that SAME authority: `harness_confirmed_live=True` is the actual
     halcyon shape (a genuinely live body wrongly folded — `reinstate_generation` is the
-    correct repair); `harness_confirmed_live=False` is a DIFFERENT anomaly this door must
+    correct repair); `harness_confirmed_live=False` is a DIFFERENT anomaly this check must
     still refuse on, but must NEVER recommend `reinstate_generation` for — doing so would
     resurrect a bodiless generation, manufacturing the exact phantom a correct fold
     already cleaned up (the inverse of #190's Deckard case). Returns one dict per
@@ -4139,7 +4139,7 @@ async def cmd_deploy(
         # blast radius, so this only surfaces what the standalone detector would show,
         # armed here so the population is discovered by routine deploy traffic rather than
         # by an operator hitting a broken `osiris resume` again (the root cause of THIS
-        # session's own specimens). `heal-seat-anchor` is the repair door, named in the note.
+        # session's own specimens). `heal-seat-anchor` is the repair command, named in the note.
         with contextlib.suppress(Exception):  # an advisory note must never crash a deploy
             from src.actions.core import Actions
             from src.orchestrator.identity_heal import detect_anchor_invariant_violations
@@ -4313,18 +4313,18 @@ async def cmd_merge(
     because: str = "", pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris merge <dupe> <into> --evidence <text> [--actor <who>] — the console-script
-    door onto orchestrator.merge.merge, the SAME function the merge MCP tool wraps (no
+    entry point onto orchestrator.merge.merge, the SAME function the merge MCP tool wraps (no
     duplicated logic, no softened gate). SELF-TYPING, exactly like the MCP tool: `dupe`'s
     own form picks Agent/Seat/SoftwareProject (agent:.../seat:.../else) — this is NOT
     fold-project's old SoftwareProject-only behavior wearing a new name, it is the full
-    merge surface, dispatch 3683's own finding that the two doors had drifted apart.
+    merge surface, dispatch 3683's own finding that the two entry points had drifted apart.
 
-    THE SANCTIONED SECOND DOOR (thread 2446, formerly fold-project's): the MCP tool can
+    THE SANCTIONED SECOND ENTRY POINT (thread 2446, formerly fold-project's): the MCP tool can
     sit invisible in a live client's stale deferred-tool index across a deploy, or be
     unreachable to a worker whose sandbox classifier refuses a raw DATABASE_URL script —
     an installed entrypoint is a path that isn't the MCP index at all.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474): the
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474): the
     merge-event/same_as witness the MCP wrapper queries after the fact — SoftwareProject
     merges only, matching the MCP tool's own conditional exactly — is queried here too.
 
@@ -4391,7 +4391,7 @@ async def cmd_fold_project(
     it collapsed into merge() (ruling 31c02dca, decision a926a8d0) and the CLI never
     followed, the exact "two halves of this house use different words for one act"
     specimen the operator's own consistency ask named. Kept working, hidden from the
-    front-door listing, forwarding straight to cmd_merge with the identical arguments —
+    front entry-point listing, forwarding straight to cmd_merge with the identical arguments —
     never break a human's muscle memory silently, but never advertise the old name either."""
     print("osiris fold-project is deprecated. Use `osiris merge` (identical arguments, "
           "same evidence-gated fold). Continuing as merge.", file=sys.stderr)
@@ -4404,7 +4404,7 @@ async def cmd_unmerge(
     pool: asyncpg.Pool | None = None, as_json: bool = False,
 ) -> int:
     """osiris unmerge <dupe> --because <text> [--actor <who>] [--execute] — the console-
-    script door onto orchestrator.merge.unmerge, the SAME function the unmerge MCP tool
+    script entry point onto orchestrator.merge.unmerge, the SAME function the unmerge MCP tool
     wraps. DRY RUN IS THE DEFAULT, matching the MCP tool's own convention exactly: without
     --execute this returns the reversal PLAN (what would move back) and writes nothing;
     review it, then re-run with --execute. Self-typing off `dupe`'s own form, same rule
@@ -4503,18 +4503,18 @@ async def cmd_charter_for(
     ruling: str | None = None, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris charter-for <seat> --repos a,b,c --because <text> --actor <who> — the
-    console-script door onto charter.charter_for, the SAME function the charter_for MCP
+    console-script entry point onto charter.charter_for, the SAME function the charter_for MCP
     tool wraps (no duplicated guard, no softening: the managed_by/operator-actor check is
     the whole point of this verb and is exactly charter_for's own, untouched here — the
     one guard tonight that is genuinely ENFORCED rather than merely documented).
 
-    THE SANCTIONED SECOND DOOR (thread 2474, the third occurrence of the same shape as
+    THE SANCTIONED SECOND ENTRY POINT (thread 2474, the third occurrence of the same shape as
     fold_project/annotate_thread/amend_decision: a verb ships, deploys, and the fleet's
     live MCP clients cannot see it in their own deferred-tool index — not this module's
     bug, upstream per ruling 482c3d0f). An installed entrypoint bypasses that index
     entirely, the same class of thing as `osiris deploy`/`osiris fold-project`.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (the general rule thread
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (the general rule thread
     2474 names after fold-project's CLI receipt was found silently weaker than its MCP
     twin): charter_for's own return dict IS the full receipt already — this command
     prints it whole, nothing dropped, so there is no second copy of the enrichment logic
@@ -4565,7 +4565,7 @@ async def cmd_settings(
     because: str = "", ruling: str | None = None, scope_id: str = "",
     actor: str = _CONSOLE_ACTOR, as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris settings <list|get|set> ... — the console-script door onto
+    """osiris settings <list|get|set> ... — the console-script entry point onto
     settings_service.{list_settings,get_setting,write_setting}, the SAME functions the
     `settings` MCP tool wraps (no duplicated logic — the CLI backup_settings itself
     never got, per Thoth's own ask on thread f4498ab304e4). `value` is a JSON string
@@ -4641,19 +4641,19 @@ async def cmd_backup_settings(
     [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL
     [--offload-mountpoint P] [--offload-schedule CAL] [--offload-disabled]]
     [--offload-remove NAME] [--because R] [--ruling REF] [--json] [--actor W] — the
-    console-script door onto orchestrator.backup_settings.{get_backup_settings,
+    console-script entry point onto orchestrator.backup_settings.{get_backup_settings,
     write_backup_settings}, the SAME functions the `backup_settings` MCP tool and the
     CMD-K backup config panel call (PARITY GAPS, WAVE 27 item 3, thread 45aff160;
-    THE BACKUP CLI DOOR ergonomics, Thoth mail 12809/12812).
+    THE BACKUP CLI ENTRY POINT ergonomics, Thoth mail 12809/12812).
 
     `action='get'` reads current settings, no authority needed. `action='write'`
     changes them — gated like `charter-for`: the operator (a raw terminal call already
-    carries operator authority, same law every other sanctioned-second-door command
+    carries operator authority, same law every other sanctioned-second-entry-point command
     here holds) writes freely, anyone else must cite a standing `--ruling` naming
     'backup_settings'; `--because` is required to write.
 
     `--timer UNIT=CAL` (repeatable) reads the CURRENT timer_schedules first and
-    overlays only the named unit(s) — the underlying door's own field is still a
+    overlays only the named unit(s) — the underlying call's own field is still a
     FULL-REPLACE, this flag just does the merge for you so a one-unit tweak doesn't
     require re-typing all five. `--offload-add`/`--offload-remove` do the same
     read-merge-write dance over offload_targets, upserting or dropping ONE target by
@@ -4778,7 +4778,7 @@ async def cmd_backup_status(
     for backup_status's `vault`/`backups` path overrides — the same NO_MCP_EQUIVALENT
     shape `osiris lint`/`osiris audit` already document): calls
     compositions._fn_backup_status directly, the identical Function the
-    `composition(action='run', name='backup_status')` door and the CMD-K panel both
+    `composition(action='run', name='backup_status')` route and the CMD-K panel both
     already run, own connection, no duplicated logic.
 
     `--vault`/`--backups` override the production paths — a test or an operator
@@ -4828,14 +4828,14 @@ async def cmd_practices(
 ) -> int:
     """osiris practices [list|show REF] [--surface S] [--limit N] [--recent] [--json]
     — WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain READS of the practices
-    composition had no CLI door at all (`amend-practice` above covers the one
+    composition had no CLI entry point at all (`amend-practice` above covers the one
     write). `list` (default) is the SAME `comp.run_spec(pool, {"op":"function",
     "name":"practices","args":{"surface","limit","recent"}}, None, name="practices")`
     the `practices` MCP tool itself calls. `show REF` goes one step past that public
     tool's own surface, straight to the composition function's own `id` arg
     (`_fn_practices`'s own docstring: "the shape amend_practice's own receipt uses
     so a write is never invisible on its own receipt") — the SAME direct-by-id
-    lookup, never a second implementation, just reached from a door the public
+    lookup, never a second implementation, just reached from an entry point the public
     `practices()` wrapper doesn't expose. `REF` accepts a practice's own uuid or
     8-char short id (matches a listing row's own `id` field, same convention as
     `dossier`'s short-id acceptance elsewhere in this file).
@@ -4902,12 +4902,12 @@ async def cmd_practices(
 async def cmd_amend_practice(
     ref: str, amendment: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris amend-practice <ref> <amendment> --actor <who> — the console-script door onto
+    """osiris amend-practice <ref> <amendment> --actor <who> — the console-script entry point onto
     capture.amend_practice, the SAME function the amend_practice MCP tool wraps (no
     duplicated guard: the refuted-practice refusal and the blank-amendment check are
     exactly amend_practice's own, untouched here).
 
-    THE SANCTIONED SECOND DOOR (thread 06c3529b, the fourth occurrence of the same shape as
+    THE SANCTIONED SECOND ENTRY POINT (thread 06c3529b, the fourth occurrence of the same shape as
     fold_project/charter_for/annotate_thread/amend_decision: a verb ships, deploys, and the
     fleet's live MCP clients cannot see it in their own deferred-tool index — not this
     module's bug, upstream per ruling 482c3d0f rather than worked around).
@@ -4918,21 +4918,21 @@ async def cmd_amend_practice(
     identity), so the MCP wrapper's own `_actor_for`/`_source_for` fallback would stamp it
     with the generic "session" bucket — a real provenance loss for a governance-relevant
     write. fold-project/charter-for already established the right precedent for exactly
-    this class of write-through-CLI-door: own pool, explicit --actor, real attribution.
-    (Consequence, named honestly: unlike cmd_fleet, this door does NOT prove the frozen
+    this class of write-through-CLI-entry-point: own pool, explicit --actor, real attribution.
+    (Consequence, named honestly: unlike cmd_fleet, this entry point does NOT prove the frozen
     tool-index is reachable server-side over the wire — it proves the underlying function
     works, a narrower claim. Thoth's own three-verbs-in-one-call test already carries the
-    server-vs-client staleness proof; this door's job is unblocking the fleet, not
+    server-vs-client staleness proof; this entry point's job is unblocking the fleet, not
     re-proving that diagnosis.)
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
     mirrors the MCP wrapper's own {"id", "amendment", "status"} / {"error": ...} shape by
     hand, since capture.amend_practice itself returns a bare UUID | None and raises
     ValueError rather than shaping either receipt itself — the MCP tool's own try/except
     and None-check are duplicated here on purpose, not softened. Also mirrors the MCP
     receipt's own `practice` row (thread 55e5ac72, msg 9123, the SAME `practices` Function
-    both doors read through) — printed after the confirmation line, so this door's write
-    is never invisible on its own receipt either."""
+    both entry points read through) — printed after the confirmation line, so this entry
+    point's write is never invisible on its own receipt either."""
     from src.actions.core import Actions
     from src.orchestrator.capture import amend_practice
 
@@ -4982,7 +4982,7 @@ async def cmd_amend_practice(
 async def cmd_annotate_thread(
     ref: str, note: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris annotate-thread <ref> <note> --actor <who> — the console-script door onto
+    """osiris annotate-thread <ref> <note> --actor <who> — the console-script entry point onto
     capture.annotate_thread, the SAME function the annotate_thread MCP tool wraps (no
     duplicated guard: the blank-note and no-match refusals are exactly annotate_thread's
     own, untouched here).
@@ -4991,14 +4991,14 @@ async def cmd_annotate_thread(
     (thread 2474) as sharing fold_project's shape — a verb ships, deploys, and the fleet's
     live MCP clients cannot see it in their own deferred-tool index (not this module's bug,
     upstream per ruling 482c3d0f) — but only fold_project/charter_for/amend_practice ever
-    got the second door built. This closes that gap.
+    got the second entry point built. This closes that gap.
 
     CALLS THE ORCHESTRATOR FUNCTION DIRECTLY, amend_practice's own precedent: an annotation
     is a WRITE, and a call_mcp_tool round-trip is anonymous — the MCP wrapper's own
     `_actor_for` fallback would stamp it with the generic "session" bucket instead of a
     named actor, a real provenance loss for a governance-relevant write.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general rule):
     mirrors the MCP wrapper's own {"id", "note", "status"} / {"error": ...} shape by hand."""
     from src.actions.core import Actions
     from src.orchestrator.capture import annotate_thread
@@ -5041,11 +5041,11 @@ async def cmd_rematerialize(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rematerialize <anchor_sid> [--dest PATH] [--force] — the console-script
-    door onto SoulStore.rematerialize_to_disk, the SAME function the rematerialize MCP
+    entry point onto SoulStore.rematerialize_to_disk, the SAME function the rematerialize MCP
     tool wraps (no duplicated guard: the live-transcript refusal and the broken-chain
     report are exactly rematerialize_to_disk's own, untouched here).
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT (thread 2474's general
     rule, same as annotate-thread above): mirrors the MCP wrapper's own dict shape by
     hand rather than a round-trip through the tool itself."""
     from src.ingest.soul_store import SoulStore
@@ -5086,20 +5086,20 @@ async def cmd_rematerialize(
 async def cmd_amend_decision(
     ref: str, addendum: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris amend-decision <ref> <addendum> --actor <who> — the console-script door onto
+    """osiris amend-decision <ref> <addendum> --actor <who> — the console-script entry point onto
     capture.amend_decision, the SAME function the amend_decision MCP tool wraps (no
     duplicated guard: the blank-addendum and already-superseded refusals are exactly
     amend_decision's own, untouched here).
 
-    NAMED BEFORE IT WAS BUILT (thread 2474, same gap annotate_thread's own CLI door
+    NAMED BEFORE IT WAS BUILT (thread 2474, same gap annotate_thread's own CLI entry point
     above closes): shipped, deployed, invisible to a stale client's deferred-tool index
-    (ruling 482c3d0f), but never given a second door until now.
+    (ruling 482c3d0f), but never given a second entry point until now.
 
     CALLS THE ORCHESTRATOR FUNCTION DIRECTLY (amend_practice's own precedent, same
     reason): a call_mcp_tool round-trip has no mounted identity to stamp the addendum
     with, only the generic "session" bucket — a real provenance loss.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: mirrors the MCP wrapper's
     own {"id", "addendum", "status"} / {"error": ...} shape by hand."""
     from src.actions.core import Actions
     from src.orchestrator.capture import amend_decision
@@ -5159,9 +5159,9 @@ async def cmd_send(
     from_project: str | None = None, actor: str = _CONSOLE_ACTOR,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris send <body> [--to PROJECT | --to-agent AGENT] ... — the console-script door
+    """osiris send <body> [--to PROJECT | --to-agent AGENT] ... — the console-script entry point
     onto mailbox.send_message, the SAME function the send MCP tool wraps (no duplicated
-    guard: `to`'s unknown-project refusal, the send-door addressing guard on a mismatched
+    guard: `to`'s unknown-project refusal, the send-entry-point addressing guard on a mismatched
     room, and every seat-resolution refusal below are exactly send_message's own).
 
     `--from-project` is CLI-ONLY (CLI_ONLY_PARAMS, test_cli_mcp_parity.py): the MCP tool
@@ -5197,16 +5197,16 @@ async def cmd_send(
         # `get_settings()` — a bare env read — when no `settings=` is given. The worker's
         # own systemd unit carries an environment drop-in setting OSIRIS_TRIGGER_ENABLED;
         # a bare `osiris send` run from an interactive shell has no such drop-in, so this
-        # door reported "trigger-dark" during the 2026-09-13 MCP outage even though the
+        # call reported "trigger-dark" during the 2026-09-13 MCP outage even though the
         # operator's actual stored toggle (settings table, key wake.trigger.enabled) was
         # on. `wake.trigger.enabled` is registered effect='next_tick' (settings_registry.
         # py), so `settings_with_overlay` — opt-in to 'immediate' fields ONLY, a
         # DELIBERATE risk boundary per that module's own docstring citing Thoth's own
         # mail 10040 — never surfaces it; widening that shared filter would touch every
-        # one of its other callers for a fix this one door needs. `current_stored_value`
+        # one of its other callers for a fix this one call needs. `current_stored_value`
         # is the narrow escape hatch instead: read this ONE key's current stored value
         # directly, bypass `effect` filtering entirely, and build the Settings object
-        # this door's own dispatch calls pass in explicitly.
+        # this call's own dispatch calls pass in explicitly.
         from src.config.settings import get_settings as _get_settings
         from src.orchestrator.settings_service import current_stored_value
 
@@ -5308,7 +5308,7 @@ async def cmd_decide(
     actor: str = _CONSOLE_ACTOR,
     as_json: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris decide <summary> [--kind K] [--rationale R] ... — the console-script door
+    """osiris decide <summary> [--kind K] [--rationale R] ... — the console-script entry point
     onto capture.record_decision, the SAME function the record_decision MCP tool wraps
     (no duplicated guard: idempotent-retry-reuses-the-same-decision, the declare-or-
     refuse link-kind gate, and `supersedes`/`resolves`'s own free-text resolution
@@ -5320,7 +5320,7 @@ async def cmd_decide(
     record_decision itself (the MCP wrapper does the free-text/short-id resolution
     BEFORE calling it, via the same `_find_decision`/`_find_thread`/`_find_practice`
     helpers) — reproducing that whole resolution ladder here would be the exact
-    duplicated-guard risk this door's own law forbids, so this console door accepts
+    duplicated-guard risk this entry point's own law forbids, so this console entry point accepts
     only an EXACT uuid for each (never a canonical string or short-id prefix), and
     `--ack-prior-art` is accepted for CLI/MCP name parity but has no effect — no
     prior-art search runs from a bare terminal, so there is nothing to acknowledge.
@@ -5331,7 +5331,7 @@ async def cmd_decide(
     is real here, not a stub — set it only when this decision really is the operator's
     ruling.
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule amend-decision/
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT, same rule amend-decision/
     annotate-thread above keep — but this hand-builds a LEANER receipt than the MCP
     wrapper's own (no `content_landed`/`prior_art`/`resolved_thread` echo): a named,
     bounded gap, not a silent one."""
@@ -5404,11 +5404,11 @@ async def cmd_decide(
     return 0
 
 
-# --- settle (#93, THE MECHANICAL SETTLE, Thoth mail 11789): the console-script door onto
+# --- settle (#93, THE MECHANICAL SETTLE, Thoth mail 11789): the console-script entry point onto
 # the settle MCP tool, called OVER THE WIRE — unlike cmd_decide above, settle()'s own logic
 # lives entirely in mcp_server.py, never split into a directly-callable orchestrator
-# function, so this door reaches the wire, same shape as osiris backfill/osiris backup-
-# settings (a write door with no local orchestrator function to call instead). Built so
+# function, so this entry point reaches the wire, same shape as osiris backfill/osiris backup-
+# settings (a write entry point with no local orchestrator function to call instead). Built so
 # scripts/osiris_hook.py's own PreCompact fallback (a stdlib-only script with no MCP
 # client) has a real subcommand to mint a machine-handoff decision through.
 
@@ -5466,11 +5466,11 @@ async def cmd_thread(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris thread <ref>... [--because W] [--artifact A] [--dry-run/--no-dry-run] —
-    the console-script door onto the `thread` MCP tool's own `action='resolve'` branch
+    the console-script entry point onto the `thread` MCP tool's own `action='resolve'` branch
     (the terminal-native reading of a bare "thread" verb: closing one). A DELIBERATE
     NARROWING (same shape as `desk`/`show`'s own declared narrowings, NO_MCP_EQUIVALENT's
     reasoning in test_cli_mcp_parity.py): `thread`'s other three actions (annotate/
-    correct_summary/reclassify) have no console door here — annotate already has its own
+    correct_summary/reclassify) have no console entry point here — annotate already has its own
     (`annotate-thread`); the other two are a real, left-open gap, not silently dropped.
 
     ONE ref resolves through capture.resolve_thread directly (no dry_run — the single-ref
@@ -5527,7 +5527,7 @@ async def cmd_proposal(
     actor: str = _CONSOLE_ACTOR, as_json: bool = False,
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris proposal <propose|accept|reject> ... — the console-script door onto
+    """osiris proposal <propose|accept|reject> ... — the console-script entry point onto
     `_proposal_action_impl`, the SAME function the `proposal` MCP tool wraps (miners as
     last resort, decision ac892cd9). `--candidate` takes a JSON string
     ('{"kind":"link",...}' or '{"kind":"object",...}') since a graph write's own shape
@@ -5580,7 +5580,7 @@ async def cmd_proposal(
 #
 # THE JESUS/CHAD PATH, FROM A TERMINAL: a seat self-reconciling ran exactly
 # merge(dupe,into) -> rebind_seat(seat,new_cwd) -> correct_pin_value(key,value) through MCP
-# (msg 6374, thread 6369). merge/unmerge already had a console door; these two did not, so a
+# (msg 6374, thread 6369). merge/unmerge already had a console entry point; these two did not, so a
 # human doing the SAME reconciliation by hand — the whole point of a CLI, per the operator's
 # own "cli shared, mcp agent, slash for human" model — had no way to run it. Both below call
 # the SAME orchestrator function their MCP twin wraps (mounts.rebind_seat /
@@ -5592,14 +5592,14 @@ async def cmd_rebind_seat(
     seat_or_agent: str, new_cwd: str, *, actor: str, extract: bool = False,
     because: str = "", force: bool = False, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris rebind-seat <seat> <new_cwd> --actor <who> — the console-script door
+    """osiris rebind-seat <seat> <new_cwd> --actor <who> — the console-script entry point
     onto mounts.rebind_seat, the SAME function the rebind_seat MCP tool wraps (no duplicated
     resolution: the claimed-name / raw-agent-id / unclaimed-seat-handle fallback chain, and
     the extract=True seat-offices-move shape, are exactly rebind_seat's own, untouched here).
 
-    TWO DOORS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: prints the full result dict
+    TWO ENTRY POINTS ONTO ONE FUNCTION MUST RETURN THE SAME RECEIPT: prints the full result dict
     the MCP tool would also return, nothing dropped — the same discipline charter-for's own
-    CLI door established (thread 2474)."""
+    CLI entry point established (thread 2474)."""
     from src.actions.core import Actions
     from src.orchestrator.mounts import rebind_seat
 
@@ -5640,14 +5640,15 @@ async def cmd_correct_pin_value(
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
     """osiris correct-pin-value <seat> <key> <value> --because <reason> --actor <who> — the
-    console-script door onto offices.correct_own_pin_value, the SAME function the
+    console-script entry point onto offices.correct_own_pin_value, the SAME function the
     correct_pin_value MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY:
     the MCP tool is self-scoped by construction (`ident.agent_id`, the mounted caller — it can
     only ever correct ITS OWN seat's pin). A terminal has no mounted identity to be self about,
-    so this door takes an EXPLICIT target instead — same shape rebind-seat's own console door
-    already uses (`seat_or_agent`, resolved the identical way: resolve_handle, falling back to
-    a raw agent id that genuinely exists). correct_own_pin_value itself is untouched — its own
-    held_seat resolution, its own refusal on a caller holding no seat, its own required-reason
+    so this entry point takes an EXPLICIT target instead — same shape rebind-seat's own
+    console entry point already uses (`seat_or_agent`, resolved the identical way:
+    resolve_handle, falling back to a raw agent id that genuinely exists). correct_own_pin_value
+    itself is untouched — its own held_seat resolution, its own refusal on a caller holding no
+    seat, its own required-reason
     and existing-key-only guards all still apply, now just to a NAMED seat rather than an
     implicit one."""
     from src.actions.core import Actions
@@ -5723,12 +5724,12 @@ async def cmd_transition_seat_project(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris transition-seat-project <seat> [--fabricated-project P] [--real-project P]
-    [--repos R ...] [--because <reason>] [--apply] — the console-script door onto
+    [--repos R ...] [--because <reason>] [--apply] — the console-script entry point onto
     transition.transition_seat_project, the SAME function the transition_seat_project
     MCP tool wraps. THE ONE DIFFERENCE FROM ITS MCP TWIN, NAMED HONESTLY: the MCP tool
     is self-scoped by construction (the mounted caller's own agent_id) — a terminal has
-    no mounted identity to be self about, so this door takes an EXPLICIT target, same
-    resolution shape correct-pin-value's own console door already uses.
+    no mounted identity to be self about, so this entry point takes an EXPLICIT target, same
+    resolution shape correct-pin-value's own console entry point already uses.
 
     `--apply` is required to actually write — dry_run=True is the default, matching
     every other repair verb in this house."""
@@ -5791,8 +5792,8 @@ async def cmd_heal_seat_anchor(
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
     """osiris heal-seat-anchor <seat> --because <reason> [--apply] — the console-script
-    door onto identity_heal.heal_seat_anchor_third_party, the SAME function the
-    heal_seat_anchor_third_party MCP tool wraps. Always the third-party door, same
+    entry point onto identity_heal.heal_seat_anchor_third_party, the SAME function the
+    heal_seat_anchor_third_party MCP tool wraps. Always the third-party entry point, same
     reasoning as correct-pin-value's own console twin: a terminal has no mounted identity
     to be self-scoped about, so this always names an EXPLICIT target and always requires
     `--because` — THE ANCHOR INVARIANT (ruling 23771416): a seat's anchor_cwd is identity,
@@ -5864,7 +5865,7 @@ async def cmd_heal_seat_anchor(
 
 async def _resolve_target_agent(actions: Any, handle_or_agent: str) -> str | None:
     """Handle or raw agent id -> a real, existing agent id — the same fallback shape
-    cmd_correct_pin_value already uses (#204: shared here since three new doors below need
+    cmd_correct_pin_value already uses (#204: shared here since three new entry points below need
     the identical resolution and a terminal has no mounted identity to be self-scoped
     about, so all of them take an EXPLICIT target)."""
     from src.orchestrator.agents import resolve_handle
@@ -5898,12 +5899,12 @@ async def cmd_correct_agent_project(
     actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris correct-agent-project <agent> [--project P] [--seat-generation N] [--actor W]
-    — the console-script door onto orchestrator.agents.correct_agent_house, the SAME
+    — the console-script entry point onto orchestrator.agents.correct_agent_house, the SAME
     function the correct_agent_house MCP tool wraps (#204, the #199 lane 3B audit's
     real gap; the MCP action's own name is Sekhmet's surface, unchanged this wave).
     UNLIKE correct_house (self-scoped), NOT self-scoped — the target need not be the
     caller, so this takes an EXPLICIT target, resolved the same handle-or-raw-id way
-    correct-pin-value's own console door does."""
+    correct-pin-value's own console entry point does."""
     from src.actions.core import Actions
     from src.orchestrator.agents import correct_agent_house as _correct_agent_house
 
@@ -5947,7 +5948,7 @@ async def cmd_declare_machine_identity(
     email: str, project: str, *, because: str, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris declare-machine-identity <email> <project> --because W [--actor W] — the
-    console-script door onto ingest.gitlog.declare_machine_identity, the SAME function
+    console-script entry point onto ingest.gitlog.declare_machine_identity, the SAME function
     the declare_machine_identity MCP tool wraps (ruling edb6b0fc): covers what git
     ingest's own heuristic misses — a bot on a real-looking domain, a local part that
     doesn't match any ingested repo's own name."""
@@ -5987,7 +5988,7 @@ async def cmd_declare_machine_identity(
 async def cmd_reconcile_merge(
     dupe: str, into: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris reconcile-merge <dupe> <into> [--actor W] — the console-script door onto
+    """osiris reconcile-merge <dupe> <into> [--actor W] — the console-script entry point onto
     orchestrator.merge.reconcile_merge, the SAME function the reconcile_merge MCP tool
     wraps (#204). Repairs the estate a partial first fold left stranded on an
     ALREADY-MERGED dupe — never re-performs the merge itself (that's `merge`'s job)."""
@@ -6028,7 +6029,7 @@ async def cmd_retire_agent(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris retire-agent <agent> --because <reason> [--override-live] [--actor W] — the
-    console-script door onto orchestrator.agents.retire_agent, the SAME function the
+    console-script entry point onto orchestrator.agents.retire_agent, the SAME function the
     retire_agent MCP tool wraps (#204). Third-party retirement, complementing the
     self-scoped `retire` (a raw terminal has no mounted session of its own to retire, so
     this always names an EXPLICIT target). ALWAYS releases the target's held seat and
@@ -6076,7 +6077,7 @@ async def cmd_retire_agent(
 async def cmd_fleet_reconcile(
     *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris fleet-reconcile [--execute] [--actor W] — the console-script door onto
+    """osiris fleet-reconcile [--execute] [--actor W] — the console-script entry point onto
     orchestrator.fleet_reconcile.reconcile_execute, the SAME function the fleet_reconcile
     MCP tool wraps (#204). Dry run is the default (returns the plan, writes nothing);
     --execute performs it, re-reading the tray fresh immediately before acting."""
@@ -6113,7 +6114,7 @@ async def cmd_fleet_reconcile(
 async def cmd_fleet_prune(
     *, execute: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris fleet-prune [--execute] [--actor W] — the console-script door onto
+    """osiris fleet-prune [--execute] [--actor W] — the console-script entry point onto
     orchestrator.fleet_prune.prune_execute (thread 07ca68ca, wave 8), the same function
     `agent(action='fleet_prune')` wraps. Dry run is the default (returns the plan, writes
     nothing); --execute performs it. Deliberately narrower than fleet-reconcile: only
@@ -6157,14 +6158,14 @@ async def cmd_backfill(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris backfill <target> [--apply] [--because R] [--only-bases ID,...]
-    [--limit N] [--newest-first] [--json] [--actor W] — the console-script door onto
+    [--limit N] [--newest-first] [--json] [--actor W] — the console-script entry point onto
     orchestrator.backfill.run_backfill, the SAME function the `backfill` MCP tool and
     the UI's Repairs panel call (thread c89a9873, wave 22, ruling 7be61879). Dry run is
     the default for every target (returns the receipt, writes nothing); `--apply`
     performs it.
 
     `agent_project_links` predates the underlying tool's own because-required-to-write
-    convention (a historical exemption) — this door does NOT inherit that exemption: a
+    convention (a historical exemption) — this entry point does NOT inherit that exemption: a
     `--because` is required to `--apply` regardless of target, a stricter contract this
     surface imposes on its own, deliberately (thread c89a9873's own scope note).
 
@@ -6218,12 +6219,12 @@ async def cmd_graph_migrate(
 ) -> int:
     """osiris graph-migrate <target> [--apply] [--because R] [--json] [--actor W]
     [--only SEAT] — the
-    console-script door onto orchestrator.graph_migrations.run_migration (DRAWING THE
+    console-script entry point onto orchestrator.graph_migrations.run_migration (DRAWING THE
     WHOLE GRAPH, thread 325ef660): three graph-shape repairs (repo:seats' phantom
     project, the unfiled-object fog, the assertion-pair-to-real-link mints) feeding the
     physics layout and the renderer, the SAME dry-run-default/because-required-to-apply
     shape `osiris backfill` already established for the identity/provenance population
-    -- a separate door, not a new backfill target, because this is a different repair
+    -- a separate entry point, not a new backfill target, because this is a different repair
     class (graph shape, not identity/provenance). Named `graph-migrate` rather than
     `migrate` to avoid colliding with the pre-existing `osiris migrate` (alembic's
     env-correct schema tool, unrelated). Dry run is the default (returns the receipt,
@@ -6275,9 +6276,9 @@ async def cmd_heal_seat_transcript(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris heal-seat-transcript <handle> <source_paths...> [--because R] [--apply] —
-    the console-script door onto orchestrator.transcript_splice.heal_seat_transcript, the
+    the console-script entry point onto orchestrator.transcript_splice.heal_seat_transcript, the
     SAME function the heal_seat_transcript MCP tool wraps (#204: THE ORIGINAL specimen
-    this whole lane exists to prevent recurring — it shipped with no CLI door at all).
+    this whole lane exists to prevent recurring — it shipped with no CLI entry point at all).
     `--apply` is required to actually write, matching every other repair verb in this
     house; dry_run reports clean/refused per pair and where the result would land."""
     from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
@@ -6361,14 +6362,14 @@ async def cmd_mint_seat(
     pool: asyncpg.Pool | None = None, office_root: Path | None = None,
 ) -> int:
     """osiris mint-seat <handle> [--manager <seat>] [--project P] [--model M]
-    [--actor <who>] [--adopt] [--force] — the console-script door onto mintseat.mint_seat,
+    [--actor <who>] [--adopt] [--force] — the console-script entry point onto mintseat.mint_seat,
     the SAME function the mint_seat MCP tool wraps (no duplicated guard: the near-miss/
     cross-house/live-adopt refusals are exactly mint_seat's own, untouched here).
 
     NO SEPARATE --house FLAG (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): a
     seat's project is never a second, independently-declared value — the new worker's
     own project comes from its manager's own project by construction (mint_seat's own
-    `resolved_house = house or manager_house`, house always omitted from this door now),
+    `resolved_house = house or manager_house`, house always omitted from this entry point now),
     the same "house(seat) IS the manager's own project" convention derive_house's own
     docstring already names. `--project` here is unrelated: it stamps this worker's own
     `.osiris` pin (never a `governs` charter edge — mint_seat deliberately never mints
@@ -6380,13 +6381,13 @@ async def cmd_mint_seat(
     the manager from the CALLING agent's own held seat ("the calling seat is always the
     manager... minting into someone else's org is a console act, deliberately absent
     here", mint_seat's own docstring). A raw terminal has no mounted agent identity to
-    infer from, so this door took `manager` explicitly at first — then dispatch 3678 (the
+    infer from, so this entry point took `manager` explicitly at first — then dispatch 3678 (the
     operator's own "make the cli friendly") asked for that requirement inferred too, the
     same way `--actor` already is: when `manager` is omitted, `_infer_manager` looks for
     the SOLE seat in the target project (`_context_project`: the cwd's own .osiris pin
     only) and refuses loudly — never guesses — if that's zero or several. Closes the
     exact gap CLI.md's own house law names: an operator standing up a brand-new seat had
-    no door but a hand-rolled `python -c` heredoc against the live DB — precisely what
+    no entry point but a hand-rolled `python -c` heredoc against the live DB — precisely what
     ruling 45b074bf bans.
 
     Prints mint_seat's own occupancy-aware `next_step_cli` (vacant: `osiris launch
@@ -6397,11 +6398,11 @@ async def cmd_mint_seat(
     `office_root` is TEST-ONLY plumbing (no CLI flag exposes it — a real operator never
     wants scaffolding anywhere but the standard `~/.osiris/seats/` location, so this
     stays a keyword-only escape hatch): mint_seat/_scaffold_office already accept an
-    injectable office_root for exactly this, but this console door never threaded it
+    injectable office_root for exactly this, but this console entry point never threaded it
     through — every unmocked test-level call scaffolded a REAL office under the
     developer's real home directory while the DB side rolled back in a test transaction,
     leaving a directory on disk with no matching Seat (climintworker1/inferredworker1,
-    Thoth's msg 3928/6026 — an office with no Seat, the exact inverse of #139's mint-door
+    Thoth's msg 3928/6026 — an office with no Seat, the exact inverse of #139's mint-entry-point
     catalog, manufactured by our own test suite on every real run)."""
     from src.actions.core import Actions
     from src.orchestrator.mintseat import mint_seat as _mint_seat
@@ -6483,7 +6484,7 @@ async def cmd_new(
     `path` defaults to `~/code/<handle>`), a Seat with NO `managed_by` edge ever, an
     office scaffold at the standard `~/.osiris/seats/<handle>/` location, and its tree
     bound to the workspace (`bind_seat_tree` — distinct from the office, offices.py's own
-    "code stays in the repos they GOVERN"). The console-script door onto
+    "code stays in the repos they GOVERN"). The console-script entry point onto
     mintseat.found_seat, which composes mint_seat's OWN primitives (`ensure_seat`,
     `_scaffold_office`) rather than reimplementing them.
 
@@ -6577,13 +6578,13 @@ async def cmd_new(
 async def cmd_bootstrap(
     cwd: str, *, project: str | None, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris bootstrap <cwd> [--project P] [--actor <who>] — the console-script door
+    """osiris bootstrap <cwd> [--project P] [--actor <who>] — the console-script entry point
     onto bootstrap.bootstrap_project, the SAME function the `bootstrap` MCP tool wraps —
     same name, same first param name (`cwd`, matching the MCP tool's own signature
     exactly rather than a synonym like `path`, per the CLI/MCP parity law, decision
     0b29f1cbcc5a). #135 deliverable 3's last of three missing verbs (decision 3db8832c):
-    a no-ctx, explicit-string-arg function, same shape as mint-seat/new's own CLI doors,
-    undoored until now for no architectural reason.
+    a no-ctx, explicit-string-arg function, same shape as mint-seat/new's own CLI entry points,
+    with no entry point of its own until now for no architectural reason.
 
     Migrates `cwd`'s markdown MEMORY (CLAUDE.md build log / DESIGN.md / memory essays)
     into the graph as retrieval-sized Reference nodes and registers the SoftwareProject —
@@ -6603,7 +6604,7 @@ async def cmd_bootstrap(
     separate `/etc/osiris/osiris.env` prod file that does not exist here — confirmed
     absent) — there is no isolated instance to fall back to. Unlike `merge`/`mint-seat`/
     `deploy`/etc. (deliberate operator acts a bare terminal call is SUPPOSED to run
-    against the real graph), `bootstrap` is the one CLI door whose ordinary use includes
+    against the real graph), `bootstrap` is the one CLI entry point whose ordinary use includes
     exploratory/scratch runs — exactly the shape that produced the specimen. So: if the
     caller did not set DATABASE_URL themselves (about to hit the fallback) AND has not
     set OSIRIS_ALLOW_LIVE=1, this refuses loudly instead of writing to production by
@@ -6611,7 +6612,7 @@ async def cmd_bootstrap(
     already carries) always wins and is never blocked.
 
     THE CHECK ITSELF NOW LIVES IN `dev_env.refuse_silent_live_db` (thread 86d562e0's own
-    CLASS fix, not just this one door) — reused verbatim here, never a second copy."""
+    CLASS fix, not just this one entry point) — reused verbatim here, never a second copy."""
     from src.actions.core import Actions
     from src.orchestrator.bootstrap import bootstrap_project
 
@@ -6653,7 +6654,7 @@ async def cmd_bootstrap(
 # ============================================================================================
 # WAVE 3 (thread 5bf6447c, Thoth dispatch 7943): the 25 NO_CLI_EQUIVALENT excuses re-read
 # one by one against today's code. These sixteen had a real, standalone, third-party-capable
-# orchestrator function all along — the console door was simply never scoped (each earlier
+# orchestrator function all along — the console entry point was simply never scoped (each earlier
 # entry's own generic "not on the jesus/chad path; not ruled out" reason, from a narrower
 # dispatch that never claimed these were impossible, only out of scope). Every one below
 # calls the SAME function its own MCP tool wraps — verified by reading each tool's own
@@ -6668,7 +6669,7 @@ async def cmd_attach_seat(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris attach-seat <worker> <manager> <evidence> [--actor W] — the console-script
-    door onto orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool
+    entry point onto orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool
     wraps (forwards to seat_edge(action='attach')). Creates a managed_by edge."""
     from src.actions.core import Actions
     from src.orchestrator.seats import attach_seat as _attach_seat
@@ -6708,7 +6709,7 @@ async def cmd_attach_seat(
 async def cmd_detach_seat(
     seat: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris detach-seat <seat> <because> [--actor W] — the console-script door onto
+    """osiris detach-seat <seat> <because> [--actor W] — the console-script entry point onto
     orchestrator.seats.detach_seat, the SAME function the detach_seat MCP tool wraps
     (forwards to seat_edge(action='detach')). Invalidates an active managed_by edge."""
     from src.actions.core import Actions
@@ -6750,13 +6751,13 @@ async def cmd_promote(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris promote <target> <worker1> [worker2 ...] --because <str> [--actor W] — the
-    console-script door onto orchestrator.seats.promote_seat, the SAME function the seat
+    console-script entry point onto orchestrator.seats.promote_seat, the SAME function the seat
     MCP tool's action='promote' branch wraps. Mints target as manager over each worker
     (peer bonds invalidated, house derived, offices reissued), one transaction, per-worker
     outcomes never a whole-call failure. `--actor` defaults to `_CONSOLE_ACTOR`
     ('console'), one of promote_seat's own recognized operator sentinels — a bare
     terminal invocation IS the operator's own hand by construction, same authority every
-    other third-party seat-write CLI door in this file already carries."""
+    other third-party seat-write CLI entry point in this file already carries."""
     from src.actions.core import Actions
     from src.orchestrator.seats import promote_seat as _promote_seat
 
@@ -6795,7 +6796,7 @@ async def cmd_promote(
 async def cmd_vacate_seat(
     seat_id: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris vacate-seat <seat> <because> [--actor W] — the console-script door onto
+    """osiris vacate-seat <seat> <because> [--actor W] — the console-script entry point onto
     orchestrator.trigger.vacate_dead_seat, the SAME function the vacate_seat MCP tool
     wraps (forwards to seat(action='vacate')). Releases a dead holder without retiring
     the seat itself."""
@@ -6837,7 +6838,7 @@ async def cmd_vacate_seat(
 async def cmd_retire_seat(
     seat_id: str, reason: str = "", *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-seat <seat> [--reason R] [--actor W] — the console-script door onto
+    """osiris retire-seat <seat> [--reason R] [--actor W] — the console-script entry point onto
     orchestrator.seats.retire_seat, the SAME function the retire_seat MCP tool wraps
     (forwards to retire_object(kind='seat')). Marks a Seat permanently CLOSED."""
     from src.actions.core import Actions
@@ -6879,7 +6880,7 @@ async def cmd_bind_seat_tree(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris bind-seat-tree <seat> <tree_cwd> <because> [--actor W] — the console-script
-    door onto orchestrator.seats.bind_seat_tree, the SAME function the bind_seat_tree MCP
+    entry point onto orchestrator.seats.bind_seat_tree, the SAME function the bind_seat_tree MCP
     tool wraps (forwards to seat(action='bind_tree')). Points a seat's CODE checkout,
     distinct from its anchor office."""
     from src.actions.core import Actions
@@ -6921,7 +6922,7 @@ async def cmd_sweep_seat_disk(
     handle: str, dry_run: bool = True, because: str = "",
     pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris sweep-seat-disk <handle> [--apply] [--because R] — the console-script door
+    """osiris sweep-seat-disk <handle> [--apply] [--because R] — the console-script entry point
     onto orchestrator.offices.sweep_retired_office + sweep_seat_workspace, the SAME two
     functions the sweep_seat_disk MCP tool wraps (forwards to seat(action='sweep_disk')).
     Dry-run by default; --apply writes."""
@@ -6966,7 +6967,7 @@ async def cmd_sweep_seat_trees(
 ) -> int:
     """osiris sweep-seat-trees [--apply] [--actor W] [--json] — WAVE 27 priority fix
     (operator-flagged via Nebbercracker DM 11747, Thoth mail 11759): the console-script
-    door onto orchestrator.seats.sweep_seat_trees, fleet-wide, listing every seat whose
+    entry point onto orchestrator.seats.sweep_seat_trees, fleet-wide, listing every seat whose
     tree_cwd is null or not a real git tree of its own governed project, repairing on
     --apply. Dry run by default."""
     from src.actions.core import Actions
@@ -7004,7 +7005,7 @@ async def cmd_rename_seat(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rename-seat <seat> <new_handle> <because> [--actor W] — the console-script
-    door onto orchestrator.seats.rename_seat, the SAME function the rename_seat MCP tool
+    entry point onto orchestrator.seats.rename_seat, the SAME function the rename_seat MCP tool
     wraps (forwards to seat(action='rename'))."""
     from src.actions.core import Actions
     from src.orchestrator.seats import rename_seat as _rename_seat
@@ -7046,7 +7047,7 @@ async def cmd_set_seat_attended(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris set-seat-attended <seat> <attended> <because> [--actor W] — the console-
-    script door onto orchestrator.seats.set_seat_attended, the SAME function the
+    script entry point onto orchestrator.seats.set_seat_attended, the SAME function the
     set_seat_attended MCP tool wraps (forwards to seat(action='set_attended'))."""
     from src.actions.core import Actions
     from src.orchestrator.seats import set_seat_attended as _set_seat_attended
@@ -7101,7 +7102,7 @@ async def cmd_reissue_seat_dir(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris reissue-seat-dir <seat> <because> [--adopt] [--actor W] — the console-script
-    door onto orchestrator.boot_compiler.reissue_office, the SAME function the
+    entry point onto orchestrator.boot_compiler.reissue_office, the SAME function the
     reissue_office MCP tool wraps (forwards to seat(action='reissue_office'))."""
     from src.actions.core import Actions
     from src.orchestrator.boot_compiler import reissue_office as _reissue_office
@@ -7152,7 +7153,7 @@ async def cmd_establish_office(
 async def cmd_establish_seat_dir(
     seat: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris establish-seat-dir <seat> [--actor W] — the console-script door onto
+    """osiris establish-seat-dir <seat> [--actor W] — the console-script entry point onto
     orchestrator.offices.establish_office, the SAME function the establish_office MCP
     tool wraps (forwards to seat(action='establish_office')). The full seat-directory
     ceremony, one receipt."""
@@ -7195,9 +7196,9 @@ async def cmd_resync_seat_project(
 ) -> int:
     """osiris resync-seat-project <seat> <reason> [--actor W] — RETIRES resync-seat-house
     outright, no alias (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"): the
-    console-script door onto orchestrator.seats.resync_seat_project, which collapses
+    console-script entry point onto orchestrator.seats.resync_seat_project, which collapses
     the old third-party `resync_seat_house_third_party` AND the old self-scoped
-    `correct_house` into one door — a seat's project is never a second, declared
+    `correct_house` into one entry point — a seat's project is never a second, declared
     value, so there is no `<new_house>` argument left to take; this always
     RE-DERIVES from the seat's own charter instead."""
     from src.actions.core import Actions
@@ -7240,7 +7241,7 @@ async def cmd_reconcile_seat_identity(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris reconcile-seat-identity <seat> <because> [--agent-id A] [--actor W] — the
-    console-script door onto orchestrator.identity_heal.reconcile_seat_identity_third_
+    console-script entry point onto orchestrator.identity_heal.reconcile_seat_identity_third_
     party, the SAME function reconcile_seat_identity_third_party (and, third-party-wise,
     reconcile_seat_identity) MCP-forwards to (seat(action='reconcile_identity')). Always
     third-party here — a raw terminal has no mounted identity to reconcile self-wise."""
@@ -7283,7 +7284,7 @@ async def cmd_reconcile_seat_identity(
 async def cmd_create_project(
     name: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris create-project <name> <because> [--actor W] — the console-script door onto
+    """osiris create-project <name> <because> [--actor W] — the console-script entry point onto
     orchestrator.project_identity.create_project, the SAME function the create_project
     MCP tool wraps (forwards to project(action='create'))."""
     from src.actions.core import Actions
@@ -7325,12 +7326,12 @@ async def cmd_rename_project(
     merge_into: bool = False, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris rename-project <project> <new_name> <because> [--apply] [--merge-into]
-    [--actor W] — the console-script door onto orchestrator.project_identity.
+    [--actor W] — the console-script entry point onto orchestrator.project_identity.
     rename_project, the SAME underlying write the rename_project MCP tool's
     project(action='rename') calls. Dry-run by default; --apply writes.
 
     RECEIPT LAW (Thoth mail 9122 item 1, wave 16) — NOT the same overall guarantee as
-    the MCP door, and this docstring used to falsely claim it was: the MCP door also
+    the MCP entry point, and this docstring used to falsely claim it was: the MCP entry point also
     (a) gathers governing-seat evidence and warns when it disagrees with `new_name`
     (`rename_evidence`/`evidence_disagrees`/`warning`, mcp_server.py's `_project_impl`
     rename branch) and (b) heals every already-mounted agent's IN-PROCESS mount cache
@@ -7363,7 +7364,7 @@ async def cmd_rename_project(
                   "instance.", file=sys.stderr)
             return 1
     try:
-        # SAME evidence-gathering the MCP door runs, before the write (best-effort —
+        # SAME evidence-gathering the MCP entry point runs, before the write (best-effort —
         # an ambiguous ref is the real refusal inside _rename_project itself below).
         evidence_by_seat: dict[str, Any] = {}
         try:
@@ -7417,7 +7418,7 @@ async def cmd_set_project_tag(
     project: str, tag: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris set-project-tag <project> <tag> <because> [--actor W] — the console-script
-    door onto orchestrator.projects.set_project_window_tag, the SAME function the
+    entry point onto orchestrator.projects.set_project_window_tag, the SAME function the
     project(action='set_tag') MCP verb wraps. Declares the persisted `[TAG]` override
     trigger.py's `_house_tag`/`_window_name` read BEFORE ever deriving one from the
     house/project's own first two letters."""
@@ -7457,7 +7458,7 @@ async def cmd_set_project_tag(
 async def cmd_retire_project(
     project: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-project <project> <because> [--actor W] — the console-script door
+    """osiris retire-project <project> <because> [--actor W] — the console-script entry point
     onto orchestrator.projects.retire_project, the SAME function the retire_project MCP
     tool wraps (forwards to retire_object(kind='project'))."""
     from src.actions.core import Actions
@@ -7498,7 +7499,7 @@ async def cmd_retire_project(
 async def cmd_retire_object(
     ref: str, because: str, *, actor: str, pool: asyncpg.Pool | None = None,
 ) -> int:
-    """osiris retire-object <ref> <because> [--actor W] — the console-script door
+    """osiris retire-object <ref> <because> [--actor W] — the console-script entry point
     onto orchestrator.retirement.retire_bare_object, the SAME function the
     retire_object(kind='object') MCP tool wraps (thread 92dde6cc). Retires an
     arbitrary ACTIVE object of no other kind (not a Seat/SoftwareProject/Agent)."""
@@ -7541,7 +7542,7 @@ async def cmd_fork_project(
     pool: asyncpg.Pool | None = None,
 ) -> int:
     """osiris fork-project <project> <fork_into> <because> [--direction fork|unfork]
-    [--actor W] — the console-script door onto orchestrator.project_identity.
+    [--actor W] — the console-script entry point onto orchestrator.project_identity.
     fork_project, the SAME function the fork_project MCP tool wraps (forwards to
     project(action='fork'/'unfork') by direction)."""
     from src.actions.core import Actions
@@ -7583,10 +7584,10 @@ async def cmd_fork_project(
         print(f"  {k}: {v}")
     return 0
 
-# dispatch 3678, "make the cli a front door instead of a dump": bare `osiris` used to be
+# dispatch 3678, "make the cli a front entry point instead of a dump": bare `osiris` used to be
 # an argparse error (`the following arguments are required: command`) followed, on -h/
 # --help, by a flat alphabetical dump of thirteen verbs with no sense of what a newcomer
-# actually needs first. This is that front door — GROUPED by what a person is trying to
+# actually needs first. This is that front entry point — GROUPED by what a person is trying to
 # DO (#97's own acceptance test: a stranger with no context gets from `osiris` to a
 # running worker without reading source or asking anyone), with the newcomer path shown
 # as literal copy-pasteable lines rather than prose describing it. Every individual
@@ -7656,7 +7657,7 @@ class _RawSubparser(argparse.ArgumentParser):
 def _add_text_flag(parser: argparse.ArgumentParser) -> None:
     """`--text` (#92, the zero-token read hook, Thoth mail 11780 item B): print the raw
     server-rendered string verbatim, no box, no title, no color — exactly what a slash
-    face already prints in a code block. Shared across every door the hook serves so its
+    face already prints in a code block. Shared across every command the hook serves so its
     static `osiris <verb> --text` invocation is uniform."""
     parser.add_argument("--text", action="store_true",
                         help="raw rendered text, no box, title, or color: for scripting "
@@ -8345,7 +8346,7 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="machine-readable: one compact JSON line")
 
     # DEPRECATED: fold_project no longer exists as a top-level tool; see
-    # cmd_fold_project's own docstring. Kept working, hidden from the front-door listing
+    # cmd_fold_project's own docstring. Kept working, hidden from the front entry-point listing
     # (no help= means argparse's own choice listing never mentions it either) — never
     # break a human's muscle memory silently, but never advertise the old name again.
     p_fold_project = sub.add_parser(
@@ -8539,7 +8540,7 @@ def _build_parser() -> argparse.ArgumentParser:
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_send = sub.add_parser("send", description=_d(
-        "Send a message to the fleet, exposed as a bare-terminal door onto the send "
+        "Send a message to the fleet, exposed as a bare-terminal entry point onto the send "
         "tool. `--to`=<project> broadcasts to that project; `--to-agent`=<agent> sends "
         "a private message. Refuses to send to a project nobody has mounted under, or "
         "a broadcast whose body names a real seat mounted in a different project, "
@@ -8575,7 +8576,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_decide = sub.add_parser("decide", description=_d(
         "Record a decision (ruling, reset, override, rejection, or choice). Exposed "
-        "as a bare-terminal door onto the record_decision tool. An exact repeat "
+        "as a bare-terminal entry point onto the record_decision tool. An exact repeat "
         "reuses the existing decision instead of minting a duplicate."),
         epilog="example: osiris decide 'freeze non-critical merges after Thursday' "
                "--rationale 'mobile team cutting a release branch' --repo osiris")
@@ -8620,7 +8621,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_settle = sub.add_parser("settle", description=_d(
         "Run the end-of-session checklist: confirm everything worth remembering is "
-        "recorded before context is lost. Exposed as a bare-terminal door onto the "
+        "recorded before context is lost. Exposed as a bare-terminal entry point onto the "
         "settle tool. With no arguments, shows the read-only completeness checklist."),
         epilog="example: osiris settle\n"
                "example: osiris settle --decisions "
@@ -8647,7 +8648,7 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_settle)
 
     p_thread = sub.add_parser("thread", description=_d(
-        "Resolve (close) a thread. Exposed as a bare-terminal door onto the thread "
+        "Resolve (close) a thread. Exposed as a bare-terminal entry point onto the thread "
         "tool's own resolve action. A deliberate narrowing: the other three actions "
         "(annotate, correct_summary, reclassify) have no command here; annotate "
         "already has its own (osiris annotate-thread)."),
@@ -8671,7 +8672,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_proposal = sub.add_parser("proposal", description=_d(
         "Propose, accept, or reject a candidate change, for use as a last resort when "
         "an automated process can't confidently make a change on its own. Exposed as "
-        "a bare-terminal door onto the `proposal` tool's own three actions."),
+        "a bare-terminal entry point onto the `proposal` tool's own three actions."),
         epilog="example: osiris proposal accept --proposal-ref proposal:1234...\n"
                "example: osiris proposal reject --proposal-ref proposal:1234... "
                "--reason 'wrong shortlist'")
@@ -8700,7 +8701,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rebind_seat = sub.add_parser(
         "rebind-seat", description=_d(
             "Move a seat's working directory to a new location, preserving its "
-            "identity, lineage, attribution, and mail. Exposed as the console door for "
+            "identity, lineage, attribution, and mail. Exposed as the console entry point for "
             "a human running this by hand."),
         epilog="example: osiris rebind-seat Jesus /home/user/code/godel")
     p_rebind_seat.add_argument("seat", help="a claimed handle, a raw agent id, or an "
@@ -9088,7 +9089,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_attach_seat = sub.add_parser(
         "attach-seat", description=_d(
-            "Create a management link between two seats: the console door onto the "
+            "Create a management link between two seats: the console entry point onto the "
             "same underlying function the attach_seat tool wraps."),
         epilog="example: osiris attach-seat Cassandra Nova \"cross-house adoption\"")
     p_attach_seat.add_argument("worker", help="the seat gaining a manager")
@@ -9101,7 +9102,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_promote = sub.add_parser(
         "promote", description=_d(
             "Mint a seat as manager over one or more workers, self-managed only: the "
-            "console door onto the same underlying function the seat tool's "
+            "console entry point onto the same underlying function the seat tool's "
             "promote action wraps. Managers cannot promote on a worker's behalf; "
             "this has to be self-managed."),
         epilog="example: osiris promote nebbercracker jenny chowder dustin "
@@ -9115,7 +9116,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_detach_seat = sub.add_parser(
         "detach-seat", description=_d(
-            "Invalidate a seat's active management link: the console door onto the "
+            "Invalidate a seat's active management link: the console entry point onto the "
             "same underlying function the detach_seat tool wraps."),
         epilog="example: osiris detach-seat Cassandra \"now self-managed\"")
     p_detach_seat.add_argument("seat", help="the seat losing its manager")
@@ -9127,7 +9128,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_vacate_seat = sub.add_parser(
         "vacate-seat", description=_d(
             "Release a dead holder without retiring the seat itself: the console "
-            "door onto the same underlying function the vacate_seat tool wraps."),
+            "entry point onto the same underlying function the vacate_seat tool wraps."),
         epilog="example: osiris vacate-seat seat:e355913e \"holder confirmed dead\"")
     p_vacate_seat.add_argument("seat_id", help="the seat's own canonical id")
     p_vacate_seat.add_argument("because", help="why this holder is being released")
@@ -9138,7 +9139,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retire_seat = sub.add_parser(
         "retire-seat", description=_d(
             "Mark a seat permanently closed, with no successor and no merge target: "
-            "the console door onto the same underlying function the retire_seat "
+            "the console entry point onto the same underlying function the retire_seat "
             "tool wraps."),
         epilog="example: osiris retire-seat seat:e355913e --reason \"role is over\"")
     p_retire_seat.add_argument("seat_id", help="the seat's own canonical id")
@@ -9150,7 +9151,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_bind_seat_tree = sub.add_parser(
         "bind-seat-tree", description=_d(
             "Point a seat's code checkout, distinct from its anchor seat directory: "
-            "the console door onto the same underlying function the "
+            "the console entry point onto the same underlying function the "
             "bind_seat_tree tool wraps."),
         epilog="example: osiris bind-seat-tree seat:e355913e ~/code/osiris \"tree moved\"")
     p_bind_seat_tree.add_argument("seat_id", help="the seat's own canonical id")
@@ -9163,7 +9164,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_sweep_seat_disk = sub.add_parser(
         "sweep-seat-disk", description=_d(
             "Sweep a retired seat's directory and workspace off disk: the console "
-            "door onto the same two underlying functions the sweep_seat_disk tool "
+            "entry point onto the same two underlying functions the sweep_seat_disk tool "
             "wraps. Dry-run by default."),
         epilog="example: osiris sweep-seat-disk OldHandle --apply --because retired")
     p_sweep_seat_disk.add_argument("handle", help="the retired seat's own handle")
@@ -9188,7 +9189,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_rename_seat = sub.add_parser(
         "rename-seat", description=_d(
-            "Rename a seat's handle deliberately: the console door onto the same "
+            "Rename a seat's handle deliberately: the console entry point onto the same "
             "underlying function the rename_seat tool wraps."),
         epilog="example: osiris rename-seat seat:e355913e Till \"casing correction\"")
     p_rename_seat.add_argument("seat_id", help="the seat's own canonical id")
@@ -9200,7 +9201,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_set_seat_attended = sub.add_parser(
         "set-seat-attended", description=_d(
-            "Stamp whether a seat is actually attended by a human: the console door "
+            "Stamp whether a seat is actually attended by a human: the console entry point "
             "onto the same underlying function the set_seat_attended tool wraps."),
         epilog="example: osiris set-seat-attended seat:34f4e5fa true \"Nova is human-driven\"")
     p_set_seat_attended.add_argument("seat_id", help="the seat's own canonical id")
@@ -9213,7 +9214,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reissue_office = sub.add_parser(
         "reissue-seat-dir", aliases=["reissue-office"], description=_d(
             "Recompile a seat's managed directory section on demand: the console "
-            "door onto the same underlying function the reissue_office tool wraps. "
+            "entry point onto the same underlying function the reissue_office tool wraps. "
             "`reissue-office` still works this release as a deprecated alias."),
         epilog="example: osiris reissue-seat-dir seat:e355913e \"manager changed\"")
     p_reissue_office.add_argument("seat_id", help="the seat's own canonical id")
@@ -9228,7 +9229,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_establish_office = sub.add_parser(
         "establish-seat-dir", aliases=["establish-office"], description=_d(
-            "Run the full seat-directory setup in one step: the console door onto "
+            "Run the full seat-directory setup in one step: the console entry point onto "
             "the same underlying function the establish_office tool wraps. "
             "`establish-office` still works this release as a deprecated alias."),
         epilog="example: osiris establish-seat-dir seat:e355913e")
@@ -9255,7 +9256,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_reconcile_seat_identity = sub.add_parser(
         "reconcile-seat-identity", description=_d(
             "Third-party identity reconciliation for a seat that cannot correct "
-            "itself: the console door onto the same underlying function that "
+            "itself: the console entry point onto the same underlying function that "
             "reconciles seat identity on another seat's behalf."),
         epilog="example: osiris reconcile-seat-identity seat:e355913e \"stale house row\"")
     p_reconcile_seat_identity.add_argument("seat_id", help="the seat's own canonical id")
@@ -9268,7 +9269,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_create_project = sub.add_parser(
         "create-project", description=_d(
-            "Declare a new SoftwareProject: the console door onto the same "
+            "Declare a new SoftwareProject: the console entry point onto the same "
             "underlying function the create_project tool wraps."),
         epilog="example: osiris create-project newthing \"standalone repo, no seat yet\"")
     p_create_project.add_argument("name", help="the new project's own name")
@@ -9280,7 +9281,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rename_project = sub.add_parser(
         "rename-project", description=_d(
             "Rename a SoftwareProject's display name (its canonical id never "
-            "changes): the console door onto the same underlying function the "
+            "changes): the console entry point onto the same underlying function the "
             "rename_project tool wraps. Dry-run by default."),
         epilog="example: osiris rename-project oldname newname \"spelling fix\" --apply")
     p_rename_project.add_argument("project", help="the project's current name/canonical")
@@ -9299,7 +9300,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "set-project-tag", description=_d(
             "Declare a SoftwareProject's persisted short window tag override "
             "(1-4 uppercase letters shown instead of the derived default). The "
-            "console door onto the same underlying function the project tool's "
+            "console entry point onto the same underlying function the project tool's "
             "set_tag action wraps."),
         epilog="example: osiris set-project-tag monsterhouse MH \"operator's own code\"")
     p_set_project_tag.add_argument("project", help="the project's own name/canonical")
@@ -9311,7 +9312,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_retire_project = sub.add_parser(
         "retire-project", description=_d(
-            "Retire a dead SoftwareProject stub: the console door onto the same "
+            "Retire a dead SoftwareProject stub: the console entry point onto the same "
             "underlying function the retire_project tool wraps."),
         epilog="example: osiris retire-project deadthing \"never went anywhere\"")
     p_retire_project.add_argument("project", help="the project's own name/canonical")
@@ -9323,7 +9324,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retire_object = sub.add_parser(
         "retire-object", description=_d(
             "Retire an arbitrary active object of no other special kind (not a seat, "
-            "SoftwareProject, or agent): the console door onto the same underlying "
+            "SoftwareProject, or agent): the console entry point onto the same underlying "
             "function the retire_object(kind='object') tool wraps."),
         epilog="example: osiris retire-object thread:dbg-cl-a-member "
                "\"debug-script artifact\"")
@@ -9336,7 +9337,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fork_project = sub.add_parser(
         "fork-project", description=_d(
             "Declare, or reverse, a fork relationship between two already-active "
-            "SoftwareProjects: the console door onto the same underlying functions "
+            "SoftwareProjects: the console entry point onto the same underlying functions "
             "the fork_project tool wraps."),
         epilog="example: osiris fork-project redmonth ballgem \"new sibling project\""
               "\nexample, reversing: osiris fork-project redmonth ballgem \"mistake\" "
@@ -9359,7 +9360,7 @@ def main(argv: list[str] | None = None) -> int:
         # dispatch 3678/3681: bare `osiris` used to be argparse's own terse usage error.
         # Thoth's own measurement says the EXIT CODE (2, a real usage condition — no
         # command was given) was already correct and must stay; only the TEXT was the
-        # dump. print_help() shows the full front-door description above; the code stays 2.
+        # dump. print_help() shows the full front entry-point description above; the code stays 2.
         parser.print_help()
         return 2
     if args.command == "attach":

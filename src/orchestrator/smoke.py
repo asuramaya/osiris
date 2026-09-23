@@ -17,7 +17,7 @@ import httpx
 
 # every chrome route named in thread bb763977 — /health isn't here on purpose: it's already
 # its own dedicated liveness endpoint (src/api/app.py), this walks the actual RENDERED pages.
-# /membrane retired (task #71, ruling 0b3dd431) — "/" (THE INBOX) is :8011's new front door.
+# /membrane retired (task #71, ruling 0b3dd431) — "/" (THE INBOX) is :8011's new main entry point.
 # /live-desk and /roadmap retired (ruling d42c543b) — pure duplicates of the "live-desk" and
 # "roadmap" compositions already roomed in /ui, verified live before deletion.
 # /canon retired 2026-07-30 (task #96): a pure pass-through to the "docs" composition, whose
@@ -110,9 +110,9 @@ async def embed_health(pool: asyncpg.Pool, *, window_hours: int = 24) -> dict[st
     """READ-ONLY, same law and same shape as `whisper_health` above: reads
     `capture.EMBED_ALARM_SURFACE` back from the SAME blind-spot channel (task #34) that
     `embed_pass` (src/workers/arq_worker.py) files into on a load failure — thread
-    5cd49217 (Thoth DM 5287), the semantic door silently latching closed forever with
+    5cd49217 (Thoth DM 5287), the semantic route silently latching closed forever with
     nothing watching. `ok` is `error_count == 0` in the window; `last_error` names what the
-    most recent failed tick said. NOT a positive probe (cannot prove the door is open, only
+    most recent failed tick said. NOT a positive probe (cannot prove the route is open, only
     that nothing has confessed to it being closed recently)."""
     from src.orchestrator.capture import EMBED_ALARM_SURFACE
 
@@ -170,8 +170,8 @@ async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]
     + the registry rowless count + the semantic-embed alarm channel, composed. `ok` is a
     single boolean a deploy script can branch on without re-deriving the per-surface
     detail — `warnings` (a list, empty when clean) never feeds it: a warning names
-    something worth a glance, never a reason to fail a deploy (embed's own door has always
-    degraded gracefully — fn_search's lexical doors still answer with it closed)."""
+    something worth a glance, never a reason to fail a deploy (embed's own route has always
+    degraded gracefully — fn_search's lexical routes still answer with it closed)."""
     chrome = await smoke_chrome(client)
     db = await smoke_pool(pool)
     whisper = await whisper_health(pool)
@@ -184,7 +184,7 @@ async def smoke(client: httpx.AsyncClient, pool: asyncpg.Pool) -> dict[str, Any]
 
 
 def _embed_warning(embed: dict[str, Any]) -> str | None:
-    """`embed_health`'s own verdict, rendered as one warning line when the door has
+    """`embed_health`'s own verdict, rendered as one warning line when the route has
     recently confessed to being closed — kept OUT of `ok` on purpose (see `smoke`'s own
     docstring): a semantic-search outage is a degraded experience, never a liveness
     failure."""

@@ -1,7 +1,7 @@
 """THE SETTINGS REGISTRY's own SERVICE layer (THE SETTINGS MENU, ruling be1b2e47, thread
 f4498ab304e4 piece 1, Thoth's GO mail 10040) — the VALUES half over `src/config/
 settings_registry.py`'s own DECLARATIONS, generalizing `backup_settings.py`'s singleton-
-table + charter_for-shaped door into the one `settings` table (migration 0067) every
+table + charter_for-shaped entry point into the one `settings` table (migration 0067) every
 future knob writes into without its own migration.
 
 THE OVERLAY IS THE RISK (Thoth's own words, mail 10040) — `settings_with_overlay` is
@@ -230,7 +230,7 @@ async def list_settings(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 async def get_setting(pool: asyncpg.Pool, key: str) -> dict[str, Any]:
     """One key's own current value plus its `live` counterpart (null when not cheap —
-    see `live_value`). `{"error": ...}` when the key is not registered — this door only
+    see `live_value`). `{"error": ...}` when the key is not registered — this call only
     ever answers for a declared knob, never an arbitrary string."""
     spec = spec_by_key(key)
     if spec is None:
@@ -339,7 +339,7 @@ async def _rotate_secret(
 ) -> dict[str, Any]:
     """THE SECRETS ROTATE ACT (thread f4498ab304e4's own follow-up, Thoth mail 10441):
     `write_setting`'s own secret_ref branch — a write on a secret_ref key IS a rotate,
-    the same door, no second action to learn. The real value goes into `spec`'s own
+    the same call, no second action to learn. The real value goes into `spec`'s own
     `backing_file` (0600, a KEY=value line, `env_field.upper()` as the key) — NEVER the
     `settings` table and NEVER echoed back in the receipt. Only a bare `{"rotated":
     true}` marker lands in the table (rev-bumped the same way every other write is),
@@ -408,7 +408,7 @@ async def write_setting(
     pool: asyncpg.Pool, key: str, value: Any, *, actor: str, because: str = "",
     scope_id: str = "", ruling: str | None = None,
 ) -> dict[str, Any]:
-    """THE WRITE DOOR — `backup_settings.write_backup_settings`'s own authority shape,
+    """THE WRITE PATH — `backup_settings.write_backup_settings`'s own authority shape,
     generalized over the registry rather than one hardcoded field set. Returns
     `{"error": ..., "errors": [{"field","message"}, ...]}` on any refusal (structured,
     Seshat's fold 5, never one bare string for a menu to show per-field), or

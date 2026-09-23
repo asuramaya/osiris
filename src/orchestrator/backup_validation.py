@@ -1,5 +1,5 @@
-"""THE BACKUP TOPOLOGY VALIDATOR (Thoth mail 12809/12812, THE BACKUP CLI DOOR + BACKUP
-TOPOLOGY / INTERMITTENT TARGETS): one shared module the CLI, MCP, and REST doors all call
+"""THE BACKUP TOPOLOGY VALIDATOR (Thoth mail 12809/12812, THE BACKUP CLI ENTRY POINT + BACKUP
+TOPOLOGY / INTERMITTENT TARGETS): one shared module the CLI, MCP, and REST entry points all call
 for the two checks that only ever mean one thing wherever they're asked — never
 reimplemented per surface, the same discipline `is_live_handoff`/`HANDOFF_LIVE_PREDICATE_SQL`
 already established for the handoff predicate.

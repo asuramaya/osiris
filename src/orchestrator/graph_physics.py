@@ -1632,7 +1632,7 @@ def _edge_length_percentiles(
 ) -> dict[str, Any]:
     """THE COMPACT ARRANGEMENT's own acceptance line (Thoth mail 11533, research
     note S4/S59): intra- vs cross-district edge length, median and 95th
-    percentile -- this door lacked both until now. Semantic edges only
+    percentile -- this verification lacked both until now. Semantic edges only
     (container/structural edges are gravity, never drawn as lines); an edge with
     either endpoint unplaced (should not happen for a real link row, defensive
     only) is skipped rather than crashing the receipt."""
@@ -1860,7 +1860,7 @@ async def _memory_guard(actions: Actions, positions: np.ndarray) -> str | None:
 async def run_physics_migrate(
     actions: Actions, *, verify_only: bool = False,
 ) -> AsyncIterator[dict[str, Any]]:
-    """THE PHYSICS LAYOUT's own migration door: a SINGLE global computation over the
+    """THE PHYSICS LAYOUT's own migration entry point: a SINGLE global computation over the
     whole active population (never a batch loop -- see the module docstring for why),
     sharing `graph_layout._LAYOUT_LOCK_KEY` with the cron heartbeat and
     `run_layout_migrate` so nothing else touches graph_x/graph_y while this runs.
@@ -1883,7 +1883,7 @@ async def run_physics_migrate(
     the `return` two lines above the write loop is what actually guarantees it). A
     verify-only run is read-only by construction, so unlike a real migration it MAY
     run from an undeployed branch against the live population; only a run that
-    actually writes still needs deployed code (the migration-doors rule)."""
+    actually writes still needs deployed code (the migration-entry-point rule)."""
     async with actions.pool.acquire() as lock_conn:
         if not await _try_acquire_layout_lock(lock_conn):
             yield {"error": "the layout heartbeat (or a migrate run) currently holds "

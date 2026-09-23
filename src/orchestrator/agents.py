@@ -1735,7 +1735,7 @@ async def _flag_unattributed_revisit(
     known lineage, and it used to mint unconditionally with no check at all) is at a
     project that already carries `works_in` activity from some other, unrelated lineage.
 
-    Never refuses the mint, the fresh identity is real, whatever door resolved it, only
+    Never refuses the mint, the fresh identity is real, whatever route resolved it, only
     confesses that this may be one of four unresolved-revisit shapes (weeks-cold project,
     harness churn, no .osiris pin, foreign harness) landing as a stranger instead of a
     recognized return, exactly the population "zero inference-minted Agents after the
@@ -2161,7 +2161,7 @@ HANDOFF_LIVE_PREDICATE_SQL = (
 
 
 async def is_live_handoff(pool: asyncpg.Pool, object_id: Any) -> bool:
-    """Single-object door onto `HANDOFF_LIVE_PREDICATE_SQL`, the same answer
+    """Single-object entry point onto `HANDOFF_LIVE_PREDICATE_SQL`, the same answer
     nearest_handoff_ancestor's own set query would give this one object, for a caller
     (ack_handoff) that already has a specific id in hand rather than a chain to walk."""
     return bool(await pool.fetchval(
@@ -2192,7 +2192,7 @@ async def nearest_handoff_ancestor(
     redesign. An explicit is_handoff='false' (ack_handoff's own retirement stamp) excludes
     the record entirely, overriding the ILIKE fallback too: once acknowledged, a handoff
     must not resurrect for a later generation merely because nothing more recent exists;
-    recall()/search() stay the door for that history, orient() should not re-deliver a
+    recall()/search() stay the route for that history, orient() should not re-deliver a
     baton someone already took. The fallback applies only to objects that never had an
     is_handoff property asserted at all (genuine pre-property legacy records); an object
     that has the property, however it currently resolves, is never routed through
@@ -2370,7 +2370,7 @@ async def _report_half_healed_phantom(
     follow_binding against whatever seat currently holds the live head, rebinding it
     backward onto a stale ancestor and stranding every real mind and every
     seat-addressed message since. Surfaced for a human's own judgment via the standard
-    obligation door, idempotent on the summary so a repeat sighting (this walk runs at
+    obligation call, idempotent on the summary so a repeat sighting (this walk runs at
     every mint) converges on one Thread rather than paging every caller who passes
     through here.
 
@@ -2434,7 +2434,7 @@ async def correct_succession(
     actions: Actions, *, agent_id: str, value: str, because: str, actor: str,
     override_live: bool = False,
 ) -> dict[str, Any]:
-    """The sanctioned door for `succeeded_by`: a batch of half-heal-detect threads were
+    """The sanctioned entry point for `succeeded_by`: a batch of half-heal-detect threads were
     found genuinely live, not bulk-closeable, but bulk-reviewable, and no verb anywhere
     touched this property; a raw assert_property from outside the MCP surface is exactly
     what house policy rules against, and the auto-mode classifier caught it before it ran.
@@ -2444,7 +2444,7 @@ async def correct_succession(
     `value=""` retracts the pointer to unset (the same NOT-NULL-safe empty-string
     sentinel `_debounce_roundtrip`/`_fold_zero_turn_ancestors` already use for a
     compensating retraction), never a delete; the stale assertion this supersedes stays
-    in history, exactly the append-only law every other correction door in this house
+    in history, exactly the append-only law every other correction entry point in this house
     already holds to.
 
     The liveness guard mirrors `retire_agent`'s shape, not its exact check (this corrects
@@ -3261,7 +3261,7 @@ async def mint_heir(
     # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS, the same window the fold uses
     # for its own back-to-back check, not a second one) is part of the seam being
     # resolved right now; a heal older than that (20 hours cold, in one specimen) is a
-    # closed one-way door.
+    # closed one-way route.
     #
     # A plain, never-healed active object is ambiguous on status alone, and status alone
     # used to decide it (a specimen of stale-numeral reuse:

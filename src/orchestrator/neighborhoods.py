@@ -14,7 +14,7 @@ member set + last movement hash into a watermark stamped on the Reference; an un
 neighborhood costs nothing (the skip-unchanged discipline the ladder named). Metered in
 llm_usage (purpose='neighborhood-summary' — the digest's cost stream sees every call).
 Recalled through consult_canon unchanged (it reads all Reference nodes), found by BOTH
-search doors: FTS immediately, the embed cron vectorizes the body on its next walk.
+search paths: FTS immediately, the embed cron vectorizes the body on its next walk.
 
 Ownership boundary: summaries are written by `neighborhood-miner`, DERIVED — a machine's
 digest of testimony is not testimony. It never touches the member objects themselves.

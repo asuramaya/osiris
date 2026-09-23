@@ -364,21 +364,21 @@ async def derive_or_abstain(
     caught up" are different provenance facts a reader may care about) stamps
     `properties["retried"]=True` on the minted edge: the caller's own declaration that
     this call is a re-attempt at a previously zero-candidate abstention (see
-    `retryable_abstentions` below for the structurally-safe door onto that population),
+    `retryable_abstentions` below for the structurally-safe entry point onto that population),
     never inferred here.
 
     A successful mint that lands on an object carrying a live (unresolved)
     `derivation_abstained_<link_type>` property SUPERSEDES it with a `resolved` marker
     (`{"link_type", "resolved": True, "resolved_to": <this to_id>}`); otherwise a
     resolved case would sit in `retryable_abstentions`' own queue forever, the exact
-    detector-without-a-door failure this whole lane exists to fix, just moved one step
+    detector-without-a-route failure this whole lane exists to fix, just moved one step
     over. CROSS-SOURCE, DELIBERATELY (the same trap an earlier backfill_lineage_
     repo_links fix found and fixed for its own mint path, now fixed here at the shared
     root): a retry runs under whatever actor re-derived it, almost never the original
     abstention's own writer, and `assert_property`'s supersession is
     same-source-only: a same-source re-assert would leave the stale, different-source
     row "current" beside the new resolved marker instead of retiring it. This uses
-    `supersede_assertion`, the one legitimate cross-source door, against every live row
+    `supersede_assertion`, the one legitimate cross-source route, against every live row
     found (never just the first). A fresh cardinality-1 success with no prior abstention
     on record (the common case) writes nothing extra: this is a correction to a stale
     record, not a receipt every mint owes.
@@ -407,7 +407,7 @@ async def derive_or_abstain(
             # leave the stale, different-source abstention "current" beside the new
             # resolved marker rather than retiring it, a contradiction minted by the very
             # act meant to resolve it. `actions.supersede_assertion` is the one
-            # legitimate cross-source retirement door; every live (non-resolved) row is
+            # legitimate cross-source retirement route; every live (non-resolved) row is
             # superseded, not just the first: multiple sources can each hold their own
             # abstention on the same object/link_type in principle, and a genuine
             # resolution retires all of them, not an arbitrarily-picked one.
@@ -541,7 +541,7 @@ async def record_lineage_abstain(
 # run's actor), never this call's own `actor`, so re-asserting under `actor` would just
 # add a second, different-source "current" row that coexists beside the stale one rather
 # than retiring it (the same multi-source-coexistence bug an earlier live diagnosis
-# found). `actions.supersede_assertion`, the one legitimate cross-source retirement door,
+# found). `actions.supersede_assertion`, the one legitimate cross-source retirement route,
 # is used instead, so a case this backfill (or a future pass) once abstained on and later
 # resolves does not sit in `retryable_abstentions`' queue forever regardless of which
 # actor recorded the original abstention. At last check, the overlap was empty (zero rows
@@ -640,7 +640,7 @@ async def backfill_lineage_repo_links(
                 # a different actor than this one). `assert_property`'s own supersession
                 # is same-source-only (actions/core.py), so retiring a different source's
                 # abstention needs `supersede_assertion`, the one legitimate cross-source
-                # retirement door, not a second same-source row that would merely coexist
+                # retirement route, not a second same-source row that would merely coexist
                 # beside the stale one (the same precedent an earlier fix established).
                 await _supersede_stale_in_repo_abstention(
                     actions, row["id"], repo, actor, observed,
@@ -859,7 +859,7 @@ async def resolve_agent_orphans(
     2+ distinct projects abstains via `derive_or_abstain`, candidate ids kept whole.
 
     THE DUAL-WRITE: an abstention here also asserts `unlinked_because`/
-    `unlinked_because_kind`, the same door-side hatch `_enforce_required_links` writes,
+    `unlinked_because_kind`, the same write-path hatch `_enforce_required_links` writes,
     so `adoption_meter`'s hatch count (an unscoped, all-object read of `unlinked_because`,
     not limited to SCOPED_TYPES) sees this sweep's confessions too. `derive_or_abstain`'s
     own `derivation_abstained_works_in` property is a different fact (candidate ids kept,
@@ -1231,7 +1231,7 @@ async def resolve_project_orphans(
     actions: Actions, *, actor: str = "provenance-sweep:project",
     dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """PROVENANCE SWEEP, SOFTWAREPROJECT LANE: SoftwareProject has no single mint door,
+    """PROVENANCE SWEEP, SOFTWAREPROJECT LANE: SoftwareProject has no single mint entry point,
     five separate auto-vivifying `create_or_find_object("SoftwareProject", ...)` call
     sites, each a side effect of some other caller resolving its own `repo=` string, so
     unlike this module's other lanes it was never covered by any sweep either. Confesses
@@ -1420,7 +1420,7 @@ async def abstained_derivations(
     LIVE ABSTENTIONS ONLY: a case `derive_or_abstain` has since resolved (its own
     `resolved` marker) is excluded: reading a resolved case as still-
     abstained would be the exact stale-record failure this lane exists to fix, just
-    surfaced through the wrong door. `count` is the true total population for that scope
+    surfaced through the wrong route. `count` is the true total population for that scope
     (never capped by `limit`, same convention `stale_current_flags` already uses);
     `sample` is bounded by `limit`."""
     name_filter = f"derivation_abstained_{link_type}" if link_type else None
@@ -1460,7 +1460,7 @@ async def abstained_derivations(
 async def retryable_abstentions(
     pool: asyncpg.Pool, link_type: str | None = None, *, limit: int = 100,
 ) -> dict[str, Any]:
-    """THE STRUCTURALLY-SAFE RETRY DOOR: the SQL itself
+    """THE STRUCTURALLY-SAFE RETRY CALL: the SQL itself
     filters to `candidate_count = 0`: a zero-candidate abstention means the lookup found
     nothing yet, which time can change (an ingest that catches up, a deploy that lands),
     so retrying it later is sound. A 2+-candidate abstention means the lookup found a
@@ -1507,7 +1507,7 @@ async def retryable_abstentions(
     return {"count": total, "sample": sample}
 
 
-# THE OTHER HALF OF THE RETRY DOOR: the zero-candidate and ambiguous
+# THE OTHER HALF OF THE RETRY CALL: the zero-candidate and ambiguous
 # populations must not collapse together; they have different re-scan
 # conditions. `retryable_abstentions` above is deliberately scoped to `candidate_count=0`
 # only: its own docstring's reasoning ("a later retry that happens to see one candidate
@@ -1919,7 +1919,7 @@ async def link_repo(
     return None
 
 
-# THE DECLARE-OR-REFUSE GATE: only the link kinds a door can know about at its own atomic
+# THE DECLARE-OR-REFUSE GATE: only the link kinds an entry point can know about at its own atomic
 # commit point are legal here.
 # repo=/grounds=/resolves= mint inside record_decision's own `actions.atomic()` block.
 # obsoletes=/confirms=/refutes=/implements=/rediscovers=/bears_on=/narrows=/cites= also now
@@ -1936,9 +1936,9 @@ async def link_repo(
 # derivation_abstained_<link_type> through the same _confess_abstention helper, which reads
 # this table for every kind it is given. resolve_project_orphans adds a third
 # identity entry, "in_repo": "in_repo": its own confirm_or_confess_link call already uses
-# "repo"'s target link type directly (a SoftwareProject orphan has no per-door "repo" kind
-# of its own to name), so it needs the same "kind == link_type" shape the other two use,
-# not the existing "repo"->"in_repo" entry (that one's key is the door-side kind word
+# "repo"'s target link type directly (a SoftwareProject orphan has no per-entry-point "repo"
+# kind of its own to name), so it needs the same "kind == link_type" shape the other two use,
+# not the existing "repo"->"in_repo" entry (that one's key is the entry-point-side kind word
 # record_decision's callers pass, never the bare link type this lane already has in hand).
 #
 # DIRECTION: every
@@ -1959,7 +1959,7 @@ _REQUIRED_LINK_KIND_TABLE: dict[str, tuple[str, str]] = {
 # "holds": "holds",
 # "works_in": "works_in", "in_repo": "in_repo": three identity entries added by hand, one
 # per new confirm_or_confess_link caller, because a caller passing its own real link_type
-# as `kind` (rather than one of the three door-side shorthand words above) got a KeyError
+# as `kind` (rather than one of the three entry-point-side shorthand words above) got a KeyError
 # unless someone remembered to add it. Both lookup sites below now fall back to treating
 # an unrecognized `kind` as the link_type itself (`.get(kind, kind)`): a caller naming its
 # own real link_type directly just works, no hand-added entry, ever again.
@@ -1970,10 +1970,10 @@ async def _confess_abstention(
     source: str, observed: datetime,
 ) -> None:
     """THE HATCH DUAL-WRITES, widening the gate to
-    every object-minting door: `unlinked_because`/`unlinked_because_kind` stay exactly as
+    every object-minting entry point: `unlinked_because`/`unlinked_because_kind` stay exactly as
     they are, the countable hatch `adoption_meter._hatch_counts` already reads, untouched.
     This also writes a `derivation_abstained_<link_type>` record per link kind in this
-    door's own `kinds_in_scope`, in the same shape `derive_or_abstain` already uses (see
+    entry point's own `kinds_in_scope`, in the same shape `derive_or_abstain` already uses (see
     above), so orphan_census/graph_lint's 'orphan' check and any future miner see one
     abstention shape regardless of whether the hand that abstained was a derivation join
     or a caller's own declared reason, never two conventions a reader has to know apart.
@@ -2066,10 +2066,10 @@ async def _enforce_required_links(
 ) -> None:
     """Called at the end of a mint's own atomic block, still inside it: a raise here
     triggers the caller's real `conn.transaction()` rollback (Actions.atomic's own
-    docstring), so a refusal leaves no orphan object, a genuine refuse-at-door rather
-    than a post-hoc alarm. `kinds_in_scope` is this door's own atomically-knowable
+    docstring), so a refusal leaves no orphan object, a genuine refuse-at-entry rather
+    than a post-hoc alarm. `kinds_in_scope` is this entry point's own atomically-knowable
     subset (see _REQUIRED_LINK_KIND_TABLE above): a type's declared requirement outside
-    that subset is silently not checked by this call (a different door checks it against
+    that subset is silently not checked by this call (a different entry point checks it against
     its own scope). `unlinked_because`, when given, is the mandatory countable hatch,
     asserted as a fact on the object in this same transaction, and satisfies the gate
     outright. Otherwise, satisfied only by a SELF_DECLARED-graded link already visible on
@@ -2143,7 +2143,7 @@ async def _enforce_required_links(
                 await _confess_abstention(a, obj_id, kinds_in_scope, unlinked_because,
                                           source, observed)
             return  # unenforced for this type (the common case in this pass), or
-                    # nothing this door can even attest to: not this call's problem
+                    # nothing this entry point can even attest to: not this call's problem
         # REAL LINKS CHECKED FIRST, the hatch only as a fallback: if `unlinked_because`
         # were checked before this, a caller who
         # passed both a real satisfying link and a (possibly machine-set)
@@ -2229,7 +2229,7 @@ async def record_decision(
     either side, no `status` touch, no path that could gray the target out of orient's
     recent list the way `supersedes` deliberately does. See `mint_narrows` below.
     `cites` joins the same
-    fold; the door `bears_on` (Decision->Thread only) and `narrows` (bounds scope, the
+    fold; the verb `bears_on` (Decision->Thread only) and `narrows` (bounds scope, the
     wrong relation) both correctly refused: a decision that adds a new facet to an
     earlier one's ongoing finding, neither bounding, refuting, nor independently re-
     deriving it. Reuses the existing `cites` link type (already legal Decision->Decision,
@@ -2258,7 +2258,7 @@ async def record_decision(
 
     `repo_evidence_class` grades the `in_repo` link only, never the decision itself: a
     caller who typed `repo=` is testifying to it (default, SELF_DECLARED, unchanged).
-    A caller who had it defaulted from mount state (an orphan-door fix, the
+    A caller who had it defaulted from mount state (an orphan entry-point fix, the
     MCP wrapper's job, not this function's) never asserted this fact about this object;
     the server observed its own live mount table, which is DIRECT_OBSERVATION (0.6), not
     a ninth-tenths-confident declaration. Landing both paths at SELF_DECLARED (the
@@ -2689,7 +2689,7 @@ async def _decision_snapshot(pool: asyncpg.Pool, decision_id: uuid.UUID) -> dict
 async def verify_ruling(
     pool: asyncpg.Pool, ruling_ref: str, *, write_name: str,
 ) -> dict[str, Any]:
-    """THE RULING-CITATION DOOR: a worker write
+    """THE RULING-CITATION CALL: a worker write
     normally gated to the operator (or a seat's own manager, where that escape exists,
     `charter_for`'s own shape) may instead cite an operator's own standing ruling and
     act under that ruling's authority, provided the ruling actually says so. Three
@@ -2739,10 +2739,10 @@ async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | Non
 # a ruling contradicting standing law must not mint frictionlessly. Canonical failure this
 # prevents: a decision minted in direct contradiction of an earlier naming decision with
 # zero friction; a human caught it, the verb didn't. `search`'s own fused engine
-# (lexical + semantic doors) is topical, not lexical, the exact property needed here, since
+# (lexical + semantic routes) is topical, not lexical, the exact property needed here, since
 # a contradicting ruling rarely reuses its predecessor's wording. `via` in ('id', 'both')
-# means an independent second door corroborated the match (an id-exact hit, or both the
-# textual and semantic doors agreeing); that agreement, not a magic rank cutoff, is what
+# means an independent second route corroborated the match (an id-exact hit, or both the
+# textual and semantic routes agreeing); that agreement, not a magic rank cutoff, is what
 # "strong" means, so the flag doesn't need recalibrating as the corpus grows.
 _PRIOR_ART_STRONG_VIA = ("id", "both")
 
@@ -2881,7 +2881,7 @@ def prior_art_from_hits(
 def prior_art_is_strong(prior_art: list[dict[str, Any]]) -> bool:
     """Does the top prior-art hit warrant the loud flag ('a standing ruling covers this
     ground, supersede it explicitly or cite it')? See `prior_art_from_hits` for why
-    cross-door agreement, not a rank number, is the bar."""
+    cross-route agreement, not a rank number, is the bar."""
     return bool(prior_art) and prior_art[0].get("via") in _PRIOR_ART_STRONG_VIA
 
 
@@ -3006,11 +3006,11 @@ async def ingest_reference(
     rather than the caller asserting it about this specific Reference.
 
     `unlinked_because`/`unlinked_because_kind` (widening the declare-or-refuse gate to
-    this door): same shape record_decision/
+    this entry point): same shape record_decision/
     open_thread already use, a real `in_repo` link satisfies the gate outright,
     `unlinked_because` is the mandatory countable hatch otherwise, and refusing without
     either raises before this Reference ever lands (`_enforce_required_links`, in scope
-    for `("repo",)` only, the sole link kind this door mints inside its own atomic
+    for `("repo",)` only, the sole link kind this entry point mints inside its own atomic
     block; `cites` is deliberately not in scope here, a root Reference legitimately
     cites nothing).
 
@@ -3375,7 +3375,7 @@ async def arc_in_scope(pool: asyncpg.Pool, repo: str | None) -> bool:
 
 async def arc_in_scope_for_thread(pool: asyncpg.Pool, thread_id: uuid.UUID) -> bool:
     """The same gate as `arc_in_scope`, for an already-existing thread (reclassify_thread's
-    own door): true when the thread carries no in_repo edge at all (same permissive default
+    own entry point): true when the thread carries no in_repo edge at all (same permissive default
     as an unspecified `repo`, since a thread deploy_guard/task_sync minted never got one
     either) or carries one to osiris itself. False when it has an in_repo edge to a real,
     different project, including the case where osiris itself was never minted, since a
@@ -3416,7 +3416,7 @@ async def open_thread(
 
     `unlinked_because` is the declare-or-refuse gate's countable hatch, same contract as
     record_decision's own parameter: if Thread declares required link kinds and this
-    call's own `repo=` (the only kind this door can know about at its own atomic commit)
+    call's own `repo=` (the only kind this entry point can know about at its own atomic commit)
     doesn't satisfy it at SELF_DECLARED grade, the write refuses unless this is given; when
     given, it's recorded as a fact in the same transaction and the write proceeds.
 
@@ -3570,7 +3570,7 @@ async def open_thread(
             await a.assert_property(t, "files_touched", files_touched, source, observed,
                                     _CONF, evidence_class=_EC)
         # noted_in FROM THE OPENER'S OWN PROSE (the same mechanism record_decision uses for
-        # decided_in, ported here since this door never had it): a thread whose summary
+        # decided_in, ported here since this entry point never had it): a thread whose summary
         # already names a commit ("commit 238b48f broke the gate") is the same self-declared
         # shape as a decision naming one, but `decided_in`'s schema domain is Decision-only
         # (schema.py:399); `noted_in` (Thread -> Commit, schema.py:372) is the type the
@@ -4030,7 +4030,7 @@ async def resolve_threads_bulk(
     batch close with an unmeasured error rate risks closing threads nobody actually
     reviewed; refusing outright beats silently skipping the bad rows and closing the rest.
 
-    `because` is mandatory here (unlike the single-ref door, where it's optional): a
+    `because` is mandatory here (unlike the single-ref call, where it's optional): a
     batch close with no shared, recorded reason is exactly the "closing 1000+ obligations
     that are mostly stale" failure mode this guards against.
 
@@ -4038,7 +4038,7 @@ async def resolve_threads_bulk(
     previews every match (id, summary, whether already resolved) and writes nothing; pass
     `dry_run=False` to actually close. `_find_thread(..., require_identifier=True)` is
     used for every ref (record_decision's own `resolves=` ladder, not the looser
-    summary-substring read `resolve_thread`'s single-ref door still allows): a batch
+    summary-substring read `resolve_thread`'s single-ref call still allows): a batch
     closes what it names, same discipline as resolves=, never a loose match."""
     if not refs:
         return {"ok": False, "reason": "empty ref list — nothing to do"}
@@ -4267,7 +4267,7 @@ async def assign_thread(
     """HAND A THREAD BACK: reassign whose move it is, without closing it. Without this,
     a debt sitting in the operator's queue had exactly two exits: they do it, or it rots,
     so anything they were ever cc'd on accumulated on them forever with no way to resolve
-    those debts per thread or per project. This is the third door: owner='<project>'
+    those debts per thread or per project. This is the third command: owner='<project>'
     pushes the duty back to the hands that actually own it, where orient() surfaces it on
     that project's wall at its next mount. Nobody dispatches; the graph does.
 
@@ -4565,12 +4565,12 @@ async def record_practice(
     link count, never a separate stored number). Idempotent on the normalized statement.
 
     `unlinked_because`/`unlinked_because_kind` widens the declare-or-refuse gate to this
-    door: a real `in_repo` link satisfies the gate, `unlinked_because` is the hatch
+    entry point: a real `in_repo` link satisfies the gate, `unlinked_because` is the hatch
     otherwise, `_enforce_required_links` in scope for `("repo",)` only. A Practice is
     deliberately repo-agnostic (timeless, may span every project a lesson applies to), so
     this scope stays inert (no refusal) unless and until this type's own
     `required_link_kinds` is armed to include `"repo"`; wiring it now only establishes the
-    same convention every other capture-a-fact door already carries, never a new
+    same convention every other capture-a-fact entry point already carries, never a new
     requirement sprung on an existing caller."""
     observed = datetime.now(UTC)
     key = " ".join(statement.split()).lower()
@@ -4713,7 +4713,7 @@ async def record_evaluation(
     this answers 'did this run/artifact pass'.
 
     `rubric` (which standard/check was applied) is mandatory and non-blank, refused
-    at the door (ValueError, never a silent default): an Evaluation with no named
+    at entry (ValueError, never a silent default): an Evaluation with no named
     rubric is unverifiable prose wearing a graph object's shape. This is a plain
     property validation, not the declare-or-refuse link-kind gate `_enforce_required_
     links` implements elsewhere (that machinery is a separate, later commit, item 2 of
@@ -4766,12 +4766,12 @@ async def record_artifact(
     source: str = _SOURCE, unlinked_because: str | None = None,
 ) -> uuid.UUID:
     """Mint an Artifact: a build/deploy/document output Commit does not already cover
-    (Graph-Engineering arc, item 2/3). Refuses (or confesses) at the door unless it
+    (Graph-Engineering arc, item 2/3). Refuses (or confesses) at entry unless it
     carries its authoring Agent generation's own `produced` edge
     (artifact-has-authoring-run-plus-version) via `_enforce_required_links`' new
     incoming direction (`"authoring_run"` above), the same declare-or-refuse
     discipline record_decision/open_thread/ingest_reference/record_practice already
-    use, extended for the first time to a kind this door can only ever see as a link
+    use, extended for the first time to a kind this entry point can only ever see as a link
     pointing at it, never one it asserts itself.
 
     `authoring_run`, when given, is a reference (UUID/short-id/canonical) to an
@@ -4779,23 +4779,23 @@ async def record_artifact(
     (an addressing path, never a fuzzy text search), refusing if it doesn't resolve.
     The session object is the Agent generation; there is no longer a separate AgentRun
     pointer to lazily mint, so the run this Artifact is attributed to must already be
-    a real, existing generation, not a string this door would otherwise have to take
+    a real, existing generation, not a string this entry point would otherwise have to take
     on faith. Resolved before the atomic block (a plain read against `actions.pool`,
     never `a.pool` inside `atomic()`, the same connection-exhaustion risk
     `_enforce_required_links`' own comment already documents for a nested pool
     acquisition). Omitted, the gate falls straight to its `unlinked_because` hatch or
-    refuses, the same two-branch shape every other door already has.
+    refuses, the same two-branch shape every other entry point already has.
 
     "PLUS-VERSION": a first version legitimately has no predecessor; `revises` is
     never itself gated here, only ever optional (an outgoing revises edge to its
     predecessor, or none if it's the first version). Version-ness is expressed by
     absence, not a second positive requirement; a caller who does have a predecessor
     links it separately via `mint_revises` after this call returns (the predecessor's
-    own id is not knowable to this door in general, it mints after the predecessor,
+    own id is not knowable to this entry point in general, it mints after the predecessor,
     not necessarily in the same breath).
 
     Artifact's own `required_link_kinds` is unarmed by default (the same "dark until a
-    real caller arms it" convention Practice's own gate already follows): this door's
+    real caller arms it" convention Practice's own gate already follows): this entry point's
     gate machinery is real and load-bearing the moment the type catalog's
     `required_link_kinds` for Artifact includes `"authoring_run"`, but until then
     every Artifact mints freely, same as before this arc existed."""
@@ -5091,7 +5091,7 @@ async def thread_answering_decisions(
     TWO EDGE TYPES, BOTH A REAL RESOLVE, NEITHER TEXT-DERIVED: `answers`
     (`mint_bears_on`'s edge, and `record_decision(resolves=)`'s own same-transaction
     mint, Decision -> Thread) unioned with `resolved_by` edges whose target is a
-    Decision (`resolve_thread(artifact=<decision>)`, Thread -> Decision, the other door
+    Decision (`resolve_thread(artifact=<decision>)`, Thread -> Decision, the other route
     that closes a thread with a decision pointer, which used to be invisible here).
     Read-side widening, never a second minting path: `resolved_by` already existed for
     every such closure, live and historical alike, so widening the read closes the gap
@@ -5422,7 +5422,7 @@ async def set_lifecycle(
 #
 # AND NEITHER IS A SECOND SUPERSEDE: amendment is not correction. `record_decision(
 # supersedes=...)` already exists for "the earlier reasoning was wrong" and stays the
-# only door for that; `amend_decision` structurally cannot touch
+# only route for that; `amend_decision` structurally cannot touch
 # `summary`/`rationale`/anything already on the object, it can only add, and refuses
 # outright, naming supersede by name, the moment its target is no longer live.
 def _append_property_name(prefix: str) -> str:
@@ -5521,7 +5521,7 @@ async def open_or_annotate_persisting_alarm(
     arc: str | None = None, severity: str | None = None, owner: str | None = None,
     unlinked_because: str | None = None,
 ) -> str:
-    """The shared mint-or-annotate door for a periodic, source-not-a-human alarm/audit
+    """The shared mint-or-annotate entry point for a periodic, source-not-a-human alarm/audit
     re-run on the same persisting condition, promoted here from deploy_guard.py once
     tree_ingest.py needed the identical shape a second time, never a second copy of the
     logic. The same guard `agents._report_half_healed_phantom` carries: every caller of

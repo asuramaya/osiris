@@ -423,7 +423,7 @@ async def guarded_miner_tick(
     writes a failure receipt first" — before the exception is allowed to propagate or
     the tick is otherwise abandoned, so a crashed tick is a durable, queryable fact,
     never silent. Reuses `open_or_annotate_persisting_alarm` (capture.py) rather than a
-    new alarm shape — the same door deploy_guard's own boot-drift alarm and
+    new alarm shape — the same call deploy_guard's own boot-drift alarm and
     fleet_reconcile's own blind-tick alarm already use, converging on the same live-
     desk `drift_alarms` filter for free. `fn` is a zero-arg async callable (never an
     already-created coroutine — this house's own footgun a coroutine can only be

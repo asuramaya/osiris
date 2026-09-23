@@ -32,7 +32,7 @@ GUARDRAILS (the ruling's own, all refused LOUD, never silently swallowed):
     generation marker, strip punctuation: 'Tantra' vs the real 'tantra 1') but does not
     exact-match it refuses instead of silently minting a second identity wearing a
     near-stranger's face. `adopt=True` states the intent explicitly (no match refuses,
-    never falls through to fresh); `force=True` is the only door past the refusal.
+    never falls through to fresh); `force=True` is the only route past the refusal.
   * CROSS-HOUSE MINTING — a manager mints workers in its OWN house by default (no house
     param = inherit the manager's); crossing to a DIFFERENT house needs the operator's
     own hand (an `actor` naming the operator), never a seat's unilateral reach into a
@@ -260,7 +260,7 @@ async def mint_seat(
     'tantra 1'), or an unauthorized house crossing. Idempotent: minted once, adopted
     forever after. `adopt=True` states the caller's intent explicitly — no match REFUSES
     instead of silently falling through to a fresh mint (the caller said adopt; minting
-    would be the lie). `force=True` is the only door past a near-miss refusal, for the
+    would be the lie). `force=True` is the only route past a near-miss refusal, for the
     rare case a distinct seat genuinely belongs beside a similarly-named one."""
     actor = actor or "ceremony:mint-seat"
     manager_seat_id = await _resolve_seat_ref(actions.pool, manager)
@@ -358,7 +358,7 @@ async def mint_seat(
     # with no pin/orders is a hollow adoption otherwise). Every write inside is its own
     # exists-guard, so running it here unconditionally is always safe.
     #
-    # `project or worker_house` IS DELIBERATE, NOT found_seat's fabrication one door
+    # `project or worker_house` IS DELIBERATE, NOT found_seat's fabrication one call
     # over (the operator's own "jesus"/"chad" defect, decision 24e0b761): a MANAGED
     # worker with no explicit project inherits its MANAGER's own already-real, already-
     # declared house — house(seat) IS the manager's own project by this house's own
@@ -434,7 +434,7 @@ async def mint_seat(
     # TASK #157 PIECE 1 (operator's own words "fix the slop"): a fresh mint can never yet
     # have a charter (charter() needs the Seat object this call just minted); an ADOPTED
     # seat may already carry one. Either way the receipt now SAYS SO — establish_office's
-    # own honest text, one door over, reused verbatim (_CHARTER_UNDECLARED) rather than a
+    # own honest text, one call over, reused verbatim (_CHARTER_UNDECLARED) rather than a
     # second string invented here, exactly the "if it picks, it is wrong" discipline this
     # arc has run on all night.
     repos = await charter_of(actions.pool, worker_seat_id)
@@ -488,7 +488,7 @@ async def found_seat(
     Older ruling 68fba2e4 item B/thread ef0e94d5 ("a direct mint with no --house stays
     homeless") is superseded here in the same direction it was already pointing: house
     never diverges from project, so no --house flag survives to disagree with `project`
-    below in the first place — this door used to write `house=handle` unconditionally
+    below in the first place — this entry point used to write `house=handle` unconditionally
     before that fix, which is precisely how Chad/Jesus/Lilguy/atlas ended up with a
     Seat.house indistinguishable from a deliberately-chosen one by any test except
     "does it equal the handle" (decision 68fba2e4's own measurement); the fix here is
@@ -499,8 +499,8 @@ async def found_seat(
     creates a jesus project and a chad project when really they are working somewhere
     else"; measured population: 8 confirmed/strong specimens fleet-wide, decision
     24e0b761). NEITHER pin gets a `project =` line written when `project` is falsy —
-    this is THE EIGHTH MINT DOOR (Thoth's own naming): #139's inventory of six
-    graph-layer mint doors (bootstrap_project, ingest_files, _mint_or_find_repo,
+    this is THE EIGHTH MINT ENTRY POINT (Thoth's own naming): #139's inventory of six
+    graph-layer mint entry points (bootstrap_project, ingest_files, _mint_or_find_repo,
     _resolve_or_mint_project, register_swarm, register_spawn, plus create_project)
     closed the class correctly FOR THAT LAYER — every one of those either derives from
     real disk truth or requires deliberate, validated caller text. This function writes
@@ -508,8 +508,8 @@ async def found_seat(
     An absent line is not silence: ruling df646654/fe8ec7ff already made "project unset"
     a first-class, self-healing state at the PIN-READ layer (mount/orient tolerate it,
     and self-heal a genuinely unset pin from the graph the moment governs+works_in+
-    anchor_cwd unambiguously agree) — that machinery could never engage while this door
-    kept writing a fabricated placeholder into a pin that would then never again read as
+    anchor_cwd unambiguously agree) — that machinery could never engage while this entry
+    point kept writing a fabricated placeholder into a pin that would then never again read as
     unset. Confirmed downstream-clean by reading, not assumed: neither establish_office
     nor rebind_seat ever writes a project line into either pin, so this fix cannot be
     silently undone by a later office ceremony.
@@ -552,7 +552,7 @@ async def found_seat(
     # THE SEAT TREE FABRICATION FIX (operator-flagged via Nebbercracker DM 11747, Thoth
     # mail 11759): an omitted `path` used to fall back to `~/code/<handle>` unconditionally
     # — the exact same fabrication-from-handle disease `house`/`project` were already
-    # cured of one door up (see this function's own docstring), just never applied to the
+    # cured of one call up (see this function's own docstring), just never applied to the
     # tree. `workspace` stays `None` here when omitted; resolved below, once the seat is
     # known, from its own real charter rather than guessed from its name.
     if path and (path == "~" or path.startswith("~/")):

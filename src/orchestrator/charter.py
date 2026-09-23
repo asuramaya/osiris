@@ -141,7 +141,7 @@ async def is_operator_actor(pool: asyncpg.Pool, actor: str) -> bool:
 
 async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, str]]:
     """`charter_of` plus each governed project's own recorded `on_disk_path` — (repo label,
-    path) pairs, only for projects that HAVE a path on record. The launch doors use this to
+    path) pairs, only for projects that HAVE a path on record. The launch commands use this to
     catch the #199 mint-time fabrication (operator, 2026-09-03, "launch lands the agent in
     the wrong cwd"): a seat whose `tree_cwd` is the convention-derived ~/code/<handle> — a
     bare directory holding nothing but a `.osiris` pin — while its charter governs a real
@@ -167,7 +167,7 @@ async def project_current_name(pool: asyncpg.Pool, repo_label: str) -> str:
     stamping a seat's own `house` as `repo:xxit`'s bare canonical ("xxit") when the
     project had since been renamed to "handlingtheloop" — every later "does this seat's
     stamped project match its charter" comparison then read as a disagreement that
-    wasn't one, and `osiris new`/ingest-time mint doors that only ever see the CURRENT
+    wasn't one, and `osiris new`/ingest-time mint entry points that only ever see the CURRENT
     name (never the frozen-at-mint canonical) minted a fresh stub project instead of
     finding the real one.
 

@@ -2,10 +2,10 @@
 own wave: "#41 chronohorn ingest has to be a SELF-HEALING infra thing agents can do by
 themselves, persistent and tooled — not an osiris-applied bandaid"). The census this needs
 already existed, tested, with zero callers (neighborhoods.discover_trees) — the missing piece
-was never the read, it was a DOOR any seat can act through, and a heartbeat that notices
-without acting unattended.
+was never the read, it was an ENTRY POINT any seat can act through, and a heartbeat that
+notices without acting unattended.
 
-`ingest_project` is that door: any seat's own self-service verb for its OWN project (mirrors
+`ingest_project` is that entry point: any seat's own self-service verb for its OWN project (mirrors
 reconcile_seat_identity's authority shape exactly — self-service derives its target from the
 caller's own mount, the third-party sibling takes an explicit target plus a required reason),
 combining `gitlog.ingest_repo` (idempotent, always writes when not dry_run) with

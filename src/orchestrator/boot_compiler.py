@@ -899,14 +899,14 @@ async def sweep_stacked_office_headers(
 ) -> dict[str, Any]:
     """THE STACKED-HEADER SUB-SWEEP (thread 658c2152 — 21 of 30 offices found with a
     leading duplicate header before their own compiled marker span; nebbercracker/jenny
-    were healed by hand through the fixed `reissue_office(adopt=True)` door, thread
+    were healed by hand through the fixed `reissue_office(adopt=True)` call, thread
     07ca68ca folds the REMAINDER into this heartbeat so a stranger's install, or any
     seat that develops the same shape later, heals mechanically). Every active seat's
     own office is checked for EXACTLY the condition `reissue_office`'s own self-heal
     already recognizes (its docstring, msg 8113's ruling): a match of that seat's own
     `_office_header_re` sitting BEFORE the marker span located by `locate_managed_
     section`. A match sends the seat through `reissue_office(adopt=True)` — the same
-    sanctioned door, never a second copy of its healing logic.
+    sanctioned call, never a second copy of its healing logic.
 
     Read-only for every seat that ISN'T stacked: no markers at all, a header only inside
     or after the marker span (the compiled section's own legitimate header), or markers

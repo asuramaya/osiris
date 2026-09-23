@@ -2,7 +2,7 @@
 heartbeat's own sibling rule, SoftwareProject junk instead of Thread classification -- a
 stub minted by a test run or a stale disk census, claimed by no commit, no open Thread, no
 Decision, and no governing Seat, is dead weight for the exact reason an unclaimed derived
-Thread is (migration_0060.py's own EXPIRY law). Two doors feed one shared guard:
+Thread is (migration_0060.py's own EXPIRY law). Two routes feed one shared guard:
 
   (1) THE ONGOING MECHANICAL RULE, forever: an active SoftwareProject minted (the earliest
       object_events row, event_type='create', its own `actor` column) under the literal
@@ -23,10 +23,10 @@ Thread is (migration_0060.py's own EXPIRY law). Two doors feed one shared guard:
         - repo:deepseek-harness's own on_disk_path (/home/asuramaya/code/dsh/deepseek-
           harness) is STILL PRESENT on disk -- not stale, contradicting the dispatch's own
           characterization of it as disk-census-gone
-      repo:dbghusk/repo:dbgsurv/repo:realrepo already match door (1) (actor='test' at
+      repo:dbghusk/repo:dbgsurv/repo:realrepo already match route (1) (actor='test' at
       creation) and are not repeated in this set.
 
-BOTH doors share ONE guard before `retire_project` is ever called: no active Thread, no
+BOTH routes share ONE guard before `retire_project` is ever called: no active Thread, no
 Decision (any status), no active `governs` edge pointing in -- on top of retire_project's own
 commit/open-thread/live-mount refusals, which stay the final safety net (a row that clears
 this sweep's guard but still fails there is reported, never raised). Compensating retire
@@ -89,9 +89,9 @@ def _matches_ongoing_rule(row: asyncpg.Record) -> bool:
 
 
 async def plan_project_hygiene_sweep(pool: asyncpg.Pool) -> dict[str, Any]:
-    """DRY RUN -- never writes. Every active SoftwareProject checked against both doors;
+    """DRY RUN -- never writes. Every active SoftwareProject checked against both routes;
     the shared guard (no thread/decision/governing seat) applies identically regardless of
-    which door matched, so a legacy-named row with an incidental decision/governs edge is
+    which route matched, so a legacy-named row with an incidental decision/governs edge is
     excluded exactly like an ongoing-rule row would be -- never a special case."""
     rows = await pool.fetch(_CANDIDATES_SQL)
     to_retire: list[dict[str, Any]] = []
@@ -114,7 +114,7 @@ async def apply_project_hygiene_sweep(
     actions: Actions, *, actor: str = MIGRATION_SOURCE,
 ) -> dict[str, Any]:
     """Applies `plan_project_hygiene_sweep`'s plan through the sanctioned `retire_project`
-    door -- never a hand-written status flip. `retire_project` re-checks commits/open-
+    entry point -- never a hand-written status flip. `retire_project` re-checks commits/open-
     threads/live-mount itself at call time (the real safety net); a row that clears this
     sweep's own guard but still fails there is reported, not raised, so one stale row never
     sinks the whole sweep. Idempotent: an already-retired row simply isn't selected on the

@@ -373,7 +373,7 @@ async def _self_restore_mount(
 async def _resolve_worker_identity(
     conn: Any, session_id: str, cwd: str,
 ) -> dict[str, Any] | None:
-    """{agent_id, seat_id} for whoever is stopping, or None when neither door resolves (an
+    """{agent_id, seat_id} for whoever is stopping, or None when neither path resolves (an
     ordinary code-repo cwd, a session with no mount row and no office of its own)."""
     from pathlib import Path
 
