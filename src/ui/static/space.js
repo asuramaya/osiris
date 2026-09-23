@@ -382,6 +382,16 @@ export async function initSpace(container) {
   // can reach positionLabels, closes that window for good.
   const _placed = []; // [x0,y0,x1,y1] boxes already shown this frame
   const LABEL_W = 90, LABEL_H = 16, LABEL_GAP = 4;
+  // labeledNodes/labelDivs/labelWidths/labelPickTimer/N_LABELS hit the identical TDZ class
+  // as _placed above: positionLabels() (reachable the same way, from the same early
+  // forceRender()/rAF paths) reads labeledNodes, and a `let` declared down near
+  // positionLabels itself was still in the temporal dead zone on that first call. Hoisted
+  // here for the same reason.
+  const N_LABELS = 40;
+  let labeledNodes = [];
+  const labelDivs = new Map(); // node -> div, reused across frames instead of rebuilt
+  const labelWidths = new Map(); // node -> real rendered px width, measured once at creation
+  let labelPickTimer = null;
   // `w` defaults to LABEL_W for any caller that doesn't have a real measured width handy
   // (e.g. a synthetic probe); every real call site below always passes the label's own
   // cached labelWidths entry.
@@ -3272,11 +3282,8 @@ export async function initSpace(container) {
   // camera's own world-space frustum bounds; a node must genuinely be on screen to be a
   // label candidate, not merely "near the camera centre" (the old rule, which could label
   // something off past the edge of the viewport).
-  const N_LABELS = 40;
-  let labeledNodes = [];
-  const labelDivs = new Map(); // node -> div, reused across frames instead of rebuilt
-  const labelWidths = new Map(); // node -> real rendered px width, measured once at creation
-  let labelPickTimer = null;
+  // N_LABELS/labeledNodes/labelDivs/labelWidths/labelPickTimer are declared much earlier in
+  // this function now (with _placed); see that declaration's own comment for why.
   function scheduleLabelPick() {
     if (labelPickTimer) return;
     labelPickTimer = setTimeout(() => { labelPickTimer = null; pickLabels(); }, 150);

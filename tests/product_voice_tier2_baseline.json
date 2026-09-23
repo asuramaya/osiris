@@ -6,6 +6,5 @@
   "src/ingest": 134,
   "src/mcp_server.py": 4,
   "src/orchestrator": 454,
-  "src/ui/static": 19,
-  "tests": 5961
+  "tests": 5962
 }
