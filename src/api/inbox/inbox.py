@@ -1,17 +1,17 @@
-"""PURE BUILDERS: graph -> Block tree (task #71). No HTML, no Jinja — only blocks.py
-types. Data source is the SAME sanctioned read-path /live-desk already uses
-(run_composition(pool, "live-desk"), ruling c5b184cd) — never a parallel hand-written
-query duplicating what that composition already answers. The three live-desk sections map
-onto InboxItem.item_kind (msg 1818's ruling 3: this axis is distinct from Badge/status):
+"""PURE BUILDERS: graph -> Block tree. No HTML, no Jinja, only blocks.py types. Data
+source is the SAME sanctioned read-path /live-desk already uses (run_composition(pool,
+"live-desk")), never a parallel hand-written query duplicating what that composition
+already answers. The three live-desk sections map onto InboxItem.item_kind (a distinct
+axis from Badge/status):
 
   owed_to_you              (open Thread, owner='operator')      -> item_kind='review'
   decisions_awaiting_a_call (fleet_messages, desk_kind='decision') -> item_kind='question'
   drift_alarms              (open Thread, severity='alarm')     -> item_kind='notify'
 
 Each row's own `_action` (already the exact {action, args} shape src/api/actions.py's
-ACTION_VERBS registry expects) becomes ONE Button, `style='primary'` — the only action
+ACTION_VERBS registry expects) becomes ONE Button, `style='primary'`: the only action
 offered per item in v0, so it is by definition "the single most-likely action" ActionRow's
-own gate (msg 1818) requires."""
+own gate requires."""
 from __future__ import annotations
 
 import re
@@ -23,7 +23,7 @@ import asyncpg
 from src.api.inbox.blocks import ActionRow, Button, InboxItem, InboxList
 from src.orchestrator.compositions import run_composition
 
-_TITLE_CAP = 160  # matches orient()'s own terse-summary cap (task #60) — one house rule
+_TITLE_CAP = 160  # matches orient()'s own terse-summary cap, one house rule
 
 
 def _short_title(summary: str) -> str:
@@ -57,7 +57,7 @@ def _button_for(row: dict[str, Any]) -> ActionRow | None:
 
 async def _thread_ages(pool: asyncpg.Pool, short_ids: list[str]) -> dict[str, datetime]:
     """created_at for a batch of Thread short-ids (the composition's own `table` op
-    doesn't select it — this is the one small enrichment query on top of the shared,
+    doesn't select it; this is the one small enrichment query on top of the shared,
     UNTOUCHED live-desk composition, not a parallel rewrite of it)."""
     if not short_ids:
         return {}
@@ -73,18 +73,18 @@ async def _thread_ages(pool: asyncpg.Pool, short_ids: list[str]) -> dict[str, da
 
 async def build_inbox(pool: asyncpg.Pool) -> InboxList:
     """The whole Inbox, one call: run live-desk, fold its three sections into one
-    triage-to-zero queue (Linear's own discipline, research-prior-art.md mechanism 4) —
+    triage-to-zero queue (Linear's own discipline, research-prior-art.md mechanism 4):
     ALL admitted items in one list, newest first within each kind's own natural order.
 
     An UNSEEDED live-desk composition degrades to an honest empty label (the same
-    discipline /live-desk's own route already follows — run_composition returns
-    {"error": ...} instead of {"items": ...} when nothing by that name is saved yet;
-    agents never improvise an empty state, design-layer's own 12th component's law, so
-    this names the real reason rather than a bare 'Inbox clear.' lie)."""
+    discipline /live-desk's own route already follows: run_composition returns
+    {"error": ...} instead of {"items": ...} when nothing by that name is saved yet).
+    Agents never improvise an empty state, so this names the real reason rather than a
+    bare 'Inbox clear.' lie."""
     out = await run_composition(pool, "live-desk")
     if "items" not in out:
         return InboxList(items=[], empty_label=(
-            "live-desk composition isn't seeded — run seed_default_compositions"))
+            "live-desk composition isn't seeded: run seed_default_compositions"))
     sections: dict[str, Any] = out["items"]
     now = datetime.now(UTC)
 
@@ -98,16 +98,16 @@ async def build_inbox(pool: asyncpg.Pool) -> InboxList:
         when_dt = datetime.fromisoformat(when) if isinstance(when, str) else when
         items.append(InboxItem(
             id=str(row["id"]), item_kind="question", title=_short_title(row["summary"]),
-            age=_age(now, when_dt) if when_dt else "—", actions=_button_for(row)))
+            age=_age(now, when_dt) if when_dt else "-", actions=_button_for(row)))
     for row in owed:
         when_dt = ages.get(row["id"])
         items.append(InboxItem(
             id=row["id"], item_kind="review", title=_short_title(row["summary"]),
-            age=_age(now, when_dt) if when_dt else "—", actions=_button_for(row)))
+            age=_age(now, when_dt) if when_dt else "-", actions=_button_for(row)))
     for row in alarms:
         when_dt = ages.get(row["id"])
         items.append(InboxItem(
             id=row["id"], item_kind="notify", title=_short_title(row["summary"]),
-            age=_age(now, when_dt) if when_dt else "—", actions=_button_for(row)))
+            age=_age(now, when_dt) if when_dt else "-", actions=_button_for(row)))
 
     return InboxList(items=items)

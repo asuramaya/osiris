@@ -1,13 +1,12 @@
-"""/desk /mail /fleet — the chrome OPENED: clickable, self-refreshing lenses (operator
-direction, 2026-07-11: "make it clickable and openable... without having to call the agent,
-closer to real time").
+"""/desk /mail /fleet: the chrome, clickable and self-refreshing lenses, so anyone can check
+status without calling an agent, close to real time.
 
-Same constitution as /membrane: a read-only LENS, no framework, no state, no writes — the
-console can crash without touching the truth. What's new is the SHAPE: each surface is its
-own page, long bodies open natively (<details> — the browser is the click handler), and a
-~15-line poller re-fetches the page body (?partial=1) every 4 seconds, restoring whichever
-cards the operator had open. Near-real-time without websockets: the graph is on localhost,
-a 4s poll of one bounded query costs nothing and survives everything.
+Same constitution as /membrane: a read-only lens, no framework, no state, no writes. The
+console can crash without touching the truth. Each surface is its own page, long bodies
+open natively (<details>; the browser is the click handler), and a ~15-line poller
+re-fetches the page body (?partial=1) every 4 seconds, restoring whichever cards were open.
+Near-real-time without websockets: the graph is on localhost, a 4s poll of one bounded
+query costs nothing and survives everything.
 
 Renderers are PURE (fixture-fed in tests); the routes in app.py feed them the live graph.
 """
@@ -114,12 +113,11 @@ button[data-act="settle"]:hover,button[data-act="settle-all"]:hover{
 button[disabled]{opacity:.4;cursor:default}
 """
 
-# THE DESK GREW HANDS (operator, 2026-07-11: "i sit on a scary red 11 desk without a good way
-# to resolve these debts per thread or per project, so it snowballs into infinity"). One
-# delegated handler; every button is the OPERATOR'S OWN CLICK posting through the Actions
-# waist (ruling 923c380f — reads stay free, only explicit acts write, signed analyst:operator).
-# After the write it just calls tick(): the 4s poller re-renders from the graph, so the page
-# never holds state and can never disagree with the record.
+# The desk's buttons resolve debts per thread or per project so they stop piling up
+# unresolved. One delegated handler; every button is the operator's own click posting
+# through the Actions waist (reads stay free, only explicit acts write, signed
+# analyst:operator). After the write it just calls tick(): the 4s poller re-renders from
+# the graph, so the page never holds state and can never disagree with the record.
 _ACTIONS = """<script>
 document.addEventListener('click',async e=>{
   const b=e.target.closest('button[data-act],button[data-action]');if(!b)return;
@@ -128,9 +126,8 @@ document.addEventListener('click',async e=>{
   b.disabled=true;const was=b.textContent;b.textContent='…';
   try{
     if(b.dataset.action){
-      // the generic action-binding path (ruling c5b184cd, thread d56e7073/#44) — the row's
-      // OWN args, resolved server-side by row_action, echoed back verbatim; this handler
-      // never constructs args itself.
+      // the generic action-binding path: the row's own args, resolved server-side by
+      // row_action, echoed back verbatim; this handler never constructs args itself.
       await fetch('/act',{method:'POST',headers:J,body:JSON.stringify(
         {action:b.dataset.action,args:JSON.parse(b.dataset.args||'{}')})});
     }else if(b.dataset.act==='settle'){
@@ -149,8 +146,8 @@ document.addEventListener('click',async e=>{
 </script>"""
 
 # the poller: re-fetch this page's body every 4s (paused when the tab is hidden), swap it
-# in, and RE-OPEN whatever cards the operator was reading — a refresh must never close the
-# drawer in their hand.
+# in, and re-open whatever cards were already open. A refresh must never close the drawer
+# in the reader's hand.
 _POLLER = """<script>
 const c=document.getElementById('c');
 async function tick(){
@@ -168,17 +165,17 @@ async function tick(){
 setInterval(tick,4000);
 </script>"""
 
-# "docs" (/canon) RETIRED 2026-07-30, task #96 — the route was a pure pass-through to the
-# "docs" composition, which lives in /ui. render_composition and its whole _comp_* chain
-# retired with it (task #96, second cut) — a second generic composition renderer in
-# Python, duplicating osiris.js client-side; no capability lost, a duplicate died.
+# "docs" (/canon) is retired: the route was a pure pass-through to the "docs" composition,
+# which lives in /ui. render_composition and its whole _comp_* chain retired with it, a
+# second generic composition renderer in Python duplicating osiris.js client-side; no
+# capability lost, a duplicate died.
 _TABS = (("inbox", "/"), ("desk", "/desk"), ("mail", "/mail"), ("fleet", "/fleet"),
          ("overhead", "/overhead"))
 
 
 def page(title: str, active: str, inner: str, *, actions: bool = False) -> str:
     """The shell: nav + the poll-swapped content div. Everything inside #c must render
-    identically when served as ?partial=1 — the poller depends on it.
+    identically when served as ?partial=1, since the poller depends on it.
 
     `actions=True` arms the click handler (the desk only). The label tells the truth about
     which it is: a page that can write must never present itself as a read-only lens."""
@@ -207,10 +204,10 @@ def _card(dom_id: str, head: str, body: str, sub: str = "") -> str:
 
 # ── /desk ────────────────────────────────────────────────────────────────────────────────
 
-# The bands are no longer the desk's TOP-LEVEL shape (they still are in read_desk, and still
-# are for AGENTS reading via inbox — a mind wants "what must the human decide"). The HUMAN's
-# page groups by project instead: decision+hands become a project's `asks`, fyi becomes the
-# letters bin. Same record, two lenses.
+# The bands are no longer the desk's top-level shape (they still are in read_desk, and still
+# are for agents reading via inbox, since an agent wants "what must the human decide"). The
+# human's page groups by project instead: decision+hands become a project's `asks`, fyi
+# becomes the letters bin. Same record, two lenses.
 
 
 def _brief_card(m: dict[str, Any]) -> str:
@@ -231,11 +228,11 @@ def _brief_card(m: dict[str, Any]) -> str:
 
 
 def _verbs(t: dict[str, Any], project: str) -> str:
-    """The FOUR DOORS off a debt. Before these, a thread on the operator's desk had two exits
-    — he did it, or it rotted — which is why his desk snowballed. `not mine` is the one that
-    was missing: it hands the duty back to the project that owes it (owner=<project>), where
-    orient() puts it on THAT project's wall at its next mount. No dispatcher; the graph is
-    the dispatcher."""
+    """The four exits off a debt. Before these, a thread on the operator's desk had two
+    exits: it got done, or it rotted, which is why the desk snowballed. `not mine` is the
+    one that was missing: it hands the duty back to the project that owes it
+    (owner=<project>), where orient() puts it on that project's wall at its next mount. No
+    dispatcher; the graph is the dispatcher."""
     tid = _e(t["id"])
     hand_to = _e(project) if project and project != "—" else ""
     back = (f'<button data-act="triage" data-verb="assign" data-id="{tid}" '
@@ -271,14 +268,12 @@ def _counts(desk: dict[str, Any]) -> str:
 
 
 def render_desk(desk: dict[str, Any]) -> str:
-    """THE ROSTER (operator, 2026-07-11: "the desk is better off as a per-project thing, like
-    the mail. the overwhelming kill here is that i get flooded with my entire fleet worth of
-    backlog on one tab").
+    """The desk is a per-project roster, like mail: a single scroll of the whole fleet's
+    backlog was itself what made the desk unusable.
 
-    So the desk LANDS ON COUNTS, never on contents: one line per project — what you owe it,
-    who asked, how long it has been rotting. You pick ONE and walk in. The whole fleet's
-    backlog on a single scroll was itself the thing that made the desk unusable; a landing
-    page that shows everything shows nothing."""
+    So the desk lands on counts, never on contents: one line per project, what you owe it,
+    who asked, how long it has been rotting. You pick one and walk in. A landing page that
+    shows everything shows nothing."""
     out: list[str] = [_counts(desk)]
     projects = desk.get("by_project") or []
     if projects:
@@ -308,14 +303,13 @@ def render_desk(desk: dict[str, Any]) -> str:
 
 
 def _guesses_band(desk: dict[str, Any]) -> str:
-    """WHAT THE MINER THINKS YOU OWE — folded, grey, and never in the red number.
+    """What the miner thinks you owe: folded, grey, never in the red number.
 
-    An LLM read a conversation and inferred a duty for the human. Nobody asked him. Five of
-    the six debts on this desk were exactly that, and two were provably false the moment anyone
-    checked. They are kept — the miner really did overhear something, and some of these are
-    real — but a guess that wears the same colour as a deliberate ask spends the only currency
-    the red number has. So: shown, with the same four doors, so a true one can be acted on and
-    a false one killed in a click."""
+    A miner read a conversation and inferred a duty for the human; nobody asked for it, and
+    some of these guesses are provably false. They are kept, since the miner really did
+    overhear something and some of these are real, but a guess that wears the same color as
+    a deliberate ask spends the only currency the red number has. So: shown, with the same
+    four exits, so a true one can be acted on and a false one killed in a click."""
     guesses = (desk.get("miner_guesses") or {}).get("threads") or []
     if not guesses:
         return ""
@@ -329,8 +323,8 @@ def _guesses_band(desk: dict[str, Any]) -> str:
 
 
 def render_desk_project(desk: dict[str, Any], project: str) -> str:
-    """ONE PROJECT, walked into: its debts (each with the four doors) and the briefs that
-    asked — together, because that is the unit of a sitting."""
+    """One project, walked into: its debts (each with the four exits) and the briefs that
+    asked, together, since that is the natural unit to review."""
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     back = '<p><a href="/desk">← all projects</a></p>'
     if p is None:
@@ -353,8 +347,8 @@ def render_desk_project(desk: dict[str, Any], project: str) -> str:
 
 
 def _letters_band(desk: dict[str, Any]) -> str:
-    """Reports and eulogies. They owe nothing, so they never touch the roster — they sit
-    FOLDED at the bottom and clear in one click."""
+    """Reports and eulogies. They owe nothing, so they never touch the roster; they sit
+    folded at the bottom and clear in one click."""
     letters = desk.get("fyi") or []
     if not letters:
         return ""
@@ -370,8 +364,8 @@ def _letters_band(desk: dict[str, Any]) -> str:
 
 
 def _dimmed_band(desk: dict[str, Any]) -> str:
-    """An agent judged these moot and said WHY — but a dim is an annotation, never a settle
-    (the membrane). They stay, folded, with the human's own dismiss."""
+    """An agent judged these moot and said why, but a dim is an annotation, never a settle
+    (the membrane). They stay, folded, for the human's own dismiss."""
     dimmed = desk.get("dimmed") or []
     if not dimmed:
         return ""
@@ -396,13 +390,13 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Every mailbox with traffic, busiest-latest first. Unsettled = no intended recipient
     has settled it (the same notion the wake dispatch uses).
 
-    LANES WEAR THEIR SOUL'S NAME (operator, 2026-07-17: 'more mailboxes than agents — who
-    do they belong to?'): a '@agent:<hash>' lane is an ADDRESS, and a long-lived seat
-    leaves one per generation. Each agent lane resolves through the living head and wears
-    the seat's label; a SUPERSEDED lane with nothing unsettled is history and folds into
-    one counted line (`historical` on the synthetic row). A superseded lane still holding
-    unsettled mail stays visible and says so — that is a sweep waiting to happen, never
-    something to hide. Rooms (project boxes) render exactly as before."""
+    Lanes wear their seat's name, not a raw address: a '@agent:<hash>' lane is an address,
+    and a long-lived seat leaves one per generation. Each agent lane resolves through the
+    living head and wears the seat's label; a superseded lane with nothing unsettled is
+    history and folds into one counted line (`historical` on the synthetic row). A
+    superseded lane still holding unsettled mail stays visible and says so, since that is a
+    sweep waiting to happen, never something to hide. Rooms (project boxes) render exactly
+    as before."""
     from src.orchestrator.agents import seat_label
     from src.orchestrator.folds import living_head
 
@@ -444,9 +438,9 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
             else:
                 group(box)["room"] = d                 # a project's group chat
             continue
-        # ONE SOUL, ONE ROW, UNDER ITS HOUSE: every lane of a soul — each generation's
-        # address, each seat it holds — merges into a single line under the living head,
-        # nested under the soul's project (agent mailboxes belong to projects)
+        # One soul, one row, under its project: every lane of a soul (each generation's
+        # address, each seat it holds) merges into a single line under the living head,
+        # nested under the soul's project, since agent mailboxes belong to projects
         s = souls.get(head)
         if s is None:
             srow = await pool.fetchrow(
@@ -481,11 +475,11 @@ async def mail_overview(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 async def mail_threads(pool: asyncpg.Pool, box: str) -> list[dict[str, Any]]:
     """One mailbox's conversations, newest thread first, messages oldest-first within.
     A '@agent:...' box is the DM lane; a bare name is a project's group chat (both
-    directions — the conversation, not just the inbound half)."""
+    directions, the conversation, not just the inbound half)."""
     if box.startswith("@agent:"):
-        # THE SOUL'S WHOLE CONVERSATION: every generation's address plus every seat the
-        # lineage ever held — the overview folds lanes by soul, so its one row must open
-        # onto everything that row counted
+        # The soul's whole conversation: every generation's address plus every seat the
+        # lineage ever held. The overview folds lanes by soul, so its one row must open
+        # onto everything that row counted.
         from src.orchestrator.agents import _generation
         cond = ("((m.to_agent = $1 OR m.to_agent LIKE $1 || '-%') "
                 " OR (m.from_agent = $1 OR m.from_agent LIKE $1 || '-%') "
@@ -582,11 +576,11 @@ def render_mail_box(box: str, threads: list[dict[str, Any]]) -> str:
 # ── /fleet ───────────────────────────────────────────────────────────────────────────────
 
 def _row_rank(m: dict[str, Any]) -> tuple[int, float]:
-    """Which of one agent's mount rows testifies for the CARD (the fold below): a row an
-    agent's own MCP connection touched (sid:) outranks an untouched whisper row, which
-    outranks a mere window (view-of:/resume-of: — a tab's alias of a session that lives
+    """Which of one agent's mount rows testifies for the card (the fold below): a row an
+    agent's own MCP connection touched (sid:) outranks an untouched background row, which
+    outranks a mere window (view-of:/resume-of:, a tab's alias of a session that lives
     elsewhere). Ties go to the fresher row. The alias is never the witness: it carries
-    the model/cwd stamped at ITS birth, stale the moment the real session swaps."""
+    the model/cwd stamped at its own birth, stale the moment the real session swaps."""
     key = m.get("session_key") or ""
     if key.startswith("sid:"):
         k = 0
@@ -609,10 +603,10 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         "   JOIN objects o ON o.id=a.object_id "
         "   WHERE o.canonical=m.agent_id AND a.name='seat_generation' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS seat_gen, "
-        # SEATED (operator, 2026-07-17: 'fleet 5 but there are only 3 agents up') — the
-        # visitor gate's own discriminator, read not enforced: a row whose agent id is just
-        # the session id echoed back, with no active object behind it, is a stranger's door
-        # (a bg-pty host, a spare, a passing whisper) and must never count as fleet.
+        # seated: the visitor-gate discriminator, read not enforced. A row whose agent id is
+        # just the session id echoed back, with no active object behind it, is a visiting
+        # session (a background-pty host, a spare, a passing connection) and must never
+        # count as fleet.
         " (substring(m.agent_id from 7 for 8) IS DISTINCT FROM "
         "    substring(split_part(coalesce(m.session_key,''), ':', 2) from 1 for 8) "
         "  OR EXISTS (SELECT 1 FROM objects o WHERE o.canonical=m.agent_id "
@@ -622,19 +616,17 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         gen = int(m["seat_gen"]) if m.get("seat_gen") else None
         m["seat"] = seat_label(m["agent_id"], m["handle"], gen)
         m["live"] = (m["age_secs"] or 1e9) < 900
-    # THE FOLD (operator ruling, 2026-07-16: "the agent hash should be a row"): one soul,
-    # one line. An agent legitimately holds MANY mount rows — its durable anchor, a tab
-    # viewing it, a resume sibling — and rendering rows drew the same seat twice ("why is
-    # there 2 thoth XL agents"). Group by agent: the realest row testifies for the card,
-    # the soul is as alive as its freshest body, and ×N confesses the extra bodies.
-    # THE SOUL is the LINEAGE, not the generation (operator, 2026-07-16: "metron ix,
-    # viii, vii all show up as separate seats, but the mental model says the ancestors
-    # are superseded"): the freshest generation is the face and every superseded one
-    # folds UNDER it as a past life — never beside it. The NAME is the soul when one
-    # exists (a restart can re-mint the id base mid-lineage — Metron IX rode a new base
-    # while VIII and VII kept the old — but the seat's generations tick with the HANDLE,
-    # and 'one day there will be a thoth 400' counts by name, not by hash); the hex base
-    # groups only the anonymous.
+    # One soul, one line. An agent legitimately holds many mount rows (its durable anchor, a
+    # tab viewing it, a resume sibling) and rendering every row drew the same seat twice.
+    # Group by agent: the realest row testifies for the card, the soul is as alive as its
+    # freshest body, and ×N confesses the extra bodies.
+    # The soul is the lineage, not the generation: separate generations of the same seat
+    # are not separate seats. The freshest generation is the face and every superseded one
+    # folds under it as a past life, never beside it. The name is the soul when one exists
+    # (a restart can re-mint the id base mid-lineage, so a later generation may ride a new
+    # base while earlier ones kept the old, but the seat's generations tick with the
+    # handle, and later generations of the same name still count by name, not by hash);
+    # the hex base groups only the anonymous.
     def _soul_key(m: dict[str, Any]) -> str:
         if m.get("handle"):
             return "seat:" + str(m["handle"]).lower()
@@ -656,7 +648,7 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
         best["seated"] = any(g.get("seated") for g in allrows)
         best["age_secs"] = min(float(g["age_secs"] or 1e9) for g in allrows)
         best["sessions"] = len(allrows)
-        # the head's doors, realest first — each carrying what the renderer EXPLAINS
+        # the head's own mount rows, realest first, each carrying what the renderer explains
         best["doors"] = [{"session_key": g.get("session_key"), "job_dir": g.get("job_dir"),
                           "age_secs": g["age_secs"], "live": g["live"]} for g in head]
         # superseded generations, freshest first: past lives of the same seat
@@ -685,8 +677,7 @@ async def fleet_data(pool: asyncpg.Pool, *, wake_budget: int = 0) -> dict[str, A
 
 
 def _door_label(d: dict[str, Any]) -> str:
-    """One door, one short line (operator, 2026-07-16, second pass: the plain words
-    taught the model; now the verbosity goes — 'tab → <sid>' says it all)."""
+    """One mount row, one short line: 'tab → <sid>' says it all without extra verbosity."""
     key = d.get("session_key") or ""
     sid = (d.get("job_dir") or "").rsplit("/", 1)[-1] or "?"
     when = _age(d.get("age_secs"))
@@ -702,9 +693,9 @@ def _fleet_row(m: dict[str, Any]) -> str:
     name = _e(m["seat"] or m["agent_id"])
     doors = m.get("doors") or []
     ancestors = m.get("ancestors") or []
-    # LEAN LABELS (operator, 2026-07-16, third pass): '1 agent' is the fold's invariant —
-    # never said; the life number is already the roman in the name — never repeated. Only
-    # the doors earn a marker. The seat's true depth (from the graph, never the registry
+    # Lean labels: '1 agent' is the fold's invariant, so it is never said; the life number
+    # is already the roman numeral in the name, so it is never repeated. Only the mount
+    # rows earn a marker. The seat's true depth (from the graph, never the registry
     # window) lives inside the unfold.
     gen = int(m["seat_gen"]) if m.get("seat_gen") else None
     lives_total = (gen - 1) if gen and gen > 1 else len(ancestors)
@@ -718,8 +709,9 @@ def _fleet_row(m: dict[str, Any]) -> str:
             past = "<br>".join(
                 f'· {_e(str(a["seat"]))} — {_e(_age(a["age_secs"]))}' for a in ancestors)
             inner = (inner + "<br>" if inner else "") + _e(head_line) + "<br>" + past
-        # a STABLE id per soul: the poller restores open folds by id, so an unkeyed
-        # details snapped shut on every refresh (operator: 'hard to nav')
+        # a stable id per soul: the poller restores open folds by id, so an unkeyed
+        # details element snapped shut on every refresh, which made the page hard to
+        # navigate
         did = "f-" + re.sub(r"[^a-zA-Z0-9]", "", m.get("agent_id") or name)
         name_cell = (f'<details id="{did}"><summary>{dot}{name}{marker}</summary>'
                      f'<div class="dim">{inner}</div></details>')
@@ -735,17 +727,17 @@ def _fleet_row(m: dict[str, Any]) -> str:
 
 def render_fleet(data: dict[str, Any]) -> str:
     mounts = data["mounts"]
-    # the fleet number counts SEATED minds only (operator, 2026-07-17: 'fleet 5 but there
-    # are only 3 agents up') — a live stranger's session (a bg-pty host, a spare) is real,
-    # so it is confessed beside the number, never counted inside it.
+    # the fleet number counts seated minds only. A live visiting session (a
+    # background-pty host, a spare) is real, so it is shown beside the number, never
+    # counted inside it.
     live_n = sum(1 for m in mounts if m["live"] and m.get("seated", True))
     vis_n = sum(1 for m in mounts if m["live"] and not m.get("seated", True))
     budget = (f' / {data["wake_budget"]}' if data.get("wake_budget") else "")
-    # SOULS FIRST, DOORS NEVER (operator, 2026-07-16: "the 3x ra and 3x thoth is still
-    # there and very confusing"): a soul's extra mount rows are doorways — tabs, resumes —
-    # and a lens does not count plumbing, so the ×N marker is gone. Below the souls, the
-    # UNRECONCILED sink into one collapsed line: they are the fold tray's backlog, named
-    # as such, not paraded as peers of the named.
+    # Souls first, extra mount rows never counted separately: a soul's extra mount rows
+    # (tabs, resumes) are plumbing, not separate agents, and a lens does not count
+    # plumbing, so the ×N marker is gone. Below the souls, the unreconciled sink into one
+    # collapsed line: they are the fold tray's backlog, named as such, not paraded as
+    # peers of the named.
     named = [m for m in mounts if m.get("seat")]
     anon = [m for m in mounts if not m.get("seat")]
     vis = f" · {vis_n} visitor{'s' if vis_n != 1 else ''}" if vis_n else ""
@@ -753,13 +745,11 @@ def render_fleet(data: dict[str, Any]) -> str:
            f'{len(named)} soul{"s" if len(named) != 1 else ""} · '
            f'{len(anon)} unreconciled</span> '
            f'<span class="pill">wakes {data["wakes_hour"]}{budget}/h</span></h2>',
-           # CONFESSED, NOT VERIFIED (door census item 2, Thoth msg 5772/5741, thread
-           # 2c3c2b9a): ● here means agent_mounts.last_seen touched within 15 minutes —
-           # the SAME cache every other liveness read in this house draws from, never
-           # cross-checked against the harness+/proc registry_census authority. An
-           # operator reading this dot had no way to know that until now; it is an
-           # awareness signal, not a verified fact, the same law render_overhead's own
-           # "the page says so rather than estimating" caption already follows.
+           # shown, not verified: ● here means agent_mounts.last_seen touched within 15
+           # minutes, the same cache every other liveness read in this system draws from,
+           # never cross-checked against the harness+/proc registry_census authority. It
+           # is an awareness signal, not a verified fact, the same rule render_overhead's
+           # own "the page says so rather than estimating" caption already follows.
            '<p class="dim">● = touched agent_mounts within 15 min (a cache reading), '
            "not a harness/proc-verified fact — a fresh row can still be a phantom, and a "
            "stale one can still be a live body the cache hasn't heard from yet.</p>"]
@@ -785,7 +775,7 @@ def render_fleet(data: dict[str, Any]) -> str:
 # ── /overhead ────────────────────────────────────────────────────────────────────────────
 
 def _fmt_tok(n: int) -> str:
-    """neo's token formatter: 1.2M reads, 1234567 doesn't."""
+    """A token formatter: 1.2M reads, 1234567 doesn't."""
     if n >= 1_000_000_000:
         return f"{n / 1_000_000_000:.1f}B"
     if n >= 1_000_000:
@@ -796,11 +786,11 @@ def _fmt_tok(n: int) -> str:
 
 
 def render_overhead(data: dict[str, Any], telemetry: dict[str, Any] | None = None) -> str:
-    """THE OVERHEAD LENS (neo's eye, task #34): what the harness itself costs — the
-    hidden channels beside every visible window, the cache-vs-fresh split, the
-    system-reminder drip, the compaction churn. Read from the transcript store, which
-    the observer's backfill keeps ~10 min current; a session the store hasn't eaten
-    isn't here, and the page says so rather than estimating."""
+    """The overhead lens: what the harness itself costs, the hidden channels beside every
+    visible window, the cache-vs-fresh split, the system-reminder drip, the compaction
+    churn. Read from the transcript store, which the observer's backfill keeps ~10 min
+    current; a session the store hasn't ingested isn't here, and the page says so rather
+    than estimating."""
     t = data["totals"]
     out = [
         f'<h2>harness overhead <span class="pill">{t["sessions"]} sessions · '
