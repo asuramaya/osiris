@@ -1,19 +1,18 @@
-"""retire_assertion — the cross-source supersede (thread 52911d2a, found diagnosing
-b9aa7326): assert_property's own supersession is scoped to the SAME source only ("other
-sources' values coexist as the multi-source set") — by design, for legitimate multi-source
-corroboration. It leaves exactly one class unreachable: a peer's CORRECTION of another
-agent's bad self-declaration can never retire it. Khnum's own correct_agent_house call on
-agent:ad1a1cb0-g40-xxiv proved this live (decision d28d1459): the right value ("58") landed
+"""retire_assertion: the cross-source supersede. assert_property's own supersession is
+scoped to the same source only ("other sources' values coexist as the multi-source set"), by
+design, for legitimate multi-source corroboration. It leaves exactly one class unreachable: a
+peer's correction of another agent's bad self-declaration can never retire it. A real
+correction call on an agent's house field proved this live: the right value ("58") landed
 from a different source, the wrong one ("2", self-declared) stayed current, both
 simultaneously "current" per current_assertions' own definition (every row nothing else's
-supersedes points at) — a reader without an exact ORDER BY confidence DESC, observed_at DESC
-LIMIT 1 could still surface the wrong one.
+supersedes points at), so a reader without an exact ORDER BY confidence DESC, observed_at
+DESC LIMIT 1 could still surface the wrong one.
 
-Deliberately NARROW, not a general edit/delete escape hatch: it retires ONE named
-assertion, by id, on a caller-named (object, name) — never a bare "whatever's current now",
+Deliberately narrow, not a general edit/delete escape hatch: it retires one named
+assertion, by id, on a caller-named (object, name), never a bare "whatever's current now",
 so a caller must already know exactly which row is wrong (from a diagnosis, never a guess).
 `because` is required: a cross-source retirement crosses accountability lines, so the
-justification is not optional the way assert_property's own routine supersession isn't."""
+justification is not optional, the same way assert_property's own routine supersession isn't."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -27,12 +26,12 @@ from src.parsers.evidence import confidence_for
 
 
 async def list_assertions(actions: Actions, *, ref: str, name: str) -> dict[str, Any]:
-    """READ-ONLY (task #157/#382067d9's own gap): retire_assertion needs a `superseded_id`
-    — an assertions.id — and until this, NOTHING exposed one. dossier()/trace_evidence()
+    """Read-only (closing an earlier gap): retire_assertion needs a `superseded_id`, an
+    assertions.id, and until this addition nothing exposed one. dossier()/trace_evidence()
     both resolve through current_assertions to a single belief-winner or a bare value list;
-    neither ever surfaced the row id underneath. This is the smallest possible door: every
-    CURRENT (non-superseded) assertion of `name` on the object `ref` resolves to, each
-    carrying its own `id` — exactly what retire_assertion's own required argument needs,
+    neither ever surfaced the row id underneath. This is the smallest possible addition:
+    every current (non-superseded) assertion of `name` on the object `ref` resolves to, each
+    carrying its own `id`, exactly what retire_assertion's own required argument needs,
     with nothing else layered on (no write, no ranking, no bulk scope)."""
     name = (name or "").strip()
     if not name:
@@ -56,14 +55,14 @@ async def list_assertions(actions: Actions, *, ref: str, name: str) -> dict[str,
 
 
 async def stale_current_flags(actions: Actions, *, limit: int = 50) -> dict[str, Any]:
-    """THE READ DOOR (thread 09bde57e, Sekhmet's own blocker named — no read door for
-    assertions/supersedes through the composer, hand SQL off the table): every row where
-    `is_current=true` (migration 0047's maintained flag) YET a real `supersedes` FK already
-    points at it from another assertion — the exact anomaly khepri's own specimen (seat:
-    ddafff44, assertion 2676719) surfaced live: current_assertions kept listing a row as
+    """The read path for a previously missing gap: no read path existed for
+    assertions/supersedes through the composer, which pushed callers toward hand-written
+    SQL. This surfaces every row where `is_current=true` (migration 0047's maintained flag)
+    yet a real `supersedes` foreign key already points at it from another assertion, the
+    exact anomaly a specific live case surfaced: current_assertions kept listing a row as
     current that a genuine successor had already superseded, because the flip (assert_
-    property's own same-source path, or supersede_assertion's cross-source one — both flip
-    `is_current` in the SAME transaction as the INSERT, per 0047's own design) never landed
+    property's own same-source path, or supersede_assertion's cross-source one, both flip
+    `is_current` in the same transaction as the insert, per 0047's own design) never landed
     for this specific row. Read-only, bounded (`limit` caps the sample; `count` is always
     the true total, never capped, so a caller sees the real population size even from a
     small sample)."""
@@ -94,18 +93,19 @@ async def stale_current_flags(actions: Actions, *, limit: int = 50) -> dict[str,
 async def repair_stale_current_flags(
     actions: Actions, *, dry_run: bool = True, limit: int = 500, actor: str | None = None,
 ) -> dict[str, Any]:
-    """THE BACKFILL for thread 09bde57e's own kernel gap — the compensating fix for exactly
-    the population `stale_current_flags` measures (123,914 of 267,305 rows at last count,
-    d8225e71): `assertions.is_current` is a maintained MATERIALIZATION of the append-only
-    kernel (migration 0047), not itself a kernel fact — flipping it here heals the
-    projection, touches no assertion's own content, and violates nothing in constitution #3.
+    """The backfill for the same kernel gap `stale_current_flags` measures, the compensating
+    fix for exactly the population it reports (123,914 of 267,305 rows at last count):
+    `assertions.is_current` is a maintained materialization of the append-only kernel
+    (migration 0047), not itself a kernel fact; flipping it here heals the projection,
+    touches no assertion's own content, and violates no constitutional constraint on the
+    kernel.
 
-    `dry_run=True` (default, list-only): names how many rows WOULD flip and their ids,
-    writes nothing. `dry_run=False` is the operator's own call, never automatic — flips
+    `dry_run=True` (default, list-only): names how many rows would flip and their ids,
+    writes nothing. `dry_run=False` is a deliberate operator call, never automatic: flips
     `is_current=false` on up to `limit` stale rows in one batched UPDATE, oldest-observed
     first. Batched because the live population is five figures; a single UPDATE touching all
     of it at once is not the shape of a repair anyone should run unattended. Idempotent: a
-    repeat call only ever sees rows STILL stale — a row already flipped drops out of the
+    repeat call only ever sees rows still stale, a row already flipped drops out of the
     WHERE clause on its own, so re-running (to walk the full population in batches, or after
     a partial failure) is always safe."""
     pool = actions.pool
@@ -130,8 +130,8 @@ async def retire_assertion(
     because: str, actor: str,
 ) -> dict[str, Any]:
     """Retire assertion `superseded_id` on the object `ref` resolves to (any form
-    resolve_ref accepts — UUID, short-id, canonical, or name), asserting `value` as the new
-    current fact from `actor`. Refuses LOUDLY (an error dict, nothing written) when:
+    resolve_ref accepts: UUID, short-id, canonical, or name), asserting `value` as the new
+    current fact from `actor`. Refuses loudly (an error dict, nothing written) when:
     `because` is blank; `ref` doesn't resolve; `superseded_id` isn't a `name` assertion on
     that object; it's already superseded by something else."""
     because = (because or "").strip()
@@ -174,28 +174,27 @@ async def retire_assertion(
 async def retire_link(
     actions: Actions, *, from_ref: str, to_ref: str, link_type: str, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE MISSING VERB (thread badb4040 — three independent live specimens: a
-    fuzzy-substring `resolves=` mis-citation, a `resolves=` mis-fire that closed the
-    wrong Thread, and this thread's own original case): `retire_assertion` above covers
-    the property-assertion half of "retract a wrongly-minted X" (confirmed already
-    general to any property, not just `name`, per this thread's own note); it has no
-    path to a LINK at all. `Actions.invalidate_link` already exists at the kernel level
-    — event-sourced (an audit row + an outbox `link_invalidated` event), idempotent,
-    NEVER a delete (`valid_until` stamped, the row stays exactly where it was created,
-    in whose name, and why) — but reaching it directly from a caller would be exactly
-    the raw-mutation shortcut house law forbids. This is that door: agent/thread-
-    agnostic (any (from, to, type) triple, on ANY object types — the per-type doors,
-    thread(action='resolve')'s own `resolved_by` edges, record_decision's own answers/
-    grounded_by, etc., keep working unchanged, this is the general escape hatch for
-    when THOSE mint the wrong edge).
+    """The missing verb: three independent live cases motivated this (a fuzzy-substring
+    `resolves=` mis-citation, a `resolves=` mis-fire that closed the wrong Thread, and the
+    original case that opened this gap). `retire_assertion` above covers the
+    property-assertion half of "retract a wrongly-minted X" (confirmed already general to
+    any property, not just `name`); it has no path to a link at all. `Actions.invalidate_link`
+    already exists at the kernel level, event-sourced (an audit row plus an outbox
+    `link_invalidated` event), idempotent, never a delete (`valid_until` stamped, the row
+    stays exactly where it was created, in whose name, and why), but reaching it directly
+    from a caller would be exactly the raw-mutation shortcut this project's rules forbid.
+    This is that path: agent/thread-agnostic (any (from, to, type) triple, on any object
+    types; the per-type paths, thread(action='resolve')'s own `resolved_by` edges,
+    record_decision's own answers/grounded_by, etc., keep working unchanged, this is the
+    general escape hatch for when those mint the wrong edge).
 
-    `because` is REQUIRED, same law `retire_assertion` already holds itself to — this
+    `because` is required, the same rule `retire_assertion` already holds itself to; this
     now rides in `invalidate_link`'s own audit/outbox payload, the compensating event
     itself, never a second write nobody derives from the first. Refuses loudly (an
     error dict, nothing written) when: `because` is blank; `from_ref`/`to_ref` doesn't
     resolve; the triple has no currently-active link of the named type to retire
     (idempotent from `invalidate_link`'s own side, but a caller here almost certainly
-    meant a REAL edge — silently returning success on a no-op would hide a typo'd
+    meant a real edge; silently returning success on a no-op would hide a typo'd
     ref/type the same way a silent drop would)."""
     because = (because or "").strip()
     if not because:
@@ -223,32 +222,30 @@ async def retire_link(
 async def retire_bare_object(
     actions: Actions, *, ref: str, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE TOOLING GAP (thread 92dde6cc, opened on Khnum's own debug-script
-    artifacts): retire_object(kind=...) covers only seat/project/agent -- no door
-    existed for an arbitrary ACTIVE object of no other kind, the exact shape a stray
-    script or a mis-minted stub leaves behind. `ref` resolves via the SAME
-    resolve_ref every other generic door here uses (UUID, short-id, canonical, or
-    name) -- any object type, not scoped like retire_project's own
+    """The tooling gap, opened on a set of debug-script artifacts: retire_object(kind=...)
+    covers only seat/project/agent, and no path existed for an arbitrary active object of
+    no other kind, the exact shape a stray script or a mis-minted stub leaves behind. `ref`
+    resolves via the same resolve_ref every other generic path here uses (UUID, short-id,
+    canonical, or name), any object type, not scoped like retire_project's own
     SoftwareProject-only resolution.
 
-    Refuses LOUDLY (an error dict, nothing written) when: `because` is blank; `ref`
-    doesn't resolve; the object is already non-active; ANY live link touches it in
-    EITHER direction (a bare object is one nothing else references and that
-    references nothing -- a live edge is direct evidence something still depends on
-    it, the same signal retire_project's own "any open Thread pointing in" checks
-    for, generalized here to any link/any direction since a truly bare object has
-    none at all); or it carries a current assertion from any source OTHER than the
+    Refuses loudly (an error dict, nothing written) when: `because` is blank; `ref`
+    doesn't resolve; the object is already non-active; any live link touches it in
+    either direction (a bare object is one nothing else references and that
+    references nothing; a live edge is direct evidence something still depends on
+    it, the same signal retire_project's own "any open Thread pointing in" check
+    looks for, generalized here to any link/any direction since a truly bare object has
+    none at all); or it carries a current assertion from any source other than the
     layout heartbeat's own GRAPH_LAYOUT_SOURCE. That one exemption is deliberate,
     not an oversight: graph_x/graph_y/graph_layout_v are bookkeeping the heartbeat
-    stamps on EVERY active object regardless of meaning -- this door's own founding
-    specimens (thread:dbg-cl-a-member/-b-member) carry nothing else, so refusing on
-    them would make this door unable to ever retire the exact objects it exists for.
-    Any OTHER source (a name, a summary, a real property) is genuine evidence of
-    content and refuses, the same law retire_project already holds for commits and
-    open threads.
+    stamps on every active object regardless of meaning; this path's own founding
+    cases carry nothing else, so refusing on them would make this path unable to ever
+    retire the exact objects it exists for. Any other source (a name, a summary, a real
+    property) is genuine evidence of content and refuses, the same rule retire_project
+    already holds for commits and open threads.
 
-    Same compensating-event mechanism as retire_project (`Actions.set_status`) --
-    never a DELETE."""
+    Same compensating-event mechanism as retire_project (`Actions.set_status`), never
+    a delete."""
     because = (because or "").strip()
     if not because:
         return {"error": "because is required — retiring a bare object is a "

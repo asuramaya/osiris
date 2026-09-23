@@ -1,46 +1,50 @@
-"""THE FORK — one mind, a new name, and a transcript that swears it was born this morning.
+"""Fork lineage resolution.
 
-`claude --fork-session --resume <parent>` is how the harness continues a conversation: it mints
-a NEW session id, COPIES the history, and runs the same mind on. New id → SessionStart fires →
-the whisper posts → automount seats it. ONE MIND, TWO SEATS.
+`claude --fork-session --resume <parent>` is how the harness continues a conversation: it
+mints a new session id, copies the history, and runs the same agent forward. The new id
+triggers SessionStart, which triggers automount, which seats the new session. One agent now
+has two seats.
 
-That is the twin (539ae43b). It is also the SKIPPED GENERATION (Khepri III with no Khepri II —
-the fork ate the numeral), the DM that lands in a seat nobody is reading, and the co-agent
-cry-wolf that told Anubis XII his tree was contended when the only other "agent" on it was
-himself (msg 424 — he was forced to fork himself just to file the report, and narrated the bug
-perfectly without knowing that was its name).
+That produces a duplicate identity: what looks like a new generation with a missing
+predecessor in the numbering, a message that lands in a seat nobody is reading, and a
+co-agent report of contention on a shared tree when the only other "agent" present was
+itself (a session had to fork itself just to file that report, and described the bug
+precisely without realizing that was its own cause).
 
-AND THE TRANSCRIPT WILL LIE TO YOU IF YOU ASK IT. I checked, on the live pair: the fork rewrites
-`sessionId` on ALL 486 of its records to its own. Zero carry the parent's. There is no
-`forkedFrom` field, no `parentSessionId`. The parent's id survives only as INCIDENTAL RESIDUE —
-inside a terminal hook's notify payload, inside the prose of a compact summary, inside mcpMeta.
-Read structurally, a fork SWEARS IT IS NEWBORN. That is why this went unfound through three
-successive identity fixes: we kept interrogating a witness that had been coached.
+And the transcript will not answer honestly if you ask it structurally. Checked on a live
+pair: the fork rewrites `sessionId` on all of its records to its own. None carry the
+parent's. There is no `forkedFrom` field, no `parentSessionId`. The parent's id survives only
+as incidental residue: inside a terminal hook's notify payload, inside the prose of a compact
+summary, inside mcpMeta. Read structurally, a fork looks newly created. That is why this went
+undetected through several successive identity fixes: the check kept interrogating a source
+that had effectively been coached to say "new."
 
-THE JOIN, AND IT IS AN OBSERVATION, NOT AN INFERENCE. A copy rewrites session ids but PRESERVES
-RECORD uuids. So:
+The join used here is an observation, not an inference. A copy rewrites session ids but
+preserves record uuids. So:
 
-    A SESSION WHOSE FIRST RECORD UUID BELONGS TO ANOTHER SESSION IS A FORK OF THAT SESSION.
+    A session whose first record uuid belongs to another session is a fork of that session.
 
-Set membership, on disk, deterministic. It cannot be wrong (uuids do not collide), it costs no
-model and no money, and under the charter — a critter may OBSERVE for nothing and may only INFER
-on a licence — it sits squarely on the free side of the line.
+Set membership, on disk, deterministic. It cannot be wrong (uuids do not collide), it costs
+no model call and no money, and under this project's distinction between observation and
+inference, an observation is free while an inference requires stronger justification, so this
+sits squarely on the free side of that line.
 
-WHY NOT THE PROCESS TABLE, which declares `--fork-session --resume <path>` in argv and would be
-O(1): because it is a witness that DIES. It cannot see the 36 forks already on disk, it cannot
-answer for a session whose process exited, and it makes lineage — the thing this whole system is
-for — depend on a process still being alive. The record must be readable from the record.
+Why not the process table, which declares `--fork-session --resume <path>` in argv and would
+be O(1): because it is a witness that disappears. It cannot see forks already on disk, it
+cannot answer for a session whose process has exited, and it would make lineage tracking,
+the whole purpose of this system, depend on a process still being alive. The record must be
+readable from the record.
 
-WHY NOT `model IS NULL` (the fix the field report asked for): because absence of an observation
-is not evidence of absence. Of the two seats reported as ghosts, one had a RESOLVED model, a LIVE
-heartbeat, and NO TRANSCRIPT AT ALL. `model IS NULL` does not mean "not anybody" — it means WE
-HAVE NOT LOOKED YET, and this project has now been bitten by that exact shape three times
-(456960e5, the quiet agent read as dead; and `last_active IS NULL` read as "it never happened").
+Why not `model IS NULL` (an earlier proposed fix): because absence of an observation is not
+evidence of absence. Of two seats once reported as inactive, one had a resolved model, a live
+heartbeat, and no transcript at all. `model IS NULL` does not mean "nobody's session"; it
+means "not yet checked," and this project has been bitten by that exact shape more than once:
+a quiet agent misread as dead, and `last_active IS NULL` misread as "never happened."
 
-RESOLVED ONCE, EVER. The scan is cheap but it is not free, and a session's lineage is immutable:
-the answer is memoized in `watermarks` under `fork:<sid>` and never recomputed. This is NOT the
-crawl coming back — the crawl re-read every transcript forever on a clock. This reads one new
-session's HEAD, once, at its birth.
+Resolved once, ever. The scan is cheap but not free, and a session's lineage is immutable: the
+answer is memoized in `watermarks` under `fork:<sid>` and never recomputed. This is not a
+recurring background scan coming back; an earlier version of this logic re-read every
+transcript repeatedly on a schedule. This reads one new session's head, once, at its birth.
 """
 
 from __future__ import annotations
@@ -52,10 +56,14 @@ import asyncpg
 
 from src.ingest.sessions import locate_current_transcript
 
-_FORK = "fork:"        # watermark: this session's lineage root, resolved once and never again
-_NONE = "-"            # memoized "looked, and it is nobody's child" — an answer, not a gap
-_CHUNK = 1 << 20       # 1 MiB; the needle is 36 bytes, so a small overlap covers every straddle
-_MAX_DEPTH = 16        # forks chain (A→B→C — 15 of 36 in the field). Cycle- and runaway-guarded.
+# watermark key prefix: this session's lineage root, resolved once and never again
+_FORK = "fork:"
+# memoized "looked, and it is nobody's child": a real answer, not a gap
+_NONE = "-"
+# 1 MiB chunks; the needle is 36 bytes, so a small overlap covers every straddle
+_CHUNK = 1 << 20
+# forks can chain (A to B to C: 15 of 36 in the field). Cycle- and runaway-guarded.
+_MAX_DEPTH = 16
 
 
 def fork_key(sid: str) -> str:
@@ -68,10 +76,10 @@ def sid_of(path: Path) -> str:
 
 
 def first_uuid(path: Path) -> str | None:
-    """The transcript's FIRST record uuid — the join key. Reads the HEAD of the file, never
-    the whole thing: the answer is in the first few lines or it is nowhere.
+    """The transcript's first record uuid, used as the join key. Reads only the head of the
+    file, never the whole thing: the answer is in the first few lines or it is nowhere.
 
-    Deliberately NOT a JSON parse of the file. We want one field off the first record that has
+    Deliberately not a JSON parse of the file. We want one field off the first record that has
     one, and a transcript's head is small.
     """
     import json
@@ -94,11 +102,12 @@ def first_uuid(path: Path) -> str | None:
 
 
 def _mentions(path: Path, needle: bytes) -> bool:
-    """Do these BYTES occur anywhere in the file? A cheap, streaming PRE-FILTER — and nothing
+    """Do these bytes occur anywhere in the file? A cheap, streaming pre-filter, and nothing
     more. It answers "worth parsing?", never "is this the parent?".
 
     Chunked with an overlap, because the needle can straddle a chunk boundary; getting that
-    wrong would silently MISS a real parent, which mints a twin and looks exactly like success.
+    wrong would silently miss a real parent, which mints a duplicate seat and looks exactly
+    like success.
     """
     tail = b""
     try:
@@ -113,20 +122,20 @@ def _mentions(path: Path, needle: bytes) -> bool:
 
 
 def _emitted(path: Path, uid: str) -> bool:
-    """Did this session EMIT a record with that uuid? The structural test, and the only one
+    """Did this session emit a record with that uuid? The structural test, and the only one
     whose answer means anything.
 
-    A BYTE MATCH IS NOT AUTHORSHIP, and the difference is the whole bug this module exists to
-    kill. A transcript is full of text that is not its own: tool outputs, pasted files, greps of
-    OTHER transcripts. The very session that wrote this module has another session's record uuids
-    sitting in its own scrollback, because it went and looked at them. Take a substring hit for a
-    parentage claim and you will one day re-seat a mind onto whichever agent happened to `cat` its
-    transcript — an inference wearing the authority of a declaration, which is the named disease
-    of this codebase and which I committed, here, in the file that cures it.
+    A byte match is not authorship, and the difference is the whole bug this module exists to
+    prevent. A transcript is full of text that is not its own: tool outputs, pasted files,
+    greps of other transcripts. Even the session that wrote this module has other sessions'
+    record uuids sitting in its own scrollback, because it looked at them. Treat a substring
+    hit as a parentage claim, and eventually an agent identity gets reseated onto whichever
+    session happened to read its transcript: an inference wearing the authority of a
+    declaration, a mistake this module exists specifically to prevent.
 
-    So: the pre-filter rejects the ~99% that never mention the uuid at all (streaming bytes, no
-    parse), and ONLY a file that mentions it gets read as JSON to ask the real question — is
-    there a record whose OWN `uuid` field is this?
+    So: the pre-filter rejects the files that never mention the uuid at all (streaming bytes,
+    no parse), and only a file that mentions it gets read as JSON to ask the real question: is
+    there a record whose own `uuid` field is this?
     """
     import json
     if not _mentions(path, uid.encode()):
@@ -140,7 +149,7 @@ def _emitted(path: Path, uid: str) -> bool:
                     rec = json.loads(line)
                 except ValueError:
                     continue
-                if rec.get("uuid") == uid:     # ITS OWN record — authorship, not mention
+                if rec.get("uuid") == uid:     # its own record: authorship, not mention
                     return True
     except OSError:
         return False
@@ -148,13 +157,14 @@ def _emitted(path: Path, uid: str) -> bool:
 
 
 def _candidates(path: Path, root: Path) -> list[Path]:
-    """Transcripts that could be this one's parent — NEAREST FIRST.
+    """Transcripts that could be this one's parent, nearest first.
 
-    Its own project dir leads, because that is where a parent almost always is (55 of 57 pairs
-    in the field census). But the fleet is the fallback and it is NOT optional: a fork DOES cross
-    project dirs when the operator `cd`s into a subrepo (2 of 57 — phanspeed forked from a
-    session rooted in `code/`). Scoping to the same dir would have been tidy, cheap, and wrong
-    twice, and a lineage engine that silently loses 2 lineages in 57 is not one.
+    Its own project directory leads, because that is where a parent almost always is (55 of
+    57 pairs in a field census). But the broader root directory is the fallback and it is not
+    optional: a fork does cross project directories when the working directory changes into a
+    subrepo (2 of 57 in that same census, one session forked from a session rooted in a parent
+    directory). Scoping to the same directory alone would have been tidy, cheap, and wrong
+    twice, and a lineage engine that silently loses 2 lineages out of 57 is not one.
     """
     here, seen = path.parent, {path.resolve()}
     out: list[Path] = []
@@ -162,20 +172,21 @@ def _candidates(path: Path, root: Path) -> list[Path]:
         for p in sorted(scope):
             rp = p.resolve()
             if rp in seen or p.parent.name.endswith("-osiris-extract"):
-                continue  # the adversary's own scratch sessions: an instrument reading itself
+                # exclude the extractor's own scratch sessions: an instrument reading itself
+                continue
             seen.add(rp)
             out.append(p)
     return out
 
 
 def _parent(path: Path, root: Path) -> tuple[Path | None, bool]:
-    """The session this one was forked from, or None if it is nobody's child — paired with
+    """The session this one was forked from, or None if it is nobody's child, paired with
     whether a real search actually ran (`determined`). `first_uuid` returning nothing at
-    session birth (the transcript may not be fully flushed yet) is NOT the same fact as
-    searching every candidate and finding no match (60bc15db specimen 4, decision
-    01e0c69a): the first case never even attempted the search, so it must never be cached
-    as a genuine negative by the caller. `determined` is only False for the never-searched
-    case — every other exit (a match, or an exhausted search) is a real answer."""
+    session birth (the transcript may not be fully flushed yet) is not the same fact as
+    searching every candidate and finding no match: the first case never even attempted the
+    search, so it must never be cached as a genuine negative by the caller. `determined` is
+    only False for the never-searched case; every other exit (a match, or an exhausted
+    search) is a real answer."""
     u = first_uuid(path)
     if not u:
         return None, False
@@ -188,18 +199,18 @@ def _parent(path: Path, root: Path) -> tuple[Path | None, bool]:
 def _find(root: Path, sid: str) -> Path | None:
     """The transcript for a session id, anywhere in the fleet.
 
-    ANCHORED (Thoth dispatch 6715, Khnum's own survey): `glob(f"*/{sid}*.jsonl")` is a
-    PREFIX match on the whole filename, not an exact stem match — looser than the three
-    sites Khnum already anchored in trigger.py, and reachable by the materializer's own
-    duplicate copies (a second file whose stem starts with this `sid` but isn't it).
-    `locate_current_transcript` is the SAME anchor those three sites use, given a
-    synthesized `jobs/<sid>` job_dir (this function only ever has a bare sid, never a
-    caller-supplied hint — the hint-first approach broke 5 tests elsewhere because a hint
-    can be a bare id with no "jobs/" component). `anchored_only=True`: a sid that matches
-    nothing must return None, never a co-tenant's newest transcript.
+    Anchored: `glob(f"*/{sid}*.jsonl")` is a prefix match on the whole filename, not an
+    exact stem match, looser than the other call sites that already anchor this same lookup
+    in trigger.py, and reachable by the materializer's own duplicate copies (a second file
+    whose stem starts with this `sid` but isn't it). `locate_current_transcript` is the same
+    anchor those other sites use, given a synthesized `jobs/<sid>` job_dir (this function
+    only ever has a bare sid, never a caller-supplied hint; a hint-first approach broke 5
+    tests elsewhere because a hint can be a bare id with no "jobs/" component).
+    `anchored_only=True`: a sid that matches nothing must return None, never a co-tenant's
+    newest transcript.
 
     `locate_current_transcript` itself carries no `-osiris-extract` exclusion (its own
-    callers each apply that separately) — kept here unchanged from the old glob's own
+    callers each apply that separately), kept here unchanged from the previous glob's own
     guard, since an ancestor's transcript must never resolve into the extractor's own
     self-reading scratch tree."""
     found = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
@@ -211,18 +222,18 @@ def _find(root: Path, sid: str) -> Path | None:
 async def resolve_parent(
     pool: asyncpg.Pool, path: Path, *, root: Path, refresh: bool = False,
 ) -> str | None:
-    """The sid this session was forked FROM — ONE hop. None if it is nobody's child.
+    """The sid this session was forked from, one hop. None if it is nobody's child.
 
-    Memoized in `watermarks` under `fork:<sid>`. A session's ancestry is IMMUTABLE, so a
-    DETERMINED scan runs once for a given session and never again; `_NONE` is a real
-    cached ANSWER ("we looked, and it is nobody's child"), not a hole to be re-dug on
-    every mount — which is precisely how a cheap check turns back into a crawl. But an
-    UNDETERMINED scan (this session's own first_uuid could not be read yet — plausible at
+    Memoized in `watermarks` under `fork:<sid>`. A session's ancestry is immutable, so a
+    determined scan runs once for a given session and never again; `_NONE` is a real
+    cached answer ("we looked, and it is nobody's child"), not a hole to be re-dug on
+    every mount, which is precisely how a cheap check turns back into a recurring scan. But
+    an undetermined scan (this session's own first_uuid could not be read yet, plausible at
     birth, before the transcript is fully flushed) is never cached at all: caching "I
     don't know" as if it were "no" would freeze a transient condition into a permanent
-    wrong answer, in the one file whose job is preventing exactly that kind of twin-seat
-    mistake (60bc15db specimen 4, decision 01e0c69a). An undetermined call returns None
-    for THIS call only — the next mount gets a fresh, real attempt.
+    wrong answer, in the one module whose job is preventing exactly that kind of
+    duplicate-seat mistake. An undetermined call returns None for this call only; the next
+    mount gets a fresh, real attempt.
     """
     sid = sid_of(path)
     key = fork_key(sid)
@@ -242,19 +253,20 @@ async def resolve_parent(
 
 
 async def seat_of_fork(pool: asyncpg.Pool, path: Path, *, root: Path) -> str | None:
-    """The agent_id this session should mount as: ITS NEAREST ANCESTOR THAT ALREADY HAS A SEAT.
+    """The agent_id this session should mount as: its nearest ancestor that already has a seat.
 
-    NOT the lineage ROOT, and the difference is the whole safety of this thing. The root is a
-    fact about a TRANSCRIPT; a seat is a fact about the GRAPH, and the two are not the same
-    object. Thoth's chain roots at 556403ee, but the fleet has known that mind as
-    `agent:ad1a1cb0` for nine generations — minting `agent:556403ee` off the transcript would
-    invent a THIRD identity while trying to cure a second one.
+    Not the lineage root, and the difference is the whole safety of this function. The root
+    is a fact about a transcript; a seat is a fact about the graph, and the two are not the
+    same object. One agent's fork chain can root at a transcript id the fleet has never used
+    as an identity, because that agent has instead been known under a different agent id for
+    many generations; minting a new identity off the transcript root would invent a third
+    identity while trying to fix a second one.
 
-    So we ask reality instead of deriving: climb the fork chain and return the first ancestor the
-    registry ALREADY has a seat for. That reuses the whole tested succession path (the caller's
-    `lineage_head` then walks it forward to the current generation), and an ancestor nobody ever
-    seated simply contributes nothing. If no ancestor has a seat, this session is genuinely new:
-    return None and let it be born.
+    So this asks reality instead of deriving it: climb the fork chain and return the first
+    ancestor the registry already has a seat for. That reuses the whole tested succession
+    path (the caller's `lineage_head` then walks it forward to the current generation), and
+    an ancestor nobody ever seated simply contributes nothing. If no ancestor has a seat,
+    this session is genuinely new: return None and let it be born.
     """
     seen = {sid_of(path)}
     cur = path

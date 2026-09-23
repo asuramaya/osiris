@@ -1,29 +1,28 @@
-"""walk_in — the door for a mind with nothing but this server, walking in cold (operator's
-own framing, 2026-08-02: a stranger has neither Thoth nor a manager, and "four steps are
-too many for a human who just wants to tell the agent 'mount into osiris'"). The other
-half — mounting a not-yet-mounted caller — is Context/session-anchor plumbing that lives
-one layer up, in the MCP wrapper (mcp_server.py's `walk_in`), the same split `lift`'s own
-wrapper/orchestrator pair already uses. This module is the pure, testable core: given an
-ALREADY-MOUNTED agent, name it and (optionally) office it, skip-detected, stop-on-refusal,
-each step's own receipt returned verbatim.
+"""walk_in: the entry point for a session that has nothing but this server, arriving cold
+with neither a manager nor prior context, so that a caller doesn't need multiple separate
+steps just to get the agent mounted into osiris. The other half, mounting a not-yet-mounted
+caller, is session-anchor plumbing that lives one layer up, in the MCP wrapper
+(mcp_server.py's `walk_in`), the same wrapper/orchestrator split `lift` already uses. This
+module is the pure, testable core: given an already-mounted agent, name it and
+(optionally) give it an office, with skip detection, stop-on-refusal, and each step's own
+result returned verbatim.
 
-COMPOSES, NEVER REINVENTS (same law as `lift`): `claim_name` and `establish_office` run
-untouched; their real receipts are returned as-is, never summarized or re-worded. If a
-step REFUSES, walk_in_named stops there and surfaces that exact text — it never proceeds
-to a later step and lets THAT step's own downstream refusal stand in as a misleading final
-error one step removed from the real cause (#117's disease, pre-empted rather than
-committed).
+Composes rather than reinventing: `claim_name` and `establish_office` run untouched; their
+real results are returned as-is, never summarized or re-worded. If a step refuses,
+walk_in_named stops there and surfaces that exact text; it never proceeds to a later step
+and lets that step's own downstream refusal stand in as a misleading final error one step
+removed from the real cause.
 
-SKIPS A COMPLETED STEP HONESTLY, NEVER SILENTLY AND NEVER FALSELY: an agent that already
-claimed a name gets `claim_name` skipped, not re-run — `ran: False`, a note naming the
-name already held. Passing a DIFFERENT handle than the one already claimed refuses rather
-than guessing which one was meant (this never renames — that's rename_seat's job,
+Skips a completed step honestly, never silently and never falsely: an agent that already
+claimed a name gets `claim_name` skipped, not re-run, with `ran: False` and a note naming
+the name already held. Passing a different handle than the one already claimed refuses
+rather than guessing which one was meant (this never renames; that's rename_seat's job,
 deliberately not composed here). A step's `ran` field is never True unless it actually ran
-THIS call.
+this call.
 
-`wants_office` IS NEVER DEFAULTED (refuse-never-guess, practice f39a9849): a one-off
-VISITOR session is a real, already-documented class in this graph; forcing a seat onto
-every walk-in would erase the reason that class exists. Callers state it explicitly."""
+`wants_office` is never defaulted: a one-off visitor session is a real, already-documented
+class in this graph, and forcing a seat onto every walk-in would erase the reason that
+class exists. Callers state it explicitly."""
 from __future__ import annotations
 
 from typing import Any
@@ -37,9 +36,9 @@ async def walk_in_named(
     pool: asyncpg.Pool, *, agent_id: str, handle: str, wants_office: bool,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """The name + office half, given an already-mounted `agent_id`. Refuses on a blank
+    """The naming and office half, given an already-mounted `agent_id`. Refuses on a blank
     handle (never guesses one) and on a handle that collides with one already claimed by
-    this same agent under a DIFFERENT name (never silently renames). Every other refusal
+    this same agent under a different name (never silently renames). Every other refusal
     is `claim_name`'s or `establish_office`'s own, propagated verbatim with a `step` field
     naming which one fired."""
     handle = (handle or "").strip()
@@ -99,54 +98,49 @@ async def promote_visitor(
     pool: asyncpg.Pool, *, target: str, handle: str, because: str, actor: str,
     ruling: str | None = None, repos: list[str] | None = None,
 ) -> dict[str, Any]:
-    """PIECE 2 (thread 879c97b9, "PROMOTION"): the visitor-to-soul collapse in ONE act —
-    claim_name + charter_for + establish_office, converging on the SAME end-state the
-    managed path reaches (seat:<uuid8> + office + deed) — for a THIRD PARTY, never the
-    caller's own identity (that self-service shape is `walk_in_named`, above; this is its
-    sibling, not a replacement). A VISITOR here is the #48-gate's own third state: a
-    resolved anchor with a real `agent_mounts` row and NO `objects` row of type Agent —
-    "a registry row and nothing else, no Agent object" (mount()'s own docstring). This is
-    exactly the population the whisper's future "offer promotion on Nth unclaimed-but-
-    recurring visit" signal names, and exactly what an operator or manager does by hand
-    today: a mind with real, repeated presence in the graph that has simply never spoken
-    its own name.
+    """The visitor-to-registered-agent collapse in one act: claim_name + charter_for +
+    establish_office, converging on the same end-state the managed path reaches
+    (seat:<uuid8> + office + deed), for a third party, never the caller's own identity
+    (that self-service shape is `walk_in_named`, above; this is a sibling, not a
+    replacement). A visitor here is a specific known state: a resolved anchor with a real
+    `agent_mounts` row and no `objects` row of type Agent, i.e. a registry row and nothing
+    else, no Agent object (see mount()'s own docstring). This is exactly the population an
+    operator or manager promotes by hand today: a session with real, repeated presence in
+    the graph that has simply never claimed its own name.
 
-    AUTHORIZATION IS ENFORCED, NOT MERELY NAMED (Thoth's ruling, mail 9465 — "refusing
-    without the operator's or a manager's word or a ruling= citation"): a third-party act
-    minting a stranger's whole identity is not routine, so `actor` must resolve to a
-    recognized operator identity (`charter.is_operator_actor` — global recognition, no
-    single project in scope for a whole-identity mint; thread 1d5b9773, "authority by
-    charter") OR hold a seat that itself manages at least one worker
-    (`seats.seats_managed_by` — a manager's word, the same SHAPE of
-    enforced check `charter.charter_for` runs for its own third-party act), OR `ruling`
-    must pass `capture.verify_ruling` (the same RULING-CITATION DOOR `charter_for` itself
-    now uses, landed independently on main while this was being built — found and
-    adopted here at rebase time rather than left as a second, weaker bespoke check): the
-    citation must resolve to a real Decision, that decision's own `kind` must read
-    'ruling' (an ordinary decision is not standing authority), and its own summary or
-    rationale text must actually NAME "promote_visitor" — a ruling about something else
-    cannot silently authorize this write just because a caller cited it. `because` is
-    always required regardless, same testimony discipline `charter_for`/`rename_seat`
-    already run for a third-party act. THIS is the whole act's one and only authorization
-    gate — deliberately NOT `charter_for` itself (see the note at its call site below:
-    that verb's own gate checks the TARGET SEAT's manager, which cannot exist yet for a
-    seat this same call is about to mint).
+    Authorization is enforced, not merely named: a third-party act minting a stranger's
+    whole identity is not routine, so `actor` must resolve to a recognized operator
+    identity (`charter.is_operator_actor`, a global recognition with no single project in
+    scope for a whole-identity mint), or hold a seat that itself manages at least one
+    worker (`seats.seats_managed_by`, a manager's word, the same shape of enforced check
+    `charter.charter_for` runs for its own third-party act), or `ruling` must pass
+    `capture.verify_ruling` (the same ruling-citation check `charter_for` itself now
+    uses, adopted here rather than left as a second, weaker bespoke check): the citation
+    must resolve to a real Decision, that decision's own `kind` must read 'ruling' (an
+    ordinary decision is not standing authority), and its own summary or rationale text
+    must actually name "promote_visitor"; a ruling about something else cannot silently
+    authorize this write just because a caller cited it. `because` is always required
+    regardless, the same testimony discipline `charter_for`/`rename_seat` already run for
+    a third-party act. This is the whole act's one and only authorization gate,
+    deliberately not `charter_for` itself (see the note at its call site below: that
+    verb's own gate checks the target seat's manager, which cannot exist yet for a seat
+    this same call is about to mint).
 
-    REFUSES ON A TARGET THAT ISN'T A GENUINE, KNOWN VISITOR: an `objects` row of type
-    Agent already existing for `target` means this isn't a promotion — claim_name/
+    Refuses on a target that isn't a genuine, known visitor: an `objects` row of type
+    Agent already existing for `target` means this isn't a promotion; claim_name/
     establish_office/charter_for compose directly for an already-real identity, and
-    running this verb over one would silently redo work that already happened. A
-    `target` with NO `agent_mounts` row at all is not a visitor either, it is nothing —
-    this never mints a label invented on the spot; the anchor must be real.
+    running this verb over one would silently redo work that already happened. A `target`
+    with no `agent_mounts` row at all is not a visitor either, it is nothing; this never
+    mints a label invented on the spot, the anchor must be real.
 
-    ORDER MATTERS: claim_name mints the Agent object (and its seat); the charter write
-    runs BEFORE establish_office because `project_of`'s own resolution ladder (agents.py)
+    Order matters: claim_name mints the Agent object (and its seat); the charter write
+    runs before establish_office because `project_of`'s own resolution ladder (agents.py)
     reads a seat's declared charter as its second tier, and establish_office refuses
-    outright on an agent with "no durable project label" — reversing this order would
-    make a visitor's own genuine, repeated cwd unusable as the source of its office.
-    STOPS ON THE FIRST REFUSAL, same law `walk_in_named` already keeps: a later step's
-    own downstream refusal must never stand in as a misleading final error one step
-    removed from the real cause."""
+    outright on an agent with no durable project label; reversing this order would make a
+    visitor's own genuine, repeated cwd unusable as the source of its office. Stops on the
+    first refusal, the same rule `walk_in_named` already keeps: a later step's own
+    downstream refusal must never stand in as a misleading final error one step removed
+    from the real cause."""
     from src.orchestrator.agents import claim_name as _claim_name
     from src.orchestrator.capture import verify_ruling
     from src.orchestrator.charter import is_operator_actor
@@ -180,8 +174,8 @@ async def promote_visitor(
         if ruling_check["ok"]:
             ruling_id, authorized, auth_note = ruling_check["ruling_id"], True, "ruling"
     if not authorized:
-        if ruling_check is not None:  # a ruling was cited but verify_ruling refused it —
-            return {"error": ruling_check["error"]}  # its own reason, never re-derived
+        if ruling_check is not None:  # a ruling was cited but verify_ruling refused it,
+            return {"error": ruling_check["error"]}  # so return its own reason, never re-derived
         return {"error": f"{actor} is not authorized to promote {target!r} — this needs "
                          "the operator's word (an operator actor), a manager's word "
                          "(a seat that itself manages at least one worker), or a "
@@ -221,14 +215,14 @@ async def promote_visitor(
                          "mount record — promote_visitor never guesses a charter; pass "
                          "repos= explicitly",
                 "step": "charter_for", "steps_so_far": steps}
-    # `set_charter`, NOT `charter_for`, DELIBERATELY (caught live, this build): charter_for
-    # runs its OWN separate authorization gate (actor must be an operator OR the TARGET
-    # SEAT's own manager) — for a seat that was just minted this same call, nobody is its
-    # manager yet, so a caller authorized by promote_visitor's own broader gate (an
-    # operator, ANY manager, or a ruling citation) would be refused a second time by a
-    # narrower gate that can never pass here. promote_visitor's own gate above is the one
-    # and only authorization check this whole act runs; set_charter (the primitive
-    # charter_for itself wraps) carries none of its own, so it composes cleanly.
+    # `set_charter`, not `charter_for`, deliberately: charter_for runs its own separate
+    # authorization gate (actor must be an operator or the target seat's own manager).
+    # For a seat that was just minted this same call, nobody is its manager yet, so a
+    # caller authorized by promote_visitor's own broader gate (an operator, any manager,
+    # or a ruling citation) would be refused a second time by a narrower gate that can
+    # never pass here. promote_visitor's own gate above is the one and only
+    # authorization check this whole act runs; set_charter (the primitive charter_for
+    # itself wraps) carries none of its own, so it composes cleanly.
     chartered = await _set_charter(Actions(pool), seat_id, final_repos, actor=actor)
     if "error" in chartered:
         return {"error": chartered["error"], "step": "charter_for", "steps_so_far": steps}
