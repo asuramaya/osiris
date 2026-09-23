@@ -1,103 +1,104 @@
-"""PROVENANCE BACKFILL (thread e332177f, wave 24 dispatch — Thoth mail 10440,
-operator's word "dispatch everything to them", 2026-09-14): the three provenance legs
-(piece 1 possible_upstream-at-the-door, piece 2 session-miner tool_result scan, piece 3
-credence surfacing) are forward-only — a write made before each piece went live carries
-no possible_upstream edges at all, not because it had no reads behind it but because
-nothing was stamping them yet. This backfills HISTORICAL agent writes (Decision/Thread)
-exactly, never a text-similarity guess, by finding each write's own RECEIPT inside its
-writer's own transcript and re-running PIECE 2's own detector over what preceded it.
+"""Provenance backfill.
 
-ONE DETECTOR, NOT A SECOND REGEX PATH: `_upstream_targets`/`_tool_result_texts_before`
-(src/ingest/sessions.py) are imported and reused verbatim — this module only supplies
-the piece the miner's own live path never needed: locating WHERE in a given transcript a
-past write's receipt landed, and WHO gets named as the edge's source (the write's own
-recorded actor, never `session-miner`).
+The provenance pipeline (upstream detection at write time, a session-miner scan of
+tool_result text, and credence surfacing) is forward-only: a write made before each
+of those pieces went live carries no possible_upstream edges at all, not because it
+had no reads behind it but because nothing was stamping them yet. This backfills
+historical agent writes (Decision/Thread) exactly, never by a text-similarity guess,
+by finding each write's own result inside its writer's own transcript and re-running
+the live detector's own logic over what preceded it.
 
-FINDS EACH WRITE BY RECEIPT, structurally: a target Decision/Thread's own `canonical`
-string is exactly what record_decision/open_thread hand back in their tool_result — the
-SAME `"canonical": "<type>:<hex>"` shape `_TOOL_CANONICAL_RE` already parses on the
-READING side of piece 2. Scanning forward through the writer's own transcript for the
-first `user`-type line whose tool_result content contains that exact string locates the
-write's own receipt line; everything the SAME window before it produced is the candidate
-upstream set, identical in shape to the live path's own scan.
+One detector, not a second regex path: `_upstream_targets`/`_tool_result_texts_before`
+(src/ingest/sessions.py) are imported and reused verbatim. This module only supplies
+the piece the miner's own live path never needed: locating where in a given transcript
+a past write's result landed, and who gets named as the edge's source (the write's own
+recorded actor, never the session-miner).
 
-WHICH TRANSCRIPT: the writer's LINEAGE-wide `anchor_sid:*` ledger (current_assertions,
-base-prefix widened — CORRECTED from this module's own original "exact generation only"
-reasoning, thread e332177f, decision b677fd14: `record_session_anchor`'s own "first
-writer wins, forever" law means only the FIRST generation ever mounted under a shared
-`job_dir` ever gets the ledger entry, so an exact-generation-only lookup found nothing
-for most CURRENT writers, including this seat's own live session) resolved against the
-disk transcript index `orchestrator.mounts._transcript_index` already maintains (sid ->
-Path) rather than re-plumbing a soul-store reader — this backfill is a rare, deliberate,
-dry-run-gated act, not a hot liveness check the way that index's other caller is.
+Finds each write by its own result line, structurally: a target Decision/Thread's own
+`canonical` string is exactly what record_decision/open_thread hand back in their
+tool_result, the same `"canonical": "<type>:<hex>"` shape `_TOOL_CANONICAL_RE` already
+parses on the reading side of the live detector. Scanning forward through the writer's
+own transcript for the first `user`-type line whose tool_result content contains that
+exact string locates the write's own result line; everything the same window before it
+produced is the candidate upstream set, identical in shape to the live path's own scan.
 
-DOOR NAMING: the thread's own spec asks for `{door: 'backfill:<tool>', read_at}`.
-`<tool>` here names the DETECTION METHOD (message id / canonical / cite / url — the same
-four piece 2's `_upstream_targets` already distinguishes), prefixed `backfill:` so a
-credence read can tell a backfilled edge from a live-path one at a glance. Flagged as a
-judgment call, not a certainty: the alternative reading (`<tool>` naming the WRITING
-verb, e.g. `backfill:record_decision`) was equally plausible from the thread text alone;
-this module picks the reading that preserves piece 2's own finer-grained door taxonomy
-rather than collapsing it, and names the choice here for review.
+Which transcript: the writer's lineage-wide `anchor_sid:*` ledger (current_assertions,
+base-prefix widened, corrected from this module's own original "exact generation only"
+assumption: `record_session_anchor`'s own first-writer-wins behavior means only the
+first generation ever mounted under a shared `job_dir` ever gets the ledger entry, so
+an exact-generation-only lookup found nothing for most current writers, including this
+session's own live session) resolved against the disk transcript index
+`orchestrator.mounts._transcript_index` already maintains (sid -> Path) rather than
+re-plumbing a separate transcript-store reader. This backfill is a rare, deliberate,
+dry-run-gated act, not a liveness check the way that index's other caller is.
 
-DRY RUN IS THE DEFAULT (restore_attribution's own mould, thread 3f7969a3). `dry_run=False`
-refuses a blank `because` — mutating historical provenance is a deliberate act on the
-record, same law. Idempotent: an existing possible_upstream edge on a candidate is left
+Naming the detection path: the target object's own spec asks for
+`{door: 'backfill:<tool>', read_at}`. `<tool>` here names the detection method
+(message id / canonical / cite / url, the same four the live detector's
+`_upstream_targets` already distinguishes), prefixed `backfill:` so a credence read
+can tell a backfilled edge from a live-path one at a glance. This is a judgment call,
+not a certainty: an alternative reading (`<tool>` naming the write action, e.g.
+`backfill:record_decision`) was equally plausible from the source text alone; this
+module picks the reading that preserves the live detector's own finer-grained
+taxonomy rather than collapsing it, and names the choice here for review.
+
+Dry run is the default (matching restore_attribution's own convention). `dry_run=False`
+refuses a blank `because`; mutating historical provenance is a deliberate act on the
+record, same rule. Idempotent: an existing possible_upstream edge on a candidate is left
 alone, so a candidate is only ever examined until either it mints or every one of its
-writer's ledger sids has been tried with no receipt found — safe to re-run.
+writer's ledger sids has been tried with no result found. Safe to re-run.
 
-UNRECOVERABLE, NAMED NOT GUESSED (`skipped`): a writer with no anchor_sid ledger; every
-ledger sid resolving to a since-pruned or never-indexed file; a receipt line never found
-in any of them (mined by session-miner before a durable mount, or otherwise genuinely
-unrecoverable, per the thread's own "unrecoverable only where transcripts were pruned");
-or a transcript over `ingest.transcript_scan_max_bytes` (thread 0be2f790 below), never
-opened at all.
+Unrecoverable, named not guessed (`skipped`): a writer with no anchor_sid ledger; every
+ledger sid resolving to a since-pruned or never-indexed file; a result line never found
+in any of them (mined before a durable mount, or otherwise genuinely unrecoverable,
+consistent with the rule that recovery is only attempted where transcripts were pruned);
+or a transcript over `ingest.transcript_scan_max_bytes` (see below), never opened at all.
 
-THE STALL (thread 0be2f790, Thoth mail 10626, 2026-09-14 evening): once piece 1
-(OSIRIS_TRANSCRIPTS) made real files reachable, `path.read_text()` on a 469MB transcript
-ran on the MCP process's own event loop thread — pure Python, uninterruptible — and
-starved every other door on that shared, whole-fleet connection for 19 minutes before
-the operator had to restart osiris-mcp by hand. Real transcripts on this box run 200-
-470MB; nothing in this module's own tests or the first two live dry runs (both run
-before OSIRIS_TRANSCRIPTS was set, so every candidate short-circuited before ever
-opening a file) ever exercised a file that size. FOUR FIXES, ruled by Thoth, not
-optional:
+Background: once transcript access made real files reachable, `path.read_text()` on a
+469MB transcript ran on the MCP process's own event loop thread, pure Python,
+uninterruptible, and starved every other request on that shared, whole-fleet connection
+for 19 minutes before the process had to be restarted by hand. Real transcripts on this
+box run 200-470MB; nothing in this module's own tests or the first two live dry runs
+(both run before transcript access was configured, so every candidate short-circuited
+before ever opening a file) ever exercised a file that size. Four fixes followed, all
+required:
 
-(1) NEVER ON THE MCP LOOP THREAD: `mcp_server.backfill()` no longer runs this target
-inline — it enqueues an arq job on osiris-worker (its own process, its own event loop)
-and returns a job id; the receipt lands as a thread annotation when the worker
-finishes (`src.workers.arq_worker.provenance_backfill_job`). The CLI door
-(`cmd_backfill`) still calls this function in-process — it IS its own process, so the
-MCP door's own starvation risk does not apply there.
+(1) Never on the MCP loop thread: `mcp_server.backfill()` no longer runs this target
+inline. It enqueues a job on the worker (its own process, its own event loop) and
+returns a job id; the result lands as a thread annotation when the worker finishes
+(`src.workers.arq_worker.provenance_backfill_job`). The CLI entry point (`cmd_backfill`)
+still calls this function in-process; it IS its own process, so the MCP starvation
+risk does not apply there.
 
-(2) STREAMING, NEVER `read_text()`: `_load_or_build_index` iterates a file line by line
-(a real Python file object's own iterator, never `.read().splitlines()` materializing
-the whole file as one string first) and builds a `canonical -> line_idx` index in the
-SAME pass it collects the lines list — one pass per file, not a per-candidate rescan
-(the OLD `_find_receipt_line`, still kept for tests exercising it directly, was its own
-O(n) walk PER CANDIDATE, so a writer with 20 candidates re-read big files 20 times).
+(2) Streaming, never `read_text()`: `_load_or_build_index` iterates a file line by
+line (a real Python file object's own iterator, never `.read().splitlines()`
+materializing the whole file as one string first) and builds a `canonical -> line_idx`
+index in the same pass it collects the lines list, one pass per file, not a
+per-candidate rescan (the old `_find_receipt_line`, still kept for tests exercising it
+directly, was its own O(n) walk per candidate, so a writer with 20 candidates re-read
+big files 20 times).
 
-A SIDECAR CACHE (thread 0be2f790's own word) sits beside the transcript itself
-(`<transcript>.providx.json`) keyed on the transcript's own `(size, mtime)` — unchanged
-since the last visit, a re-run costs exactly one `stat()` plus one small JSON read,
-never a re-scan of the real file. The index inside is EVERY `"canonical": "<type>:
-<hex>"` string found in ANY tool_result-shaped line (the same structural signature piece
-2's own `_TOOL_CANONICAL_RE` already trusts, not a second pattern) — built once, reused
-by every future candidate that ever points at this same file, not just this call's own.
+A sidecar cache sits beside the transcript itself (`<transcript>.providx.json`), keyed
+on the transcript's own `(size, mtime)`. Unchanged since the last visit, a re-run costs
+exactly one `stat()` plus one small JSON read, never a re-scan of the real file. The
+index inside is every `"canonical": "<type>:<hex>"` string found in any
+tool_result-shaped line (the same structural signature the live detector's
+`_TOOL_CANONICAL_RE` already trusts, not a second pattern), built once, reused by every
+future candidate that ever points at this same file, not just this call's own.
 
-(3) A PER-FILE BYTE CAP, `ingest.transcript_scan_max_bytes` (settings_registry.py,
-default 64MB, `effect='next_tick'` — read via `current_stored_value`, never baked into
-a live env var the way a `restart:<unit>` knob is): a transcript over the cap is
-skipped on its OWN `stat()` alone, never opened, with an honest per-writer skip reason
-in the receipt — "unrecoverable, named not guessed," the same law the rest of this
-module's own `skipped` list already keeps, extended to a file too large to read safely
-rather than one merely missing.
+(3) A per-file byte cap, `ingest.transcript_scan_max_bytes` (settings_registry.py,
+default 64MB, `effect='next_tick'`, read via `current_stored_value`, never baked into a
+live env var the way a `restart:<unit>` knob is): a transcript over the cap is skipped
+on its own `stat()` alone, never opened, with an honest per-writer skip reason in the
+result, "unrecoverable, named not guessed," the same rule the rest of this module's own
+`skipped` list already keeps, extended to a file too large to read safely rather than
+one merely missing.
 
-(4) A WALL-CLOCK BUDGET, `budget_seconds` (default `_DEFAULT_BUDGET_SECONDS`): checked
+(4) A wall-clock budget, `budget_seconds` (default `_DEFAULT_BUDGET_SECONDS`): checked
 between candidates, never mid-file (a file already being read finishes; the check only
-ever refuses to START the next one). Exceeding it returns a PARTIAL receipt
-(`report["partial"] = True`) naming exactly how far it got, never a silent hang — the
-stall this whole thread exists to fix was precisely a caller with no way to know the
+ever refuses to start the next one). Exceeding it returns a partial result
+(`report["partial"] = True`) naming exactly how far it got, never a silent hang; the
+stall this module exists to prevent was precisely a caller with no way to know the
 call would never return.
 """
 from __future__ import annotations
@@ -120,24 +121,24 @@ _TARGET_TYPES = ("Decision", "Thread")
 _WINDOW = 6
 _DEFAULT_LIMIT = 200
 _MAX_SIDS_PER_WRITER = 25  # mirrors mounts.MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK's own cap
-_EC = EvidenceClass.DERIVED.value  # a transcript text scan is an inference, same as piece 2
+_EC = EvidenceClass.DERIVED.value  # a transcript text scan is an inference, like the live detector
 _CONF = confidence_for(EvidenceClass.DERIVED)
 _DEFAULT_MAX_SCAN_BYTES = 1024 * 1024 * 1024  # ingest.transcript_scan_max_bytes' own default
-_DEFAULT_BUDGET_SECONDS = 240.0  # thread 0be2f790: a partial receipt, never a silent hang
+_DEFAULT_BUDGET_SECONDS = 240.0  # a partial result, never a silent hang
 _RECEIPT_CANONICAL_RE_SRC = r'"canonical"\s*:\s*"([a-z_]+:[0-9a-f]{6,40})"'
 
 
 async def _candidates(
     pool: asyncpg.Pool, limit: int, *, newest_first: bool = False,
 ) -> list[asyncpg.Record]:
-    """Every Decision/Thread with an agent:-prefixed writer and NO possible_upstream
-    out-edge yet — the live-path gap this backfill exists to close. Oldest first by
-    default (the writes most likely to predate piece 1's own live wiring); `newest_first`
-    (thread e332177f, Thoth's own follow-on, msg 10525 — "the oldest-first default made
-    the sample blind: pre-ledger generations can never match") flips the order to sample
-    the writers MOST likely to carry a live anchor_sid ledger instead, since the ledger is
-    itself a recent mechanism — the two orders answer different questions and neither
-    subsumes the other over one bounded `limit`."""
+    """Every Decision/Thread with an agent:-prefixed writer and no possible_upstream
+    out-edge yet, the live-path gap this backfill exists to close. Oldest first by
+    default (the writes most likely to predate the live detector's own wiring);
+    `newest_first` (a follow-on request noting that the oldest-first default made the
+    sample blind, since pre-ledger generations can never match) flips the order to
+    sample the writers most likely to carry a live anchor_sid ledger instead, since the
+    ledger is itself a recent mechanism. The two orders answer different questions and
+    neither subsumes the other over one bounded `limit`."""
     order = "DESC" if newest_first else "ASC"
     return await pool.fetch(  # type: ignore[no-any-return]
         "SELECT o.id, o.canonical, o.type, a.source_id AS writer, o.created_at "
@@ -151,22 +152,22 @@ async def _candidates(
 
 
 async def _anchor_sids(pool: asyncpg.Pool, agent_id: str) -> list[str]:
-    """This writer's LINEAGE-wide session ids, freshest first (thread e332177f, Thoth
-    mail 10576, decision b677fd14 — CORRECTED from this function's own original "never
-    lineage-widened" reasoning). `record_session_anchor`'s own exists-check is scoped to
-    ANY active Agent, never a specific one, and `job_dir`/session id is durable across
-    `--resume`/compaction WITHIN one lineage — so only the FIRST generation ever mounted
-    under a given job_dir ever gets its own `anchor_sid` entry; every successor generation
-    is structurally excluded by design ("first writer wins, forever," mounts.py's own
-    law). Verified live: agent:seat-af50a33e-g49 (this session) carries ZERO anchor_sid
-    assertions of its own, while an ancestor generation of the SAME lineage already
-    claimed the job_dir's sid weeks earlier. The risk this function's own original
-    docstring worried about — "crediting a sibling generation's reads to this one" —
-    does not actually exist: a shared job_dir/anchor_sid IS the same underlying
-    transcript continuity, exactly the fact `mounts.agent_liveness`/
-    `_lineage_transcript_mtime` already lean on lineage-wide, never per-generation. Same
-    base-prefix widening those functions use (`_generation`'s own root, never a fresh
-    graph walk) — one precedent, not a second lineage-resolution mechanism."""
+    """This writer's lineage-wide session ids, freshest first (corrected from this
+    function's own original assumption that lineage should never be widened).
+    `record_session_anchor`'s own exists-check is scoped to any active Agent, never a
+    specific one, and `job_dir`/session id is durable across resume/compaction within
+    one lineage, so only the first generation ever mounted under a given job_dir ever
+    gets its own `anchor_sid` entry; every successor generation is structurally
+    excluded by design (first writer wins, forever, per mounts.py's own behavior).
+    Verified live: one live session carries zero anchor_sid assertions of its own,
+    while an ancestor generation of the same lineage already claimed the job_dir's sid
+    weeks earlier. The risk this function's own original docstring worried about,
+    crediting a sibling generation's reads to this one, does not actually exist: a
+    shared job_dir/anchor_sid IS the same underlying transcript continuity, exactly the
+    fact `mounts.agent_liveness`/`_lineage_transcript_mtime` already lean on
+    lineage-wide, never per-generation. Same base-prefix widening those functions use
+    (`_generation`'s own root, never a fresh graph walk): one precedent, not a second
+    lineage-resolution mechanism."""
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
@@ -181,13 +182,13 @@ async def _anchor_sids(pool: asyncpg.Pool, agent_id: str) -> list[str]:
 
 
 def _find_receipt_line(lines: list[str], canonical: str) -> int | None:
-    """The first `user`-type line (forward scan — a write's receipt is the earliest tool
+    """The first `user`-type line (forward scan, a write's result is the earliest tool
     result naming it in its own writer's transcript) whose tool_result content contains
     this object's own `canonical` string verbatim. Reuses `_tool_result_texts_before`
-    (piece 2's own block-extraction, `window=1` from the line right after `idx`) rather
-    than re-parsing tool_result content a second way — a raw-line substring check would
-    miss a match hiding behind the outer JSONL's own escaping of the inner tool_result
-    text. None when no line in `lines` does."""
+    (the live detector's own block-extraction, `window=1` from the line right after
+    `idx`) rather than re-parsing tool_result content a second way; a raw-line
+    substring check would miss a match hiding behind the outer JSONL's own escaping of
+    the inner tool_result text. None when no line in `lines` does."""
     from src.ingest.sessions import _tool_result_texts_before
 
     for idx in range(len(lines)):
@@ -202,13 +203,13 @@ def _sidecar_path(transcript: Path) -> Path:
 
 
 def _tool_result_content(raw_line: str) -> str | None:
-    """This ONE line's own tool_result content, flattened — or None when it isn't a
-    `type='user'` line carrying any tool_result block. A write's own receipt lands in
-    the outer JSONL as a `type='user'` line whose tool_result content STRING is itself
-    JSON-encoded, so its own `"canonical": "..."` text is escaped one level deep — a
-    plain regex against the raw outer line (unescaped) can never match it; this
-    extracts the same way `_tool_result_texts_before` (piece 2) already does before
-    regexing, one implementation, not a second."""
+    """This one line's own tool_result content, flattened, or None when it isn't a
+    `type='user'` line carrying any tool_result block. A write's own result lands in
+    the outer JSONL as a `type='user'` line whose tool_result content string is itself
+    JSON-encoded, so its own `"canonical": "..."` text is escaped one level deep; a
+    plain regex against the raw outer line (unescaped) can never match it. This
+    extracts the same way `_tool_result_texts_before` (the live detector) already does
+    before regexing: one implementation, not a second."""
     import json as _json
 
     try:
@@ -237,22 +238,22 @@ _SHORT_ID_RE = re.compile(r"^[0-9a-f]{6,40}$")
 
 
 def _settle_receipt_short_ids(text: str) -> list[str]:
-    """settle()'s OWN receipt shape (thread e332177f, Thoth mail 10791/10975,
-    specimen decision ab991412) — structurally different from record_decision's/
-    open_thread's own direct tool_result, which is what `_RECEIPT_CANONICAL_RE_SRC`
-    matches. A decision/thread minted via `settle(decisions=[...]/threads_open=[...]/
+    """The completeness-report result shape used when a decision/thread is minted via
+    a batch settle call, structurally different from record_decision's/open_thread's
+    own direct tool_result, which is what `_RECEIPT_CANONICAL_RE_SRC` matches. A
+    decision/thread minted via `settle(decisions=[...]/threads_open=[...]/
     threads_resolve=[...])` never echoes its own `"canonical"` key back to the
-    caller's transcript at all — only settle()'s own completeness report does,
+    caller's transcript at all; only that call's own completeness report does,
     `{"accepted": {"decisions": [{"id": "<short-id>"}], "threads_opened": [...],
-    "threads_resolved": [...]}}`, keyed by the object's SHORT id (the first 6-40 hex
-    chars of its canonical — the SAME short-id convention every osiris DM/thread
-    reference already uses), never the full `type:hex` canonical string.
+    "threads_resolved": [...]}}`, keyed by the object's short id (the first 6-40 hex
+    chars of its canonical, the same short-id convention other object references
+    already use), never the full `type:hex` canonical string.
 
-    A STRUCTURAL json.loads of the already-flattened tool_result content, not a
-    second regex layer — scoped to the `accepted` key specifically so a decision
-    merely CITED as `prior_art` elsewhere in the SAME tool_result (a sibling,
-    unrelated key on a record_decision response, e.g.) is never mistaken for its
-    own creation/resolution receipt."""
+    A structural json.loads of the already-flattened tool_result content, not a
+    second regex layer, scoped to the `accepted` key specifically so a decision
+    merely cited as `prior_art` elsewhere in the same tool_result (a sibling,
+    unrelated key on a record_decision result, e.g.) is never mistaken for its
+    own creation/resolution result."""
     try:
         parsed = json.loads(text)
     except (ValueError, TypeError):
@@ -275,15 +276,15 @@ def _settle_receipt_short_ids(text: str) -> list[str]:
 
 
 def _do_scan_lines(transcript: Path) -> tuple[list[str], dict[str, int]]:
-    """The actual blocking file walk, run only via `asyncio.to_thread` below — never
+    """The actual blocking file walk, run only via `asyncio.to_thread` below, never
     called directly, so this name itself never appears as a bare `.read`-family call
     the blocking-transcript-read guard (tests/test_blocking_transcript_reads.py) scans
-    for. ONE PASS, iterating the file object directly (never `f.read()`/`.splitlines()`
+    for. One pass, iterating the file object directly (never `f.read()`/`.splitlines()`
     materializing the whole file as a second, separate string first).
 
-    `index` carries BOTH keying shapes in the same dict — a full canonical string
-    (`"decision:<hex>"`) from a direct record_decision/open_thread receipt, or a bare
-    short id (`"<hex>"`, no type prefix) from a settle() receipt — since the two forms
+    `index` carries both keying shapes in the same dict: a full canonical string
+    (`"decision:<hex>"`) from a direct record_decision/open_thread result, or a bare
+    short id (`"<hex>"`, no type prefix) from a settle() result, since the two forms
     can never collide (a canonical always contains `:`, a short id never does). The
     lookup side (`backfill_possible_upstream`) tries the candidate's own full canonical
     first, then its short-id prefix as a fallback."""
@@ -307,25 +308,27 @@ def _do_scan_lines(transcript: Path) -> tuple[list[str], dict[str, int]]:
 async def _scan_transcript(
     transcript: Path, max_bytes: int,
 ) -> tuple[list[str], dict[str, int]] | None:
-    """Thread 0be2f790's own streaming fix. Returns `(lines, canonical_index)`, or None
-    when `transcript` exceeds `max_bytes` (checked by `stat()` alone, never opened) or
-    cannot be read at all. Every actual blocking file operation — the sidecar read, the
-    transcript walk, the sidecar write — runs through its own `asyncio.to_thread` call
-    (the blocking-transcript-read guard's own detection shape: a wrapped read is passed
-    as a bare, uncalled attribute, never an inline `.read_text()` call), so this
-    function stays async and never blocks whatever thread awaits it, MCP loop included.
+    """The streaming fix described in the module docstring. Returns `(lines,
+    canonical_index)`, or None when `transcript` exceeds `max_bytes` (checked by
+    `stat()` alone, never opened) or cannot be read at all. Every actual blocking file
+    operation (the sidecar read, the transcript walk, the sidecar write) runs through
+    its own `asyncio.to_thread` call (the blocking-transcript-read guard's own
+    detection shape: a wrapped read is passed as a bare, uncalled attribute, never an
+    inline `.read_text()` call), so this function stays async and never blocks
+    whatever thread awaits it, MCP loop included.
 
     `canonical_index` (every `"canonical": "<type>:<hex>"` string found, mapped to its
-    own line number — the SAME structural shape piece 2's `_TOOL_CANONICAL_RE` already
-    trusts, a plain substring/regex check, never a per-line JSON parse) is built in the
-    SAME pass as `lines`, so a huge file is walked exactly once regardless of how many
-    candidates this call, or a FUTURE call, ever ask about it.
+    own line number, the same structural shape the live detector's
+    `_TOOL_CANONICAL_RE` already trusts, a plain substring/regex check, never a
+    per-line JSON parse) is built in the same pass as `lines`, so a huge file is
+    walked exactly once regardless of how many candidates this call, or a future
+    call, ever ask about it.
 
-    THE SIDECAR (thread 0be2f790's own word): a small JSON file beside the transcript
-    (`_sidecar_path`) recording this exact scan keyed on `(size, mtime)` — an unchanged
-    transcript on the next visit costs one `stat()` plus one small JSON read, never a
-    re-scan. A stale or missing sidecar is silently rebuilt; a sidecar WRITE failure
-    (a read-only mount, a full disk) is swallowed — the cache is a bonus, never a
+    The sidecar cache: a small JSON file beside the transcript (`_sidecar_path`)
+    recording this exact scan keyed on `(size, mtime)`. An unchanged transcript on
+    the next visit costs one `stat()` plus one small JSON read, never a re-scan. A
+    stale or missing sidecar is silently rebuilt; a sidecar write failure (a
+    read-only mount, a full disk) is swallowed. The cache is a bonus, never a
     requirement for correctness."""
     try:
         st = await asyncio.to_thread(transcript.stat)
@@ -365,29 +368,29 @@ async def backfill_possible_upstream(
     transcript_root: Path | None = None, max_scan_bytes: int | None = None,
     budget_seconds: float = _DEFAULT_BUDGET_SECONDS,
 ) -> dict[str, Any]:
-    """`transcript_root` defaults to `get_settings().osiris_transcripts` — overridable so
-    a test (or an operator pointing at an archived tree) never depends on the live
+    """`transcript_root` defaults to `get_settings().osiris_transcripts`, overridable
+    so a test (or an operator pointing at an archived tree) never depends on the live
     fleet's own configured root. `max_scan_bytes` defaults to the registered
-    `ingest.transcript_scan_max_bytes` setting (`current_stored_value`, falling back to
-    `_DEFAULT_MAX_SCAN_BYTES` when unset) — a caller may still override it directly (a
-    test, or a deliberately widened one-off run).
+    `ingest.transcript_scan_max_bytes` setting (`current_stored_value`, falling back
+    to `_DEFAULT_MAX_SCAN_BYTES` when unset); a caller may still override it directly
+    (a test, or a deliberately widened one-off run).
 
-    THE RECEIPT'S OWN SUMMARY (thread e332177f, Thoth msg 10525): `summary.candidates`/
-    `summary.writers` classify every candidate/writer examined into exactly one of
-    `matched` (a receipt was found — this writer's transcript IS reachable, whether or
-    not that receipt's own preceding window produced any upstream targets),
-    `no_ledger` (the writer carries no `anchor_sid` assertion at all — never attempted a
-    transcript read), or `no_transcript` (a ledger exists but every sid in it either
-    resolved to no receipt for this write OR named a transcript over `max_scan_bytes`,
-    skipped unopened — thread 0be2f790's own fix). A writer with a ledger who matches on
-    ONE candidate and misses on another counts as `matched` at the writer level — the
-    ledger is proven reachable, so the miss is that specific write's own receipt, not
-    the writer's transcript access. `runtime_seconds` times the whole call, wall-clock.
+    The result's own summary: `summary.candidates`/`summary.writers` classify every
+    candidate/writer examined into exactly one of `matched` (a result was found, this
+    writer's transcript IS reachable, whether or not that result's own preceding
+    window produced any upstream targets), `no_ledger` (the writer carries no
+    `anchor_sid` assertion at all, never attempted a transcript read), or
+    `no_transcript` (a ledger exists but every sid in it either resolved to no result
+    for this write or named a transcript over `max_scan_bytes`, skipped unopened). A
+    writer with a ledger who matches on one candidate and misses on another counts as
+    `matched` at the writer level; the ledger is proven reachable, so the miss is that
+    specific write's own result, not the writer's transcript access. `runtime_seconds`
+    times the whole call, wall-clock.
 
-    `budget_seconds` (thread 0be2f790, the stall this whole module exists to prevent
-    from recurring): checked between candidates, never mid-file — exceeding it stops
-    early and returns `report["partial"] = True` naming exactly how far it got, rather
-    than the caller waiting on a call that silently never returns."""
+    `budget_seconds` (the safeguard against the stall this module exists to prevent):
+    checked between candidates, never mid-file; exceeding it stops early and returns
+    `report["partial"] = True` naming exactly how far it got, rather than the caller
+    waiting on a call that silently never returns."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling historical provenance without a because is an "
                          "un-audited graph write — cite the ruling/dispatch that "
@@ -441,12 +444,12 @@ async def backfill_possible_upstream(
     async def _writer_receipt_index(
         writer: str, sids: list[str],
     ) -> tuple[dict[str, Path], int, bool]:
-        """Built ONCE per writer (Thoth mail 10716: "looked up, not searched") — merges
-        every one of the writer's resolvable, in-cap transcripts into a single
-        canonical->path map, so each candidate after the first for this writer is a
-        dict lookup, never a re-walk of the writer's own sid list. `too_large_count`
-        counts sids whose file exceeds `max_scan_bytes`; `any_scanned` is True the
-        moment even one file was actually opened and indexed (never all skipped)."""
+        """Built once per writer (looked up, not searched): merges every one of the
+        writer's resolvable, in-cap transcripts into a single canonical->path map, so
+        each candidate after the first for this writer is a dict lookup, never a
+        re-walk of the writer's own sid list. `too_large_count` counts sids whose file
+        exceeds `max_scan_bytes`; `any_scanned` is True the moment even one file was
+        actually opened and indexed (never all skipped)."""
         cached = writer_receipt_index_cache.get(writer)
         if cached is not None:
             return cached

@@ -1,40 +1,39 @@
-"""OBLIGATION HYGIENE — the no-regrow rule (dispatch #204's own follow-on, decision
-a44ab697161a proposing N1=14/N2=14; OPERATOR RULED TIGHTER, 2026-09-05 ~04:40Z, relayed
-Thoth DM 7161): N1 = 7 idle days -> a DM nudge to the obligation's own owner. N2 = +7 more
-days of continued silence past that nudge -> a STALE-CANDIDATE marker plus a desk brief,
-surfaced for a human. NEVER AUTO-RESOLVED at either stage — this mechanism only nudges and
-surfaces, it never closes, reclassifies away from 'open', or judges a thread dead on its
-own authority.
+"""Obligation hygiene: a no-regrow policy for open obligation threads. N1 = 7 idle days,
+which triggers a DM nudge to the obligation's own owner. N2 = 7 more days of continued
+silence past that nudge, which triggers a stale-candidate marker plus a desk brief
+surfaced for a human. Nothing is ever auto-resolved at either stage: this mechanism only
+nudges and surfaces. It never closes a thread, reclassifies it away from 'open', or judges
+it dead on its own authority.
 
-THE SHAPE mirrors phantom_fold_reap.py's own two-phase discipline (a pure `_dry_run`
-report, then a separately-gated `_execute`) rather than reinventing it, and reuses
-open_thread_wall's own `last_touched`/`owner` reads (compositions.py) — the SAME
-authoritative clock (`assertions.evidence_class='self_declared'`, max `observed_at`) that
-already answers "has a MIND touched this" everywhere else in the fleet.
+The shape mirrors phantom_fold_reap.py's two-phase discipline (a pure `_dry_run` report,
+then a separately-gated `_execute`) rather than reinventing it, and reuses
+open_thread_wall's `last_touched`/`owner` reads (compositions.py): the same authoritative
+clock (`assertions.evidence_class='self_declared'`, max `observed_at`) that already
+answers "has an agent touched this" everywhere else in the system.
 
-IDLE, exactly as proposed and ruled on: a thread's own `last_touched` is at least N1 days
-old, AND the owner has made no self_declared graph write ANYWHERE in that window — an
-owner who is visibly alive and working the graph gets the benefit of the doubt even before
-they get to this particular thread. Both halves must hold; neither alone is idle.
+Idle is defined as: a thread's `last_touched` is at least N1 days old, and the owner has
+made no self_declared graph write anywhere in that window. An owner who is visibly alive
+and working the graph gets the benefit of the doubt even before they get to this
+particular thread. Both halves must hold; neither alone is idle.
 
-TWO DURABLE MARKERS, both assertions on the thread itself (name `hygiene_stage`, values
-'nudged' / 'stale_candidate'; `hygiene_nudged_at` records when N1 fired) — written at
-`EvidenceClass.DERIVED`, DELIBERATELY NOT 'self_declared', so this sweep's own writes can
-never count as the "touch" that resets a thread's own idle clock or fools
-open_thread_wall's untouched/echo split. A thread genuinely re-annotated by a mind after a
-nudge resets the clock and starts a fresh N1 window, exactly as if never nudged.
+Two durable markers, both assertions on the thread itself (name `hygiene_stage`, values
+'nudged' / 'stale_candidate'; `hygiene_nudged_at` records when N1 fired), are written at
+`EvidenceClass.DERIVED`, deliberately not 'self_declared', so this sweep's own writes can
+never count as the touch that resets a thread's idle clock or confuses open_thread_wall's
+untouched/echo split. A thread genuinely re-annotated by an agent after a nudge resets the
+clock and starts a fresh N1 window, exactly as if never nudged.
 
-THE OWNER-ADDRESS FALLBACK (owner='operator' when the owner is a project name or no live
-agent, exactly as ruled): the nudge always tries a DM to the declared owner first — a
-project-name owner, or one `send_message` cannot resolve to a live agent, routes to the
-operator's desk instead. `send_message`'s own ValueError on an unresolvable `to_agent` IS
-that "no live agent" signal; this module never re-derives seat liveness a second way.
+The owner-address fallback (owner='operator' when the owner is a project name or there is
+no live agent): the nudge always tries a DM to the declared owner first. A project-name
+owner, or one `send_message` cannot resolve to a live agent, routes to the operator's desk
+instead. `send_message`'s own ValueError on an unresolvable `to_agent` is that "no live
+agent" signal; this module never re-derives seat liveness a second way.
 
-SCHEDULED LEG stays a normal cron switch (`osiris_obligation_hygiene_enabled`) — but per
-the operator's own explicit instruction ("land it with the flag ON"), this ships TRUE by
-default rather than the dark-by-default convention every sibling scheduled writer in this
-house otherwise follows (fleet_reconcile, phantom_heal, phantom_fold_reap, landing_audit,
-tree_ingest_alarm) — a deliberate, named exception, not an oversight."""
+The scheduled leg is a normal cron switch (`osiris_obligation_hygiene_enabled`), but by
+explicit instruction it ships enabled by default rather than following the dark-by-default
+convention every sibling scheduled writer otherwise follows (fleet_reconcile, phantom_heal,
+phantom_fold_reap, landing_audit, tree_ingest_alarm). That is a deliberate, named
+exception, not an oversight."""
 from __future__ import annotations
 
 import uuid
@@ -50,23 +49,22 @@ from src.parsers.base import EvidenceClass
 N1_IDLE_DAYS = 7
 N2_SILENCE_DAYS = 7
 
-# ANSWERS EDGE MINTED BY REAL RESOLVE (thread 367cfafd, Imhotep's finding 18028547,
-# operator's word 2026-09-14) SUPERSEDES the sim-tiered wording this constant used to
-# gate (thread 3a9d9a5d89fa's own 0.30 threshold, measured 2026-09-14 against 1181 live
-# `answers` edges: 93% of ALL edges, true citations included, scored under 0.4 — not a
-# clean separator, so a text-similarity score was never an honest signal for whether an
-# edge counts as "answered", only for how confident the WORDING should sound about an
-# edge that already, structurally, exists). The fix removes the tier rather than tuning
-# it: `_quote_summary` below now reads the `answers` edge alone — present or absent,
-# never a text-scored maybe. `mint_bears_on`'s own edges stay exactly as sanctioned
-# (Thoth's receipt-honesty law 42176e16 — a deliberate, non-auto-closing citation, never
+# Whether an obligation counts as answered is decided by the presence of a real `answers`
+# edge, not by a text-similarity score. A prior version of this constant gated on a 0.30
+# similarity threshold, but measured against 1181 live `answers` edges, 93% of all edges,
+# true citations included, scored under 0.4: not a clean separator, so a text-similarity
+# score was never an honest signal for whether an edge counts as "answered", only for how
+# confident the wording should sound about an edge that already, structurally, exists.
+# The fix removes the tier rather than tuning it: `_quote_summary` below now reads the
+# `answers` edge alone, present or absent, never a text-scored maybe. `mint_bears_on`'s
+# own edges stay exactly as sanctioned (a deliberate, non-auto-closing citation, never
 # removed or downgraded); what changed is only that this nudge no longer tries to guess,
 # by text, how much to trust one.
 _HYGIENE_EC = EvidenceClass.DERIVED.value
 _SANCTIONED_HYGIENE_ACTOR = "cron:obligation_hygiene_heartbeat"
 
-# THE SAME summary-display COALESCE every wall/roadmap query uses (compositions.py's own
-# _SUMMARY_DISPLAY_SQL) — a corrected summary wins over the original by default.
+# The same summary-display COALESCE every wall/roadmap query uses (compositions.py's own
+# _SUMMARY_DISPLAY_SQL): a corrected summary wins over the original by default.
 _SUMMARY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -86,26 +84,25 @@ _STATUS_SQL = (
 
 
 async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
-    """Every OPEN kind='obligation' Thread fleet-wide, with `owner`, `last_touched` (the
-    freshest self_declared assertion's observed_at — open_thread_wall's own clock), and
+    """Every open kind='obligation' Thread system-wide, with `owner`, `last_touched` (the
+    freshest self_declared assertion's observed_at, open_thread_wall's own clock), and
     this sweep's own prior markers read back (`hygiene_stage`/`hygiene_nudged_at`) so a
     tick is idempotent against its own last tick.
 
-    `contested`/`summary_age_days` (fix (c), Metron's mechanism report, mail 8890/8921/
-    8922): the nudge that quotes `summary` back at the owner must never present a
-    disputed headline as settled fact — `contested` names the dispute, `summary_age_days`
-    (how long the CURRENT summary text has stood, from its own last touch to now) lets
-    the nudge say "unchanged for N days" instead of implying it was just observed.
+    `contested`/`summary_age_days`: the nudge that quotes `summary` back at the owner
+    must never present a disputed headline as settled fact. `contested` names the
+    dispute, and `summary_age_days` (how long the current summary text has stood, from
+    its own last touch to now) lets the nudge say "unchanged for N days" instead of
+    implying it was just observed.
 
-    `answered_by` (wave 18 item 1, thread 898840dc, "the stale nudge quotes it"): every
-    live `answers` edge already landed on this row (`capture.thread_answering_decisions`,
-    the SAME batched read `recall()` uses for its own `bears_on_from`) — a row Seshat's
-    own sweep found FOUR of six stale board rows already carried, unrouted, before
-    mint_bears_on existed at all. Never suppresses or reclassifies the nudge; only lets
-    it say "already answered by decision X" instead of blindly asking the owner to
-    re-measure something someone already did. READ AS-IS, NEVER TEXT-SCORED (thread
-    367cfafd, superseding the sim-tiered read this docstring used to describe): the edge
-    alone decides the wording now — see `_quote_summary`."""
+    `answered_by`: every live `answers` edge already landed on this row
+    (`capture.thread_answering_decisions`, the same batched read `recall()` uses for its
+    own `bears_on_from`); a prior sweep found several stale board rows already carrying
+    one, unrouted, before mint_bears_on existed at all. This never suppresses or
+    reclassifies the nudge; it only lets the nudge say "already answered by decision X"
+    instead of blindly asking the owner to re-measure something someone already did. The
+    edge is read as-is, never text-scored: presence or absence alone decides the wording,
+    see `_quote_summary`."""
     from src.orchestrator.capture import (
         CONTESTED_SQL,
         LAST_SUMMARY_TOUCH_SQL,
@@ -136,9 +133,9 @@ async def _open_obligation_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 
 async def _owner_active_since(pool: asyncpg.Pool, owner: str, since: datetime) -> bool:
-    """Has this owner made ANY self_declared graph write, anywhere, since `since`? — the
-    idle definition's own "no graph write by its owner in the window" half, deliberately
-    fleet-wide rather than scoped to one thread. Case-insensitive exact match on
+    """Has this owner made any self_declared graph write, anywhere, since `since`? This is
+    the idle definition's "no graph write by its owner in the window" half, deliberately
+    checked system-wide rather than scoped to one thread. Case-insensitive exact match on
     `assertions.source_id`, the same forgiving match rank_open_threads already applies to
     a bare seat handle."""
     return bool(await pool.fetchval(
@@ -154,27 +151,23 @@ def _parse_dt(value: Any) -> datetime | None:
 
 
 def _quote_summary(item: dict[str, Any]) -> str:
-    """Fix (c), Metron's mechanism report (mail 8890/8921/8922): the nudge quotes a
-    summary WITH its age and, when disputed, says so — never as though it were current,
-    unverified fact. `summary_age_days` is None only when the thread's own created_at
-    (this function's last-resort clock) is somehow absent; the quote degrades gracefully
-    rather than raising.
+    """The nudge quotes a summary with its age and, when disputed, says so, never as
+    though it were current, unverified fact. `summary_age_days` is None only when the
+    thread's own created_at (this function's last-resort clock) is somehow absent; the
+    quote degrades gracefully rather than raising.
 
-    ANSWERED-BY, APPENDED (wave 18 item 1, thread 898840dc, "the stale nudge quotes it"):
-    when `mint_bears_on` has already routed a fresh Decision onto this exact row, the
-    nudge says so and quotes it — never suppressing or softening the nudge itself (the
-    row is still open and still needs a human act), only sparing the owner a redundant
-    re-measurement of something someone already found.
+    Answered-by is appended when `mint_bears_on` has already routed a fresh Decision onto
+    this exact row: the nudge says so and quotes it. This never suppresses or softens the
+    nudge itself (the row is still open and still needs a human act), it only spares the
+    owner a redundant re-measurement of something someone already found.
 
-    NO TIER, NO TEXT SCORE (thread 367cfafd, Imhotep's finding 18028547, operator's word
-    2026-09-14 — supersedes the sim-tiered "possibly answered" wording this docstring
-    used to describe, thread 3a9d9a5d89fa): the `answers` edge is read ALONE, never
-    weighted by how similar its citing decision's own words happen to be — the edge
+    There is no similarity tier or text score here: the `answers` edge is read alone,
+    never weighted by how similar its citing decision's own words happen to be. The edge
     itself is already the deliberate act (`mint_bears_on`/`record_decision(resolves=)`/
     `resolve_thread(artifact=<decision>)`), never a text guess, so a caller confident
-    enough to mint it earns the plain "ALREADY ANSWERED" wording. Present -> named
-    plainly; absent -> says so plainly ("no recorded answer") rather than silently
-    omitting the clause — a reader should never have to infer which case they're in."""
+    enough to mint it earns the plain "ALREADY ANSWERED" wording. Present means named
+    plainly; absent means it says so plainly ("no recorded answer") rather than silently
+    omitting the clause, so a reader never has to infer which case they're in."""
     age = item.get("summary_age_days")
     aged = f"{item['summary']!r}, unchanged for {age} day(s)" if age is not None \
         else f"{item['summary']!r}"
@@ -190,8 +183,8 @@ def _quote_summary(item: dict[str, Any]) -> str:
 
 
 async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) -> dict[str, Any]:
-    """THE REPORT — every open obligation Thread, bucketed into would_nudge /
-    would_stale_candidate / no_action with the reason named. Writes NOTHING."""
+    """The report: every open obligation Thread, bucketed into would_nudge /
+    would_stale_candidate / no_action with the reason named. Writes nothing."""
     now = now or datetime.now(UTC)
     n1_cutoff = now - timedelta(days=N1_IDLE_DAYS)
     rows = await _open_obligation_rows(pool)
@@ -204,11 +197,11 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
         stage = r["hygiene_stage"]
         nudged_at = _parse_dt(r["hygiene_nudged_at"])
         summary_touch = r["last_summary_touch"] or r["created_at"]
-        # THE THIRD OWNER CATEGORY (thread 3a9d9a5d89fa, Ra XL's measured report):
-        # `owner` naming a bare PROJECT (not a seat/agent) is exactly the population
-        # `threads()`'s own individual-spelling match can never show its holder — the
-        # nudge body says so explicitly (`_nudge_owner` already routes it correctly
-        # via `resolve_owner_target`; this only fixes what the TEXT tells the reader).
+        # A third owner category: `owner` naming a bare project (not a seat/agent) is
+        # exactly the population `threads()`'s own individual-spelling match can never
+        # show its holder. The nudge body says so explicitly (`_nudge_owner` already
+        # routes it correctly via `resolve_owner_target`; this only fixes what the text
+        # tells the reader).
         project_owned = owner is not None and bool(await _project_name_for(pool, owner))
         item: dict[str, Any] = {
             "thread_id": str(r["id"]), "owner": owner, "summary": r["summary"],
@@ -226,7 +219,7 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
             continue
 
         if stage == "nudged" and nudged_at is not None and last_touched <= nudged_at:
-            # No touch on the thread since its own nudge — check the N2 silence window.
+            # No touch on the thread since its own nudge: check the N2 silence window.
             if now - nudged_at >= timedelta(days=N2_SILENCE_DAYS):
                 owner_silent = True
                 if owner:
@@ -239,8 +232,8 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
                                    "activity"})
             continue
 
-        # stage is None, OR 'nudged' but genuinely touched since (last_touched > nudged_at)
-        # — a real touch resets the clock exactly as if never nudged.
+        # stage is None, OR 'nudged' but genuinely touched since (last_touched > nudged_at).
+        # A real touch resets the clock exactly as if never nudged.
         if now - last_touched >= timedelta(days=N1_IDLE_DAYS):
             owner_silent = True
             if owner:
@@ -257,7 +250,7 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
 
 
 async def _project_name_for(pool: asyncpg.Pool, owner: str) -> str | None:
-    """The bare project name `owner` names, or None when it isn't one — a SoftwareProject
+    """The bare project name `owner` names, or None when it isn't one. A SoftwareProject
     lookup, case-insensitive, with or without the `repo:` canonical prefix."""
     if owner.lower() == "operator":
         return None
@@ -268,69 +261,68 @@ async def _project_name_for(pool: asyncpg.Pool, owner: str) -> str | None:
 
 
 async def _is_exactly_live(pool: asyncpg.Pool, agent_id: str) -> bool:
-    """`mounts.agent_liveness_exact`'s own bool shape — no lineage-wide LIKE broadening
-    across a base id's generations. A DM to a specific `agent:<id>` addresses THAT
-    generation's own mailbox literally (send_message's own grave rule: an explicit id is
-    an act of intent, never silently redirected) — a live SUCCESSOR does not make an
-    ANCESTOR's own address live, only lineage_head's forward walk finds the successor
-    worth redirecting to. Delegates outright (thread 7dd09031) rather than re-deriving
-    the same query a second time — this WAS a hand-rolled duplicate of
-    `agent_liveness_exact`, carrying the same stale `current_assertions.last_active`
-    defect that function has since dropped; calling it directly means this can never
-    drift from that fix again."""
+    """`mounts.agent_liveness_exact`'s own bool shape: no lineage-wide LIKE broadening
+    across a base id's generations. A DM to a specific `agent:<id>` addresses that
+    generation's own mailbox literally (send_message's own rule that an explicit id is an
+    act of intent, never silently redirected); a live successor does not make an
+    ancestor's own address live, only lineage_head's forward walk finds the successor
+    worth redirecting to. This delegates outright rather than re-deriving the same query a
+    second time: this function used to be a hand-rolled duplicate of `agent_liveness_exact`,
+    carrying the same stale `current_assertions.last_active` defect that function has since
+    dropped. Calling it directly means this can never drift from that fix again."""
     from src.orchestrator.mounts import agent_liveness_exact
 
     return bool((await agent_liveness_exact(pool, agent_id))["live"])
 
 
 async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[str, Any]:
-    """THE OWNER-RESOLUTION LADDER (operator "one more round" 2026-09-05, relayed Thoth DM
-    7391 — the first firing's own live proof found 128 of 151 nudges landing on the
-    operator's desk because owners are project names or dead agents, "that makes the desk
-    the pile"): a rung is tried before falling to the desk, never instead of trying at all.
+    """The owner-resolution ladder. An earlier measurement found the majority of nudges
+    landing on the operator's desk because owners were project names or dead agents rather
+    than resolvable live agents, which defeated the point of a desk fallback. Each rung
+    below is tried in order before falling through to the desk; a rung is tried before
+    falling to the desk, never instead of trying at all.
 
-    Rung 0 — AN OWNER STRING IS A SEAT BEFORE IT IS A REPO (Thoth ruling, msg 7425,
-    correcting decision 1014b74804da's "44 no-match = charter gap": 42 of those 44 turned
-    out to be bare seat handles — 'Thoth', 'seshat', 'imhotep' — not project names at all;
-    a sample thread owned by 'Thoth' was a literal duty for whoever holds that seat, not a
-    project awaiting a claimant). Checked FIRST, before the project-name rung, because a
-    seat's own bare handle and a project's bare name are indistinguishable strings — a
-    project-name lookup that happens to hit a stale/retired SoftwareProject sharing the
-    same spelling would otherwise pre-empt this every time. Case-insensitive match against
-    a live Seat's `handle`; the seat's own current holder, gated by the SAME exact-liveness
-    test rung 2 uses (`_is_exactly_live`, not `seat_occupancy`'s lineage-broadened
-    `agent_liveness`) — a DM addresses a literal agent id, so what matters is whether that
-    exact holder is live right now, not whether the seat's lineage survives under some
-    other generation.
+    Rung 0: an owner string is checked as a seat handle before it is checked as a repo
+    name. An earlier "N no-match = charter gap" measurement turned out to be mostly bare
+    seat handles, not project names at all; a thread owned by a seat handle is a literal
+    duty for whoever holds that seat, not a project awaiting a claimant. This is checked
+    first, before the project-name rung, because a seat's bare handle and a project's bare
+    name are indistinguishable strings; a project-name lookup that happens to hit a
+    stale/retired SoftwareProject sharing the same spelling would otherwise pre-empt this
+    every time. It is a case-insensitive match against a live Seat's `handle`, resolved to
+    the seat's current holder, gated by the same exact-liveness test rung 2 uses
+    (`_is_exactly_live`, not `seat_occupancy`'s lineage-broadened `agent_liveness`): a DM
+    addresses a literal agent id, so what matters is whether that exact holder is live
+    right now, not whether the seat's lineage survives under some other generation.
 
-    Rung 1 — owner is a PROJECT NAME: that project's live seat head — `roster(repo=...)`'s
-    own single unambiguous match, occupied right now; when charter and pin disagree but one
-    seat manages the other (`agreement='governed'`), the MANAGING seat, never the managed
-    one; when N>2 seats all match and it's their own HOUSE's home repo
-    (`agreement='shared-house'`, roster's own third case, Thoth ruling msg 7425 — every
-    worker legitimately charters/pins the house's own repo, that's the normal shape, not a
-    conflict), the house's manager seat. A genuine 2-seat `conflict` gets one more look,
-    narrowly (operator ruling, decision 2ee59140, msg 7428) — NEVER folded into roster's
-    own `governed` split, which stays charter-manages-pin-specific and tested against the
-    reverse direction: if one matched seat MANAGES the other regardless of which via-signal
-    each carries, the manager, same role as `governed`; if the two are an active `peer_of`
-    pair, whichever peer is live, BOTH when both are (a peer pair is shared ownership, never
-    a coin flip — `target` is then a list, and `_nudge_owner` sends the same nudge to each).
-    Anything else stays a genuine `conflict`, falls through, never guessed at.
+    Rung 1: owner is a project name. Resolves to that project's live seat: `roster(repo=
+    ...)`'s own single unambiguous match, occupied right now; when charter and pin
+    disagree but one seat manages the other (`agreement='governed'`), the managing seat,
+    never the managed one; when more than two seats all match and it's their own house's
+    home repo (`agreement='shared-house'`, roster's own third case: every worker
+    legitimately charters/pins the house's own repo, that's the normal shape, not a
+    conflict), the house's manager seat. A genuine two-seat `conflict` gets one more look,
+    narrowly, never folded into roster's own `governed` split, which stays
+    charter-manages-pin-specific and tested against the reverse direction: if one matched
+    seat manages the other regardless of which via-signal each carries, the manager, same
+    role as `governed`; if the two are an active `peer_of` pair, whichever peer is live,
+    both when both are (a peer pair is shared ownership, never a coin flip; `target` is
+    then a list, and `_nudge_owner` sends the same nudge to each). Anything else stays a
+    genuine `conflict`, falls through, never guessed at.
 
-    Rung 2 — owner is a DEAD/RETIRED AGENT id: its own lineage head (`lineage_head`'s
-    forward `succeeded_by` walk — the SAME authority `send_message`'s reply-routing already
-    trusts for "where does this soul live now"), but ONLY if that HEAD's own exact address
-    is currently live — deliberately NOT `agent_liveness` (its own lineage-wide LIKE
-    broadening treats a live successor as proof the ANCESTOR's own literal mailbox is
-    "live" too, which is backwards for a DM: `send_message` addresses an `agent:<id>`
-    literally, the grave rule, so what matters is whether HEAD's own exact address has a
-    body reading it, not whether the soul survives under some other numeral). A lineage
-    that ends in another corpse is not a rung, it's the same fall-through.
+    Rung 2: owner is a dead/retired agent id. Resolves to its own lineage head
+    (`lineage_head`'s forward `succeeded_by` walk, the same authority `send_message`'s
+    reply-routing already trusts for finding where an agent's identity now lives), but
+    only if that head's own exact address is currently live. This deliberately does not
+    use `agent_liveness`, whose lineage-wide LIKE broadening treats a live successor as
+    proof the ancestor's own literal mailbox is "live" too, which is backwards for a DM:
+    `send_message` addresses an `agent:<id>` literally, so what matters is whether the
+    head's own exact address has a live session reading it, not whether the identity
+    survives under some other generation. A lineage that ends in another dead agent is not
+    a rung, it's the same fall-through.
 
-    Every fall-through carries a `reason` naming exactly which rung failed and why — the
-    desk brief for a fallback quotes it verbatim, per the dispatch's own instruction ("the
-    desk brief for those carries the reason"). Pure and read-only: sends nothing, so a
+    Every fall-through carries a `reason` naming exactly which rung failed and why; the
+    desk brief for a fallback quotes it verbatim. Pure and read-only: sends nothing, so a
     caller (real send, or a dry-run report) can call this as many times as it likes without
     ever double-nudging a real owner."""
     from src.orchestrator.agents import lineage_head, resolve_seat
@@ -369,31 +361,31 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
         agreement, matches = out.get("agreement"), out.get("matches") or []
 
         if agreement == "conflict" and len(matches) == 2:
-            # TWO RESOLUTIONS ROSTER ITSELF NEVER CLASSIFIES (operator ruling, decision
-            # 2ee59140, relayed Thoth msg 7428) — narrowly scoped to THIS ladder, never
-            # folded into roster's own `governed`/`conflict` split (that split is
-            # deliberately charter-manages-pin-specific, tested against the reverse
-            # direction — see test_roster_repo_lookup_stays_conflict_when_the_manager_edge_
+            # Two resolutions roster itself never classifies, narrowly scoped to this
+            # ladder, never folded into roster's own `governed`/`conflict` split (that
+            # split is deliberately charter-manages-pin-specific, tested against the
+            # reverse direction, see
+            # test_roster_repo_lookup_stays_conflict_when_the_manager_edge_
             # points_the_other_way; widening it there would silently flip that boundary):
             #
-            # PEER CHECKED FIRST (Ptah/Ra's own live shape caught this): a peer_of bond is
-            # the FRESH, deliberate signal this exact ruling minted for this exact pair; an
-            # older, unrelated managed_by edge between the same two seats (an ordinary org
-            # fact, not a statement about who owns THIS repo) must never silently outrank
-            # it — checking manager first found Ptah already managed_by Ra from some
-            # earlier, unrelated org fact and would have nudged neither seat as a "cold
-            # manager" even though the operator explicitly ruled this pair PEERS, not
-            # manager/managed, for rotten-apple specifically.
+            # Peer is checked first: a peer_of bond is the fresh, deliberate signal minted
+            # for a specific pair; an older, unrelated managed_by edge between the same
+            # two seats (an ordinary org fact, not a statement about who owns this repo)
+            # must never silently outrank it. Checking manager first, in one observed
+            # case, found one seat already managed_by the other from some earlier,
+            # unrelated org fact, and would have nudged neither seat as a "cold manager"
+            # even though the two seats had been explicitly declared peers, not
+            # manager/managed, for that project specifically.
             #
-            # (a) the two matched seats are an active peer_of pair (rotten-apple: Ptah/Ra;
-            # xxit: deckard/metron) — never a conflict once peered: whichever peer is live,
-            # BOTH when both are (a peer pair is recognized as shared ownership, not two
-            # rivals — silently picking one over the other would be exactly the guess this
-            # ladder refuses to make everywhere else).
+            # (a) the two matched seats are an active peer_of pair: never a conflict once
+            # peered, whichever peer is live, both when both are (a peer pair is
+            # recognized as shared ownership, not two rivals; silently picking one over
+            # the other would be exactly the guess this ladder refuses to make
+            # everywhere else).
             #
-            # (b) one matched seat MANAGES the other, regardless of which via-signal each
-            # carries (mudra's own shape: vajra matches via both charter+pin, alfred via
-            # charter only, but alfred already manages vajra) — prefer the manager, same
+            # (b) one matched seat manages the other, regardless of which via-signal each
+            # carries (one seat may match via both charter and pin while another matches
+            # via charter only, but already manages the first): prefer the manager, same
             # role `governed` gives the charter-seat.
             seat_a, seat_b = matches[0]["seat"], matches[1]["seat"]
             if await peer_of_seat(pool, seat_a) == seat_b:
@@ -462,7 +454,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
         return {"channel": "desk", "target": None,
                 "reason": f"seat {target!r} is {occ['state']}"}
 
-    # a bare handle/name — resolve_seat's own territory, the SAME live-holder-at-read-time
+    # a bare handle/name: resolve_seat's own territory, the same live-holder-at-read-time
     # resolution send_message itself uses for a plain to_agent= name.
     ineligible = await seat_holder_ineligible(pool, target)
     if ineligible is not None:
@@ -478,12 +470,12 @@ async def _nudge_owner(
     pool: asyncpg.Pool, owner: str | None, *, actor: str, body: str,
 ) -> dict[str, Any]:
     """Resolves via the owner-resolution ladder (`resolve_owner_target`), then sends
-    against that verdict — a DM when a rung resolved (ONE send, except a live peer_of pair
-    where BOTH peers are live: `target` is then a list and each gets the SAME nudge, per
-    the operator's own ruling that a peer pair is shared ownership, never a coin flip), the
-    operator's desk (with the failing rung's own reason appended) otherwise. A race between
-    resolution and send (the target goes cold in between) still falls back to the desk
-    rather than losing the nudge outright."""
+    against that verdict: a DM when a rung resolved (one send, except a live peer_of pair
+    where both peers are live, in which case `target` is a list and each gets the same
+    nudge, since a peer pair is shared ownership, never a coin flip), the operator's desk
+    (with the failing rung's own reason appended) otherwise. A race between resolution and
+    send (the target goes cold in between) still falls back to the desk rather than losing
+    the nudge outright."""
     from src.orchestrator.mailbox import send_message
 
     verdict = await resolve_owner_target(pool, owner)
@@ -505,19 +497,19 @@ async def hygiene_execute(
     actions: Actions, *, actor: str = _SANCTIONED_HYGIENE_ACTOR, execute: bool = False,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """THE ACTING HALF. DRY RUN IS THE DEFAULT (`execute=False`) — re-reads the tray itself
-    via `hygiene_dry_run` (never trusts a caller-supplied stale report), returning the exact
-    plan without writing anything.
+    """The acting half. Dry run is the default (`execute=False`): re-reads the current
+    state via `hygiene_dry_run` (never trusts a caller-supplied stale report), returning
+    the exact plan without writing anything.
 
     would_nudge: a DM (or desk brief, per the owner-address fallback) plus the two durable
-    markers (`hygiene_nudged_at`, `hygiene_stage='nudged'`) — written even if the mail send
+    markers (`hygiene_nudged_at`, `hygiene_stage='nudged'`), written even if the mail send
     itself fails, so a mail hiccup never masks the tick's own idle finding; the failed send
     is reported inline on the row instead.
 
     would_stale_candidate: `hygiene_stage='stale_candidate'` plus one desk `fyi` brief.
-    NEVER a status change on the thread, never a resolve — the record's own law here is
-    identical to phantom_fold_reap's: a single row's mail hiccup is caught and reported
-    inline rather than aborting the batch."""
+    Never a status change on the thread, never a resolve. This follows the same rule as
+    phantom_fold_reap's: a single row's mail hiccup is caught and reported inline rather
+    than aborting the batch."""
     now = now or datetime.now(UTC)
     report = await hygiene_dry_run(actions.pool, now=now)
     plan: dict[str, Any] = {
@@ -544,7 +536,7 @@ async def hygiene_execute(
             f"auto-resolved.")
         try:
             sent = await _nudge_owner(actions.pool, item["owner"], actor=actor, body=body)
-        except Exception as exc:  # noqa: BLE001 — a mail hiccup must not skip the marker
+        except Exception as exc:  # noqa: BLE001, a mail hiccup must not skip the marker
             sent = {"error": f"{type(exc).__name__}: {exc}"}
         await actions.assert_property(
             tid, "hygiene_nudged_at", now.isoformat(), actor, now, 0.9,
@@ -569,7 +561,7 @@ async def hygiene_execute(
             sent = await send_message(
                 actions.pool, from_agent=actor, from_project="osiris",
                 to_project="operator", body=body, desk_kind="fyi")
-        except Exception as exc:  # noqa: BLE001 — the marker must land even if mail fails
+        except Exception as exc:  # noqa: BLE001, the marker must land even if mail fails
             sent = {"error": f"{type(exc).__name__}: {exc}"}
         staled.append({**item, "desk_brief": sent})
 
@@ -581,8 +573,8 @@ async def hygiene_execute(
 
 
 async def hygiene_status(pool: asyncpg.Pool) -> dict[str, Any]:
-    """counts per stage per project — 'none' (never nudged), 'nudged', 'stale_candidate' —
-    across every open kind='obligation' Thread fleet-wide. An unfiled obligation (no
+    """Counts per stage per project: 'none' (never nudged), 'nudged', 'stale_candidate',
+    across every open kind='obligation' Thread system-wide. An unfiled obligation (no
     in_repo link) counts under '(unfiled)'. Read-only, no scheduling side effect."""
     rows = await pool.fetch(
         "SELECT COALESCE(p.canonical, '(unfiled)') AS project, "
@@ -606,11 +598,11 @@ async def hygiene_status(pool: asyncpg.Pool) -> dict[str, Any]:
 async def obligation_hygiene_scheduled_tick(
     actions: Actions, *, settings: Settings | None = None, now: datetime | None = None,
 ) -> dict[str, Any]:
-    """THE SCHEDULED LEG's own tick — `arq_worker.obligation_hygiene_heartbeat` calls this
-    unconditionally, the same thin-shim shape every other scheduled writer in this house
-    uses. OFF unless `osiris_obligation_hygiene_enabled` — but per the operator's own
-    explicit instruction this ships TRUE by default, a named exception to every sibling
-    switch's dark-by-default convention."""
+    """The scheduled leg's own tick. `arq_worker.obligation_hygiene_heartbeat` calls this
+    unconditionally, the same thin-shim shape every other scheduled writer here uses. Off
+    unless `osiris_obligation_hygiene_enabled`, but by explicit instruction this ships
+    enabled by default, a named exception to every sibling switch's dark-by-default
+    convention."""
     st = settings or get_settings()
     if not st.osiris_obligation_hygiene_enabled:
         return {"enabled": False, "nudged": [], "staled": [],
