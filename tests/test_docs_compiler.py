@@ -38,7 +38,7 @@ def test_compile_markdown_section_is_idempotent(tmp_path: Path) -> None:
     assert first["changed"] is True
     second = compile_markdown_section(p, "same content", version="v1", because="test")
     assert second == {"path": str(p), "version": "v1", "because": "test", "changed": False,
-                      "note": "no change — the compiled section already matches"}
+                      "note": "no change, the compiled section already matches"}
 
 
 def test_compile_markdown_section_refuses_on_mangled_marker_and_touches_nothing(

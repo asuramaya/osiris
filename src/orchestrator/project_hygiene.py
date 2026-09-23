@@ -1,27 +1,27 @@
-"""PROJECT HYGIENE SWEEP (thread 14fae7d3, wave 6 dispatch msg 8063): classification_laws_
-heartbeat's own sibling rule, SoftwareProject junk instead of Thread classification -- a
+"""PROJECT HYGIENE SWEEP: classification_laws_
+heartbeat's own sibling rule, SoftwareProject junk instead of Thread classification. a
 stub minted by a test run or a stale disk census, claimed by no commit, no open Thread, no
 Decision, and no governing Seat, is dead weight for the exact reason an unclaimed derived
 Thread is (migration_0060.py's own EXPIRY law). Two routes feed one shared guard:
 
   (1) THE ONGOING MECHANICAL RULE, forever: an active SoftwareProject minted (the earliest
       object_events row, event_type='create', its own `actor` column) under the literal
-      actor 'test' -- the convention test fixtures should use per this thread's own mandate
-      -- OR minted by 'disk-census' whose own `on_disk_path` property no longer exists on
-      THIS host's filesystem RIGHT NOW (Path.exists(), checked live -- never trusted from a
+      actor 'test' (the convention test fixtures should use per this sweep's own mandate)
+      OR minted by 'disk-census' whose own `on_disk_path` property no longer exists on
+      THIS host's filesystem RIGHT NOW (Path.exists(), checked live, never trusted from a
       stale snapshot).
   (2) THE ONE-SHOT LEGACY BACKLOG: named canonicals minted by live acceptance/probe runs
       against the shared dev graph BEFORE the source='test' convention existed, so their own
-      create-actor is whatever agent happened to run the probe, not a reusable signal --
+      create-actor is whatever agent happened to run the probe, not a reusable signal.
       dated and named explicitly here rather than re-derived by a fuzzy actor-string
-      heuristic. Wave 6's dispatch (msg 8063) named ~25 candidates; measured live against
+      heuristic. An early dispatch named ~25 candidates; measured live against
       the graph 2026-09-08, three of those are deliberately EXCLUDED and reported rather
       than forced through:
         - repo:khnum-launch-acceptance-4 carries an active Decision in_repo (itself likely
           another same-run test artifact, but this sweep never guesses past its own guard)
         - repo:realrepo carries two active `governs` edges
         - repo:deepseek-harness's own on_disk_path (/home/asuramaya/code/dsh/deepseek-
-          harness) is STILL PRESENT on disk -- not stale, contradicting the dispatch's own
+          harness) is STILL PRESENT on disk, not stale, contradicting the dispatch's own
           characterization of it as disk-census-gone
       repo:dbghusk/repo:dbgsurv/repo:realrepo already match route (1) (actor='test' at
       creation) and are not repeated in this set.
@@ -43,9 +43,9 @@ import asyncpg
 from src.actions.core import Actions
 
 MIGRATION_SOURCE = "hygiene:project_sweep"
-_BECAUSE = "project hygiene sweep (thread 14fae7d3): unclaimed test/disk-census stub"
+_BECAUSE = "project hygiene sweep: unclaimed test/disk-census stub"
 
-# One-shot legacy backlog -- see the module docstring for the three named exceptions this
+# One-shot legacy backlog, see the module docstring for the three named exceptions this
 # sweep deliberately leaves untouched (khnum-launch-acceptance-4, realrepo, deepseek-harness).
 LEGACY_JUNK_PROJECT_CANONICALS = frozenset({
     "repo:evalab-scratch-_7w7gkze", "repo:evalab-scratch-8dckvw76",
@@ -89,10 +89,10 @@ def _matches_ongoing_rule(row: asyncpg.Record) -> bool:
 
 
 async def plan_project_hygiene_sweep(pool: asyncpg.Pool) -> dict[str, Any]:
-    """DRY RUN -- never writes. Every active SoftwareProject checked against both routes;
+    """DRY RUN, never writes. Every active SoftwareProject checked against both routes;
     the shared guard (no thread/decision/governing seat) applies identically regardless of
     which route matched, so a legacy-named row with an incidental decision/governs edge is
-    excluded exactly like an ongoing-rule row would be -- never a special case."""
+    excluded exactly like an ongoing-rule row would be, never a special case."""
     rows = await pool.fetch(_CANDIDATES_SQL)
     to_retire: list[dict[str, Any]] = []
     guarded: list[dict[str, Any]] = []
@@ -114,7 +114,7 @@ async def apply_project_hygiene_sweep(
     actions: Actions, *, actor: str = MIGRATION_SOURCE,
 ) -> dict[str, Any]:
     """Applies `plan_project_hygiene_sweep`'s plan through the sanctioned `retire_project`
-    entry point -- never a hand-written status flip. `retire_project` re-checks commits/open-
+    entry point, never a hand-written status flip. `retire_project` re-checks commits/open-
     threads/live-mount itself at call time (the real safety net); a row that clears this
     sweep's own guard but still fails there is reported, not raised, so one stale row never
     sinks the whole sweep. Idempotent: an already-retired row simply isn't selected on the

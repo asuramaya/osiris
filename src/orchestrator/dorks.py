@@ -1,4 +1,4 @@
-"""Dork generation (DESIGN §8) — intent-keyed query families per selector type.
+"""Dork generation (DESIGN §8): intent-keyed query families per selector type.
 
 Rather than bespoke scrapers per source (fragile, rate-limited, CAPTCHA-walled),
 the broad collection path is search-engine dorking through a meta-search engine:

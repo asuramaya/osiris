@@ -1,37 +1,33 @@
-"""lift(ref, handle) — pull a QUIET rogue instance out of its ad hoc cwd and into a clean
-osiris home + seat, one coherent act (thread 67f11cbd, the operator's framing: import a
-running guest into the managed home, preserve its state, give it a clean managed identity).
+"""lift(ref, handle) pulls a QUIET rogue instance out of its ad hoc cwd and into a clean
+osiris home + seat, one coherent act: import a running guest into the managed home, preserve
+its state, give it a clean managed identity.
 
-COMPOSES rather than reinvents: `doors()` (Wave 2, this module's sibling) already answers
+COMPOSES rather than reinvents: `doors()` (this module's sibling) already answers
 "who is this, and are they home right now"; `claim_name` already names a lineage and binds
 its seat; `establish_office` already rebind-extracts a named seat into
 `~/.osiris/seats/<handle>/`, re-addressing transcripts so resume works in place. lift() runs
 the three as one act, plus a fourth: a fresh `doors()` read AFTER the write, because a
 receipt that only echoes what claim_name/establish_office each individually claimed is
-exactly the lying-receipt shape the fleet has been fighting all week (dispatch_dm's
-"delivered"-that-wasn't, 5af93c89; the compaction-seam refusal that was actually stale,
-a580490f) — `verified` here is an independent re-derivation, never a collapsed echo.
+exactly the lying-receipt shape the fleet has been fighting (a delivery marked "delivered"
+that was not; a compaction-seam refusal that was actually stale). `verified` here is an
+independent re-derivation, never a collapsed echo.
 
-SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just unbuilt — proven, not assumed. A caller's own
+SELF-LIFT IS STRUCTURALLY IMPOSSIBLE, not just unbuilt, proven, not assumed. A caller's own
 `agent_mounts.last_seen` is kept perpetually fresh by ITS OWN TERMINAL's statusline heartbeat
-(`compute_heartbeat`, src/orchestrator/heartbeat.py:62 — the write this comment used to cite
-lived in `scripts/osiris_statusline.py` until #187's 7-script retirement moved it here without
-updating this pointer, caught live 2026-09-02 chasing agent:f0d23039-ii's own phantom pulse:
-`UPDATE agent_mounts SET last_seen=now()` fires on every render, independent of any tool call),
-so a live session can never observe itself as quiet from inside a call — and even bypassing
-that check, the running harness process keeps appending to its OLD transcript path regardless
-of what the database says (fixed at session start). So lift() always targets a NAMED,
-ALREADY-QUIET rogue from a DIFFERENT live session — never itself. `establish_office`'s own
-live-seat refusal (the rollout guard) is reused in spirit here, front-loaded as a `doors()`
-pre-check so the whole act refuses atomically
-before `claim_name` ever runs, rather than leaving a claimed name stranded with no office.
+(`compute_heartbeat`, src/orchestrator/heartbeat.py:62 fires this write on every render,
+independent of any tool call), so a live session can never observe itself as quiet from
+inside a call, and even bypassing that check, the running harness process keeps appending to
+its OLD transcript path regardless of what the database says (fixed at session start). So
+lift() always targets a NAMED, ALREADY-QUIET rogue from a DIFFERENT live session, never
+itself. `establish_office`'s own live-seat refusal (the rollout guard) is reused in spirit
+here, front-loaded as a `doors()` pre-check so the whole act refuses atomically before
+`claim_name` ever runs, rather than leaving a claimed name stranded with no office.
 
 ONE PRE-EXISTING GAP, named and deliberately left alone (not lift()'s to fix): `held_seat`
-does an EXACT generation match with no lineage-aware fallback (bug 5ec86731), and
-`mint_heir` never calls `bind_holder` on succession — so a FUTURE successor of a lifted
-agent could still land in the same unreachable-head class Ra hit (aeae9977/5af93c89) if that
-gap outlives this build. lift() itself is sound for the generation it acts on; the
-dependency is Khnum's, tracked on thread 67f11cbd.
+does an EXACT generation match with no lineage-aware fallback, and `mint_heir` never calls
+`bind_holder` on succession, so a FUTURE successor of a lifted agent could still land in an
+unreachable-head class this fleet has hit before if that gap outlives this build. lift()
+itself is sound for the generation it acts on; the dependency is tracked separately.
 """
 from __future__ import annotations
 
@@ -45,14 +41,14 @@ async def lift(
     office_root: Any = None, projects_root: Any = None, claude_json: Any = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """Extract a named, quiet rogue into a clean office. `doors(ref)` resolves the target —
-    refuses on 0 matches (never invents one), on >1 (an ambiguous multi-tenant cwd — name a
+    """Extract a named, quiet rogue into a clean office. `doors(ref)` resolves the target,
+    refuses on 0 matches (never invents one), on >1 (an ambiguous multi-tenant cwd, name a
     specific `agent:` id instead of guessing), and on a LIVE match (moving a live seat splits
     its running session's history between two homes; close its tab first). Then
     `claim_name(handle)` names the lineage, propagating its own real refusals honestly (a
     visitor, a name held live elsewhere, a cross-house collision) rather than reinventing
     them. Then `establish_office` performs the actual move. Then `doors()` runs AGAIN on the
-    result — the receipt's `verified` field is that fresh, independent read, never an echo of
+    result: the receipt's `verified` field is that fresh, independent read, never an echo of
     what the sub-steps each individually claimed. Non-side-channel: pure graph + file
     operations, never the daemon reply lane."""
     from src.actions.core import Actions
@@ -65,16 +61,16 @@ async def lift(
     pre = await _doors(pool, ref, **census_kw)
     matches = pre["matches"]
     if not matches:
-        return {"error": f"no such agent/seat/cwd: {ref!r} — lift never guesses at a "
+        return {"error": f"no such agent/seat/cwd: {ref!r}: lift never guesses at a "
                          "target; an unresolved ref is refused, not invented"}
     if len(matches) > 1:
-        return {"error": f"{ref!r} is ambiguous — {len(matches)} distinct souls have "
+        return {"error": f"{ref!r} is ambiguous: {len(matches)} distinct souls have "
                          "mounted there; name a specific agent: id instead of a shared cwd",
                 "candidates": [m["agent_id"] for m in matches]}
     target = matches[0]
     if target["live"]:
         return {"error": f"{target['agent_id']} is LIVE right now (last seen "
-                         f"{target['last_seen']}) — moving a live seat splits its running "
+                         f"{target['last_seen']}): moving a live seat splits its running "
                          "session's history between two homes. Close its tab first, then "
                          "lift; it wakes up in the office"}
     agent_id = target["agent_id"]
@@ -109,7 +105,7 @@ async def lift(
         "claimed": claimed, "established": established,
         "verified": verified,
         "post_lift": post_match,
-        "note": (f"{handle} lifted into {established.get('office')} — `verified` is a fresh "
+        "note": (f"{handle} lifted into {established.get('office')}: `verified` is a fresh "
                  "doors() read taken AFTER the write, not an echo of what claim_name or "
                  "establish_office each individually claimed"),
     }

@@ -1,4 +1,4 @@
-"""Trigger matching — the read side of the manifest projection.
+"""Trigger matching: the read side of the manifest projection.
 
 Given an emitted event and the object it concerns, return the helper ids whose
 projected triggers fire. Pure DB read; the durable outbox relay + Arq dispatch

@@ -1,9 +1,9 @@
-"""Co-investment analysis — which companies share the people who fund this one.
+"""Co-investment analysis: which companies share the people who fund this one.
 
 The SPV graph (company <- raises_for <- SPV -> officer -> operator) makes a latent
 network explicit: two private companies are entangled when the SAME operator runs
 feeder funds for both. This ranks a company's co-investment ties by how many operators
-they share — the tightest ties are the companies wired into the same capital plumbing.
+they share; the tightest ties are the companies wired into the same capital plumbing.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ import asyncpg
 
 # Fund-administration platforms sign as officer/director on SPVs for unrelated deals
 # (Sydecar admins SPVs for Neuralink AND for dentists), so they are NOT a co-investment
-# signal — they're plumbing. We drop them two ways: by name, and (the robust one) by
-# DEGREE — an operator wired into more than `platform_degree` distinct companies is a
+# signal: they're plumbing. We drop them two ways: by name, and (the robust one) by
+# DEGREE: an operator wired into more than `platform_degree` distinct companies is a
 # platform/serial-admin, not a thesis investor. The degree cut catches platform
 # *signatories* (a person like a Sydecar ops lead) that no name list would.
 _PLATFORM_RE = (
@@ -48,7 +48,7 @@ async def coinvestment_ties(
     pool: asyncpg.Pool, company_id: uuid.UUID, *, limit: int = 25, platform_degree: int = 12
 ) -> list[dict[str, Any]]:
     """For a target company, the other companies funded by SPVs that share an operator
-    with it — ranked by the number of shared operators (the strength of the tie).
+    with it, ranked by the number of shared operators (the strength of the tie).
 
     Fund-admin platforms are filtered out (by name + by degree), so a shared operator
     means a shared *thesis* sponsor, not just a shared SPV-formation service."""

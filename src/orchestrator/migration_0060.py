@@ -1,11 +1,11 @@
-"""MIGRATION 0060, THE THREE CLASSIFICATION LAWS (thread 0af7b202, decision 0d863363's
-own "ships mechanically, never a coordinator's hand pass" mandate, #203 to zero).
-CORRECTED BY MIGRATION 0061 (census 583e2669, msg 8000/8001): the `repo` this module's
+"""MIGRATION 0060, THE THREE CLASSIFICATION LAWS, ships mechanically, never a
+coordinator's hand pass.
+CORRECTED BY MIGRATION 0061: the `repo` this module's
 own query derives for a Thread was read off a `repo` PROPERTY assertion that
-structurally never exists — `link_repo` (capture.py) attaches a project ONLY via the
+structurally never exists, `link_repo` (capture.py) attaches a project ONLY via the
 `in_repo` LINK, never a property, so this rung silently misfired for every thread on
 both the empty-owner AND the present-but-unresolvable-owner branches below. Fixed in
-place (not forked into a new module — this function is idempotent by construction, the
+place (not forked into a new module, this function is idempotent by construction, the
 bug was in the read, not the law) by deriving `repo` from the `in_repo` link's target
 SoftwareProject instead. Migration 0061 simply re-invokes `apply_migration_0060` with
 this fix live, so every row the deploy gap or this bug left stranded gets its one more
@@ -13,7 +13,7 @@ touch.
 
   (1) OWNER LAW: an owner is a Seat's own canonical or the literal 'operator', nothing
       else. Every open Thread's owner is resolved through `resolve_owner_seat`
-      (owner_normalization.py, shared with thread b5ae6773's write-time refusal gate —
+      (owner_normalization.py, shared with the write-time refusal gate,
       one function, never two copies deriving the same rules twice); an empty owner with
       a `repo` on record resolves via `_coordinating_seat_for_project` directly (`resolve_
       owner_seat` short-circuits an empty string to None before ever reaching its own
@@ -99,15 +99,14 @@ async def plan_migration_0060(pool: asyncpg.Pool) -> dict[str, Any]:
     """DRY RUN -- never writes. Every open Thread classified against all three laws at
     once (one scan, one row set).
 
-    OWNER RESOLUTION IS MEMOIZED PER (owner, repo) WITHIN THIS ONE CALL (thread
-    cc82a8e7, classification_laws_heartbeat's own heavy-sweep follow-up to 9150aec2):
+    OWNER RESOLUTION IS MEMOIZED PER (owner, repo) WITHIN THIS ONE CALL:
     resolve_owner_seat/_coordinating_seat_for_project each pay a live DB round trip
     even for an ALREADY-compliant `seat:<...>` owner (confirming it is still active),
-    so the naive per-row loop paid one round trip PER THREAD — 262 open threads,
+    so the naive per-row loop paid one round trip PER THREAD, 262 open threads,
     measured live, but only 35 DISTINCT owner values among them. Caching within this
     one call turns that into ~35-40 round trips instead, with ZERO staleness risk: every
     distinct owner is still freshly re-resolved every single tick, nothing here is
-    skipped or trusted stale across ticks — this is NOT the same shape as skipping
+    skipped or trusted stale across ticks, this is NOT the same shape as skipping
     already-compliant rows outright, which would blind the law to a seat that goes
     inactive between ticks, exactly the drift this migration exists to catch."""
     from src.orchestrator.owner_normalization import (
@@ -128,7 +127,7 @@ async def plan_migration_0060(pool: asyncpg.Pool) -> dict[str, Any]:
         canonical, repo = row["canonical"], row["repo"]
         owner = (row["owner"] or "").strip()
 
-        # (1) OWNER LAW — memoized by (owner, repo): see this function's own docstring.
+        # (1) OWNER LAW, memoized by (owner, repo): see this function's own docstring.
         if owner:
             cache_key = (owner, repo)
             if cache_key not in _resolved_cache:

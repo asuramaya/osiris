@@ -2,7 +2,7 @@
 
 Claims a helper_run (atomic, via the active-claim partial unique index),
 resolves a parser's ParseResult against the graph, and applies it through the
-Actions layer — every emitted object/property/link is audited and cascades via
+Actions layer: every emitted object/property/link is audited and cascades via
 the outbox. The async router, token buckets, and routing tiers are Phase 3;
 here the response is fetched by the caller and handed in directly.
 """
@@ -37,7 +37,7 @@ async def claim_run(
     window_bucket: datetime | None = None,
 ) -> uuid.UUID | None:
     """Atomically claim a run. Returns the run id, or None if one is already
-    active for this (helper, object, case, window_bucket) — the partial unique
+    active for this (helper, object, case, window_bucket): the partial unique
     index decides. `status` lets a gated dispatch claim into 'awaiting_human';
     `window_bucket` makes each rolling window its own claimable run."""
     row = await actions.pool.fetchrow(
@@ -58,8 +58,8 @@ async def reap_stale_runs(pool: Any, *, older_than_secs: int = 900) -> int:
     """Recover orphaned runs left by a crashed worker. The active-claim partial
     unique index blocks a second claim while a run is in a machine state
     (queued/running), so a worker that dies mid-run leaves a stuck row that would
-    wedge that (helper, object, case) FOREVER. This resets such rows — older than
-    `older_than_secs` with no finish — to 'failed', releasing the claim so the
+    wedge that (helper, object, case) FOREVER. This resets such rows, older than
+    `older_than_secs` with no finish, to 'failed', releasing the claim so the
     restarted worker (or the next cascade round) can re-claim a fresh run.
 
     Human-wait states (awaiting_human/in_browser/result_posted_back) are long-lived
@@ -78,7 +78,7 @@ async def reap_stale_runs(pool: Any, *, older_than_secs: int = 900) -> int:
 
 async def load_input_object(pool: Any, object_id: uuid.UUID) -> InputObject:
     """Materialize the InputObject a helper consumes (type, canonical, current
-    property names) — shared by the cascade and the handoff resume path."""
+    property names): shared by the cascade and the handoff resume path."""
     row = await pool.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", object_id)
     props = await pool.fetch(
         "SELECT DISTINCT name FROM current_assertions WHERE object_id=$1", object_id
@@ -150,7 +150,7 @@ async def apply_result(
             evidence_uri, evidence_sha = store.put_json(spec.evidence)
         for name, value in spec.properties.items():
             if value is None:
-                continue  # a None property is "unknown", not a fact — don't assert it
+                continue  # a None property is "unknown", not a fact, don't assert it
             # Grade each property by its own class (falling back to the object
             # default); confidence is the projection of that class. Legacy specs
             # with no class fall back to spec.confidence and write no class.
@@ -168,7 +168,7 @@ async def apply_result(
         from_id = await _resolve(actions, link.from_ref, ids, input_id)
         to_id = await _resolve(actions, link.to_ref, ids, input_id)
         if from_id is None or to_id is None:
-            continue  # unresolved endpoint (e.g. ATT&CK object not ingested) — skip
+            continue  # unresolved endpoint (e.g. ATT&CK object not ingested): skip
         await actions.create_link(
             from_id, to_id, link.type, source_id, observed_at, link.confidence,
             case_id=case_id, helper_run_id=helper_run_id,

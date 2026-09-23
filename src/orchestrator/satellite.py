@@ -1,10 +1,10 @@
-"""Placeful satellite — vantage-bound collection dispatched by the placeless core.
+"""Placeful satellite: vantage-bound collection dispatched by the placeless core.
 
 The hosted kernel can't reach everything from one place: some collection needs a
 residential IP, a logged-in browser session, or a network only reachable from a
 particular box. So the core DISPATCHES a collection job; a satellite agent running
 AT that vantage claims it, runs the collector locally, and returns the results
-through the same Actions narrow waist — they land in the central graph exactly like
+through the same Actions narrow waist, and land in the central graph exactly like
 any other emit. The only coupling is Postgres (the bus); a satellite is a thin
 process that can live anywhere it can reach the DB.
 
@@ -39,7 +39,7 @@ class CollectionJob:
 
 
 # A collector runs AT the satellite's vantage and returns what it found as WatchItems
-# (the same shape a source tick materializes). Injected — a real one drives a browser.
+# (the same shape a source tick materializes). Injected: a real one drives a browser.
 Collector = Callable[[CollectionJob], Awaitable[list[WatchItem]]]
 
 
@@ -59,7 +59,7 @@ async def claim_collection_job(
     pool: Any, satellite_id: str, *, vantages: list[str]
 ) -> CollectionJob | None:
     """Atomically claim one queued job this satellite can serve: a job with no vantage
-    requirement, or one whose vantage this satellite provides. FOR UPDATE SKIP LOCKED —
+    requirement, or one whose vantage this satellite provides. FOR UPDATE SKIP LOCKED:
     two satellites never take the same job."""
     row = await pool.fetchrow(
         "UPDATE collection_jobs SET status='claimed', claimed_by=$1, claimed_at=now() "
@@ -81,7 +81,7 @@ async def run_satellite_once(
 ) -> str:
     """Claim one job, run its collector at this vantage, emit the results into the
     central graph through Actions, and mark the job done/failed. Returns an outcome
-    tag. A collector blowing up fails just that job — never the satellite loop."""
+    tag. A collector blowing up fails just that job, never the satellite loop."""
     job = await claim_collection_job(actions.pool, satellite_id, vantages=vantages)
     if job is None:
         return "idle"
@@ -120,7 +120,7 @@ async def run_satellite_once(
     return "collected"
 
 
-# The satellite's collector registry — empty by default (the proof injects fakes; a
+# The satellite's collector registry, empty by default (the proof injects fakes; a
 # real deploy registers vantage-bound collectors here, e.g. a browser/residential fetch).
 COLLECTORS: dict[str, Collector] = {}
 
@@ -128,7 +128,7 @@ COLLECTORS: dict[str, Collector] = {}
 def register_default_collectors() -> None:
     """Register the vantage-bound collectors a real satellite serves. Kept OUT of the
     placeless kernel (imported lazily, only at the satellite process) so the core never
-    depends on a placeful scraper. The Harris collector's LIVE fetch is the WALL — it
+    depends on a placeful scraper. The Harris collector's LIVE fetch is the WALL: it
     runs only on a box with county-portal access."""
     from src.ingest.harris_foreclosure import harris_collector
     COLLECTORS.setdefault("harris_foreclosure", harris_collector)
@@ -136,7 +136,7 @@ def register_default_collectors() -> None:
 
 async def _run_loop(poll_secs: float = 2.0) -> None:  # pragma: no cover - process entrypoint
     """The satellite agent: poll for dispatched jobs at this vantage and serve them.
-    A thin process — its only dependency is Postgres (the bus)."""
+    A thin process: its only dependency is Postgres (the bus)."""
     import asyncio
 
     from src.config.settings import get_settings

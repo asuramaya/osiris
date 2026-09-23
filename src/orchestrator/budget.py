@@ -1,20 +1,21 @@
-"""THE WAIST HAS A WIDTH — a bound on what any tool may hand back.
+"""THE WAIST HAS A WIDTH: a bound on what any tool may hand back.
 
 Osiris grew tools that answer honestly and answer HUGE. `fleet()` shipped 1022 flat rows
 (166k chars); `fleet_digest(hours=24)` shipped the fleet's entire lifetime (262k); an
 un-mounted `orient()` shipped 292k. Every one of them was CORRECT. Every one of them blew
-the caller's context before a single line could be read — and a truth that cannot be
+the caller's context before a single line could be read, and a truth that cannot be
 received is not a truth that was told.
 
-Three agents hit this from three directions and each invented a private workaround. That is
-the third appearance of one shape, so it is not a pattern — it is a missing primitive.
+This shape kept recurring from multiple directions, each time with its own private
+workaround invented on the spot, which is the signature of a missing primitive rather than
+a one-off bug.
 
 Two layers, and the distinction matters:
 
-  * THE LENS (per tool) decides what is WORTH sending — the live rows, the windowed rows,
+  * THE LENS (per tool) decides what is WORTH sending: the live rows, the windowed rows,
     the counts you walk into. That judgment cannot live here; only the tool knows what its
     caller came for.
-  * THE BOUND (this module) is the BACKSTOP — it does not know what matters, so it never
+  * THE BOUND (this module) is the BACKSTOP: it does not know what matters, so it never
     pretends to. It keeps a lens's failure from becoming the caller's death, and it says so
     out loud.
 
@@ -34,14 +35,14 @@ from typing import Any
 # ~12k tokens. Set from the real ceiling, not a round number: the fleet_digest that provoked
 # this shipped 262k chars, and a well-lensed one lands at 35k of genuine content (a day of the
 # fleet's decisions, its swaps, its conversations). The bound must be loose enough that an
-# honest answer survives INTACT — a backstop that trims real work is doing the lens's job and
-# doing it blindly — and tight enough that a runaway never reaches the caller's context.
+# honest answer survives INTACT (a backstop that trims real work is doing the lens's job and
+# doing it blindly) and tight enough that a runaway never reaches the caller's context.
 BUDGET_CHARS = 48_000
 MIN_KEEP = 3      # a trimmed list still has to SHOW you its shape, or it teaches nothing
 MAX_STR = 8_000   # a single monstrous string (a render, a blob) is a firehose too
 
-_NOTE = ("TRUNCATED to fit the response budget. What you see is a PREFIX, not the whole — "
-         "do NOT read these lists as complete or count off them. Narrow the query (a project, "
+_NOTE = ("TRUNCATED to fit the response budget. What you see is a PREFIX, not the whole. "
+         "Do NOT read these lists as complete or count off them. Narrow the query (a project, "
          "a window, an id) and ask again for the part you actually need.")
 
 
@@ -87,11 +88,11 @@ def _set_at(root: dict[str, Any], path: tuple[str, ...], value: Any) -> None:
 
 
 def fit(result: Any, *, tool: str, budget: int = BUDGET_CHARS) -> Any:
-    """Trim `result` until it fits the budget — loudly, largest firehose first.
+    """Trim `result` until it fits the budget, loudly, largest firehose first.
 
     Returns the result unchanged when it already fits (the overwhelming case; the cost of
     this check is one serialization). When it does not fit, the biggest list is halved,
-    then the next biggest, until it does — so a tool with one runaway stream loses that
+    then the next biggest, until it does, so a tool with one runaway stream loses that
     stream's tail and keeps everything else intact, rather than every stream losing its
     middle.
 
@@ -125,17 +126,17 @@ def fit(result: Any, *, tool: str, budget: int = BUDGET_CHARS) -> Any:
             name = ".".join(path)
             dropped.setdefault(name, {"shown": MAX_STR, "of": len(text)})
 
-    # task #64's own measurement (ruling ad19a779): MANY SMALL-BUT-VERBOSE rows defeat both
-    # phases above — every list is already ≤MIN_KEEP, every string already ≤MAX_STR, yet the
-    # SUM is still over budget. Neither phase has anything left to cut (candidates=[] breaks
-    # the loop early; no string qualifies for the truncation pass), so the OLD code returned
-    # silently — no `_bounded` key at all when `dropped` stayed empty, or an unqualified one
-    # implying success when it wasn't. That is exactly the lie this module's own docstring
-    # forbids ("a cap that hides what it dropped"), just at one remove: it hid that it
-    # DIDN'T cap. This backstop still does not get smarter here on purpose — going below
-    # MIN_KEEP would violate its own "still shows you the shape" law, and the real fix is
-    # the LENS (a tool's own fields/take/depth, e.g. run_composition's — task #64's other
-    # leg) asking narrower in the first place, not this net trying harder to catch it blind.
+    # A live measurement found a further failure shape: MANY SMALL-BUT-VERBOSE rows defeat
+    # both phases above, every list is already <=MIN_KEEP, every string already <=MAX_STR,
+    # yet the SUM is still over budget. Neither phase has anything left to cut (candidates=[]
+    # breaks the loop early; no string qualifies for the truncation pass), so the OLD code
+    # returned silently: no `_bounded` key at all when `dropped` stayed empty, or an
+    # unqualified one implying success when it wasn't. That is exactly the lie this module's
+    # own docstring forbids ("a cap that hides what it dropped"), just at one remove: it hid
+    # that it DIDN'T cap. This backstop still does not get smarter here on purpose, going
+    # below MIN_KEEP would violate its own "still shows you the shape" law, and the real fix
+    # is the LENS (a tool's own fields/take/depth, e.g. run_composition's) asking narrower in
+    # the first place, not this net trying harder to catch it blind.
     still_over = _size(result) > budget
     if dropped or still_over:
         result["_bounded"] = {"tool": tool, "note": _NOTE, "dropped": dropped}
@@ -143,7 +144,7 @@ def fit(result: Any, *, tool: str, budget: int = BUDGET_CHARS) -> Any:
             result["_bounded"]["still_over_budget"] = True
             result["_bounded"]["note"] = (
                 f"{_NOTE} STILL over budget after trimming every list to {MIN_KEEP} and "
-                f"every string to {MAX_STR} chars — the cost is many small, individually "
+                f"every string to {MAX_STR} chars, the cost is many small, individually "
                 "modest items whose SUM is too large, a shape this backstop cannot reduce "
                 "further on its own. Ask the tool for a narrower query (fewer fields, a "
                 "smaller take/limit) instead of retrying the same call.")

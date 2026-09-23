@@ -1,48 +1,48 @@
-"""THE DAILY CEILING — what Osiris may SPEND before it stops.
+"""THE DAILY CEILING: what Osiris may SPEND before it stops.
 
 (Not to be confused with budget.py, which bounds how many CHARACTERS a tool may hand back. That
 one protects the reader's context; this one protects the operator's card.)
 
-    "my plan is about to reset, not catastrophic but still damning for the application,
-     nobody will touch this if it burns."                            — the operator, 2026-07-13
+A recurring worry drives this: a subscription plan resetting is not catastrophic, but it is
+still damning for the application if nobody notices before it burns through the allowance.
 
 Every catastrophe in this system's life has been a SPEND catastrophe wearing a memory costume: a
 miner that walked every transcript forever; a trigger that minted 463 real Claude sessions on
 projects nobody had opened in days; a worker that wedged itself with ten 290MB `claude -p`
-children. In every single case the same thing was true — NOBODY WAS COUNTING.
+children. In every single case the same thing was true: NOBODY WAS COUNTING.
 
 The adversary already has a YIELD FLOOR (dispose.licence: "is this producer any good?"). That is
-a different question from the only one the operator actually asked, which is: CAN HE AFFORD IT? A
-producer can be excellent and still ruinous. Nothing anywhere said "Osiris may spend $X today and
-then it stops." This is that.
+a different question from the only one that actually matters, which is: CAN THE OPERATOR AFFORD
+IT? A producer can be excellent and still ruinous. Nothing anywhere said "Osiris may spend $X
+today and then it stops." This is that.
 
-═══ IT GATES ON MEASURED DOLLARS, NEVER ON A GUESS.
+IT GATES ON MEASURED DOLLARS, NEVER ON A GUESS.
 
-`cost_usd` was never a price table — it is `total_cost_usd`, printed by the CLI in its own output
-envelope. The vendor tells us what each call cost, for free, on every call. That is why the
-miner's $40.49 is exact to the cent, and it is why this gate needs no rate card, no price feed,
-and no maintenance: it cannot drift, because it never estimates.
+`cost_usd` was never a price table, it is `total_cost_usd`, printed by the CLI in its own output
+envelope. The vendor tells us what each call cost, for free, on every call. That is why a
+recorded figure like $40.49 is exact to the cent, and it is why this gate needs no rate card, no
+price feed, and no maintenance: it cannot drift, because it never estimates.
 
-I tried the other way first. Fitting a rate card against 1,376 rows of real billing gave a 0.1%
-residual and A NEGATIVE PRICE PER INPUT TOKEN (−$1,457/Mtok). The fit was excellent; the model was
-nonsense. A GOOD FIT IS NOT A CORRECT MODEL — and a low residual is the most persuasive costume an
-inference can wear while impersonating a fact.
+Fitting a rate card against 1,376 rows of real billing data was tried and rejected: it gave a
+0.1% residual and A NEGATIVE PRICE PER INPUT TOKEN (-$1,457/Mtok), so the fit was excellent but
+the model was nonsense. A GOOD FIT IS NOT A CORRECT MODEL, and a low residual is the most
+persuasive costume an inference can wear while impersonating a fact.
 
     A PRODUCER THAT CANNOT PRICE ITSELF MAY NOT SPEND.
 
-Hence `blind`. A call recorded with a NULL cost is not a cheap call — it is an INVISIBLE one, and
+Hence `blind`. A call recorded with a NULL cost is not a cheap call, it is an INVISIBLE one, and
 that is strictly worse, because the ceiling cannot see it and will wave a fortune straight
-through. The ghost farm was 463 spawns of exactly that kind. Blindness is reported LOUDLY, on its
-own, and is never quietly counted as zero.
+through. The ghost farm of 463 unpriced spawns was exactly that kind. Blindness is reported
+LOUDLY, on its own, and is never quietly counted as zero.
 
-═══ AND IT MUST BE ABLE TO OPEN.
+AND IT MUST BE ABLE TO OPEN.
 
-Thoth XXVIII shipped a licence gate that could never pass: it judged a new producer on the OLD
-one's yield, over rows the new one could not have written. "A GATE THAT CAN NEVER OPEN IS A KILL
-SWITCH WEARING A GATE'S CLOTHES." So this ceiling is a ROLLING window over spend that actually
-happened — it drains as the clock moves, it has no state to wedge in, and it cannot lock the
-system out forever. cap = 0 means STOP (an honest kill switch, named as one); cap < 0 means
-UNLIMITED (the operator's deliberate choice to run without a net).
+An earlier licence gate could never pass: it judged a new producer on the old one's yield, over
+rows the new one could not have written. A GATE THAT CAN NEVER OPEN IS A KILL SWITCH WEARING A
+GATE'S CLOTHES. So this ceiling is a ROLLING window over spend that actually happened: it drains
+as the clock moves, it has no state to wedge in, and it cannot lock the system out forever.
+cap = 0 means STOP (an honest kill switch, named as one); cap < 0 means UNLIMITED (the
+operator's deliberate choice to run without a net).
 """
 
 from __future__ import annotations
@@ -55,7 +55,7 @@ import asyncpg
 #   $1.47  $4.80  $3.05  $3.59  $2.52  $7.38  $11.89  $3.74      median ~$3.60, peak $11.89
 # Nobody had ever run that query. A $10 ceiling is therefore "a busy day, and no worse": it would
 # not have blocked a single day of honest work in this system's history, and it would have caught
-# every runaway long before it became a story. A DEFAULT, not a doctrine — the operator's to
+# every runaway long before it became a story. A DEFAULT, not a doctrine: the operator's to
 # raise, lower, or switch off entirely.
 DEFAULT_DAILY_USD = 10.0
 
@@ -64,10 +64,10 @@ WINDOW_HOURS = 24
 
 @dataclass(frozen=True)
 class Ceiling:
-    """What the gate knows right now — and, in `blind`, what it CANNOT know and says so."""
+    """What the gate knows right now, and, in `blind`, what it CANNOT know and says so."""
 
     cap: float          # < 0 = no ceiling (deliberate); 0 = stopped; > 0 = the daily allowance
-    spent: float        # MEASURED dollars in the window — the vendor's own figure, never a guess
+    spent: float        # MEASURED dollars in the window: the vendor's own figure, never a guess
     blind: int          # calls in the window that recorded NO price: spend nobody can see
 
     @property
@@ -80,8 +80,8 @@ class Ceiling:
 
     @property
     def may_spend(self) -> bool:
-        # thread 24c3cc74: the docstring's own doctrine ("A PRODUCER THAT CANNOT PRICE ITSELF
-        # MAY NOT SPEND") was never wired into this boolean — `blind` sat in `why()`'s string
+        # The docstring's own doctrine ("A PRODUCER THAT CANNOT PRICE ITSELF MAY NOT SPEND")
+        # was never wired into this boolean: `blind` sat in `why()`'s string
         # only, so a call that recorded NO price was quietly waved through as long as the
         # PRICED spend stayed under cap. `unlimited` still bypasses everything: the operator
         # chose to run with no ceiling to defend, so an unseen call threatens no budget.
@@ -91,24 +91,24 @@ class Ceiling:
         """One line a human can act on. NEVER a bare boolean: a refusal that cannot explain
         itself gets overridden by the next person in a hurry, and then it protects nobody."""
         if self.unlimited:
-            out = f"NO CEILING (cap < 0 — the operator's explicit choice). ${self.spent:.2f} spent"
+            out = f"NO CEILING (cap < 0, the operator's explicit choice). ${self.spent:.2f} spent"
         elif self.cap == 0:
-            out = "STOPPED — the ceiling is 0. That is a kill switch, and it is named as one"
+            out = "STOPPED: the ceiling is 0. That is a kill switch, and it is named as one"
         elif self.spent >= self.cap:
-            out = (f"CEILING REACHED — ${self.spent:.2f} of ${self.cap:.2f} in {WINDOW_HOURS}h. "
+            out = (f"CEILING REACHED: ${self.spent:.2f} of ${self.cap:.2f} in {WINDOW_HOURS}h. "
                    f"Osiris stops spending until the window rolls forward")
         elif self.may_spend:
-            out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h — "
+            out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h, "
                    f"${self.remaining:.2f} left")
         else:
-            # under the DOLLAR cap, but refused anyway — blindness alone is the reason, named
+            # under the DOLLAR cap, but refused anyway: blindness alone is the reason, named
             # here so this never reads as the (untrue) "CEILING REACHED" case above.
-            out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h — REFUSED: "
+            out = (f"${self.spent:.2f} of ${self.cap:.2f} spent in {WINDOW_HOURS}h, REFUSED: "
                    f"blind calls make the true spend unknown, not the dollar cap")
         if self.blind:
             # NOT folded into `spent`. An unpriced call is not a cheap call, it is an unseen one,
             # and silently scoring it $0 is precisely how the ghost farm ran for a week.
-            out += (f" · ⚠ {self.blind} call(s) recorded NO PRICE — that spend is INVISIBLE to "
+            out += (f" · ⚠ {self.blind} call(s) recorded NO PRICE: that spend is INVISIBLE to "
                     f"this ceiling. A producer that cannot price itself may not spend")
         return out
 
@@ -127,25 +127,25 @@ async def may_spend(
 ) -> tuple[bool, str]:
     """THE GATE. Call it before any paid inference; obey what it says.
 
-    `metered` says whether that inference is BILLED PER CALL — the keyed API path (ask
+    `metered` says whether that inference is BILLED PER CALL: the keyed API path (ask
     providers.spend_is_metered(); it reads the live backend). On a SUBSCRIPTION (the local Claude
     CLI) the vendor's `total_cost_usd` is a notional figure, not a debit, so summing it and gating
     on it stops real work on imaginary money. When the spend is NOT metered this gate is INERT: it
     never refuses, and it says so. It defaults True so a caller that forgets fails toward
-    enforcement, never toward an unbounded spree — the historically safe direction.
+    enforcement, never toward an unbounded spree, the historically safe direction.
 
     FAILS OPEN on an unreadable ledger, and that is deliberate. If Postgres is down, Osiris has no
-    graph to write to and no work worth doing — the ceiling is not what is protecting anyone in
+    graph to write to and no work worth doing, so the ceiling is not what is protecting anyone in
     that moment, while a gate that SLAMS on its own read error is a system that bricks itself over
     a hiccup. The bound that actually matters is on the ledger being WRITTEN, not on it being
-    readable, and an unpriced producer is refused AT THE PRODUCER — a place no database outage can
+    readable, and an unpriced producer is refused AT THE PRODUCER, a place no database outage can
     reach.
     """
     if not metered:
-        return True, ("subscription — inference runs on the local Claude CLI, not billed per "
+        return True, ("subscription: inference runs on the local Claude CLI, not billed per "
                       "call; the dollar ceiling does not apply (spend_is_metered=False)")
     try:
         c = await ceiling(pool, cap=cap)
-    except Exception:  # noqa: BLE001 — an unreadable ledger must never brick the fleet
-        return True, "ceiling UNKNOWN (the ledger could not be read) — proceeding, and saying so"
+    except Exception:  # noqa: BLE001 - an unreadable ledger must never brick the fleet
+        return True, "ceiling UNKNOWN (the ledger could not be read), proceeding, and saying so"
     return c.may_spend, c.why()

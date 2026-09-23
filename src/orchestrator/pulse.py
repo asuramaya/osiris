@@ -1,11 +1,11 @@
-"""The heartbeat — the autonomic loop that makes the developer persona come alive.
+"""The heartbeat: the autonomic loop that makes the developer persona come alive.
 
 A pile of lenses only moves when you query it. This is the involuntary pulse that runs WITHOUT
 you: each tick it SENSES change (a repo's HEAD moved), re-INGESTS it, re-runs the lenses
-(REFLECT), and ACCUMULATES the delta vs the last pulse as FINDINGS — so you return to a "what
-changed since I last looked" digest assembled off the clock. Deterministic + cheap (the bg-Claude
-reflection layer comes later). It NEVER mutates your repos — it reads, it tells (the brain and
-the alarm clock, not the hands).
+(REFLECT), and ACCUMULATES the delta vs the last pulse as FINDINGS, so you return to a "what
+changed since I last looked" digest assembled off the clock. Deterministic and cheap (the
+background reflection layer comes later). It NEVER mutates your repos: it reads, it tells (the
+brain and the alarm clock, not the hands).
 
 Run once:    `python -m src.orchestrator.pulse [repo-path ...]`
 Run forever: `python -m src.orchestrator.pulse --watch 300 [repo-path ...]`
@@ -52,7 +52,7 @@ def repo_name(path: str) -> str | None:
 
 
 async def _snapshot(pool: Any) -> dict[str, Any]:
-    """The metrics a pulse diffs on — cheap graph queries, no Claude. The developer graph's
+    """The metrics a pulse diffs on: cheap graph queries, no model call. The developer graph's
     vital signs: commits/repo, open threads, decisions, review candidates, drifting roles."""
     repos = {
         r["name"]: r["c"] for r in await pool.fetch(
@@ -89,7 +89,7 @@ async def _snapshot(pool: Any) -> dict[str, Any]:
 
 
 def _diff(prev: dict[str, Any], cur: dict[str, Any]) -> list[str]:
-    """The findings — what changed since the last pulse, in plain language."""
+    """The findings: what changed since the last pulse, in plain language."""
     out: list[str] = []
     pr = prev.get("repos", {})
     for name, c in cur["repos"].items():
@@ -98,7 +98,7 @@ def _diff(prev: dict[str, Any], cur: dict[str, Any]) -> list[str]:
         elif c > pr[name]:
             n = c - pr[name]
             out.append(f"{n} new commit{'s' if n != 1 else ''} in {name}")
-    # (noun, plural) — pluralize the NOUN, not the trailing phrase ("2 decisions recorded",
+    # (noun, plural): pluralize the NOUN, not the trailing phrase ("2 decisions recorded",
     # never "2 decision recordeds")
     for one, many, d in (
         ("open thread", "open threads",
@@ -145,15 +145,15 @@ async def pulse(
         #
         # AND THIS IS HOW THEY SURVIVED SO LONG: they cost NOTHING. The daily ceiling gates on
         # measured dollars and they spend zero. The adversary's licence was keyed to the adversary.
-        # The miner kill-switch named `session-miner` and this is a different daemon entirely — it
+        # The miner kill-switch named `session-miner` and this is a different daemon entirely: it
         # was still minting thirteen hours after we "killed the miner".
         #
-        #     THE CHARTER'S LINE IS OBSERVE vs INFER, NOT PAID vs FREE. A critter may observe for
-        #     nothing; it may only infer on a licence. BEING FREE IS NOT A LICENCE — it is merely
+        #     THE CHARTER'S LINE IS OBSERVE vs INFER, NOT PAID vs FREE. A process may observe for
+        #     nothing; it may only infer on a licence. BEING FREE IS NOT A LICENCE, it is merely
         #     the reason nobody was watching.
         #
         # Nothing is lost by darkening them: GIT ALREADY HAS THE COMMIT BODIES, in full, with the
-        # context the fragment strips away. What died here was never knowledge — it was a keyword
+        # context the fragment strips away. What died here was never knowledge, it was a keyword
         # match wearing a duty's clothes, and two of the last nine it minted were OUR OWN LAWS,
         # filed back at us as chores.
         if get_settings().osiris_mine_commits:
@@ -164,7 +164,7 @@ async def pulse(
     cur = await _snapshot(pool)
     prev = await pool.fetchrow("SELECT snapshot FROM dev_pulses ORDER BY id DESC LIMIT 1")
     if prev is None:
-        findings = [f"baseline — tracking {len(cur['repos'])} repos, "
+        findings = [f"baseline: tracking {len(cur['repos'])} repos, "
                     f"{sum(cur['repos'].values())} commits, {cur['decisions']} decisions"]
     else:
         findings = _diff(prev["snapshot"], cur)

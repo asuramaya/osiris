@@ -1,8 +1,8 @@
-"""Footprint-discrepancy analysis — where an entity OPERATES vs where it DISCLOSES.
+"""Footprint-discrepancy analysis: where an entity OPERATES vs where it DISCLOSES.
 
 The interesting OSINT signal is rarely a single fact; it's a contradiction. An entity
-discloses a home (incorporation, HQ, registered address) but its *activities* — trial
-sites, feeder funds, officers — touch jurisdictions its corporate footprint never
+discloses a home (incorporation, HQ, registered address) but its *activities*, trial
+sites, feeder funds, officers, touch jurisdictions its corporate footprint never
 mentions. Those foreign reach-points are the shadow footprint: a US company running
 brain-implant trials in Abu Dhabi, or raising retail money through a Jakarta fund,
 discloses neither.
@@ -24,7 +24,7 @@ import asyncpg
 from src.ontology.resolution import normalize_org_name
 
 # EDGAR foreign stateOrCountry codes are a letter followed by a digit (A0, X5, K8…).
-# An UNMAPPED one is not a country — never leak 'L3'/'X0'/'C7' as a false reach claim.
+# An UNMAPPED one is not a country: never leak 'L3'/'X0'/'C7' as a false reach claim.
 _EDGAR_CODE = re.compile(r"^[A-Z][0-9]$")
 
 # US state / territory postal codes -> the home country is the United States.
@@ -91,7 +91,7 @@ async def _cluster(pool: asyncpg.Pool, object_id: uuid.UUID) -> list[uuid.UUID]:
                 ) or ""
             ) == norm:
                 ids.add(r["object_id"])
-    # include objects MERGED into any cluster member — their links (e.g. trial sites
+    # include objects MERGED into any cluster member: their links (e.g. trial sites
     # that hung off a pre-merge sponsor node) still point at the old ids, and the
     # identity is the same, so the analysis must follow them.
     rows = await pool.fetch(

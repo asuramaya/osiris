@@ -1,13 +1,13 @@
-"""GHOST HOUSE-STAMP RETIREMENT (thread a732e331 clause 3, wave 7 dispatch msg 8079/8090):
-classification_laws_heartbeat's own third sibling sweep — SoftwareProject junk
-(project_hygiene.py) and Thread classification (migration_0060.py) both got one; a Seat's
-own pre-house-optional GHOST stamp is the third population left standing.
+"""GHOST HOUSE-STAMP RETIREMENT: classification_laws_heartbeat's own third sibling sweep.
+SoftwareProject junk (project_hygiene.py) and Thread classification (migration_0060.py)
+both got one; a Seat's own pre-house-optional GHOST stamp is the third population left
+standing.
 
-derive_house's own `_is_ghost_house` (seats.py, Khnum's bb1cdc2) already makes a ghost stamp
+derive_house's own `_is_ghost_house` (seats.py) already makes a ghost stamp
 READ AS EMPTY at derivation time -- nothing here is load-bearing for correctness. This sweep
-is the WRITE-TIME half clause 3 explicitly asked for: a receipt naming each retired seat, so
-the graph itself stops carrying a pre-house-optional artifact forward forever rather than
-merely working around it on every read.
+is the WRITE-TIME half the retirement work explicitly asked for: a receipt naming each
+retired seat, so the graph itself stops carrying a pre-house-optional artifact forward
+forever rather than merely working around it on every read.
 
 POPULATION: an active, MANAGED Seat (has a real `manager_of_seat`, matching the ghost
 clause's own "the ghost clause only ever protects the managed-seat anchor check, never a
@@ -15,8 +15,8 @@ head's own authoritative declaration") whose current `house` assertion is non-em
 equals one of its own `charter_of` (governed project) names, case-insensitive -- the exact
 `_is_ghost_house` predicate, reused verbatim rather than re-derived.
 
-RETIRE, NEVER DELETE: `retire_assertion` (the sanctioned cross-source supersede entry point, thread
-52911d2a) supersedes the ghost `house` row with an empty string -- falsy under every existing
+RETIRE, NEVER DELETE: `retire_assertion` (the sanctioned cross-source supersede entry point)
+supersedes the ghost `house` row with an empty string -- falsy under every existing
 `if house:` read in this codebase (derive_house, _own_house_stamp's callers), the same
 "empty" derive_house already treats a ghost as, now durable instead of read-time-patched. A
 head's own matching stamp (the ordinary, legitimate case) and a managed seat's real,
@@ -31,7 +31,7 @@ import asyncpg
 from src.actions.core import Actions
 
 MIGRATION_SOURCE = "hygiene:ghost_house_sweep"
-_BECAUSE = "ghost house-stamp retirement (thread a732e331 clause 3): pre-house-optional stamp"
+_BECAUSE = "ghost house-stamp retirement: pre-house-optional stamp"
 
 _MANAGED_SEATS_WITH_HOUSE_SQL = """
     SELECT o.canonical AS seat, a.id AS assertion_id, a.value #>> '{}' AS house

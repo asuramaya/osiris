@@ -1,18 +1,15 @@
-"""THE SELF-SERVICE TRANSITION VERB (Thoth dispatch 6901, task #199's core-verbs lane,
-the Jesus/Chad specimen): a seat moves its project binding from a fabricated
+"""THE SELF-SERVICE TRANSITION VERB: a seat moves its project binding from a fabricated
 handle-project to the real repo project it actually works in, in one composed act.
-Never a fourth mechanism — folds three already-shipped, independently-audited
+Never a fourth mechanism: folds three already-shipped, independently-audited
 primitives: `invalidate_works_in` (drop the stale edge), `correct_own_pin_value` (all
-three pin copies — office, anchor, workspace — ruling b30e2b38), `set_charter`
-(declare the real repos).
+three pin copies, office, anchor, workspace), `set_charter` (declare the real repos).
 
-DELIBERATELY EXCLUDES `rebind_seat`, even though the operator's own parity-matrix scan
-(decision fff496fe22b0) named it as part of a 5-call sequence: THE ANCHOR INVARIANT
-(ruling 23771416, landed after that scan) pins `anchor_cwd` to
-`<office_root>/<handle>` permanently, DERIVED, never a caller-supplied path — and
-Jesus/Chad broke their own anchors by calling `rebind_seat` on themselves during
-exactly this kind of transition (root-caused live, same ruling). A seat's WORK tree
-moving is `bind_seat_tree`'s job, a separate concern this verb does not touch.
+DELIBERATELY EXCLUDES `rebind_seat`, even though an earlier parity-matrix scan named
+it as part of a 5-call sequence: THE ANCHOR INVARIANT pins `anchor_cwd` to
+`<office_root>/<handle>` permanently, DERIVED, never a caller-supplied path, and a
+seat once broke its own anchor by calling `rebind_seat` on itself during exactly this
+kind of transition (root-caused live). A seat's WORK tree moving is
+`bind_seat_tree`'s job, a separate concern this verb does not touch.
 """
 
 from __future__ import annotations
@@ -31,22 +28,22 @@ async def transition_seat_project(
     because: str = "", repos: list[str] | None = None, dry_run: bool = True,
     office_root: Path | None = None, workspace_root: Path | None = None,
 ) -> dict[str, Any]:
-    """PRECONDITION: the caller already carries TWO live works_in edges — the
-    fabricated one and a real one — which means mounting at the real repo's cwd
+    """PRECONDITION: the caller already carries TWO live works_in edges, the
+    fabricated one and a real one, which means mounting at the real repo's cwd
     FIRST is a prerequisite this verb does not perform itself (same shape
     `invalidate_works_in` already requires). `fabricated_project` defaults to the
-    seat's own handle (the exact specimen shape: a project fabricated FROM a handle
-    shares its name). `real_project` disambiguates when more than one other live
-    edge exists; omitted, it auto-picks the sole other edge and refuses rather than
-    guesses when there is more than one.
+    seat's own handle (a project fabricated from a handle shares its name).
+    `real_project` disambiguates when more than one other live edge exists;
+    omitted, it auto-picks the sole other edge and refuses rather than guesses
+    when there is more than one.
 
-    `dry_run=True` (default) returns the PLAN — which of invalidate/pin/charter
-    actually differ from the target state — without writing anything. `dry_run=False`
+    `dry_run=True` (default) returns the PLAN: which of invalidate/pin/charter
+    actually differ from the target state, without writing anything. `dry_run=False`
     requires `because` and executes each planned step against the SAME functions
     their own MCP/CLI commands already wrap, in order: a step already matching the
     target state is skipped, not re-run as a no-op write. Every precondition is
     checked before the FIRST write (same ATOMIC-OR-REFUSED discipline
-    `normalize_project_casing` uses) — a partial result past that point can only come
+    `normalize_project_casing` uses); a partial result past that point can only come
     from a genuine race, reported loudly under `error`, never silently swallowed."""
     from src.orchestrator.agents import invalidate_works_in
     from src.orchestrator.charter import charter_of, set_charter
@@ -59,7 +56,7 @@ async def transition_seat_project(
         return {"error": "agent_id is required"}
     bound = await held_seat(pool, agent_id)
     if bound is None:
-        return {"error": f"{agent_id} holds no seat — a project transition is a seat's "
+        return {"error": f"{agent_id} holds no seat. A project transition is a seat's "
                          "own act, never performed on another's behalf"}
     handle = bound["handle"]
 
@@ -68,7 +65,7 @@ async def transition_seat_project(
     if err:
         return err
     if fab_row is None:
-        return {"error": f"no such SoftwareProject: {fab_ref!r} — nothing fabricated to "
+        return {"error": f"no such SoftwareProject: {fab_ref!r}. Nothing fabricated to "
                          "transition away from"}
 
     agent_row = await pool.fetchrow(
@@ -83,10 +80,10 @@ async def transition_seat_project(
     live_by_id = {r["to_id"]: r["project"] for r in live}
     if fab_row["id"] not in live_by_id:
         return {"error": f"{agent_row['canonical']} has no active works_in edge to "
-                         f"{fab_row['canonical']} — nothing to transition"}
+                         f"{fab_row['canonical']}. Nothing to transition"}
     others = {k: v for k, v in live_by_id.items() if k != fab_row["id"]}
     if not others:
-        return {"error": f"{fab_row['canonical']} is your ONLY live works_in edge — "
+        return {"error": f"{fab_row['canonical']} is your ONLY live works_in edge: "
                          "mount at the real repo's cwd first (this verb transitions an "
                          "already-dual binding, it does not create the first one)"}
     if real_project:
@@ -101,7 +98,7 @@ async def transition_seat_project(
     elif len(others) == 1:
         ((real_id, real_canonical),) = others.items()
     else:
-        return {"error": f"ambiguous — {len(others)} live works_in edges besides "
+        return {"error": f"ambiguous: {len(others)} live works_in edges besides "
                          f"{fab_row['canonical']}: {sorted(others.values())}. Pass "
                          "real_project= explicitly; transition_seat_project never "
                          "guesses which one is real."}
@@ -133,14 +130,14 @@ async def transition_seat_project(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required to execute — dry_run=False without a "
+        return {"error": "because is required to execute: dry_run=False without a "
                          "reason is refused before anything is touched"}
 
     steps: dict[str, Any] = {}
     steps["invalidate_works_in"] = await invalidate_works_in(
         Actions(pool), agent_id, fab_row["canonical"], because=because, actor=agent_id)
     if steps["invalidate_works_in"].get("error"):
-        out["error"] = "invalidate_works_in refused — nothing else touched"
+        out["error"] = "invalidate_works_in refused, nothing else touched"
         out["steps"] = steps
         return out
     if pin_needs_write:

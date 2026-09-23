@@ -1,13 +1,13 @@
-"""Anchor-and-pivot frontier policy — what the cascade is allowed to expand.
+"""Anchor-and-pivot frontier policy: what the cascade is allowed to expand.
 
 The old cascade fanned out on everything, so a single weak seed ("hector") and
 greedy snippet mining produced dozens of stranger accounts. The fix: only expand
 a node that has a real reason to exist in the subject's graph. The signal is the
-node's *inbound links* — "why is this connected to the subject?" — not its own
+node's *inbound links*: "why is this connected to the subject?", not its own
 properties (an enumerated soundcloud:foo provably EXISTS, but the same-handle link
 to the subject is only a guess, so we must not crawl it).
 
-Policy (surgical — it only ever blocks, never widens):
+Policy (surgical, it only ever blocks, never widens):
   * seed / subject-anchored object            -> ANCHOR   (always expand)
   * object with no inbound links (a root)     -> ANCHOR   (can't judge; allow)
   * strongest inbound link is self-declared/
@@ -17,11 +17,11 @@ Policy (surgical — it only ever blocks, never widens):
   * EVERY inbound link is a co-occurrence /
     derived guess                             -> SPECULATIVE (a leaf; do NOT expand)
 
-A SPECULATIVE leaf still *receives* assertions from other sources — the gate is on
+A SPECULATIVE leaf still *receives* assertions from other sources. The gate is on
 "does this node spawn new crawls", never on "can facts attach to it". So when a
 second, non-speculative source links the same node (corroboration), its strongest
 inbound class rises and it becomes expandable on the next fixpoint round of
-`expand_case` — no re-queue machinery needed. NULL is treated as OBSERVED so the
+`expand_case`. No re-queue machinery needed. NULL is treated as OBSERVED so the
 not-yet-ported (threat-intel) parsers keep their prior expand-everything behaviour.
 """
 
@@ -41,12 +41,12 @@ _ID_TYPES = ("Person", "Account", "Username", "Email", "Phone", "Domain", "URL")
 
 class Tier(StrEnum):
     ANCHOR = "anchor"            # a self-declared/authoritative (or seed/subject) reason to exist
-    OBSERVED = "observed"        # a real observation (or unclassified) — expandable, medium trust
-    SPECULATIVE = "speculative"  # only a co-occurrence/derived guess connects it — a leaf
+    OBSERVED = "observed"        # a real observation (or unclassified): expandable, medium trust
+    SPECULATIVE = "speculative"  # only a co-occurrence/derived guess connects it, a leaf
 
 
 async def _is_seed(pool: asyncpg.Pool, case_id: uuid.UUID, object_id: uuid.UUID) -> bool:
-    """The operator-chosen seed sits at hop 0 — intake creates it there, while every
+    """The operator-chosen seed sits at hop 0: intake creates it there, while every
     cascade child is placed at input_hop+1 (>=1). (added_by_run is never populated by
     create_or_find_object, so hop_distance is the reliable seed signal.)"""
     hop = await pool.fetchval(
@@ -78,7 +78,7 @@ async def tier_of(pool: asyncpg.Pool, case_id: uuid.UUID, object_id: uuid.UUID) 
         case_id,
     )
     if not rows:
-        return Tier.ANCHOR  # a root / manually added object — never gate it
+        return Tier.ANCHOR  # a root / manually added object, never gate it
 
     classes = [EvidenceClass(r["evidence_class"]) if r["evidence_class"] else None for r in rows]
     if any(c is not None and is_anchor_grade(c) for c in classes):
@@ -101,9 +101,9 @@ async def subject_report(
 ) -> dict[str, list[dict[str, object]]]:
     """Answer 'who is this?' as a confidence ladder instead of a raw graph. Every
     identity fragment in the case is bucketed by HOW well it is established:
-      * verified    — seed/subject, or a self-declared/authoritative reason to exist
-      * corroborated — not anchor-grade, but >=2 independent sources point at it
-      * speculative — a single weak (co-occurrence/derived) reason only
+      * verified: seed/subject, or a self-declared/authoritative reason to exist
+      * corroborated: not anchor-grade, but >=2 independent sources point at it
+      * speculative: a single weak (co-occurrence/derived) reason only
     Each fragment carries its strongest evidence_class, source count and confidence
     so the operator can see WHY it is believed."""
     subject_ids = {

@@ -1,6 +1,6 @@
 """Federation: query a source in place, promote results on demand (DESIGN §2.4).
 
-The graph isn't only a sink — an analyst can run a helper against an object and
+The graph isn't only a sink: an analyst can run a helper against an object and
 *preview* what it would emit without persisting anything, then promote the
 subset they want into the case graph. Promotion goes through the Actions layer
 (audited, cascades via outbox) and records a 'manual' helper_run for provenance.

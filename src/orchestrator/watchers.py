@@ -1,11 +1,11 @@
-"""Source watchers — real pullers for the watch (cron Phase 3).
+"""Source watchers: real pullers for the watch (cron Phase 3).
 
 A watcher is a `monitor.Puller`: given the last cursor, it pulls only the delta of
 NEW public records and returns them as `WatchItem`s plus the advanced cursor. The
 generic `tick` machinery (monitor.py) materializes the items through Actions and
 advances the cursor; the durable outbox + the subscription evaluator then turn a
 matching new record into a sourced alert. This module supplies the *source-specific*
-half — the fetch + the cursor semantics — for one easy, already-keyless source:
+half (the fetch plus the cursor semantics) for one easy, already-keyless source:
 new SEC Form D filings.
 
 The network fetch is injected (a `Fetch` callable) so the watcher is testable with a

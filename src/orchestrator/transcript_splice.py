@@ -1,5 +1,5 @@
 """Splice a seat's session, fragmented across multiple project slugs by a mid-session cwd
-move, back into ONE file at its own office slug (#204: extracted from mcp_server.py's own
+move, back into ONE file at its own office slug (extracted from mcp_server.py's own
 heal_seat_transcript tool body, unchanged, so the CLI command added alongside it wraps the SAME
 function rather than a second copy of this logic)."""
 
@@ -16,7 +16,7 @@ async def heal_seat_transcript(
     dry_run: bool = True, because: str = "",
 ) -> dict[str, Any]:
     """`handle` names the seat whose office the result lands at. `source_paths` are the
-    original fragments, IN CHAIN ORDER (oldest first) — the session uuid and 8-char
+    original fragments, IN CHAIN ORDER (oldest first): the session uuid and 8-char
     anchor_sid derive from `source_paths[0]`'s own filename.
 
     `verify_jsonl_chain_boundary` runs on every consecutive pair before anything is
@@ -24,14 +24,14 @@ async def heal_seat_transcript(
     a directory.
 
     `dry_run=True` (default) reports clean/refused per pair and where the result would
-    land — nothing written. `dry_run=False` requires `because` and performs the real
-    splice + rematerialize. Never touches a Seat row, anchor_cwd, or any source transcript
-    — the anchor-repoint half is heal_seat_anchor, a different entry point."""
+    land. Nothing is written. `dry_run=False` requires `because` and performs the real
+    splice + rematerialize. Never touches a Seat row, anchor_cwd, or any source transcript.
+    The anchor-repoint half is heal_seat_anchor, a different entry point."""
     handle = (handle or "").strip()
     if not handle:
         return {"error": "a handle is required"}
     if not source_paths or len(source_paths) < 2:
-        return {"error": "source_paths needs at least two fragments to splice — a single "
+        return {"error": "source_paths needs at least two fragments to splice, a single "
                          "file has nothing to join"}
     from src.ingest.soul_store import SoulStore, verify_jsonl_chain_boundary
     from src.orchestrator.offices import _default_office_root
@@ -39,7 +39,7 @@ async def heal_seat_transcript(
     first_stem = Path(source_paths[0]).stem
     if len(first_stem) != 36 or first_stem.count("-") != 4:
         return {"error": f"source_paths[0]'s filename ({first_stem!r}) is not a session "
-                         "uuid — cannot derive the session id to splice under"}
+                         "uuid, cannot derive the session id to splice under"}
     full_sid = first_stem
     anchor_sid = full_sid.split("-")[0]
     dest = _default_office_root() / handle.lower() / f"{full_sid}.jsonl"
@@ -53,14 +53,14 @@ async def heal_seat_transcript(
         "preflight": preflight, "office_dest": str(dest),
     }
     if any(not p["clean"] for p in preflight):
-        out["error"] = "preflight refused — see `preflight` for which pair and why"
+        out["error"] = "preflight refused, see `preflight` for which pair and why"
         return out
     if dry_run:
         return out
 
     because = because.strip()
     if not because:
-        return {"error": "because is required to execute — an operator-gated act needs "
+        return {"error": "because is required to execute, an operator-gated act needs "
                          "a stated reason", **out}
 
     store = SoulStore(pool)

@@ -1,4 +1,4 @@
-"""The cascade engine — durable outbox relay + trigger fan-out + dispatch.
+"""The cascade engine: durable outbox relay + trigger fan-out + dispatch.
 
 This is the autonomous loop (DESIGN §6). Actions write events to the `outbox`
 in the same transaction as the data change (no lost cascades, unlike fire-and-
@@ -73,7 +73,7 @@ async def dispatch(
     decided = await route(ctx.pool, ctx.limiter, manifest, object_id)
     if decided is Route.CACHED:
         # CACHED is global (any case ran it). If THIS case already has the done run,
-        # it's a genuine hit — skip. Otherwise re-materialize the cached result into
+        # it's a genuine hit, skip. Otherwise re-materialize the cached result into
         # this case (a cache hit means no network; cross-case reuse stays cheap).
         if await has_cached_run_for_case(
             ctx.pool, manifest.id, object_id, case_id, manifest.cache_ttl
@@ -83,7 +83,7 @@ async def dispatch(
     if decided is Route.DEFER:
         return "defer"
     if decided is Route.AWAITING_HUMAN:
-        # gated tier — never attempt server-side; park for the analyst's browser.
+        # gated tier: never attempt server-side; park for the analyst's browser.
         input_object = await load_input_object(ctx.pool, object_id)
         handoff_id = await suspend(
             ctx.actions, ctx.ledger, manifest, object_id, case_id,
@@ -108,7 +108,7 @@ async def dispatch(
             ctx.pool, connector, manifest.id, input_object, cache_ttl=manifest.cache_ttl
         )
     except ChallengeDetected as cd:
-        # bot-fight / login wall hit mid-fetch — suspend the in-flight run instead
+        # bot-fight / login wall hit mid-fetch: suspend the in-flight run instead
         # of solving or evading. The rate credit is refunded; a handoff credit is spent.
         await ctx.ledger.refund_rate_credit(case_id)
         handoff_id = await suspend(
@@ -138,13 +138,13 @@ async def _rematerialize_cached(
     case_id: uuid.UUID,
     input_hop: int,
 ) -> str:
-    """A global CACHED hit with no done run in THIS case — re-link the cached result
+    """A global CACHED hit with no done run in THIS case: re-link the cached result
     into this case. cached_fetch returns the stored response without touching the
     network, so this is cheap; the claim index keeps it idempotent. No rate credit
     is spent (a cache hit isn't an egress)."""
     connector = ctx.connectors.get(manifest.id)
     if connector is None:
-        return "cached"  # no connector/parser loaded here — can't re-link, leave as-is
+        return "cached"  # no connector/parser loaded here, can't re-link, leave as-is
     run_id = await claim_run(ctx.actions, manifest.id, object_id, case_id, manifest.tier)
     if run_id is None:  # another worker is already materializing it for this case
         return "skipped:active"
@@ -190,7 +190,7 @@ async def fire_triggers(
     helper_ids = await matching_helpers(ctx.pool, event, obj["type"], props, case_id=case_id)
     # Anchor-and-pivot: only expand nodes with a real reason to exist. A speculative
     # leaf (its only inbound links are co-occurrence/derived guesses) is skipped here
-    # so it never spawns crawls — until a second source corroborates it and a later
+    # so it never spawns crawls, until a second source corroborates it and a later
     # expand_case round re-fires this and finds it expandable. Facts still attach to
     # it via other helpers; we only gate *its own* expansion.
     if helper_ids and not await is_expandable(ctx.pool, case_id, object_id):
@@ -204,7 +204,7 @@ async def fire_triggers(
             outcomes.append(await dispatch(ctx, manifest, object_id, case_id))
         except Exception as exc:
             # one helper blowing up must not abort the whole fan-out (or the
-            # background cascade) — record it and keep going.
+            # background cascade), record it and keep going.
             logger.warning("dispatch %s on %s failed: %r", hid, object_id, exc)
             outcomes.append(f"error:{type(exc).__name__}")
     return outcomes
@@ -246,7 +246,7 @@ async def expand_case(ctx: CascadeContext, case_id: uuid.UUID, *, max_rounds: in
             "SELECT count(*) FROM case_objects WHERE case_id=$1", case_id
         )
         if after == before:
-            break  # fixpoint — nothing new entered the case this round
+            break  # fixpoint: nothing new entered the case this round
     # assemble the discovered fragments into identity hubs + merge candidates.
     # Isolated so a convergence error never aborts the expand the operator asked for.
     try:

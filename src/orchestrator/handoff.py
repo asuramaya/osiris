@@ -7,7 +7,7 @@ in_browser; posting back the scraped result runs the helper's parser and finishe
 the run (downstream triggers then cascade normally); abandoning releases it.
 
 State is authoritative on helper_runs.status; handoffs.resolved_at marks closure.
-No business logic here beyond the transitions — the parser does the interpreting.
+No business logic here beyond the transitions; the parser does the interpreting.
 """
 
 from __future__ import annotations
@@ -68,7 +68,7 @@ async def suspend(
         )
 
     # Priority is a heuristic: objects closer to the seed tend to block more
-    # downstream work (true fan-out isn't knowable before the run — see §9).
+    # downstream work (true fan-out isn't knowable before the run; see §9).
     priority = float(-(await _hop(actions, case_id, object_id)))
     handoff_id: int = await actions.pool.fetchval(
         "INSERT INTO handoffs (helper_run_id, helper_id, object_id, case_id, origin, url, "
@@ -147,7 +147,7 @@ async def post_back(
 
 
 async def abandon(actions: Actions, handoff_id: int) -> None:
-    """Analyst skipped it — release the claim, mark the run abandoned."""
+    """Analyst skipped it: release the claim, mark the run abandoned."""
     run_id = await actions.pool.fetchval(
         "SELECT helper_run_id FROM handoffs WHERE id=$1 AND resolved_at IS NULL", handoff_id
     )

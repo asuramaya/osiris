@@ -1,6 +1,6 @@
 """Per-origin token-bucket rate limiting (Redis).
 
-Rate limits are origin-scoped, not global (DESIGN §16) — keyed by the *resolved*
+Rate limits are origin-scoped, not global (DESIGN §16), keyed by the *resolved*
 target origin at dispatch, since one helper run may touch many origins. The
 bucket refills continuously at `rps` up to `capacity` (burst); acquisition is
 atomic via a Lua script so concurrent workers can't oversubscribe an origin.

@@ -1,10 +1,10 @@
-"""Per-case budgets — the cascade terminator (DESIGN §6).
+"""Per-case budgets: the cascade terminator (DESIGN §6).
 
 Cascades stop because budgets hit zero, not because the queue drained. Three
 gates, all checked at *dispatch*:
-  * rate credits     — atomic Redis decrement (reserve, refund on no-op routes)
-  * hop distance      — graph distance from the seed (case_objects.hop_distance)
-  * helpers/object    — cap re-runs against one hot entity
+  * rate credits     : atomic Redis decrement (reserve, refund on no-op routes)
+  * hop distance      : graph distance from the seed (case_objects.hop_distance)
+  * helpers/object    : cap re-runs against one hot entity
 
 Budgets live in cases.budgets (jsonb); the Redis credit counter is seeded from
 it once via SET NX so concurrent workers share one authoritative balance.
@@ -67,7 +67,7 @@ class BudgetLedger:
         await self.redis.incr(f"budget:{case_id}:rate")
 
     async def reserve_handoff_credit(self, case_id: uuid.UUID) -> bool:
-        """Human attention is the scarcest budget — gate handoffs separately."""
+        """Human attention is the scarcest budget: gate handoffs separately."""
         budgets = await _load_budgets(self.pool, case_id)
         await self.redis.set(
             f"budget:{case_id}:handoffs", int(budgets["max_human_handoffs"]), nx=True

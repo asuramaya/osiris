@@ -1,8 +1,8 @@
-"""Response cache — reuse source fetches across expansions (DESIGN §6 cache).
+"""Response cache: reuse source fetches across expansions (DESIGN §6 cache).
 
 `cached_fetch` is the single fetch path for the cascade and federation: it returns
 a fresh cached response when one exists, otherwise calls the connector and stores
-the result. This is what makes deep / repeated expansion affordable — a (helper,
+the result. This is what makes deep / repeated expansion affordable: a (helper,
 object) pair is fetched from the network at most once per TTL, no matter how many
 times the case is expanded or previewed.
 """
