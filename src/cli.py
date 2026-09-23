@@ -205,8 +205,8 @@ async def cmd_attach(handle: str, *, manager: ManagerCall = _default_manager) ->
     try:
         roster = await manager({"op": "pty_list"})
     except (OSError, TimeoutError) as exc:
-        print(f"osiris attach: the manager daemon is unreachable ({exc}) — is osiris-manager "
-              "running? (systemctl --user status osiris-manager)", file=sys.stderr)
+        print(f"osiris attach: the manager daemon is unreachable ({exc}). Is osiris-manager "
+              "running? Check with: systemctl --user status osiris-manager", file=sys.stderr)
         return 1
     sessions = roster.get("sessions")
     sessions = sessions if isinstance(sessions, list) else []
@@ -417,7 +417,7 @@ async def _real_full_suite_gate(repo_root: Path) -> dict[str, Any]:
     except TimeoutError:
         with contextlib.suppress(ProcessLookupError):
             proc.kill()
-        return {"ok": False, "summary": "pytest timed out after 600s — never finished",
+        return {"ok": False, "summary": "pytest timed out after 600s: never finished",
                "returncode": None}
     out = out_bytes.decode(errors="replace")
     tail = "\n".join(out.strip().splitlines()[-15:])
@@ -446,13 +446,13 @@ async def cmd_smoke_chaos(*, pool: asyncpg.Pool | None = None) -> int:
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:smoke-chaos")
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris smoke --chaos: could not reach postgres — {exc}", file=sys.stderr)
+            print(f"osiris smoke --chaos: could not reach postgres: {exc}", file=sys.stderr)
             return 1
     try:
         report = await _real_chaos_gate(pool)
         await set_cursor(pool, CHAOS_LEDGER_KEY, json.dumps(report))
         if report["ok"]:
-            print(f"chaos replay: all invariants held — {report['storm_fired']} session-end(s) "
+            print(f"chaos replay: all invariants held. {report['storm_fired']} session-end(s) "
                   f"fired concurrently with the kill, recovered in "
                   f"{report['recovery_elapsed_secs']:.0f}s, "
                   f"{report['automount_probes_total']} /automount probe(s) during the window "
@@ -520,7 +520,7 @@ async def cmd_boot_status(
                     application_name="osiris-cli:boot-status-fleet")
             except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
                 print(f"osiris boot-status --fleet: could not reach postgres at "
-                      f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                      f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the "
                       "dev instance.", file=sys.stderr)
                 return 1
         try:
@@ -534,7 +534,7 @@ async def cmd_boot_status(
             render.emit(report, as_json=True)
             return 1 if report.get("rowless_count") else 0
         if report.get("blind"):
-            print("boot --fleet: the harness registry read failed — cannot census")
+            print("boot --fleet: the harness registry read failed. Cannot census")
             return 1
         for r in report["refreshed"]:
             print(f"refreshed: {r['agent_id']} (job_dir {r['job_dir']})")
@@ -542,7 +542,7 @@ async def cmd_boot_status(
             print(f"no mount row: session {r['session_id']} pid={r.get('pid')} "
                   f"cwd={r.get('cwd')}")
         if not report["refreshed"] and not report["rowless"]:
-            print("boot --fleet: every live body already had a fresh mount row")
+            print("boot --fleet: every live session already had a fresh mount row")
         return 1 if report.get("rowless_count") else 0
 
     from src.orchestrator.boot_compiler import boot_rollout_gap_notes, boot_rollout_gaps
@@ -560,8 +560,8 @@ async def cmd_boot_status(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:boot-status")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris boot-status: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris boot-status: could not reach postgres at {settings.database_url}"
+                  f": {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         gaps = await boot_rollout_gaps(pool)
@@ -686,7 +686,7 @@ async def cmd_lint(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:lint")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris lint: could not reach postgres at {settings.database_url} — "
+            print(f"osiris lint: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     if check == "triage":
@@ -734,7 +734,7 @@ async def cmd_lint(
 
     if not findings:
         scope = f" for project {project!r}" if project else ""
-        print(f"osiris lint: clean{scope} — no findings")
+        print(f"osiris lint: clean{scope}, no findings")
         return 0
     for f in findings:
         detail = f.get("detail", "")
@@ -743,8 +743,8 @@ async def cmd_lint(
         print(f"[{f.get('severity', '?')}] {f.get('check', '?')}{subj_part}: {detail}")
     counts = items.get("counts", {})
     total = sum(counts.get(c, 0) for c in {f.get("check") for f in findings})
-    print(f"osiris lint: {len(findings)} shown, {total} total in the listed checks — "
-          f"see counts_by_severity/could_not_evaluate with --json for the full receipt")
+    print(f"osiris lint: {len(findings)} shown, {total} total in the listed checks. "
+          f"See counts_by_severity/could_not_evaluate with --json for the full result")
     return 1
 
 
@@ -779,7 +779,7 @@ async def cmd_graph_export(
                 application_name="osiris-cli:graph-export")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris graph-export: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   f"instance.", file=sys.stderr)
             return 1
     try:
@@ -849,8 +849,8 @@ async def cmd_layout(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:layout-migrate")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris layout: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris layout: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         actions = Actions(pool)
@@ -923,11 +923,11 @@ async def cmd_layout(
                     print(f"osiris layout: {receipt['stage']}"
                           + (f" ({receipt['count']})" if "count" in receipt else ""))
                 elif receipt.get("verify_only"):
-                    print(f"osiris layout: verify-only OK — {receipt['placed']} objects "
+                    print(f"osiris layout: verify-only OK. {receipt['placed']} objects "
                           f"would be placed, nothing written{rss_note}{declump_note}"
                           f"{acceptance_note}")
                 elif receipt.get("done"):
-                    print(f"osiris layout: done — {receipt['placed']} objects placed "
+                    print(f"osiris layout: done. {receipt['placed']} objects placed "
                           f"under the physics layout{rss_note}{declump_note}{acceptance_note}")
             return rc
         async for receipt in run_layout_migrate(actions, limit=limit):
@@ -938,7 +938,7 @@ async def cmd_layout(
             print(f"osiris layout: batch {receipt['batch']} placed {receipt['placed']} "
                   f"(total {receipt['total_placed']})")
         else:
-            print("osiris layout: done — every object carries the current layout version")
+            print("osiris layout: done. Every object carries the current layout version")
         return rc
     finally:
         if owns_pool:
@@ -989,7 +989,7 @@ async def cmd_audit(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:audit")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris audit: could not reach postgres at {settings.database_url} — "
+            print(f"osiris audit: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -1021,7 +1021,7 @@ async def cmd_seed(*, compositions_only: bool, pool: asyncpg.Pool | None = None)
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:seed")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris seed: could not reach postgres at {settings.database_url} — {exc}. "
+            print(f"osiris seed: could not reach postgres at {settings.database_url}: {exc}. "
                   "Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -1092,7 +1092,7 @@ async def cmd_soul_key(
         out = soul_crypto.soul_key_init(
             owner=owner, path=path, backend=backend, print_recovery=print_recovery)
         if "error" in out:
-            print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+            print(f"osiris soul-key {action}: refused: {out['error']}", file=sys.stderr)
             render.emit(out, as_json=as_json, title=f"soul-key {action}")
             return 1
         out["restart_units"] = _SOUL_KEY_RESTART_UNITS
@@ -1106,7 +1106,7 @@ async def cmd_soul_key(
             out["restarted"] = False
             out["restart_hint"] = (
                 f"the key is minted, but osiris-mcp/osiris-worker won't see it until "
-                f"restarted — run `{restart_cmd}` (or re-run with --restart)")
+                f"restarted. Run `{restart_cmd}` (or re-run with --restart)")
         render.emit(out, as_json=as_json, title=f"soul-key {action}")
         return 0
     if action not in _SOUL_KEY_ACTIONS:
@@ -1130,7 +1130,7 @@ async def cmd_soul_key(
                 application_name="osiris-cli:soul-key")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris soul-key {action}: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the "
                   "dev instance.", file=sys.stderr)
             return 1
     try:
@@ -1153,7 +1153,7 @@ async def cmd_soul_key(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris soul-key {action}: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris soul-key {action}: refused: {out['error']}", file=sys.stderr)
         render.emit(out, as_json=as_json, title=f"soul-key {action}")
         return 1
     render.emit(out, as_json=as_json, title=f"soul-key {action}")
@@ -1187,7 +1187,7 @@ async def cmd_restic_key(
     else:
         out = restic_credential.restic_key_status(path=path)
     if "error" in out:
-        print(f"osiris restic-key {action}: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris restic-key {action}: refused: {out['error']}", file=sys.stderr)
         render.emit(out, as_json=as_json, title=f"restic-key {action}")
         return 1
     render.emit(out, as_json=as_json, title=f"restic-key {action}")
@@ -1228,7 +1228,7 @@ async def cmd_offload_runner(
                 application_name="osiris-cli:offload-runner")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris offload-runner tick: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the "
                   "dev instance.", file=sys.stderr)
             return 1
     try:
@@ -1239,7 +1239,7 @@ async def cmd_offload_runner(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris offload-runner tick: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris offload-runner tick: refused: {out['error']}", file=sys.stderr)
         render.emit(out, as_json=as_json, title="offload-runner tick")
         return 1
     render.emit(out, as_json=as_json, title="offload-runner tick")
@@ -1298,17 +1298,17 @@ async def _resolve_launch_target(
         print(f"osiris {verb}: no living Seat holds handle {handle!r}.", file=sys.stderr)
         return None
     if len(seat_ids) > 1:
-        print(f"osiris {verb}: {handle!r} is ambiguous — {len(seat_ids)} seats share it: "
+        print(f"osiris {verb}: {handle!r} is ambiguous. {len(seat_ids)} seats share it: "
               f"{seat_ids}. Use a more specific handle.", file=sys.stderr)
         return None
     facts = await seat_facts(pool, seat_ids[0])
     if not facts["handle"]:
-        print(f"osiris {verb}: {seat_ids[0]} carries no handle assertion — a body cannot "
+        print(f"osiris {verb}: {seat_ids[0]} carries no handle assertion. A session cannot "
               "be named for a nameless seat.", file=sys.stderr)
         return None
     if not facts["anchor_cwd"]:
-        print(f"osiris {verb}: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd — "
-              "establish-seat-dir first; a body needs a seat directory to be born in.",
+        print(f"osiris {verb}: {facts['handle']} ({seat_ids[0]}) has no anchor_cwd. "
+              "Run establish-seat-dir first; a session needs a seat directory to be born in.",
               file=sys.stderr)
         return None
     facts["seat_id"] = seat_ids[0]
@@ -1396,9 +1396,9 @@ async def _resolve_and_guard_launch(
     # side should make — this only refuses loudly and names which field disagrees.
     if not _tree_exists(office):
         print(f"osiris {verb}: {handle!r} names anchor_cwd={office!r} but it does not "
-              "exist on disk — repoint it or create the directory before launch; osiris "
-              "never provisions one itself. The anchor is a GRAPH assertion (not a "
-              f".osiris pin file) — fix it with: rebind_seat(seat={handle!r}, "
+              "exist on disk. Repoint it or create the directory before launch; osiris "
+              "never provisions one itself. The anchor is a graph assertion, not a "
+              f".osiris pin file. Fix it with: rebind_seat(seat={handle!r}, "
               "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
               f"{office!r} at that exact path.", file=sys.stderr)
         return 1
@@ -1406,8 +1406,8 @@ async def _resolve_and_guard_launch(
     if tree_cwd:
         if not _tree_exists(tree_cwd):
             print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r} but it does not "
-                  "exist on disk — osiris expects the harness (or a human, via "
-                  "EnterWorktree) to have created it before launch; it never provisions "
+                  "exist on disk. Osiris expects the harness, or a human via "
+                  "EnterWorktree, to have created it before launch; it never provisions "
                   "one itself. Fix it with: bind_seat_tree(seat_id="
                   f"{facts['seat_id']!r}, tree_cwd='<the real directory>', because='...') "
                   "via the osiris MCP tools, or by creating it at that exact path.",
@@ -1421,8 +1421,8 @@ async def _resolve_and_guard_launch(
         if fabricated is not None:
             repo, real_path = fabricated
             print(f"osiris {verb}: {handle!r} names tree_cwd={tree_cwd!r}, which holds no "
-                  f"git tree, while its charter governs {repo!r} at {real_path!r} (a real "
-                  "tree) — the #199 mint-time fabrication; a body spawned there lands in "
+                  f"git tree, while its charter governs {repo!r} at {real_path!r}, a real "
+                  "tree. A body spawned there lands in "
                   "the wrong cwd. Fix it with: bind_seat_tree(seat_id="
                   f"{facts['seat_id']!r}, tree_cwd={real_path!r}, because='...') via the "
                   "osiris MCP tools.", file=sys.stderr)
@@ -1455,7 +1455,7 @@ async def _resolve_and_guard_launch(
         # does. Neither is a failure and neither should shout. The DIAGNOSTIC (how we
         # know) goes to stderr so `osiris launch X | ...` stays clean; the VERDICT stays
         # on stdout, and now names which of the two things happened.
-        print(f"already-live: {handle} — a body is already there, nothing started")
+        print(f"already-live: {handle}. A session is already there, nothing started")
         print(f"osiris {verb}: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
     if twin["stale_harness_row"] is not None:
@@ -1467,7 +1467,7 @@ async def _resolve_and_guard_launch(
         row = twin["stale_harness_row"]
         print(f"osiris {verb}: ignoring a stale claude agents --json row for "
               f"{handle} ({row.get('name')!r}, state={row.get('state')!r}, "
-              f"pid={row.get('pid')!r}) — dead, not a twin", file=sys.stderr)
+              f"pid={row.get('pid')!r}): dead, not a twin", file=sys.stderr)
     return facts, launch_cwd
 
 
@@ -1516,9 +1516,9 @@ async def _cmd_launch_harness(
     # own docstring for why this stays here rather than in the shared trigger.py shell.
     if not _tree_exists(office):
         print(f"osiris launch: {handle!r} names anchor_cwd={office!r} but it does not "
-              "exist on disk — repoint it or create the directory before launch; osiris "
-              "never provisions one itself. The anchor is a GRAPH assertion (not a "
-              f".osiris pin file) — fix it with: rebind_seat(seat={handle!r}, "
+              "exist on disk. Repoint it or create the directory before launch; osiris "
+              "never provisions one itself. The anchor is a graph assertion, not a "
+              f".osiris pin file. Fix it with: rebind_seat(seat={handle!r}, "
               "new_cwd='<the real directory>') via the osiris MCP tools, or by creating "
               f"{office!r} at that exact path.", file=sys.stderr)
         return 1
@@ -1532,19 +1532,19 @@ async def _cmd_launch_harness(
 
     status = out.get("status")
     if status == "already-live":
-        print(f"already-live: {handle} — a body is already there, nothing started")
+        print(f"already-live: {handle}. A session is already there, nothing started")
         seen_via = out.get("seen_via")
         if seen_via:
             print(f"osiris launch: seen via {', '.join(seen_via)}", file=sys.stderr)
         return 0
     if status != "launched":
-        print(f"osiris launch: refused — {out.get('detail', status)}", file=sys.stderr)
+        print(f"osiris launch: refused: {out.get('detail', status)}", file=sys.stderr)
         return 1
 
     dormant = out.get("dormant_history")
     if dormant is not None:
         from src.ingest.sessions import dormant_history_note
-        print(f"osiris launch: {handle!r} — {dormant_history_note(dormant)}",
+        print(f"osiris launch: {handle!r}: {dormant_history_note(dormant)}",
               file=sys.stderr)
 
     window = out.get("window")
@@ -1567,7 +1567,7 @@ async def _cmd_launch_harness(
             break
         await sleep(1.0)
     if alive_row is None:
-        print("  not yet visible in `claude agents --json` — it may still be booting or "
+        print("  not yet visible in `claude agents --json`. It may still be booting or "
               "self-binding; re-check with `osiris fleet` in a few seconds.")
         return 0
     session_id = alive_row.get("sessionId")
@@ -1593,14 +1593,14 @@ async def _cmd_launch_pty(
     try:
         roster = await manager({"op": "pty_list"})
     except (OSError, TimeoutError) as exc:
-        print(f"osiris launch: the manager daemon is unreachable ({exc}) — is "
+        print(f"osiris launch: the manager daemon is unreachable ({exc}). Is "
               "osiris-manager running?", file=sys.stderr)
         return 1
     sessions = roster.get("sessions")
     sessions = sessions if isinstance(sessions, list) else []
     existing, _ = match_session(sessions, handle)
     if existing:
-        print(f"osiris launch: a live body already holds {handle!r} — {existing!r}. Not "
+        print(f"osiris launch: a live session already holds {handle!r}: {existing!r}. Not "
               f"minting a twin (attach to it: `osiris attach {handle}`).")
         return 0
 
@@ -1614,7 +1614,7 @@ async def _cmd_launch_pty(
     st = get_settings()
     ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
     if not ok:
-        print(f"osiris launch: refused — {why}", file=sys.stderr)
+        print(f"osiris launch: refused: {why}", file=sys.stderr)
         return 1
 
     resolved_model = resolve_model(model, facts["intended_model"], wake_default)
@@ -1634,36 +1634,36 @@ async def _cmd_launch_pty(
              "seat": {"handle": facts["handle"], "house": facts["house"]},
              "job_dir": anchor, "env": child_env})
     except (OSError, TimeoutError) as exc:
-        print(f"osiris launch: manager unreachable mid-spawn ({exc}) — nothing confirmed "
+        print(f"osiris launch: manager unreachable mid-spawn ({exc}). Nothing confirmed "
               "spawned.", file=sys.stderr)
         return 1
     if not isinstance(res, dict) or res.get("error"):
         detail = res.get("error") if isinstance(res, dict) else str(res)
-        print(f"osiris launch: spawn refused — {detail}", file=sys.stderr)
+        print(f"osiris launch: spawn refused: {detail}", file=sys.stderr)
         return 1
 
     spawned = res.get("spawned")
     if not isinstance(spawned, str):
-        print(f"osiris launch: manager accepted the spawn but named no window ({res!r}) — "
-              "cannot confirm anything; check with `osiris fleet`.", file=sys.stderr)
+        print(f"osiris launch: manager accepted the spawn but named no window ({res!r}). "
+              "Cannot confirm anything; check with `osiris fleet`.", file=sys.stderr)
         return 1
     print(f"osiris launch: spawned {spawned!r}, requested model="
           f"{resolved_model or '(claude CLI default)'}")
     alive, mounted_model = await _await_launch_confirmation(
         pool, manager, spawned_name=spawned, anchor_cwd=facts["anchor_cwd"])
     print(f"  window alive: {alive}" + ("" if alive else
-          " (not yet — re-check with `osiris fleet` shortly; if this persists, "
+          " (not yet, re-check with `osiris fleet` shortly; if this persists, run "
           "systemctl --user status osiris-manager)"))
     if mounted_model is None:
-        print("  mount not yet observed within the wait — the claude is still booting or "
+        print("  mount not yet observed within the wait. The claude is still booting or "
               "self-binding; re-check with `osiris fleet` in a few seconds.")
     elif resolved_model and mounted_model != resolved_model:
-        print(f"  MISMATCH: requested model={resolved_model!r} but the body that mounted "
-              f"reports model={mounted_model!r} — this is thread 20e4feb6's own bug class "
+        print(f"  MISMATCH: requested model={resolved_model!r} but the session that mounted "
+              f"reports model={mounted_model!r}. This is a known bug class "
               "(launch spawning the wrong model, silently); check the manager daemon's "
               "argv handling before assuming this launch is healthy.")
     else:
-        print(f"  confirmed: a body mounted at {facts['anchor_cwd']} reporting "
+        print(f"  confirmed: a session mounted at {facts['anchor_cwd']} reporting "
               f"model={mounted_model!r}")
     return 0
 
@@ -1700,7 +1700,7 @@ async def cmd_launch(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:launch")
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris launch: could not reach postgres at {settings.database_url} — "
+            print(f"osiris launch: could not reach postgres at {settings.database_url}: "
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
@@ -1796,10 +1796,10 @@ async def _cmd_resume_harness(
             # osiris resume never mints, whatever the registry finding is; "resident-
             # unknown" gets the SHARPER message naming the exact resume command a human
             # can run to confirm the session themselves.
-            print(f"osiris resume: REFUSING — {handle!r} has a possibly-resumable "
+            print(f"osiris resume: refusing. {handle!r} has a possibly-resumable "
                   f"session {resume[0][:8]} but {refusal}. Run `claude -p --resume "
                   f"{resume[0]}` by hand to confirm it yourself; osiris will not resume "
-                  "a head it merely couldn't verify.", file=sys.stderr)
+                  "a session it merely couldn't verify.", file=sys.stderr)
             return 1
         if gate is not None:
             resume_log = [*resume_log, f"{gate} guard refused it: {refusal}"]
@@ -1808,7 +1808,7 @@ async def _cmd_resume_harness(
         # NEVER FALLS THROUGH TO FRESH (the whole point of the split, operator ruling
         # 60c78788): `osiris launch` mints fresh; `osiris resume` either resumes or
         # refuses, cleanly, nothing spawned either way.
-        print(f"osiris resume: {handle!r} has nothing resumable — "
+        print(f"osiris resume: {handle!r} has nothing resumable. "
               f"{_collapse_resume_log(resume_log)} (gate: "
               f"min_tail_bytes={st.osiris_resume_min_tail_bytes}, ceiling="
               f"{st.osiris_resume_ceiling_bytes}b)", file=sys.stderr)
@@ -1836,22 +1836,22 @@ async def _cmd_resume_harness(
         pool, agents_json=agents_json, office=spawn_cwd, requested_sid=resumed_session_id,
         holder=str(holder), project=facts.get("house"))
     if adoption.get("copied"):
-        print(f"osiris resume: NOTE — the harness started a COPY (session "
+        print(f"osiris resume: note: the harness started a copy (session "
               f"{str(adoption['session_id'])[:8]}) instead of continuing "
-              f"{resumed_session_id[:8]}: a stopped background record was still on file "
+              f"{resumed_session_id[:8]}: a stopped background record was still on file. "
               f"(`osiris stop` now removes it; `claude rm {resumed_session_id[:8]}` clears "
-              f"one by hand). Adopted as {holder}'s own continuation — its ledger and "
+              f"one by hand.) Adopted as {holder}'s own continuation: its ledger and "
               "registry now name this seat's lineage.", file=sys.stderr)
     elif adoption.get("session_id") is None:
-        print("osiris resume: NOTE — no body appeared at the seat directory within the "
-              "check window; `claude agents --json` is the witness, not this receipt.",
+        print("osiris resume: note: no session appeared at the seat directory within the "
+              "check window. `claude agents --json` is the witness, not this result.",
               file=sys.stderr)
     if cleared:
         print(f"osiris resume: cleared a stale stopped record for "
-              f"{resumed_session_id[:8]} before spawning — pre-empting the copy quirk, "
-              "not just adopting it.", file=sys.stderr)
-    print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd} — "
-          f"walked {resume[5]} generation(s) back to find it "
+              f"{resumed_session_id[:8]} before spawning. This pre-empts the copy quirk, "
+              "not just adopts it.", file=sys.stderr)
+    print(f"osiris resume: resumed session {resumed_session_id[:8]} at {spawn_cwd}. "
+          f"Walked {resume[5]} generation(s) back to find it "
           f"({_collapse_resume_log(resume_log)}). Runs persistently under `claude --bg "
           f"--resume`: it idles after this turn rather than exiting, and shows up in "
           f"`claude agents` as {name!r}. To reach it again: send it mail, it wakes on "
@@ -1859,8 +1859,8 @@ async def _cmd_resume_harness(
     stamped_model = facts.get("intended_model")
     if stamped_model and resolved_model != stamped_model:
         print(f"  MODEL MISMATCH: spawned on {resolved_model!r} but the seat's own "
-              f"stamped intended_model is {stamped_model!r} — never silent (thread "
-              "20e4feb6).", file=sys.stderr)
+              f"stamped intended_model is {stamped_model!r}. Never silent.",
+              file=sys.stderr)
     return 0
 
 
@@ -1894,7 +1894,7 @@ async def cmd_resume(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:resume")
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris resume: could not reach postgres at {settings.database_url} — "
+            print(f"osiris resume: could not reach postgres at {settings.database_url}: "
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
@@ -1936,7 +1936,7 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
             pool = await create_pool(settings.database_url, min_size=1, max_size=2,
                                      application_name="osiris-cli:stop")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris stop: could not reach postgres at {settings.database_url} — "
+            print(f"osiris stop: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -1954,7 +1954,7 @@ async def cmd_stop(handle: str, *, reason: str = "", as_json: bool = False,
     status = out.get("status")
     if status in ("stopped", "no-live-body"):
         return 0
-    print(f"osiris stop: {status} — {out.get('detail', '')}", file=sys.stderr)
+    print(f"osiris stop: {status}: {out.get('detail', '')}", file=sys.stderr)
     return 1
 
 
@@ -1977,8 +1977,8 @@ async def cmd_search(query: str, *, limit: int = 15, as_json: bool = False,
     url = await _mcp_url()
     result = await call_mcp_tool(url, "search", {"query": query, "limit": limit})
     if isinstance(result, str):
-        print(f"osiris search: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        print(f"osiris search: {result}. Is osiris-mcp running? "
+              "Check with: systemctl --user status osiris-mcp", file=sys.stderr)
         return 1
     # search() has no server-side render='text' shape (no single-string form exists to ask
     # for) — `--text` falls back to the same human render `--text`-less mode already gives
@@ -2007,7 +2007,7 @@ async def cmd_dossier(object_ref: str, *, want_relationships: bool = False,
     result = await call_mcp_tool(
         url, "dossier", {"object_ref": object_ref, "want_relationships": want_relationships})
     if isinstance(result, str):
-        print(f"osiris dossier: {result} — is osiris-mcp running? "
+        print(f"osiris dossier: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     # dossier() has no server-side render='text' shape — `--text` falls back to the same
@@ -2027,7 +2027,7 @@ async def cmd_object_events(object_ref: str, *, event_type: str | None = None,
     result = await call_mcp_tool(
         url, "object_events", {"object_ref": object_ref, "event_type": event_type})
     if isinstance(result, str):
-        print(f"osiris object-events: {result} — is osiris-mcp running? "
+        print(f"osiris object-events: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     render.emit(result, as_json=as_json, title=f"object-events · {object_ref}")
@@ -2044,7 +2044,7 @@ async def cmd_succession_chain(ref: str, *, max_hops: int = 10,
     url = await _mcp_url()
     result = await call_mcp_tool(url, "succession_chain", {"ref": ref, "max_hops": max_hops})
     if isinstance(result, str):
-        print(f"osiris succession-chain: {result} — is osiris-mcp running? "
+        print(f"osiris succession-chain: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     render.emit(result, as_json=as_json, title=f"succession-chain · {ref}")
@@ -2063,7 +2063,7 @@ async def cmd_candidates(*, project: str | None = None, limit: int = 50,
     url = await _mcp_url()
     result = await call_mcp_tool(url, "candidates", {"project": project, "limit": limit})
     if isinstance(result, str):
-        print(f"osiris candidates: {result} — is osiris-mcp running? "
+        print(f"osiris candidates: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     render.emit(result, as_json=as_json, title="candidates")
@@ -2102,7 +2102,7 @@ async def cmd_inspect(
     dossier_result = await call_mcp_tool(
         url, "dossier", {"object_ref": ref, "want_relationships": want_relationships})
     if isinstance(dossier_result, str):
-        print(f"osiris inspect: {dossier_result} — is osiris-mcp running? "
+        print(f"osiris inspect: {dossier_result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     out["dossier"] = dossier_result
@@ -2151,7 +2151,7 @@ async def cmd_digest(*, hours: int | None = None, mark_seen: bool = False,
     result = await call_mcp_tool(
         url, "fleet_digest", {"hours": hours, "mark_seen": mark_seen})
     if isinstance(result, str):
-        print(f"osiris digest: {result} — is osiris-mcp running? "
+        print(f"osiris digest: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     # fleet_digest() has no server-side render='text' shape — same fallback note as
@@ -2214,7 +2214,7 @@ async def cmd_composition(
                     application_name="osiris-cli:composition")
             except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
                 print(f"osiris composition: could not reach postgres at "
-                      f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the "
+                      f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the "
                       "dev instance.", file=sys.stderr)
                 return 1
         try:
@@ -2236,7 +2236,7 @@ async def cmd_composition(
         "subject": subject, "fields": fields, "take": take, "depth": depth, "offset": offset,
     })
     if isinstance(result, str):
-        print(f"osiris composition: {result} — is osiris-mcp running? "
+        print(f"osiris composition: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     render.emit(result, as_json=as_json, title=f"composition {action}")
@@ -2269,7 +2269,7 @@ async def cmd_retire_assertion(
                 application_name="osiris-cli:retire-assertion")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-assertion: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -2280,7 +2280,7 @@ async def cmd_retire_assertion(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-assertion: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-assertion: refused: {out['error']}", file=sys.stderr)
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title="retire-assertion")
@@ -2313,7 +2313,7 @@ async def cmd_retire_link(
                 application_name="osiris-cli:retire-link")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-link: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -2324,7 +2324,7 @@ async def cmd_retire_link(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-link: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-link: refused: {out['error']}", file=sys.stderr)
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title="retire-link")
@@ -2358,20 +2358,20 @@ async def cmd_cite(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:cite")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris cite: could not reach postgres at {settings.database_url} — "
+            print(f"osiris cite: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         from_id = await resolve_ref(pool, ref)
         if from_id is None:
-            print(f"osiris cite: refused — {ref!r} does not resolve to any object — a "
-                  "citation needs a real citing Decision/Thread/Evaluation", file=sys.stderr)
+            print(f"osiris cite: refused: {ref!r} does not resolve to any object. A "
+                  "citation needs a real citing Decision, Thread, or Evaluation.", file=sys.stderr)
             return 1
         try:
             out = await mint_transcript_citation(
                 Actions(pool), from_id, agent, line_idx, because, source=actor)
         except ValueError as e:
-            print(f"osiris cite: refused — {e}", file=sys.stderr)
+            print(f"osiris cite: refused: {e}", file=sys.stderr)
             return 1
     finally:
         if owns_pool:
@@ -2405,19 +2405,19 @@ async def cmd_citation(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:citation")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris citation: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris citation: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         from_id = await resolve_ref(pool, ref)
         if from_id is None:
-            print(f"osiris citation: refused — {ref!r} does not resolve to any object",
+            print(f"osiris citation: refused: {ref!r} does not resolve to any object",
                   file=sys.stderr)
             return 1
         try:
             out = await read_transcript_citation(pool, from_id, agent)
         except ValueError as e:
-            print(f"osiris citation: refused — {e}", file=sys.stderr)
+            print(f"osiris citation: refused: {e}", file=sys.stderr)
             return 1
     finally:
         if owns_pool:
@@ -2439,7 +2439,7 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
         # response for the caller's own `full`.
         result = await call_mcp_tool(url, "fleet", {"full": full})
         if isinstance(result, str):
-            print(f"osiris fleet: {result} — is osiris-mcp running? "
+            print(f"osiris fleet: {result}. Is osiris-mcp running? "
                   "(systemctl --user status osiris-mcp)", file=sys.stderr)
             return 1
         render.emit(result, as_json=True)
@@ -2456,7 +2456,7 @@ async def cmd_fleet(*, full: bool, as_json: bool = False) -> int:
     # on THIS terminal (`cli_render.supports_color()`), which the server can never know.
     result = await call_mcp_tool(url, "fleet", {"full": full})
     if isinstance(result, str):
-        print(f"osiris fleet: {result} — is osiris-mcp running? "
+        print(f"osiris fleet: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     tree = result.get("tree")
@@ -2493,7 +2493,7 @@ async def _call_and_emit_text(
     call_params = dict(params) if want_json else {**params, "render": "text"}
     result = await call_mcp_tool(url, tool, call_params)
     if isinstance(result, str):
-        print(f"{error_prefix}: {result} — is osiris-mcp running? "
+        print(f"{error_prefix}: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     if text_only:
@@ -2575,7 +2575,7 @@ async def cmd_team(*, seat: str | None = None, as_json: bool = False, text: bool
             pool = await create_pool(settings.database_url, min_size=1, max_size=2,
                                      application_name="osiris-cli:team")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris team: could not reach postgres at {settings.database_url} — "
+            print(f"osiris team: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -2656,7 +2656,7 @@ async def cmd_show(ref: str, *, as_json: bool = False, text: bool = False) -> in
     url = await _mcp_url()
     result = await call_mcp_tool(url, "recall", {"ref": ref})
     if isinstance(result, str):
-        print(f"osiris show: {result} — is osiris-mcp running? "
+        print(f"osiris show: {result}. Is osiris-mcp running? "
               "(systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     # recall() has no server-side render='text' shape — same fallback note as cmd_search.
@@ -2797,11 +2797,11 @@ async def _real_install_user_units(repo_root: Path) -> list[str]:
     never re-read."""
     sources = user_unit_sources(repo_root)
     if not sources:
-        return ["unit files: no deploy/user/ found — nothing to install"]
+        return ["unit files: no deploy/user/ found, nothing to install"]
     rendered = await _rendered_user_unit_contents(repo_root)
     contents = {src.name: rendered.get(src.name, src.read_text()) for src in sources}
     placeholder_notes = [
-        f"unit: REFUSED {name} — {reason}"
+        f"unit: REFUSED {name}: {reason}"
         for name, text in contents.items()
         if (reason := _placeholder_unit_reason(text, repo_root)) is not None
     ]
@@ -2935,9 +2935,9 @@ def commit_deployed_notes(status: list[tuple[str, str]], oneshot: dict[str, str]
         unit = oneshot.get(path)
         if unit is None:
             continue
-        notes.append(f"{path} (backs oneshot timer {unit!r}, status {code.strip() or '??'}) — "
-                     "read fresh from disk at every fire; NOT gated by a restart or a hold. "
-                     "Whatever's there now is already effectively live — review it directly.")
+        notes.append(f"{path} (backs oneshot timer {unit!r}, status {code.strip() or '??'}): "
+                     "read fresh from disk at every fire. NOT gated by a restart or a hold. "
+                     "Whatever's there now is already effectively live. Review it directly.")
     return notes
 
 
@@ -3041,7 +3041,7 @@ async def cmd_smoke_reboot(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:smoke-reboot")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"  worker heartbeat: could not reach postgres to check — {exc}",
+            print(f"  worker heartbeat: could not reach postgres to check: {exc}",
                   file=sys.stderr)
             misses.append("worker heartbeat (postgres unreachable)")
             pool = None
@@ -3058,7 +3058,7 @@ async def cmd_smoke_reboot(
             misses.append("worker heartbeat")
 
     if misses:
-        print(f"osiris smoke --reboot: FAILED — {', '.join(misses)} did not answer "
+        print(f"osiris smoke --reboot: FAILED: {', '.join(misses)} did not answer "
               f"within {budget_secs:.0f}s", file=sys.stderr)
         return 1
     print("osiris smoke --reboot: all green")
@@ -3099,10 +3099,10 @@ def unit_drift_notes(repo_root: Path, systemd_user_dir: Path) -> list[str]:
     for src in user_unit_sources(repo_root):
         dest = systemd_user_dir / src.name
         if not dest.is_file():
-            notes.append(f"{src.name}: NOT INSTALLED — {dest} does not exist")
+            notes.append(f"{src.name}: NOT INSTALLED: {dest} does not exist")
             continue
         if dest.read_text() != src.read_text():
-            notes.append(f"{src.name}: DRIFTED — installed content differs from the repo's "
+            notes.append(f"{src.name}: DRIFTED: installed content differs from the repo's "
                         f"own deploy/user/{src.name}")
     return notes
 
@@ -3149,7 +3149,7 @@ async def _cmd_boot_status_units(*, as_json: bool = False) -> int:
     files on disk + systemctl state, no pool needed) over the same CLI verb."""
     root = _find_repo_root()
     if root is None:
-        print("osiris boot-status --units: not inside a git checkout — nothing to check",
+        print("osiris boot-status --units: not inside a git checkout, nothing to check",
               file=sys.stderr)
         return 1
     systemd_user_dir = Path.home() / ".config" / "systemd" / "user"
@@ -3212,7 +3212,7 @@ def composition_gap_notes(have: set[str], expected: set[str]) -> list[str]:
     naming it, so `osiris seed --compositions-only` is an instruction a reader can act on
     rather than a hope. Extra rows (user-saved or otherwise) never mask a gap here — only
     a name present in `expected` and absent from `have` counts as one."""
-    return [f"compositions: default {name!r} missing from the DB — run `osiris seed` "
+    return [f"compositions: default {name!r} missing from the DB, run `osiris seed` "
             "(or `osiris seed --compositions-only`)." for name in sorted(expected - have)]
 
 
@@ -3243,7 +3243,7 @@ def composition_drift_notes(
             continue
         if json.dumps(source_spec, sort_keys=True) != json.dumps(live_specs[name], sort_keys=True):
             out.append(
-                f"compositions: {name!r} DIFFERS from its own DEFAULT_COMPOSITIONS source — "
+                f"compositions: {name!r} DIFFERS from its own DEFAULT_COMPOSITIONS source: "
                 "either a deliberate live hand-edit (leave it) or a forgotten re-save after "
                 "editing the source constant (run `osiris seed --compositions-only`); this "
                 "check cannot tell which.")
@@ -3253,7 +3253,7 @@ def composition_drift_notes(
 def alembic_gap_note(current: str | None, head: str | None) -> str | None:
     if head is None or current == head:
         return None
-    return (f"alembic: DB is at revision {current!r}, the latest migration is {head!r} — "
+    return (f"alembic: DB is at revision {current!r}, the latest migration is {head!r}. "
            "run `alembic upgrade head`.")
 
 
@@ -3341,7 +3341,7 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
         Actions(pool), evidence="osiris deploy: automatic casefold merge "
         "(#108 piece 2, operator ruling 22d47acb/d02f2cdd)",
         actor="osiris-deploy", execute=execute)
-    notes = [f"casefold auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+    notes = [f"casefold auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
              f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
     for c in result["candidates"]:
         notes.append(f"  {c['phantom']} -> {c['populated']} (correct case "
@@ -3355,7 +3355,7 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
                          "side and had its project attribution re-pointed by this "
                          "automatic merge")
     for s in result["skipped"]:
-        notes.append(f"  SKIPPED: {s['canonicals']} — {s['reason']}")
+        notes.append(f"  SKIPPED: {s['canonicals']}: {s['reason']}")
     return notes
 
 
@@ -3407,12 +3407,12 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
         Actions(pool), evidence="osiris deploy: automatic remote_url-matched merge "
         "(#108 piece 3, decision 2ee34a9d)",
         actor="osiris-deploy", execute=execute)
-    notes = [f"remote_url auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+    notes = [f"remote_url auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
              f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
     for c in result["candidates"]:
         notes.append(f"  {c['dupe']} -> {c['into']} (remote_url {c['remote_url']!r})")
     for s in result["skipped"]:
-        notes.append(f"  SKIPPED: {s['canonicals']} — {s['reason']}")
+        notes.append(f"  SKIPPED: {s['canonicals']}: {s['reason']}")
     return notes
 
 
@@ -3439,14 +3439,14 @@ async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
         "(#108 piece 4, decision 118a98da/31e5bae1) — the survivor's own graph already "
         "asserted this rename as a current name alias before this fold ran",
         actor="osiris-deploy", execute=execute)
-    notes = [f"name-alias auto-merge: {'EXECUTED' if execute else 'dry-run'} — "
+    notes = [f"name-alias auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
              f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
     for c in result["candidates"]:
         notes.append(f"  {c['dupe']} -> {c['into']} (alias {c['alias']!r} was already "
-                     f"a current name on {c['into']} — see decision 31e5bae1 for the "
-                     "standing self-service procedure this fold follows)")
+                     f"a current name on {c['into']}, matching the standing self-service "
+                     "merge procedure)")
     for s in result["skipped"]:
-        notes.append(f"  SKIPPED: {s['survivor']} alias {s['alias']!r} — {s['reason']}")
+        notes.append(f"  SKIPPED: {s['survivor']} alias {s['alias']!r}: {s['reason']}")
     return notes
 
 
@@ -3499,8 +3499,8 @@ async def _apply_pending_migrations(
     gap = alembic_gap_note(current, head)
     if gap is None:
         return True, ("migrations: up to date" if head is not None else
-                      "migrations: undeterminable here (no alembic.ini under this repo_root) "
-                      "— not gating")
+                      "migrations: undeterminable here (no alembic.ini under this repo_root), "
+                      "not gating")
     # NAME THE ACCIDENTAL CONTROL (decision 8d3f5e2d, task #142 follow-up): this exact
     # refusal already happened once by luck — `command.upgrade(cfg, "head")` errors when
     # `current` isn't reachable from the tree's own alembic chain, and the generic except
@@ -3512,14 +3512,14 @@ async def _apply_pending_migrations(
     known = _alembic_revision_known(repo_root, current) if current is not None else None
     if known is False:
         return False, (
-            f"migrations: REFUSED — DB is at revision {current!r}, which this tree's own "
-            f"migrations do not recognize (decision 8d3f5e2d: another branch's migration "
-            f"ran against this shared database before merging). NOTHING was restarted; "
-            f"find and merge the branch that owns revision {current!r}.")
+            f"migrations: REFUSED. DB is at revision {current!r}, which this tree's own "
+            f"migrations do not recognize (another branch's migration ran against this "
+            f"shared database before merging). NOTHING was restarted. "
+            f"Find and merge the branch that owns revision {current!r}.")
     try:
         await run_migrations(repo_root)
     except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, refuse, never restart
-        return False, f"migrations: REFUSED — {gap} ({exc}). NOTHING was restarted."
+        return False, f"migrations: REFUSED: {gap} ({exc}). NOTHING was restarted."
     return True, f"migrations: {current!r}..{head!r} applied"
 
 
@@ -3536,7 +3536,7 @@ async def cmd_migrate(
     leg 2) who wants to know without acting."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
-        print("osiris migrate: not inside a git repository — cd into the osiris checkout "
+        print("osiris migrate: not inside a git repository. cd into the osiris checkout "
               "first.", file=sys.stderr)
         return 1
 
@@ -3553,13 +3553,13 @@ async def cmd_migrate(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:migrate")
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris migrate: could not reach postgres at {settings.database_url} — "
+            print(f"osiris migrate: could not reach postgres at {settings.database_url}: "
                   f"{exc}.", file=sys.stderr)
             return 1
     try:
         current, head = await state(pool, root)
         if head is None:
-            print(f"osiris migrate: no alembic.ini/alembic/ under {root} — nothing to "
+            print(f"osiris migrate: no alembic.ini/alembic/ under {root}, nothing to "
                   "migrate here.", file=sys.stderr)
             return 1
         gap = alembic_gap_note(current, head)
@@ -3567,12 +3567,12 @@ async def cmd_migrate(
             print(f"osiris migrate: up to date (revision {head!r})")
             return 0
         if check:
-            print(f"osiris migrate --check: PENDING — {gap}")
+            print(f"osiris migrate --check: PENDING: {gap}")
             return 1
         try:
             await run_migrations(root)
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris migrate: upgrade failed — {exc}", file=sys.stderr)
+            print(f"osiris migrate: upgrade failed: {exc}", file=sys.stderr)
             return 1
         print(f"osiris migrate: applied {current!r} -> {head!r}")
         return 0
@@ -3684,15 +3684,15 @@ async def _synthetic_automount_probe(client: Any) -> tuple[bool, str]:
         except Exception:  # noqa: BLE001 — best-effort cleanup, never the gate's own verdict
             pass
         if r.status_code != 200:
-            return False, (f"whisper probe: REFUSED — /automount returned "
+            return False, (f"whisper probe: REFUSED. /automount returned "
                           f"{r.status_code}: {r.text[:200]}")
         body = r.json()
         if isinstance(body, dict) and body.get("error"):
-            return False, (f"whisper probe: REFUSED — /automount returned 200 with an "
+            return False, (f"whisper probe: REFUSED. /automount returned 200 with an "
                           f"error body: {body['error']}")
         return True, "whisper probe: /automount round-tripped clean"
     except Exception as exc:  # noqa: BLE001
-        return False, f"whisper probe: REFUSED — /automount round-trip failed: {exc}"
+        return False, f"whisper probe: REFUSED. /automount round-trip failed: {exc}"
 
 
 async def _real_check_false_mint_live(
@@ -3802,14 +3802,14 @@ def _run_install_script(script_rel: str, root: Path) -> str:
 
     script = root / script_rel
     if not script.is_file():
-        return f"{script_rel}: SOURCE MISSING — nothing installed"
+        return f"{script_rel}: SOURCE MISSING, nothing installed"
     try:
         result = subprocess.run(
             ["sh", str(script)], cwd=root, capture_output=True, text=True, timeout=30)
     except (OSError, subprocess.TimeoutExpired) as exc:
         return f"{script_rel}: could not run ({exc})"
     if result.returncode != 0:
-        return (f"{script_rel}: FAILED (exit {result.returncode}) — "
+        return (f"{script_rel}: FAILED (exit {result.returncode}): "
                 f"{result.stderr.strip() or result.stdout.strip()}")
     return result.stdout.strip() or f"{script_rel}: ran, no output"
 
@@ -3834,7 +3834,7 @@ async def _real_update_deploy_snapshot(root: Path, sha: str) -> str:
     with its own httpx/asyncpg calls earlier in the same ritual."""
     script = root / "scripts" / "update_deploy_snapshot.sh"
     if not script.is_file():
-        return "deploy snapshot: SOURCE MISSING (scripts/update_deploy_snapshot.sh) — skipped"
+        return "deploy snapshot: SOURCE MISSING (scripts/update_deploy_snapshot.sh), skipped"
     try:
         proc = await asyncio.create_subprocess_exec(
             "sh", str(script), str(root), sha, cwd=root,
@@ -3848,10 +3848,10 @@ async def _real_update_deploy_snapshot(root: Path, sha: str) -> str:
         # unbounded-wait-ok: draining an already-killed process's pipes is near-instant
         await proc.communicate()
         return "deploy snapshot: TIMED OUT after 300s (uv sync against a fresh worktree " \
-               "should not take this long) — worktree may be left mid-checkout"
+               "should not take this long). The worktree may be left mid-checkout."
     out = out_bytes.decode(errors="replace").strip()
     if proc.returncode != 0:
-        return f"deploy snapshot: FAILED (exit {proc.returncode}) — {out}"
+        return f"deploy snapshot: FAILED (exit {proc.returncode}): {out}"
     return out or "deploy snapshot: ran, no output"
 
 
@@ -3926,17 +3926,17 @@ async def cmd_deploy(
     2026-08-09 — seven tests were doing exactly that, unmocked, 565s of a 1160s suite)."""
     root = repo_root if repo_root is not None else _find_repo_root()
     if root is None:
-        print("osiris deploy: not inside a git repository — cd into the osiris checkout "
+        print("osiris deploy: not inside a git repository. cd into the osiris checkout "
               "first.", file=sys.stderr)
         return 1
 
     status = git_status(root)
     dirty_src = dirty_tracked_src_files(status)
     if dirty_src:
-        print("osiris deploy: REFUSED — tracked src/ files have uncommitted changes:")
+        print("osiris deploy: REFUSED. Tracked src/ files have uncommitted changes:")
         for f in dirty_src:
             print(f"  - {f}")
-        print("Restarting now would ship a half-written edit. Commit or stash first — check "
+        print("Restarting now would ship a half-written edit. Commit or stash first, and check "
               "project mail for a collision-watch broadcast naming these files before "
               "assuming they're abandoned.")
         return 1
@@ -3957,8 +3957,8 @@ async def cmd_deploy(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:deploy")
         except Exception as exc:  # noqa: BLE001
-            print(f"osiris deploy: REFUSED — could not reach postgres to check migrations "
-                  f"— {exc}. NOTHING was restarted.", file=sys.stderr)
+            print(f"osiris deploy: REFUSED. Could not reach postgres to check migrations: "
+                  f"{exc}. NOTHING was restarted.", file=sys.stderr)
             return 1
     try:
         from src.orchestrator.deploy_guard import (
@@ -3997,10 +3997,10 @@ async def cmd_deploy(
         for note in unit_notes:
             print(note)
         if expects_unit_install and not unit_notes:
-            print("osiris deploy: REFUSED — deploy/user/ carries unit files but install_units "
-                  "reported NOTHING (a silent no-op, thread e6fd3772 piece 3-infra's own "
-                  "specimen: a real deploy restarted onto a stale unit set while printing zero "
-                  "unit: lines). Refusing rather than restarting blind. NOTHING was restarted.",
+            print("osiris deploy: refused. deploy/user/ carries unit files, but "
+                  "install_units reported nothing installed. A previous deploy could "
+                  "have restarted onto a stale unit set while printing zero unit "
+                  "lines. Refusing rather than restarting blind. Nothing was restarted.",
                   file=sys.stderr)
             return 1
         if any(note.startswith("unit: REFUSED") for note in unit_notes):
@@ -4011,9 +4011,9 @@ async def cmd_deploy(
             # batch rather than writing any of it the moment one source file looks
             # like a placeholder — never restart onto whatever partial install just
             # happened, or didn't.
-            print("osiris deploy: REFUSED — one or more unit files look like "
+            print("osiris deploy: refused. One or more unit files look like "
                   "placeholders, not real units (see the `unit: REFUSED` line(s) "
-                  "above). NOTHING was installed or restarted.", file=sys.stderr)
+                  "above). Nothing was installed or restarted.", file=sys.stderr)
             return 1
 
         tools_before = await list_tools()
@@ -4032,7 +4032,7 @@ async def cmd_deploy(
                 pool, from_agent="deploy:disconnect-warning", from_project="osiris",
                 to_project="osiris", grade="fyi",
                 body=f"deploy {deploy_sha[:8] if deploy_sha else '?'} restarting "
-                     "osiris-mcp — your next call reconnects (streamable-HTTP sessions "
+                     "osiris-mcp. Your next call reconnects (streamable-HTTP sessions "
                      "do not survive the restart; automount re-adopts on your next "
                      "mount()).")
         except Exception as exc:  # noqa: BLE001
@@ -4052,7 +4052,7 @@ async def cmd_deploy(
                       "pg_dump to finish before restarting")
             else:
                 print(f"osiris deploy: a pg_dump is still running after "
-                      f"{pg_dump_waited:.0f}s — proceeding anyway (project_triggers' "
+                      f"{pg_dump_waited:.0f}s. Proceeding anyway (project_triggers' "
                       "own lock_timeout protects startup)")
 
         units = deploy_unit_names(root)
@@ -4077,19 +4077,19 @@ async def cmd_deploy(
                     pool, from_agent="deploy:disconnect-warning", from_project="osiris",
                     to_project="osiris", grade="fyi",
                     body=f"deploy {deploy_sha[:8] if deploy_sha else '?'}: osiris-mcp is "
-                         "back up — reconnect now.")
+                         "back up. Reconnect now.")
             except Exception as exc:  # noqa: BLE001
                 print(f"NOTE: post-restart reconnect notice failed to send: {exc}")
         else:
-            print(f"health: NOT UP after waiting {health_waited:.0f}s (ceiling) — the "
+            print(f"health: not up after waiting {health_waited:.0f}s (ceiling). The "
                   "console did not come up; this is a real startup failure, not a "
-                  "smoke-timing false-alarm")
+                  "smoke-timing false alarm")
 
         whisper_ok, whisper_note = await check_whisper_probe()
         print(whisper_note)
         if not whisper_ok:
-            print("osiris deploy: NOT recording this deploy — the whisper's own server "
-                  "half cannot be trusted after a restart it cannot itself verify.")
+            print("osiris deploy: not recording this deploy. The background probe's "
+                  "server half cannot be trusted after a restart it cannot itself verify.")
             return 1
 
         # THE HALCYON GATE (operator ruling 921eabcf, addendum to obligation 6b1efacb,
@@ -4101,21 +4101,22 @@ async def cmd_deploy(
             confirmed = [r["agent_id"] for r in false_mint_live if r["harness_confirmed_live"]]
             unconfirmed = [r["agent_id"] for r in false_mint_live
                            if not r["harness_confirmed_live"]]
-            print("osiris deploy: REFUSED — false-mint-live: a generation carries "
+            print("osiris deploy: refused (false-mint-live). A generation carries "
                   "false_mint=true with a live mount.")
             reason_lines = []
             if confirmed:
-                line = ("HARNESS-CONFIRMED LIVE (the halcyon shape — a genuinely live body "
-                        f"wrongly folded): {', '.join(confirmed)}. reinstate_generation is the "
-                        "repair door.")
+                line = ("Confirmed live by the harness (a genuinely live session that was "
+                        f"wrongly closed): {', '.join(confirmed)}. reinstate_generation is the "
+                        "tool that repairs this.")
                 print(f"  {line}")
                 reason_lines.append(line)
             if unconfirmed:
-                line = ("NOT harness-confirmed live (a fresh/refreshing mount row alone is "
-                        "not proof of a live body): "
-                        f"{', '.join(unconfirmed)}. Do NOT run reinstate_generation on these — "
-                        "that would resurrect a bodiless generation. The real live body may "
-                        "sit under a DIFFERENT generation id; a human must reconcile identity.")
+                line = ("Not confirmed live by the harness (a fresh or refreshing mount row "
+                        "alone is not proof of a live session): "
+                        f"{', '.join(unconfirmed)}. Do not run reinstate_generation on these: "
+                        "that would resurrect a session with no process behind it. The real "
+                        "live session may sit under a different generation id; a human must "
+                        "reconcile identity.")
                 print(f"  {line}")
                 reason_lines.append(line)
             print("osiris deploy: NOT recording this deploy.")
@@ -4147,8 +4148,8 @@ async def cmd_deploy(
             both_axes = ({m["seat"] for m in anchor_findings["multi_current"]}
                         & {r["seat"] for r in anchor_findings["outside_root"]})
             if both_axes:
-                print(f"NOTE: anchor invariant — {len(both_axes)} seat(s) carry a current "
-                      f"anchor_cwd outside the office root ALONGSIDE the correct one: "
+                print(f"NOTE: anchor invariant: {len(both_axes)} seat(s) carry a current "
+                      f"anchor_cwd outside the office root alongside the correct one: "
                       f"{sorted(both_axes)}. `osiris heal-seat-anchor <handle> --because "
                       "... [--apply]` repairs one seat at a time; never auto-run here.")
 
@@ -4178,7 +4179,7 @@ async def cmd_deploy(
             if suite_report["ok"]:
                 print("full suite: green on the merged tree")
             else:
-                print("osiris deploy: REFUSED — the full suite failed on the merged tree:")
+                print("osiris deploy: refused. The full suite failed on the merged tree:")
                 print(suite_report["summary"])
                 print("NOT recording this deploy.")
                 return 1
@@ -4198,11 +4199,11 @@ async def cmd_deploy(
             chaos_report = await chaos_gate(pool)
             await set_cursor(pool, "chaos-replay:last", json.dumps(chaos_report))
             if chaos_report["ok"]:
-                print(f"chaos replay: all invariants held — {chaos_report['storm_fired']} "
+                print(f"chaos replay: all invariants held. {chaos_report['storm_fired']} "
                       f"session-end(s) fired concurrently with the kill, recovered in "
                       f"{chaos_report['recovery_elapsed_secs']:.0f}s")
             else:
-                print("osiris deploy: REFUSED — the chaos replay gate found a real "
+                print("osiris deploy: refused. The chaos replay gate found a real "
                       "invariant violation:")
                 for f in chaos_report["findings"]:
                     print("  -", f)
@@ -4211,7 +4212,7 @@ async def cmd_deploy(
 
         deployed_head = await record_deploy(pool, root)
         print(f"deploy ledger: recorded {deployed_head}" if deployed_head else
-              "deploy ledger: HEAD unknown — not recorded (repo_root isn't a git checkout)")
+              "deploy ledger: HEAD unknown, not recorded (repo_root isn't a git checkout)")
 
         # #189 ADOPTION METER (Thoth msg 5825, ruling d68c57e5) — an INSTRUMENT, never a
         # gate: read-only against the graph (its one write is a baseline watermark, seeded
@@ -4237,12 +4238,12 @@ async def cmd_deploy(
         tools_after = await list_tools()
         if isinstance(tools_before, str) or isinstance(tools_after, str):
             side = "before" if isinstance(tools_before, str) else "after"
-            print(f"tool list: could not compare — the {side}-restart round-trip failed "
+            print(f"tool list: could not compare. The {side}-restart round-trip failed "
                   f"({tools_before if side == 'before' else tools_after})")
         else:
             delta = diff_tool_lists(tools_before, tools_after)
             if delta:
-                print(f"TOOL LIST CHANGED: {', '.join(delta)} — connected sessions see the "
+                print(f"tool list changed: {', '.join(delta)}. Connected sessions see the "
                       "old list until their own client refreshes.")
             else:
                 print("tool list: unchanged")
@@ -4273,10 +4274,10 @@ async def cmd_deploy(
         audit = await landing_audit(_Actions(pool), root)
         if audit["stale_unmerged_branches"] or audit["graph_claim_mismatches"]:
             print(f"landing audit: {len(audit['stale_unmerged_branches'])} stale branch(es), "
-                  f"{len(audit['graph_claim_mismatches'])} graph claim mismatch(es) — "
+                  f"{len(audit['graph_claim_mismatches'])} graph claim mismatch(es), "
                   f"{len(audit['obligations'])} obligation(s) minted/deduped")
         else:
-            print("landing audit: clean — every branch is either merged or held-work-claimed, "
+            print("landing audit: clean. Every branch is either merged or held-work-claimed, "
                   "no graph text disagrees with git")
 
         print(_run_install_script("scripts/install_push_guard_hook.sh", root))
@@ -4347,8 +4348,8 @@ async def cmd_merge(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:merge")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris merge: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris merge: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         out = await _merge(Actions(pool), dupe=dupe, into=into, evidence=evidence,
@@ -4369,7 +4370,7 @@ async def cmd_merge(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris merge: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris merge: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"folded {out['folded']} into {out['into']}")
     if out.get("edges_moved"):
@@ -4392,7 +4393,7 @@ async def cmd_fold_project(
     specimen the operator's own consistency ask named. Kept working, hidden from the
     front-door listing, forwarding straight to cmd_merge with the identical arguments —
     never break a human's muscle memory silently, but never advertise the old name either."""
-    print("osiris fold-project is deprecated — use `osiris merge` (identical arguments, "
+    print("osiris fold-project is deprecated. Use `osiris merge` (identical arguments, "
           "same evidence-gated fold). Continuing as merge.", file=sys.stderr)
     return await cmd_merge(dupe, into, evidence, actor=actor, force=force, because=because,
                            pool=pool)
@@ -4425,8 +4426,8 @@ async def cmd_unmerge(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:unmerge")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris unmerge: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris unmerge: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         out = await _unmerge(Actions(pool), dupe=dupe, because=because, actor=actor,
@@ -4459,7 +4460,7 @@ async def cmd_retention(
 
     fn = {"outbox": outbox_retention, "audit-log": audit_log_retention}.get(table)
     if fn is None:
-        print(f"osiris retention: unknown table {table!r} — outbox or audit-log",
+        print(f"osiris retention: unknown table {table!r}. Use outbox or audit-log",
               file=sys.stderr)
         return 1
     owns_pool = pool is None
@@ -4476,7 +4477,7 @@ async def cmd_retention(
                 application_name="osiris-cli:retention")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retention: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -4490,7 +4491,7 @@ async def cmd_retention(
     from src import cli_render as render
     render.emit(out, as_json=as_json, title="retention")
     if not execute:
-        print(f"osiris retention: dry run — {out['eligible']} row(s) eligible, "
+        print(f"osiris retention: dry run. {out['eligible']} row(s) eligible, "
               "nothing deleted. Pass --execute to delete.", file=sys.stderr)
     return 0
 
@@ -4534,8 +4535,8 @@ async def cmd_charter_for(
                 settings.database_url, min_size=1, max_size=4,
                 application_name="osiris-cli:charter-for")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris charter-for: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris charter-for: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         out = await charter_for(Actions(pool), seat_id, repos, because=because, actor=actor,
@@ -4544,7 +4545,7 @@ async def cmd_charter_for(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris charter-for: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris charter-for: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"charter for {out['seat']}: {out['charter']}")
     if out.get("added"):
@@ -4587,8 +4588,8 @@ async def cmd_settings(
                 settings.database_url, min_size=1, max_size=2,
                 application_name="osiris-cli:settings")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris settings: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris settings: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         if action == "list":
@@ -4619,7 +4620,7 @@ async def cmd_settings(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris settings {action}: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris settings {action}: refused: {out['error']}", file=sys.stderr)
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title=f"settings {action}")
@@ -4686,7 +4687,7 @@ async def cmd_backup_settings(
                 application_name="osiris-cli:backup-settings")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris backup-settings: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -4694,9 +4695,9 @@ async def cmd_backup_settings(
             out = await get_backup_settings(pool)
         elif action == "write":
             if not (because or "").strip():
-                print("osiris backup-settings write: --because is required — a backup "
-                      "config write is testimony, same discipline every other repair "
-                      "door in this project holds", file=sys.stderr)
+                print("osiris backup-settings write: --because is required. A backup "
+                      "config write needs a reason on record, the same discipline every "
+                      "other repair command in this project holds", file=sys.stderr)
                 return 1
             fields: dict[str, Any] = {}
             if vault_path is not None:
@@ -4759,7 +4760,7 @@ async def cmd_backup_settings(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris backup-settings {action}: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris backup-settings {action}: refused: {out['error']}", file=sys.stderr)
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title=f"backup-settings {action}")
@@ -4800,7 +4801,7 @@ async def cmd_backup_status(
                 application_name="osiris-cli:backup-status")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris backup-status: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     args: dict[str, Any] = {}
@@ -4845,7 +4846,7 @@ async def cmd_practices(
     from src.orchestrator import compositions as comp
 
     if action not in ("list", "show"):
-        print(f"osiris practices: unknown action {action!r} — choose list or show",
+        print(f"osiris practices: unknown action {action!r}. Choose list or show",
               file=sys.stderr)
         return 1
     if action == "show" and not (ref or "").strip():
@@ -4866,7 +4867,7 @@ async def cmd_practices(
                 application_name="osiris-cli:practices")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris practices: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -4949,7 +4950,7 @@ async def cmd_amend_practice(
                 application_name="osiris-cli:amend-practice")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris amend-practice: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     row: dict[str, object] | None = None
@@ -4957,7 +4958,7 @@ async def cmd_amend_practice(
         try:
             pid = await amend_practice(Actions(pool), ref, amendment, source=actor)
         except ValueError as e:
-            print(f"osiris amend-practice: refused — {e}", file=sys.stderr)
+            print(f"osiris amend-practice: refused: {e}", file=sys.stderr)
             return 1
         if pid is not None:
             from src.orchestrator import compositions as comp
@@ -4967,7 +4968,7 @@ async def cmd_amend_practice(
         if owns_pool:
             await pool.close()
     if pid is None:
-        print(f"osiris amend-practice: refused — no practice matches {ref!r}",
+        print(f"osiris amend-practice: refused: no practice matches {ref!r}",
               file=sys.stderr)
         return 1
     print(f"amended {pid}: {amendment.strip()}")
@@ -5016,20 +5017,20 @@ async def cmd_annotate_thread(
                 application_name="osiris-cli:annotate-thread")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris annotate-thread: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
         try:
             tid = await annotate_thread(Actions(pool), ref, note, source=actor)
         except ValueError as e:
-            print(f"osiris annotate-thread: refused — {e}", file=sys.stderr)
+            print(f"osiris annotate-thread: refused: {e}", file=sys.stderr)
             return 1
     finally:
         if owns_pool:
             await pool.close()
     if tid is None:
-        print(f"osiris annotate-thread: refused — no thread matches {ref!r}", file=sys.stderr)
+        print(f"osiris annotate-thread: refused: no thread matches {ref!r}", file=sys.stderr)
         return 1
     print(f"annotated {tid}: {note.strip()}")
     return 0
@@ -5063,7 +5064,7 @@ async def cmd_rematerialize(
                 application_name="osiris-cli:rematerialize")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris rematerialize: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5073,7 +5074,7 @@ async def cmd_rematerialize(
         if owns_pool:
             await pool.close()
     if "error" in receipt:
-        print(f"osiris rematerialize: refused — {receipt['error']}", file=sys.stderr)
+        print(f"osiris rematerialize: refused: {receipt['error']}", file=sys.stderr)
         return 1
     print(f"wrote {receipt['written']} ({receipt['lines']} lines, "
           f"sha256 {receipt['sha256']})")
@@ -5117,20 +5118,20 @@ async def cmd_amend_decision(
                 application_name="osiris-cli:amend-decision")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris amend-decision: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
         try:
             did = await amend_decision(Actions(pool), ref, addendum, source=actor)
         except ValueError as e:
-            print(f"osiris amend-decision: refused — {e}", file=sys.stderr)
+            print(f"osiris amend-decision: refused: {e}", file=sys.stderr)
             return 1
     finally:
         if owns_pool:
             await pool.close()
     if did is None:
-        print(f"osiris amend-decision: refused — no decision matches {ref!r}", file=sys.stderr)
+        print(f"osiris amend-decision: refused: no decision matches {ref!r}", file=sys.stderr)
         return 1
     print(f"amended {did}: {addendum.strip()}")
     return 0
@@ -5187,7 +5188,7 @@ async def cmd_send(
             pool = await create_pool(settings.database_url, min_size=1, max_size=4,
                                      application_name="osiris-cli:send")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris send: could not reach postgres at {settings.database_url} — "
+            print(f"osiris send: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -5226,13 +5227,13 @@ async def cmd_send(
                 to_agent=to_agent, body=body, reply_to=reply_to, desk_kind=desk,
                 grade=grade, require_seat=require_seat, threads=threads)
         except ValueError as e:
-            print(f"osiris send: refused — {e}", file=sys.stderr)
+            print(f"osiris send: refused: {e}", file=sys.stderr)
             return 1
         out: dict[str, Any] = {"sent": res["id"], "from": actor}
         if res["thread_id"] is not None:
             out["thread"] = res["thread_id"]
         if res.get("dedup"):
-            out["dedup"] = "identical recent message already queued — not re-posted"
+            out["dedup"] = "identical recent message already queued, not re-posted"
         if res.get("threads_stamped"):
             out["threads_stamped"] = res["threads_stamped"]
         if res.get("addressee_resolved"):
@@ -5258,8 +5259,8 @@ async def cmd_send(
                         settings=dispatch_settings)
                 except Exception as exc:  # noqa: BLE001 - the send already committed; confess
                     out["dispatch"] = {"mode": "deferred",
-                                       "detail": f"immediate dispatch failed ({exc}) — "
-                                                "the worker sweep is the backstop"}
+                                       "detail": f"immediate dispatch failed ({exc}). "
+                                                "The worker sweep is the backstop"}
         else:
             from src.orchestrator import mounts
             dest = res["to"]
@@ -5280,8 +5281,8 @@ async def cmd_send(
                         settings=dispatch_settings)
                 except Exception as exc:  # noqa: BLE001 - the send already committed; confess
                     out["dispatch"] = {"mode": "deferred",
-                                       "detail": f"immediate dispatch failed ({exc}) — "
-                                                "the worker sweep is the backstop"}
+                                       "detail": f"immediate dispatch failed ({exc}). "
+                                                "The worker sweep is the backstop"}
             from src.config.settings import get_settings
             from src.orchestrator.mailbox import project_deliverable_count
             out["backlog"] = await project_deliverable_count(
@@ -5346,8 +5347,8 @@ async def cmd_decide(
             return [uuid_mod.UUID(v) for v in vals]
         except ValueError as e:
             raise SystemExit(
-                f"osiris decide: {flag} takes an exact uuid only (no short-id/prose "
-                f"resolution from the console) — {e}") from e
+                f"osiris decide: {flag} takes an exact uuid only (no short-id or "
+                f"text lookup from the console): {e}") from e
 
     def _uuid1(val: str | None, flag: str) -> uuid_mod.UUID | None:
         if val is None:
@@ -5356,8 +5357,8 @@ async def cmd_decide(
             return uuid_mod.UUID(val)
         except ValueError as e:
             raise SystemExit(
-                f"osiris decide: {flag} takes an exact uuid only (no short-id/prose "
-                f"resolution from the console) — {e}") from e
+                f"osiris decide: {flag} takes an exact uuid only (no short-id or "
+                f"text lookup from the console): {e}") from e
 
     owns_pool = pool is None
     if pool is None:
@@ -5371,7 +5372,7 @@ async def cmd_decide(
             pool = await create_pool(settings.database_url, min_size=1, max_size=4,
                                      application_name="osiris-cli:decide")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris decide: could not reach postgres at {settings.database_url} — "
+            print(f"osiris decide: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -5389,14 +5390,14 @@ async def cmd_decide(
                 unlinked_because=unlinked_because,
                 operator_authorized=operator_authorized)
         except ValueError as e:
-            print(f"osiris decide: refused — {e}", file=sys.stderr)
+            print(f"osiris decide: refused: {e}", file=sys.stderr)
             return 1
     finally:
         if owns_pool:
             await pool.close()
     out = {"id": str(did), "kind": kind, "summary": summary.strip()}
     if ack_prior_art:
-        out["note"] = "--ack-prior-art has no effect from the console — no prior-art " \
+        out["note"] = "--ack-prior-art has no effect from the console. No prior-art " \
                        "search runs here (see this command's own docstring)"
     from src import cli_render as render
     render.emit(out, as_json=as_json, title="decide")
@@ -5435,7 +5436,7 @@ async def cmd_settle(
         try:
             return json_mod.loads(raw)
         except ValueError as e:
-            print(f"osiris settle: {flag} is not valid JSON — {e}", file=sys.stderr)
+            print(f"osiris settle: {flag} is not valid JSON: {e}", file=sys.stderr)
             raise SystemExit(2) from e
 
     params = {
@@ -5449,8 +5450,8 @@ async def cmd_settle(
     url = await _mcp_url()
     result = await call_mcp_tool(url, "settle", params)
     if isinstance(result, str):
-        print(f"osiris settle: {result} — is osiris-mcp running? "
-              "(systemctl --user status osiris-mcp)", file=sys.stderr)
+        print(f"osiris settle: {result}. Is osiris-mcp running? "
+              "(check with: systemctl --user status osiris-mcp)", file=sys.stderr)
         return 1
     if text:
         print(json_mod.dumps(result))
@@ -5492,7 +5493,7 @@ async def cmd_thread(
             pool = await create_pool(settings.database_url, min_size=1, max_size=4,
                                      application_name="osiris-cli:thread")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris thread: could not reach postgres at {settings.database_url} — "
+            print(f"osiris thread: could not reach postgres at {settings.database_url}: "
                   f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
@@ -5500,7 +5501,7 @@ async def cmd_thread(
             tid = await resolve_thread(
                 Actions(pool), ref[0], because=because, artifact=artifact, source=actor)
             if tid is None:
-                print(f"osiris thread: refused — no thread matches {ref[0]!r}",
+                print(f"osiris thread: refused: no thread matches {ref[0]!r}",
                       file=sys.stderr)
                 return 1
             out: dict[str, Any] = {"id": str(tid), "status": "resolved"}
@@ -5540,7 +5541,7 @@ async def cmd_proposal(
         try:
             parsed_candidate = _json.loads(candidate)
         except _json.JSONDecodeError as exc:
-            print(f"osiris proposal: --candidate is not valid JSON — {exc}",
+            print(f"osiris proposal: --candidate is not valid JSON: {exc}",
                   file=sys.stderr)
             return 1
 
@@ -5556,8 +5557,8 @@ async def cmd_proposal(
             pool = await create_pool(settings.database_url, min_size=1, max_size=2,
                                      application_name="osiris-cli:proposal")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
-            print(f"osiris proposal: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+            print(f"osiris proposal: could not reach postgres at {settings.database_url}: "
+                  f"{exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         out = await _proposal_action_impl(
@@ -5568,7 +5569,7 @@ async def cmd_proposal(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris proposal: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris proposal: refused: {out['error']}", file=sys.stderr)
         return 1
     from src import cli_render as render
     render.emit(out, as_json=as_json, title="proposal")
@@ -5616,7 +5617,7 @@ async def cmd_rebind_seat(
                 application_name="osiris-cli:rebind-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris rebind-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5626,7 +5627,7 @@ async def cmd_rebind_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris rebind-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris rebind-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"rebound {seat_or_agent} -> {new_cwd}")
     for k, v in out.items():
@@ -5667,7 +5668,7 @@ async def cmd_correct_pin_value(
                 application_name="osiris-cli:correct-pin-value")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris correct-pin-value: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5679,7 +5680,7 @@ async def cmd_correct_pin_value(
                 handle_or_agent)
             agent_id = handle_or_agent if exists else None
         if agent_id is None:
-            print(f"osiris correct-pin-value: refused — no such claimed seat or live agent: "
+            print(f"osiris correct-pin-value: refused: no such claimed seat or live agent: "
                   f"{handle_or_agent!r}", file=sys.stderr)
             return 1
         out = await correct_own_pin_value(pool, agent_id, key, value, reason=reason,
@@ -5688,10 +5689,10 @@ async def cmd_correct_pin_value(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris correct-pin-value: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris correct-pin-value: refused: {out['error']}", file=sys.stderr)
         return 1
     if not out.get("written"):
-        print(f"{key}: already {value!r} — nothing written (old_value={out.get('old_value')!r})")
+        print(f"{key}: already {value!r}, nothing written (old_value={out.get('old_value')!r})")
     else:
         print(f"corrected {out.get('seat_id', handle_or_agent)}'s {key}: "
               f"{out['old_value']!r} -> {out['new_value']!r}")
@@ -5707,11 +5708,11 @@ async def cmd_correct_pin_value(
         if detail is None:
             continue
         if detail.get("error"):
-            print(f"{copy}: refused — {detail['error']}")
+            print(f"{copy}: refused: {detail['error']}")
         elif detail.get("corrected"):
-            print(f"{copy}: corrected — path: {detail['path']}")
+            print(f"{copy}: corrected, path: {detail['path']}")
         else:
-            print(f"{copy}: already {value!r} — nothing written "
+            print(f"{copy}: already {value!r}, nothing written "
                   f"(old_value={detail.get('old_value')!r})")
     return 0
 
@@ -5748,7 +5749,7 @@ async def cmd_transition_seat_project(
                 application_name="osiris-cli:transition-seat-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris transition-seat-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5760,7 +5761,7 @@ async def cmd_transition_seat_project(
                 handle_or_agent)
             agent_id = handle_or_agent if exists else None
         if agent_id is None:
-            print(f"osiris transition-seat-project: refused — no such claimed seat or "
+            print(f"osiris transition-seat-project: refused: no such claimed seat or "
                   f"live agent: {handle_or_agent!r}", file=sys.stderr)
             return 1
         out = await transition_seat_project(
@@ -5770,15 +5771,15 @@ async def cmd_transition_seat_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris transition-seat-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris transition-seat-project: refused: {out['error']}", file=sys.stderr)
         return 1
     if out.get("dry_run"):
-        print(f"PLAN for {out['seat']} — {out['fabricated_project']} -> "
+        print(f"PLAN for {out['seat']}: {out['fabricated_project']} -> "
               f"{out['real_project']} (dry run, pass --apply to execute):")
         for step, detail in out["plan"].items():
-            print(f"  {step}: {detail if detail is not None else 'already correct — no-op'}")
+            print(f"  {step}: {detail if detail is not None else 'already correct, no-op'}")
         return 0
-    print(f"transitioned {out['seat']} — {out['fabricated_project']} -> "
+    print(f"transitioned {out['seat']}: {out['fabricated_project']} -> "
           f"{out['real_project']}")
     for step, detail in out.get("steps", {}).items():
         print(f"  {step}: {detail}")
@@ -5822,7 +5823,7 @@ async def cmd_heal_seat_anchor(
                 application_name="osiris-cli:heal-seat-anchor")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris heal-seat-anchor: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5831,11 +5832,11 @@ async def cmd_heal_seat_anchor(
         else:
             matches = await seats_by_handle(pool, seat_or_handle)
             if not matches:
-                print(f"osiris heal-seat-anchor: refused — no active seat holds handle "
+                print(f"osiris heal-seat-anchor: refused: no active seat holds handle "
                       f"{seat_or_handle!r}", file=sys.stderr)
                 return 1
             if len(matches) > 1:
-                print(f"osiris heal-seat-anchor: refused — {seat_or_handle!r} is "
+                print(f"osiris heal-seat-anchor: refused: {seat_or_handle!r} is "
                       f"ambiguous, {len(matches)} seats share it: {matches}. Use the "
                       "seat's own canonical id instead.", file=sys.stderr)
                 return 1
@@ -5847,13 +5848,13 @@ async def cmd_heal_seat_anchor(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris heal-seat-anchor: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris heal-seat-anchor: refused: {out['error']}", file=sys.stderr)
         return 1
     if out.get("healed") is False:
-        print(f"{seat_id}: {out.get('reason', 'nothing to heal')} — target already "
+        print(f"{seat_id}: {out.get('reason', 'nothing to heal')}. Target already "
               f"{out.get('target')!r}")
         return 0
-    verb = "healed" if apply else "would heal (dry run — pass --apply to write)"
+    verb = "healed" if apply else "would heal (dry run, pass --apply to write)"
     print(f"{seat_id} {verb}: target={out['target']!r}")
     for row in out.get("current_before", []):
         print(f"  before: {row['value']!r} (source={row['source_id']}, "
@@ -5885,7 +5886,7 @@ async def cmd_correct_agent_house(
     — DEPRECATED alias for `correct-agent-project`, kept this release only (ONE
     TAXONOMY, ruling 52a59652/70c001ec). A thin wrapper, never a second
     implementation — the underlying Agent property was already named `project`."""
-    print("osiris correct-agent-house: deprecated, use correct-agent-project — kept as "
+    print("osiris correct-agent-house: deprecated, use correct-agent-project. Kept as "
           "an alias this release only", file=sys.stderr)
     return await cmd_correct_agent_project(
         handle_or_agent, project=project, seat_generation=seat_generation, actor=actor,
@@ -5920,14 +5921,14 @@ async def cmd_correct_agent_project(
                 application_name="osiris-cli:correct-agent-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris correct-agent-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
         actions = Actions(pool)
         agent_id = await _resolve_target_agent(actions, handle_or_agent)
         if agent_id is None:
-            print(f"osiris correct-agent-project: refused — no such claimed seat or live "
+            print(f"osiris correct-agent-project: refused: no such claimed seat or live "
                   f"agent: {handle_or_agent!r}", file=sys.stderr)
             return 1
         out = await _correct_agent_house(actions, agent_id=agent_id, project=project,
@@ -5936,7 +5937,7 @@ async def cmd_correct_agent_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris correct-agent-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris correct-agent-project: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"corrected {agent_id}: {out}")
     return 0
@@ -5967,7 +5968,7 @@ async def cmd_declare_machine_identity(
                 application_name="osiris-cli:declare-machine-identity")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris declare-machine-identity: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -5977,7 +5978,7 @@ async def cmd_declare_machine_identity(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris declare-machine-identity: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris declare-machine-identity: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"declared {out['machine_identity']} -> {out['project']}: {out}")
     return 0
@@ -6007,7 +6008,7 @@ async def cmd_reconcile_merge(
                 application_name="osiris-cli:reconcile-merge")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris reconcile-merge: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6016,7 +6017,7 @@ async def cmd_reconcile_merge(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris reconcile-merge: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris reconcile-merge: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"reconciled {dupe} -> {into}: {out}")
     return 0
@@ -6050,14 +6051,14 @@ async def cmd_retire_agent(
                 application_name="osiris-cli:retire-agent")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-agent: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
         actions = Actions(pool)
         agent_id = await _resolve_target_agent(actions, handle_or_agent)
         if agent_id is None:
-            print(f"osiris retire-agent: refused — no such claimed seat or live agent: "
+            print(f"osiris retire-agent: refused: no such claimed seat or live agent: "
                   f"{handle_or_agent!r}", file=sys.stderr)
             return 1
         out = await _retire_agent(actions, agent_id=agent_id, actor=actor, because=because,
@@ -6066,7 +6067,7 @@ async def cmd_retire_agent(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-agent: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-agent: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"retired {agent_id}: {out}")
     return 0
@@ -6096,7 +6097,7 @@ async def cmd_fleet_reconcile(
                 application_name="osiris-cli:fleet-reconcile")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris fleet-reconcile: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6104,7 +6105,7 @@ async def cmd_fleet_reconcile(
     finally:
         if owns_pool:
             await pool.close()
-    verb = "executed" if execute else "planned (dry run — pass --execute to write)"
+    verb = "executed" if execute else "planned (dry run: pass --execute to write)"
     print(f"fleet-reconcile {verb}: {out}")
     return 0
 
@@ -6136,7 +6137,7 @@ async def cmd_fleet_prune(
                 application_name="osiris-cli:fleet-prune")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris fleet-prune: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6144,7 +6145,7 @@ async def cmd_fleet_prune(
     finally:
         if owns_pool:
             await pool.close()
-    verb = "executed" if execute else "planned (dry run — pass --execute to write)"
+    verb = "executed" if execute else "planned (dry run: pass --execute to write)"
     print(f"fleet-prune {verb}: {out}")
     return 0
 
@@ -6172,8 +6173,9 @@ async def cmd_backfill(
     from src.orchestrator.backfill import run_backfill
 
     if apply and not (because or "").strip():
-        print("osiris backfill: --because is required to --apply — a backfill write is "
-              "testimony, same discipline every other repair door in this project holds",
+        print("osiris backfill: --because is required to --apply. A backfill write must "
+              "be justified, the same rule every other repair command in this project "
+              "enforces.",
               file=sys.stderr)
         return 1
     owns_pool = pool is None
@@ -6190,7 +6192,7 @@ async def cmd_backfill(
                 application_name="osiris-cli:backfill")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris backfill: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6204,7 +6206,7 @@ async def cmd_backfill(
         from src import cli_render as render
         render.emit(out, as_json=True)
         return 1 if "error" in out else 0
-    verb = "applied" if apply else "planned (dry run — pass --apply to write)"
+    verb = "applied" if apply else "planned (dry run: pass --apply to write)"
     print(f"backfill {target} {verb}: {out}")
     return 1 if "error" in out else 0
 
@@ -6231,9 +6233,9 @@ async def cmd_graph_migrate(
     from src.orchestrator.graph_migrations import run_migration
 
     if apply and not (because or "").strip():
-        print("osiris graph-migrate: --because is required to --apply — a migration "
-              "write is testimony, same discipline every other repair door in this "
-              "house holds", file=sys.stderr)
+        print("osiris graph-migrate: --because is required to --apply. A migration "
+              "write must be justified, the same rule every other repair command "
+              "enforces.", file=sys.stderr)
         return 1
     owns_pool = pool is None
     if pool is None:
@@ -6249,7 +6251,7 @@ async def cmd_graph_migrate(
                 application_name="osiris-cli:graph-migrate")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris graph-migrate: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6263,7 +6265,7 @@ async def cmd_graph_migrate(
         from src import cli_render as render
         render.emit(out, as_json=True)
         return 1 if "error" in out else 0
-    verb = "applied" if apply else "planned (dry run — pass --apply to write)"
+    verb = "applied" if apply else "planned (dry run: pass --apply to write)"
     print(f"graph-migrate {target} {verb}: {out}")
     return 1 if "error" in out else 0
 
@@ -6294,7 +6296,7 @@ async def cmd_heal_seat_transcript(
                 application_name="osiris-cli:heal-seat-transcript")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris heal-seat-transcript: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6303,10 +6305,10 @@ async def cmd_heal_seat_transcript(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris heal-seat-transcript: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris heal-seat-transcript: refused: {out['error']}", file=sys.stderr)
         return 1
     if out.get("dry_run"):
-        print(f"would heal (dry run — pass --apply to write): {out}")
+        print(f"would heal (dry run: pass --apply to write): {out}")
     else:
         print(f"healed: {out}")
     return 0
@@ -6336,19 +6338,19 @@ async def _infer_manager(
     would be exactly the silent-guess failure #135 exists to name)."""
     if not project:
         return None, ("no --manager given and no project could be inferred (no .osiris "
-                      "pin here) — pass --manager explicitly, or run this from inside a "
-                      "pinned project directory")
+                      "pin here). Pass --manager explicitly, or run this from inside a "
+                      "pinned project directory.")
     from src.orchestrator.seats import fleet_occupancy
 
     candidates = [s for s in await fleet_occupancy(pool) if s.get("house") == project]
     if not candidates:
-        return None, (f"no seats exist in project {project!r} yet — mint-seat needs an "
+        return None, (f"no seats exist in project {project!r} yet. mint-seat needs an "
                       "existing seat as manager-of-record even to start a brand-new "
-                      "project (crossing into one always does); pass --manager naming "
-                      "any existing seat")
+                      "project (crossing into one always does). Pass --manager naming "
+                      "any existing seat.")
     if len(candidates) > 1:
         names = ", ".join(sorted(c["handle"] for c in candidates if c.get("handle")))
-        return None, (f"{len(candidates)} seats in project {project!r} ({names}) — "
+        return None, (f"{len(candidates)} seats in project {project!r} ({names}): "
                       "ambiguous, name one explicitly with --manager")
     return candidates[0]["handle"], None
 
@@ -6418,7 +6420,7 @@ async def cmd_mint_seat(
                 application_name="osiris-cli:mint-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris mint-seat: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+                  f": {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         if manager is None:
@@ -6428,8 +6430,8 @@ async def cmd_mint_seat(
                 print(f"osiris mint-seat: {infer_error}", file=sys.stderr)
                 return 1
             assert manager is not None  # _infer_manager's own contract: error XOR manager
-            print(f"osiris mint-seat: inferred --manager={manager!r} — the only seat in "
-                  f"project {ctx_project!r}; pass --manager explicitly to override")
+            print(f"osiris mint-seat: inferred --manager={manager!r}, the only seat in "
+                  f"project {ctx_project!r}. Pass --manager explicitly to override.")
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
         if office_root is not None:
             kwargs["office_root"] = office_root
@@ -6440,7 +6442,7 @@ async def cmd_mint_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris mint-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris mint-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{'minted' if out['seat_minted'] else 'adopted'} {out['handle']} "
           f"({out['seat_id']}), project={out['house']}")
@@ -6452,14 +6454,14 @@ async def cmd_mint_seat(
         # only fires when this call actually WROTE the pin (`project_declared is None`
         # means the pin already existed and was left untouched — nothing new to confess).
         if office.get("osiris_pin_project_declared") is False:
-            print("project: unset in this seat directory's pin — no --project given, "
+            print("project: unset in this seat directory's pin. No --project given, "
                   "none invented. mount will fill this in on its own once the graph "
-                  "unambiguously knows it; `osiris mint-seat ... --project <name>` "
+                  "unambiguously knows it. `osiris mint-seat ... --project <name>` "
                   "declares it now.")
     print(f"model: {out['intended_model']}"
           + (" (stamped)" if out.get("intended_model_stamped") else ""))
     print(f"manager: {out['manager_seat_id']} ({out['managed_by']})")
-    print(f"occupancy: {out['occupancy']} — {out['next_step_cli']}")
+    print(f"occupancy: {out['occupancy']}: {out['next_step_cli']}")
     return 0
 
 
@@ -6504,9 +6506,10 @@ async def cmd_new(
         cwd = Path.cwd()
         default_workspace = Path.home() / "code" / handle.lower()
         if cwd != Path.home() and cwd != default_workspace:
-            print(f"osiris new: standing in {cwd}, but no path given — this creates "
-                  f"{default_workspace} instead (osiris never assumes your cwd is the "
-                  f"workspace). To use where you are: osiris new {handle} .",
+            print(f"osiris new: standing in {cwd}, but no path given. This creates "
+                  f"{default_workspace} instead (osiris never assumes your current "
+                  f"directory is the workspace). To use where you are: "
+                  f"osiris new {handle} .",
                   file=sys.stderr)
 
     owns_pool = pool is None
@@ -6523,7 +6526,7 @@ async def cmd_new(
                 application_name="osiris-cli:new")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris new: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+                  f": {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         kwargs: dict[str, Any] = {"intended_model": model} if model else {}
@@ -6533,10 +6536,10 @@ async def cmd_new(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris new: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris new: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{'founded' if out['seat_minted'] else 'converged on'} {out['handle']} "
-          f"({out['seat_id']}) — self-managed, no manager")
+          f"({out['seat_id']}): self-managed, no manager")
     # THE PROJECT CONFESSION (the operator, live, 2026-09-02: "the thing cannot handle
     # 'no project' — it falsely creates a jesus project and a chad project when really
     # they are working somewhere else", decision 24e0b761): no --project no longer
@@ -6546,8 +6549,8 @@ async def cmd_new(
     if out["project"]:
         print(f"project: {out['project']}")
     else:
-        print("project: unset — no --project given, none invented. mount will fill "
-              "this in on its own once the graph unambiguously knows it; "
+        print("project: unset. No --project given, none invented. mount will fill "
+              "this in on its own once the graph unambiguously knows it. "
               "`osiris new <handle> --project <name>` declares it now.")
     print(f"workspace: {out['workspace']} ({out['workspace_pin']})")
     office = out.get("office")
@@ -6559,12 +6562,12 @@ async def cmd_new(
     # with nothing saying so reads it as unpredictable. Say plainly which is which,
     # only when they actually differ.
     if out["handle"] != out["handle"].lower():
-        print(f"note: paths use the lowercase form ({out['handle'].lower()!r}); the "
-              f"handle itself keeps your capitalization ({out['handle']!r}) — both name "
-              "the same seat")
+        print(f"note: paths use the lowercase form ({out['handle'].lower()!r}). The "
+              f"handle itself keeps your capitalization ({out['handle']!r}). Both name "
+              "the same seat.")
     print(f"model: {out['intended_model']}"
           + (" (stamped)" if out.get("intended_model_stamped") else ""))
-    print(f"occupancy: {out['occupancy']} — {out['next_step']}")
+    print(f"occupancy: {out['occupancy']}: {out['next_step']}")
     print(f"next: osiris launch {out['handle']}")
     return 0
 
@@ -6630,7 +6633,7 @@ async def cmd_bootstrap(
                 application_name="osiris-cli:bootstrap")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris bootstrap: could not reach postgres at {settings.database_url} "
-                  f"— {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
+                  f": {exc}. Set DATABASE_URL, or start the dev instance.", file=sys.stderr)
             return 1
     try:
         out = await bootstrap_project(Actions(pool), cwd, project=project, source=actor)
@@ -6684,7 +6687,7 @@ async def cmd_attach_seat(
                 application_name="osiris-cli:attach-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris attach-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6694,7 +6697,7 @@ async def cmd_attach_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris attach-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris attach-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"attached {worker} -> {manager}")
     for k, v in out.items():
@@ -6725,7 +6728,7 @@ async def cmd_detach_seat(
                 application_name="osiris-cli:detach-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris detach-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6734,7 +6737,7 @@ async def cmd_detach_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris detach-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris detach-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"detached {seat}")
     for k, v in out.items():
@@ -6771,7 +6774,7 @@ async def cmd_promote(
                 application_name="osiris-cli:promote")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris promote: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6781,7 +6784,7 @@ async def cmd_promote(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris promote: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris promote: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"promoted {out['promoted']} over {len(workers)} worker(s)")
     for worker, verdict in out.get("workers", {}).items():
@@ -6813,7 +6816,7 @@ async def cmd_vacate_seat(
                 application_name="osiris-cli:vacate-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris vacate-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6823,7 +6826,7 @@ async def cmd_vacate_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris vacate-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris vacate-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"vacated {seat_id}")
     for k, v in out.items():
@@ -6854,7 +6857,7 @@ async def cmd_retire_seat(
                 application_name="osiris-cli:retire-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6863,7 +6866,7 @@ async def cmd_retire_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"retired {seat_id}")
     for k, v in out.items():
@@ -6896,7 +6899,7 @@ async def cmd_bind_seat_tree(
                 application_name="osiris-cli:bind-seat-tree")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris bind-seat-tree: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -6906,7 +6909,7 @@ async def cmd_bind_seat_tree(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris bind-seat-tree: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris bind-seat-tree: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"bound {seat_id} tree -> {tree_cwd}")
     for k, v in out.items():
@@ -6938,7 +6941,7 @@ async def cmd_sweep_seat_disk(
                 application_name="osiris-cli:sweep-seat-disk")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris sweep-seat-disk: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     because_arg = because.strip() or None
@@ -6950,7 +6953,7 @@ async def cmd_sweep_seat_disk(
     finally:
         if owns_pool:
             await pool.close()
-    verb = "swept" if not dry_run else "would sweep (dry run — pass --apply to write)"
+    verb = "swept" if not dry_run else "would sweep (dry run: pass --apply to write)"
     print(f"{handle} {verb}:")
     print(f"  seat directory: {office_out}")
     print(f"  workspace: {workspace_out}")
@@ -6983,7 +6986,7 @@ async def cmd_sweep_seat_trees(
                 application_name="osiris-cli:sweep-seat-trees")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris sweep-seat-trees: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7020,7 +7023,7 @@ async def cmd_rename_seat(
                 application_name="osiris-cli:rename-seat")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris rename-seat: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7030,7 +7033,7 @@ async def cmd_rename_seat(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris rename-seat: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris rename-seat: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"renamed {seat_id} -> {new_handle}")
     for k, v in out.items():
@@ -7062,7 +7065,7 @@ async def cmd_set_seat_attended(
                 application_name="osiris-cli:set-seat-attended")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris set-seat-attended: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7072,7 +7075,7 @@ async def cmd_set_seat_attended(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris set-seat-attended: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris set-seat-attended: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{seat_id} attended -> {attended}")
     for k, v in out.items():
@@ -7088,8 +7091,8 @@ async def cmd_reissue_office(
     for `reissue-seat-dir`, kept this release only (ONE TAXONOMY, ruling
     52a59652/70c001ec: "office" retired as a place-word in favor of "seat directory").
     A thin wrapper, never a second implementation."""
-    print("osiris reissue-office: deprecated, use reissue-seat-dir — kept as an "
-          "alias this release only", file=sys.stderr)
+    print("osiris reissue-office: deprecated, use reissue-seat-dir. Kept as an "
+          "alias this release only.", file=sys.stderr)
     return await cmd_reissue_seat_dir(seat_id, because, adopt=adopt, actor=actor, pool=pool)
 
 
@@ -7117,7 +7120,7 @@ async def cmd_reissue_seat_dir(
                 application_name="osiris-cli:reissue-seat-dir")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris reissue-seat-dir: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7127,7 +7130,7 @@ async def cmd_reissue_seat_dir(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris reissue-seat-dir: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris reissue-seat-dir: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"reissued seat directory for {seat_id}")
     for k, v in out.items():
@@ -7141,8 +7144,8 @@ async def cmd_establish_office(
     """osiris establish-office <seat> [--actor W] — DEPRECATED alias for
     `establish-seat-dir`, kept this release only (ONE TAXONOMY, ruling
     52a59652/70c001ec). A thin wrapper, never a second implementation."""
-    print("osiris establish-office: deprecated, use establish-seat-dir — kept as "
-          "an alias this release only", file=sys.stderr)
+    print("osiris establish-office: deprecated, use establish-seat-dir. Kept as "
+          "an alias this release only.", file=sys.stderr)
     return await cmd_establish_seat_dir(seat, actor=actor, pool=pool)
 
 
@@ -7170,7 +7173,7 @@ async def cmd_establish_seat_dir(
                 application_name="osiris-cli:establish-seat-dir")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris establish-seat-dir: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7179,7 +7182,7 @@ async def cmd_establish_seat_dir(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris establish-seat-dir: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris establish-seat-dir: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"established seat directory for {seat}")
     for k, v in out.items():
@@ -7214,7 +7217,7 @@ async def cmd_resync_seat_project(
                 application_name="osiris-cli:resync-seat-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris resync-seat-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7223,7 +7226,7 @@ async def cmd_resync_seat_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris resync-seat-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris resync-seat-project: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{seat_id} project -> {out['project']!r}"
           + (" (already correct)" if out.get("already_correct") else ""))
@@ -7258,7 +7261,7 @@ async def cmd_reconcile_seat_identity(
                 application_name="osiris-cli:reconcile-seat-identity")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris reconcile-seat-identity: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7269,7 +7272,7 @@ async def cmd_reconcile_seat_identity(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris reconcile-seat-identity: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris reconcile-seat-identity: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"reconciled {seat_id}")
     for k, v in out.items():
@@ -7300,7 +7303,7 @@ async def cmd_create_project(
                 application_name="osiris-cli:create-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris create-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7309,7 +7312,7 @@ async def cmd_create_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris create-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris create-project: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"created project {name!r}")
     for k, v in out.items():
@@ -7356,7 +7359,7 @@ async def cmd_rename_project(
                 application_name="osiris-cli:rename-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris rename-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7389,21 +7392,21 @@ async def cmd_rename_project(
                 out["evidence_disagrees"] = True
                 out["warning"] = (
                     f"{new_name!r} was written, but {len(disagreeing)} governing seat "
-                    f"evidence disagrees with it: {', '.join(disagreeing)} — their own "
-                    "pin/charter/remote still names something else; go fix those, this "
-                    "write did not")
+                    f"evidence disagrees with it: {', '.join(disagreeing)}. Their own "
+                    "pin, charter, or remote still names something else. Fix those too, "
+                    "this write did not.")
         if not dry_run and not out.get("error"):
             out["mount_cache_note"] = (
                 "any already-mounted agent's in-process get_status() may still report "
-                "the pre-rename name until its next re-mount — this CLI process has no "
-                "live agent cache to heal (only the MCP server process does)")
+                "the pre-rename name until its next re-mount. This CLI process has no "
+                "live agent cache to heal (only the MCP server process does).")
     finally:
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris rename-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris rename-project: refused: {out['error']}", file=sys.stderr)
         return 1
-    verb = "renamed" if not dry_run else "would rename (dry run — pass --apply to write)"
+    verb = "renamed" if not dry_run else "would rename (dry run: pass --apply to write)"
     print(f"{project} {verb} -> {new_name}")
     for k, v in out.items():
         print(f"  {k}: {v}")
@@ -7435,7 +7438,7 @@ async def cmd_set_project_tag(
                 application_name="osiris-cli:set-project-tag")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris set-project-tag: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7445,7 +7448,7 @@ async def cmd_set_project_tag(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris set-project-tag: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris set-project-tag: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{project}: window tag set to [{out['window_tag']}]")
     return 0
@@ -7474,7 +7477,7 @@ async def cmd_retire_project(
                 application_name="osiris-cli:retire-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7484,7 +7487,7 @@ async def cmd_retire_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-project: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"retired project {project!r}")
     for k, v in out.items():
@@ -7516,7 +7519,7 @@ async def cmd_retire_object(
                 application_name="osiris-cli:retire-object")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris retire-object: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7525,7 +7528,7 @@ async def cmd_retire_object(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris retire-object: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris retire-object: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"retired object {ref!r}")
     for k, v in out.items():
@@ -7558,7 +7561,7 @@ async def cmd_fork_project(
                 application_name="osiris-cli:fork-project")
         except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
             print(f"osiris fork-project: could not reach postgres at "
-                  f"{settings.database_url} — {exc}. Set DATABASE_URL, or start the dev "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
                   "instance.", file=sys.stderr)
             return 1
     try:
@@ -7573,7 +7576,7 @@ async def cmd_fork_project(
         if owns_pool:
             await pool.close()
     if "error" in out:
-        print(f"osiris fork-project: refused — {out['error']}", file=sys.stderr)
+        print(f"osiris fork-project: refused: {out['error']}", file=sys.stderr)
         return 1
     print(f"{project} {direction} -> {fork_into}")
     for k, v in out.items():
@@ -7591,20 +7594,20 @@ async def cmd_fork_project(
 # otherwise print AGAIN, alphabetically, right below this) — `osiris <verb> --help`
 # still shows that verb's own full description and a worked example, untouched.
 _TOP_LEVEL_HELP = """\
-THE TWO COMMANDS TO REMEMBER — nothing to a working, independent mind:
+THE TWO COMMANDS TO REMEMBER, nothing else, to get a working, independent agent running:
     osiris new <name>
     osiris launch <name>
-`new` founds a SELF-MANAGED seat (no manager, ever) with its own code workspace
-(~/code/<name> by default) — a brand-new, independent project in the same act, no repo
-required. `launch` bodies it. Nothing else to hold in memory; everything below is
-discoverable when you need it, not something to remember in advance.
+`new` founds a self-managed seat (no manager, ever) with its own code workspace
+(~/code/<name> by default), a brand-new, independent project in the same act, no repo
+required. `launch` starts it running. Nothing else to hold in memory: everything below
+is discoverable when you need it, not something to remember in advance.
 
-ADDING A WORKER TO A HOUSE YOU ALREADY RUN (a different case — MANAGED, not independent):
+ADDING A WORKER TO A PROJECT YOU ALREADY RUN (a different case: managed, not independent):
     osiris mint-seat <name>
     osiris launch <name>
-(--manager/--actor are inferred — the seat you're standing in, the console actor — and
+(--manager/--actor are inferred from the seat you're running this command as, and
 stay real overrides when that's wrong or ambiguous. Naming a --house with no seats in it
-yet brings that house/project into existence in this same act too — --project defaults
+yet brings that house/project into existence in this same act too. --project defaults
 to the house name.)
 
 COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
@@ -7656,8 +7659,8 @@ def _add_text_flag(parser: argparse.ArgumentParser) -> None:
     face already prints in a code block. Shared across every door the hook serves so its
     static `osiris <verb> --text` invocation is uniform."""
     parser.add_argument("--text", action="store_true",
-                        help="raw rendered text, no box/title/color — for scripting or "
-                             "a hook, never a human at an interactive terminal")
+                        help="raw rendered text, no box, title, or color: for scripting "
+                             "or automation, never a human at an interactive terminal")
 
 
 def _d(text: str) -> str:
@@ -7675,139 +7678,142 @@ def _build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = p.add_subparsers(dest="command", required=False, parser_class=_RawSubparser)
 
-    p_attach = sub.add_parser("attach", description=_d("attach to a live seat's PTY session"),
-                              epilog="example: osiris attach Khnum")
+    p_attach = sub.add_parser("attach", description=_d("Attach to a seat's live terminal session."),
+                              epilog="example: osiris attach Atlas")
     p_attach.add_argument("handle", help="the seat's handle to attach to")
 
     p_smoke = sub.add_parser(
-        "smoke", description=_d("the same deploy-time liveness probe the fleet runs"),
+        "smoke", description=_d("Run the same deploy-time health check the fleet runs on "
+                                 "itself, to confirm the system is actually working."),
         epilog="example: osiris smoke\nexample: osiris smoke --chaos\n"
                "example: osiris smoke --reboot")
     p_smoke.add_argument(
         "--chaos", action="store_true",
-        help="crash replay: kill osiris-mcp/osiris-worker hard, fire a concurrent "
-             "session-end storm, restart, then assert system invariants still hold "
-             "under a real crash, never just a graceful restart")
+        help="crash-replay test: kill the mcp/worker processes hard, fire a burst of "
+             "concurrent session-end activity, restart, then check that the system's "
+             "invariants still hold after a real crash, not just a graceful restart")
     p_smoke.add_argument(
         "--reboot", action="store_true",
-        help="REBOOT SURVIVAL (thread 194eac83): restarts every daemon unit in "
-             "dependency order (boot-heal first) and asserts pg/mcp/console each answer "
-             "and the worker's own heartbeat goes fresh within budget — a real restart "
-             "of real daemons, runs live only by the operator's own hand")
+        help="restart every daemon unit in dependency order (boot-heal first) and check "
+             "that postgres, the MCP server, and the console all answer, and that the "
+             "worker's own heartbeat is fresh within budget. This restarts real daemons, "
+             "so only run it by hand deliberately")
     p_smoke.add_argument("--json", action="store_true", dest="as_json",
-                         help="machine-readable: one compact JSON line. Never chaos's or "
-                              "reboot's own path (each runs a separate, longer-lived "
-                              "probe with its own text receipt) — the ordinary probe only")
+                         help="machine-readable: one compact JSON line. Not used by "
+                              "--chaos or --reboot, which each print their own longer "
+                              "report; this applies to the ordinary probe only")
 
     p_boot_status = sub.add_parser("boot-status", description=_d(
-        "name every active seat with no compiled managed section, "
-                               "classified by why (report-only; exit 1 if any)"),
+        "List every active seat that has no compiled managed section, with a reason "
+                               "for each. Report-only; exits 1 if any are found."),
                    epilog="example: osiris boot-status\nexample: osiris boot-status --units")
     p_boot_status.add_argument("--json", action="store_true", dest="as_json",
                                help="machine-readable: one compact JSON line")
     p_boot_status.add_argument("--fleet", action="store_true",
-                               help="a separate report: registry_census-verified live "
-                                    "bodies get their mount row refreshed and a "
-                                    "boot_resumed_at stamp; a body with no mount row at "
-                                    "all is named. Runs the SAME pass the worker runs "
-                                    "once at its own startup — exit 1 if any body has "
-                                    "no mount row")
+                               help="a separate report: for every verified live session, "
+                                    "refresh its mount row and stamp boot_resumed_at; "
+                                    "name any live session with no mount row at all. "
+                                    "This is the same pass the worker runs once at its "
+                                    "own startup. Exits 1 if any session has no mount row")
     p_boot_status.add_argument("--units", action="store_true",
-                               help="REBOOT SURVIVAL (thread 194eac83): a separate report "
-                                    "— deploy/user unit drift against the repo's own "
-                                    "sources, plus any enabled-but-failed unit; no pool "
-                                    "needed, never mixed with the seat rollout report above")
+                               help="a separate report: compare deployed systemd units "
+                                    "against the repo's own source, plus list any unit "
+                                    "that's enabled but failed. Needs no database "
+                                    "connection; never combine with the seat report above")
 
     p_lint = sub.add_parser("lint", description=_d(
-        "the graph audits itself — headless mirror of the graph_lint MCP tool/CMD-K "
-        "power tool, same 32 checks, same receipt (report-only; exit 1 if any findings). "
-        "WAVE 27 widening (Thoth mail 11752): --check also takes 'triage' or one of "
-        "AUDIT_NAMES, folding the whole graph-health namespace into one door"),
+        "Audit the graph for integrity problems, headless. Runs the same 32 checks as "
+        "the graph_lint tool and the console's power-tool panel, and prints the same "
+        "report. Report-only; exits 1 if any findings. --check also accepts 'triage' "
+        "or one of a set of named audits, folding the whole graph-health surface into "
+        "one command."),
                    epilog="example: osiris lint\nexample: osiris lint --check false-mint "
                           "--json\nexample: osiris lint --project osiris\n"
                           "example: osiris lint --check triage\n"
                           "example: osiris lint --check closure-health")
     p_lint.add_argument("--check", default=None,
                         help="one graph_lint check name (a `counts` key) to list in "
-                             "full, past the default 50-per-check cap; or 'triage'; or "
-                             "one of AUDIT_NAMES (closure-health/the-wall/type-census/"
-                             "family-consistency/family-drift) — see --json's own "
-                             "counts for the complete graph_lint name list")
+                             "full, past the default cap of 50 per check; or 'triage'; "
+                             "or one of the named audits (closure-health, the-wall, "
+                             "type-census, family-consistency, family-drift). See the "
+                             "counts in --json output for the complete check name list")
     p_lint.add_argument("--project", default=None,
-                        help="best-effort client-side filter (no SQL-level scoping exists "
-                             "upstream) — keeps only findings whose subject/detail "
-                             "mentions this string; --json names which checks could not "
-                             "be evaluated for project membership at all")
+                        help="best-effort client-side filter (there is no server-side "
+                             "scoping for this yet): keeps only findings whose subject "
+                             "or detail mentions this string; --json output lists which "
+                             "checks could not be evaluated for project membership at all")
     p_lint.add_argument("--json", action="store_true", dest="as_json",
-                        help="machine-readable: the full receipt (findings/counts/"
-                             "counts_by_severity/severity/could_not_evaluate)")
+                        help="machine-readable: the full report (findings, counts, "
+                             "counts_by_severity, severity, could_not_evaluate)")
     p_lint.add_argument("--stale-days", type=int, default=14, dest="stale_days",
-                        help="the stale-obligation/rot-candidate/peer-silent window, days "
-                             "(default 14)")
+                        help="the window, in days, used for the stale-obligation, "
+                             "rot-candidate, and peer-silent checks (default 14)")
     p_lint.add_argument("--limit", type=int, default=None,
                         help="with --check: page size past the default full fetch")
     p_lint.add_argument("--offset", type=int, default=0,
                         help="with --check: page offset")
 
     p_graph_export = sub.add_parser("graph-export", description=_d(
-        "the CLI mirror of GET /graph/stream (NAVIGABLE SPACE, THE SERVER piece B, "
-        "thread b6cb1d7c0b36) — the whole graph as typed arrays, direct-to-Postgres "
-        "and headless"),
+        "Export the whole graph as typed arrays, direct from Postgres and headless. "
+        "The CLI equivalent of GET /graph/stream."),
         epilog="example: osiris graph-export --out graph.bin\n"
                "example: osiris graph-export --json")
     p_graph_export.add_argument("--out", default=None,
-                        help="file path to write the exact binary snapshot payload to")
+                        help="file path to write the binary snapshot to")
     p_graph_export.add_argument("--json", action="store_true", dest="as_json",
-                        help="print a header-only summary (schema_version/count/"
-                             "edge_count/types/projects, no array bodies)")
+                        help="print a header-only summary (schema_version, count, "
+                             "edge_count, types, projects; no array bodies)")
 
     p_layout = sub.add_parser("layout", description=_d(
-        "THE MIGRATION DOOR (Thoth mail 10609) — drives the layout heartbeat's own "
-        "graph_layout.layout_batch to quiescence right now, instead of waiting on "
-        "its 5-minute cron cadence; refuses if the heartbeat is mid-tick. "
-        "--physics (THE PHYSICS LAYOUT, Thoth mail 11047) runs graph_physics."
-        "run_physics_migrate instead — a single global force simulation over the "
-        "whole active graph, never a batch loop; --limit is meaningless with it"),
+        "Force an immediate layout pass instead of waiting for the next scheduled run. "
+        "--migrate drives the ordinary batch layout job to completion right now instead "
+        "of on its usual 5-minute schedule; refuses if a batch is already running. "
+        "--physics runs the alternative physics-based layout instead: a single global "
+        "force simulation over the whole active graph, not a batch loop. --limit has no "
+        "effect with --physics."),
         epilog="example: osiris layout --migrate\nexample: osiris layout --physics")
     p_layout.add_argument("--migrate", action="store_true",
-                          help="loop layout_batch until every object carries the "
-                               "current graph_layout_v, printing one receipt per batch")
+                          help="loop the batch layout job until every object carries the "
+                               "current layout version, printing one report per batch")
     p_layout.add_argument("--physics", action="store_true",
-                          help="THE PHYSICS LAYOUT's own one-shot migration — a single "
-                               "global force simulation, not a batch loop")
+                          help="run the physics-based layout: a single global force "
+                               "simulation, not a batch loop")
     p_layout.add_argument("--verify-only", action="store_true",
-                          help="THE PHYSICS LAYOUT, computed and verified but WRITES "
-                               "NOTHING (ruling 6befd2a5) — read-only by construction, "
-                               "so unlike a real --physics run this may run from an "
-                               "undeployed branch against the live population; "
-                               "--physics only")
+                          help="compute and verify the physics layout but write nothing. "
+                               "Read-only by construction, so unlike a real --physics "
+                               "run this may run from an undeployed branch against the "
+                               "live population; --physics only")
     p_layout.add_argument("--limit", type=int, default=None,
                           help="objects per batch (default: the live layout.batch_size "
-                               "setting, itself defaulting to 1000) — --migrate only")
+                               "setting, itself defaulting to 1000); --migrate only")
 
     p_audit = sub.add_parser("audit", description=_d(
-        "headless mirror of graph_lint's own CMD-K audit siblings — one door for all "
-        "five rather than a subcommand each"),
+        "Run one of the graph's named integrity audits, the same ones available from "
+        "the graph_lint tool's own audit panel, as a single command instead of one "
+        "subcommand per audit."),
                    epilog="example: osiris audit the-wall\nexample: osiris audit "
                           "closure-health --json")
     p_audit.add_argument("name", choices=list(AUDIT_NAMES),
                          help="which audit to run")
     p_audit.add_argument("--json", action="store_true", dest="as_json",
-                         help="machine-readable: the full composition result")
+                         help="machine-readable: the full result")
 
-    p_seed = sub.add_parser("seed", description=_d("seed default compositions (and rooms)"),
+    p_seed = sub.add_parser("seed", description=_d("Seed default compositions (and rooms)."),
                             epilog="example: osiris seed\nexample: osiris seed "
                                    "--compositions-only")
     p_seed.add_argument("--compositions-only", action="store_true",
-                        help="seed + room DEFAULT_COMPOSITIONS only; skip the canon ingest")
+                        help="seed default compositions and rooms only; skip the "
+                             "reference-material ingest")
 
     p_soul_key = sub.add_parser("soul-key", description=_d(
-        "THE KEY DOOR (KEY CUSTODY REWRITTEN, ruling e0b98ff2): status/init/rotate "
-        "the soul-store encryption key (a systemd user credential by default, never "
-        "a plaintext file), enroll or use FIDO2 recovery on a Security Key, or drill "
-        "an off-box backup's own restorability. status/init/rotate resolve the key "
-        "path automatically — the SAME path an installed osiris-mcp/osiris-worker "
-        "--user unit already uses — without exporting anything"),
+        "Manage the encryption key that protects stored session transcripts (the soul "
+        "store). Use this to check the key's status, mint the first key on a new box, "
+        "rotate to a new key, enroll or use a hardware security key for recovery, or "
+        "test that an off-box backup actually restores. By default the key is held as "
+        "a systemd user credential rather than a plaintext file. status, init, and "
+        "rotate all resolve the key's path automatically, the same path an installed "
+        "osiris-mcp/osiris-worker --user unit already uses, so nothing needs to be "
+        "exported by hand."),
         epilog="example: osiris soul-key init\n"
                "example: sudo env \"PATH=$PATH\" osiris soul-key init --owner osiris\n"
                "example: osiris soul-key init --backend file --print-recovery\n"
@@ -7820,81 +7826,82 @@ def _build_parser() -> argparse.ArgumentParser:
     p_soul_key.add_argument(
         "action",
         choices=["status", "init", "rotate", "restore-drill", "enroll-recovery", "recover"],
-        help="status: backend/recovery/legacy-row facts, never key bytes. "
-             "init: mint the first key (refuses if one exists) — a systemd-creds "
-             "user credential by default, --backend file for the old plaintext "
-             "shape. rotate: mint a new key and re-wrap every row onto it; "
-             "--finish once the receipt is clean. enroll-recovery: wrap the "
-             "current key with a FIDO2 Security Key (PIN + touch). recover: "
-             "restore a key from a FIDO2 recovery enrollment onto a box with no "
-             "live key yet. restore-drill: prove an off-box backup repository "
-             "actually restores")
+        help="status: show backend, recovery, and legacy-row facts, never the key bytes "
+             "themselves. init: mint the first key, refusing if one already exists; a "
+             "systemd-creds user credential by default, or use --backend file for the "
+             "older plaintext form. rotate: mint a new key and re-wrap every row onto "
+             "it; run again with --finish once the report is clean. enroll-recovery: "
+             "wrap the current key with a hardware security key (PIN plus touch). "
+             "recover: restore a key from a security-key recovery enrollment onto a "
+             "box with no live key yet. restore-drill: prove that an off-box backup "
+             "repository actually restores")
     p_soul_key.add_argument("--owner", default=None,
-                            help="init only: chown the key file + directory to this user "
-                                 "after writing (for running as root, which has no "
-                                 "natural owner of its own to land the file as)")
+                            help="init only: change ownership of the key file and "
+                                 "directory to this user after writing (useful when "
+                                 "running as root, which has no natural owner of its "
+                                 "own for the file)")
     p_soul_key.add_argument("--path", default=None,
                             help="an explicit key file path, overriding the automatic "
-                                 "--user-unit/XDG resolution")
+                                 "systemd-unit/XDG resolution")
     p_soul_key.add_argument("--backend", default=None, choices=["host-cred", "host+tpm2", "file"],
-                            help="init/recover only: the key-at-rest shape — default "
-                                 "(omit this) auto-selects host+tpm2 once you've "
-                                 "joined the tss group, else host-cred, else file on "
-                                 "a non-systemd box")
+                            help="init/recover only: the storage format for the key at "
+                                 "rest. The default (omit this flag) auto-selects "
+                                 "host+tpm2 once you've joined the tss group, else "
+                                 "host-cred, else file on a non-systemd box")
     p_soul_key.add_argument("--finish", action="store_true",
-                            help="rotate only: step 2 — remove the old key once the "
-                                 "receipt reports zero rows remain under it")
+                            help="rotate only: step 2, remove the old key once the "
+                                 "report confirms zero rows remain under it")
     p_soul_key.add_argument("--print-recovery", action="store_true", dest="print_recovery",
-                            help="init/rotate: print the mandatory-offline-recovery "
-                                 "secret banner (the OLD default) — off by default "
-                                 "now that FIDO2 enroll-recovery is the primary path")
+                            help="init/rotate: print the offline-recovery secret banner "
+                                 "(the old default). Off by default now that "
+                                 "enroll-recovery with a hardware key is the primary path")
     p_soul_key.add_argument("--repo-url", default=None,
                             help="restore-drill only: one restic repository URL to "
-                                 "drill; defaults to every URL in "
+                                 "drill; defaults to every URL configured under "
                                  "backup.offbox_repositories")
     p_soul_key.add_argument("--restart", action="store_true",
-                            help="init only: restart osiris-mcp/osiris-worker right "
-                                 "after minting the key (systemctl --user restart, "
-                                 "no sudo) — without this, init prints the command "
-                                 "to run by hand instead")
+                            help="init only: restart the mcp/worker services right "
+                                 "after minting the key (a user-level restart, no "
+                                 "sudo needed). Without this flag, init prints the "
+                                 "command to run by hand instead")
     p_soul_key.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
 
     p_restic_key = sub.add_parser("restic-key", description=_d(
-        "THE OFFLOAD RUNNER's own credential door (KEY CUSTODY REWRITTEN, ruling "
-        "e0b98ff2, 'same shape for the restic repository password'): status/init "
-        "the restic repository password — a systemd user credential by default, "
-        "never a plaintext file. No rotate/enroll-recovery/recover yet, a "
-        "deliberate scope cut for this first cut"),
+        "Manage the credential for the off-box restic backup runner: check its status "
+        "or mint the repository password, stored as a systemd user credential by "
+        "default rather than a plaintext file. Rotation and recovery are not "
+        "supported yet; that's a deliberate scope cut for this first version."),
         epilog="example: osiris restic-key init\n"
                "example: osiris restic-key status")
     p_restic_key.add_argument("action", choices=_RESTIC_KEY_ACTIONS,
-                              help="status: backend/presence facts, never the password. "
-                                   "init: mint the password (refuses if one exists) — a "
-                                   "systemd-creds user credential by default, --backend "
-                                   "file for the old plaintext shape")
+                              help="status: show backend and presence facts, never the "
+                                   "password itself. init: mint the password, refusing "
+                                   "if one already exists; a systemd-creds user "
+                                   "credential by default, or use --backend file for "
+                                   "the older plaintext form")
     p_restic_key.add_argument("--path", default=None,
                               help="an explicit password file path, overriding the "
                                    "default ~/.config/osiris/restic.password")
     p_restic_key.add_argument("--backend", default=None,
                               choices=["host-cred", "host+tpm2", "file"],
-                              help="init only: the credential-at-rest shape — default "
-                                   "(omit this) auto-selects host+tpm2 once you've "
-                                   "joined the tss group, else host-cred, else file on "
-                                   "a non-systemd box")
+                              help="init only: the storage format for the credential "
+                                   "at rest. The default (omit this flag) auto-selects "
+                                   "host+tpm2 once you've joined the tss group, else "
+                                   "host-cred, else file on a non-systemd box")
     p_restic_key.add_argument("--json", action="store_true", dest="as_json",
                               help="machine-readable: one compact JSON line")
 
     p_offload_runner = sub.add_parser("offload-runner", description=_d(
-        "THE OPPORTUNISTIC OFFLOAD RUNNER (operator ruling be21384a): one tick "
-        "checks every configured offload_targets[] row's presence and syncs the "
-        "vault via restic to every one that's present right now, recording a "
-        "receipt per target — meant as osiris-offload.timer's own ExecStart, safe "
-        "to run by hand any time"),
+        "Run one pass of the opportunistic offload runner: for every configured "
+        "offload target, check whether it's present right now and, if so, sync the "
+        "vault to it via restic, recording a result per target. This is meant to run "
+        "as the offload timer's own scheduled job, and is safe to run by hand any "
+        "time too."),
         epilog="example: osiris offload-runner tick")
     p_offload_runner.add_argument("action", choices=["tick"],
-                                  help="tick: one opportunistic pass over every "
-                                       "enabled, present offload target")
+                                  help="tick: run one pass over every enabled, present "
+                                       "offload target")
     p_offload_runner.add_argument("--vault", default=None,
                                   help="override the vault directory being synced "
                                        "(defaults to $OSIRIS_VAULT or ~/osiris-vault)")
@@ -7902,58 +7909,60 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="machine-readable: one compact JSON line")
 
     p_launch = sub.add_parser("launch", description=_d(
-        "body a seat with a fresh, persistent `claude --bg` process — always shows up "
-        "in `claude agents`, always attachable. To continue the seat's last session "
-        "instead, use `osiris resume`"),
-                              epilog="example: osiris launch Khnum")
-    p_launch.add_argument("handle", help="the seat's handle to launch a body for")
+        "Give a seat a live, persistent process (a `claude --bg` process): it will show "
+        "up in `claude agents` and can be attached to later. To continue a seat's most "
+        "recent session instead of starting a new persistent one, use `osiris resume`."),
+                              epilog="example: osiris launch Atlas")
+    p_launch.add_argument("handle", help="the seat's handle to launch a process for")
     p_launch.add_argument("--model", default=None,
-                          help="the model to launch with — defaults to the seat's own "
-                               "recorded intended_model, else the fleet's wake default")
+                          help="the model to launch with. Defaults to the seat's own "
+                               "recorded model, else the fleet's default")
     p_launch.add_argument("--debug", action="store_true",
-                          help="use the osiris PTY-broker lane instead of the default "
-                               "`claude --bg` — for an incident or a build with no --bg")
+                          help="use the PTY-broker launch path instead of the default "
+                               "`claude --bg`, for troubleshooting or on a build with "
+                               "no --bg support")
 
     p_resume = sub.add_parser("resume", description=_d(
-        "continue a seat's last session as a ONE-SHOT `-p --resume` turn — runs the "
-        "brief and exits, never shows up in `claude agents`, reached again by sending "
-        "it mail. Refuses if there is nothing resumable; never falls through to a "
-        "fresh mint — for that, use `osiris launch`"),
-                              epilog="example: osiris resume Khnum")
+        "Continue a seat's most recent session as a single, one-shot turn: it runs the "
+        "given message and exits, never shows up in `claude agents`, and can be "
+        "reached again by sending it mail. Refuses if there's nothing resumable, and "
+        "never falls back to starting a fresh session; use `osiris launch` for that."),
+                              epilog="example: osiris resume Atlas")
     p_resume.add_argument("handle", help="the seat's handle to resume")
     p_resume.add_argument("--model", default=None,
-                          help="the model to resume with — defaults to the seat's own "
-                               "recorded intended_model, else the fleet's wake default")
+                          help="the model to resume with. Defaults to the seat's own "
+                               "recorded model, else the fleet's default")
 
     p_stop = sub.add_parser("stop", description=_d(
-        "END a live body — `osiris launch`'s inverse. Stops the seat's own process (the "
-        "harness's own `claude stop <id>` when the body is harness-tracked, else a plain "
-        "SIGTERM) and nothing more: not a pause, no promised thaw-where-you-left-off. "
-        "Reachability afterward is governed by the SAME occupancy authority launch/wake "
-        "already read, so a later launch just works — there is no 'unstop' to remember. "
-        "`no-live-body` exits 0: nothing running there is a SUCCESS for a teardown"),
-        epilog="example, ending a worker you started:\n"
-               "    osiris stop Khnum --reason 'test run done'\n"
-               "example, in a teardown loop (0 whether it was live or already gone):\n"
+        "End a seat's live process, the inverse of `osiris launch`. Stops the seat's "
+        "process (using the harness's own stop command when the process is "
+        "harness-tracked, otherwise a plain SIGTERM) and does nothing more: this is "
+        "not a pause, and there's no promise of picking up where it left off. "
+        "Reachability afterward works the same way it does for launch and wake, so a "
+        "later launch just works; there's no separate 'unstop' step. Exits 0 when "
+        "nothing was running there (status 'no-live-body'): for a teardown, that "
+        "counts as success."),
+        epilog="example, ending a process you started:\n"
+               "    osiris stop Atlas --reason 'test run done'\n"
+               "example, in a teardown loop (exits 0 whether it was live or already gone):\n"
                "    osiris stop probe-seat || echo 'refused, see stderr'")
-    p_stop.add_argument("handle", help="the seat handle whose body to end")
+    p_stop.add_argument("handle", help="the seat handle whose process to end")
     p_stop.add_argument("--reason", default="",
-                        help="recorded on the seat as stopped_reason — say why, for whoever "
+                        help="recorded on the seat as the stop reason, for whoever "
                              "reads this later")
     p_stop.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line")
 
     p_status = sub.add_parser("status", description=_d(
-        "your identity, mail count, and fleet pulse — the same get_status() the MCP tool "
-        "answers, called over the wire"),
+        "Show your identity, mail count, and fleet status. The same information the "
+        "status tool answers, called over the CLI."),
         epilog="example: osiris status")
     p_status.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_status)
 
     p_search = sub.add_parser("search", description=_d(
-        "search the graph's knowledge — the same search() the MCP tool answers, called "
-        "over the wire"),
+        "Search the graph's knowledge. The same search tool, called over the CLI."),
         epilog="example: osiris search 'quorumlatch counter'")
     p_search.add_argument("query", help="words, phrases, or \"quoted phrases\" (websearch syntax)")
     p_search.add_argument("--limit", type=int, default=15, help="max results (default 15)")
@@ -7962,50 +7971,51 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_search)
 
     p_fleet = sub.add_parser("fleet", description=_d(
-        "the fleet roster, grouped by project — the same "
-                                         "fleet() the MCP tool answers, called over the wire"),
+        "List the fleet roster, grouped by project. The same information the fleet "
+                                         "tool answers, called over the CLI."),
                              epilog="example: osiris fleet\nexample: osiris fleet --full")
     p_fleet.add_argument("--full", action="store_true",
-                         help="expand every historical (retired) session too, not just the "
-                              "live ones — the whole roster, not the collapsed count")
+                         help="expand every past (retired) session too, not just the "
+                              "live ones, showing the whole roster instead of a collapsed count")
     p_fleet.add_argument("--json", action="store_true", dest="as_json",
                          help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_roster = sub.add_parser("roster", description=_d(
-        "which seat owns a repo, and is anybody home — the same roster() the MCP tool "
-        "answers, called over the wire. Without --repo: every active seat's occupancy "
-        "(vacant/occupied/cold — cold is NOT vacant), charter, and .osiris pin. With "
-        "--repo: which seat's charter or pin names it, flagged if they disagree"),
+        "Show which seat owns each repo, and whether anyone is home. The same "
+        "information the roster tool answers, called over the CLI. Without --repo: "
+        "every active seat's occupancy (vacant, occupied, or cold; cold is not the "
+        "same as vacant), charter, and pinned project. With --repo: which seat's "
+        "charter or pin names that repo, flagged if they disagree."),
         epilog="example: osiris roster\nexample: osiris roster --repo coldspot")
     p_roster.add_argument("--repo", default=None,
                           help="reverse-lookup: which seat owns this repo")
     p_roster.add_argument("--caveats", action="store_true", dest="want_caveats",
-                          help="the full text of this function's own blind spots (default: "
-                               "a one-line count+pointer, same diet as the MCP tool)")
+                          help="show the full text of this command's own known blind "
+                               "spots (default: a one-line count and pointer)")
     p_roster.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_roster)
 
     p_backlog = sub.add_parser("backlog", description=_d(
-        "per-project open obligations against target, past-window first, oldest owners — "
-        "the same backlog() the MCP tool answers, called over the wire. Scoped to your own "
-        "mounted project by default"),
+        "List open obligations per project, oldest and most overdue first. The same "
+        "information the backlog tool answers, called over the CLI. Scoped to your "
+        "own mounted project by default."),
         epilog="example: osiris backlog\nexample: osiris backlog --all-projects"
                "\nexample: osiris backlog --fleet")
     p_backlog.add_argument("--all-projects", action="store_true", dest="all_projects",
                            help="every project, not just your own mounted one")
     p_backlog.add_argument("--fleet", action="store_true", dest="fleet",
-                           help="the per-seat crunch view instead of per-project "
-                                "(thread 8608, THE BACKLOG BAND) — who is carrying the "
-                                "backlog fleet-wide, takes priority over --all-projects")
+                           help="show the per-seat view instead of per-project: who is "
+                                "carrying the backlog fleet-wide. Takes priority over "
+                                "--all-projects")
     p_backlog.add_argument("--json", action="store_true", dest="as_json",
                            help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_backlog)
 
     p_threads = sub.add_parser("threads", description=_d(
-        "MINE: every OPEN thread you own, one line each with a short id — the same "
-        "threads() the MCP tool answers, called over the wire. A raw terminal has no "
-        "mounted identity of its own, so --project is effectively required here"),
+        "List every open thread you own, one line each with a short id. The same "
+        "information the threads tool answers, called over the CLI. A raw terminal "
+        "has no mounted identity of its own, so --project is effectively required here."),
         epilog="example: osiris threads --project osiris")
     p_threads.add_argument("--project", default=None,
                            help="the repo to list open threads for")
@@ -8014,20 +8024,21 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_threads)
 
     p_team = sub.add_parser("team", description=_d(
-        "a manager's own seats: live, owe, envelope — the same team() the MCP tool "
-        "answers, called over the wire (self-scoped off the caller's own held seat). "
-        "--seat resolves the manager by handle directly, off the wire, for a bare "
-        "terminal with no mount of its own"),
-        epilog="example: osiris team\nexample: osiris team --seat Thoth")
+        "Show a manager's own seats: who's live, what they owe, and their overall "
+        "load. The same information the team tool answers, called over the CLI "
+        "(scoped to the caller's own held seat by default). --seat resolves the "
+        "manager by handle directly, for a bare terminal with no mount of its own."),
+        epilog="example: osiris team\nexample: osiris team --seat Nova")
     p_team.add_argument("--seat", default=None,
-                        help="the manager's own handle (bypasses the MCP self-scoping gap)")
+                        help="the manager's own handle (works even without a mounted session)")
     p_team.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_team)
 
     p_inbox = sub.add_parser("inbox", description=_d(
-        "a peek at a project's own mailbox — the same inbox() the MCP tool answers, "
-        "called over the wire. Always a peek; settling mail is an agent's own act"),
+        "Peek at a project's mailbox. The same information the inbox tool answers, "
+        "called over the CLI. Always a read-only peek; marking mail as read is a "
+        "separate, explicit act."),
         epilog="example: osiris inbox --project osiris")
     p_inbox.add_argument("--project", required=True, help="the project mailbox to peek at")
     p_inbox.add_argument("--json", action="store_true", dest="as_json",
@@ -8035,19 +8046,20 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_inbox)
 
     p_desk = sub.add_parser("desk", description=_d(
-        "the operator's own organized queue — needs_decision / needs_hands / fyi bands, "
-        "the your_queue thread list, dimmed moot briefs — read at a terminal instead of "
-        "only the web console or an agent peeking on your behalf. Always a peek; settling "
-        "a brief is still only ever your own explicit word (the desk MCP tool's ack=)"),
+        "Show the operator's own organized queue: items needing a decision, items "
+        "needing hands, and fyi items, plus the current thread list, with dismissed "
+        "items dimmed. Useful at a terminal instead of only in the web console or "
+        "through an agent. Always a read-only peek; acknowledging an item is still "
+        "always an explicit act."),
         epilog="example: osiris desk\nexample: osiris desk --json")
     p_desk.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
     _add_text_flag(p_desk)
 
     p_show = sub.add_parser("show", description=_d(
-        "the full, untruncated record for one Thread or Decision — by UUID, 8-char short "
-        "id, or summary substring, the same recall() an agent already reads. Refuses "
-        "loudly (never guesses) when nothing matches"),
+        "Show the full, untruncated record for one thread or decision, by UUID, "
+        "8-character short id, or summary substring. Refuses loudly, never guesses, "
+        "when nothing matches."),
         epilog="example: osiris show 5f234a1c\nexample: osiris show 5f234a1c --json")
     p_show.add_argument("ref", help="UUID, 8-char short id, or summary substring")
     p_show.add_argument("--json", action="store_true", dest="as_json",
@@ -8055,8 +8067,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_show)
 
     p_dossier = sub.add_parser("dossier", description=_d(
-        "the full entity dossier for one object — the same dossier() MCP tool, called "
-        "over the wire"),
+        "Show the full dossier for one object. The same information the dossier tool "
+        "answers, called over the CLI."),
         epilog="example: osiris dossier 5f234a1c\n"
                "example: osiris dossier 5f234a1c --want-relationships")
     p_dossier.add_argument("object_ref", help="UUID, canonical, or name")
@@ -8068,8 +8080,8 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_dossier)
 
     p_object_events = sub.add_parser("object-events", description=_d(
-        "the append-only event history for one object — the same object_events() MCP "
-        "tool, called over the wire"),
+        "Show the append-only event history for one object. The same information the "
+        "object_events tool answers, called over the CLI."),
         epilog="example: osiris object-events 5f234a1c\n"
                "example: osiris object-events 5f234a1c --event-type status_changed")
     p_object_events.add_argument("object_ref", help="UUID, canonical, or name")
@@ -8079,8 +8091,8 @@ def _build_parser() -> argparse.ArgumentParser:
                                  help="machine-readable: one compact JSON line")
 
     p_succession_chain = sub.add_parser("succession-chain", description=_d(
-        "an agent lineage's own succession chain — the same succession_chain() MCP "
-        "tool, called over the wire"),
+        "Show an agent lineage's own succession chain. The same information the "
+        "succession_chain tool answers, called over the CLI."),
         epilog="example: osiris succession-chain ad1a1cb0\n"
                "example: osiris succession-chain ad1a1cb0 --max-hops 5")
     p_succession_chain.add_argument("ref", help="UUID, canonical, handle, or lineage prefix")
@@ -8090,9 +8102,10 @@ def _build_parser() -> argparse.ArgumentParser:
                                     help="machine-readable: one compact JSON line")
 
     p_candidates = sub.add_parser("candidates", description=_d(
-        "identity-merge candidates for a project — the same candidates() MCP tool, "
-        "called over the wire. Omitting --project matches the fleet-wide default: a "
-        "count you may look at, not a pile a bare terminal can act on"),
+        "List identity-merge candidates for a project. The same information the "
+        "candidates tool answers, called over the CLI. Omitting --project defaults "
+        "to fleet-wide, which returns a count you can look at but not act on directly "
+        "from a bare terminal."),
         epilog="example: osiris candidates --project osiris\n"
                "example: osiris candidates --limit 10")
     p_candidates.add_argument("--project", default=None,
@@ -8104,29 +8117,30 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_candidates)
 
     p_digest = sub.add_parser("digest", description=_d(
-        "the operator's own membrane into the autonomous fleet — the same fleet_digest() "
-        "MCP tool, called over the wire. Omitting --hours matches watermark mode: what's "
-        "new since the operator last looked, never advancing it unless --mark-seen says so"),
+        "Show the operator's own summary of what's new across the fleet. The same "
+        "information the fleet_digest tool answers, called over the CLI. Omitting "
+        "--hours uses watermark mode: everything new since it was last read, without "
+        "advancing that watermark unless --mark-seen is given."),
         epilog="example: osiris digest\nexample: osiris digest --hours 24"
                "\nexample: osiris digest --mark-seen")
     p_digest.add_argument("--hours", type=int, default=None,
-                          help="an ad-hoc rolling window instead of watermark mode")
+                          help="use an ad-hoc rolling window instead of watermark mode")
     p_digest.add_argument("--mark-seen", action="store_true", dest="mark_seen",
-                          help="advance the operator watermark to now (only once you're "
+                          help="advance the read watermark to now (only once you're "
                                "actually done reading)")
     p_digest.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line")
     _add_text_flag(p_digest)
 
     p_inspect = sub.add_parser("inspect", description=_d(
-        "WAVE 27, PARITY GAP 5 (Thoth mail 11752): the generic 'look at this object' "
-        "convenience over dossier/object-events/succession-chain/candidates — dossier "
-        "always runs, the other three are opt-in flags, one combined receipt"),
+        "Look up an object and show everything relevant about it in one call: a "
+        "combined view over dossier, object-events, succession-chain, and "
+        "candidates. The dossier lookup always runs; the other three are opt-in flags."),
         epilog="example: osiris inspect agent:ad1a1cb0\n"
                "example: osiris inspect thread:a948c7156418 --events --chain\n"
                "example: osiris inspect osiris --candidates --json")
-    p_inspect.add_argument("ref", help="uuid, short id, canonical, or name — same "
-                           "resolver dossier itself uses")
+    p_inspect.add_argument("ref", help="uuid, short id, canonical, or name, using the "
+                           "same lookup as dossier itself")
     p_inspect.add_argument("--events", action="store_true", dest="want_events",
                            help="also fetch object-events")
     p_inspect.add_argument("--chain", action="store_true", dest="want_chain",
@@ -8134,16 +8148,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_inspect.add_argument("--candidates", action="store_true", dest="want_candidates",
                            help="also fetch candidates, treating REF as a project name")
     p_inspect.add_argument("--relationships", action="store_true", dest="want_relationships",
-                           help="dossier's own want_relationships — every relationship "
-                                "row, not just the first 10 per type")
+                           help="include every relationship row, not just the first 10 "
+                                "per type (dossier's own want_relationships option)")
     p_inspect.add_argument("--json", action="store_true", dest="as_json",
-                           help="machine-readable: one combined JSON receipt")
+                           help="machine-readable: one combined JSON result")
     _add_text_flag(p_inspect)
 
     p_practices = sub.add_parser("practices", description=_d(
-        "WAVE 27, PARITY GAP 6 (Thoth mail 11752): plain reads of the practices "
-        "composition (amend-practice above covers the one write) — the same "
-        "practices() MCP tool call for 'list', a direct by-id lookup for 'show'"),
+        "Read the technique log: list recorded practices, or show one in full. "
+        "(Use `amend-practice` to add to an existing one.)"),
         epilog="example: osiris practices\n"
                "example: osiris practices list --surface deploy --recent\n"
                "example: osiris practices show 3e96c10e")
@@ -8152,7 +8165,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_practices.add_argument("ref", nargs="?", default=None,
                              help="practice uuid/short-id/name, required for show")
     p_practices.add_argument("--surface", default=None,
-                             help="list only: narrow to one domain vocabulary")
+                             help="list only: narrow to one domain")
     p_practices.add_argument("--limit", type=int, default=50,
                              help="list only: max practices returned (default 50)")
     p_practices.add_argument("--recent", action="store_true",
@@ -8162,10 +8175,10 @@ def _build_parser() -> argparse.ArgumentParser:
                              help="machine-readable: one compact JSON line")
 
     p_composition = sub.add_parser("composition", description=_d(
-        "the composition MCP tool's own save/run/list actions (called over the wire), "
-        "plus a fourth CLI-only mirror onto compositions.run_spec (an ephemeral, "
-        "never-saved spec — see cmd_composition's own docstring for why run-spec has "
-        "no MCP counterpart; Thoth's dispatch named this door, mail 10441/10448)"),
+        "Save, run, or list saved compositions (saved views and watches over the "
+        "graph). Also supports run-spec, a CLI-only fourth mode that runs an "
+        "ephemeral, never-saved spec directly (see cmd_composition's own docstring "
+        "for why run-spec has no server-side equivalent)."),
         epilog="example: osiris composition list\n"
                "example: osiris composition run briefing\n"
                "example: osiris composition save my-lens "
@@ -8189,15 +8202,15 @@ def _build_parser() -> argparse.ArgumentParser:
     p_composition.add_argument("--depth", type=int, default=None)
     p_composition.add_argument("--offset", type=int, default=None)
     p_composition.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help="run-spec only: the reflection ACL's caller identity — "
-                                    f"defaults to {_CONSOLE_ACTOR!r}")
+                               help="run-spec only: the caller identity used for access "
+                                    "control checks. Defaults to "
+                                    f"{_CONSOLE_ACTOR!r}")
     p_composition.add_argument("--json", action="store_true", dest="as_json",
                                help="machine-readable: one compact JSON line")
 
     p_retire_assertion = sub.add_parser("retire-assertion", description=_d(
-        "retire one superseded property value on an object — the console door onto "
-        "orchestrator.retirement.retire_assertion, the same function the "
-        "retire_assertion MCP tool wraps"),
+        "Retire one superseded property value on an object. Called over the CLI; the "
+        "same underlying function the retire_assertion tool wraps."),
         epilog="example: osiris retire-assertion 5f234a1c memory_max 42 3G "
                "'stale, replaced by settings registry'")
     p_retire_assertion.add_argument("ref", help="UUID, canonical, or name of the object")
@@ -8207,15 +8220,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retire_assertion.add_argument("value", help="the stale value, for the record")
     p_retire_assertion.add_argument("because", help="why this is retired now")
     p_retire_assertion.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                    help="who is performing this retirement — defaults to "
+                                    help="who is performing this retirement. Defaults to "
                                          f"{_CONSOLE_ACTOR!r}")
     p_retire_assertion.add_argument("--json", action="store_true", dest="as_json",
                                     help="machine-readable: one compact JSON line")
 
     p_retire_link = sub.add_parser("retire-link", description=_d(
-        "retire one no-longer-active link between two objects — the console door onto "
-        "orchestrator.retirement.retire_link, the same function the retire_link MCP "
-        "tool wraps"),
+        "Retire one no-longer-active link between two objects. Called over the CLI; "
+        "the same underlying function the retire_link tool wraps."),
         epilog="example: osiris retire-link 5f234a1c 7a1b2c3d governs "
                "'seat reassigned, charter moved'")
     p_retire_link.add_argument("from_ref", help="UUID, canonical, or name of the source object")
@@ -8223,80 +8235,79 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retire_link.add_argument("link_type", help="the link type being retired")
     p_retire_link.add_argument("because", help="why this link is retired now")
     p_retire_link.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help="who is performing this retirement — defaults to "
+                               help="who is performing this retirement. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
     p_retire_link.add_argument("--json", action="store_true", dest="as_json",
                                help="machine-readable: one compact JSON line")
 
     p_cite = sub.add_parser("cite", description=_d(
-        "mint a transcript citation on a Decision/Thread/Evaluation — the console door "
-        "onto capture.mint_transcript_citation, the same function the cite_transcript "
-        "MCP tool wraps"),
-        epilog="example: osiris cite 5f234a1c Khnum 142 'this line proves the claim'")
+        "Mint a transcript citation on a decision, thread, or evaluation. Called over "
+        "the CLI; the same underlying function the cite_transcript tool wraps."),
+        epilog="example: osiris cite 5f234a1c Atlas 142 'this line proves the claim'")
     p_cite.add_argument("ref", help="UUID, canonical, or name of the citing object")
     p_cite.add_argument("agent", help="the agent whose transcript is being cited")
     p_cite.add_argument("line_idx", type=int, help="the transcript line index")
     p_cite.add_argument("because", help="why this line is being cited")
     p_cite.add_argument("--actor", default=_CONSOLE_ACTOR,
-                        help="who is performing this citation — defaults to "
+                        help="who is performing this citation. Defaults to "
                              f"{_CONSOLE_ACTOR!r}")
     p_cite.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_citation = sub.add_parser("citation", description=_d(
-        "read back a transcript citation on a Decision/Thread/Evaluation — the console "
-        "door onto capture.read_transcript_citation, the same function the "
-        "read_citation MCP tool wraps"),
-        epilog="example: osiris citation 5f234a1c Khnum")
+        "Read back a transcript citation on a decision, thread, or evaluation. Called "
+        "over the CLI; the same underlying function the read_citation tool wraps."),
+        epilog="example: osiris citation 5f234a1c Atlas")
     p_citation.add_argument("ref", help="UUID, canonical, or name of the citing object")
     p_citation.add_argument("agent", help="the agent whose transcript was cited")
     p_citation.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
 
     p_migrate = sub.add_parser("migrate", description=_d(
-        "env-correct `alembic upgrade head` (--check "
-                                           "reports without applying)"),
+        "Run `alembic upgrade head` with the environment resolved automatically. "
+        "--check reports what's pending without applying it."),
                                epilog="example: osiris migrate --check")
     p_migrate.add_argument("--check", action="store_true",
                            help="report a pending revision without applying it")
 
-    sub.add_parser("deploy", description=_d("the deploy ritual as one verb: dirty-guard, migrate, "
-                               "restart, smoke, un-run-step report"),
+    sub.add_parser("deploy", description=_d("Run the full deploy sequence as one command: "
+                               "check for a dirty tree, migrate, restart, run the smoke "
+                               "test, and report which step didn't run if any."),
                    epilog="example: osiris deploy")
 
     p_merge = sub.add_parser(
-        "merge", description=_d("Fold `dupe` into `into` — declare two labels of the SAME "
-            "type one thing (Agent, Seat, or SoftwareProject; self-typing off dupe's own "
-            "form: agent:.../seat:.../else). Append-only (a merge event, nothing "
-            "deleted); each type's own estate (mail, mounts, threads, holders, edges) "
-            "follows onto the survivor. The same orchestrator.merge.merge the MCP tool "
-            "wraps — replaces the old `fold-project` name (kept as a deprecated, working "
-            "alias for a SoftwareProject-only call)."),
+        "merge", description=_d("Fold `dupe` into `into`: declare that two labels of "
+            "the same type (Agent, Seat, or SoftwareProject) are actually one thing. "
+            "Type is inferred from dupe's own form (agent:..., seat:..., or otherwise "
+            "a SoftwareProject). This is append-only: it records a merge event and "
+            "deletes nothing; each type's own data (mail, mounts, threads, holders, "
+            "edges) carries over onto the surviving object. This replaces the older "
+            "`fold-project` name, which still works as a deprecated alias for a "
+            "SoftwareProject-only merge."),
         epilog="example: osiris merge OldLabel NewLabel --evidence \"same repo, two "
             "labels\"")
-    p_merge.add_argument("dupe", help="the duplicate label — agent:/seat: prefix picks "
+    p_merge.add_argument("dupe", help="the duplicate label; an agent:/seat: prefix picks "
                          "that type, anything else means SoftwareProject")
     p_merge.add_argument("into", help="the surviving label, same type as dupe")
     p_merge.add_argument("--evidence", required=True,
                          help="why these are one thing, not two")
     p_merge.add_argument("--actor", default=_CONSOLE_ACTOR,
-                         help="who is performing this merge — defaults to "
+                         help="who is performing this merge. Defaults to "
                               f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
-                              "operator authority, the only gate an Agent merge enforces)")
+                              "operator authority, the only check an Agent merge enforces)")
     p_merge.add_argument("--force", action="store_true",
-                         help="override decision 7fe20cc5's liveness guard "
-                              "(SoftwareProject folds only) — required alongside "
-                              "--because to fold a project a DIFFERENT lineage's live "
-                              "session currently has mounted; self never needs this")
+                         help="override the liveness guard on SoftwareProject folds "
+                              "only: required alongside --because to fold a project "
+                              "that a different lineage's live session currently has "
+                              "mounted. Never needed when folding your own")
     p_merge.add_argument("--because", default="",
-                         help="required when --force is used — why the live-session "
+                         help="required when --force is used: why the live-session "
                               "guard is being overridden")
 
     p_unmerge = sub.add_parser(
-        "unmerge", description=_d("Reverse a wrongful `merge` — dry run by default (returns "
-            "the reversal plan, writes nothing); pass --execute once you've reviewed it. "
-            "Self-typing off dupe's own form, same rule as merge. The same "
-            "orchestrator.merge.unmerge the MCP tool wraps."),
+        "unmerge", description=_d("Reverse a wrongful `merge`. Dry run by default: "
+            "returns the reversal plan and writes nothing; pass --execute once you've "
+            "reviewed it. Type is inferred from dupe's own form, same rule as merge."),
         epilog="example, review the plan first:\n"
             "    osiris unmerge OldLabel --because \"was never actually a duplicate\"\n"
             "example, then apply it:\n"
@@ -8306,7 +8317,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_unmerge.add_argument("--because", required=True,
                            help="why this merge is being reversed")
     p_unmerge.add_argument("--actor", default=_CONSOLE_ACTOR,
-                           help=f"who is reversing this merge — defaults to "
+                           help=f"who is reversing this merge. Defaults to "
                                 f"{_CONSOLE_ACTOR!r}")
     p_unmerge.add_argument("--execute", action="store_true",
                            help="apply the reversal plan instead of only showing it")
@@ -8314,9 +8325,9 @@ def _build_parser() -> argparse.ArgumentParser:
                            help="machine-readable: one compact JSON line, for a script or an agent")
 
     p_retention = sub.add_parser(
-        "retention", description=_d("Prune outbox/audit_log rows past their retention "
-            "window — dry run by default (counts only, writes nothing); pass --execute "
-            "to delete, in batches."),
+        "retention", description=_d("Prune old outbox or audit-log rows past their "
+            "retention window. Dry run by default (counts only, writes nothing); pass "
+            "--execute to delete, in batches."),
         epilog="example, count only:\n"
             "    osiris retention outbox\n"
             "example, then delete:\n"
@@ -8333,14 +8344,14 @@ def _build_parser() -> argparse.ArgumentParser:
     p_retention.add_argument("--json", action="store_true", dest="as_json",
                              help="machine-readable: one compact JSON line")
 
-    # DEPRECATED (dispatch 3683): fold_project no longer exists as an MCP tool — see
+    # DEPRECATED: fold_project no longer exists as a top-level tool; see
     # cmd_fold_project's own docstring. Kept working, hidden from the front-door listing
     # (no help= means argparse's own choice listing never mentions it either) — never
     # break a human's muscle memory silently, but never advertise the old name again.
     p_fold_project = sub.add_parser(
         "fold-project",
-        description=_d("DEPRECATED — use `osiris merge` instead (identical arguments, same "
-            "evidence-gated fold). Kept working for muscle memory; never advertised."),
+        description=_d("Deprecated. Use `osiris merge` instead (identical arguments, "
+            "same evidence-gated fold). Kept working for muscle memory, never advertised."),
         epilog="example: osiris fold-project OldLabel NewLabel --evidence "
             "\"same repo, two labels\"")
     p_fold_project.add_argument("dupe", help="the duplicate project's label")
@@ -8348,137 +8359,136 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fold_project.add_argument("--evidence", required=True,
                                 help="why these are one project, not two")
     p_fold_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                help="who is performing this fold — defaults to "
+                                help="who is performing this fold. Defaults to "
                                      f"{_CONSOLE_ACTOR!r} (a terminal call already carries "
                                      "operator authority); override to attribute it "
                                      "elsewhere")
     p_fold_project.add_argument("--force", action="store_true",
-                                help="override decision 7fe20cc5's liveness guard — "
-                                     "required alongside --because")
+                                help="override the liveness guard, required alongside "
+                                     "--because")
     p_fold_project.add_argument("--because", default="",
                                 help="required when --force is used")
 
     p_charter_for = sub.add_parser("charter-for", description=_d(
-        "declare a charter on behalf of a seat — the "
-                                       "same manager/operator-enforced charter_for the MCP "
-                                       "tool wraps, exposed as the sanctioned second door"),
+        "Declare a charter on behalf of another seat. The manager- or "
+        "operator-authorized equivalent of a seat declaring its own charter, exposed "
+        "as the sanctioned second way to do it."),
                                    epilog="example: osiris charter-for seat:a1b2c3d4 "
                                        "--repos osiris,osiris-console "
                                        "--because \"declared on the seat's own behalf\"")
     p_charter_for.add_argument("seat", help="the target seat's canonical (seat:<id>)")
     p_charter_for.add_argument("--repos", required=True,
-                               help="comma-separated repo labels — the whole charter, not "
+                               help="comma-separated repo labels: the whole charter, not "
                                     "an increment")
     p_charter_for.add_argument("--because", required=True,
                                help="why this charter is being declared on the seat's behalf")
     p_charter_for.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help="who is declaring this charter — must be the seat's "
+                               help="who is declaring this charter. Must be the seat's "
                                     f"manager or an operator actor; defaults to {_CONSOLE_ACTOR!r} "
                                     "(already an operator actor)")
     p_charter_for.add_argument("--ruling", default=None,
-                               help="a standing operator ruling's decision id — lets a "
+                               help="a standing operator ruling's decision id, letting a "
                                     "non-manager act under that ruling's authority "
-                                    "instead, refused unless the ruling actually names "
+                                    "instead. Refused unless the ruling actually names "
                                     "charter_for")
 
     p_settings = sub.add_parser("settings", description=_d(
-        "THE SETTINGS MENU's own CLI door (thread f4498ab304e4) — list/get/set over "
-        "the settings registry, the same functions the `settings` MCP tool wraps"),
+        "List, read, or write settings in the settings registry. Called over the "
+        "CLI; the same underlying functions the `settings` tool wraps."),
         epilog="example: osiris settings list\n"
                "example: osiris settings get daemon.pit_watch.enabled\n"
                "example: osiris settings set daemon.pit_watch.enabled true "
-               "--because 'watching a live pit tonight'")
+               "--because 'watching a live run tonight'")
     p_settings.add_argument("action", choices=("list", "get", "set"))
     p_settings.add_argument("key", nargs="?", default=None,
-                            help="required for get/set — a registered dotted key "
+                            help="required for get/set: a registered dotted key "
                                  "(see 'osiris settings list')")
     p_settings.add_argument("value", nargs="?", default=None,
-                            help="set only — a JSON value ('true', '5', '\"text\"', "
+                            help="set only: a JSON value ('true', '5', '\"text\"', "
                                  "'{\"a\":1}'), or a bare string when it isn't valid JSON")
     p_settings.add_argument("--because", default="",
                             help="required unless the setting opts out "
                                  "(requires_because=False)")
     p_settings.add_argument("--ruling", default=None,
-                            help="a standing operator ruling's decision id — lets a "
+                            help="a standing operator ruling's decision id, letting a "
                                  "non-operator write under that ruling's authority")
     p_settings.add_argument("--scope-id", default="", dest="scope_id",
-                            help="for a project/seat-scoped setting; box-scope settings "
-                                 "(everything registered today) ignore this")
+                            help="for a project- or seat-scoped setting; global-scope "
+                                 "settings (everything registered today) ignore this")
     p_settings.add_argument("--actor", default=_CONSOLE_ACTOR,
-                            help=f"who is making this change — defaults to {_CONSOLE_ACTOR!r}")
+                            help=f"who is making this change. Defaults to {_CONSOLE_ACTOR!r}")
     p_settings.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
 
     p_backup_settings = sub.add_parser(
         "backup-settings", description=_d(
-            "the backup config panel's own CLI door (PARITY GAPS, WAVE 27 item 3, "
-            "thread 45aff160) — get/write over vault_path, the five backup-lane "
-            "timer schedules, and offbox_repositories, the same functions the "
-            "`backup_settings` MCP tool and the CMD-K panel call"),
+            "Read or write the backup configuration: the vault path, the five "
+            "backup-timer schedules, and off-box repositories. Called over the CLI; "
+            "the same underlying functions the `backup_settings` tool and the "
+            "console's config panel call."),
         epilog="example: osiris backup-settings get\n"
                "example: osiris backup-settings write --vault-path /mnt/backup-vault "
                "--because 'moved the vault to the new NAS mount'")
     p_backup_settings.add_argument("action", choices=("get", "write"))
     p_backup_settings.add_argument("--vault-path", default=None, dest="vault_path",
-                                   help="write only — absolute path, local disk or an "
+                                   help="write only: absolute path, local disk or an "
                                         "OS-mounted NAS share")
     p_backup_settings.add_argument(
         "--timer-schedules", default=None, dest="timer_schedules",
-        help="write only — a JSON object mapping unit name -> OnCalendar= "
+        help="write only: a JSON object mapping unit name to OnCalendar= schedule "
              "(full-replace: an omitted unit is explicitly cleared)")
     p_backup_settings.add_argument(
         "--offbox-repositories", default=None, dest="offbox_repositories",
-        help="write only, DEPRECATED — a JSON list of {url, schedule, enabled}; use "
+        help="write only, deprecated: a JSON list of {url, schedule, enabled}; use "
              "--offload-add/--offload-remove instead")
     p_backup_settings.add_argument(
         "--timer", action="append", default=None, metavar="UNIT=ONCALENDAR",
-        help="write only, repeatable — merges into the CURRENT timer_schedules, only "
-             "touching the named unit(s); cannot CLEAR a unit back to its shipped "
-             "default (an empty ONCALENDAR= is refused) — use --timer-schedules with "
+        help="write only, repeatable: merges into the current timer schedules, only "
+             "touching the named unit(s). Cannot clear a unit back to its shipped "
+             "default (an empty ONCALENDAR= is refused); use --timer-schedules with "
              "that unit set to null for that")
     p_backup_settings.add_argument(
         "--offload-add", default=None, dest="offload_add", metavar="NAME",
-        help="write only — upsert one offload_targets entry by name (requires "
+        help="write only: add or update one offload target by name (requires "
              "--offload-kind and --offload-target)")
     p_backup_settings.add_argument(
         "--offload-kind", default=None, dest="offload_kind", choices=("local", "restic"),
         help="--offload-add only")
     p_backup_settings.add_argument(
         "--offload-target", default=None, dest="offload_target", metavar="PATH_OR_URL",
-        help="--offload-add only — a filesystem path (kind=local) or a restic "
+        help="--offload-add only: a filesystem path (kind=local) or a restic "
              "repository URL (kind=restic)")
     p_backup_settings.add_argument(
         "--offload-mountpoint", default=None, dest="offload_mountpoint", metavar="PATH",
-        help="--offload-add --offload-kind=local only — the mountpoint the presence "
+        help="--offload-add --offload-kind=local only: the mountpoint the presence "
              "check looks for")
     p_backup_settings.add_argument(
         "--offload-schedule", default=None, dest="offload_schedule", metavar="ONCALENDAR",
-        help="--offload-add only, REQUIRED — the schema itself requires a non-empty "
-             "schedule on every target")
+        help="--offload-add only, required: every target needs a non-empty schedule")
     p_backup_settings.add_argument(
         "--offload-disabled", action="store_true", dest="offload_disabled",
-        help="--offload-add only — mint the target disabled (default: enabled)")
+        help="--offload-add only: add the target disabled (default: enabled)")
     p_backup_settings.add_argument(
         "--offload-remove", default=None, dest="offload_remove", metavar="NAME",
-        help="write only — drop one offload_targets entry by name")
+        help="write only: remove one offload target by name")
     p_backup_settings.add_argument("--because", default=None,
                                    help="required to write")
     p_backup_settings.add_argument("--ruling", default=None,
                                    help="a standing operator ruling naming "
-                                        "'backup_settings' — lets a non-operator write "
+                                        "'backup_settings', letting a non-operator write "
                                         "under that ruling's authority")
     p_backup_settings.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is making this change — defaults to "
+                                   help=f"who is making this change. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
     p_backup_settings.add_argument("--json", action="store_true", dest="as_json",
                                    help="machine-readable: one compact JSON line")
 
     p_backup_status = sub.add_parser(
         "backup-status", description=_d(
-            "the backup panel's own live health read: timers, vault dump/base-backup "
-            "counts, disk headroom, prune-ladder tiers, manifest state — the same "
-            "backup_status composition Function the CMD-K panel calls, called directly "
-            "(no MCP tool wraps its own vault/backups path overrides)"),
+            "Show current backup health: timers, vault dump and base-backup counts, "
+            "disk headroom, prune tiers, and manifest state. Called directly; the "
+            "same underlying reporting the console's backup panel calls, with vault "
+            "and backups path overrides not available through the console."),
         epilog="example: osiris backup-status\n"
                "example: osiris backup-status --vault /tmp/vault-check --json")
     p_backup_status.add_argument("--vault", default=None,
@@ -8490,59 +8500,55 @@ def _build_parser() -> argparse.ArgumentParser:
                                  help="machine-readable: one compact JSON line")
 
     p_amend_practice = sub.add_parser("amend-practice", description=_d(
-        "narrow or correct a LIVE practice's "
-                                          "guidance — the same amend_practice the MCP tool "
-                                          "wraps, exposed as the sanctioned second door"),
+        "Narrow or correct an existing practice's guidance, exposed as the "
+                                          "sanctioned second way to do it."),
                                       epilog="example: osiris amend-practice a1b2c3d4 "
                                           "\"except when the target is a fresh clone\"")
     p_amend_practice.add_argument("ref", help="the target practice's uuid, canonical, "
                                   "short-id prefix, or statement substring")
-    p_amend_practice.add_argument("amendment", help="the text to add — never replaces the "
+    p_amend_practice.add_argument("amendment", help="the text to add; never replaces the "
                                   "practice's own statement")
     p_amend_practice.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is making this amendment — defaults to "
+                                  help=f"who is making this amendment. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_annotate_thread = sub.add_parser("annotate-thread", description=_d(
-        "add to a thread's record without "
-                                           "closing it — the same annotate_thread the MCP "
-                                           "tool wraps, exposed as the sanctioned second door"),
+        "Add a note to a thread's record without closing it, exposed as the "
+                                           "sanctioned second way to do it."),
                                        epilog="example: osiris annotate-thread a1b2c3d4 "
                                            "\"confirmed independently, see commit abc1234\"")
     p_annotate_thread.add_argument("ref", help="the target thread's uuid, canonical, "
                                    "short-id prefix, or summary substring")
-    p_annotate_thread.add_argument("note", help="the note to append — never touches "
-                                   "summary/status")
+    p_annotate_thread.add_argument("note", help="the note to append; never touches "
+                                   "summary or status")
     p_annotate_thread.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is adding this note — defaults to "
+                                   help=f"who is adding this note. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
     p_amend_decision = sub.add_parser("amend-decision", description=_d(
-        "append reasoning to a LIVE decision "
-                                          "without superseding it — the same amend_decision "
-                                          "the MCP tool wraps, exposed as the sanctioned "
-                                          "second door"),
+        "Append reasoning to an existing decision without superseding it, exposed as "
+                                          "the sanctioned second way to do it."),
                                       epilog="example: osiris amend-decision a1b2c3d4 "
                                           "\"the smaller residual specimen still held up\"")
     p_amend_decision.add_argument("ref", help="the target decision's uuid, canonical, "
                                   "short-id prefix, or summary substring")
-    p_amend_decision.add_argument("addendum", help="the text to add — never replaces the "
-                                  "decision's own summary/rationale/kind")
+    p_amend_decision.add_argument("addendum", help="the text to add; never replaces the "
+                                  "decision's own summary, rationale, or kind")
     p_amend_decision.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is making this addendum — defaults to "
+                                  help=f"who is making this addendum. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_send = sub.add_parser("send", description=_d(
-        "message the fleet — the same send the MCP tool wraps, exposed as a bare-"
-        "terminal door. `--to`=<project> is a BROADCAST; `--to-agent`=<agent> is a "
-        "private DM. Refuses a project nobody has mounted under, or a broadcast whose "
-        "body names a real seat mounted in a different project, exactly as the MCP "
-        "tool does"),
+        "Send a message to the fleet, exposed as a bare-terminal door onto the send "
+        "tool. `--to`=<project> broadcasts to that project; `--to-agent`=<agent> sends "
+        "a private message. Refuses to send to a project nobody has mounted under, or "
+        "a broadcast whose body names a real seat mounted in a different project, "
+        "exactly as the underlying tool does."),
         epilog="example, a broadcast: osiris send 'deploy landing' --to osiris\n"
-               "example, a DM: osiris send 'ship it' --to-agent agent:abc123")
+               "example, a direct message: osiris send 'ship it' --to-agent agent:abc123")
     p_send.add_argument("body", help="the message text")
     p_send.add_argument("--to", default=None, help="broadcast to this project")
-    p_send.add_argument("--to-agent", default=None, help="DM this agent id or live handle")
+    p_send.add_argument("--to-agent", default=None, help="message this agent id or live handle")
     p_send.add_argument("--reply-to", type=int, default=None,
                         help="the message id this answers")
     p_send.add_argument("--desk", default=None, choices=["decision", "hands", "fyi"],
@@ -8550,71 +8556,72 @@ def _build_parser() -> argparse.ArgumentParser:
     p_send.add_argument("--grade", default=None, choices=["ask", "fyi"],
                         help="'ask' (named in the recipient's unread count) or 'fyi'")
     p_send.add_argument("--require-seat", action="store_true",
-                        help="refuse rather than DM an unclaimed target")
+                        help="refuse rather than message an unclaimed target")
     p_send.add_argument("--threads", nargs="*", default=None,
-                        help="existing Thread ref(s) to transfer ownership of to a DM's "
-                             "addressee")
+                        help="existing thread ref(s) to transfer ownership of to a "
+                             "direct message's addressee")
     p_send.add_argument("--want-prior-art", action="store_true",
                         help="run the same prior-art search record_decision does")
     p_send.add_argument("--want-listener", action="store_true",
-                        help="include liveness in the receipt")
+                        help="include liveness in the result")
     p_send.add_argument("--from-project", default=None,
-                        help="CLI-only (see CLI_ONLY_PARAMS): an agent's from_project "
-                             "comes from its own mount; a console caller has none, so "
-                             "name it explicitly for broadcast-reply routing")
+                        help="CLI-only: an agent's from_project comes from its own "
+                             "mount, but a console caller has none, so name it "
+                             "explicitly for broadcast-reply routing")
     p_send.add_argument("--actor", default=_CONSOLE_ACTOR,
-                        help=f"who this is from — defaults to {_CONSOLE_ACTOR!r}")
+                        help=f"who this is from. Defaults to {_CONSOLE_ACTOR!r}")
     p_send.add_argument("--json", action="store_true", dest="as_json",
                         help="machine-readable: one compact JSON line")
 
     p_decide = sub.add_parser("decide", description=_d(
-        "record a decision (ruling|reset|override|rejection|choice) — the same "
-        "record_decision the MCP tool wraps, exposed as a bare-terminal door. An exact "
-        "repeat re-uses the existing decision rather than minting a twin"),
+        "Record a decision (ruling, reset, override, rejection, or choice). Exposed "
+        "as a bare-terminal door onto the record_decision tool. An exact repeat "
+        "reuses the existing decision instead of minting a duplicate."),
         epilog="example: osiris decide 'freeze non-critical merges after Thursday' "
                "--rationale 'mobile team cutting a release branch' --repo osiris")
     p_decide.add_argument("summary", help="the decision, one clear sentence")
     p_decide.add_argument("--kind", default="ruling",
                           help="ruling|reset|override|rejection|choice (default: ruling)")
-    p_decide.add_argument("--rationale", default=None, help="the WHY behind the summary")
+    p_decide.add_argument("--rationale", default=None, help="the reasoning behind the summary")
     p_decide.add_argument("--repo", default=None, help="the project this decision governs")
     p_decide.add_argument("--grounds", nargs="*", default=None,
                           help="refs this decision rests on")
     p_decide.add_argument("--protocol", default=None,
                           help="the exact invocation to rerun this decision's own act")
-    p_decide.add_argument("--supersedes", default=None, help="bury an earlier decision")
+    p_decide.add_argument("--supersedes", default=None, help="replace an earlier decision")
     p_decide.add_argument("--resolves", nargs="*", default=None,
-                          help="close the Thread(s) this settles")
+                          help="close the thread(s) this settles")
     p_decide.add_argument("--obsoletes", nargs="*", default=None,
-                          help="kill a named Superstition")
-    p_decide.add_argument("--confirms", nargs="*", default=None, help="witness a Practice")
-    p_decide.add_argument("--refutes", default=None, help="disprove a Practice")
+                          help="retire a named superstition")
+    p_decide.add_argument("--confirms", nargs="*", default=None, help="confirm a practice")
+    p_decide.add_argument("--refutes", default=None, help="disprove a practice")
     p_decide.add_argument("--implements", default=None,
-                          help="execute a standing Decision (parent stays alive)")
+                          help="execute a standing decision (the parent stays in force)")
     p_decide.add_argument("--rediscovers", nargs="*", default=None,
-                          help="independent re-arrival at an earlier decision")
+                          help="record independent arrival at an earlier decision")
     p_decide.add_argument("--bears-on", nargs="*", default=None,
-                          help="speak to an open Thread without closing it")
+                          help="speak to an open thread without closing it")
     p_decide.add_argument("--narrows", nargs="*", default=None,
                           help="scope-bound an earlier decision")
     p_decide.add_argument("--cites", nargs="*", default=None,
                           help="add a facet to an earlier decision")
     p_decide.add_argument("--ack-prior-art", action="store_true",
-                          help="record a dismissed prior_art_flag instead of a silent shrug")
+                          help="record a dismissed prior-art match instead of a silent shrug")
     p_decide.add_argument("--unlinked-because", default=None,
-                          help="a real reason through declare-or-refuse's link-kind gate")
+                          help="a real reason for bypassing the link-kind check")
     p_decide.add_argument("--operator-authorized", action="store_true",
-                          help="this decision carries the operator's own authority — "
-                               "mints a ruled_by edge to the operator's Person "
-                               "object")
+                          help="mark this decision as carrying the operator's own "
+                               "authority; records a ruled_by edge to the operator's "
+                               "Person object")
     p_decide.add_argument("--actor", default=_CONSOLE_ACTOR,
-                          help=f"who is deciding — defaults to {_CONSOLE_ACTOR!r}")
+                          help=f"who is deciding. Defaults to {_CONSOLE_ACTOR!r}")
     p_decide.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line")
 
     p_settle = sub.add_parser("settle", description=_d(
-        "the end-of-context ritual — the same settle() MCP tool, called over the wire. "
-        "No args = the read-only completeness-boxes surface"),
+        "Run the end-of-session checklist: confirm everything worth remembering is "
+        "recorded before context is lost. Exposed as a bare-terminal door onto the "
+        "settle tool. With no arguments, shows the read-only completeness checklist."),
         epilog="example: osiris settle\n"
                "example: osiris settle --decisions "
                "'[{\"summary\": \"state of the board\", \"is_handoff\": true}]'")
@@ -8628,10 +8635,10 @@ def _build_parser() -> argparse.ArgumentParser:
                           help="a JSON array of resolve_thread kwargs, one object per "
                                "thread")
     p_settle.add_argument("--repo-path", default=None, dest="repo_path",
-                          help="the code repo for the git-status box (defaults to your "
+                          help="the code repo for the git-status check (defaults to your "
                                "mounted cwd)")
     p_settle.add_argument("--standing-orders", default=None, dest="standing_orders",
-                          help="'unchanged' closes the standing-orders box honestly — "
+                          help="'unchanged' closes the standing-orders check honestly; "
                                "requires --because")
     p_settle.add_argument("--because", default=None,
                           help="required with --standing-orders unchanged")
@@ -8640,30 +8647,31 @@ def _build_parser() -> argparse.ArgumentParser:
     _add_text_flag(p_settle)
 
     p_thread = sub.add_parser("thread", description=_d(
-        "resolve (close) a Thread — the same `thread` MCP tool's own action='resolve' "
-        "branch, exposed as a bare-terminal door. A DELIBERATE NARROWING: the other "
-        "three actions (annotate/correct_summary/reclassify) have no door here — "
-        "annotate already has its own (osiris annotate-thread)"),
+        "Resolve (close) a thread. Exposed as a bare-terminal door onto the thread "
+        "tool's own resolve action. A deliberate narrowing: the other three actions "
+        "(annotate, correct_summary, reclassify) have no command here; annotate "
+        "already has its own (osiris annotate-thread)."),
         epilog="example: osiris thread a1b2c3d4 --because 'shipped in e74efd6'\n"
                "example, closing several at once: osiris thread a1b2 c3d4 e5f6 "
                "--because 'superseded by the census' --no-dry-run")
     p_thread.add_argument("ref", nargs="+",
-                          help="one or more target Thread uuid/canonical/short-id/"
+                          help="one or more target thread uuid/canonical/short-id/"
                                "summary-substring refs")
-    p_thread.add_argument("--because", default=None, help="a short WHY, not an essay")
+    p_thread.add_argument("--because", default=None, help="a short reason, not an essay")
     p_thread.add_argument("--artifact", default=None,
-                          help="a file:line/commit/decision proving the close")
+                          help="a file:line, commit, or decision proving the close")
     p_thread.add_argument("--dry-run", action=argparse.BooleanOptionalAction, default=True,
-                          help="preview only — ONLY takes effect with more than one ref "
-                               "(the single-ref primitive never previews); default true")
+                          help="preview only. Only takes effect with more than one ref "
+                               "(closing a single ref never previews); default true")
     p_thread.add_argument("--actor", default=_CONSOLE_ACTOR,
-                          help=f"who is closing this — defaults to {_CONSOLE_ACTOR!r}")
+                          help=f"who is closing this. Defaults to {_CONSOLE_ACTOR!r}")
     p_thread.add_argument("--json", action="store_true", dest="as_json",
                           help="machine-readable: one compact JSON line")
 
     p_proposal = sub.add_parser("proposal", description=_d(
-        "miners as last resort (decision ac892cd9) — propose/accept/reject over a "
-        "Proposal, the same `proposal` MCP tool's own three actions"),
+        "Propose, accept, or reject a candidate change, for use as a last resort when "
+        "an automated process can't confidently make a change on its own. Exposed as "
+        "a bare-terminal door onto the `proposal` tool's own three actions."),
         epilog="example: osiris proposal accept --proposal-ref proposal:1234...\n"
                "example: osiris proposal reject --proposal-ref proposal:1234... "
                "--reason 'wrong shortlist'")
@@ -8676,311 +8684,298 @@ def _build_parser() -> argparse.ArgumentParser:
                             help="propose only: a JSON string, "
                                  "{\"kind\":\"link\",...} or {\"kind\":\"object\",...}")
     p_proposal.add_argument("--confidence", type=float, default=None,
-                            help="propose only: capped at the DERIVED tier regardless")
+                            help="propose only: capped at the derived-confidence tier regardless")
     p_proposal.add_argument("--owner", default=None,
                             help="propose only: an active seat, its handle, or 'operator'")
-    p_proposal.add_argument("--miner", default=None, help="propose only: the proposing miner")
+    p_proposal.add_argument("--miner", default=None, help="propose only: the proposing source")
     p_proposal.add_argument("--proposal-ref", default=None,
-                            help="accept/reject: the Proposal's own canonical")
+                            help="accept/reject: the proposal's own canonical")
     p_proposal.add_argument("--reason", default=None,
-                            help="reject only: mandatory, the miner reads it back")
+                            help="reject only: mandatory, read back to the proposer")
     p_proposal.add_argument("--actor", default=_CONSOLE_ACTOR,
-                            help=f"who is acting — defaults to {_CONSOLE_ACTOR!r}")
+                            help=f"who is acting. Defaults to {_CONSOLE_ACTOR!r}")
     p_proposal.add_argument("--json", action="store_true", dest="as_json",
                             help="machine-readable: one compact JSON line")
 
     p_rebind_seat = sub.add_parser(
         "rebind-seat", description=_d(
-            "move a seat's ANCHOR cwd, preserving identity, lineage, attribution, and "
-            "mail — the same orchestrator.mounts.rebind_seat the MCP tool wraps, exposed "
-            "as the console door a human runs this from (jesus/chad's own self-"
-            "reconciliation sequence, msg 6374)"),
+            "Move a seat's working directory to a new location, preserving its "
+            "identity, lineage, attribution, and mail. Exposed as the console door for "
+            "a human running this by hand."),
         epilog="example: osiris rebind-seat Jesus /home/user/code/godel")
     p_rebind_seat.add_argument("seat", help="a claimed handle, a raw agent id, or an "
                                "unclaimed seat's own handle/canonical")
     p_rebind_seat.add_argument("new_cwd", help="the destination directory")
     p_rebind_seat.add_argument("--extract", action="store_true",
-                               help="leave a SHARED cwd taking only this lineage's own "
-                                    "transcripts, rather than moving the whole project")
+                               help="leave a shared working directory in place, taking "
+                                    "only this lineage's own transcripts, rather than "
+                                    "moving the whole project")
     p_rebind_seat.add_argument("--because", default="",
-                               help="why this seat is moving — the audit reason the MCP "
-                                    "tool takes; a repair with no stated reason is exactly "
-                                    "what this project forbids, so supply it")
+                               help="why this seat is moving. A repair with no stated "
+                                    "reason is exactly what this system disallows, so "
+                                    "supply it")
     p_rebind_seat.add_argument("--force", action="store_true",
-                               help="override rebind_seat's own refusals (it refuses loudly "
-                                    "by default) — same flag, same semantics as the MCP tool")
+                               help="override this command's own refusals (it refuses "
+                                    "loudly by default)")
     p_rebind_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this rebind — defaults to "
+                               help=f"who is performing this move. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_correct_pin = sub.add_parser(
         "correct-pin-value", description=_d(
-            "correct an EXISTING key in a seat's own `.osiris` pin — the same "
-            "orchestrator.offices.correct_own_pin_value the MCP tool wraps, given an "
-            "explicit target instead of an implicit mounted one (a terminal has no "
-            "mounted identity to be self-scoped about)"),
+            "Correct an existing key in a seat's own local pin file. Takes an "
+            "explicit target instead of an implicit mounted one, since a terminal has "
+            "no mounted identity of its own."),
         epilog="example: osiris correct-pin-value Jesus project Godel "
             "--because \"anchor moved, pin still named the old project\"")
-    p_correct_pin.add_argument("seat", help="a claimed handle or a raw agent id — the "
+    p_correct_pin.add_argument("seat", help="a claimed handle or a raw agent id: the "
                                "seat whose pin this corrects")
     p_correct_pin.add_argument("key", help="the already-declared pin key to rewrite")
     p_correct_pin.add_argument("value", help="the corrected value")
     p_correct_pin.add_argument("--because", required=True, dest="reason",
-                               help="why this correction is being made — never optional, "
-                                    "same rule as the MCP tool")
+                               help="why this correction is being made; never optional")
 
     p_heal_anchor = sub.add_parser(
         "heal-seat-anchor", description=_d(
-            "assert THE ANCHOR INVARIANT (ruling 23771416) for one seat — anchor_cwd is "
-            "identity, always <office_root>/<handle>, never wherever a session happened "
-            "to be sitting. The same identity_heal.heal_seat_anchor_third_party the MCP "
-            "tool wraps, given an explicit target (a terminal has no mounted identity to "
-            "be self-scoped about)"),
+            "Fix a seat's anchor directory so it matches its identity: always "
+            "<office_root>/<handle>, never wherever a session happened to be sitting. "
+            "Takes an explicit target instead of an implicit mounted one, since a "
+            "terminal has no mounted identity of its own."),
         epilog="example: osiris heal-seat-anchor Jesus --because "
             "\"anchor invariant repair\" --apply")
-    p_heal_anchor.add_argument("seat", help="a claimed handle or a raw agent id — the "
+    p_heal_anchor.add_argument("seat", help="a claimed handle or a raw agent id: the "
                                "seat whose anchor this heals")
     p_heal_anchor.add_argument("--because", required=True,
-                               help="why this repair is being run — never optional, same "
-                                    "rule as the MCP tool")
+                               help="why this repair is being run; never optional")
     p_heal_anchor.add_argument("--apply", action="store_true",
-                               help="actually write — default is a dry-run report, same "
-                                    "convention as every other repair verb in this project")
+                               help="actually write; default is a dry-run report, same "
+                                    "convention as every other repair command here")
     p_heal_anchor.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this repair — defaults to "
+                               help=f"who is performing this repair. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_transition = sub.add_parser(
         "transition-seat-project", description=_d(
-            "move a seat's project binding from a fabricated handle-project to the "
-            "real repo it already works in, in one composed act — the same "
-            "transition.transition_seat_project the MCP tool wraps (the Jesus/Chad "
-            "specimen's own hand-run sequence, now one call). Given an explicit "
-            "target (a terminal has no mounted identity to be self-scoped about)"),
+            "Move a seat's project binding from a placeholder project to the real "
+            "repo it already works in, in one combined step. Takes an explicit "
+            "target instead of an implicit mounted one, since a terminal has no "
+            "mounted identity of its own."),
         epilog="example: osiris transition-seat-project Jesus --real-project Godel "
             "--because \"fabricated project, real repo already worked in\" --apply")
-    p_transition.add_argument("seat", help="a claimed handle or a raw agent id — the "
+    p_transition.add_argument("seat", help="a claimed handle or a raw agent id: the "
                               "seat whose binding this transitions")
     p_transition.add_argument("--fabricated-project", default=None,
-                              help="the project to transition away from — defaults to "
-                                   "the seat's own handle (the specimen shape)")
+                              help="the project to transition away from; defaults to "
+                                   "the seat's own handle, the common case")
     p_transition.add_argument("--real-project", default=None,
-                              help="the project to transition onto — required only when "
-                                   "the seat carries more than one other live works_in "
-                                   "edge; otherwise auto-picked")
+                              help="the project to transition onto; required only when "
+                                   "the seat carries more than one other live project "
+                                   "link, otherwise picked automatically")
     p_transition.add_argument("--repos", default=None,
-                              help="comma-separated charter repos to declare — defaults "
+                              help="comma-separated charter repos to declare; defaults "
                                    "to [real-project]")
     p_transition.add_argument("--because", default="",
-                              help="why this transition is being made — required with "
-                                   "--apply, same rule as the MCP tool")
+                              help="why this transition is being made; required with "
+                                   "--apply")
     p_transition.add_argument("--apply", action="store_true",
-                              help="actually write — default is a dry-run plan, same "
-                                   "convention as every other repair verb in this project")
+                              help="actually write; default is a dry-run plan, same "
+                                   "convention as every other repair command here")
 
     p_correct_agent_house = sub.add_parser(
         "correct-agent-project", aliases=["correct-agent-house"], description=_d(
-            "heal an already-polluted agent's own project/seat_generation stamps — the "
-            "same orchestrator.agents.correct_agent_house the MCP tool wraps, given an "
-            "explicit target (a terminal has no mounted identity to be self-scoped "
-            "about; correct-house's own self-scoped act has no console door for that "
-            "reason). `correct-agent-house` still works this release as a deprecated "
-            "alias (ONE TAXONOMY, ruling 52a59652/70c001ec)."),
+            "Fix an already-incorrect agent's own project and generation stamps. "
+            "Takes an explicit target instead of an implicit mounted one, since a "
+            "terminal has no mounted identity of its own. `correct-agent-house` "
+            "still works this release as a deprecated alias."),
         epilog="example: osiris correct-agent-project Jesus --project godel")
-    p_correct_agent_house.add_argument("seat", help="a claimed handle or a raw agent id "
-                                       "— the agent whose stamps this corrects")
+    p_correct_agent_house.add_argument("seat", help="a claimed handle or a raw agent id: "
+                                       "the agent whose stamps this corrects")
     p_correct_agent_house.add_argument("--project", default=None,
                                        help="the corrected project stamp")
     p_correct_agent_house.add_argument("--seat-generation", type=int, default=None,
                                        dest="seat_generation",
                                        help="the corrected seat_generation stamp")
     p_correct_agent_house.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                       help=f"who is performing this correction — "
-                                            f"defaults to {_CONSOLE_ACTOR!r}")
+                                       help=f"who is performing this correction. "
+                                            f"Defaults to {_CONSOLE_ACTOR!r}")
 
     p_declare_machine = sub.add_parser(
         "declare-machine-identity", description=_d(
-            "manually mint/link a MachineIdentity git ingest's own heuristic missed "
-            "(ruling edb6b0fc) — a bot on a real-looking domain, a local part that "
-            "doesn't match any ingested repo's own name"),
+            "Manually record that a git commit author is a machine identity when the "
+            "automatic ingest heuristic misses it: for example, a bot on a "
+            "real-looking domain, or a local part that doesn't match any ingested "
+            "repo's own name."),
         epilog="example: osiris declare-machine-identity ci@example.com osiris "
                "--because 'CI bot, real-looking domain, heuristic never fires'")
     p_declare_machine.add_argument("email", help="the commit author email to declare")
     p_declare_machine.add_argument("project", help="a bare repo name (e.g. 'osiris' for "
-                                   "repo:osiris) — must already be an ingested SoftwareProject")
+                                   "repo:osiris); must already be an ingested SoftwareProject")
     p_declare_machine.add_argument("--because", required=True,
-                                   help="why this identity is a machine, not a person — "
+                                   help="why this identity is a machine, not a person; "
                                         "required, never silent")
     p_declare_machine.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is making this declaration — defaults to "
+                                   help=f"who is making this declaration. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
     p_reconcile_merge = sub.add_parser(
         "reconcile-merge", description=_d(
-            "repair the estate a partial first fold left stranded on an ALREADY-MERGED "
-            "dupe — the same orchestrator.merge.reconcile_merge the MCP tool wraps. "
-            "Never re-performs the merge itself (that's `merge`'s job); unmerge-then-"
-            "remerge is not a substitute"),
+            "Repair data left stranded by a partial first merge, on an already-merged "
+            "duplicate. Never re-performs the merge itself (that's `merge`'s job); "
+            "unmerge-then-remerge is not a substitute for this."),
         epilog="example: osiris reconcile-merge agent:deadbeef agent:c0ffee")
-    p_reconcile_merge.add_argument("dupe", help="the already-merged duplicate — type is "
+    p_reconcile_merge.add_argument("dupe", help="the already-merged duplicate; type is "
                                    "read off its own form, same rule as merge/unmerge")
     p_reconcile_merge.add_argument("into", help="the surviving target")
     p_reconcile_merge.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is performing this reconcile — defaults to "
+                                   help=f"who is performing this reconcile. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
     p_retire_agent = sub.add_parser(
         "retire-agent", description=_d(
-            "third-party agent retirement — the same orchestrator.agents.retire_agent "
-            "the MCP tool wraps, complementing the self-scoped `retire` (no target "
-            "param, a raw terminal has no mounted session of its own to retire). "
-            "ALWAYS releases the target's held seat and mount rows on success"),
+            "Retire another agent (not yourself). Complements the self-scoped "
+            "`retire` command, which has no target parameter since a raw terminal has "
+            "no mounted session of its own to retire. Always releases the target's "
+            "held seat and mount rows on success."),
         epilog="example: osiris retire-agent agent:deadbeef --because "
             "\"lineage superseded, stale test agent\"")
-    p_retire_agent.add_argument("seat", help="a claimed handle or a raw agent id — the "
+    p_retire_agent.add_argument("seat", help="a claimed handle or a raw agent id: the "
                                 "agent to retire")
     p_retire_agent.add_argument("--because", required=True,
-                                help="why this agent is being retired — never optional, "
-                                     "same rule as the MCP tool")
+                                help="why this agent is being retired; never optional")
     p_retire_agent.add_argument("--override-live", action="store_true",
                                 dest="override_live",
-                                help="retire even if the target reads LIVE (seen within "
-                                     "15 min) — refused otherwise")
+                                help="retire even if the target reads live (seen within "
+                                     "15 minutes); refused otherwise")
     p_retire_agent.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                help=f"who is performing this retirement — defaults to "
+                                help=f"who is performing this retirement. Defaults to "
                                      f"{_CONSOLE_ACTOR!r}")
 
     p_fleet_reconcile = sub.add_parser(
         "fleet-reconcile", description=_d(
-            "THE REAPER — buckets stale/anonymous agent mounts and acts on the fold-"
-            "eligible ones, the same orchestrator.fleet_reconcile.reconcile_execute the "
-            "MCP tool wraps. Dry run is the default: returns the plan, writes nothing"),
+            "Find and fold stale or anonymous agent mounts into their real identity. "
+            "Buckets every candidate by reason and acts on the fold-eligible ones. "
+            "Dry run is the default: returns the plan, writes nothing."),
         epilog="example: osiris fleet-reconcile\n"
             "example, to actually write: osiris fleet-reconcile --execute")
     p_fleet_reconcile.add_argument("--execute", action="store_true",
-                                   help="act on the plan rather than just report it — "
+                                   help="act on the plan rather than just report it; "
                                         "default is dry-run")
     p_fleet_reconcile.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is performing this reconcile — defaults to "
+                                   help=f"who is performing this reconcile. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
     p_fleet_prune = sub.add_parser(
         "fleet-prune", description=_d(
-            "THE MECHANICAL PRUNE (thread 07ca68ca) — dead_transcript (a mount row whose "
-            "own job_dir is gone from disk) and unclaimed_body (a live OS body bound to "
-            "its seat when tree_seat_hint resolves one), the same orchestrator.fleet_prune"
-            ".prune_execute the MCP tool wraps. Dry run is the default: returns the plan, "
-            "writes nothing. fleet-reconcile's own identity-folding buckets are untouched "
-            "here — see that command instead"),
+            "Remove two kinds of dead entries: dead_transcript (a mount row whose own "
+            "job directory is gone from disk) and unclaimed_body (a live process "
+            "bound to its seat once the seat hint resolves one). Dry run is the "
+            "default: returns the plan, writes nothing. Does not touch the identity-"
+            "folding buckets fleet-reconcile handles; use that command for those."),
         epilog="example: osiris fleet-prune\n"
             "example, to actually write: osiris fleet-prune --execute")
     p_fleet_prune.add_argument("--execute", action="store_true",
-                               help="act on the plan rather than just report it — "
+                               help="act on the plan rather than just report it; "
                                     "default is dry-run")
     p_fleet_prune.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this prune — defaults to "
+                               help=f"who is performing this prune. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     from src.orchestrator.backfill import BACKFILL_TARGETS
 
     p_backfill = sub.add_parser(
         "backfill", description=_d(
-            "one of the seven repair verbs, dispatched over TARGET — the same "
-            "orchestrator.backfill.run_backfill the `backfill` MCP tool and the UI's "
-            "Repairs panel call (thread c89a9873, wave 22). Dry run is the default: "
-            "returns the receipt, writes nothing"),
+            "Run one of several repair jobs, chosen by TARGET. The same underlying "
+            "function the `backfill` tool and the console's Repairs panel call. Dry "
+            "run is the default: returns the report, writes nothing."),
         epilog="example: osiris backfill bootstrap_orphan_references\n"
             "example, to actually write: osiris backfill bootstrap_orphan_references "
             "--apply --because \"clearing the ref:osiris orphan backlog\"")
     p_backfill.add_argument("target", choices=sorted(BACKFILL_TARGETS),
-                            help="which repair to run — see `backfill`'s own MCP "
+                            help="which repair to run; see `backfill`'s own "
                                  "docstring for what each target does")
     p_backfill.add_argument("--apply", action="store_true",
-                            help="actually write — default is a dry-run report, same "
-                                 "convention as every other repair verb in this project")
+                            help="actually write; default is a dry-run report, same "
+                                 "convention as every other repair command here")
     p_backfill.add_argument("--because", default=None,
-                            help="why this backfill is being applied — required to "
-                                 "--apply regardless of target (this door's own, "
-                                 "stricter contract; see agent_project_links' own note "
+                            help="why this backfill is being applied; required to "
+                                 "--apply regardless of target (this command's own, "
+                                 "stricter rule; see agent_project_links' own note "
                                  "in the docstring)")
     p_backfill.add_argument("--only-bases", default=None,
-                            help="comma-separated base agent ids — only meaningful for "
+                            help="comma-separated base agent ids; only meaningful for "
                                  "the agent_project_links target, ignored by the other "
                                  "six")
     p_backfill.add_argument("--limit", type=int, default=None,
-                            help="candidate batch size — only meaningful for "
+                            help="candidate batch size; only meaningful for "
                                  "provenance_possible_upstream (default 200), ignored "
                                  "by every other target")
     p_backfill.add_argument("--newest-first", action="store_true",
                             help="sample the most recent candidates instead of the "
-                                 "oldest — only meaningful for "
+                                 "oldest; only meaningful for "
                                  "provenance_possible_upstream, ignored by every other "
                                  "target")
     p_backfill.add_argument("--actor", default=_CONSOLE_ACTOR,
-                            help=f"who is performing this backfill — defaults to "
+                            help=f"who is performing this backfill. Defaults to "
                                  f"{_CONSOLE_ACTOR!r}")
     p_backfill.add_argument("--json", action="store_true", dest="as_json",
-                            help="machine-readable receipt")
+                            help="machine-readable result")
 
     from src.orchestrator.graph_migrations import MIGRATION_TARGETS
 
     p_graph_migrate = sub.add_parser(
         "graph-migrate", description=_d(
-            "one of three graph-shape repair verbs, dispatched over TARGET — the same "
-            "orchestrator.graph_migrations.run_migration (DRAWING THE WHOLE GRAPH, "
-            "thread 325ef660). Dry run is the default: returns the receipt, writes "
-            "nothing"),
+            "Run one of three graph-shape repair jobs, chosen by TARGET. Dry run is "
+            "the default: returns the report, writes nothing."),
         epilog="example: osiris graph-migrate repo_seats_fix\n"
             "example, to actually write: osiris graph-migrate repo_seats_fix --apply "
-            "--because \"DRAWING THE WHOLE GRAPH, thread 325ef660\"")
+            "--because \"fixing repo/seat links across the graph\"")
     p_graph_migrate.add_argument("target", choices=sorted(MIGRATION_TARGETS),
-                                 help="which repair to run — see graph_migrations.py's "
+                                 help="which repair to run; see graph_migrations.py's "
                                       "own docstrings for what each target does")
     p_graph_migrate.add_argument("--apply", action="store_true",
-                                 help="actually write — default is a dry-run report, "
-                                      "same convention as every other repair verb in "
-                                      "this house")
+                                 help="actually write; default is a dry-run report, "
+                                      "same convention as every other repair command "
+                                      "here")
     p_graph_migrate.add_argument("--because", default=None,
-                                 help="why this migration is being applied — required "
+                                 help="why this migration is being applied; required "
                                       "to --apply")
     p_graph_migrate.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                 help=f"who is performing this migration — defaults to "
+                                 help=f"who is performing this migration. Defaults to "
                                       f"{_CONSOLE_ACTOR!r}")
     p_graph_migrate.add_argument("--json", action="store_true", dest="as_json",
-                                 help="machine-readable receipt")
+                                 help="machine-readable result")
     p_graph_migrate.add_argument("--only", default=None, dest="only_seat",
                                  help="narrow to one seat (seat:<id> or its bare "
-                                      "handle) — holds_sandwich only, refused for "
+                                      "handle); holds_sandwich only, refused for "
                                       "every other target")
 
     p_heal_transcript = sub.add_parser(
         "heal-seat-transcript", description=_d(
-            "splice a seat's session, fragmented across multiple project slugs by a "
-            "mid-session cwd move, back into ONE file at its own seat-directory slug — "
-            "the same orchestrator.transcript_splice.heal_seat_transcript the MCP tool "
-            "wraps. Never touches a Seat row, anchor_cwd, or any source transcript"),
+            "Splice a seat's session, fragmented across multiple project directories "
+            "by a mid-session directory move, back into one file at its own seat "
+            "directory. Never touches a seat row, its anchor directory, or any "
+            "source transcript."),
         epilog="example: osiris heal-seat-transcript Jesus "
             "/path/to/fragment1.jsonl /path/to/fragment2.jsonl --apply --because "
             "\"mid-session cwd move split the transcript\"")
     p_heal_transcript.add_argument("seat", help="the seat whose seat directory the "
                                    "spliced result lands at")
     p_heal_transcript.add_argument("source_paths", nargs="+",
-                                   help="the original fragments, IN CHAIN ORDER (oldest "
-                                        "first) — needs at least two")
+                                   help="the original fragments, in chain order (oldest "
+                                        "first); needs at least two")
     p_heal_transcript.add_argument("--because", default="",
-                                   help="why this splice is being run — required to "
-                                        "--apply, same rule as the MCP tool")
+                                   help="why this splice is being run; required to "
+                                        "--apply")
     p_heal_transcript.add_argument("--apply", action="store_true",
-                                   help="actually write — default is a dry-run report, "
-                                        "same convention as every other repair verb in "
-                                        "this house")
+                                   help="actually write; default is a dry-run report, "
+                                        "same convention as every other repair command "
+                                        "here")
 
     p_rematerialize = sub.add_parser(
         "rematerialize", description=_d(
-            "reconstruct a session's transcript BYTE-FOR-BYTE from the soul store's "
-            "soul_lines alone — the same SoulStore.rematerialize_to_"
-            "disk the MCP tool wraps. Verifies the hash chain while collecting; a break "
-            "is reported and NOTHING is written, never a silent partial file. Refuses "
+            "Reconstruct a session's transcript byte-for-byte from the stored soul "
+            "lines alone. Verifies the hash chain while collecting; a break is "
+            "reported and nothing is written, never a silent partial file. Refuses "
             "to overwrite a transcript modified more recently than the store's last "
             "ingest unless --force is given."),
         epilog="example: osiris rematerialize deadbeef\n"
@@ -8989,8 +8984,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p_rematerialize.add_argument("anchor_sid", help="the 8-char session anchor to "
                                  "reconstruct")
     p_rematerialize.add_argument("--dest", default=None,
-                                 help="where to write the reconstruction — defaults to "
-                                      "the session's own recorded source_path (the "
+                                 help="where to write the reconstruction; defaults to "
+                                      "the session's own recorded source path (the "
                                       "harness's own projects-slug convention)")
     p_rematerialize.add_argument("--force", action="store_true",
                                  help="write even if the target exists and was modified "
@@ -8998,43 +8993,43 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_mint_seat = sub.add_parser(
         "mint-seat", description=_d(
-            "Mint (or adopt) a worker seat: ensure_seat + a seat-directory scaffold on "
-            "disk (a directory, an .osiris pin carrying project AND model, CLAUDE.md, "
-            "charter.md) + an intended_model stamp + a managed_by link to the manager. "
-            "Idempotent — a handle that already names a living seat is ADOPTED (missing "
-            "pieces filled in, nothing rewritten) rather than twinned. The same "
-            "mintseat.mint_seat the MCP tool wraps; --manager/--actor are CLI-only (a raw "
-            "terminal holds no seat of its own to infer them from, so this door infers "
-            "them a different way — see their own --help below) and --adopt/--force are "
-            "deliberate console-only escape hatches an agent caller can never reach."),
+            "Mint (or adopt) a worker seat: create the seat, scaffold its directory "
+            "on disk (a directory, a pin file carrying project and model, CLAUDE.md, "
+            "charter.md), stamp its intended model, and link it to its manager. "
+            "Idempotent: a handle that already names a living seat is adopted "
+            "(missing pieces filled in, nothing rewritten) rather than duplicated. "
+            "--manager/--actor are CLI-only, since a raw terminal holds no seat of "
+            "its own to infer them from (see their own --help below), and "
+            "--adopt/--force are deliberate console-only options an agent caller "
+            "can never reach."),
         epilog="example, adding a worker to your own project:\n"
             "    osiris mint-seat NewBot\n"
             "example, starting a brand-new project (an existing seat crossing into it, "
             "operator authority required):\n"
-            "    osiris mint-seat NewBot --manager Thoth --project NewProject")
+            "    osiris mint-seat NewBot --manager Nova --project NewProject")
     p_mint_seat.add_argument("handle", help="the new worker seat's handle")
     p_mint_seat.add_argument("--manager", default=None,
                              help="the minting seat's own handle or seat_id. Omit it and "
                                   "this infers the sole seat in the cwd's own pinned "
-                                  "project — refuses loudly instead of guessing among "
+                                  "project; refuses loudly instead of guessing among "
                                   "several. A seat's own project is never a second, "
-                                  "independently-given value — no --house flag here; the "
-                                  "new worker's project comes from its manager's own "
-                                  "project by construction")
+                                  "independently-given value: there's no --house flag "
+                                  "here, the new worker's project comes from its "
+                                  "manager's own project by construction")
     p_mint_seat.add_argument("--project", default=None,
-                             help="stamped into this new seat's own .osiris pin (never "
-                                  "invented if omitted — declare it later with "
+                             help="stamped into this new seat's own pin file (never "
+                                  "invented if omitted; declare it later with "
                                   "`charter(repos=[...])` once it actually governs one); "
                                   "distinct from which project the seat itself belongs "
                                   "to, which is never a flag here (see --manager)")
     p_mint_seat.add_argument("--model", default=None,
-                             help="defaults to mint_seat's own worker default")
+                             help="defaults to the standard worker default model")
     p_mint_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                             help=f"who is performing this mint — defaults to "
+                             help=f"who is performing this mint. Defaults to "
                                   f"{_CONSOLE_ACTOR!r}")
     p_mint_seat.add_argument("--adopt", action="store_true",
-                             help="state explicitly that handle names an EXISTING seat to "
-                                  "adopt — refuses instead of silently minting fresh on no "
+                             help="state explicitly that handle names an existing seat to "
+                                  "adopt; refuses instead of silently minting fresh on no "
                                   "match")
     p_mint_seat.add_argument("--force", action="store_true",
                              help="mint a distinct seat past a near-miss handle refusal")
@@ -9043,9 +9038,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "new", description=(
             _d("Create a new independent seat and its workspace, in one command.") + "\n\n" +
             _d("You get: a directory to work in (~/code/<handle> unless you name one), "
-               "a seat that owns it, and an identity seat directory at "
+               "a seat that owns it, and an identity directory at "
                "~/.osiris/seats/<handle>/. Then `osiris launch <handle>` gives it a "
-               "body.") + "\n\n" +
+               "live process.") + "\n\n" +
             _d("Use `new` for a seat that answers to nobody. Use `mint-seat` for a "
                "worker in a project you already run.")),
         epilog="example, converging on ~/code/henry:\n"
@@ -9056,123 +9051,120 @@ def _build_parser() -> argparse.ArgumentParser:
             "    osiris launch henry")
     p_new.add_argument("handle", help="the new self-managed seat's handle")
     p_new.add_argument("path", nargs="?", default=None,
-                       help="the code workspace directory (created if absent) — "
+                       help="the code workspace directory (created if absent); "
                             "defaults to ~/code/<handle>")
     p_new.add_argument("--project", default=None,
-                       help="the project name written into the workspace's own .osiris "
-                            "pin AND this seat's own identity — no separate --house flag "
-                            "(a self-managed seat has no manager to derive one from "
-                            "instead); omit it and none is invented, it stays "
-                            "genuinely unset (ruling 68fba2e4: homeless is a legal state)")
+                       help="the project name written into the workspace's own pin "
+                            "file and this seat's own identity. There's no separate "
+                            "--house flag (a self-managed seat has no manager to derive "
+                            "one from instead); omit it and none is invented, it stays "
+                            "genuinely unset (a seat with no project is a valid state)")
     p_new.add_argument("--model", default=None,
-                       help="defaults to mint_seat's own worker default")
+                       help="defaults to the standard worker default model")
     p_new.add_argument("--actor", default=_CONSOLE_ACTOR,
-                       help=f"who is performing this act — defaults to {_CONSOLE_ACTOR!r}")
+                       help=f"who is performing this act. Defaults to {_CONSOLE_ACTOR!r}")
 
     p_bootstrap = sub.add_parser(
         "bootstrap", description=_d(
-            "Onboard an EXISTING project: migrate its markdown memory (CLAUDE.md build "
-            "log / DESIGN.md / memory essays) into the graph as retrieval-sized "
-            "Reference nodes and register it. No hands on the project's files — reads "
-            "the mds, writes the graph, prints a suggested boot-sector CLAUDE.md for a "
-            "human to review and write. Different from `new`: this does not mint a seat "
-            "or touch identity, it only brings a project's knowledge into the graph."),
+            "Onboard an existing project: migrate its markdown memory (CLAUDE.md "
+            "build log, DESIGN.md, memory notes) into the graph as retrieval-sized "
+            "reference records, and register the project. Makes no changes to the "
+            "project's own files: reads the markdown, writes to the graph, and "
+            "prints a suggested boot-sector CLAUDE.md for a human to review and "
+            "write. Different from `new`: this does not mint a seat or touch "
+            "identity, it only brings a project's knowledge into the graph."),
         epilog="example:\n"
             "    osiris bootstrap ~/code/some-project\n"
             "example, naming the project explicitly:\n"
             "    osiris bootstrap ~/code/some-project --project some-project")
     p_bootstrap.add_argument("cwd", help="the project's directory on disk")
     p_bootstrap.add_argument("--project", default=None,
-                             help="defaults to the directory's own basename — CLI-only, "
-                                  "the MCP tool always infers it")
+                             help="defaults to the directory's own basename; CLI-only, "
+                                  "the underlying tool always infers it")
     p_bootstrap.add_argument("--actor", default=_CONSOLE_ACTOR,
-                             help=f"who is performing this act — defaults to "
+                             help=f"who is performing this act. Defaults to "
                                   f"{_CONSOLE_ACTOR!r}")
 
 
     p_attach_seat = sub.add_parser(
         "attach-seat", description=_d(
-            "create a managed_by edge between two seats — the console-script door onto "
-            "orchestrator.seats.attach_seat, the SAME function the attach_seat MCP tool "
-            "wraps (wave 3, thread 5bf6447c)"),
-        epilog="example: osiris attach-seat Cassandra Thoth \"cross-house adoption\"")
+            "Create a management link between two seats: the console door onto the "
+            "same underlying function the attach_seat tool wraps."),
+        epilog="example: osiris attach-seat Cassandra Nova \"cross-house adoption\"")
     p_attach_seat.add_argument("worker", help="the seat gaining a manager")
     p_attach_seat.add_argument("manager", help="the seat becoming that manager")
     p_attach_seat.add_argument("evidence", help="why this edge is real")
     p_attach_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this act — defaults to "
+                               help=f"who is performing this act. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_promote = sub.add_parser(
         "promote", description=_d(
-            "mint a seat as manager over one or more workers, self-managed only — the "
-            "console-script door onto orchestrator.seats.promote_seat, the SAME function "
-            "the seat MCP tool's action='promote' branch wraps (operator 2026-09-07: "
-            "'thoth cannot do it, it has to be self managed')"),
+            "Mint a seat as manager over one or more workers, self-managed only: the "
+            "console door onto the same underlying function the seat tool's "
+            "promote action wraps. Managers cannot promote on a worker's behalf; "
+            "this has to be self-managed."),
         epilog="example: osiris promote nebbercracker jenny chowder dustin "
               "--because \"nebbercracker leads monsterhouse now\"")
     p_promote.add_argument("target", help="the seat becoming the manager")
     p_promote.add_argument("workers", nargs="+", help="the seat(s) gaining this manager")
     p_promote.add_argument("--because", required=True, help="why this promotion is real")
     p_promote.add_argument("--actor", default=_CONSOLE_ACTOR,
-                           help=f"who is performing this act — defaults to "
+                           help=f"who is performing this act. Defaults to "
                                 f"{_CONSOLE_ACTOR!r}")
 
     p_detach_seat = sub.add_parser(
         "detach-seat", description=_d(
-            "invalidate a seat's active managed_by edge — the console-script door onto "
-            "orchestrator.seats.detach_seat, the SAME function the detach_seat MCP tool "
-            "wraps (wave 3, thread 5bf6447c)"),
+            "Invalidate a seat's active management link: the console door onto the "
+            "same underlying function the detach_seat tool wraps."),
         epilog="example: osiris detach-seat Cassandra \"now self-managed\"")
     p_detach_seat.add_argument("seat", help="the seat losing its manager")
     p_detach_seat.add_argument("because", help="why this edge is being cut")
     p_detach_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this act — defaults to "
+                               help=f"who is performing this act. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_vacate_seat = sub.add_parser(
         "vacate-seat", description=_d(
-            "release a dead holder without retiring the seat itself — the console-"
-            "script door onto orchestrator.trigger.vacate_dead_seat, the SAME function "
-            "the vacate_seat MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Release a dead holder without retiring the seat itself: the console "
+            "door onto the same underlying function the vacate_seat tool wraps."),
         epilog="example: osiris vacate-seat seat:e355913e \"holder confirmed dead\"")
     p_vacate_seat.add_argument("seat_id", help="the seat's own canonical id")
     p_vacate_seat.add_argument("because", help="why this holder is being released")
     p_vacate_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this act — defaults to "
+                               help=f"who is performing this act. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_retire_seat = sub.add_parser(
         "retire-seat", description=_d(
-            "mark a Seat permanently CLOSED, no successor, no merge target — the "
-            "console-script door onto orchestrator.seats.retire_seat, the SAME function "
-            "the retire_seat MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Mark a seat permanently closed, with no successor and no merge target: "
+            "the console door onto the same underlying function the retire_seat "
+            "tool wraps."),
         epilog="example: osiris retire-seat seat:e355913e --reason \"role is over\"")
     p_retire_seat.add_argument("seat_id", help="the seat's own canonical id")
     p_retire_seat.add_argument("--reason", default="", help="why this role is over")
     p_retire_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this act — defaults to "
+                               help=f"who is performing this act. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_bind_seat_tree = sub.add_parser(
         "bind-seat-tree", description=_d(
-            "point a seat's CODE checkout, distinct from its anchor seat directory — the "
-            "console-script door onto orchestrator.seats.bind_seat_tree, the SAME "
-            "function the bind_seat_tree MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Point a seat's code checkout, distinct from its anchor seat directory: "
+            "the console door onto the same underlying function the "
+            "bind_seat_tree tool wraps."),
         epilog="example: osiris bind-seat-tree seat:e355913e ~/code/osiris \"tree moved\"")
     p_bind_seat_tree.add_argument("seat_id", help="the seat's own canonical id")
     p_bind_seat_tree.add_argument("tree_cwd", help="the code checkout's directory")
     p_bind_seat_tree.add_argument("because", help="why this tree is moving")
     p_bind_seat_tree.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is performing this act — defaults to "
+                                  help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_sweep_seat_disk = sub.add_parser(
         "sweep-seat-disk", description=_d(
-            "sweep a retired seat's directory and workspace off disk — the console-script "
-            "door onto orchestrator.offices.sweep_retired_office + "
-            "sweep_seat_workspace, the SAME two functions the sweep_seat_disk MCP tool "
-            "wraps (wave 3, thread 5bf6447c). Dry-run by default"),
+            "Sweep a retired seat's directory and workspace off disk: the console "
+            "door onto the same two underlying functions the sweep_seat_disk tool "
+            "wraps. Dry-run by default."),
         epilog="example: osiris sweep-seat-disk OldHandle --apply --because retired")
     p_sweep_seat_disk.add_argument("handle", help="the retired seat's own handle")
     p_sweep_seat_disk.add_argument("--apply", action="store_true", dest="apply_",
@@ -9181,53 +9173,48 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_sweep_seat_trees = sub.add_parser(
         "sweep-seat-trees", description=_d(
-            "WAVE 27 priority fix (Thoth mail 11759): fleet-wide, every seat whose "
-            "tree_cwd is null or not a real git tree of its own governed project, "
-            "listed (dry run) or repaired (--apply) — the console-script door onto "
-            "orchestrator.seats.sweep_seat_trees"),
+            "Find every seat, fleet-wide, whose code checkout is null or not a real "
+            "git tree of its own governed project, and list them (dry run) or repair "
+            "them (--apply)."),
         epilog="example: osiris sweep-seat-trees\n"
                "example: osiris sweep-seat-trees --apply --actor operator")
     p_sweep_seat_trees.add_argument("--apply", action="store_true",
                                     help="write; default is a dry-run report")
     p_sweep_seat_trees.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                    help="bind_seat_tree's own authorization identity — "
-                                         f"defaults to {_CONSOLE_ACTOR!r}")
+                                    help="the identity used to authorize each repair. "
+                                         f"Defaults to {_CONSOLE_ACTOR!r}")
     p_sweep_seat_trees.add_argument("--json", action="store_true", dest="as_json",
-                                    help="machine-readable: the full receipt")
+                                    help="machine-readable: the full result")
 
     p_rename_seat = sub.add_parser(
         "rename-seat", description=_d(
-            "rename a seat's handle deliberately — the console-script door onto "
-            "orchestrator.seats.rename_seat, the SAME function the rename_seat MCP "
-            "tool wraps (wave 3, thread 5bf6447c)"),
+            "Rename a seat's handle deliberately: the console door onto the same "
+            "underlying function the rename_seat tool wraps."),
         epilog="example: osiris rename-seat seat:e355913e Till \"casing correction\"")
     p_rename_seat.add_argument("seat_id", help="the seat's own canonical id")
     p_rename_seat.add_argument("new_handle", help="the corrected handle")
     p_rename_seat.add_argument("because", help="why this rename is happening")
     p_rename_seat.add_argument("--actor", default=_CONSOLE_ACTOR,
-                               help=f"who is performing this act — defaults to "
+                               help=f"who is performing this act. Defaults to "
                                     f"{_CONSOLE_ACTOR!r}")
 
     p_set_seat_attended = sub.add_parser(
         "set-seat-attended", description=_d(
-            "stamp a seat's real human-attendance signal — the console-script door onto "
-            "orchestrator.seats.set_seat_attended, the SAME function the "
-            "set_seat_attended MCP tool wraps (wave 3, thread 5bf6447c)"),
-        epilog="example: osiris set-seat-attended seat:34f4e5fa true \"Thoth is human-driven\"")
+            "Stamp whether a seat is actually attended by a human: the console door "
+            "onto the same underlying function the set_seat_attended tool wraps."),
+        epilog="example: osiris set-seat-attended seat:34f4e5fa true \"Nova is human-driven\"")
     p_set_seat_attended.add_argument("seat_id", help="the seat's own canonical id")
     p_set_seat_attended.add_argument("attended", help="'true' or 'false'")
     p_set_seat_attended.add_argument("because", help="why this signal is being set")
     p_set_seat_attended.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                     help=f"who is performing this act — defaults to "
+                                     help=f"who is performing this act. Defaults to "
                                           f"{_CONSOLE_ACTOR!r}")
 
     p_reissue_office = sub.add_parser(
         "reissue-seat-dir", aliases=["reissue-office"], description=_d(
-            "recompile a seat's managed directory section on demand — the console-script "
-            "door onto orchestrator.boot_compiler.reissue_office, the SAME function the "
-            "reissue_office MCP tool wraps (wave 3, thread 5bf6447c). `reissue-office` "
-            "still works this release as a deprecated alias (ONE TAXONOMY, ruling "
-            "52a59652/70c001ec)."),
+            "Recompile a seat's managed directory section on demand: the console "
+            "door onto the same underlying function the reissue_office tool wraps. "
+            "`reissue-office` still works this release as a deprecated alias."),
         epilog="example: osiris reissue-seat-dir seat:e355913e \"manager changed\"")
     p_reissue_office.add_argument("seat_id", help="the seat's own canonical id")
     p_reissue_office.add_argument("because",
@@ -9236,72 +9223,65 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="one-time on-ramp for a seat directory predating "
                                        "the compiler")
     p_reissue_office.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is performing this act — defaults to "
+                                  help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_establish_office = sub.add_parser(
         "establish-seat-dir", aliases=["establish-office"], description=_d(
-            "the full seat-directory ceremony, one receipt — the console-script door "
-            "onto orchestrator.offices.establish_office, the SAME function the "
-            "establish_office MCP tool wraps (wave 3, thread 5bf6447c). "
-            "`establish-office` still works this release as a deprecated alias (ONE "
-            "TAXONOMY, ruling 52a59652/70c001ec)."),
+            "Run the full seat-directory setup in one step: the console door onto "
+            "the same underlying function the establish_office tool wraps. "
+            "`establish-office` still works this release as a deprecated alias."),
         epilog="example: osiris establish-seat-dir seat:e355913e")
     p_establish_office.add_argument("seat", help="a claimed handle, raw agent id, or "
                                     "unclaimed seat's own handle/canonical")
     p_establish_office.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                    help=f"who is performing this act — defaults to "
+                                    help=f"who is performing this act. Defaults to "
                                          f"{_CONSOLE_ACTOR!r}")
 
     p_resync_seat_project = sub.add_parser(
         "resync-seat-project", description=_d(
-            "re-derive a Seat's own project property FROM ITS CHARTER — RETIRES "
-            "resync-seat-house outright, no alias (Thoth mail 12000, implements "
-            "70c001ec, \"ONE TAXONOMY\"): collapses the old third-party "
-            "resync_seat_house_third_party AND the old self-scoped correct_house into "
-            "one door, since a seat's project is never a second, declared value. "
-            "Refuses on a charter governing zero or more than one project — never "
-            "guesses."),
+            "Re-derive a seat's own project property from its charter. This retires "
+            "the old resync-seat-house command outright, with no alias: it collapses "
+            "the old third-party and self-scoped versions into one command, since a "
+            "seat's project is never a second, separately declared value. Refuses "
+            "on a charter governing zero or more than one project; never guesses."),
         epilog="example: osiris resync-seat-project seat:e355913e \"charter changed\"")
     p_resync_seat_project.add_argument("seat_id", help="the seat's own canonical id")
     p_resync_seat_project.add_argument("reason", help="why this is being re-derived")
     p_resync_seat_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                       help=f"who is performing this act — defaults to "
+                                       help=f"who is performing this act. Defaults to "
                                             f"{_CONSOLE_ACTOR!r}")
 
     p_reconcile_seat_identity = sub.add_parser(
         "reconcile-seat-identity", description=_d(
-            "third-party identity reconciliation for a seat that cannot correct itself "
-            "— the console-script door onto orchestrator.identity_heal."
-            "reconcile_seat_identity_third_party, the SAME function "
-            "reconcile_seat_identity_third_party wraps (wave 3, thread 5bf6447c)"),
+            "Third-party identity reconciliation for a seat that cannot correct "
+            "itself: the console door onto the same underlying function that "
+            "reconciles seat identity on another seat's behalf."),
         epilog="example: osiris reconcile-seat-identity seat:e355913e \"stale house row\"")
     p_reconcile_seat_identity.add_argument("seat_id", help="the seat's own canonical id")
     p_reconcile_seat_identity.add_argument("because", help="why this needs reconciling")
     p_reconcile_seat_identity.add_argument("--agent-id", default=None, dest="agent_id",
-                                           help="omit to heal house alone")
+                                           help="omit to heal the project link alone")
     p_reconcile_seat_identity.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                           help=f"who is performing this act — defaults "
+                                           help=f"who is performing this act. Defaults "
                                                 f"to {_CONSOLE_ACTOR!r}")
 
     p_create_project = sub.add_parser(
         "create-project", description=_d(
-            "declare a NEW SoftwareProject — the console-script door onto "
-            "orchestrator.project_identity.create_project, the SAME function the "
-            "create_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Declare a new SoftwareProject: the console door onto the same "
+            "underlying function the create_project tool wraps."),
         epilog="example: osiris create-project newthing \"standalone repo, no seat yet\"")
     p_create_project.add_argument("name", help="the new project's own name")
     p_create_project.add_argument("because", help="why this project is being declared")
     p_create_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is performing this act — defaults to "
+                                  help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_rename_project = sub.add_parser(
         "rename-project", description=_d(
-            "rename a SoftwareProject's own `name` property (canonical never moves) — "
-            "the console-script door onto orchestrator.project_identity.rename_project, "
-            "the SAME function the rename_project MCP tool wraps (wave 3, thread "
-            "5bf6447c). Dry-run by default"),
+            "Rename a SoftwareProject's display name (its canonical id never "
+            "changes): the console door onto the same underlying function the "
+            "rename_project tool wraps. Dry-run by default."),
         epilog="example: osiris rename-project oldname newname \"spelling fix\" --apply")
     p_rename_project.add_argument("project", help="the project's current name/canonical")
     p_rename_project.add_argument("new_name", help="the corrected name")
@@ -9310,58 +9290,54 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help="write; default is a dry-run report")
     p_rename_project.add_argument("--merge-into", action="store_true", dest="merge_into",
                                   help="lift the collision refusal when the new name "
-                                       "already names an active project — folds into it")
+                                       "already names an active project, folding into it")
     p_rename_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is performing this act — defaults to "
+                                  help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_set_project_tag = sub.add_parser(
         "set-project-tag", description=_d(
-            "declare a SoftwareProject's persisted window `[TAG]` override — the "
-            "console-script door onto orchestrator.projects.set_project_window_tag, "
-            "the SAME function the project(action='set_tag') MCP verb wraps. "
-            "trigger.py's _house_tag/_window_name read this BEFORE ever deriving a tag "
-            "from the house/project's own first two letters"),
+            "Declare a SoftwareProject's persisted short window tag override "
+            "(1-4 uppercase letters shown instead of the derived default). The "
+            "console door onto the same underlying function the project tool's "
+            "set_tag action wraps."),
         epilog="example: osiris set-project-tag monsterhouse MH \"operator's own code\"")
     p_set_project_tag.add_argument("project", help="the project's own name/canonical")
     p_set_project_tag.add_argument("tag", help="1-4 uppercase letters, exactly as wanted")
     p_set_project_tag.add_argument("because", help="why this tag is being declared")
     p_set_project_tag.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                   help=f"who is performing this act — defaults to "
+                                   help=f"who is performing this act. Defaults to "
                                         f"{_CONSOLE_ACTOR!r}")
 
     p_retire_project = sub.add_parser(
         "retire-project", description=_d(
-            "retire a dead SoftwareProject stub — the console-script door onto "
-            "orchestrator.projects.retire_project, the SAME function the "
-            "retire_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Retire a dead SoftwareProject stub: the console door onto the same "
+            "underlying function the retire_project tool wraps."),
         epilog="example: osiris retire-project deadthing \"never went anywhere\"")
     p_retire_project.add_argument("project", help="the project's own name/canonical")
     p_retire_project.add_argument("because", help="why this project is being retired")
     p_retire_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                  help=f"who is performing this act — defaults to "
+                                  help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
     p_retire_object = sub.add_parser(
         "retire-object", description=_d(
-            "retire an arbitrary ACTIVE object of no other kind (not a Seat/"
-            "SoftwareProject/Agent) — the console-script door onto "
-            "orchestrator.retirement.retire_bare_object, the SAME function the "
-            "retire_object(kind='object') MCP tool wraps (thread 92dde6cc)"),
+            "Retire an arbitrary active object of no other special kind (not a seat, "
+            "SoftwareProject, or agent): the console door onto the same underlying "
+            "function the retire_object(kind='object') tool wraps."),
         epilog="example: osiris retire-object thread:dbg-cl-a-member "
                "\"debug-script artifact\"")
     p_retire_object.add_argument("ref", help="UUID, short id, canonical, or name")
     p_retire_object.add_argument("because", help="why this object is being retired")
     p_retire_object.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                 help=f"who is performing this act — defaults to "
+                                 help=f"who is performing this act. Defaults to "
                                       f"{_CONSOLE_ACTOR!r}")
 
     p_fork_project = sub.add_parser(
         "fork-project", description=_d(
-            "declare (or reverse) a fork relationship between two ALREADY-active "
-            "SoftwareProjects — the console-script door onto "
-            "orchestrator.project_identity.fork_project/unfork_project, the SAME "
-            "functions the fork_project MCP tool wraps (wave 3, thread 5bf6447c)"),
+            "Declare, or reverse, a fork relationship between two already-active "
+            "SoftwareProjects: the console door onto the same underlying functions "
+            "the fork_project tool wraps."),
         epilog="example: osiris fork-project redmonth ballgem \"new sibling project\""
               "\nexample, reversing: osiris fork-project redmonth ballgem \"mistake\" "
               "--direction unfork")
@@ -9371,7 +9347,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p_fork_project.add_argument("--direction", choices=["fork", "unfork"], default="fork",
                                 help="'unfork' invalidates a live forked_from edge instead")
     p_fork_project.add_argument("--actor", default=_CONSOLE_ACTOR,
-                                help=f"who is performing this act — defaults to "
+                                help=f"who is performing this act. Defaults to "
                                      f"{_CONSOLE_ACTOR!r}")
     return p
 
