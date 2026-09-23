@@ -51,8 +51,8 @@ async def test_dossier_renders_identity_and_named_network(actions: Actions) -> N
     assert d["type"] == "Person"
     assert d["name"] == "Kim Jong Un"
 
-    # identity properties (task #170's neighbour: `name` now JOINS this set, `tag` stays
-    # excluded on its own separate grounds — see dossier.py's own comment)
+    # identity properties: `name` now JOINS this set, `tag` stays
+    # excluded on its own separate grounds (see dossier.py's own comment)
     prop_names = {p["name"] for p in d["properties"]}
     assert {"country", "birthDate", "topics", "name"} <= prop_names
     assert "tag" not in prop_names
@@ -76,10 +76,9 @@ async def test_dossier_missing_object_is_empty(actions: Actions) -> None:
 async def test_dossier_splits_lifecycle_status_from_semantic_status(
     actions: Actions,
 ) -> None:
-    """THE FIX (thread 6212d9f5, Thoth DM 2746, "the graph knows and the display lies"):
-    the object's own LIFECYCLE (objects.status: active/merged/archived) and a Thread's
-    semantic status ASSERTION (open/resolved/retracted) are two different concepts that
-    used to share one top-level "status" key — the lifecycle value always won, silently.
+    """THE FIX: the object's own LIFECYCLE (objects.status: active/merged/archived) and a
+    Thread's semantic status ASSERTION (open/resolved/retracted) are two different concepts
+    that used to share one top-level "status" key: the lifecycle value always won, silently.
     They must now render as two distinctly-named fields."""
     from datetime import UTC, datetime
 
@@ -94,9 +93,9 @@ async def test_dossier_splits_lifecycle_status_from_semantic_status(
 async def test_dossier_status_resolves_the_winner_not_the_first_or_last_write(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE SHAPE (b318a9d3's own live specimen): THREE sources, none
-    superseding another — open (oldest), resolved (middle), resolved (newest, highest
-    confidence tied with the others) — winning_props' own ordering (confidence DESC, then
+    """THE ACCEPTANCE SHAPE: THREE sources, none
+    superseding another: open (oldest), resolved (middle), resolved (newest, highest
+    confidence tied with the others). winning_props' own ordering (confidence DESC, then
     observed_at DESC) must pick the newest 'resolved', not whichever row the DB happened
     to return first."""
     from datetime import UTC, datetime, timedelta
@@ -119,8 +118,8 @@ async def test_dossier_status_resolves_the_winner_not_the_first_or_last_write(
 async def test_dossier_status_is_none_for_a_type_with_no_status_assertion(
     actions: Actions,
 ) -> None:
-    """Most object types (Person, Company, ...) never carry a `status` PROPERTY at all —
-    the new top-level `status` must stay honestly None rather than inventing one, while
+    """Most object types (Person, Company, ...) never carry a `status` PROPERTY at all.
+    The new top-level `status` must stay honestly None rather than inventing one, while
     `object_status` still answers the lifecycle question it always did."""
     await ingest_ftm(actions, _FTM)
     p1 = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='P1'")
@@ -133,7 +132,7 @@ async def test_dossier_resolves_own_name_and_neighbor_name_via_the_full_chain(
     actions: Actions,
 ) -> None:
     """Task #97 workstream 3: both the entity's own name and a neighbor's name used to
-    check ONLY the `name` property — a Thread (summary, no name) or a Practice
+    check ONLY the `name` property, a Thread (summary, no name) or a Practice
     (statement, no name) rendered its raw canonical hash here, even in a dossier for
     an object the graph/table views already labelled correctly."""
     from datetime import UTC, datetime
@@ -155,14 +154,14 @@ async def test_dossier_resolves_own_name_and_neighbor_name_via_the_full_chain(
 async def test_dossier_already_surfaced_both_sides_of_a_contradiction_before_marking(
     actions: Actions,
 ) -> None:
-    """VERIFICATION for task #102 (Thoth's DM 2279), done BEFORE building the mark: does
+    """VERIFICATION for task #102, done BEFORE building the mark: does
     dossier show BOTH contradicting assertions, or silently take the first?
     `current_assertions` (alembic 0001/0005) excludes ONLY assertions someone explicitly
-    `supersedes`d — two DIFFERENT sources asserting DIFFERENT values on the same property,
+    `supersedes`d: two DIFFERENT sources asserting DIFFERENT values on the same property,
     neither superseding the other, BOTH stay current by design. This proves
     entity_dossier's properties query (no LIMIT, no ORDER-BY-confidence-then-take-one)
-    already read that whole multi-source set rather than silently collapsing to a winner —
-    NOT an instrument defect of the valid_until family Imhotep fixed at 4610cb2. #102's
+    already read that whole multi-source set rather than silently collapsing to a winner,
+    NOT an instrument defect of the valid_until family already fixed. #102's
     actual gap, closed by the `agreement` field below, was that nothing NAMED whether the
     values it already returns agree or genuinely contradict."""
     from datetime import UTC, datetime
@@ -176,7 +175,7 @@ async def test_dossier_already_surfaced_both_sides_of_a_contradiction_before_mar
     status = next(p for p in d["properties"] if p["name"] == "status")
     values = {v["value"] for v in status["values"]}
     sources = {v["source"] for v in status["values"]}
-    # both genuinely contradicting values are present — not silently collapsed to one
+    # both genuinely contradicting values are present, not silently collapsed to one
     assert values == {"open", "resolved"}
     assert sources == {"agent:alice", "agent:bob"}
     assert len(status["values"]) == 2
@@ -197,7 +196,7 @@ async def test_dossier_marks_a_single_source_property_as_single(actions: Actions
 async def test_dossier_marks_two_sources_with_the_same_value_as_agreeing(
     actions: Actions,
 ) -> None:
-    """SAME tag, SAME data — the operator's rule names this ONE referent corroborated by
+    """SAME tag, SAME data: the operator's rule names this ONE referent corroborated by
     two sources, never a conflict, and MUST render distinctly from a genuine contradiction
     (same tag, DIFFERENT data)."""
     from datetime import UTC, datetime
@@ -216,7 +215,7 @@ async def test_dossier_marks_two_sources_with_the_same_value_as_agreeing(
 async def test_dossier_marks_two_sources_with_different_values_as_contradicting(
     actions: Actions,
 ) -> None:
-    """The actual #102 payoff: MARKED, never resolved — no value dropped, ranked, or
+    """The actual #102 payoff: MARKED, never resolved. No value dropped, ranked, or
     picked as a winner; both remain, now with the epistemic state named."""
     from datetime import UTC, datetime
 
@@ -233,12 +232,12 @@ async def test_dossier_marks_two_sources_with_different_values_as_contradicting(
 async def test_dossier_marks_name_disagreement_without_the_display_field_picking_a_winner(
     actions: Actions,
 ) -> None:
-    """THE NAME-PROPERTY GAP (Thoth msg 4292, Sekhmet's find, decision 7960db40): `name`
-    used to be silently excluded from the agreement view — a UI-dedup call made before
+    """THE NAME-PROPERTY GAP: `name`
+    used to be silently excluded from the agreement view, a UI-dedup call made before
     #102 existed, inherited by #102's own query without anyone revisiting it. `name` now
     joins the SAME vocabulary as every other property (single/agreeing/contradicting), and
-    the top-level `name` field (resolve_label's own silent winner-pick, task #97/ruling
-    52daab71) must keep answering a DIFFERENT question — "what to display" — never leaking
+    the top-level `name` field (resolve_label's own silent winner-pick, task #97)
+    must keep answering a DIFFERENT question, "what to display", never leaking
     into or being replaced by the agreement mark. This is repo:bytebye's/repo:tony's own
     live shape in miniature: two different sources, two different spellings, neither
     superseding the other."""
@@ -253,15 +252,15 @@ async def test_dossier_marks_name_disagreement_without_the_display_field_picking
     name_prop = next(p for p in d["properties"] if p["name"] == "name")
     assert name_prop["agreement"] == "contradicting"
     assert {v["value"] for v in name_prop["values"]} == {"ByeByte", "byebyte"}
-    # the top-level display field is still a single, resolved string — never a list, never
+    # the top-level display field is still a single, resolved string, never a list, never
     # the agreement mark itself; it answers "what to show", not "do sources disagree"
     assert d["name"] in {"ByeByte", "byebyte"}
     assert isinstance(d["name"], str)
 
 
 async def test_dossier_marks_a_genuine_credence_dispute(actions: Actions) -> None:
-    """PROVENANCE PIECE 3(b) (thread b4477e9e): `disputed` is a SEPARATE signal from
-    `agreement` — a spawned ancestor genuinely disagreeing with its own subtree's origin
+    """PROVENANCE PIECE 3(b): `disputed` is a SEPARATE signal from
+    `agreement`. A spawned ancestor genuinely disagreeing with its own subtree's origin
     surfaces here too, sourced from the SAME credence.resolve_credence oracle
     credence_props runs elsewhere, never re-derived by this route."""
     from datetime import UTC, datetime
@@ -298,7 +297,7 @@ async def test_dossier_single_source_property_is_not_disputed(actions: Actions) 
 
 
 async def test_dossier_tag_stays_excluded_from_the_agreement_view(actions: Actions) -> None:
-    """`tag` keeps its own, separate, still-correct exclusion (dossier.py's own comment):
+    """`tag` keeps its own, separate, still-correct exclusion (see dossier.py's own comment):
     additive/multi-valued by design, no winner or disagreement concept applies to it the
     way it does to a single-fact property like `name` or `status`."""
     obj = await actions.create_or_find_object("Domain", "domain:tagstays", "test")
@@ -311,11 +310,11 @@ async def test_dossier_tag_stays_excluded_from_the_agreement_view(actions: Actio
 
 
 async def test_dossier_relationships_filter_invalidated_links(actions: Actions) -> None:
-    """Task #114 (thread 7b258b5f, found by Thoth closing #99): a link healed by
+    """Task #114: a link healed by
     invalidate_link (valid_until stamped, never deleted) used to render identically to a
-    live one — the exact shape that produced a false-urgent finding published as fact
+    live one, the exact shape that produced a false-urgent finding published as fact
     (a managed_by edge read as active a full day after it was invalidated). A still-live
-    link on the SAME (type, direction) must keep showing — this proves the filter is on
+    link on the SAME (type, direction) must keep showing: this proves the filter is on
     validity, not a blanket drop of the edge type."""
     from datetime import UTC, datetime, timedelta
 
@@ -336,9 +335,9 @@ async def test_dossier_relationships_filter_invalidated_links(actions: Actions) 
 async def test_dossier_resolves_a_fleet_handle_to_the_real_agent_not_a_sidechain(
     actions: Actions,
 ) -> None:
-    """Task #114 (thread 05a72d2c0af0, found by Seshat XIII): dossier("sekhmet") returned
-    "sekhmet I.1" — a harness sidechain artifact whose own label merely CONTAINED the
-    handle — ahead of the real agent, reachable only by following that artifact's own
+    """Task #114: dossier("somehandle") returned
+    "somehandle I.1", a harness sidechain artifact whose own label merely CONTAINED the
+    handle, ahead of the real agent, reachable only by following that artifact's own
     spawned_by edge. resolve_ref now tries agents.resolve_seat (mail's own battle-tested
     handle resolver, which explicitly excludes spawned_by visitors) before falling
     through to the generic name-substring legs that have no concept of "visitor" at all."""
@@ -350,7 +349,7 @@ async def test_dossier_resolves_a_fleet_handle_to_the_real_agent_not_a_sidechain
     real = await actions.create_or_find_object("Agent", "agent:handletest99", "test")
     await actions.assert_property(real, "handle", "handletest99", "test", NOW, 0.95)
     # the decoy: a harness sidechain artifact whose OWN name merely contains the handle as
-    # a substring — shorter than any real name resolve_ref's ILIKE leg would otherwise favor
+    # a substring, shorter than any real name resolve_ref's ILIKE leg would otherwise favor
     decoy = await actions.create_or_find_object("Thread", "thread:handletest99decoy", "test")
     await actions.assert_property(decoy, "name", "handletest99 I.1", "test", NOW, 0.95)
 
@@ -366,10 +365,10 @@ async def test_dossier_resolves_a_fleet_handle_to_the_real_agent_not_a_sidechain
 async def test_dossier_never_resolves_a_handle_to_an_ineligible_holders_agent(
     actions: Actions,
 ) -> None:
-    """60bc15db specimen 3 (rulings 1a64ae9a/aee67e6d), resolve_ref's own call site:
+    """resolve_ref's own call site:
     a handle whose unique seat has only an ineligible (false_mint) active holder must
     never resolve through resolve_seat's un-seated-lineage fallback into that dead
-    generation's own Agent object — the same grave-delivery class send()/doors() already
+    generation's own Agent object, the same grave-delivery class send()/doors() already
     guard against, now closed at dossier's own resolver too."""
     from datetime import UTC, datetime
 
@@ -402,9 +401,9 @@ async def test_dossier_never_resolves_a_handle_to_an_ineligible_holders_agent(
 
 
 async def test_the_mcp_dossier_tool_resolves_a_short_id(actions: Actions) -> None:
-    """task #64 (ruling ad19a779): every id a composition ROW hands out (a table/Function
+    """task #64: every id a composition ROW hands out (a table/Function
     row's own 8-char "id" column) must feed straight back into dossier(), not just
-    recall(). Before the resolve_ref fix, this returned {"error": "no object ..."} — proven
+    recall(). Before the resolve_ref fix, this returned {"error": "no object ..."}, proven
     directly against the real MCP tool (srv._pool swap, mirrors test_describe.py's own
     pattern), not just the lower-level resolve_ref function."""
     from src import mcp_server as srv

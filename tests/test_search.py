@@ -1,4 +1,4 @@
-"""search v2 — the FTS engine (rung 1, thread 0deaec4f).
+"""search v2: the FTS engine.
 
 The old search read only the `name` property; these tests prove the rooms are searchable
 (summaries/rationales), that the ranking inherits the evidence ladder, that every hit
@@ -37,8 +37,8 @@ async def _scoped_search(actions: Actions, q: str, project: str) -> dict:
 async def test_search_project_scope_answers_under_either_name_after_a_rename(
     actions: Actions,
 ) -> None:
-    """THE RENAME READ ALIAS (dispatch 2589353a, the rename cascade verb): search's
-    `project=` scope filter used to match a literal `repo:<project>` canonical string —
+    """THE RENAME READ ALIAS (the rename cascade verb): search's
+    `project=` scope filter used to match a literal `repo:<project>` canonical string,
     permanently blind to the OLD label the moment a rename changed only the `name`
     property (canonical never moves). `_resolve_repo`'s own name-or-canonical fallback
     is what search's own GRAPH SCOPE FILTER now goes through."""
@@ -58,7 +58,7 @@ async def test_search_project_scope_answers_under_either_name_after_a_rename(
 
 
 async def test_search_reads_the_rooms_not_the_door_plaques(actions: Actions) -> None:
-    """A decision whose SUMMARY says 'credence clamp' must be findable by those words —
+    """A decision whose SUMMARY says 'credence clamp' must be findable by those words,
     the exact miss the old name-only search shipped with."""
     await _decision(actions, "decision:clamp", "the credence clamp ships tonight",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
@@ -66,13 +66,13 @@ async def test_search_reads_the_rooms_not_the_door_plaques(actions: Actions) -> 
     assert len(out["hits"]) == 1
     h = out["hits"][0]
     assert h["canonical"] == "decision:clamp" and h["field"] == "summary"
-    # testimony: source, grade, when, snippet — the hit says WHY it surfaced
+    # testimony: source, grade, when, snippet: the hit says WHY it surfaced
     assert h["source"] == "agent:a" and h["grade"] == "self_declared"
     assert "clamp" in h["snippet"].lower() and h["when"].startswith("2026-07")
 
 
 async def test_ranking_inherits_the_evidence_ladder(actions: Actions) -> None:
-    """Equal textual relevance → the deliberate ruling outranks the mined echo."""
+    """Equal textual relevance: the deliberate ruling outranks the mined echo."""
     await _decision(actions, "decision:ruled", "wake economics uses haiku triage",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     await _decision(actions, "decision:mined", "wake economics uses haiku triage",
@@ -91,8 +91,8 @@ async def test_stemming_and_phrases_work(actions: Actions) -> None:
 
 
 async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
-    """Soundwave (msg 244): cross-referencing rulings by id was 'all manual memory'. A
-    bare hex fragment is an ID, not vocabulary — prefix lookup answers directly."""
+    """The field report on cross-referencing rulings by id: 'all manual memory'. A
+    bare hex fragment is an ID, not vocabulary, prefix lookup answers directly."""
     await _decision(actions, "decision:iddoor", "the id door answers by prefix",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     oid = await actions.pool.fetchval(
@@ -101,7 +101,7 @@ async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
     assert out["hits"] and out["hits"][0]["canonical"] == "decision:iddoor"
     assert out["hits"][0]["via"] == "id" and "id door" in out["hits"][0]["snippet"]
     assert "id-fragment" in out["note"]
-    # ...and ordinary words are never mistaken for ids ('decide' is not hex) — this
+    # ...and ordinary words are never mistaken for ids ('decide' is not hex): this
     # is specifically about the ID-FRAGMENT door, not about zero hits overall: the
     # catalog (task #97) legitimately seeds a real, searchable link type named
     # "decided_in", so a substring match on "decide" is correct search behavior,
@@ -111,7 +111,7 @@ async def test_a_bare_hex_fragment_opens_the_id_door(actions: Actions) -> None:
 
 
 async def test_a_practice_hit_carries_its_statement_not_a_raw_hash(actions: Actions) -> None:
-    """Task #97 workstream 3 (ruling 52daab71): the reported bug verbatim — a Practice
+    """Task #97 workstream 3: the reported bug verbatim, a Practice
     has none of name/title/summary (only statement/failure_prevented/surface), so a
     search hit's own `canonical` is all a raw hash gives you. Matched via lexical
     search on the statement text (not the id door), the hit must still carry a real
@@ -128,7 +128,7 @@ async def test_a_practice_hit_carries_its_statement_not_a_raw_hash(actions: Acti
 
 async def test_the_id_door_labels_its_answer_too(actions: Actions) -> None:
     """The single-bare-hex-token path returns early (a separate code path from the
-    lexical/fused hits below) — it must not skip label attachment just because it
+    lexical/fused hits below). It must not skip label attachment just because it
     skips everything else."""
     pid = await record_practice(actions, "never hand-write kernel SQL, use the MCP surface")
     oid = await actions.pool.fetchval(
@@ -139,9 +139,9 @@ async def test_the_id_door_labels_its_answer_too(actions: Actions) -> None:
 
 
 async def test_the_id_door_also_matches_a_threads_canonical_short_hash(actions: Actions) -> None:
-    """Alfred V's repro (thread 4ffe0eb9): a Thread's natural handle is its CANONICAL
-    short hash (thread:23423ff856ab — a sha1 of the summary, minted by open_thread), not
-    the underlying object's UUID — two different hashes name one thread, and a holder may
+    """A Thread's natural handle is its CANONICAL
+    short hash (thread:23423ff856ab, a sha1 of the summary, minted by open_thread), not
+    the underlying object's UUID. Two different hashes name one thread, and a holder may
     quote either. Both must resolve."""
     tid = await open_thread(actions, "Alfred IV's succession handoff, unfiled and unmissable")
     canonical = await actions.pool.fetchval(
@@ -157,7 +157,7 @@ async def test_the_id_door_also_matches_a_threads_canonical_short_hash(actions: 
 
 
 async def test_id_door_fires_on_a_token_inside_a_longer_query(actions: Actions) -> None:
-    """A quoted id doesn't have to be the WHOLE query — 'dd27f61f succession torch' must
+    """A quoted id doesn't have to be the WHOLE query: an id fragment plus 'succession torch' must
     still surface the thread the token names, merged above the ordinary text hits, while
     the pure-FTS path for queries with no id token never regresses."""
     tid = await open_thread(actions, "the succession torch passes at the seam")
@@ -176,8 +176,8 @@ async def test_id_door_fires_on_a_token_inside_a_longer_query(actions: Actions) 
 
 
 async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
-    """The false-empty repro (agent e46a657e-ii, msg 124): websearch ANDs every term, so
-    'Hector background skills experience projects' needs all five words in ONE document —
+    """The false-empty repro: websearch ANDs every term, so
+    'Hector background skills experience projects' needs all five words in ONE document,
     zero by construction while the graph is full. A plain multi-word bag that strict-AND
     can't satisfy relaxes to ANY-term, best-covered first; explicit syntax (quotes,
     operators) is never second-guessed."""
@@ -185,12 +185,12 @@ async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     await _decision(actions, "decision:tr", "training the reinforcement loop on pytorch",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
-    # strict-AND would need one doc holding all of these — instead both docs surface
+    # strict-AND would need one doc holding all of these, instead both docs surface
     out = await _search(actions, "sibling-six accessibility pointer hands-free training")
     got = {h["canonical"] for h in out["hits"]}
     assert {"decision:ga", "decision:tr"} <= got
     assert "ANY term" in out["note"]
-    # a quoted phrase is the asker's own syntax — no relaxation behind their back
+    # a quoted phrase is the asker's own syntax: no relaxation behind their back
     assert (await _search(actions, '"sibling-six training loop"'))["hits"] == []
     # the log records the ORIGINAL query with the relaxed outcome (telemetry stays honest)
     row = await actions.pool.fetchrow(
@@ -200,9 +200,9 @@ async def test_a_keyword_bag_relaxes_to_any_term(actions: Actions) -> None:
 
 
 async def test_relaxation_ranks_rarity_over_ubiquity(actions: Actions) -> None:
-    """Thread 15b976ce (hector-vector msg 237): the ANY-term retry ranked flat, so a
+    """The ANY-term retry ranked flat, so a
     common word outranked a distinctive one on every multi-term bag. The relaxed leg now
-    scores by summed idf — the one document holding the RARE word must beat every
+    scores by summed idf: the one document holding the RARE word must beat every
     document that merely repeats the ubiquitous one."""
     # 'harness' is everywhere; 'chronohorn' lives in exactly one document
     for i in range(6):
@@ -212,7 +212,7 @@ async def test_relaxation_ranks_rarity_over_ubiquity(actions: Actions) -> None:
     await _decision(actions, "decision:rare",
                     "chronohorn ships its first clock",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
-    # strict-AND needs both words in one doc → nothing; the bag relaxes
+    # strict-AND needs both words in one doc, so nothing; the bag relaxes
     out = await _search(actions, "chronohorn harness")
     assert "ANY term" in out.get("note", "")
     assert out["hits"][0]["canonical"] == "decision:rare"  # rarity outranks repetition
@@ -221,7 +221,7 @@ async def test_relaxation_ranks_rarity_over_ubiquity(actions: Actions) -> None:
 
 
 async def test_the_misses_log_records_recall_failures(actions: Actions) -> None:
-    """Every call logs; the zero-hit rate is the embeddings tripwire — measured, not vibed."""
+    """Every call logs; the zero-hit rate is the embeddings tripwire: measured, not vibed."""
     await _decision(actions, "decision:x", "the membrane holds",
                     "agent:a", EvidenceClass.SELF_DECLARED.value)
     await _search(actions, "membrane", caller="agent:tester")
@@ -239,8 +239,8 @@ async def test_the_misses_log_records_recall_failures(actions: Actions) -> None:
 
 
 async def test_a_superseded_decision_is_flagged_never_hidden(actions: Actions) -> None:
-    """The supersedes verb reaches search (dd04d7dd): a buried ruling still surfaces (the
-    record forgets nothing) but carries a superseded flag naming its successor — a skimmer
+    """The supersedes verb reaches search: a buried ruling still surfaces (the
+    record forgets nothing) but carries a superseded flag naming its successor, a skimmer
     is never handed a corrected hypothesis as live testimony."""
     from src.orchestrator.capture import record_decision
 
@@ -258,8 +258,8 @@ async def test_a_superseded_decision_is_flagged_never_hidden(actions: Actions) -
 async def test_a_scope_narrowed_decision_is_flagged_and_stays_fully_live(
     actions: Actions,
 ) -> None:
-    """The narrows edge reaches search too (thread e05e439d): unlike supersedes, the
-    bounded hit is never buried — it stays fully live and ranked, only flagged, since
+    """The narrows edge reaches search too: unlike supersedes, the
+    bounded hit is never buried, it stays fully live and ranked, only flagged, since
     its own measurement is still correct within its now-visible limit."""
     from src.orchestrator.capture import record_decision
 
@@ -273,12 +273,12 @@ async def test_a_scope_narrowed_decision_is_flagged_and_stays_fully_live(
     hit = next(h for h in out["hits"] if h["id"] == str(bounded))
     assert hit.get("scope_limited_by") is not None
     assert str(narrower)[:8] in hit["scope_limited_by"]
-    # never buried — no `superseded` flag, and the hit is present at full standing
+    # never buried: no `superseded` flag, and the hit is present at full standing
     assert not hit.get("superseded")
 
 
 async def test_one_row_per_object_best_witness(actions: Actions) -> None:
-    """Two sources co-asserting one decision's summary → ONE hit (the multi-source set must
+    """Two sources co-asserting one decision's summary means ONE hit (the multi-source set must
     not double-list), carrying the better witness."""
     await _decision(actions, "decision:co", "adopt the desk fold",
                     "agent:weak", EvidenceClass.DERIVED.value, conf=0.4)
@@ -290,7 +290,7 @@ async def test_one_row_per_object_best_witness(actions: Actions) -> None:
 
 
 async def test_hardening_stopwords_never_poison_the_misses_log(actions: Actions) -> None:
-    """'the of and' parses to an EMPTY tsquery — zero hits by construction, not a recall
+    """'the of and' parses to an EMPTY tsquery: zero hits by construction, not a recall
     failure. It must return a note and stay OUT of search_log (audit finding #4)."""
     out = await _search(actions, "the of and")
     assert out["hits"] == [] and "stopwords" in out["note"]
@@ -304,7 +304,7 @@ async def test_hardening_limit_and_length_clamps(actions: Actions) -> None:
     spec = {"op": "function", "name": "search", "args": {"q": "clamp inputs", "limit": -5}}
     out = (await run_spec(actions.pool, spec, None, name="search"))["items"]
     assert len(out["hits"]) == 1  # clamped to >=1, no error
-    long_q = "clamp " * 200  # ~1.2KB → truncated to 300 chars, still searches
+    long_q = "clamp " * 200  # ~1.2KB, truncated to 300 chars, still searches
     out2 = await _search(actions, long_q)
     assert len(out2["hits"]) == 1
     logged = await actions.pool.fetchval(
@@ -313,7 +313,7 @@ async def test_hardening_limit_and_length_clamps(actions: Actions) -> None:
 
 
 async def test_hardening_log_retention_prunes_ancient_rows(actions: Actions) -> None:
-    """search_log keeps 90 days — the telemetry must not grow forever (audit finding #5)."""
+    """search_log keeps 90 days: the telemetry must not grow forever (audit finding #5)."""
     await actions.pool.execute(
         "INSERT INTO search_log (query, hits, searched_at) "
         "VALUES ('ancient', 0, now() - interval '200 days')")
@@ -325,8 +325,8 @@ async def test_hardening_log_retention_prunes_ancient_rows(actions: Actions) -> 
 
 
 async def test_relaxed_flag_lands_in_the_telemetry(actions: Actions) -> None:
-    """Zero-hits retired as the embeddings tripwire (ruling 40e68cb1); the next honest
-    trigger is relaxed-hit QUALITY — so the log must remember which searches only
+    """Zero-hits retired as the embeddings tripwire; the next honest
+    trigger is relaxed-hit QUALITY, so the log must remember which searches only
     survived on the ANY-term fallback."""
     now = datetime.now(UTC)
     d = await actions.create_or_find_object("Decision", "decision:relaxtest", "session")
@@ -342,4 +342,4 @@ async def test_relaxed_flag_lands_in_the_telemetry(actions: Actions) -> None:
     rows = await actions.pool.fetch(
         "SELECT query, hits, relaxed FROM search_log ORDER BY id")
     assert [bool(r["relaxed"]) for r in rows] == [False, True]
-    assert rows[1]["hits"] > 0  # it did survive — on relaxation
+    assert rows[1]["hits"] > 0  # it did survive, on relaxation

@@ -1,8 +1,7 @@
-"""LIVENESS — is that mind ALIVE, or has it merely stopped talking to us?
+"""LIVENESS: is that mind ALIVE, or has it merely stopped talking to us?
 
-The operator, 2026-07-12: "there is a bug where agents are getting staled while they are still
-working." He was right. `last_seen` was refreshed ONLY when an agent CALLED Osiris, and every
-liveness test in the system reads `last_seen > now() - 15 minutes` — so a mind heads-down for
+`last_seen` was refreshed ONLY when an agent CALLED Osiris, and every
+liveness test in the system reads `last_seen > now() - 15 minutes`, so a mind heads-down for
 twenty minutes, writing code and running tests, was marked DEAD while it was very much alive.
 
 WE WERE MEASURING CHATTINESS AND CALLING IT ALIVENESS.
@@ -49,8 +48,8 @@ async def _mount(pool: asyncpg.Pool, agent: str, sid: str, *, quiet_for: timedel
 
 
 async def test_a_mind_HEADS_DOWN_is_not_DEAD(actions: Actions, tmp_path: Path) -> None:
-    """THE BUG, exactly. An agent that has not called Osiris in twenty minutes — because it has
-    been writing code and running a test suite — reads as dead to all eight liveness readers,
+    """THE BUG, exactly. An agent that has not called Osiris in twenty minutes, because it has
+    been writing code and running a test suite, reads as dead to all eight liveness readers,
     including the WAKE TRIGGER, which would then spawn a second agent onto its shared tree.
 
     But it has been WRITING TO ITS TRANSCRIPT the whole time, and that is a `stat()` away.
@@ -92,8 +91,8 @@ async def test_liveness_can_only_ever_ADD_life_never_take_it(
 async def test_a_growing_transcript_earns_the_provisional_row_its_pulse(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): observe_liveness's own
-    promotion — a whisper seat's (save_mount alive=False) first transcript growth — is
+    """THE EARNED-PULSE COLUMN: observe_liveness's own
+    promotion (a whisper seat's (save_mount alive=False) first transcript growth) is
     one of exactly two acts that may ever stamp `earned_pulse_at`. First-earn only: a
     row that already earned its pulse (a real mount() call) is never re-stamped by a
     later transcript touch."""
@@ -123,10 +122,10 @@ async def test_a_growing_transcript_earns_the_provisional_row_its_pulse(
 async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Ptah's gap (thread #174, 2026-08-17), the SAME self-evident derivation
+    """A resume wake's gap (thread #174, 2026-08-17), the SAME self-evident derivation
     `find_session_row`'s own lane 3 closes: a `-p --resume` wake's mount row carries a
     job_dir keyed by the WAKE's own fresh job anchor (c8a22a05), unrelated to the resumed
-    transcript's own sid (02eaaa7a) — even though 02eaaa7a genuinely IS this agent's own
+    transcript's own sid (02eaaa7a), even though 02eaaa7a genuinely IS this agent's own
     generation-derived identity. The job-dir join alone would miss this transcript's mtime
     forever; matching also on agent_id (self-evident, no ledger read needed) closes it."""
     await mounts.save_mount(actions.pool, job_dir="/home/x/.claude/jobs/c8a22a05",
@@ -138,7 +137,7 @@ async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
     _transcript(tmp_path, "-ptah", "02eaaa7a-ea67-4fac-a9fc-d9377c6f8474")
 
     stale_before = await _live(actions.pool)
-    assert "agent:02eaaa7a-ii" not in stale_before, "reads cold, exactly Ptah's own symptom"
+    assert "agent:02eaaa7a-ii" not in stale_before, "reads cold, exactly the resume-wake symptom"
 
     touched = await observe_liveness(actions.pool, tmp_path)
     assert touched == 1
@@ -147,7 +146,7 @@ async def test_a_resume_wake_s_mismatched_job_dir_still_promotes(
 
 
 async def test_a_genuinely_dead_session_STAYS_dead(actions: Actions, tmp_path: Path) -> None:
-    """The fix must not trade false-dead for false-alive — which is exactly what simply widening
+    """The fix must not trade false-dead for false-alive, which is exactly what simply widening
     the 15-minute window would have done. A session whose transcript has not moved in hours has
     not been writing, and it is not working. It is gone."""
     await _mount(actions.pool, "agent:ghost", "cccc3333", quiet_for=timedelta(hours=4))
@@ -173,7 +172,7 @@ async def test_the_extractor_s_own_scratch_sessions_are_not_MINDS(
 def test_the_OBSERVER_and_the_INFERRER_do_not_share_a_switch() -> None:
     """THE CHARTER, in one assertion. Observing is FREE, deterministic and always right; inferring
     costs money and is gated on a licence. If they shared a switch, killing the expensive miner
-    would silently blind the free liveness signal — and one day someone would pull the wrong one
+    would silently blind the free liveness signal, and one day someone would pull the wrong one
     and never know what else went dark with it.
 
     (This is not hypothetical: the honest liveness signal USED to be stamped by the miner's crawl,

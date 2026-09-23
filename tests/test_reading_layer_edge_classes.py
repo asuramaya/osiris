@@ -1,6 +1,5 @@
-"""THE READING LAYER, part A: EDGE CLASSES (ruling c5953bb1, Thoth DM 10596, thread
-71c4ca0d). The operator's own word on his screenshot: "focus needs to really focus so I can
-see long paths leading back and upstream", "inspector, table and graph in harmony".
+"""THE READING LAYER, part A: EDGE CLASSES. The goal was to let a reader focus enough to
+trace long paths back and upstream, with the inspector, table and graph working in harmony.
 Structural edges (containment/membership -- in_repo, works_in, governs, ...) are real but
 not what a reader is tracing and their degree dwarfs everything else (repo:osiris alone:
 20,352); they are not drawn at rest. Semantic edges (the actual provenance trail --
@@ -22,8 +21,8 @@ _INDEX_HTML = (_STATIC / "index.html").read_text()
 _SPACE_HTML = (_STATIC / "space.html").read_text()
 
 
-# --- classification: a default, disclosed rather than parked on (mail 10596's own
-# instruction), overridden by Khnum's real per-type header field ---------------------------
+# --- classification: a default, disclosed rather than parked on, overridden by the
+# real per-type header field ---------------------------------------------------------------
 
 def test_a_default_structural_type_list_exists_and_is_disclosed() -> None:
     assert "const STRUCTURAL_EDGE_TYPES = new Set([" in _SPACE_JS
@@ -33,7 +32,7 @@ def test_a_default_structural_type_list_exists_and_is_disclosed() -> None:
 
 
 def test_classification_reads_the_wire_field_link_type_class_not_edge_classes() -> None:
-    # THE WIRE EDGE CLASSES FIX (Thoth mail 11291): the browser used to read
+    # THE WIRE EDGE CLASSES FIX: the browser used to read
     # `snap.edge_classes`, a field the wire never actually sends -- the real header field
     # is `link_type_class`, index-aligned to edge_types the same way. The old field is gone
     # outright as a live READ (an explanatory comment naming it, for the historical record,
@@ -47,7 +46,7 @@ def test_classification_reads_the_wire_field_link_type_class_not_edge_classes() 
 
 
 def test_header_container_class_no_longer_normalizes_to_structural() -> None:
-    # WAVE 27, THE LENS PANEL (Thoth mail 11754): "container" used to normalize to
+    # THE LENS PANEL: "container" used to normalize to
     # "structural" here (every pre-existing check only ever distinguished "structural" from
     # everything else) -- now kept distinct so the legend can offer it as its own lens
     # toggle, alongside semantic/structural. Every call site that relied on the old
@@ -58,7 +57,7 @@ def test_header_container_class_no_longer_normalizes_to_structural() -> None:
 
 
 def test_a_header_class_overrides_the_client_fallback_table() -> None:
-    # live-verified regression (mail 11291): the browser marked authored_by "semantic"
+    # live-verified regression: the browser marked authored_by "semantic"
     # (STRUCTURAL_EDGE_TYPES doesn't list it) while the header's own link_type_class says
     # authored_by is structural -- edgeClassByType must prefer the header's own value.
     body = _SPACE_JS.split("async function fetchStreamSnapshot()", 1)[1][:3400]
@@ -75,18 +74,17 @@ def test_effective_edge_class_debug_hook_exists() -> None:
 # --- the legend still opts a class/type OUT; nothing is hidden by default any more --------
 
 def test_structural_class_is_no_longer_hidden_by_default() -> None:
-    # ruling c5953bb1's own "structural hidden at rest" is superseded outright by THE
-    # DRAWING TIP's own operator ruling (4a51cab1/1178e7d9, thread 325ef660, mail 11408):
-    # "nothing hidden, nothing drawn twice" -- caps and hides were the old answer to
-    # density; membership is a project fill and the two universal fans are high-degree
-    # objects now, not a blanket structural-class hide. See tests/test_drawing_tip.py for
-    # the full model.
+    # the earlier "structural hidden at rest" rule is superseded outright by THE
+    # DRAWING TIP's own ruling: nothing hidden, nothing drawn twice. Caps and hides were
+    # the old answer to density; membership is a project fill and the two universal fans
+    # are high-degree objects now, not a blanket structural-class hide. See
+    # tests/test_drawing_tip.py for the full model.
     assert 'const hiddenEdgeClasses = new Set();' in _SPACE_JS
     assert 'const hiddenEdgeClasses = new Set(["structural"]);' not in _SPACE_JS
 
 
 def test_edge_geometry_build_filters_by_hidden_classes_and_types() -> None:
-    # TIP 4 (operator ruling "DENSITY NOT DISCS", mail 11011) reverted the parameter back
+    # TIP 4 (operator ruling "DENSITY NOT DISCS") reverted the parameter back
     # to edgeList -- no more zoom-tier edge budget. hiddenEdgeClasses/hiddenEdgeTypes start
     # empty now (THE DRAWING TIP) but the legend-toggle filter mechanism itself is unchanged.
     body = _SPACE_JS.split("function buildEdgeLines(nodes, edgeList)", 1)[1][:2300]
@@ -95,7 +93,7 @@ def test_edge_geometry_build_filters_by_hidden_classes_and_types() -> None:
 
 
 # --- semantic edges fade by ON-SCREEN length (a GPU shader, not a per-zoom CPU rewrite --
-# the same discipline mail 10581 already established for node sizing) ----------------------
+# the same discipline already established for node sizing) ---------------------------------
 
 def test_edge_fade_is_a_shader_not_a_per_zoom_material_opacity_write() -> None:
     assert "function makeEdgeFadeMaterial()" in _SPACE_JS
@@ -131,29 +129,29 @@ def test_legend_toggle_button_shows_and_hides_the_panel() -> None:
 
 
 def test_legend_checkboxes_rebuild_edge_lines_on_change() -> None:
-    # THE LEGIBILITY PASS, TIP 1(e) (ruling e1cb9e3b) added a third checkbox group (node
-    # types, alongside edge class/type) to the same legend panel — all three still rebuild.
+    # THE LEGIBILITY PASS, TIP 1(e) added a third checkbox group (node
+    # types, alongside edge class/type) to the same legend panel: all three still rebuild.
     body = _SPACE_JS.split("function renderLegend(edgeList, nodeList)", 1)[1]
     # three legend checkbox groups (node type, class, type), setHiddenTypes' own call (the
     # header taxonomy pills' entry point, TIP 1(e)), setHiddenProjects' own call (the
-    # header repo selector's entry point, CONSOLE CHROME CLEANUP piece 2, decision
-    # 31717ca7), plus TIP 1b's own review-flaw-#1 fix: focusObject and clearFocus each
+    # header repo selector's entry point, CONSOLE CHROME CLEANUP piece 2),
+    # plus TIP 1b's own review-flaw-#1 fix: focusObject and clearFocus each
     # rebuild the base layer too, so unreachable edges actually disappear on focus instead
-    # of only nodes — seven call sites total. TIP 3 briefly added an eighth (refreshLOD,
-    # Thoth mail 10930, rebuilding the edge layer under its own zoom-tier budget); TIP 4
-    # (operator ruling "DENSITY NOT DISCS", mail 11011) retired that budget outright, back to
-    # seven. THE DRILL (Thoth mail 11048) added two more of its own: renderContainerDrill
+    # of only nodes: seven call sites total. TIP 3 briefly added an eighth (refreshLOD,
+    # rebuilding the edge layer under its own zoom-tier budget); TIP 4
+    # (operator ruling "DENSITY NOT DISCS") retired that budget outright, back to
+    # seven. THE DRILL added two more of its own: renderContainerDrill
     # (a container-scale focus rebuilds the base layer same as an ordinary focus) and
     # revealProjectStub (a stub reveal changes nodeVisible for the revealed ids, so the base
-    # layer must rebuild too) — nine call sites. WAVE 26, THE STORYLINE (mail 11534) added a
+    # layer must rebuild too): nine call sites. THE STORYLINE added a
     # tenth: renderStoryline rebuilds the base layer same as an ordinary focus or the drill.
-    # WAVE 27, THE LENS PANEL (mail 11754) added an eleventh: the new "high-degree objects"
+    # THE LENS PANEL added an eleventh: the new "high-degree objects"
     # lens checkbox rebuilds the base layer too (its own toggle changes which edges fold
-    # into a badge vs. draw as a line). The same wave's hash-restore fix (Thoth mail 11981/
-    # 12052) added a twelfth: a hashchange listener reapplies a shared lens link's state and
+    # into a badge vs. draw as a line). The same pass's hash-restore fix
+    # added a twelfth: a hashchange listener reapplies a shared lens link's state and
     # must rebuild the edge layer the same way a legend checkbox does, since the restored
     # state can change which edge classes/types are hidden. This slice runs unbounded to
     # end-of-file (no closing boundary in the split above), so it catches every function
-    # defined after renderLegend, not just renderLegend's own body — noted rather than
+    # defined after renderLegend, not just renderLegend's own body: noted rather than
     # silently re-scoping an existing test's own slicing choice.
     assert body.count("buildEdgeLines(idToNode, edges);") == 12

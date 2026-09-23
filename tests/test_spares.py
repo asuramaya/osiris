@@ -1,17 +1,17 @@
-"""THE SPARE — a process that is not anybody, wearing a real session id.
+"""THE SPARE: a process that is not anybody, wearing a real session id.
 
 Claude Code fires SessionStart for things no human ever addresses: `claude bg-spare` pre-warms,
 pty hosts, claim-socket daemons. Each has a genuine session_id and a genuine cwd, so the whisper
-seats it — and `last_seen=now()` handed it a HEARTBEAT, which made it LIVE by every test the fleet
+seats it, and `last_seen=now()` handed it a HEARTBEAT, which made it LIVE by every test the fleet
 owns. It inflated the roster, it made the co-agent collision warning cry wolf on an uncontended
-tree (Anubis XII obeyed it and declined to stage; the tree was empty), and it could take delivery
-of a DM into a process that will never read anything.
+tree (a worker seat obeyed it and declined to stage; the tree was empty), and it could take
+delivery of a message into a process that will never read anything.
 
     A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING.
 
 And NOT by `model IS NULL`, which is the fix the field report asked for and which would have been
 wrong: of the two seats reported as ghosts, one carried a RESOLVED MODEL and a LIVE HEARTBEAT and
-had NO TRANSCRIPT ON DISK AT ALL. `model IS NULL` does not mean "not anybody" — it means WE HAVE
+had NO TRANSCRIPT ON DISK AT ALL. `model IS NULL` does not mean "not anybody", it means WE HAVE
 NOT LOOKED YET. This project has been bitten by that exact shape three times.
 """
 
@@ -44,7 +44,7 @@ async def test_a_GREETING_does_not_make_you_alive(actions: Actions) -> None:
 
 
 async def test_an_ACT_does(actions: Actions) -> None:
-    """A real Osiris call — the thing a spare never makes."""
+    """A real Osiris call: the thing a spare never makes."""
     await _mount(actions, "bbbbbbbb", "agent:bbbbbbbb", alive=False)
     assert not await _live(actions, "agent:bbbbbbbb")
     await _mount(actions, "bbbbbbbb", "agent:bbbbbbbb", alive=True)
@@ -56,7 +56,7 @@ async def test_a_PROVISIONAL_seat_is_PROMOTED_when_its_transcript_moves(
 ) -> None:
     """THE CLAUSE THE WHOLE DESIGN HANGS ON.
 
-    observe_liveness used `v.moved > m.last_seen`, and `x > NULL` is NULL — which is not TRUE. So
+    observe_liveness used `v.moved > m.last_seen`, and `x > NULL` is NULL, which is not TRUE. So
     a provisionally-seated agent could work all day, writing to its transcript the whole time, and
     the fleet would read it as DEAD FOREVER. Taking the heartbeat away is only safe if the way
     back is real.
@@ -76,7 +76,7 @@ async def test_a_SPARE_never_writes_and_so_is_never_promoted(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The other half, and the point of the whole thing: the sweep is FREE and it is EXACT.
-    We do not guess which process is a person — we let the process show us, and a spare has
+    We do not guess which process is a person, we let the process show us, and a spare has
     nothing to show."""
     await _mount(actions, "dddddddd", "agent:dddddddd", alive=False)
     (tmp_path / "-repo").mkdir(parents=True)          # a project dir, but no transcript for it
@@ -87,8 +87,8 @@ async def test_a_SPARE_never_writes_and_so_is_never_promoted(
 
 async def test_a_greeting_never_REVOKES_a_pulse_it_did_not_grant(actions: Actions) -> None:
     """A living agent that gets re-whispered (a reconnect, a re-fire of SessionStart) must keep
-    the life it EARNED. A fix for over-counting that starts under-counting is not a fix — it is
-    the liveness bug (456960e5) coming back through the other door."""
+    the life it EARNED. A fix for over-counting that starts under-counting is not a fix, it is
+    the liveness bug coming back through the other door."""
     await _mount(actions, "eeeeeeee", "agent:eeeeeeee", alive=True)
     assert await _live(actions, "agent:eeeeeeee")
     await _mount(actions, "eeeeeeee", "agent:eeeeeeee", alive=False)   # SessionStart re-fires

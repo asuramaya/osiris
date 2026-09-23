@@ -1,4 +1,4 @@
-"""Reference ingest — the design canon (Palantir/Notion + own docs) as project memory.
+"""Reference ingest: the design canon (Palantir/Notion + own docs) as project memory.
 
 The self-referential loop: the models that shape the front end live IN the graph as sourced,
 gradeable objects, so the canon is queryable next to the commits and threads that implement it.
@@ -20,7 +20,7 @@ from src.ontology.schema import LINK_TYPES, OBJECT_TYPES
 
 
 def test_ingest_read_redacts_credentials(tmp_path) -> None:  # type: ignore[no-untyped-def]
-    """The ingest read strips credential shapes (ruling f8f22e14) — a project's mds can carry
+    """The ingest read strips credential shapes, a project's mds can carry
     printed key material just like a transcript, and must not enter the graph raw."""
     p = tmp_path / "NOTES.md"
     p.write_text(
@@ -53,7 +53,7 @@ def test_schema_declares_reference() -> None:
 
 
 async def test_mine_mentions_joins_a_doc_to_the_entities_it_names(actions: Actions) -> None:
-    """Layer 3, keyless: a doc links to the named entities that appear in its text — and only
+    """Layer 3, keyless: a doc links to the named entities that appear in its text, and only
     distinctive ones (a short/common name doesn't false-match)."""
     org = await actions.create_or_find_object("Organization", "cik:1", "edgar")
     await actions.assert_property(org, "name", "Neuralink Corp", "edgar", NOW, 0.85)
@@ -106,8 +106,8 @@ async def test_ingest_reference_doc_grades_and_dedups(actions: Actions, tmp_path
 async def test_ingest_reference_doc_links_in_repo_when_given(
     actions: Actions, tmp_path: object,
 ) -> None:
-    """Operator ruling, 2026-08-27 (decision 49231693's Reference-orphan trace): a doc
-    only gets ingested because someone was working a project — `repo` links it at the
+    """Operator ruling, 2026-08-27 (Reference-orphan trace): a doc
+    only gets ingested because someone was working a project, `repo` links it at the
     door instead of leaving that context to be thrown away."""
     p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
@@ -134,9 +134,9 @@ async def test_ingest_reference_doc_links_in_repo_when_given(
 async def test_ingest_reference_doc_refuses_with_neither_repo_nor_hatch(
     actions: Actions, tmp_path: object,
 ) -> None:
-    """THE DECLARE-OR-REFUSE GATE WIDENS HERE (Thoth mail 8960 item 2, msg 9071): the
+    """THE DECLARE-OR-REFUSE GATE WIDENS HERE: the
     silent-omission door that produced resolve_reference_orphans' own 56-orphan backlog
-    is now closed — repo= or unlinked_because= is mandatory, no third silent option."""
+    is now closed, repo= or unlinked_because= is mandatory, no third silent option."""
     p = tmp_path / "refused-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t -->\n"
                  "# Refused\n\nno repo, no hatch.")
@@ -151,7 +151,7 @@ async def test_ingest_reference_doc_refuses_with_neither_repo_nor_hatch(
 
 
 async def test_grounds_property_is_stored(actions: Actions, tmp_path: object) -> None:
-    """A reference carries the precise module it grounds (the `grounds:` header) as a property —
+    """A reference carries the precise module it grounds (the `grounds:` header) as a property,
     the field the retrieval Function searches to point 'how was X solved?' at the right canon."""
     p = tmp_path / "palantir-thing.md"  # type: ignore[attr-defined]
     p.write_text("<!-- source: http://p | vendor: palantir | topic: t | grounds: src/x.py -->\n"
@@ -176,13 +176,13 @@ async def test_ingest_canon_informs_the_repo(actions: Actions) -> None:
     ec = await actions.pool.fetchval(
         "SELECT evidence_class FROM links WHERE type='informs' LIMIT 1")
     assert ec == "self_declared"                          # our own attribution, not vendor canon
-    again = await ingest_canon(actions)                   # idempotent — no duplicate edges
+    again = await ingest_canon(actions)                   # idempotent, no duplicate edges
     assert again["informs"] == 0
 
 
 # --- _wire_informs must wire EXACTLY the project it grounds, never fan out to every
-# active SoftwareProject fleet-wide (thread 5156 — the repo:? specimen's own root cause,
-# decision ca091c4b: measured live, 1037 of 1054 informs edges were pure cross-join
+# active SoftwareProject fleet-wide (thread 5156, the repo:? specimen's own root cause,
+# measured live, 1037 of 1054 informs edges were pure cross-join
 # noise). Contract test: ingesting the canon wires exactly repo:osiris, nothing else. ---
 
 
@@ -226,7 +226,7 @@ async def test_unwire_informs_fanout_dry_run_finds_exactly_the_noise(actions: Ac
     await actions.create_link(ref, unrelated2, "informs", "ref:osiris", now, 0.9,
                               evidence_class="self_declared")
     # a genuinely third-party-asserted informs edge, on its OWN triple (the fan-out's own
-    # dedup never let it double up with a noise row on the same (from,to) pair) — never
+    # dedup never let it double up with a noise row on the same (from,to) pair), never
     # the fan-out's own signature, must never be touched
     await actions.create_link(ref, unrelated3, "informs", "agent:third-party", now, 0.9,
                               evidence_class="self_declared")
@@ -278,7 +278,7 @@ async def test_unwire_informs_fanout_refuses_execute_without_because(actions: Ac
     assert live == 1, "the noise edge was removed despite the refusal"
 
 
-# --- backfill_bootstrap_orphan_references (decision 49231693/adde094b, operator ruling
+# --- backfill_bootstrap_orphan_references (operator ruling
 # 2026-08-27): the repair verb for the ~105 References the bootstrap_project door-gap
 # minted before repo= was threaded through. -----------------------------------------
 
@@ -295,17 +295,17 @@ async def test_backfill_bootstrap_orphan_references_dry_run_finds_exactly_the_re
         "Reference", "ref:decepticons-history-2026-07-03-allspark-night", "ref:osiris")
     await actions.assert_property(matched, "name", "the allspark night", "ref:osiris",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    # no clean project prefix — must stay excluded, never guessed at
+    # no clean project prefix, must stay excluded, never guessed at
     unmatched = await actions.create_or_find_object(
         "Reference", "ref:design-1-vision", "ref:osiris")
     await actions.assert_property(unmatched, "name", "vision", "ref:osiris",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    # a real agent call, not the bootstrap script's own signature — must stay excluded
+    # a real agent call, not the bootstrap script's own signature, must stay excluded
     real_call = await actions.create_or_find_object(
         "Reference", "ref:decepticons-real-paper", "agent:d5c671c1")
     await actions.assert_property(real_call, "name", "a real paper", "agent:d5c671c1",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    # already linked — must stay excluded (not zero live links)
+    # already linked, must stay excluded (not zero live links)
     already = await actions.create_or_find_object(
         "Reference", "ref:decepticons-history-already-linked", "ref:osiris")
     await actions.assert_property(already, "name", "already linked", "ref:osiris",
@@ -346,7 +346,7 @@ async def test_backfill_bootstrap_orphan_references_executes_and_is_idempotent(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", ref) == 0
 
     out = await backfill_bootstrap_orphan_references(
-        actions, actor="agent:test", dry_run=False, because="decision 49231693 backfill")
+        actions, actor="agent:test", dry_run=False, because="backfill")
     assert out["linked"] == 1
     row = await actions.pool.fetchrow(
         "SELECT o.canonical, l.evidence_class FROM links l JOIN objects o ON o.id=l.to_id "
@@ -354,14 +354,14 @@ async def test_backfill_bootstrap_orphan_references_executes_and_is_idempotent(
     assert row["canonical"] == "repo:monsterhouse"
     assert row["evidence_class"] == "derived"
 
-    # idempotent — a second dry run finds nothing left to do
+    # idempotent, a second dry run finds nothing left to do
     again = await backfill_bootstrap_orphan_references(actions, actor="agent:test", dry_run=True)
     assert again["to_link"] == 0
 
 
 async def test_ingest_canon_wires_cites_edges(actions: Actions) -> None:
     """The real repo canon: docs/reference/* + own docs, and COMPOSER cites the vendor refs
-    (the link COMPOSER.md actually declares — design memory that knows its own sources)."""
+    (the link COMPOSER.md actually declares, design memory that knows its own sources)."""
     res = await ingest_canon(actions)
     assert res["vendor"] >= 5 and res["own"] >= 2          # 5 vendor pages + own docs
     n = await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='cites'")
@@ -374,7 +374,7 @@ async def test_ingest_canon_wires_cites_edges(actions: Actions) -> None:
 
 
 async def test_ingest_canon_cites_is_idempotent(actions: Actions) -> None:
-    """The `cites` wiring (COMPOSER → each vendor ref) must dedup like informs/mentions — a
+    """The `cites` wiring (COMPOSER → each vendor ref) must dedup like informs/mentions, a
     second ingest_canon adds no duplicate edges (regression: it went 7→14 before the guard)."""
     first = await ingest_canon(actions)
     n = await actions.pool.fetchval("SELECT count(*) FROM links WHERE type='cites'")
@@ -387,7 +387,7 @@ async def test_ingest_canon_cites_is_idempotent(actions: Actions) -> None:
 
 # --- the md-kill (task #18): a build log ingests as PER-ENTRY nodes, never one dump -----
 
-_LOG = """# CLAUDE.md — session-start notes
+_LOG = """# CLAUDE.md: session-start notes
 
 Read the graph first.
 
@@ -396,7 +396,7 @@ Single machine, single operator. Services bind to 127.0.0.1.
 
 ## Build order
 - **Phase 0 (DONE):** schema + six actions + audit/outbox + tests. """ + "kernel " * 70 + """
-- **THE LIVENESS NIGHT — fresh-eyes audit (DONE, 2026-07-02):** proven is not alive; """ \
+- **THE LIVENESS NIGHT: fresh-eyes audit (DONE, 2026-07-02):** proven is not alive; """ \
     + "fleet repair " * 40 + """
 - **tiny note:** too small to be its own entry.
 """
@@ -413,7 +413,7 @@ def test_parse_log_chunks_sections_and_dated_entries() -> None:
     liveness = next(e for e in entries if "LIVENESS" in e["title"])
     assert liveness["date"] == "2026-07-02"            # dated from its own header
     assert "fleet repair" in liveness["body"]
-    # the tiny bullet did NOT become a node — it stays with its section's remainder
+    # the tiny bullet did NOT become a node, it stays with its section's remainder
     assert not any(e["title"] == "tiny note" for e in entries)
     build = next(e for e in entries if e["title"] == "Build order")
     assert "too small" in build["body"]
@@ -467,8 +467,8 @@ async def test_ingest_log_links_every_entry_in_repo_when_given(
 async def test_ingest_log_refuses_with_neither_repo_nor_hatch(
     actions: Actions, tmp_path,  # type: ignore[no-untyped-def]
 ) -> None:
-    """THE DECLARE-OR-REFUSE GATE WIDENS HERE too (Thoth mail 8960 item 2, msg 9071),
-    same shape as ingest_reference_doc's own widening — checked ONCE, before the first
+    """THE DECLARE-OR-REFUSE GATE WIDENS HERE too,
+    same shape as ingest_reference_doc's own widening, checked ONCE, before the first
     entry mints, never per-entry (one call names one project for every entry it
     produces)."""
     from src.ingest.reference import ingest_log
@@ -487,12 +487,12 @@ async def test_ingest_log_refuses_with_neither_repo_nor_hatch(
 
 def test_parse_log_splits_entries_whose_bold_header_wraps() -> None:
     """Live receipt: THE LIVENESS NIGHT's header wraps a line; without DOTALL it never
-    split and got swallowed into the previous entry — retrieval returned the wrong node."""
+    split and got swallowed into the previous entry, retrieval returned the wrong node."""
     from src.ingest.reference import parse_log
 
     log = ("## Build order\n"
            "- **FIRST ENTRY (DONE, 2026-06-01):** " + "alpha " * 90 + "\n"
-           "- **THE WRAPPED NIGHT — a header long enough that the operator's editor\n"
+           "- **THE WRAPPED NIGHT: a header long enough that the editor\n"
            "  wraps it (DONE, 2026-07-02):** " + "beta " * 90 + "\n")
     entries = parse_log(log)
     wrapped = next(e for e in entries if "WRAPPED NIGHT" in e["title"])
