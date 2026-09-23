@@ -342,14 +342,21 @@ def test_backup_panel_is_fully_retired_from_console_js() -> None:
 
 
 def test_settings_panel_reads_the_settings_list_route() -> None:
-    body = _JS.split("async function renderSettingsPanel()", 1)[1].split(
-        "\nfunction ", 1)[0]
+    # THE SETTINGS PANE (Thoth mail 13350) moved the shared fetch into
+    # renderSettingsInto(containerId); renderSettingsPanel is now a one-line
+    # standalone-container wrapper around it (still reachable, no longer its own
+    # palette row — see test_settings_panel_has_a_palette_entry_not_a_nav_tab below).
+    body = _JS.split("async function renderSettingsInto(containerId)", 1)[1].split(
+        "\nasync function ", 1)[0]
     assert "fetch('/settings')" in body
 
 
 def test_settings_panel_has_a_palette_entry_not_a_nav_tab() -> None:
-    assert "'Settings…'" in _JS
-    assert "run: () => renderSettingsPanel()" in _JS
+    # the three old standalone rows (Key…/Offload Targets…/Settings…) consolidated
+    # into ONE "Settings" entry over THE SETTINGS PANE (Thoth mail 13350).
+    assert "'Settings…'" not in _JS
+    assert "label: 'Settings'," in _JS
+    assert "run: () => renderSettingsPane()" in _JS
     assert 'data-surface="settings"' not in _JS
 
 

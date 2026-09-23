@@ -1618,6 +1618,57 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             raw_key_b64=body.raw_key, key_fingerprint=body.key_fingerprint,
             resolved_path=body.resolved_path, backend=body.backend)
 
+    # THE RESTIC-KEY STATUS ROUTE (Thoth mail 13350, THE SETTINGS PANE's own BOX
+    # section) — a genuinely thin door: no REST route existed at all for `osiris
+    # restic-key status`'s own facts before this (only the CLI, src/cli.py's own
+    # cmd_restic_key). Same OPERATOR-ONLY AUTHORITY LAW the KEY DOOR routes above
+    # state (console is localhost, the operator's own hands) — NEVER the password
+    # bytes themselves, restic_key_status's own docstring guarantee.
+    @app.get("/restic-key/status")
+    async def restic_key_status_route() -> dict[str, Any]:
+        from src.orchestrator.restic_credential import restic_key_status
+
+        return restic_key_status()
+
+    # THE DEPLOY-STATUS ROUTE (Thoth mail 13350, BOX section) — no read door existed
+    # for "deploy snapshot sha vs deployed.sha" before this; see
+    # src/orchestrator/deploy_status.py's own module docstring for the full design.
+    @app.get("/deploy-status")
+    async def deploy_status_route() -> dict[str, Any]:
+        from src.orchestrator.deploy_status import get_deploy_status
+
+        return await get_deploy_status()
+
+    # THE OPERATOR DESK, AS JSON (Thoth mail 13350, THE SETTINGS PANE's own OPERATOR
+    # DESK section) — the EXISTING /desk route (above) only ever served server-rendered
+    # HTML (the old chrome surface); `read_desk`'s own dict was always plain-JSON-able,
+    # just never exposed that way. A genuinely new route, not a rewrite of /desk (that
+    # page stays exactly as it is for whoever still opens it directly).
+    @app.get("/operator/desk")
+    async def operator_desk_json_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        from src.orchestrator.mailbox import read_desk
+
+        return await read_desk(p)
+
+    # THE OPERATOR'S OWN REPLY DOOR (Thoth mail 13350) — no REST route let the operator
+    # SEND a mail reply before this (only /pane/{agent}/reply, a different door entirely:
+    # a live seat's own session transcript, never the graph mailbox). Wraps
+    # `mailbox.send_message` exactly as the MCP `send(reply_to=...)` tool does, `from_
+    # agent=OPERATOR_ADDR` hardcoded here (never trusted from the request body) — the
+    # SAME "his click, his signature" law /desk/settle's own docstring states.
+    @app.post("/operator/desk/reply")
+    async def operator_desk_reply_route(
+        body: OperatorDeskReplyBody, p: asyncpg.Pool = Depends(get_pool)
+    ) -> dict[str, Any]:
+        from src.orchestrator.mailbox import OPERATOR_ADDR, send_message
+
+        try:
+            return await send_message(
+                p, from_agent=OPERATOR_ADDR, from_project=None, body=body.body,
+                reply_to=body.id)
+        except ValueError as exc:
+            return {"error": str(exc)}
+
     # THE REPAIRS PANEL'S OWN REST DOOR (thread c89a9873, wave 22) — mirrors the
     # `backfill` MCP tool and the `osiris backfill` CLI command one-for-one, all three
     # calling orchestrator.backfill.run_backfill, never one wrapping another. A dry-run
@@ -2390,6 +2441,14 @@ class SoulKeyRecoverFromBrowserBody(BaseModel):
     key_fingerprint: str
     resolved_path: str
     backend: str | None = None
+
+
+class OperatorDeskReplyBody(BaseModel):
+    """THE OPERATOR'S OWN REPLY DOOR (Thoth mail 13350, THE SETTINGS PANE) — `id` is the
+    desk card's own message id (a folded card's LEAD id; `send_message`'s own reply
+    routing settles the whole thread), `body` the operator's own reply text."""
+    id: int
+    body: str
 
 
 class LayoutMigrateBody(BaseModel):
