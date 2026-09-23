@@ -4,8 +4,8 @@
   "src/cli.py": 941,
   "src/config": 2,
   "src/ingest": 134,
-  "src/mcp_server.py": 2313,
-  "src/orchestrator": 13260,
-  "src/ui/static": 692,
-  "tests": 16856
+  "src/mcp_server.py": 1401,
+  "src/orchestrator": 11938,
+  "src/ui/static": 36,
+  "tests": 16834
 }

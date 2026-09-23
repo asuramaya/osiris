@@ -1,32 +1,32 @@
-"""Compositions — the composer's primitive: a saved, forkable spec over the graph.
+"""Compositions: the composer's primitive, a saved, forkable spec over the graph.
 
-The front end was never a page; it's the *composer* — the place where intent becomes a
+The front end was never a page; it's the *composer*, the place where intent becomes a
 composition over neutral primitives. A composition is a small op-tree the substrate
 executes. It unifies the *watch* (a saved subscription) and the *lens* (a saved query)
-into ONE first-class object, so opinion lives in the composition the USER owns — not
-welded into engine code. Claude authors them from a sentence (the MCP tools); the
-substrate runs them; the views render them.
+into ONE first-class object, so opinion lives in the composition the USER owns, not
+welded into engine code. Compositions are authored from a sentence via the MCP tools;
+the substrate runs them; the views render them.
 
-The op set is small and CLOSED — grounded in Palantir's Object Set API + Notion's
+The op set is small and CLOSED, grounded in Palantir's Object Set API + Notion's
 rollups, which independently land on the same vocabulary (see docs/COMPOSER.md). Anything
 the ops can't express is a Function (a named transform), never a new op.
 
-Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
+Ops (neutral, composable, the equivalent of Notion's filter/relation/rollup):
   {"op":"subject"}                                 -> the object you're looking at
   {"op":"select","object_type":?,"where":[...],"status":?,"subject_link":?,"scope":?}
-       -> objects matching conditions (.filter). `status` (Thoth dispatch 9490) opt-in:
+       -> objects matching conditions (.filter). `status` is opt-in:
        omitted = active-only (the historical default, byte-identical); "any" lifts the
-       filter; an explicit list narrows to exactly those. `subject_link` (Thoth dispatch
-       9676/9690, 588148bb piece 4) opt-in: `{"link_type":?,"direction":in|out}` narrows to
+       filter; an explicit list narrows to exactly those. `subject_link` is opt-in:
+       `{"link_type":?,"direction":in|out}` narrows to
        the one-hop neighborhood of the RUNTIME subject via that link (same "in"/"out"
-       convention as `traverse`/`_rollup`) — inert (old behavior, byte-identical)
+       convention as `traverse`/`_rollup`), inert (old behavior, byte-identical)
        whenever the key is absent OR no subject is bound, so an unfiltered composition
        like `browse`'s own default run is untouched; only a subject-bound run (e.g. a
-       `bind_subject` row_action's drill-in) narrows. `scope` (Thoth dispatch 9838,
-       588148bb's Browse tab cutover; extended by thread 0be2f790's DM 10711 with
-       "types"/"status") opt-in: `{"case_id":?,"project":?,"q":?,"types":[...]?,
+       `bind_subject` row_action's drill-in) narrows. `scope` (added later to extend the
+       Browse tab cutover with "types"/"status") is opt-in:
+       `{"case_id":?,"project":?,"q":?,"types":[...]?,
        "status":?,"exclude_types":?,"cursor":{"before_created_at":?,"before_id":?},
-       "limit":?}` — delegates to `list_objects_scoped`, the SAME function /objects' own
+       "limit":?}`, delegates to `list_objects_scoped`, the SAME function /objects' own
        REST route calls (one definition, not a second copy) for case/project scoping
        (multi-repo, case-insensitive), word-order-proof search, a multi-select type
        filter (`types`), an extra status equality narrowing (`status`, layered on top of
@@ -49,28 +49,28 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
        "object_type":?,"of":count|first|max|min|sum|avg,"property":?}} | {"name":,
        "function":{"name":<fn>,"args":{},"field":F}} | {"name":,"name_fallback":
        {"strip_prefix":?,"field":"name"|"unnamed"}}. `first` = Notion's show-original
-       (pluck a single relation's value, incl. an object column like `canonical` — how a
+       (pluck a single relation's value, incl. an object column like `canonical`, how a
        linked commit/entity is named). `property:"name"` resolves through resolve_label's
-       rule/chain tiers (Thoth dispatch 9676/9712/9716) — TYPE-NEUTRAL, the same chain
+       rule/chain tiers, TYPE-NEUTRAL, the same chain
        /objects itself uses, returning the raw canonical (unstripped) on the canonical
        tier for every composition alike. `name_fallback` is the opt-in SIBLING for a
-       composition with its OWN naming policy (e.g. the projects composition's "never
-       show a bare repo: canonical" ruling): `strip_prefix` trims a canonical-tier
+       composition with its OWN naming policy (e.g. the projects composition's rule to
+       never show a bare repo canonical): `strip_prefix` trims a canonical-tier
        fallback, `field:"unnamed"` picks the honest boolean off the same resolve_label
-       call instead of the display text — one call, two fields, never baked into the
-       shared property path itself. `function` (Thoth dispatch 9542, task #138/#163's
-       arc) is for real domain logic no property/rollup can express (triage's bucket
-       classification) — called ONCE per distinct (name, args) across the whole table,
+       call instead of the display text, one call, two fields, never baked into the
+       shared property path itself. `function` is for real domain logic no property/rollup
+       can express (triage's bucket
+       classification), called ONCE per distinct (name, args) across the whole table,
        matched back to each row by the Function's own "id" field; an object absent from
        the Function's output degrades that column to None, never a crash. `row_action`
-       (ruling c5b184cd, thread d56e7073/#44 — the write leg) declares a CONTROL every row
+       (the write leg) declares a CONTROL every row
        carries, not a column:
        {"action":<name>,"args":{<argname>:{"property":P}}}, resolved per-row into a private
-       `_action` key the renderer turns into a button — the op-tree only ever DECLARES the
-       shape; `/act`'s own registry is what enforces which actions/args are real.
-       `bind_subject:true` (Thoth dispatch 9676/9690, 588148bb piece 4) is a second,
+       `_action` key the renderer turns into a button; the op-tree only ever DECLARES the
+       shape, `/act`'s own registry is what enforces which actions/args are real.
+       `bind_subject:true` is a second,
        mutually-exclusive mode from `args` above: the row's OWN OBJECT becomes the
-       target composition's bound subject (`_action:{"action":,"subject":<id>}`) — for
+       target composition's bound subject (`_action:{"action":,"subject":<id>}`), for
        a "run:<name>" target that's an op-tree, not a registered Function, so there's
        nothing to call via /compositions/run-spec's {"op":"function"} wrapping; the
        client instead calls the NORMAL /compositions/<name>/run with this subject,
@@ -80,54 +80,54 @@ Ops (neutral, composable — the equivalent of Notion's filter/relation/rollup):
   {"op":"take","from":N,"n":K}                      -> top-N (.take)
   {"op":"sections","sections":[{"title":,"body":N},...]} -> stack named sub-compositions into
        one titled read-model (Notion's page-of-blocks). Each body is its own op-tree; the
-       result is {title: rendered-items}. This is what a "briefing"/"dossier" IS — a page of
+       result is {title: rendered-items}. This is what a "briefing"/"dossier" IS: a page of
        compositions, not bespoke code.
   {"op":"group","from":N,"by":P,"body":N,"sequence":?}  -> one section PER DISTINCT VALUE of
-       property P (a DYNAMIC `sections` — titles come from the data, not the spec). `body`
+       property P (a DYNAMIC `sections`, titles come from the data, not the spec). `body`
        is evaluated once per partition; {"op":"these"} inside it means "this partition's
-       members," so `body` may itself be another `group` — arc->status->owner IS three of
-       these nested, nothing more (ruling c5b184cd, thread d56e7073/#44). Capped at
+       members," so `body` may itself be another `group`, arc->status->owner IS three of
+       these nested, nothing more. Capped at
        MAX_GROUP_DEPTH so nesting stays closed, not open-ended.
-       `sequence` (ruling d42c543b, Thoth msg 1937) imposes a caller-given order on the
-       partition TITLES — distinct from `order`, which sorts rows/objects by a DERIVED
+       `sequence` imposes a caller-given order on the
+       partition TITLES, distinct from `order`, which sorts rows/objects by a DERIVED
        property value, never a caller-literal key sequence. Listed titles render first, in
-       that order (one absent from the data just doesn't appear — never an error); any
+       that order (one absent from the data just doesn't appear, never an error); any
        title NOT in the sequence appends after, alphabetically, so an unanticipated value
-       is visible, never dropped. Independent per nesting level — an outer and inner
+       is visible, never dropped. Independent per nesting level: an outer and inner
        `group` may each carry their own `sequence` or none.
   {"op":"these"}                                    -> the nearest enclosing `group`'s own
-       partition (empty outside one) — {"op":"subject"}'s sibling for a group body.
+       partition (empty outside one), {"op":"subject"}'s sibling for a group body.
   {"op":"function","name":,"args":{},"row_action":?,"row_actions":?} -> a registered
-       Function (the escape hatch). When its own output is row-shaped (task #60's data->rows
-       reclassification), `row_action` works exactly as `table`'s own (msg 1952, gating msg
-       1950's server-side proposal) — SIMPLER, even: a Function's row is already a plain
+       Function (the escape hatch). When its own output is row-shaped (following an earlier
+       data->rows reclassification), `row_action` works exactly as `table`'s own,
+       SIMPLER, even: a Function's row is already a plain
        dict, so args resolve via `row.get(property)` directly, no `_props` indirection. The
        client (table() recognizing a lone `_action` as a control, a click-delegate POSTing
-       to /act) shipped in 37af8b7 — browser-verified against live-desk's own resolve
-       button. An action named `"run:<function>"` is NAVIGATION rather than a write — the
+       to /act) was browser-verified against live-desk's own resolve
+       button. An action named `"run:<function>"` is NAVIGATION rather than a write: the
        client dispatches a DOM event instead of POSTing, the page shell runs the named
-       Function via /compositions/run-spec and shows its Result (task #90, Thoth msg 1976/
-       2005) — see `mail_overview`'s own row_action for the motivating case.
-       `row_actions` (plural, msg 1976 gating msg 1971's proposal) is for a row that affords
-       MORE than one verb — a list of {label,action,args}, producing `_actions:[...]` on the
+       Function via /compositions/run-spec and shows its Result
+       (see `mail_overview`'s own row_action for the motivating case).
+       `row_actions` (plural) is for a row that affords
+       MORE than one verb: a list of {label,action,args}, producing `_actions:[...]` on the
        row. Its own arg templates add `{"literal":v}` alongside `{"property":p}` (exactly
-       one of the two, or the composer refuses loudly — see `_row_action_arg`'s own
+       one of the two, or the composer refuses loudly, see `_row_action_arg`'s own
        docstring). The client renders `_actions` as N buttons, same click delegate, same /act
-       round trip per button as the singular form (task #91, Thoth msg 1976/2029) — a Function
+       round trip per button as the singular form. A Function
        may also embed `_actions`/`_action` directly on rows it returns, without this node-level
        declaration, when a saved composition can't express the shape. Two distinct reasons seen
        so far, not one: `desk_project` (two row kinds in one list, needing two different action
-       shapes — see its own docstring) and `_fn_echoes` (task #92: the node-level grammar
+       shapes, see its own docstring) and `_fn_echoes` (the node-level grammar
        decorates a Function's OWN top-level rows, but echoes' top level is a dict wrapping a
-       nested list — nothing for it to hook. Two Functions hitting embedding for the SAME
+       nested list, nothing for it to hook). Two Functions hitting embedding for the SAME
        reason would be the signal to promote that reason to a real op; these are two different
-       reasons, so it isn't, yet — see `_fn_echoes`'s own docstring).
+       reasons, so it isn't, yet (see `_fn_echoes`'s own docstring).
 
 The old `discrepancy` read-model is just one composition (opinion left the engine):
   subtract( collect(location, country) over traverse(subject, 2 hops),
             collect(home-props, country) over subject )
 
-There is deliberately NO generic `join` — relating two sets is `intersect` (set algebra)
+There is deliberately NO generic `join`: relating two sets is `intersect` (set algebra)
 or `traverse` (a link), and fuzzy matching (screening) is a Function. Caps (Palantir's,
 load-tested): `traverse` ≤ 3 hops, `aggregate` ≤ 3 group_by dimensions.
 """
@@ -160,7 +160,7 @@ from src.orchestrator.seats import _OPERATOR_ACTORS
 
 logger = logging.getLogger("osiris.compositions")
 
-# Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral —
+# Named pure transforms a `collect` op may apply to a value. Kept tiny and neutral.
 # `country` is the only domain helper, shared with the (soon-vestigial) discrepancy code.
 _TRANSFORMS: dict[str, Any] = {
     "identity": lambda v: v,
@@ -168,12 +168,12 @@ _TRANSFORMS: dict[str, Any] = {
     "lower": lambda v: v.lower() if isinstance(v, str) else v,
 }
 
-# Functions — the escape hatch (Palantir's exact split: a small closed op set + arbitrary
+# Functions: the escape hatch (Palantir's exact split: a small closed op set + arbitrary
 # registered logic for anything the ops can't express). A read-model whose precision lives
-# in domain logic — merge-aware cluster resolution, a platform-degree filter, multi-signal
-# fuzzy matching — is a FUNCTION, not a worse pure-op rewrite. Registering it here lets a
+# in domain logic (merge-aware cluster resolution, a platform-degree filter, multi-signal
+# fuzzy matching) is a FUNCTION, not a worse pure-op rewrite. Registering it here lets a
 # forkable composition REFERENCE it ({"op":"function","name":...}), so the opinion leaves
-# engine code and becomes a named, listable, swappable artifact the user owns — without
+# engine code and becomes a named, listable, swappable artifact the user owns, without
 # losing a drop of the analytics. The subject passed to `run_composition` is the function's
 # anchor (an entity for coinvest/screen; a case for subject_report).
 Function = Callable[[asyncpg.Pool, uuid.UUID | None, dict[str, Any]], Awaitable[Any]]
@@ -199,7 +199,7 @@ async def _fn_screen(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     return await screen_network(pool, subject, min_len=int(args.get("min_len", 5)))
 
 
-# NB: `briefing` was a hand-written Function (three SQL queries). It is GONE — it decomposed
+# NB: `briefing` was a hand-written Function (three SQL queries). It is GONE: it decomposed
 # into a `sections` op-tree (see BRIEFING below): each section is a pure select→table, so the
 # "where am I?" read-model is now a composition the user owns, not bespoke code. This is the
 # canonical proof that a "briefing"/"dossier" is a PAGE OF COMPOSITIONS, never a coded page.
@@ -226,15 +226,15 @@ def _trim(text: str) -> str:
 
 
 # evidence grades → rank weights for fn_search: search inherits the SAME epistemics as every
-# other read surface — a deliberate ruling outranks a mined echo at equal textual relevance.
+# other read surface. A deliberate ruling outranks a mined echo at equal textual relevance.
 _GRADE_W = ("CASE a.evidence_class WHEN 'self_declared' THEN 1.0 "
             "WHEN 'authoritative_api' THEN 0.95 WHEN 'corroborated' THEN 0.9 "
             "WHEN 'direct_observation' THEN 0.8 WHEN 'derived' THEN 0.5 "
             "ELSE 0.35 END")
 
-# THE INDEXED FIELDS (THE THAW, ruling 1e6d7367, migration 0037): must match
+# THE INDEXED FIELDS (migration 0037): must match
 # ix_assertions_fts's partial predicate exactly, or the planner falls off the index. Long
-# excluded 'statement' — Superstition's own field has never been searchable since it
+# excluded 'statement': the corresponding field has never been searchable since it
 # shipped (a latent gap this build heals alongside making Practice findable).
 _FTS_FIELDS = "'name','summary','rationale','statement'"
 
@@ -242,10 +242,10 @@ _FTS_FIELDS = "'name','summary','rationale','statement'"
 def _fuse_ranked(
     lex: list[dict[str, Any]], sem: list[dict[str, Any]], limit: int, *, k: int = 60,
 ) -> list[dict[str, Any]]:
-    """Reciprocal-rank fusion of the lexical and semantic hit lists — scale-free (an FTS
+    """Reciprocal-rank fusion of the lexical and semantic hit lists. Scale-free (an FTS
     rank product and a cosine share no axis; their POSITIONS do). One row per object: a
     hit found by both doors keeps the lexical row (its snippet is a real headline) and is
-    marked via='both'. Pure — the fusion policy is trivially testable."""
+    marked via='both'. Pure, so the fusion policy is trivially testable."""
     scores: dict[str, float] = {}
     meta: dict[str, dict[str, Any]] = {}
     for pos, h in enumerate(lex):
@@ -263,17 +263,17 @@ def _fuse_ranked(
     return out
 
 
-# python-side grade weights for the semantic door (the SQL door uses _GRADE_W — same table)
+# python-side grade weights for the semantic door (the SQL door uses _GRADE_W, same table)
 _GRADE_W_PY = {"self_declared": 1.0, "authoritative_api": 0.95, "corroborated": 0.9,
                "direct_observation": 0.8, "derived": 0.5}
 
 
-# ═══════════ THE REFLECTION ACL — house-scoped memories (ruling 6c18709f) ═══════════
+# ═══════════ THE REFLECTION ACL: house-scoped memories ═══════════
 # A Reflection is a memory lived with the operator's agents, not work knowledge: readable
 # within its OWN HOUSE and by the operator, opaque to other houses. Decisions, threads,
-# canon, tensions, blind spots stay fleet-readable — cross-repo recall is the product; the
+# canon, tensions, blind spots stay fleet-readable; cross-repo recall is the product. The
 # boundary is reflections ONLY. Enforcement lives at the READ LENSES (this module is where
-# every discovery read converges): the record itself stays append-only and whole — an ACL
+# every discovery read converges): the record itself stays append-only and whole. An ACL
 # is a lens, never a delete. The caller rides a ContextVar so the recursive op evaluator
 # (select, and any op stacked over it) inherits it without threading a parameter through
 # every branch; run_spec sets it, _fn_search/_fn_lap fall back to it.
@@ -282,22 +282,20 @@ _ACL_CALLER: ContextVar[str | None] = ContextVar("_ACL_CALLER", default=None)
 
 
 async def _caller_house(pool: asyncpg.Pool, caller: str | None) -> str | None:
-    """The house a caller reads reflections as — a SECURITY-RELEVANT read (this gates
-    cross-house reflection visibility, ruling ff6148b0): '*' for the operator's own
-    surfaces (`seats._OPERATOR_ACTORS` — the ONE definition of "this actor is the
+    """The house a caller reads reflections as: a SECURITY-RELEVANT read (this gates
+    cross-house reflection visibility). Returns '*' for the operator's own
+    surfaces (`seats._OPERATOR_ACTORS`, the ONE definition of "this actor is the
     operator's own hand", shared with derive_house's house-anchor check and mintseat's
     cross-house-mint guard; a second, locally-drifted copy here once excluded
-    'analyst:operator' — the API layer's own attribution string for the human's triage
-    clicks — task #82), None for an anonymous caller (reads NO reflections — an
-    unmounted stranger has no house), else the caller's seat house, falling back to its
-    project label (most projects are their own house). `held_seat`'s `house` is DERIVED
-    (decision 4c9e4bd7) — this inherits that fix for free, no query of its own.
+    'analyst:operator', the API layer's own attribution string for the human's triage
+    clicks), None for an anonymous caller (reads NO reflections: an
+    unmounted caller has no house), else the caller's seat house, falling back to its
+    project label (most projects are their own house). `held_seat`'s `house` is DERIVED,
+    this inherits that fix for free, no query of its own.
 
-    BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): this
-    '*' cross-house omniscience is genuinely adjacent to multi-operator scoping, but
-    Thoth's own dispatch for piece 1 does not name this file, and the parent design
-    thread explicitly lists per-operator desks/visibility as a SEPARATE, later piece
-    ("stays design") — not silently forgotten, just not this build's scope."""
+    This '*' cross-house omniscience is genuinely adjacent to multi-operator scoping, but
+    the design for per-operator desks/visibility is intentionally out of scope here and
+    left for a separate, later change, not silently forgotten."""
     if caller in _OPERATOR_ACTORS:
         return "*"
     if not caller:
@@ -315,7 +313,7 @@ async def _visible_reflections(
 ) -> set[uuid.UUID]:
     """Which of these Reflection ids this caller may read: those whose in_repo project
     matches the caller's house (a reflection filed with no house inherits its home
-    project's house — per the ruling; one filed with NO project at all is operator-only,
+    project's house; one filed with NO project at all is operator-only,
     the conservative default)."""
     if not ids:
         return set()
@@ -336,7 +334,7 @@ async def _visible_reflections(
 async def _hide_foreign_reflections(
     pool: asyncpg.Pool, hits: list[dict[str, Any]], caller: str | None
 ) -> list[dict[str, Any]]:
-    """Drop Reflection hits outside the caller's house from a search result — silently
+    """Drop Reflection hits outside the caller's house from a search result, silently
     (a boundary that names what it hides has already leaked that it exists)."""
     refl = [uuid.UUID(h["id"]) for h in hits if h.get("type") == "Reflection"]
     if not refl:
@@ -346,15 +344,15 @@ async def _hide_foreign_reflections(
 
 
 async def _attach_labels(pool: asyncpg.Pool, hits: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Task #97 workstream 3 (ruling 52daab71): search hits carry `field`/`snippet` —
-    WHERE the query matched — but never what to CALL the object, which is exactly the
-    reported bug (a hex hash where a sentence belongs, e.g. `practice:b1eb7520e783`).
+    """Search hits carry `field`/`snippet`, WHERE the query matched, but never what to
+    CALL the object, which is exactly the reported bug (a hex hash where a sentence
+    belongs, e.g. `practice:b1eb7520e783`).
     One batched fetch of each hit's LABEL_CHAIN-candidate properties (the same winning-
     value tie-break as everywhere else: confidence DESC, observed_at DESC), resolved
     through the single canonical `resolve_label`, then `disambiguate_labels` across
     THIS result set so two hits that would otherwise truncate identically stay
     distinguishable. Adds `label`/`label_source` (resolve_label's own fields) and
-    `display_label` (disambiguated, truncated) to each hit; never raises — a hit with
+    `display_label` (disambiguated, truncated) to each hit; never raises: a hit with
     nothing resolvable just keeps its canonical, same as before this existed."""
     if not hits:
         return hits
@@ -376,7 +374,7 @@ _ID_TOKEN_HEX = re.compile(r"[0-9a-f]{6,32}")
 
 def _is_id_token(word: str) -> bool:
     """A bare hex fragment (6-32 hex chars, dashes allowed) is a RULING/THREAD ID quoted
-    by its prefix — never ordinary vocabulary (no real word fullmatches this). Pure, so
+    by its prefix, never ordinary vocabulary (no real word fullmatches this). Pure, so
     both the whole-query and embedded-token cases share one definition of 'looks like an
     id'."""
     w = word.lower()
@@ -384,15 +382,15 @@ def _is_id_token(word: str) -> bool:
 
 
 async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """search v2, MAX LEVEL (operator ruling a0cfcca1) — ONE engine, FOUR doors, one fused
-    answer. Lexical ladder: strict FTS (websearch AND) → OR-relaxation (any-term bags) →
-    TRIGRAM (pg_trgm word_similarity: every query word must fuzzily appear — the typo door).
+    """search v2: ONE engine, FOUR doors, one fused
+    answer. Lexical resolution order: strict FTS (websearch AND) -> OR-relaxation (any-term bags) ->
+    TRIGRAM (pg_trgm word_similarity: every query word must fuzzily appear, the typo door).
     Beside it, the SEMANTIC door: local static embeddings (semantics.py) cosine over the
     vector index, so meaning matches where words don't. Doors fuse by reciprocal rank
-    (positions, not incomparable scores); grade × recency weight both sides — a deliberate
+    (positions, not incomparable scores); grade x recency weight both sides. A deliberate
     ruling outranks a mined echo at equal relevance in EVERY door. Every hit carries
     TESTIMONY (field, source, grade, when, snippet, via) and every call lands in search_log
-    with which doors answered (relaxed / fuzzy / semantic) — the quality telemetry this
+    with which doors answered (relaxed / fuzzy / semantic), the quality telemetry this
     engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
@@ -405,10 +403,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     caller = str(args.get("caller") or "") or _ACL_CALLER.get()
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
-    # THE ID DOOR (Soundwave, msg 244: 'tonight's cross-referencing is all manual memory';
-    # extended per Alfred V's repro, thread 4ffe0eb9): a hex TOKEN is a RULING/THREAD ID,
-    # not vocabulary — a holder may quote it as the OBJECT's uuid prefix (dd27f61f…) or as
-    # its CANONICAL short hash (thread:23423ff856ab — the fleet's actual quoting habit),
+    # THE ID DOOR: a hex TOKEN is a RULING/THREAD ID,
+    # not vocabulary. A caller may quote it as the OBJECT's uuid prefix (dd27f61f...) or as
+    # its CANONICAL short hash (thread:23423ff856ab, the typical quoting habit),
     # alone or embedded in a longer query ('dd27f61f succession torch'). Look it up by
     # prefix against BOTH forms, wherever the token sits in the query, and answer directly,
     # testimony included.
@@ -435,12 +432,12 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                      "when": r["observed_at"].isoformat()} if r["source_id"] else {}),
                  "rank": 1.0, "via": "id"}
                 for r in idrows]
-            # the id door is still a read lens — knowing a reflection's id is not a key
+            # the id door is still a read lens: knowing a reflection's id is not a key
             id_hits = await _hide_foreign_reflections(pool, id_hits, caller)
     if len(words) == 1 and id_hits:
-        # the WHOLE query is one id token — answer directly, the legacy shape unchanged.
+        # the WHOLE query is one id token: answer directly, the legacy shape unchanged.
         # This is the MOST likely path to hit the reported bug (someone pastes a bare
-        # hash to search it) — label it same as the merged-hits path below.
+        # hash to search it); label it same as the merged-hits path below.
         id_hits = await _attach_labels(pool, id_hits)
         await pool.execute(
             "INSERT INTO search_log (query, caller, hits, top_rank, relaxed) "
@@ -450,15 +447,15 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     # still runs on the FULL query (never regress the pure-FTS path) and id_hits merge in
     # ABOVE the fused text hits further down.
     # stopword-only / punctuation-only queries parse to an EMPTY tsquery: zero hits by
-    # construction, not a recall failure — returning early keeps them OUT of the misses log
-    # (they would poison the exact telemetry the embeddings tripwire reads) — UNLESS an id
+    # construction, not a recall failure. Returning early keeps them OUT of the misses log
+    # (they would poison the exact telemetry the embeddings tripwire reads), UNLESS an id
     # token already answered part of the query, in which case that answer stands and the
     # (harmlessly empty) FTS leg below just contributes nothing further.
     if not id_hits and not await pool.fetchval(
             "SELECT websearch_to_tsquery('english', $1)::text", q):
         return {"hits": [], "q": q,
                 "note": "query is all stopwords/punctuation — nothing to match (not logged)"}
-    # rank inside `cand`, headline ONLY the surviving rows (`top`): ts_headline is the
+    # rank inside `cand`, headline ONLY the surviving rows (`top`); ts_headline is the
     # expensive part and a broad query can match thousands of candidates. ts_rank
     # normalization 1 divides by 1+log(doc length) so a long rationale can't outrank a
     # short summary on term frequency alone.
@@ -481,21 +478,21 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "FROM top, tq ORDER BY top.rank DESC")
     rows = await pool.fetch(_SQL, q, limit)
     relaxed = fuzzy = False
-    # explicit syntax (quotes, OR, minus) means the asker KNEW the language — no door
+    # explicit syntax (quotes, OR, minus) means the asker KNEW the language: no door
     # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
     # (`words` was already split off `q` by the id door above; q is unchanged since)
     plain_bag = ('"' not in q and " or " not in q.lower()
                  and not any(w.startswith("-") for w in words))  # a leading '-' is NOT
     # syntax; an inner hyphen (hands-free, a-sibling) is just a word
     if not rows and len(words) > 1 and plain_bag:
-        # PROGRESSIVE RELAXATION (field report, agent e46a657e-ii, msg 124): websearch
+        # PROGRESSIVE RELAXATION: websearch
         # semantics AND every term, so a keyword BAG ('Hector background skills experience
-        # projects') needs all of them in ONE document — zero by construction, and the
+        # projects') needs all of them in ONE document, zero by construction, and the
         # docstring promises bags work. When strict-AND finds nothing and the query is a
-        # plain multi-word bag, retry as ANY-term — RARITY-WEIGHTED (thread 15b976ce):
+        # plain multi-word bag, retry as ANY-term, RARITY-WEIGHTED:
         # plain ts_rank over an OR query ranked flat, so a common word ('set') outranked
         # a distinctive one ('HTL') on every bag. Each candidate now scores the SUMMED
-        # idf of the words it matches — one rare word beats three ubiquitous ones, and a
+        # idf of the words it matches: one rare word beats three ubiquitous ones, and a
         # word in every document contributes exactly zero.
         or_q = " OR ".join(words)
         if await pool.fetchval(
@@ -503,7 +500,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             rows = await pool.fetch(_RELAX_SQL, [w.lower() for w in words], or_q, limit)
             relaxed = bool(rows)
     if not rows and plain_bag:
-        # THE TRIGRAM DOOR (max-level, a0cfcca1): a misspelled word survives no tsquery —
+        # THE TRIGRAM DOOR: a misspelled word survives no tsquery,
         # 'compositon' matches nothing lexically forever. word_similarity is strict-AND
         # with typo tolerance: EVERY query word must fuzzily appear somewhere in the text.
         # Last lexical rung: full-scan word_similarity is fine at this corpus size and
@@ -519,25 +516,25 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
          "rank": round(float(r["rank"]), 6), "via": "fuzzy" if fuzzy else "lexical"}
         for r in rows
     ]
-    # THE SEMANTIC DOOR runs beside the lexical ladder, never instead of it: meaning
-    # matches where words don't ('model downgrade' → the warm-swap rulings). Closed (no
+    # THE SEMANTIC DOOR runs beside the lexical resolution order, never instead of it: meaning
+    # matches where words don't ('model downgrade' -> the warm-swap rulings). Closed (no
     # embedder / empty index / any error) it contributes nothing and costs nothing.
     sem_hits = await _semantic_hits(pool, q, limit)
     hits = _fuse_ranked(lex_hits, sem_hits, limit)
     if id_hits:
-        # an id token embedded in the query found an exact match — it leads, the fused
+        # an id token embedded in the query found an exact match: it leads, the fused
         # textual/semantic hits follow beneath it, deduped so nothing appears twice
         seen_ids = {h["id"] for h in id_hits}
         hits = id_hits + [h for h in hits if h["id"] not in seen_ids]
         hits = hits[:limit]
-    # the house boundary (6c18709f): every door's rows converge here — one filter covers
+    # the house boundary: every door's rows converge here, one filter covers
     # strict, relaxed, trigram and semantic alike (id_hits were already filtered when
     # computed, so re-filtering here is a no-op for them and real work for the rest)
     hits = await _hide_foreign_reflections(pool, hits, caller)
     hits = await _attach_labels(pool, hits)
     semantic = any(h["via"] in ("semantic", "both") for h in hits)
-    # a superseded decision must not read as live testimony (the supersedes verb,
-    # dd04d7dd): one batched lookup marks such hits — still findable, honestly flagged
+    # a superseded decision must not read as live testimony (the supersedes verb):
+    # one batched lookup marks such hits, still findable, honestly flagged
     if hits:
         buried = {str(r["object_id"]): r["v"] for r in await pool.fetch(
             "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
@@ -548,9 +545,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         for h in hits:
             if h["id"] in buried:
                 h["superseded"] = f"by decision {buried[h['id']][:8]} — read the successor"
-        # a refuted Practice must stay findable (THE THAW, ruling 1e6d7367: 'a half-
+        # a refuted Practice must stay findable ('a half-
         # remembered refuted lesson is exactly what must remain findable'), unlike a
-        # superseded Decision it is NEVER hidden or buried — only flagged, same batched
+        # superseded Decision it is NEVER hidden or buried, only flagged, same batched
         # shape as the supersedes lookup above
         refuted = {str(r["object_id"]): r["v"] for r in await pool.fetch(
             "SELECT DISTINCT ON (object_id) object_id, value #>> '{}' AS v "
@@ -562,8 +559,8 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             if h["id"] in refuted:
                 h["refuted"] = (f"by decision {refuted[h['id']][:8]} — a dead lesson, "
                                 "not standing law")
-        # a scope-narrowed decision must not read as unbounded testimony either — unlike
-        # supersedes/refutes this is a real EDGE (`narrows`, thread e05e439d), not a
+        # a scope-narrowed decision must not read as unbounded testimony either, unlike
+        # supersedes/refutes this is a real EDGE (`narrows`), not a
         # property, and non-burying by construction: the hit stays fully live and ranked
         # on its own merits, only flagged. Same batched shape, one lookup on the links
         # table instead of current_assertions.
@@ -582,8 +579,8 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         filters = []
         sparams: list[Any] = []
         if scope_project:
-            # RESOLVE BY NAME-OR-CANONICAL (dispatch 2589353a, the rename cascade
-            # verb): a renamed project's OLD label must still scope search — the same
+            # RESOLVE BY NAME-OR-CANONICAL (the rename cascade
+            # verb): a renamed project's OLD label must still scope search, the same
             # `_resolve_repo` law every other project reference already follows,
             # never a literal `repo:<scope_project>` canonical match that goes blind
             # the moment a rename changes only the `name` property.
@@ -644,20 +641,20 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             **({"note": "no hits — logged; the zero-hit rate is watched"} if not hits else {})}
 
 
-# THE RARITY-WEIGHTED RELAXATION (thread 15b976ce): the ANY-term retry's rank is the sum
-# of ln(N/df) over the query words each candidate matches — df computed against the same
+# THE RARITY-WEIGHTED RELAXATION: the ANY-term retry's rank is the sum
+# of ln(N/df) over the query words each candidate matches. df is computed against the same
 # corpus the door searches, in the same statement (the corpus CTE materializes once, and
 # this leg only runs when strict-AND found nothing). Stopwords parse to empty tsqueries
 # and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
-# snippet still headlines with the OR query, and grade × recency weigh exactly as the
+# snippet still headlines with the OR query, and grade x recency weigh exactly as the
 # strict door does.
 #
 # `n AS MATERIALIZED` IS LOAD-BEARING (measured, not stylistic): `n` is a single-row count
 # referenced only inside SubPlan 3's per-candidate rank calc, so PG's once-referenced-CTE
-# heuristic auto-inlines it — re-executing count(*) FROM corpus per candidate row instead of
+# heuristic auto-inlines it, re-executing count(*) FROM corpus per candidate row instead of
 # once. Live EXPLAIN ANALYZE: 397s total, 332s of it this one CTE re-scanning corpus 20,003
 # times (213M temp-read buffers). The per-row to_tsvector() build (`corpus`) and `df` cost
-# under 4s combined — real at scale, but not this query's actual villain.
+# under 4s combined: real at scale, but not this query's actual villain.
 _RELAX_SQL = (
     "WITH words AS (SELECT DISTINCT lower(w) AS w FROM unnest($1::text[]) AS w), "
     "corpus AS ("
@@ -706,7 +703,7 @@ _TRGM_SQL = (
 
 async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[str, Any]]:
     """The semantic door's hit list, testimony included: cosine candidates hydrated with
-    the winner assertion behind each (object, field), ordered cos × grade × recency —
+    the winner assertion behind each (object, field), ordered cos x grade x recency,
     the same epistemics as the SQL doors, applied python-side. [] when the door is closed."""
     from src.orchestrator import semantics
 
@@ -731,7 +728,7 @@ async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[st
     for c in cands:
         r = by_key.get((c["object_id"], c["field"]))
         if r is None:
-            continue  # the index lags the graph by one backfill — skip, never invent
+            continue  # the index lags the graph by one backfill: skip, never invent
         age_days = max(0.0, (now - r["observed_at"]).total_seconds() / 86400.0)
         w = (c["cos"] * _GRADE_W_PY.get(r["evidence_class"], 0.35)
              * (1.0 / (1.0 + age_days / 90.0)))
@@ -753,10 +750,10 @@ async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[st
 async def _fn_reference_catalog(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any],
 ) -> Any:
-    """The type catalog osiris SHIPS — object/link types, straight from schema.py's static
-    declared manifest (task #111, thread 26694d10). Deliberately NOT catalog.py's live,
-    accretive one: `ensure_type`'s stub-minting must never touch what this reads (Thoth's
-    ruling, msg 2099) — an agent correctly using the accretion path can never turn this
+    """The type catalog osiris SHIPS: object/link types, straight from schema.py's static
+    declared manifest. Deliberately NOT catalog.py's live,
+    accretive one: `ensure_type`'s stub-minting must never touch what this reads,
+    an agent correctly using the accretion path can never turn this
     composition, or the REFERENCE.md doc `docs_compiler.py` renders from the SAME manifest,
     into something that changed underneath them. Ignores `pool`/`subject` entirely: the data
     is pool-free by the same ruling that makes the doc pool-free."""
@@ -766,11 +763,11 @@ async def _fn_reference_catalog(
 
 
 async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """Consult the design canon — Palantir/Notion's models + Osiris's own docs, ingested as
+    """Consult the design canon: Palantir/Notion's models + Osiris's own docs, ingested as
     `Reference` objects (src/ingest/reference.py). 'Cite, don't re-derive': given a query (a
     topic, a `grounds` module path, or a design word), return the matching canon SECTIONS
-    ranked, each with its source + the module it grounds. Empty query → the canon index (one
-    overview row per reference). Subject-FREE — it answers a design question, not an entity;
+    ranked, each with its source + the module it grounds. Empty query -> the canon index (one
+    overview row per reference). Subject-FREE: it answers a design question, not an entity;
     this is what a designer (human or Claude, via `consult_canon`) calls BEFORE re-deriving a
     problem Palantir/Notion already solved (the closed op set, aggregation caps, the kinetic
     write path, the renderer's view rules)."""
@@ -799,12 +796,12 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
         "FROM objects o WHERE o.type='Reference' AND o.status='active'"
     )
     # scope: the shared design canon (vendor-tagged) is visible to everyone; UNVENDORED project
-    # history (ref:<project>-*) is visible only to its OWN project — a caller never bleeds another
+    # history (ref:<project>-*) is visible only to its OWN project: a caller never bleeds another
     # repo's memory. Unscoped (no project) searches everything, as before.
     if scope:
         pref = f"ref:{scope}-"
         refs = [r for r in refs if r["vendor"] or (r["canonical"] or "").startswith(pref)]
-    if not q:  # the index — one overview row per reference, ordered by vendor then title
+    if not q:  # the index: one overview row per reference, ordered by vendor then title
         index = []
         for r in sorted(refs, key=lambda x: (x["vendor"] or "", x["title"] or "")):
             secs = _canon_sections(r["body"] or "")
@@ -812,7 +809,7 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
                           "grounds": r["grounds"], "source": r["source"],
                           "text": _trim(secs[0][1]) if secs else ""})
         return {"Design canon — Palantir · Notion · own docs": index}
-    # rank by how many QUERY TERMS hit (meta > heading > body), NOT a whole-string match — a
+    # rank by how many QUERY TERMS hit (meta > heading > body), NOT a whole-string match: a
     # natural multi-word query (e.g. migrated project history recall) matched nothing contiguously
     # and returned empty, silently breaking the migration's promised bounded-query recall path.
     terms = [t for t in re.split(r"[^a-z0-9_]+", q) if len(t) >= 3] or [q]
@@ -837,20 +834,20 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
 
 
 # NB: `decisions` was a hand-written Function (a SQL query joining decided_in → commit). It is
-# GONE — it decomposed into DECISION_LOG (a `sections` op-tree): select Decision (summary-present)
+# GONE: it decomposed into DECISION_LOG (a `sections` op-tree): select Decision (summary-present)
 # → table with `of:"first"` rollups plucking the decided_in commit's canonical + date → order.
 # The show-original rollup is what made this possible without abusing max(). A kind filter is now
 # a `where` on the select the user forks in, not a bespoke arg.
 
 
 # config roles where two repos' files SHOULD agree in CONTENT (legal/config), unlike prose
-# (readme/changelog/contributing) which are expected to differ — so the drift audit skips prose.
+# (readme/changelog/contributing) which are expected to differ, so the drift audit skips prose.
 _CONFIG_ROLES = frozenset(
     {"license", "gitignore", "editorconfig", "makefile", "ci", "manifest", "dockerfile"})
 
 
 async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.UUID, str]:
-    """Repos in scope for a family audit — those with an ingested file tree, optionally filtered
+    """Repos in scope for a family audit: those with an ingested file tree, optionally filtered
     to `args.repos`. Returns {repo_id: name}; a family needs ≥2 (caller guards)."""
     want = {str(w).lower() for w in (args.get("repos") or [])}
     repos = await pool.fetch(
@@ -869,12 +866,12 @@ async def _family_repos(pool: asyncpg.Pool, args: dict[str, Any]) -> dict[uuid.U
 async def _fn_family(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """Family consistency audit — make a set of similar repos a real FAMILY by auditing what
-    drifted across them. Compares repos by file ROLE (license/readme/ci/manifest/…): for each
+    """Family consistency audit: make a set of similar repos a real FAMILY by auditing what
+    drifted across them. Compares repos by file ROLE (license/readme/ci/manifest/...): for each
     role, which repos have it and which LACK it. A role present in some-but-not-all is an
     inconsistency (a missing license, a CI one repo skipped). Subject-free; `args.repos` scopes
-    the family (default: every repo whose tree is ingested). CANDIDATE-GATED — blocks by role,
-    never all-files-all-pairs — so it holds as the family grows. (Presence audit; content drift
+    the family (default: every repo whose tree is ingested). CANDIDATE-GATED: blocks by role,
+    never all-files-all-pairs, so it holds as the family grows. (Presence audit; content drift
     is `family_drift`.)"""
     rmap = await _family_repos(pool, args)
     if len(rmap) < 2:
@@ -903,7 +900,7 @@ async def _fn_family(
 async def _fn_family_drift(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """Content-drift audit — the deeper layer over the presence audit. For the files a family
+    """Content-drift audit: the deeper layer over the presence audit. For the files a family
     SHARES, do they AGREE? License TYPE across the family (MIT in one repo, Apache in another is
     a real inconsistency), and config files (gitignore/ci/editorconfig/makefile/manifest/
     dockerfile) byte-identical or diverged. Prose roles (readme/changelog/contributing) are
@@ -927,7 +924,7 @@ async def _fn_family_drift(
         "WHERE l.type='in_repo' AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "AND l.to_id = ANY($1::uuid[])", list(rmap))
     # role -> repo -> [hashes]; a repo may have several files of one role (e.g. CI workflows),
-    # so its signature is all of them combined — then signatures compare across repos.
+    # so its signature is all of them combined, then signatures compare across repos.
     sigs: dict[str, dict[uuid.UUID, list[str]]] = {}
     ltypes: dict[uuid.UUID, set[str]] = {}
     for r in rows:
@@ -958,7 +955,7 @@ async def _fn_family_drift(
 async def _fn_project(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """One project's scope — its recent commits, decisions, and file roles, as lists. The drill
+    """One project's scope: its recent commits, decisions, and file roles, as lists. The drill
     from the project browser (`projects`). The subject is the repo (focus it, or pass
     `args.repo` = the name). Volume as lists, never a graph."""
     repo = subject
@@ -984,10 +981,10 @@ async def _fn_project(
         "WHERE l.to_id=$1 AND l.type='in_repo' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) "
         "ORDER BY date DESC NULLS LAST LIMIT 15", repo)
-    # THE UNCITED RULING (Thoth DM 2704, finding 1 of the in_repo audit): a Decision's OWN
+    # THE UNCITED RULING: a Decision's OWN
     # in_repo edge (record_decision(repo=...) mints one via link_repo, at birth) used to
-    # count for nothing here — only a decided_in citation to a commit that is itself
-    # in_repo did. A ruling filed under a repo but naming no commit sha (the common case —
+    # count for nothing here, only a decided_in citation to a commit that is itself
+    # in_repo did. A ruling filed under a repo but naming no commit sha (the common case,
     # most of a session's own rulings, including several that named THIS gap) was invisible
     # in its own project's decision browser. UNION, not replace: the commit-derived path
     # still finds decisions whose OWN in_repo edge is missing but whose cited commit's
@@ -1035,22 +1032,21 @@ async def _fn_project(
 async def _fn_project_worktrees(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """WORKTREE NESTING (Thoth dispatch 9542, 588148bb's projects-composition series,
-    piece 3 of 4): every live Worktree's own name+branch, grouped by its parent
-    SoftwareProject's id via `worktree_of` — the old /projects route's own nested sub-
-    rows (thread 922d920c/55992ca9: a worktree is never a project of its own), now a
-    Function-backed column (table's own "function" column, piece 2's mechanism) rather
-    than a bespoke client-side join. Subject-free — the projects composition wants every
+    """WORKTREE NESTING: every live Worktree's own name+branch, grouped by its parent
+    SoftwareProject's id via `worktree_of`, the old /projects route's own nested sub-
+    rows (a worktree is never a project of its own), now a
+    Function-backed column (table's own "function" column mechanism) rather
+    than a bespoke client-side join. Subject-free: the projects composition wants every
     project's worktrees in one read, batched, same discipline every other function-column
     call already follows.
 
     FRONTEND FOLLOW-UP, NOT BUILT HERE (flagged, not silently absorbed): the generic
     table() renderer already shows a nested list-of-dicts column as flattened prose
-    (_flatVal, task #109's own "neither render_composition nor osiris.js's table()
-    recurse into a nested list/dict CELL value" fix) — real information, not lost, but
+    (_flatVal, a fix ensuring neither render_composition nor osiris.js's table()
+    recurse into a nested list/dict CELL value), real information, not lost, but
     not the indented sub-row treatment the old hardcoded page had. That needs its own
     change to the shared, frozen table() renderer, used by every composition in the
-    system — too wide a blast radius to fold into this backend piece."""
+    system, too wide a blast radius to fold into this backend piece."""
     rows = await pool.fetch(
         "SELECT p.id AS project_id, w.canonical, "
         " (SELECT a.value #>> '{}' FROM current_assertions a "
@@ -1071,23 +1067,23 @@ async def _fn_project_worktrees(
     return [{"id": pid, "worktrees": wts} for pid, wts in grouped.items()]
 
 
-_WORD = re.compile(r"[a-z][a-z0-9_+]{3,}")   # a term ≥4 chars — the derivation's unit
+_WORD = re.compile(r"[a-z][a-z0-9_+]{3,}")   # a term ≥4 chars, the derivation's unit
 _EXT = re.compile(r"\.([a-z0-9]{1,6})$")     # a file extension
 
 
 async def _fn_portfolio(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """The developer's project portfolio, DERIVED — for each ingested repo: its STACK (top file
+    """The developer's project portfolio, DERIVED: for each ingested repo: its STACK (top file
     types), what it's ABOUT (the terms DISTINCTIVE to it), and its size. The substrate half of
     cross-repo cognition: it gathers the candidate signal deterministically; NAMING the shared
     primitive that recurs across repos is a judgment left to the lens (Claude on the MCP) or the
-    tripwire (a small model on the cron) — gather here, judge there.
+    tripwire (a small model on the cron): gather here, judge there.
 
     'Distinctive' = LOW document-frequency (a term in ≤ ~a third of repos), which is the whole
     trick: the terms every repo shares are generic noise ('config', 'test', 'while'); the signal
     is in the rare terms that name a repo ('cgroup'/'metered' → a throttle; 'miracast'/'airplay'
-    → a cast receiver). So generic words fall out FOR FREE with no stoplist — the same 'never
+    → a cast receiver). So generic words fall out FOR FREE with no stoplist, the same 'never
     the whole flat corpus, only the distinctive bounded set' law the resolver uses. Subject-free;
     `args.repos` scopes it, `args.terms` caps the per-repo term count (default 10)."""
     want = {str(w).lower() for w in (args.get("repos") or [])}
@@ -1151,11 +1147,11 @@ async def _fn_portfolio(
 
 
 # The digest reads the pulse LOG on demand, so its liveness verdict is re-derived every time
-# you look — the loop can die (the daemon stops) without the dead-man's-switch dying with it.
+# you look: the loop can die (the daemon stops) without the dead-man's-switch dying with it.
 # A newest-pulse older than this ⇒ the heartbeat is DEAD, surfaced as the lead row.
 _PULSE_STALE = timedelta(minutes=45)
 # Default window: aggregate findings across the last 24h of pulses, ANCHORED at the most recent
-# one (so a stale/dead loop still shows what changed before it stopped) — not just the single
+# one (so a stale/dead loop still shows what changed before it stopped), not just the single
 # last tick. Bounded so a fast `--watch` loop can't return thousands of rows.
 _PULSE_WINDOW = timedelta(hours=24)
 _PULSE_CAP = 200
@@ -1177,7 +1173,7 @@ def _ago(delta: timedelta) -> str:
 
 
 def _pulse_now(args: dict[str, Any]) -> datetime:
-    """'Now' for the staleness verdict — overridable (a datetime or ISO string) so tests can
+    """'Now' for the staleness verdict: overridable (a datetime or ISO string) so tests can
     freeze it; production reads the wall clock ON EACH LOOK (that IS the dead-man's-switch)."""
     v = args.get("now")
     if isinstance(v, datetime):
@@ -1194,26 +1190,26 @@ def _pulse_now(args: dict[str, Any]) -> datetime:
 async def _fn_pulse(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """The heartbeat digest — what the off-the-clock loop (src/orchestrator/pulse.py) found
+    """The heartbeat digest: what the off-the-clock loop (src/orchestrator/pulse.py) found
     while you were away, aggregated across a real WINDOW of pulses (newest first), not just the
     last tick. (The old bug: `LIMIT 1` read only the newest pulse, so a quiet last tick lied
     'no pulse yet' with a full log, and a loop that DIED with its daemon looked like one that
     never ran.) It ALWAYS leads with a heartbeat-status row derived ON READ: a newest pulse
-    older than ~45 min ⇒ the loop is DEAD — the lens re-checks liveness every look, so it can't
+    older than ~45 min ⇒ the loop is DEAD. The lens re-checks liveness every look, so it can't
     die with the daemon (the dead-man's-switch). `args.last` overrides the window to the last N
     pulses; default = the last 24h of pulses (bounded)."""
     override = args.get("last")
     cap = max(1, int(override)) if override is not None else _PULSE_CAP
     rows = await pool.fetch(
         "SELECT ran_at, synced, findings FROM dev_pulses ORDER BY id DESC LIMIT $1", cap)
-    if not rows:                                    # the loop has NEVER run — keep the how-to row
+    if not rows:                                    # the loop has NEVER run: keep the how-to row
         return {_PULSE_TITLE: [
             {"finding": "no pulse yet — run `python -m src.orchestrator.pulse`",
              "when": "—", "synced": "—"}]}
 
     last_ran = rows[0]["ran_at"]
     age = _pulse_now(args) - last_ran
-    if age > _PULSE_STALE:                          # DEAD — lead with the dead-since row
+    if age > _PULSE_STALE:                          # DEAD: lead with the dead-since row
         status = {"finding": f"heartbeat DEAD — no pulse since {str(last_ran)[:19]} "
                              f"({_ago(age)} ago); the loop is not running",
                   "when": str(last_ran)[:19], "synced": "—"}
@@ -1240,16 +1236,16 @@ async def _fn_pulse(
 async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     """Accept a UUID, a short-id PREFIX, an exact canonical, or a name; resolve to an object
     id. Name matching tries exact first (most-described wins), then substring (shortest name
-    wins — closest to the query). ONE definition shared by the server's tools and the
+    wins, closest to the query). ONE definition shared by the server's tools and the
     composition functions, so the console and an agent always resolve the same words to the
     same object.
 
-    The short-id leg (task #64, ruling ad19a779 — every id a composition row hands out must
+    The short-id leg (every id a composition row hands out must
     feed straight back in) mirrors capture._find_thread/_find_decision's own convention
-    exactly (same regex, same order, one object type wider — this resolves ANY type, not
+    exactly (same regex, same order, one object type wider: this resolves ANY type, not
     just Thread/Decision): a `table`/Function-sourced row's own "id" column IS this 8-char
     prefix (`_col_value`'s special case), and dossier()/focus_object() previously had no way
-    to resolve it at all — only recall() (via _find_thread/_find_decision) could. Verified
+    to resolve it at all; only recall() (via _find_thread/_find_decision) could. Verified
     live before this fix: dossier("3e96c10e") returned "no object", though recall() resolved
     the identical ref cleanly."""
     try:
@@ -1267,7 +1263,7 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
         "SELECT id FROM objects WHERE canonical=$1 AND status='active' LIMIT 1", ref)
     if oid is not None:
         return uuid.UUID(str(oid))
-    # A RETIRED CANONICAL (object_aliases, a rename migrated it — Thoth DM 12786) names the
+    # A RETIRED CANONICAL (object_aliases, a rename migrated it) names the
     # SAME object: console/dossier/inspect resolve the old spelling forever. `alias_hit`
     # is how a caller reports `resolved_via_alias`.
     oid = await pool.fetchval(
@@ -1275,14 +1271,14 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
         "WHERE al.alias=$1 AND o.status='active' AND o.canonical <> al.alias LIMIT 1", ref)
     if oid is not None:
         return uuid.UUID(str(oid))
-    # A FLEET HANDLE ("sekhmet") must resolve to the REAL agent, never a harness sidechain
-    # artifact that happens to share the substring (task #114, Seshat XIII, thread
-    # 05a72d2c0af0 — found live: dossier("sekhmet") returned "sekhmet I.1", a spawned_by
+    # A FLEET HANDLE (e.g. "myagent") must resolve to the REAL agent, never a harness sidechain
+    # artifact that happens to share the substring. Found live: dossier("myagent") returned
+    # "myagent I.1", a spawned_by
     # visitor object, ahead of agent:seat-af50a33e, the real body, reachable only by
-    # following that artifact's OWN spawned_by edge). agents.resolve_seat is the already-
+    # following that artifact's OWN spawned_by edge. agents.resolve_seat is the already-
     # correct, battle-tested resolver mail routing uses for exactly this: it explicitly
-    # excludes spawned_by visitors ("a spawn wearing a handle is a leak, resolving mail into
-    # it buries the message in a sidechain nobody resumes" — its own docstring) and, among
+    # excludes spawned_by visitors (a spawn wearing a handle is a leak, resolving mail into
+    # it buries the message in a sidechain nobody resumes, per its own docstring) and, among
     # real candidates, a live seat always wins and the latest generation outranks its
     # ancestor. Tried before the generic name-matching legs below, which have no concept of
     # "visitor" at all and would happily match the shorter, ILIKE-friendliest sidechain label.
@@ -1290,11 +1286,11 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     from src.orchestrator.agents import resolve_seat
     from src.orchestrator.seats import seat_holder_ineligible
 
-    # THE SAME GUARD send()/doors() USE (60bc15db specimen 3, rulings 1a64ae9a/aee67e6d):
+    # THE SAME GUARD send()/doors() USE:
     # a name whose unique seat has only ineligible holders would otherwise fall to
     # resolve_seat's un-seated-lineage fallback and confidently resolve a dossier/focus_
     # object lookup to some OTHER, older, unmarked generation. Falls through to the
-    # generic name-matching legs below rather than refusing outright — this resolver has
+    # generic name-matching legs below rather than refusing outright, this resolver has
     # other real legs left to try, unlike a pure address-resolution door.
     if await seat_holder_ineligible(pool, ref) is None:
         seat = await resolve_seat(Actions(pool), ref)
@@ -1329,12 +1325,12 @@ def _cell(v: str | None) -> str:
 
 
 async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """rung 3 — the LAP LENS (campaign 5c57f54d): ONE object's full provenance timeline.
+    """The LAP LENS: ONE object's full provenance timeline.
     Every assertion (with its supersession fate), every link (both directions, retractions
     marked), every kernel event, in observed order, each carrying source + grade +
-    confidence. search answers WHAT the graph knows; lap answers HOW IT CAME TO KNOW IT —
+    confidence. search answers WHAT the graph knows; lap answers HOW IT CAME TO KNOW IT,
     the Palantir half of the knowledge layer. Pure SQL, no LLM. `ref` = uuid | canonical |
-    name (a uuid also reaches merged/retired corpses — the timeline is exactly where you
+    name (a uuid also reaches merged/retired corpses, the timeline is exactly where you
     autopsy them); `limit` keeps the newest N entries and REPORTS what it dropped."""
     ref = str(args.get("ref") or "").strip()
     oid = (await resolve_ref(pool, ref)) if ref else subject
@@ -1347,7 +1343,7 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
         "FROM objects WHERE id=$1", oid)
     if head is None:
         return {"note": f"no object {oid}"}
-    # the house boundary (6c18709f): lap is the deepest read lens of all — it serves the
+    # the house boundary: lap is the deepest read lens of all, it serves the
     # BODY. A foreign house's reflection answers exactly like a missing object (a boundary
     # that names what it hides has already leaked that it exists).
     if head["type"] == "Reflection":
@@ -1410,21 +1406,21 @@ async def _fn_lap(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str,
 
 
 async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """The collapsed pile, listable (ruling 758ded94): open threads the LENS ranks off the
-    wall — miner echoes no mind has ever touched (not one self_declared assertion, AT ANY AGE)
+    """The collapsed pile, listable: open threads the LENS ranks off the
+    wall, miner echoes no mind has ever touched (not one self_declared assertion, AT ANY AGE)
     plus judged questions (kind='question'). Their status is OPEN and stays open: untouched is
-    a fact about readers, never a resolution. Oldest first — triage drains from the bottom.
+    a fact about readers, never a resolution. Oldest first: triage drains from the bottom.
     `args.repo` scopes to one project; report-only.
 
-    Each row carries `_actions` (task #92, replacing index.html's own bespoke checkbox+
+    Each row carries `_actions` (replacing index.html's own bespoke checkbox+
     bulk-triage bar) embedded directly here rather than declared via the composition's own
-    `row_actions` node-level grammar — NOT desk_project's reason (mixed row shapes one
+    `row_actions` node-level grammar, NOT desk_project's reason (mixed row shapes one
     declaration can't express uniformly): every echo row is the same shape and gets the
     same three verbs. The reason here is structural: this Function's own TOP-LEVEL return is
     a dict (`{"echoes": [...], "count": ..., ...}`, kind='data'), not a bare list[dict]
-    (kind='rows') — the node-level grammar decorates a Function's OWN output rows, and a
+    (kind='rows'), the node-level grammar decorates a Function's OWN output rows, and a
     dict has none to decorate; only the nested `echoes` list does. A second, distinct
-    boundary condition from Thoth's ruling on desk_project (msg 2043) — flagged here so it
+    boundary condition from the same ruling that shaped desk_project, flagged here so it
     doesn't have to be rediscovered."""
     repo = str(args.get("repo") or "").strip()
     limit = max(1, min(int(args.get("limit") or 100), 500))
@@ -1439,8 +1435,8 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='kind' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS kind, "
-        # THE ROT CANDIDATE'S EVIDENCE (closure-miner, operator ruling 2026-07-12): a later
-        # commit that looks like it did this. It is a QUESTION, never a verdict — it rides the
+        # THE ROT CANDIDATE'S EVIDENCE (closure-miner): a later
+        # commit that looks like it did this. It is a QUESTION, never a verdict, it rides the
         # pile so the human can confirm a whole tree in one sitting instead of re-deriving each.
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='rot_candidate' "
@@ -1459,9 +1455,9 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             continue
         if repo and (r["project"] or "").removeprefix("repo:") != repo.removeprefix("repo:"):
             continue
-        # A DECLARED duty never hides — declaring TOUCHES the thread. A guess folds into the
+        # A DECLARED duty never hides: declaring TOUCHES the thread. A guess folds into the
         # pile IMMEDIATELY: no freshness week (see the scoped lens below for why the "loud week"
-        # is exactly what let the pile grow). A ROT CANDIDATE rides the pile whatever its age —
+        # is exactly what let the pile grow). A ROT CANDIDATE rides the pile whatever its age,
         # it carries EVIDENCE, which is the entire point of it.
         if r["kind"] == "question" or r["probably_done"] or bool(r["untouched"]):
             eid = str(r["id"])[:8]
@@ -1470,11 +1466,11 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                 "project": (r["project"] or "").removeprefix("repo:") or None,
                 "kind": r["kind"], "summary": r["summary"][:200],
                 **({"probably_done": r["probably_done"]} if r["probably_done"] else {}),
-                # per-row triage (task #92 — row_actions, not a bulk-select toolbar: this
+                # per-row triage (row_actions, not a bulk-select toolbar: this
                 # Function's own `verbs` field below already documented "triage with
                 # testimony, never bulk writes" before the UI ever caught up to it). Same
                 # ACTION_VERBS/`_find_thread` short-id resolution proven live for desk's
-                # debt rows (task #91) — `eid` is the same 8-char truncated form.
+                # debt rows; `eid` is the same 8-char truncated form.
                 "_actions": [
                     {"label": "resolve", "action": "resolve_thread",
                      "args": {"ref": eid, "because": "operator: resolved from the echo pile"}},
@@ -1496,10 +1492,10 @@ async def _fn_echoes(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     }
 
 
-_LINT_CAP = 50  # findings LISTED per check; totals are always reported — no silent caps
+_LINT_CAP = 50  # findings LISTED per check; totals are always reported, no silent caps
 _SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
-# Every check _fn_lint runs, in the exact order it runs them — the could-not-evaluate net
-# (thread 04c651ce item 2) walks this list against `counts` to name which checks never
+# Every check _fn_lint runs, in the exact order it runs them: the could-not-evaluate net
+# walks this list against `counts` to name which checks never
 # reached land() when one check's own query breaks partway through, rather than either the
 # whole call crashing (losing every OTHER check's real findings too) or a broken check
 # silently reading as counts[check]==0 (indistinguishable from a genuinely clean pass).
@@ -1517,56 +1513,56 @@ _LINT_CHECK_NAMES = [
 
 
 def _unavailable(reason: str) -> dict[str, Any]:
-    """THE RESERVED UNAVAILABLE MARKER (thread 04c651ce item 2, Thoth dispatch msg 9123):
-    a PARTIAL failure — one field of an otherwise-normal row/result genuinely could not be
-    computed (an exception, a dependency down) — needs a shape a programmatic reader can
+    """THE RESERVED UNAVAILABLE MARKER:
+    a PARTIAL failure, one field of an otherwise-normal row/result genuinely could not be
+    computed (an exception, a dependency down), needs a shape a programmatic reader can
     tell apart from real data by STRUCTURE, never by sniffing human-readable text for the
     word "unavailable" (which a real value could legitimately contain). Mirrors the
     `_action`/`_actions` row-control convention this same file already uses: a reserved
     leading-underscore key, checked by KEY not by content. osiris.js's table()/_txt() strip
     this shape wherever it appears (top-level or nested in a cell) and render a distinct
-    dimmed marker instead of flattening it as if it were real nested JSON — see osiris.js's
+    dimmed marker instead of flattening it as if it were real nested JSON, see osiris.js's
     own `_UNAVAILABLE_KEY`. Distinct from the fleet-wide `{"error": ...}` refusal idiom
-    (a deliberate validation refusal, a different concept this helper never touches) —
+    (a deliberate validation refusal, a different concept this helper never touches),
     reserved for genuinely couldn't-evaluate cases, the ones today's `except Exception`
     sites raise."""
     return {"_unavailable": reason}
 
-# THE RATCHET (Thoth DM 2581/2603, decision fc5b6c5f/5713e1fc, cb38d922): resolved-with-no-
+# THE RATCHET: resolved-with-no-
 # closure-edge must never increase. Armable now, not just measurable, because all three
-# sanctioned closing paths mint an edge unconditionally — capture.py's resolve_thread/
+# sanctioned closing paths mint an edge unconditionally: capture.py's resolve_thread/
 # record_decision (Phase 1a, commit 23c5991), close_by_commits' strong verdict (commit
 # 0a629f6), and _resolve_own_threads no longer writes status at all (same commit). Growth
-# past this ceiling can only mean a bypass — raw SQL, a new writer nobody gated, or a
+# past this ceiling can only mean a bypass: raw SQL, a new writer nobody gated, or a
 # healed/invalidated closure edge with the property left resolved. Fleet-wide baseline
 # measured live 2026-08-01 (read-only query, DSN port 5601): 949. Lower this constant the
-# moment a deliberate historical backfill lands and reduces the real count — never raise it
+# moment a deliberate historical backfill lands and reduces the real count; never raise it
 # to chase a violation; a ratchet that moves to match the pile it was built to catch is not
 # a ratchet.
 EDGELESS_CLOSURE_CEILING = 949
 
 
 async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """THE SMALLEST DOOR (Thoth dispatch 7543 item 2): a small, growable set of read-only
-    population counts the standing tooling had no verb for — three obligations were stuck
+    """THE SMALLEST DOOR: a small, growable set of read-only
+    population counts the standing tooling had no verb for; three obligations were stuck
     on a direct-DB-script workaround (a real house-law violation: raw SQL against the
     kernel is a defect report, never a shortcut) purely because nothing on the MCP surface
     could answer them. `kind` selects which count; unrecognized kinds report the valid set
     rather than guessing.
 
-    kind='seat_property_contradictions' (thread a78b6987): SEAT PROPERTIES holding
-    contradicting live values are a population Alfred first named as uncounted — the same
+    kind='seat_property_contradictions': SEAT PROPERTIES holding
+    contradicting live values are a population first identified as uncounted, the same
     shape as a contradicting `governs` EDGE, but on a plain property, never invalidated,
     only outvoted by a later assertion. Every (seat, property) pair with more than one
     currently-live distinct value, fleet-wide.
 
-    kind='cohort' (thread 7917b404): the #189 adoption instrument's own cohort-aged
-    connectivity figures (ruling 3831aee4) — delegates to `adoption_meter` rather than
+    kind='cohort': an adoption instrument's own cohort-aged
+    connectivity figures. Delegates to `adoption_meter` rather than
     re-deriving its SQL a second time; this door exists so a session with no direct DB
     access can still read it, not to replace the module that computes it.
 
-    NOT b2208b94 (the monsterhouse tree walk): that obligation needs an actual ingest
-    pass (close_by_commits against a live git tree), not a population count — a
+    NOT the monsterhouse tree walk: that obligation needs an actual ingest
+    pass (close_by_commits against a live git tree), not a population count, a
     genuinely different shape of work this door does not attempt to cover."""
     kind = args.get("kind")
     if kind == "seat_property_contradictions":
@@ -1595,19 +1591,19 @@ async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 
 async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """THE ORPHAN LAWS, item 1 (operator's word, wave 15, Thoth DM 8841): every ACTIVE
-    object with NO LIVE LINK AT ALL — neither incoming nor outgoing — grouped by type,
+    """THE ORPHAN LAWS, item 1: every ACTIVE
+    object with NO LIVE LINK AT ALL, neither incoming nor outgoing, grouped by type,
     Type nodes excluded (a Type is a taxonomy entry, never meant to carry an edge of its
     own), with how many already carry a durable `derivation_abstained_<link_type>`
-    record (capture.py's `derive_or_abstain`) counted alongside the raw total — an
+    record (capture.py's `derive_or_abstain`) counted alongside the raw total. An
     ACKNOWLEDGED disconnection (a mind or a miner tried to link it, found nothing, and
     said so on the record) is a materially different fact from one nobody has ever
-    looked at. Shared by graph_lint's own 'orphan' check and preflight's weekly line —
+    looked at. Shared by graph_lint's own 'orphan' check and preflight's weekly line,
     one derivation, never two drifting copies of the same query.
 
-    A RESOLVED ABSTENTION IS NOT A LIVE ONE (Khnum's own catch, DM 8855): `derive_or_
+    A RESOLVED ABSTENTION IS NOT A LIVE ONE: `derive_or_
     abstain`'s later successful mint supersedes a live abstention with a `resolved:
-    true` marker via `supersede_assertion` — the same `NOT (value ? 'resolved')`
+    true` marker via `supersede_assertion`, the same `NOT (value ? 'resolved')`
     predicate `backfill_lineage_repo_links` already checks for the identical stale-
     abstention-retirement case, reused here rather than re-derived a third time.
     Excluded from `abstained` so a since-answered abstention never masquerades as a
@@ -1615,16 +1611,16 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
     DIFFERENT POPULATION FROM `orphan-link` (this same module's own INFO-grade check):
     that one counts LINKS touching a non-active object (consolidation debt under
-    resolve-on-read); this counts OBJECTS with no link touching them at all — a
+    resolve-on-read); this counts OBJECTS with no link touching them at all, a
     reachability question, not a status one. A merged/retired object can carry
     orphan-link findings forever and never appear here; an active object with a real
     live edge never appears here even if that edge's OTHER end is long since merged
     away.
 
-    THE Agent BUCKET DEFLATES VISIT-CLASS OUT OF ITS OWN COUNT (9dc3ce8b, read-side
+    THE Agent BUCKET DEFLATES VISIT-CLASS OUT OF ITS OWN COUNT (read-side
     adoption): a visit-class doorbell ring is exactly the shape most likely to be
     orphaned (a one-shot registration nobody ever linked to anything), so this check's
-    own by_type['Agent'] was the fiction's own worst-case surface. visit sub-counts
+    own by_type['Agent'] was the worst-case surface for that pattern. visit sub-counts
     alongside count, same shared predicate as fleet()'s agent_classes and greatfold.py's
     fold_census (vitals.py's one authority) - only the Agent bucket gets it, never a
     zero-value key on a type it makes no sense for."""
@@ -1659,23 +1655,22 @@ async def orphan_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """PROJECT IDENTITY DRIFT'S OWN LINT (operator ruling b5663511, Thoth dispatch
-    12401) — two populations, the same disease from either end.
+    """PROJECT IDENTITY DRIFT'S OWN LINT: two populations, the same disease from either end.
 
     STUB COLLISIONS: an active SoftwareProject with ZERO live INBOUND links (nothing
-    `in_repo`/`works_in`/`governs` it — the mint-time resolve-by-name fixes this same
+    `in_repo`/`works_in`/`governs` it, the mint-time resolve-by-name fixes this same
     ruling built elsewhere exist precisely so nothing NEW joins this population) whose
     own name or canonical matches ANOTHER active project's name or canonical. The live
     specimens (repo:handlingtheloop, repo:ByeByte) were both exactly this: an empty
     stub sitting beside the real, already-referenced object under a DIFFERENT canonical
     (repo:xxit/repo:bytebye) that had simply been renamed since the stub minted. This
-    census is for what already happened before this ruling's other fixes landed —
+    census is for what already happened before this ruling's other fixes landed:
     a fold, not a migration door, is the intended repair (merge_project onto the live
     survivor), so this only ever flags, never writes.
 
     NAME NOT SINGULAR: an active SoftwareProject carrying more than one
-    simultaneously-current `name` assertion (ruling 1335332e's own contradiction
-    shape, on this one property specifically — `count(DISTINCT value)`, never a raw
+    simultaneously-current `name` assertion (the same contradiction
+    shape as elsewhere, on this one property specifically: `count(DISTINCT value)`, never a raw
     row count, so redundant agreement across sources never falsely counts). The exact
     population `migrate_project_name_singular`'s own dry run reports, surfaced here
     too so a fleet-wide lint pass catches it without a separate invocation."""
@@ -1718,10 +1713,10 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
         "GROUP BY o.canonical HAVING count(DISTINCT a.value #>> '{}') > 1")
     not_singular = [{"canonical": r["canonical"], "names": sorted(r["names"])} for r in dupes]
 
-    # ALIAS HYGIENE (a rename migrates the canonical, Thoth DM 12786): an alias is the
+    # ALIAS HYGIENE (a rename migrates the canonical): an alias is the
     # RETIRED spelling of one object and must never be a second identity. Flagged when a
     # retired canonical is (a) the LIVE canonical of a DIFFERENT active object (two
-    # objects answering to one string — the alias would shadow or be shadowed), or (b)
+    # objects answering to one string, the alias would shadow or be shadowed), or (b)
     # the current `name` of a different active object (an alias posing as a second name).
     alias_rows = await pool.fetch(
         "SELECT al.alias, al.object_id, o.canonical AS owner FROM object_aliases al "
@@ -1743,22 +1738,21 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """`osiris lint --check seat-holders` (thread b33fa26b, Thoth mail 13351 — the jenny/
-    dustin crossing, Nebbercracker findings ab59c731/a0fd7e5b): every ACTIVE seat's
+    """`osiris lint --check seat-holders`: every ACTIVE seat's
     CURRENT holder, checked against the two red flags the live specimen actually showed,
-    neither auto-healed here — this only ever flags.
+    neither auto-healed here, this only ever flags.
 
     BORROWED: the holder id is actually a DIFFERENT agent's own live job_dir slug
-    (`mounts.borrowed_job_dir_owner` — the same fingerprint `_bind_before_spawn`'s
+    (`mounts.borrowed_job_dir_owner`, the same fingerprint `_bind_before_spawn`'s
     fallback guard and `rehold_seat`'s own new guard already refuse at write time; this
     census is what catches an edge that reached this shape through some OTHER door,
     written before either guard existed or through one this fix doesn't yet cover).
 
-    UNPROVENANCED: the holder carries no real identity story of its own — never
+    UNPROVENANCED: the holder carries no real identity story of its own, never
     minted (`minted_because`), never named (`handle`), never succeeded anything
     (`succeeded_from`). Reported as a WARN, not proof of corruption: a genuine
     pre-Seat-object holder (older than the Seat-object convention) can legitimately
-    have none of these and still be exactly who the seat's own `holds` edge says — this
+    have none of these and still be exactly who the seat's own `holds` edge says. This
     surfaces it for a human's eyes, the same conservative "flag, verify, never auto-
     fold" discipline every other census in this module already holds itself to."""
     from src.orchestrator.mounts import borrowed_job_dir_owner
@@ -1786,46 +1780,46 @@ async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """THE TRACEABILITY INVARIANT (Graph-Engineering, operator decision f47d14a7, thread
-    7f547426) — the acceptance test for THE WORK-LINEAGE build: every ACTIVE Artifact or
+    """THE TRACEABILITY INVARIANT: the acceptance test for THE WORK-LINEAGE build:
+    every ACTIVE Artifact or
     Commit (the traceable "output" class) must trace to its RUN, its PLAN/OBJECTIVE, its
     SOURCE, and its EVALUATOR. Four legs, each satisfied by a real live edge OR a live
-    (non-resolved) `derivation_abstained_<link_type>`/`unlinked_because` confession —
-    unlike `orphan_census` above (where a confession only ANNOTATES an otherwise-still-
-    orphaned row), here a confession genuinely SATISFIES its own leg: "acceptance is zero
-    rows after confession" (f47d14a7's own wording) means a fully-confessed output
+    (non-resolved) `derivation_abstained_<link_type>`/`unlinked_because` confession.
+    Unlike `orphan_census` above (where a confession only ANNOTATES an otherwise-still-
+    orphaned row), here a confession genuinely SATISFIES its own leg: acceptance is zero
+    rows after confession, meaning a fully-confessed output
     disappears from this census entirely, the same way `_enforce_required_links`
     (capture.py) treats `unlinked_because=` as satisfying its gate outright, not as a
     flagged-but-still-failing state.
 
     THE FOUR LEGS:
-      run      — an incoming `produced` edge from some Agent generation, or a
+      run      - an incoming `produced` edge from some Agent generation, or a
                  confession on THIS object under `derivation_abstained_produced`.
-      plan     — the PRODUCING RUN's own outgoing `authorized_by` edge to a Decision or
+      plan     - the PRODUCING RUN's own outgoing `authorized_by` edge to a Decision or
                  Thread, or a confession on THAT RUN (not this object) under
                  `derivation_abstained_authorized_by`. With no producing run at all
-                 (the `run` leg itself missing), `plan` is unconditionally missing too —
+                 (the `run` leg itself missing), `plan` is unconditionally missing too,
                  there is no run whose plan could ever be checked or confessed.
-      source   — an outgoing `derived_from` edge from this object, or a confession under
+      source   - an outgoing `derived_from` edge from this object, or a confession under
                  `derivation_abstained_derived_from`.
-      evaluator — an outgoing `evaluated_by` edge from this object, or a confession under
+      evaluator - an outgoing `evaluated_by` edge from this object, or a confession under
                  `derivation_abstained_evaluated_by`.
 
-    A RESOLVED CONFESSION DOES NOT SATISFY A LEG (same predicate Khnum's own catch
-    established for `orphan_census`, DM 8855): `derive_or_abstain`'s later successful
+    A RESOLVED CONFESSION DOES NOT SATISFY A LEG (same predicate established
+    for `orphan_census`): `derive_or_abstain`'s later successful
     mint supersedes a live abstention with a `resolved: true` marker meaning "answered
-    elsewhere" — the leg's own real edge is what must exist now, never the stale marker
+    elsewhere". The leg's own real edge is what must exist now, never the stale marker
     on trust. `NOT (value ? 'resolved')` gates every confession check below, exactly as
     it gates `orphan_census`'s own `abstained` flag.
 
     A row is included ONLY when at least one leg is genuinely missing (neither a live
-    edge nor a live confession) — `missing_legs` names which; `confessed_legs` names any
+    edge nor a live confession); `missing_legs` names which; `confessed_legs` names any
     OTHER leg that IS missing-by-edge but explained by a live confession (informational:
-    it does not block the row, since a confessed leg is already satisfied — this exists
+    it does not block the row, since a confessed leg is already satisfied. This exists
     so a reader can see partial acknowledgement, e.g. run+plan+evaluator all confessed
     but source genuinely unexamined, distinct from a row where nothing has ever been
     looked at). Shared by graph_lint's own 'untraceable-output' check and preflight's
-    weekly line — one derivation, never two drifting copies of the same four-leg query."""
+    weekly line, one derivation, never two drifting copies of the same four-leg query."""
     outputs = await pool.fetch(
         "SELECT o.id, o.canonical, o.type FROM objects o "
         "WHERE o.status='active' AND o.type IN ('Artifact', 'Commit') "
@@ -1918,12 +1912,12 @@ async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
-    """FIX (e), METRON'S MECHANISM REPORT (mail 8890/8921/8922): the fleet-wide number
-    the report itself asked for — "an audit for 'threads whose newest note post-dates
+    """FIX (e): the fleet-wide number
+    the report itself asked for: "an audit for 'threads whose newest note post-dates
     the summary' would size it fleet-wide in one query." Every ACTIVE Thread where
     `CONTESTED_SQL` (capture.py, the one shared definition fixes (b)/(c)/(d) all import)
     holds. Shared by graph_lint's own 'contested-summary' check and any caller that just
-    wants the number — one derivation, never two drifting copies of the same query."""
+    wants the number, one derivation, never two drifting copies of the same query."""
     from src.orchestrator.capture import CONTESTED_SQL
 
     rows = await pool.fetch(
@@ -1935,13 +1929,13 @@ async def contested_summary_audit(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def citation_verification_census(pool: asyncpg.Pool) -> dict[str, Any]:
-    """CITATION SHAPE's own acceptance test (operator ruling c6d25164, thread
-    9d2aaf4d): every LIVE `cites` edge targeting an Agent (a transcript citation,
-    `mint_transcript_citation`'s own shape — never a prose-derived `cites` edge,
+    """CITATION SHAPE's own acceptance test: every LIVE `cites` edge targeting an
+    Agent (a transcript citation,
+    `mint_transcript_citation`'s own shape, never a prose-derived `cites` edge,
     which structurally never targets Agent, see `_resolve_cited_object`) re-verified
     against the soul store's own hash chain, one derivation shared by graph_lint's
-    'unverified-citation' check and any other reader (orphan_census's own
-    precedent — never two drifting copies of the same query)."""
+    'unverified-citation' check and any other reader (following the same
+    precedent as elsewhere: never two drifting copies of the same query)."""
     from src.orchestrator.capture import _verify_transcript_line
     from src.orchestrator.dossier import _jsonb
 
@@ -1955,7 +1949,7 @@ async def citation_verification_census(pool: asyncpg.Pool) -> dict[str, Any]:
         props = _jsonb(r["properties"])
         line_idx = props.get("line_idx")
         if line_idx is None:
-            continue  # a non-transcript `cites` edge to an Agent — not this population
+            continue  # a non-transcript `cites` edge to an Agent: not this population
         session = await pool.fetchval(
             "SELECT a.value #>> '{}' FROM current_assertions a "
             "WHERE a.object_id=$1 AND a.name='session'", r["to_id"])
@@ -1974,34 +1968,34 @@ async def citation_verification_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
 
 async def grounds_law_measure(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
-    """PROVENANCE PIECE 3(c), THE GROUNDS-LAW MEASURE (thread b4477e9e, ruling bb3e4422,
-    operator 2026-09-14): MEASURE ONLY, no enforcement anywhere — over the last `days` of
+    """PROVENANCE PIECE 3(c), THE GROUNDS-LAW MEASURE: MEASURE ONLY, no enforcement anywhere.
+    Over the last `days` of
     fact writes, count what a hypothetical grounds law would have refused, by writer and
     by channel, so the operator sets the ceremony threshold from data rather than a guess.
 
     A write (an `assertions` row) is REFUSED iff NONE of five signals hold:
-      observation — `backed_by_observation` is a per-AGENT property (credence.py's own
+      observation - `backed_by_observation` is a per-AGENT property (credence.py's own
                     `_looked_map`), resolved off the WRITER's Agent object, not per-write.
-      grounds     — a live `grounded_by` link from the written object (the real link type
+      grounds     - a live `grounded_by` link from the written object (the real link type
                     `record_decision`'s own `grounds=` mints, capture.py's
                     `_REQUIRED_LINK_KIND_TABLE`).
-      cites       — a live `cites` link from the written object.
-      refs        — no distinct `refs` link type exists anywhere in the schema; the closest
+      cites       - a live `cites` link from the written object.
+      refs        - no distinct `refs` link type exists anywhere in the schema; the closest
                     real thing is a live link from the written object to a `Reference`
-                    object, so that stands in for "refs" here (scope note on this thread).
-      read-set    — a `session_reads` row for this writer (`agent_id` = the assertion's
-                    `source_id`) at `read_at < assertions.created_at` — any prior read
+                    object, so that stands in for "refs" here.
+      read-set    - a `session_reads` row for this writer (`agent_id` = the assertion's
+                    `source_id`) at `read_at < assertions.created_at`, any prior read
                     counts, no window, matching `stamp_possible_upstream`'s own convention.
 
-    Population is `assertions` (not `current_assertions` — a same-source supersession
+    Population is `assertions` (not `current_assertions`, a same-source supersession
     inside the window would silently drop an earlier write that still happened), scoped by
     `created_at` (wall-clock write time) over the last `days`.
 
-    "BY DOOR": assertions carry no per-write door column — door/channel instrumentation
+    "BY DOOR": assertions carry no per-write door column; door/channel instrumentation
     (`READ_DOORS`/`stamp_read`) is wired only for reads, at the MCP dispatch layer. The one
     channel-shaped signal that DOES exist per-write is the writer's own `source_id` prefix
-    (`agent:`/`analyst:`/`miner:`/…) — ruling bb3e4422 is itself titled "provenance BY
-    CHANNEL, not by text," so that prefix stands in for "door" here. `by_writer` is exact;
+    (`agent:`/`analyst:`/`miner:`/...), following the "provenance BY
+    CHANNEL, not by text" principle, so that prefix stands in for "door" here. `by_writer` is exact;
     `by_channel` is this substitution, named so a reader can tell the two apart."""
     since = f"now() - interval '{int(days)} days'"
     pop = await pool.fetch(
@@ -2075,108 +2069,107 @@ async def grounds_law_measure(pool: asyncpg.Pool, *, days: int = 30) -> dict[str
 
 
 async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """rung 2 — GRAPH LINT (campaign 5c57f54d): the knowledge layer's immune system. Audits
-    the graph ITSELF — report-only, pure SQL + credence, no LLM, and NO WRITES (rule #7: a
+    """GRAPH LINT: the knowledge layer's immune system. Audits
+    the graph ITSELF: report-only, pure SQL + credence, no LLM, and NO WRITES (a
     lint that healed would be a loop pathology; findings are testimony for a mind to judge).
-    Seven checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners
-    on one NON-lifecycle fact — surfaced, never resolved), STATUS-REGRESSION (error: three
-    genuine open-vs-resolved disagreement shapes, ruling aaf050e4 — an 'open' newer than
+    Many checks, each born from a lived bug: CONTRADICTION (near-tie multi-source winners
+    on one NON-lifecycle fact, surfaced, never resolved), STATUS-REGRESSION (error: three
+    genuine open-vs-resolved disagreement shapes: an 'open' newer than
     another source's 'resolved'; a never-flipped current 'open' with resolve evidence dated
-    after it and no later reopen; an exact-timestamp tie between the two values — normal
+    after it and no later reopen; an exact-timestamp tie between the two values; normal
     transitions stay silent throughout),
-    LAUNDERING (an agent carrying a fact above its origin grade — via credence_props, the
+    LAUNDERING (an agent carrying a fact above its origin grade, via credence_props, the
     mandated read path for grade-is-the-message), LINEAGE (succeeded_by cycles / dangling
     heir pointers / heirs without ancestry / retired-yet-live agents / healed false mints),
-    ORPHAN-LINK (info-grade: historical edges on non-active objects — expected under
+    ORPHAN-LINK (info-grade: historical edges on non-active objects, expected under
     resolve-on-read, metered as consolidation debt, merge markers excluded),
-    STALE-OBLIGATION (open duties older than `stale_days` — duties rot silently),
-    ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary —
+    STALE-OBLIGATION (open duties older than `stale_days`, duties rot silently),
+    ROT-CANDIDATE (info: open threads whose repo's later commits share their vocabulary:
     'probably resolved, confirm?' dealt to a mind's triage verbs, never auto-resolved),
     ROT-CANDIDATE-UNSCOPED (info: how many open threads have no in_repo edge at all and so
-    cannot be evaluated by the check above — a declared boundary, not a defect),
+    cannot be evaluated by the check above, a declared boundary, not a defect),
     EDGELESS-CLOSURE-GROWTH (error: fleet-wide resolved-with-no-closure-edge past
-    EDGELESS_CLOSURE_CEILING — the cb38d922 ratchet; every sanctioned closing path mints an
+    EDGELESS_CLOSURE_CEILING, the standing ratchet; every sanctioned closing path mints an
     edge unconditionally now, so growth here can only mean a bypass),
-    ATTRIBUTION (writes from agent ids the graph never registered — the impersonation
+    ATTRIBUTION (writes from agent ids the graph never registered, the impersonation
     class, made a standing tripwire), PHANTOM-TWIN (an anonymous un-spawned agent mounted
-    at a Seat's office beside a different holder lineage — a resumed soul wearing a second
+    at a Seat's office beside a different holder lineage, a resumed identity wearing a second
     row; the one identity degradation that must never be silent), PULSE-ONLY-LIVENESS
     (info: a non-Claude-harness agent whose liveness reads entirely off a self-reported
-    pulse, never a census-verified body — thread 879c97b9 piece 3, Thoth's guard #3;
+    pulse, never a census-verified body;
     named so the population riding the weaker signal stays visible, never a defect),
     PARALLEL-LIVES (a
-    generation minted while a different door of its own lineage held a live pulse — the
+    generation minted while a different door of its own lineage held a live pulse, the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
-    the mint, thread 4bcd6541), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
-    than one simultaneously-live works_in edge — orient() itself never resolves project
+    the mint), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
+    than one simultaneously-live works_in edge, orient() itself never resolves project
     through this edge, but the repo= default and the pin self-heal vote both abstain
-    instead of resolving one, John XVII's own specimen; thread 8640a625/decision fce39baa,
-    text corrected by c3504289 — invalidate_works_in is the repair, this only counts, per
-    ruling 1973d46f's own law that a reconciler with no trigger is worse than
+    instead of resolving one; invalidate_works_in is the repair, this only counts, per
+    the standing rule that a reconciler with no trigger is worse than
     none), PEER-SILENT (warn: an active peer_of pair with no direct mail between either
-    side's holders in `stale_days` — a mechanical proxy for v1's fiduciary-disclosure duty,
-    task #76 item 2, spec e6636c7e; testimony that a pair has gone quiet, never proof a
+    side's holders in `stale_days`, a mechanical proxy for the fiduciary-disclosure duty;
+    testimony that a pair has gone quiet, never proof a
     finding was actually withheld), HELD-PAST-DEADLINE (warn: a hold_action() thread still
-    open past its own time-box — task #76 item 4b, the mutual HOLD's auto-escalation half
+    open past its own time-box, the mutual HOLD's auto-escalation half
     built as a lint check rather than a new daemon; testimony a mind takes to the
     operator's desk, never lint's own push), KINDLESS-OPEN-THREAD (warn: an open Thread
-    with no `kind` at all — thread b5ae6773's write-time law refuses this going forward;
+    with no `kind` at all, a write-time law refuses this going forward;
     this is the standing audit for anything that slipped past it), UNRESOLVABLE-OWNER
     (warn: an open Thread's `owner` that resolves to neither an active Seat nor
-    'operator' via `resolve_owner_seat` — the same function migration 0060 backfills the
-    existing stock with), ZERO-RECIPIENT-DM (warn: a DM — fleet_messages.to_agent IS NOT
-    NULL — with no message_recipients row at all, thread 9d1d41c8, Thoth's follow-up on
-    24f52959 — nobody was ever registered to read it; a project broadcast is excluded,
+    'operator' via `resolve_owner_seat`, the same function a later migration backfills the
+    existing stock with), ZERO-RECIPIENT-DM (warn: a DM (fleet_messages.to_agent IS NOT
+    NULL) with no message_recipients row at all,
+    nobody was ever registered to read it; a project broadcast is excluded,
     since every agent in the project is its own implicit recipient), ORPHAN (warn: an
-    active object — Type nodes excluded — with NO live link at all, neither incoming nor
-    outgoing, operator's word wave 15/Thoth DM 8841; a DIFFERENT population from
+    active object (Type nodes excluded) with NO live link at all, neither incoming nor
+    outgoing; a DIFFERENT population from
     orphan-link's own edges-on-non-active-objects, this is a reachability question over
     active objects. `orphan_by_type`/`orphan_abstained_total`, alongside the usual
-    findings/counts, carry the by-type rollup — an object already carrying a durable
+    findings/counts, carry the by-type rollup, an object already carrying a durable
     `derivation_abstained_*` record names an ACKNOWLEDGED disconnection, distinct from
     one nobody has ever examined; `orphan_census` is the shared derivation preflight's
     own weekly line reads too, never a second copy), CONTESTED-SUMMARY (warn: an active
-    Thread whose newest note post-dates its own last summary correction — a headline the
-    fleet has already disproved on the record but not yet fixed; fix (e), Metron's
-    mechanism report, mail 8890/8921/8922 — `contested_summary_audit` is the shared
+    Thread whose newest note post-dates its own last summary correction, a headline the
+    fleet has already disproved on the record but not yet fixed;
+    `contested_summary_audit` is the shared
     query this check and `CONTESTED_SQL` (capture.py) both anchor on, never a second
     derivation of "which summary wins, and is it stale"), UNTRACEABLE-OUTPUT (warn: an
     active Artifact or Commit missing at least one of the traceability invariant's four
-    legs — run/plan/source/evaluator — after confession, Graph-Engineering, operator
-    decision f47d14a7/thread 7f547426; `untraceable_by_type` carries the by-type rollup
+    legs (run/plan/source/evaluator) after confession; `untraceable_by_type` carries
+    the by-type rollup
     alongside the usual findings/counts; a leg satisfied only by a RESOLVED confession
     still counts as missing (the same `NOT (value ? 'resolved')` discipline `orphan`'s
-    own abstained flag uses) — `traceability_census` is the shared derivation preflight's
+    own abstained flag uses), `traceability_census` is the shared derivation preflight's
     own weekly line reads too, never a second copy).
 
-    `check`/`limit`/`offset` (task #74, thread 12a210ab leg 1): every check hard-caps its
-    LISTED findings at `_LINT_CAP` (50) regardless — the reap needed the full 19
+    `check`/`limit`/`offset`: every check hard-caps its
+    LISTED findings at `_LINT_CAP` (50) regardless. A prior audit needed the full 19
     contradiction rows and full 24 false-mint rows and could only get them by hand-writing
     _fn_lint's own SQL again. Pass `check` (one of the `check` values a finding/`counts` key
     carries, e.g. 'false-mint') to list ONLY that check's findings, with `limit`/`offset`
     paginating its FULL row set instead of the 50-cap (default: uncapped, all of it, in one
-    page) — a named check is ALWAYS fetched to its true total, however large (thread
-    187323d9: orphan-link used to silently self-truncate its fetch at 5000 rows regardless
+    page); a named check is ALWAYS fetched to its true total, however large (orphan-link
+    used to silently self-truncate its fetch at 5000 rows regardless
     of the real population, so an offset past that point returned an empty page while still
-    reporting a positive remainder — fixed; every check's own full row set is now genuinely
+    reporting a positive remainder; fixed. Every check's own full row set is now genuinely
     reachable, matching this paragraph's own promise). Every OTHER check still just reports
-    its `counts` total — unfiltered calls are BYTE-IDENTICAL to before this existed
+    its `counts` total; unfiltered calls are BYTE-IDENTICAL to before this existed
     (`check=None` is a complete no-op).
 
-    `severity`/`counts_by_severity` (thread 187323d9, Thoth DM 3143): `counts` alone mixes
-    info-grade metered history (orphan-link) with warn/error-grade damage in one flat list —
-    trusting it at face value overstated this graph's real debt by 54x, live. `severity` maps
+    `severity`/`counts_by_severity`: `counts` alone mixes
+    info-grade metered history (orphan-link) with warn/error-grade damage in one flat list.
+    Trusting it at face value overstated this graph's real debt by 54x, live. `severity` maps
     each check name to its grade (info/warn/error); `counts_by_severity` is the one-glance
-    rollup — read that before `counts` when the question is how much of this actually
+    rollup, read that before `counts` when the question is how much of this actually
     matters.
 
-    `could_not_evaluate` (thread 04c651ce item 2, Thoth dispatch msg 9123): every check's
-    own query runs inside ONE shared try/except around the whole check sequence — if any
+    `could_not_evaluate`: every check's
+    own query runs inside ONE shared try/except around the whole check sequence. If any
     check's query breaks partway through, every check that already landed keeps its real
     findings, and every check that never reached `land()` (that one plus every check still
     to come, in run order) is named here with the exception as its reason, present ONLY
     when non-empty. A check absent from `could_not_evaluate` and reading `counts[check]==0`
-    in `clean` is a genuinely clean pass — no longer structurally indistinguishable from a
+    in `clean` is a genuinely clean pass, no longer structurally indistinguishable from a
     check whose query silently broke."""
     stale_days = max(1, min(int(args.get("stale_days") or 14), 365))
     eps = float(args.get("eps") or 0.05)          # "near-tie" on the confidence axis
@@ -2189,7 +2182,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     counts: dict[str, int] = {}
     severity_by_check: dict[str, str] = {}
     could_not_evaluate: dict[str, str] = {}
-    # defaults for state the checks below fill in as they run — a check-isolating
+    # defaults for state the checks below fill in as they run: a check-isolating
     # try/except means an EARLIER check's exception must never strand the epilogue
     # (the final return) without these; a check that runs for real overwrites them.
     now = datetime.now(UTC)
@@ -2210,67 +2203,66 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             findings.append({"check": check, "severity": severity, **r})
 
     try:
-        # CONTRADICTION — same (object, field), different values from different sources, the top
+        # CONTRADICTION: same (object, field), different values from different sources, the top
         # two winners within eps of each other: the grade-then-recency resolver is deciding this
         # fact on a coin flip. Surface the tie; resolving it is a mind's job (tension audit).
-        # The LIFECYCLE FAMILY is EXCLUDED: `status` because open→resolved from another hand is
+        # The LIFECYCLE FAMILY is EXCLUDED: `status` because open->resolved from another hand is
         # the state machine working, not a war (the first live lint flagged 23 of these; zero
         # were real), and `resolved_in`/`resolved_because` because two sources both writing them
-        # means two hands BOTH closed the thread — a same-status double-resolution is
-        # CORROBORATION, two witnesses attesting one fact from their own vantages (operator
-        # ruling 64adf08a, the 94ddca1f adjudication: keep both witnesses, never pick one to
-        # satisfy the lint). The family's one true failure mode — a close being overridden —
+        # means two hands BOTH closed the thread, a same-status double-resolution is
+        # CORROBORATION, two witnesses attesting one fact from their own vantages: keep both
+        # witnesses, never pick one to
+        # satisfy the lint. The family's one true failure mode, a close being overridden,
         # gets its own check below (status-regression).
         #
-        # `is_handoff` JOINS THE LIFECYCLE FAMILY (thread 6027, Thoth's own "504 contradictions
-        # are probably one bug" dispatch): record_decision/settle stamp is_handoff='true' at
+        # `is_handoff` JOINS THE LIFECYCLE FAMILY: record_decision/settle stamp is_handoff='true' at
         # confidence 0.9 (mcp_server.py's `settle` handler); `_retire_stale_handoffs`/
-        # `_retire_handoff_backlog` (the #150 backlog disposition) retire an OLDER marker within
-        # the SAME lineage by asserting is_handoff='false' at the SAME fixed 0.9 confidence — a
+        # `_retire_handoff_backlog` retire an OLDER marker within
+        # the SAME lineage by asserting is_handoff='false' at the SAME fixed 0.9 confidence, a
         # deliberate supersession, not a second source disagreeing. Measured against the live
-        # graph (2026-08-29, script-verified via the same ranked-CTE this check runs): of 295
+        # graph (script-verified via the same ranked-CTE this check runs): of 295
         # is_handoff findings, ALL 295 had the 'false' winner's observed_at strictly later than
-        # the 'true' rival's, and ALL 295 were the false-over-true retirement direction — zero
+        # the 'true' rival's, and ALL 295 were the false-over-true retirement direction, zero
         # cases of the reverse (a stale 'false' overridden by a later 'true'), zero cases of a
         # tie. The resolver was never wrong; this check's confidence-only heuristic just can't
         # tell a designed two-state lifecycle (true at mint, false at retirement, same confidence
-        # both times) from a live dispute — exactly the class `status` was already excluded for.
+        # both times) from a live dispute, exactly the class `status` was already excluded for.
         # No dedicated regression check is added: the reverse direction has never been observed,
         # so there is nothing yet to guard against (build one if it ever is).
         #
-        # TWO MORE EXCLUSIONS (thread 4a7da43a/12a210ab, reap Stage 1b leg 1, 2026-07-28):
-        # (1) NON-ACTIVE SUBJECTS — a merged/historical/archived object's internal coin-flips
+        # TWO MORE EXCLUSIONS:
+        # (1) NON-ACTIVE SUBJECTS: a merged/historical/archived object's internal coin-flips
         # are history, not live ambiguity: nothing in the read-path (lineage_head resolves
         # merged_into before ever touching a loser's own properties) ever surfaces them, so
         # flagging them is the same "cry wolf" class the orphan-link check already excludes for
-        # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS — seam-debounce and
+        # the same reason. (2) SUCCEEDED_BY VS AN EMPTY DEBOUNCE/HEAL GUESS: seam-debounce and
         # husk-heal both write succeeded_by='' at debounce/heal time as a "no successor seen
         # yet" placeholder, WRITTEN BEFORE the real answer exists; once a real generation
         # self-declares succeeded_from back at the predecessor, the guess is permanently stale
         # but NEVER a live dispute (walked and verified live: lineage_head's walk continues
-        # through the winner regardless of whether it later gets healed as false_mint itself —
-        # decision c41f74a6 — so this is resolver noise from a known automated observer, not a
-        # coin-flip a mind needs to referee). THIS EXCLUSION IS NARROW ON PURPOSE (decision
-        # c14f8b0d, thread 6027/6036): `phantom-fold` ALSO writes succeeded_by='' but is
+        # through the winner regardless of whether it later gets healed as false_mint itself,
+        # so this is resolver noise from a known automated observer, not a
+        # coin-flip a mind needs to referee). THIS EXCLUSION IS NARROW ON PURPOSE:
+        # `phantom-fold` ALSO writes succeeded_by='' but is
         # DELIBERATELY LEFT OUT of the IN-list below, because its mechanism is the opposite of
-        # seam-debounce/husk-heal's — it RETRACTS an already-declared successor later proven a
+        # seam-debounce/husk-heal's: it RETRACTS an already-declared successor later proven a
         # zero-turn phantom (atomic with false_mint/retired/retired_by), landing AFTER the real
         # declaration by up to fold_existing_zero_turn_phantoms's own 15-minute sweep window,
         # not before it. That retraction is legitimate lifecycle noise in the general case
         # (measured 22/24 self-consistent), but a hand-reversed fold that never restores the
-        # pointer is a genuine live defect the lint SHOULD keep surfacing — silently folding
+        # pointer is a genuine live defect the lint SHOULD keep surfacing; silently folding
         # phantom-fold into this exclusion would have hidden exactly that specimen
-        # (agent:seat-8187daaa-vii, repaired 2026-08-29). Do not generalize this comment's
+        # (a repaired lineage defect on one agent generation). Do not generalize this comment's
         # reasoning to any other blank-writing source without checking which mechanism it is.
         # rn=1 vs rn=2 ALONE used to miss a rank-3+ rival hiding behind an agreeing top-2 (the
-        # auditor's completeness gap, thread 59e95366/decision 93d8d15c — confirmed on
+        # auditor's completeness gap: confirmed on
         # repo:bytebye/name: 19 rows sat invisible at rn=3+ purely because rn=1 and rn=2
         # happened to already agree).
         # `per_value` collapses every source's row to ONE best row per DISTINCT VALUE first
         # (same confidence/observed_at tiebreak the ranking already used), so two corroborating
         # sources on the winning value can no longer occupy both of the compared slots and hide
         # a genuinely different value sitting one rank deeper. `ranked` then compares the winner
-        # against EVERY other distinct value (r.rn>1), not just the row immediately below it —
+        # against EVERY other distinct value (r.rn>1), not just the row immediately below it,
         # the RESOLVER's own supersession is untouched by this (it still serves the single
         # current-winning assertion exactly as before); only the AUDITOR's coverage widens.
         con = await pool.fetch(
@@ -2306,23 +2298,24 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        f"{round(float(r['rival_conf']), 3)}) by ≤{eps} — a coin-flip winner"}
             for r in con])
 
-        # STATUS-REGRESSION — the lifecycle property's real failure modes, widened per ruling
-        # aaf050e4 (operator, on top of 64adf08a): a normal open->resolved transition is STILL
-        # never flagged — only a genuine open-vs-resolved disagreement is. Three distinct
+        # STATUS-REGRESSION: the lifecycle property's real failure modes: a normal
+        # open->resolved transition is STILL
+        # never flagged, only a genuine open-vs-resolved disagreement is. Three distinct
         # shapes, unioned into one check:
-        #   (1) THE ORIGINAL — an 'open' NEWER than a different source's 'resolved' at
+        #   (1) THE ORIGINAL: an 'open' NEWER than a different source's 'resolved' at
         #       comparable confidence: a deliberate close overridden by recency (the
         #       miner-re-opens-what-a-session-resolved class).
-        #   (2) THE NEVER-FLIPPED (ruling 1335332e's own 713 specimens): a current status='open'
+        #   (2) THE NEVER-FLIPPED (713 specimens found on a fleet-wide check): a
+        #       current status='open'
         #       assertion whose thread ALSO carries resolved_because/resolved_in evidence dated
-        #       AFTER it — a close happened and the flag never flipped (the supersession-leak
+        #       AFTER it: a close happened and the flag never flipped (the supersession-leak
         #       shape assert_singular_property now prevents going forward, but historical rows
         #       still carry it, and any write path assert_singular_property doesn't cover could
         #       still produce a fresh one). Silent when a LATER status assertion (any source) or
-        #       a LATER annotate note exists past the resolve — either is a legitimate, on-the-
+        #       a LATER annotate note exists past the resolve: either is a legitimate, on-the-
         #       record reopen, not a leak.
         #   (3) THE EXACT TIE: two different sources asserting 'open' and 'resolved' at the
-        #       identical observed_at — the winner-picker's own confidence/recency tiebreak has
+        #       identical observed_at: the winner-picker's own confidence/recency tiebreak has
         #       nothing left to break the tie on, so this is reported rather than silently
         #       coin-flipped.
         reg = await pool.fetch(
@@ -2348,8 +2341,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         seen_regression = {r["canonical"] for r in reg}
 
         # THE WINNER, not merely "an open row exists" (double-resolution's own corroboration
-        # shape — an old open superseded in spirit by two later, genuine resolves from
-        # different sources — must stay silent; only when 'open' actually WINS the standard
+        # shape: an old open superseded in spirit by two later, genuine resolves from
+        # different sources, must stay silent; only when 'open' actually WINS the standard
         # confidence-then-recency ranking among ALL current status rows is there a live leak).
         never_flipped = await pool.fetch(
             "WITH winner AS (SELECT DISTINCT ON (ca.object_id) ca.object_id, "
@@ -2404,9 +2397,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                           "confidence/recency tiebreak has nothing left to break the tie on"})
         land("status-regression", "error", findings_reg)
 
-        # LAUNDERING — through credence_props, the module whose own invariant demands every
+        # LAUNDERING: through credence_props, the module whose own invariant demands every
         # grade-is-the-message read path route through it. Candidates: only co-asserted objects
-        # (same fact, >1 source) — the lineage discipline is meaningless on a single voice.
+        # (same fact, >1 source); the lineage discipline is meaningless on a single voice.
         cand_rows = await pool.fetch(
             "SELECT object_id, max(observed_at) AS latest FROM current_assertions "
             "WHERE (object_id, name) IN (SELECT object_id, name FROM current_assertions "
@@ -2428,12 +2421,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 for w in cred.winners if w.laundering]
         land("laundering", "warn", laundering)
 
-        # LINEAGE — the succession invariants the identity layer lives by (ruling a882b334).
+        # LINEAGE: the succession invariants the identity layer lives by.
         # THE WALK COVERS EVERY GENERATION THE GRAPH EVER REGISTERED, whatever its status:
         # lineage_head deliberately walks THROUGH inactive generations (a historical middle is
-        # ancestry, not absence), and a lint that loads active-only diverged from that law —
+        # ancestry, not absence), and a lint that loads active-only diverged from that law:
         # four bases whose -ii heirs had been archived read as 'dangling' for two sessions
-        # (task #20, 2026-07-19: every flagged edge pointed at a real, historical object).
+        # (every flagged edge pointed at a real, historical object).
         # `canons` (active-only) still scopes the OTHER checks below; only the walk widened.
         ag_rows = await pool.fetch(
             "SELECT id, canonical, status FROM objects WHERE type='Agent'")
@@ -2479,30 +2472,28 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         land("lineage-cycle", "error", cycles)
         land("lineage-dangling", "error", dangling)
 
-        # DANGLING-SUCCEEDED_FROM (thread 8322bca8, Khnum specimen #3, decision 0e9c4f1d):
+        # DANGLING-SUCCEEDED_FROM:
         # the walk above only follows `succeeded_by` FORWARD (an ancestor's own pointer to
-        # ITS successor) — `succeeded_from` (an heir's own pointer to ITS ancestor) was never
+        # ITS successor); `succeeded_from` (an heir's own pointer to ITS ancestor) was never
         # checked in the reverse direction, so a `succeeded_from` value naming a canonical no
         # Agent object of any status carries slipped past every existing lineage check. Same
         # "pointer into the void" failure mode as `lineage-dangling`, same `known` set built
-        # above (every registered Agent canonical, any status) — just the other direction,
+        # above (every registered Agent canonical, any status), just the other direction,
         # and no chain to walk (`succeeded_from` names exactly one ancestor, never a further
         # pointer to follow).
         #
-        # SCOPE NOTE (measurement discipline, this house's own standing practice): `succeeded_
-        # from` is ALSO a real graph LINK TYPE (compositions.py's neighborhood-expansion query
-        # above, `l.type IN (..., 'succeeded_from', ...)`), stored in parallel with this same-
-        # named property. A prior investigation (thread 8322bca8's own dated-plan note,
-        # 2026-09-05) attempted to cross-validate the LINK against the PROPERTY and got an
-        # inconclusive "format mismatch (text vs raw UUID)" rather than a clean agree/disagree
-        # count — and this build could not re-measure that population live (no DB reachable
-        # from the worktree this was built in) to build it correctly. Deliberately NOT built
-        # here: guessing at a link/property cross-validation query without a live measurement
-        # to verify it against risks exactly the kind of confidently-wrong population claim
-        # this house has been burned by before. This check covers only the property-side
-        # reverse-direction gap, which reuses already-proven logic (`known`, `props`) and
-        # needs no new live measurement to trust. The link-side cross-validation remains a
-        # distinct, still-open follow-up — flag it fresh rather than build it blind.
+        # SCOPE NOTE (measurement discipline): `succeeded_from` is ALSO a real graph LINK TYPE
+        # (compositions.py's neighborhood-expansion query above, `l.type IN (..., 'succeeded_
+        # from', ...)`), stored in parallel with this same-named property. A prior attempt to
+        # cross-validate the LINK against the PROPERTY got an inconclusive "format mismatch
+        # (text vs raw UUID)" rather than a clean agree/disagree count, and this build could
+        # not re-measure that population live (no DB reachable from the worktree this was
+        # built in) to build it correctly. Deliberately NOT built here: guessing at a link/
+        # property cross-validation query without a live measurement to verify it against
+        # risks a confidently-wrong population claim. This check covers only the property-
+        # side reverse-direction gap, which reuses already-proven logic (`known`, `props`)
+        # and needs no new live measurement to trust. The link-side cross-validation remains
+        # a distinct, still-open follow-up; flag it fresh rather than build it blind.
         succ_from = {c: p["succeeded_from"] for c, p in props.items() if p.get("succeeded_from")}
         land("dangling-succeeded_from", "error", [
             {"subject": c, "detail": f"succeeded_from points at {anc!r}, which no Agent "
@@ -2515,22 +2506,21 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for c in sorted(canons)
             if _generation(c)[1] > 1 and not props.get(c, {}).get("succeeded_from")])
 
-        # SUCCEEDED-FROM-MISMATCH (decision 1081a782, Khnum's guard-symmetry inventory,
-        # specimen #3 — same root decision 0e9c4f1d as lineage-dangling/orphan-heir above):
-        # every check in this family reads succeeded_by FORWARD; none had ever cross-checked
-        # an heir's own succeeded_from pointer against that SAME ancestor's own succeeded_by —
-        # the exact blindness that hid a live break for twelve days (seat-8187daaa-vii, six
-        # checks all looking the other way down the same relation). Pure Python comparison
-        # over `props`/`succ_by`, already loaded above for the forward walk — no new query.
+        # SUCCEEDED-FROM-MISMATCH: every check in this family reads succeeded_by FORWARD; none
+        # had ever cross-checked an heir's own succeeded_from pointer against that SAME
+        # ancestor's own succeeded_by, the exact blindness that hid a live lineage break for
+        # twelve days (six existing checks all looking the other way down the same relation).
+        # Pure Python comparison over `props`/`succ_by`, already loaded above for the forward
+        # walk, no new query.
         #
-        # NOT A CLEAN DAMAGE SIGNAL (1081a782's own measured population: 660 active agents
-        # carry succeeded_from; 41 disagree; 40 of those are the EXPECTED case — the named
-        # ancestor's own succeeded_by was never asserted, or was phantom-folded blank (see
-        # false-mint/the 'phantom-fold' source name above) rather than naming someone else;
-        # 1 is a genuinely different name, an already-cleared parallel-lives fork; CURRENT
-        # UNREPAIRED LIVE MISMATCHES: ZERO). That 40-vs-1 split IS code-derivable — an absent/
+        # NOT A CLEAN DAMAGE SIGNAL: measured population was 660 active agents carrying
+        # succeeded_from, of which 41 disagree; 40 of those are the EXPECTED case (the named
+        # ancestor's own succeeded_by was never asserted, or was phantom-folded blank, see
+        # the false-mint/'phantom-fold' source name above) rather than naming someone else;
+        # 1 is a genuinely different name, an already-cleared parallel-lives fork; current
+        # unrepaired live mismatches: zero. That 40-vs-1 split IS code-derivable, an absent/
         # blank ancestor succeeded_by is architecturally different from one naming a THIRD
-        # party — so both shapes land under warn (a candidate for a human's glance, same
+        # party, so both shapes land under warn (a candidate for a human's glance, same
         # tier as orphan-heir/merged-with-live-successor, never error: this is a structural
         # possibility, not a proven-impossible state), but each finding's own `detail` names
         # which shape it is rather than flattening them into one undifferentiated claim.
@@ -2561,16 +2551,16 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             {"subject": c, "detail": "a healed false mint (compensating events) — expected to "
                                      "be retired; listed so the healing stays visible"}
             for c in sorted(canons) if props.get(c, {}).get("false_mint") == "true"])
-        # THE HALCYON RULE (obligation 6b1efacb, 2026-08-18) — a NAMED, DISTINCT check from
-        # "retired-live" above (which fires for any deliberate retirement racing a slow mount-
-        # row cleanup, a different and much less alarming shape): a generation SPECIFICALLY
-        # false_mint (never a plain deliberate close) with a live mount is the exact zero-turn
-        # phantom fold blindness this obligation's own occupancy fix (is_occupied_by_a_live_
-        # body) now guards against going forward — this check is the retrospective net for
-        # anything that slips through anyway, or that was folded before that fix shipped.
-        # `live` (agent_mounts freshness) is a cheaper, coarser signal than registry_census's
-        # own harness-confirmed check — a real false positive here is still worth a human's
-        # glance, never worth silently trusting agent_mounts alone for a repair decision.
+        # A NAMED, DISTINCT check from "retired-live" above (which fires for any deliberate
+        # retirement racing a slow mount-row cleanup, a different and much less alarming
+        # shape): a generation SPECIFICALLY false_mint (never a plain deliberate close) with
+        # a live mount is the exact zero-turn phantom-fold blindness that the occupancy fix
+        # (is_occupied_by_a_live_body) now guards against going forward; this check is the
+        # retrospective net for anything that slips through anyway, or that was folded before
+        # that fix shipped. `live` (agent_mounts freshness) is a cheaper, coarser signal than
+        # registry_census's own harness-confirmed check; a real false positive here is still
+        # worth a human's glance, never worth silently trusting agent_mounts alone for a
+        # repair decision.
         land("false-mint-live", "error", [
             {"subject": c, "detail": "carries false_mint=true yet holds a LIVE mount — a "
                                      "genuinely live body may be wearing a phantom-folded "
@@ -2579,17 +2569,17 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for c in sorted(canons)
             if props.get(c, {}).get("false_mint") == "true" and c in live])
 
-        # MERGED-WITH-LIVE-SUCCESSOR (thread 16ef8d24, the xxxix mis-merge, decision 4510e4c6):
-        # a merge says "this label and its target are the same mind"; a real succeeded_by says
-        # "this mind's story continues at THAT label instead" — a MERGED object still carrying a
-        # winning succeeded_by that names a currently ACTIVE object claims both at once, and the
-        # two claims can point at different places (agent:d6a08aaa-xxxix's own succeeded_by named
-        # agent:d6a08aaa-g40, a real, distinct, still-onward-succeeding identity, while the merge
-        # had folded xxxix into agent:d6a08aaa-g40-vii — seven real generations later in that SAME
-        # chain). A CANDIDATE, not a verdict, same discipline as orphan-heir/retired-live above: a
-        # healthy merge whose target ALSO happens to carry an unrelated succeeded_by fires here
-        # too (an intermediate chain link pointing at a just-repaired ancestor, harmless) — every
-        # hit is unmerge()-worth a human's glance, never an auto-repair.
+        # MERGED-WITH-LIVE-SUCCESSOR: a merge says "this label and its target are the same
+        # mind"; a real succeeded_by says "this mind's story continues at THAT label instead".
+        # A MERGED object still carrying a winning succeeded_by that names a currently ACTIVE
+        # object claims both at once, and the two claims can point at different places (one
+        # real mis-merge specimen: an object's own succeeded_by named a real, distinct, still-
+        # onward-succeeding identity, while the merge had folded it into a label seven real
+        # generations later in that SAME chain). A CANDIDATE, not a verdict, same discipline
+        # as orphan-heir/retired-live above: a healthy merge whose target ALSO happens to
+        # carry an unrelated succeeded_by fires here too (an intermediate chain link pointing
+        # at a just-repaired ancestor, harmless); every hit is worth a human's glance via
+        # unmerge(), never an auto-repair.
         status_of = {r["canonical"]: r["status"] for r in ag_rows}
         land("merged-with-live-successor", "warn", [
             {"subject": c,
@@ -2601,18 +2591,17 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             if status_of[c] == "merged" and props.get(c, {}).get("succeeded_by")
             and status_of.get(props[c]["succeeded_by"]) == "active"])
 
-        # PULSE-ONLY-LIVENESS (thread 879c97b9 piece 3, Thoth's guard #3 — "graph_lint
-        # gains a 'pulse-only-liveness' count so the population this guard covers is
-        # always readable"): a non-Claude harness's `is_occupied_by_a_live_body` (agents.py)
-        # can NEVER be confirmed by the Claude-only census (`registry_census`'s `matched`
-        # set shells out to `claude agents --json` and verifies a claude binary) — every
-        # such agent's liveness rides ENTIRELY on its own self-reported pulse instead
-        # (`mounts.pulse_mount`, the harness-neutral MCP tool). INFO-grade, not damage: this
-        # names the population whose liveness signal is structurally weaker (self-report,
-        # never census-verified), so it stays visible rather than indistinguishable from an
-        # ordinary Claude session once it reads live. Pure SQL, same 5-minute freshness
-        # window `registry_census`'s own `pulse_live` uses (a live process census is not
-        # available inside this report-only function).
+        # PULSE-ONLY-LIVENESS: graph_lint gains a 'pulse-only-liveness' count so the
+        # population this guard covers is always readable. A non-Claude harness's
+        # `is_occupied_by_a_live_body` (agents.py) can NEVER be confirmed by the Claude-only
+        # census (`registry_census`'s `matched` set shells out to `claude agents --json` and
+        # verifies a claude binary); every such agent's liveness rides ENTIRELY on its own
+        # self-reported pulse instead (`mounts.pulse_mount`, the harness-neutral MCP tool).
+        # INFO-grade, not damage: this names the population whose liveness signal is
+        # structurally weaker (self-report, never census-verified), so it stays visible
+        # rather than indistinguishable from an ordinary Claude session once it reads live.
+        # Pure SQL, same 5-minute freshness window `registry_census`'s own `pulse_live` uses
+        # (a live process census is not available inside this report-only function).
         land("pulse-only-liveness", "info", [
             {"subject": r["agent_id"],
              "detail": "this agent's own harness is not claude-code — its liveness reads "
@@ -2630,12 +2619,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 "AND m.last_seen > now() - interval '5 minutes' "
                 "ORDER BY o.canonical")])
 
-        # ORPHAN-LINK — FKs make truly dangling links impossible, and the kernel's merge is
-        # resolve-on-read BY DESIGN (assertions and links are never rewritten — provenance
-        # survives; the loser's same_as → winner IS the merge marker). So edges on non-active
-        # objects are HISTORY, not errors: this check is an INFO-grade consolidation-debt meter
-        # (rung 4's queue), with the merge markers themselves excluded — flagging the merge
-        # mechanism as damage taught the first live run to cry wolf 159 times.
+        # ORPHAN-LINK: FKs make truly dangling links impossible, and the kernel's merge is
+        # resolve-on-read BY DESIGN (assertions and links are never rewritten, provenance
+        # survives; the loser's same_as pointing at the winner IS the merge marker). So
+        # edges on non-active objects are HISTORY, not errors: this check is an INFO-grade
+        # consolidation-debt meter (a consolidation-debt queue), with the merge markers
+        # themselves excluded, flagging the merge mechanism as damage taught the first
+        # live run to cry wolf 159 times.
         _ORPHAN_WHERE = (
             "FROM links l JOIN objects fo ON fo.id=l.from_id JOIN objects t ON t.id=l.to_id "
             "WHERE (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -2643,22 +2633,22 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             "  AND NOT (l.type = 'same_as' AND fo.merged_into IS NOT DISTINCT FROM l.to_id)")
         orphan_total = await pool.fetchval(f"SELECT count(*) {_ORPHAN_WHERE}")
         # this check's own SQL pre-limits to _LINT_CAP (unlike every other check, which fetches
-        # its FULL row set and only caps at land()'s own display layer) — a genuine, justified
+        # its FULL row set and only caps at land()'s own display layer), a genuine, justified
         # optimization for the DEFAULT unfiltered call, where only _LINT_CAP rows are ever
         # displayed regardless of the real population.
         #
-        # THE BUG THIS REPLACED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): when the
-        # check IS explicitly named, land()'s own offset/limit slicing assumes it received the
-        # FULL row set to slice in Python — exactly what every OTHER check already does. This
-        # fetch used to hard-cap at min(page_offset + page_limit, 5000) regardless of how large
-        # the real population was, so any offset landing past what actually got fetched sliced
-        # against a too-short list and silently returned [] — while `counts`/`remaining` (built
-        # from the independent COUNT(*) below) kept reporting a genuine positive remainder.
-        # Blindness rendered as silence, never a refusal — proven live against a 10,637-row
-        # population, reproduced in tests/test_lap_lint.py at 5,010 rows. Fetching exactly
-        # `orphan_total` rows when the check is named matches the function's own documented
-        # contract ("paginating its FULL row set... default: uncapped, all of it") — the same
-        # promise every sibling check already keeps unconditionally.
+        # THE BUG THIS REPLACED: when the check IS explicitly named, land()'s own offset/limit
+        # slicing assumes it received the FULL row set to slice in Python, exactly what every
+        # OTHER check already does. This fetch used to hard-cap at min(page_offset + page_
+        # limit, 5000) regardless of how large the real population was, so any offset landing
+        # past what actually got fetched sliced against a too-short list and silently
+        # returned [], while `counts`/`remaining` (built from the independent COUNT(*) below)
+        # kept reporting a genuine positive remainder. Blindness rendered as silence, never a
+        # refusal, proven live against a 10,637-row population, reproduced in
+        # tests/test_lap_lint.py at 5,010 rows. Fetching exactly `orphan_total` rows when the
+        # check is named matches the function's own documented contract ("paginating its FULL
+        # row set... default: uncapped, all of it"), the same promise every sibling check
+        # already keeps unconditionally.
         orphan_fetch = orphan_total if check_filter == "orphan-link" else _LINT_CAP
         orphans = await pool.fetch(
             "SELECT l.type, fo.canonical AS from_c, fo.status AS from_s, "
@@ -2675,7 +2665,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for r in orphans])
         counts["orphan-link"] = int(orphan_total)
 
-        # STALE-OBLIGATION — a duty nobody resolved or resolved-away; age from birth, honestly
+        # STALE-OBLIGATION: a duty nobody resolved or resolved-away; age from birth, honestly
         # crude (the graph has no per-thread activity clock yet).
         th = await pool.fetch(
             "SELECT o.id, o.created_at, "
@@ -2695,12 +2685,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for r in sorted(th, key=lambda r: r["created_at"])
             if r["st"] == "open" and r["kind"] == "obligation"])
 
-        # ROT-CANDIDATE (info) — an open thread whose repo's COMMITS, landed AFTER the
+        # ROT-CANDIDATE (info): an open thread whose repo's COMMITS, landed AFTER the
         # thread's last movement, share its distinctive vocabulary: the work probably
-        # happened and nobody testified (two witnesses: Metron IV fa918939, Soundwave
-        # b813e389 — 'I re-derive which obligations are actually alive at every mount').
-        # Report-only, ruling 758ded94 intact: the finding DEALS the thread to a mind's
-        # triage verbs; the status change stays testimony, never lint's.
+        # happened and nobody testified. Report-only: the finding surfaces the thread for
+        # someone's triage verbs; the status change stays testimony, never lint's.
         from src.ingest.mined import distinctive_terms
 
         open_th = await pool.fetch(
@@ -2752,14 +2740,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                     break
         land("rot-candidate", "info", rot)
 
-        # ROT-CANDIDATE-UNSCOPED (info, Thoth DM 2704, finding 2 of the in_repo audit): the check
-        # above INNER JOINs in_repo — structurally, not by oversight: a thread's "did a later
-        # commit do this" verdict needs THAT repo's commits to compare against, and a repo-less
-        # thread has no commit corpus to be compared to. There is no signal to compensate with
-        # (open_thread_wall's union-by-owner doesn't apply here — owner names a MIND, not a
-        # commit history). So the fix is declaring the boundary, not compensating for it: a
-        # single fleet-wide count of open threads this check structurally cannot evaluate,
-        # the same shape close_by_commits.unreachable_no_repo and dispose.orphans() already use.
+        # ROT-CANDIDATE-UNSCOPED (info): the check above INNER JOINs in_repo, structurally,
+        # not by oversight: a thread's "did a later commit do this" verdict needs THAT repo's
+        # commits to compare against, and a repo-less thread has no commit corpus to be
+        # compared to. There is no signal to compensate with (open_thread_wall's union-by-
+        # owner doesn't apply here, owner names a MIND, not a commit history). So the fix is
+        # declaring the boundary, not compensating for it: a single fleet-wide count of open
+        # threads this check structurally cannot evaluate, the same shape close_by_commits.
+        # unreachable_no_repo and dispose.orphans() already use.
         unscoped = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "AND (SELECT value #>> '{}' FROM current_assertions WHERE object_id=o.id "
@@ -2773,14 +2761,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "corpus to compare against); not a defect, a structural blind spot "
                        "this check is now honest about"}] if unscoped else [])
 
-        # EDGELESS-CLOSURE-GROWTH (the ratchet, Thoth DM 2581/2603, decision cb38d922): resolved-
-        # with-no-closure-edge (resolved_by/answers/closed_by, valid_until open) must never grow
-        # past EDGELESS_CLOSURE_CEILING — every sanctioned closing path now mints an edge
-        # unconditionally, so growth can only mean a bypass. Fleet-wide by design (unlike most
-        # checks here this ignores `subject`/project scope on purpose — a bypass in one repo is
-        # exactly as much a defect as one in another, and the ceiling itself was measured
-        # fleet-wide). One finding, never a per-thread list — that's enumerate_threads' job, not
-        # lint's; this check answers "did the leak reopen," nothing more granular.
+        # EDGELESS-CLOSURE-GROWTH (a ratchet): resolved-with-no-closure-edge (resolved_by/
+        # answers/closed_by, valid_until open) must never grow past EDGELESS_CLOSURE_CEILING;
+        # every sanctioned closing path now mints an edge unconditionally, so growth can only
+        # mean a bypass. Fleet-wide by design (unlike most checks here this ignores `subject`/
+        # project scope on purpose, a bypass in one repo is exactly as much a defect as one in
+        # another, and the ceiling itself was measured fleet-wide). One finding, never a per-
+        # thread list, that's enumerate_threads' job, not lint's; this check answers "did the
+        # leak reopen," nothing more granular.
         edgeless = await pool.fetchval(
             "SELECT count(*) FROM objects o WHERE o.type='Thread' AND o.status='active' "
             "AND o.merged_into IS NULL AND COALESCE((SELECT a.value #>> '{}' FROM "
@@ -2799,12 +2787,12 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "resolved"}
         ] if edgeless > EDGELESS_CLOSURE_CEILING else [])
 
-        # ATTRIBUTION — writes stamped from an agent id that was never registered as an Agent:
-        # the impersonation class (thread 33838160) as a standing tripwire, not a one-off hunt.
+        # ATTRIBUTION: writes stamped from an agent id that was never registered as an Agent,
+        # the impersonation class, as a standing tripwire, not a one-off hunt.
         # THE MATCH SEES THROUGH AN ANNOTATION: a writer may suffix its id with a parenthetical
-        # provenance note — 'agent:<id> (relaying operator ruling ...)' — and 338 of XLIV's
-        # relay writes read as an unregistered impersonator for two sessions because the exact
-        # match couldn't (task #21, 2026-07-19). The id is judged; the note rides along.
+        # provenance note, 'agent:<id> (relaying a ruling...)', and a batch of relay writes
+        # once read as an unregistered impersonator for two sessions because an exact string
+        # match couldn't see past that suffix. The id is judged; the note rides along.
         ghosts = await pool.fetch(
             "SELECT w.source_id, count(*) AS writes, max(w.at) AS last FROM ("
             "  SELECT source_id, observed_at AS at FROM assertions "
@@ -2820,14 +2808,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        f"(last {r['last'].isoformat()[:19]}) — who wore this face?"}
             for r in ghosts])
 
-        # PHANTOM-TWIN — an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
-        # some Seat's anchor (an OFFICE — single-occupant by design, ed5f5ce2) while the seat's
-        # holder is a different lineage. The bridged-resume path mints exactly this shape when
-        # its receipts are missing (agent:6ebb4445 beside alfred, 2026-07-16): the same soul
-        # wearing a second registry row. Adoption cures the cases with evidence; this tripwire
-        # makes the evidence-less remainder LOUD — the one degradation that touches identity
-        # must never be silent. Flag, never guess (blind adoption-by-location was the cwd-guess
-        # bug class; seating is deliberate or it is nothing).
+        # PHANTOM-TWIN: an ANONYMOUS, un-spawned, un-seated agent mounted at a cwd that is
+        # some Seat's anchor (an office, single-occupant by design) while the seat's holder
+        # is a different lineage. The bridged-resume path mints exactly this shape when its
+        # receipts are missing: the same identity wearing a second registry row. Adoption
+        # cures the cases with evidence; this tripwire makes the evidence-less remainder
+        # LOUD, the one degradation that touches identity must never be silent. Flag, never
+        # guess (blind adoption-by-location was a past bug class; seating is deliberate or
+        # it is nothing).
         twins = await pool.fetch(
             "SELECT m.agent_id AS suspect, m.cwd AS office, s.canonical AS seat, "
             "  h.canonical AS holder, m.last_seen "
@@ -2855,13 +2843,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "its receipts). Verify and heal by hand; never auto-merge"}
             for r in twins])
 
-        # PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d) — a
-        # generation whose MINT captured a live pulse on a DIFFERENT door of its own lineage:
-        # the predecessor was not dead when the heir was crowned (g40-v/vi were minted while
-        # g40-iv worked; each would have tripped this within a minute). The evidence is the
-        # `parallel_pulse_door` stamp mint_heir writes AT the mint — rows are hot state and
-        # the pulse is gone by lint time, so the stamp is the only witness. Testimony for
-        # the fold tray; the seam may still have been real (verify), never auto-fold.
+        # PARALLEL-LIVES: a generation whose MINT captured a live pulse on a DIFFERENT
+        # instance of its own lineage: the predecessor was not dead when the heir was
+        # crowned (one specimen: two later generations were each minted while an earlier
+        # generation still worked; each would have tripped this within a minute). The
+        # evidence is the `parallel_pulse_door` stamp mint_heir writes AT the mint, mount
+        # rows are hot state and the pulse is gone by lint time, so the stamp is the only
+        # witness. Testimony for review; the seam may still have been real (verify), never
+        # auto-fold.
         par = await pool.fetch(
             "SELECT o.canonical AS heir, "
             "  max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') AS door, "
@@ -2881,25 +2870,23 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "predecessor was not dead. Verify the seam; fold by hand if false"}
             for r in par])
 
-        # DUPLICATE-WORKS-IN (thread 8640a625, decision fce39baa — John XVII's own specimen;
-        # detail text corrected by decision c3504289, thread 6028/6037 — Thoth's own dispatch
-        # had quoted the ORIGINAL wording below as fact and it was false): a LIVE agent
-        # carrying more than one simultaneously-live works_in edge. THIS DOES NOT MEAN orient()
-        # can resolve the wrong project: measured directly (c3504289) — a seated agent's
-        # project comes from seat→derive_house (governs/charter), an unseated one from cwd
-        # pin/basename; NEITHER reads works_in at all. The two live readers that DO consult a
-        # single agent's own works_in for an answer (lineage_works_in's repo= default rung 3,
-        # offices.py's pin self-heal vote) already abstain to None the instant they see 2+
-        # distinct projects, by construction — a duplicate can never feed either one a wrong
-        # single answer. The real, measured cost is narrower: an honest repo= abstention where
-        # a default could otherwise have resolved, and an inflated agent_count in ledger-style
-        # reports. (Historical scope note unchanged: measured live, 2026-08-03, 41 agents
-        # fleet-wide carry the shape, but only currently-LIVE agents are flagged here — a dead
+        # DUPLICATE-WORKS-IN: a LIVE agent carrying more than one simultaneously-live
+        # works_in edge. THIS DOES NOT MEAN orient() can resolve the wrong project: measured
+        # directly, a seated agent's project comes from seat -> derive_house (governs/
+        # charter), an unseated one from cwd pin/basename; NEITHER reads works_in at all. The
+        # two live readers that DO consult a single agent's own works_in for an answer
+        # (lineage_works_in's repo= default, offices.py's pin self-heal vote) already abstain
+        # to None the instant they see 2+ distinct projects, by construction, a duplicate can
+        # never feed either one a wrong single answer. The real, measured cost is narrower:
+        # an honest repo= abstention where a default could otherwise have resolved, and an
+        # inflated agent_count in ledger-style reports. (Historical scope note unchanged:
+        # measured live, 41 agents fleet-wide carried the shape, but only currently-LIVE
+        # agents are flagged here, a dead
         # generation's leftover duplicate feeds neither consumer above for anyone; that larger
-        # historical count is thread 20af2c95's own separate, still-open concern, not this
-        # check's.) Scoped to `live_secs` — the SAME liveness window phantom-twin already uses,
-        # not a second definition of "live". Testimony only: this counts, it never judges which
-        # edge is the stale one — invalidate_works_in is the repair, a mind names the target.
+        # historical count is a separate, still-open concern, not this check's.) Scoped to
+        # `live_secs`, the SAME liveness window phantom-twin already uses, not a second
+        # definition of "live". Testimony only: this counts, it never judges which edge is
+        # the stale one; invalidate_works_in is the repair, a human names the target.
         dup = await pool.fetch(
             "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
             "  WHERE last_seen > now() - make_interval(secs => $1)) "
@@ -2924,21 +2911,21 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "counts, it never guesses which"}
             for r in dup])
 
-        # PEER-SILENT — task #76 item 2 (spec e6636c7e): v1's fiduciary-disclosure duty
-        # ("surface in-scope findings and risks to your peer proactively — silence is a
-        # violation", offices.py's PEER ADDENDUM) is prose only; nothing in this function
-        # measured it. A true "was every in-scope finding disclosed" check needs a disclosure
-        # marker that does not exist yet — this is the honest, mechanical proxy available from
-        # EXISTING conventions alone (reuse, not new machinery): has this pair exchanged ANY
-        # direct mail at all, recently? An active peer_of pair where no DM has passed between
-        # either side's holders in `stale_days` (or ever) is flagged — not proof a finding was
-        # withheld, but the coarse tripwire the spec's own "silence is a violation" language
-        # calls for. Matches EVERY agent that has EVER held either seat (the same `holds` edge
-        # `held_seat`/`resolve_seat` read elsewhere), not just the current generation, so a
-        # mid-reign swap on either side never produces a false silence. Counts a DM addressed
-        # directly agent-to-agent OR to either seat's own address (`to_agent='seat:...'`);
-        # deliberately does NOT count project broadcasts — a peer bond is a private duty, and
-        # crediting a broadcast neither peer need have read would hide real silence.
+        # PEER-SILENT: the fiduciary-disclosure duty ("surface in-scope findings and risks to
+        # your peer proactively, silence is a violation") is prose only; nothing in this
+        # function measured it. A true "was every in-scope finding disclosed" check needs a
+        # disclosure marker that does not exist yet; this is the honest, mechanical proxy
+        # available from EXISTING conventions alone (reuse, not new machinery): has this pair
+        # exchanged ANY direct mail at all, recently? An active peer_of pair where no DM has
+        # passed between either side's holders in `stale_days` (or ever) is flagged, not
+        # proof a finding was withheld, but the coarse tripwire that "silence is a violation"
+        # calls for. Matches EVERY agent that has EVER held either seat (the same `holds`
+        # edge `held_seat`/`resolve_seat` read elsewhere), not just the current generation,
+        # so a mid-reign swap on either side never produces a false silence. Counts a DM
+        # addressed directly agent-to-agent OR to either seat's own address
+        # (`to_agent='seat:...'`); deliberately does NOT count project broadcasts, a peer
+        # bond is a private duty, and crediting a broadcast neither peer need have read would
+        # hide real silence.
         peer_silence = await pool.fetch(
             "WITH active_peers AS ("
             "  SELECT oa.canonical AS seat_a, ob.canonical AS seat_b, oa.id AS seat_a_id, "
@@ -2976,14 +2963,14 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                          "other check here"}
             for r in peer_silence])
 
-        # HELD-PAST-DEADLINE — task #76 item 4b (spec e6636c7e, decision e85d3040): the mutual
-        # HOLD's auto-escalation-to-the-operator half, built as a LINT check rather than a new
-        # daemon (Thoth's ruling, matching the operator's own #169 precedent — match the
-        # instrument to the base rate; a periodic read over durable state is exactly graph_lint's
-        # own shape, and this reuses the SAME function item 2 just extended, no new machinery).
-        # A hold_action() thread (severity='hold') still open past its own hold_deadline is
-        # flagged — this is testimony ONLY, same as every other check: the actual push-to-the-
-        # operator act stays a mind's (or a later caller's) own move, never lint's.
+        # HELD-PAST-DEADLINE: the mutual HOLD's auto-escalation-to-the-operator half, built
+        # as a LINT check rather than a new daemon, matching a size precedent: match the
+        # instrument to the base rate, a periodic read over durable state is exactly
+        # graph_lint's own shape, and this reuses the SAME function extended, no new
+        # machinery. A hold_action() thread (severity='hold') still open past its own
+        # hold_deadline is flagged, this is testimony ONLY, same as every other check: the
+        # actual push-to-the-operator act stays a human's (or a later caller's) own move,
+        # never lint's.
         held_past_deadline = await pool.fetch(
             "SELECT o.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -3021,15 +3008,15 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "desk, not lint's own act"}
             for r in held_past_deadline])
 
-        # STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — RECURRENCE DETECTION): the
-        # write-side fix (mint_heir/fold_agent invalidating a predecessor's works_in/governs
-        # onto its heir, decision 5b217d13, 2026-08-04) closed the LEAK; backfill_agent_
-        # project_links repairs the historical debt it left behind (906 measured at the time,
-        # down to 2 by the time this check was written) — but nothing watched for the CLASS
-        # recurring (a future mint path this fix never reached, or a regression in it). Same
-        # enumeration backfill_agent_project_links itself uses — an Agent that is NOT its
-        # lineage's living_head yet still carries a live works_in/governs edge — read-only
-        # here; the repair stays that verb's own job, this only counts.
+        # STALE-OFF-HEAD-LINK (recurrence detection): the write-side fix (mint_heir/
+        # fold_agent invalidating a predecessor's works_in/governs onto its heir) closed the
+        # LEAK; backfill_agent_project_links repairs the historical debt it left behind (906
+        # measured at the time, down to 2 by the time this check was written), but nothing
+        # watched for the CLASS recurring (a future mint path this fix never reached, or a
+        # regression in it). Same enumeration backfill_agent_project_links itself uses, an
+        # Agent that is NOT its lineage's living_head yet still carries a live works_in/
+        # governs edge, read-only here; the repair stays that verb's own job, this only
+        # counts.
         from src.orchestrator.folds import living_head
 
         off_head_rows = await pool.fetch(
@@ -3052,24 +3039,24 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "only counts (thread 20af2c95's own recurrence tripwire)"}
             for r in stale_links])
 
-        # STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — RECURRENCE DETECTION): the SAME
-        # anomaly `stale_current_flags`'s own read door surfaces (an assertion still carrying
-        # `is_current=true` though a real `supersedes` FK already points at it from another row)
-        # — folded into the standing lint wall so a future session finds this without knowing
-        # to call that door by name. NOT a live write-path bug (verified: both of
-        # assert_property's supersession paths, actions/core.py:265-269 same-source and :346-349
-        # cross-source, flip `is_current=false` on the superseded row in the SAME transaction as
-        # the write, unconditionally) — the live population (123,914 at last count, d8225e71) is
-        # migration-0047 backfill debt (pre-existing rows the migration's own backfill never
-        # reached), not ongoing accrual. Still `warn`, not `info`: khepri's own specimen (seat:
-        # ddafff44) proved this actively BLOCKS retire_assertion/reconcile_seat_identity on an
-        # affected object, a live consequence orphan-link's own historical debt never has.
-        # repair_stale_current_flags is the batched backfill; this only counts. Same pre-
-        # limited-fetch shape as orphan-link (thread 187323d9's own fix): the population is
-        # five figures, so the DEFAULT unfiltered call fetches only `_LINT_CAP` rows (matching
-        # what land() would ever display anyway); a call naming check='stale-current-flag'
-        # fetches its true, full total instead — land()'s own counts[check]=len(rows) must
-        # see the FULL row set to report honestly, never the pre-limited sample.
+        # STALE-CURRENT-FLAG (recurrence detection): the SAME anomaly `stale_current_flags`'s
+        # own read door surfaces (an assertion still carrying `is_current=true` though a real
+        # `supersedes` FK already points at it from another row), folded into the standing
+        # lint wall so a future session finds this without knowing to call that door by name.
+        # NOT a live write-path bug (verified: both of assert_property's supersession paths,
+        # actions/core.py:265-269 same-source and :346-349 cross-source, flip
+        # `is_current=false` on the superseded row in the SAME transaction as the write,
+        # unconditionally); the live population (123,914 at last count) is migration-0047
+        # backfill debt (pre-existing rows the migration's own backfill never reached), not
+        # ongoing accrual. Still `warn`, not `info`: one specimen proved this actively BLOCKS
+        # retire_assertion/reconcile_seat_identity on an affected object, a live consequence
+        # orphan-link's own historical debt never has. repair_stale_current_flags is the
+        # batched backfill; this only counts. Same pre-limited-fetch shape as orphan-link:
+        # the population is five figures, so the DEFAULT unfiltered call fetches only
+        # `_LINT_CAP` rows (matching what land() would ever display anyway); a call naming
+        # check='stale-current-flag' fetches its true, full total instead, land()'s own
+        # counts[check]=len(rows) must see the FULL row set to report honestly, never the
+        # pre-limited sample.
         stale_flag_total = await pool.fetchval(
             "SELECT count(*) FROM assertions a JOIN assertions s ON s.supersedes = a.id "
             "WHERE a.is_current")
@@ -3087,11 +3074,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for r in stale_flags])
         counts["stale-current-flag"] = int(stale_flag_total or 0)
 
-        # KINDLESS-OPEN-THREAD (thread b5ae6773, #203's write-time classification laws): an
-        # open Thread with no `kind` at all — the write-time refusal (open_thread's own MCP
-        # tool) stops this going forward; this is the standing audit that catches anything
-        # that slipped past it (an internal caller, a pre-law row migration 0060 hasn't
-        # reached yet). Never a REPAIR — reclassify_thread is the mind's own act.
+        # KINDLESS-OPEN-THREAD (write-time classification laws): an open Thread with no
+        # `kind` at all. The write-time refusal (open_thread's own MCP tool) stops this
+        # going forward; this is the standing audit that catches anything that slipped past
+        # it (an internal caller, a pre-law row migration 0060 hasn't reached yet). Never a
+        # REPAIR: reclassify_thread is the human's own act.
         kindless = await pool.fetch(
             "SELECT o.canonical, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -3110,8 +3097,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "reclassify_thread(kind=...) is the fix, never a silent default"}
             for r in kindless])
 
-        # UNRESOLVABLE-OWNER (thread b5ae6773, same law's other half): an open Thread's
-        # `owner` that resolves to neither an active Seat nor the literal 'operator' — a
+        # UNRESOLVABLE-OWNER (same classification law's other half): an open Thread's
+        # `owner` that resolves to neither an active Seat nor the literal 'operator', a
         # bare handle nobody holds, a dead agent id, a project name with no chartered
         # coordinator. `resolve_owner_seat` is the SAME function migration 0060 uses to
         # backfill the existing stock, so a row this check clears is a row the migration
@@ -3144,20 +3131,20 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                 })
         land("unresolvable-owner", "warn", bad_owner)
 
-        # ZERO-RECIPIENT-DM (thread 9d1d41c8, folded into wave 8's fleet-hygiene work —
-        # Thoth's own follow-up on 24f52959: "add a read-only graph_lint audit for 'DMs
-        # with zero recipient rows'"): a DM (fleet_messages.to_agent IS NOT NULL) with NO
-        # message_recipients row at all — nobody was ever registered to read it, the exact
-        # silent-loss shape 24f52959 fixed ONE cause of (a seat's own agent:seat-<hex>
-        # placeholder resolving to a dead lineage instead of the seat). A project BROADCAST
-        # (to_agent IS NULL) is excluded — every agent in the project is its own implicit
-        # recipient, so a broadcast legitimately mints no message_recipients row until
-        # someone actually reads it; only a DM's own to_agent promises a specific reader.
-        # Read-only census, never a repair — resending is a mind's own act, same doctrine
-        # every other check in this function holds to. `zero_recipient_dm_rows` (mailbox.py)
-        # is the ONE place this query lives — the mechanical backlog closer
-        # (scripts/close_zero_recipient_dm_backlog.py, wave 13 item 1) acts on the identical
-        # rows this check itself reports, never a second query that could drift.
+        # ZERO-RECIPIENT-DM (fleet-hygiene follow-up: "add a read-only graph_lint audit for
+        # 'DMs with zero recipient rows'"): a DM (fleet_messages.to_agent IS NOT NULL) with
+        # NO message_recipients row at all, nobody was ever registered to read it, the exact
+        # silent-loss shape a prior fix addressed ONE cause of (a seat's own
+        # agent:seat-<hex> placeholder resolving to a dead lineage instead of the seat). A
+        # project BROADCAST (to_agent IS NULL) is excluded: every agent in the project is
+        # its own implicit recipient, so a broadcast legitimately mints no
+        # message_recipients row until someone actually reads it; only a DM's own to_agent
+        # promises a specific reader. Read-only census, never a repair, resending is a
+        # human's own act, same doctrine every other check in this function holds to.
+        # `zero_recipient_dm_rows` (mailbox.py) is the ONE place this query lives; the
+        # mechanical backlog closer (scripts/close_zero_recipient_dm_backlog.py) acts on
+        # the identical rows this check itself reports, never a second query that could
+        # drift.
         from src.orchestrator.mailbox import zero_recipient_dm_rows
 
         zero_recip = await zero_recipient_dm_rows(pool)
@@ -3169,13 +3156,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "still matters"}
             for r in zero_recip])
 
-        # ORPHAN — THE ORPHAN LAWS item 1 (operator's word, wave 15, Thoth DM 8841): every
-        # active object with no live link at all, Type nodes excluded, an ACKNOWLEDGED
-        # disconnection (a live `derivation_abstained_*` record) named on each finding rather
-        # than left indistinguishable from one nobody has ever looked at. `orphan_by_type`/
-        # `orphan_abstained_total` carry the by-type rollup this check's own findings can't
-        # (one row per OBJECT, same shape every other check here already uses) — the exact
-        # numbers preflight's own weekly line reads, one derivation shared, not two.
+        # ORPHAN: every active object with no live link at all, Type nodes excluded, an
+        # ACKNOWLEDGED disconnection (a live `derivation_abstained_*` record) named on each
+        # finding rather than left indistinguishable from one nobody has ever looked at.
+        # `orphan_by_type`/`orphan_abstained_total` carry the by-type rollup this check's
+        # own findings can't (one row per OBJECT, same shape every other check here already
+        # uses), the exact numbers preflight's own weekly line reads, one derivation shared,
+        # not two.
         orphan_census_result = await orphan_census(pool)
         land("orphan", "warn", [
             {"subject": r["canonical"],
@@ -3185,12 +3172,11 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                  "genuinely unexamined")}
             for r in orphan_census_result["rows"]])
 
-        # UNTRACEABLE-OUTPUT — Graph-Engineering (operator decision f47d14a7, thread
-        # 7f547426): every active Artifact/Commit missing at least one of the
-        # traceability invariant's four legs (run/plan/source/evaluator) after
-        # confession — "acceptance is zero rows after confession" is this check's own
-        # stated acceptance test. `missing_legs` names what still blocks it;
-        # `confessed_legs` names any OTHER leg already explained.
+        # UNTRACEABLE-OUTPUT: every active Artifact/Commit missing at least one of the
+        # traceability invariant's four legs (run/plan/source/evaluator) after confession.
+        # "acceptance is zero rows after confession" is this check's own stated acceptance
+        # test. `missing_legs` names what still blocks it; `confessed_legs` names any OTHER
+        # leg already explained.
         traceability_census_result = await traceability_census(pool)
         land("untraceable-output", "warn", [
             {"subject": r["canonical"],
@@ -3199,9 +3185,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                  if r["confessed_legs"] else "")}
             for r in traceability_census_result["rows"]])
 
-        # CONTESTED-SUMMARY — fix (e), Metron's mechanism report (mail 8890/8921/8922): every
-        # active Thread whose newest note post-dates its own last summary touch — a false
-        # headline the fleet has already disproved but not yet corrected on the record.
+        # CONTESTED-SUMMARY: every active Thread whose newest note post-dates its own last
+        # summary touch, a false headline the fleet has already disproved but not yet
+        # corrected on the record.
         contested = await contested_summary_audit(pool)
         land("contested-summary", "warn", [
             {"subject": r["canonical"],
@@ -3210,11 +3196,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "clear it"}
             for r in contested["rows"]])
 
-        # UNVERIFIED-CITATION — CITATION SHAPE's own acceptance test (operator ruling
-        # c6d25164, thread 9d2aaf4d): a transcript citation whose stored line_hash no
-        # longer verifies against the soul store's own chain means either tampering or
-        # a broken pointer — both a genuine integrity failure, error-severity like
-        # attribution/lineage-cycle, never a mere warn.
+        # UNVERIFIED-CITATION (citation-shape acceptance test): a transcript citation whose
+        # stored line_hash no longer verifies against the soul store's own chain means
+        # either tampering or a broken pointer, both a genuine integrity failure, error-
+        # severity like attribution/lineage-cycle, never a mere warn.
         citation_result = await citation_verification_census(pool)
         land("unverified-citation", "error", [
             {"subject": r["agent"],
@@ -3222,8 +3207,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        f"{r['reason']}"}
             for r in citation_result["rows"]])
 
-        # PROJECT-IDENTITY — operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth
-        # dispatch 12401). See project_identity_census's own docstring for both halves.
+        # PROJECT-IDENTITY (project identity drift). See project_identity_census's own
+        # docstring for both halves.
         identity_result = await project_identity_census(pool)
         land("project-identity", "warn", [
             {"subject": r["canonical"],
@@ -3245,8 +3230,8 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "fold or rename the squatter, never treat the alias as a second name"}
             for r in identity_result["alias_conflicts"]])
 
-        # SEAT-HOLDERS — thread b33fa26b, Thoth mail 13351, the jenny/dustin crossing.
-        # See seat_holder_census's own docstring for both halves.
+        # SEAT-HOLDERS: a seat whose recorded holder was actually another identity's
+        # borrowed slug. See seat_holder_census's own docstring for both halves.
         holder_result = await seat_holder_census(pool)
         land("seat-holders", "warn", [
             {"subject": r["seat"],
@@ -3263,13 +3248,13 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        "through a door this check's own fingerprint didn't catch; "
                        "verify by hand"}
             for r in holder_result["unprovenanced"]])
-    except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
-        # other: a genuinely distinct could-not-evaluate state (ruling on thread
-        # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call
-        # crashing and losing every check's findings, or a broken check silently
-        # reading as counts[check]==0 (a clean pass). Every check already landed
-        # before the exception keeps its real findings; every check that never
-        # reached land() is named here instead of just vanishing from the response.
+    except Exception as exc:  # noqa: BLE001 - isolate ONE broken check from every
+        # other: a genuinely distinct could-not-evaluate state rather than the whole
+        # lint call crashing and losing every check's findings, or a broken check
+        # silently reading as counts[check]==0 (a clean pass). Every check already
+        # landed before the exception keeps its real findings; every check that
+        # never reached land() is named here instead of just vanishing from the
+        # response.
         reason = f"{type(exc).__name__}: {exc}"
         for _check_name in _LINT_CHECK_NAMES:
             if _check_name not in counts:
@@ -3277,7 +3262,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
 
     findings.sort(key=lambda f: (_SEVERITY_RANK.get(str(f["severity"]), 9), str(f["check"])))
     if check_filter is not None:
-        # a per-check ask paginates ONE check's full set — "capped" now names how much of
+        # a per-check ask paginates ONE check's full set, "capped" now names how much of
         # THAT check's own total is still beyond this page, never the other checks (they
         # were never listed at all, so their own counts need no remaining-count noise)
         total = counts.get(check_filter, 0)
@@ -3290,15 +3275,15 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         capped = {c: n - _LINT_CAP for c, n in counts.items() if n > _LINT_CAP}
         note = ("some checks list only their first "
                 f"{_LINT_CAP} findings; counts hold the true totals") if capped else None
-    # SEVERITY, ADDED (thread 187323d9, decision 6647fcd5, Thoth DM 3143): `counts` alone
-    # flattened info-class metered history (orphan-link: thousands, expected under
+    # SEVERITY, ADDED: `counts` alone flattened info-class metered history (orphan-link:
+    # thousands, expected under
     # resolve-on-read) into the same undifferentiated list as warn/error-class damage
-    # (contradiction, attribution, ...) — a reader trusting `counts` at face value can
+    # (contradiction, attribution, ...), a reader trusting `counts` at face value can
     # overstate this graph's real debt by an order of magnitude (measured live: 54x).
-    # `severity` (per-check, non-breaking — `counts` itself keeps its original int-valued
+    # `severity` (per-check, non-breaking: `counts` itself keeps its original int-valued
     # shape for every existing caller) lets a reader segment the two without memorizing this
     # function's own docstring; `counts_by_severity` is the one-glance rollup that directly
-    # answers the question the flattening obscured — "how much of this is really damage."
+    # answers the question the flattening obscured: "how much of this is really damage."
     counts_by_severity: dict[str, int] = {}
     for c, n in counts.items():
         counts_by_severity[severity_by_check.get(c, "unknown")] = (
@@ -3320,10 +3305,10 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     }
 
 
-# ── THE ONE WALL LAW (operator ruling 923c380f, 2026-07-11) ─────────────────────────────
-# The console's briefing rendered the RAW open-thread select — 919 rows, 92% of them miner
-# echoes no mind ever touched — while orient() had the graded law all along. The law now
-# lives HERE, and mcp_server imports it: one wall, every lens.
+# ── THE ONE OPEN-THREAD RANKING RULE ─────────────────────────────────────────────────────
+# The console's briefing used to render the RAW open-thread select, 919 rows, 92% of them
+# low-signal echoes nobody ever touched, while orient() had the graded ranking logic all
+# along. That logic now lives HERE, and mcp_server imports it: one ranking rule, every view.
 
 ORIENT_OPEN_THREADS = 25
 
@@ -3332,36 +3317,35 @@ async def owner_lineage_roots(
     pool: asyncpg.Pool, owners: set[str],
 ) -> dict[str, str]:
     """Resolve every DISTINCT agent-shaped owner's TRUE lineage root the SAME way
-    `lineage_root`'s own succeeded_from edge walk does — never `_generation()`'s string
+    `lineage_root`'s own succeeded_from edge walk does, never `_generation()`'s string
     parse, which strips only the LAST `-<roman>` segment and is blind to a multi-hop id
-    like `agent:x-g40-g40-vii` (measured live, 2026-08-16: 18 of 71 distinct open-thread
-    owners disagreed, EVERY one a real lineage the string parse split into false-separate
-    roots — Imhotep's #150 finding, the same shape, applied one layer up to
-    `rank_open_threads`'s own `whose_move`, per Thoth's dispatch).
+    like `agent:x-g40-g40-vii` (measured live: 18 of 71 distinct open-thread owners
+    disagreed, EVERY one a real lineage the string parse split into false-separate roots,
+    the same shape applied one layer up to `rank_open_threads`'s own `whose_move`).
 
-    ONE BULK FETCH, NOT N SEQUENTIAL WALKS (measured live, same night: calling
-    `lineage_root` once per owner against a real 76-generation-deep lineage — Thoth's own
-    — cost ~1.8s for just 13 distinct owners, ~137ms/owner, each independently re-walking
-    a chain most of them share most of. `lineage_root` itself stays untouched and correct
-    for a single lookup; this is a SEPARATE bulk path for the same underlying data, one
-    query for the WHOLE succeeded_from adjacency map (bounded by however many Agent
-    objects have ever asserted it — hundreds, not the thousands orient()'s own hot path
-    needs to fear), same belief resolution `_succeeded_from_of` uses (DISTINCT ON,
-    confidence DESC/observed_at DESC) so it can never disagree with a single-owner
-    `lineage_root` call reading the identical data. Every owner's chain then walks
-    IN MEMORY, memoizing every node's own root across ALL owners in this one call — a
-    76-hop chain shared by 13 owners costs one real walk, not thirteen. Same 100-iteration
-    cycle guard as `lineage_root`; a chain that doesn't terminate within it is confessed
-    (left OUT of the returned map, same as any other unresolved owner) rather than risking
-    a bad root.
+    ONE BULK FETCH, NOT N SEQUENTIAL WALKS (measured live: calling `lineage_root` once per
+    owner against a real 76-generation-deep lineage cost ~1.8s for just 13 distinct owners,
+    ~137ms/owner, each independently re-walking a chain most of them share most of).
+    `lineage_root` itself stays untouched and correct for a single lookup; this is a
+    SEPARATE bulk path for the same underlying data, one query for the WHOLE
+    succeeded_from adjacency map (bounded by however many Agent objects have ever
+    asserted it, hundreds, not the thousands orient()'s own hot path needs to fear), same
+    belief resolution `_succeeded_from_of` uses (DISTINCT ON, confidence DESC/observed_at
+    DESC) so it can never disagree with a single-owner `lineage_root` call reading the
+    identical data. Every owner's chain then walks IN MEMORY, memoizing every node's own
+    root across ALL owners in this one call, a 76-hop chain shared by 13 owners costs one
+    real walk, not thirteen. Same 100-iteration cycle guard as `lineage_root`; a chain
+    that doesn't terminate within it is confessed (left OUT of the returned map, same as
+    any other unresolved owner) rather than risking a bad root.
 
-    Batched ONCE per caller here, never per row — `rank_open_threads` itself stays pure
-    and synchronous; every bit of I/O this needs happens before it's called, matching
-    577988ed's own ban on a fleet-wide hot-path slowdown for a ranking nicety. A value
-    that isn't agent-shaped ('operator', a project name, blank) is skipped — it was never
+    Batched ONCE per caller here, never per row: `rank_open_threads` itself stays pure and
+    synchronous; every bit of I/O this needs happens before it's called, matching a
+    standing ban on a fleet-wide hot-path slowdown for a ranking nicety. A value that
+    isn't agent-shaped ('operator', a project name, blank) is skipped, it was never
     lineage-comparable to begin with, and `rank_open_threads` falls back to its own
     string-parse for anything missing from the returned map (a genuinely unresolved
-    lookup degrades to the OLD behavior, never a crash or a silent mis-rank to 'nobody's')."""
+    lookup degrades to the OLD behavior, never a crash or a silent mis-rank to
+    'nobody's')."""
     candidates = {o for o in owners if o and o.startswith("agent:")}
     if not candidates:
         return {}
@@ -3389,7 +3373,7 @@ async def owner_lineage_roots(
             chain.append(cur)
             cur = nxt
         else:
-            return None  # cycle/too-deep — confessed by absence, never a guessed root
+            return None  # cycle/too-deep: confessed by absence, never a guessed root
         for node in chain:
             resolved[node] = root
         return root
@@ -3405,18 +3389,18 @@ async def owner_lineage_roots(
 async def reader_identity_set(
     pool: asyncpg.Pool, *, agent_id: str | None, project: str | None,
 ) -> frozenset[str]:
-    """ONE AUTHORITY for the `me` set `rank_open_threads` ranks against (#185 leg (a)):
-    orient() and automount()/whisper each used to hand-roll `{agent_id, project}` — never
-    the seat's own HANDLE. A charter obligation filed `owner='<handle>'` (the natural way
-    to say "whose move is this" for a self-declaring seat, per 696d302c/1bb8e095's own
-    self-service model) never ranked as MINE under either caller: a bare handle matches
-    neither an agent id nor a project name, so a seat's own evidenced-but-undeclared
-    charter sat on its wall ranked no differently from a stranger's business. Two identical
-    copies of this gap were the bug, not a missing feature in `rank_open_threads` itself —
-    this closes both at once rather than patching each caller separately.
+    """ONE AUTHORITY for the `me` set `rank_open_threads` ranks against: orient() and
+    automount()/whisper each used to hand-roll `{agent_id, project}`, never the seat's own
+    HANDLE. A charter obligation filed `owner='<handle>'` (the natural way to say "whose
+    move is this" for a self-declaring seat, under a self-service ownership model) never
+    ranked as MINE under either caller: a bare handle matches neither an agent id nor a
+    project name, so a seat's own evidenced-but-undeclared charter sat on its wall ranked
+    no differently from someone else's business. Two identical copies of this gap were the
+    bug, not a missing feature in `rank_open_threads` itself; this closes both at once
+    rather than patching each caller separately.
 
     Resolves the seat via `held_seat` (lineage-aware, the same "who am I" lookup mount/
-    orient already use) and folds its handle in alongside agent_id/project — never a
+    orient already use) and folds its handle in alongside agent_id/project, never a
     second, independently-drifting handle lookup. Silent on any resolution failure (an
     unbound identity, a transient pool error): the reader still gets its base set, exactly
     the fail-open law every whisper/orient path already holds to."""
@@ -3426,7 +3410,7 @@ async def reader_identity_set(
     try:
         from src.orchestrator.seats import held_seat
         seat = await held_seat(pool, agent_id)
-    except Exception:  # noqa: BLE001 — the reader's own identity set must never crash on this
+    except Exception:  # noqa: BLE001 - the reader's own identity set must never crash on this
         seat = None
     handle = seat.get("handle") if seat else None
     return base | {handle} if handle else base
@@ -3436,42 +3420,40 @@ def rank_open_threads(
     rows: list[dict[str, Any]], me: frozenset[str] = frozenset(),
     owner_roots: dict[str, str] | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Rank open threads for display and cap. Obligations — DUTIES an action minted — float
+    """Rank open threads for display and cap. Obligations, DUTIES an action minted, float
     above ordinary threads. WITHIN each kind group, ownership orders for the READER (`me` =
     the caller's agent id + project; the console passes {'operator'}): MINE TO ACT first,
-    another mind's claims next, 'waiting on the human' last. Ownership matching is LINEAGE-
-    AWARE (finding D, Khnum audit thread ffb13bd9): an obligation owned by an earlier or
-    later generation of the same agent lineage (agent:foo-iii vs agent:foo-iv, post-
-    compaction succession) still ranks as mine — the compositions layer had never inherited
-    the `_generation()` treatment held_seat/manager_of_seat already carry.
+    someone else's claims next, 'waiting on the human' last. Ownership matching is LINEAGE-
+    AWARE: an obligation owned by an earlier or later generation of the same agent lineage
+    (agent:foo-iii vs agent:foo-iv, post-compaction succession) still ranks as mine, the
+    compositions layer had never inherited the `_generation()` treatment held_seat/
+    manager_of_seat already carry.
 
     `owner_roots` (optional, from `owner_lineage_roots` above): the EDGE-WALKED root for
     each distinct owner/`me` value this caller already resolved, precomputed once. Every
     lookup here prefers it; a value absent from the map (the caller didn't precompute it,
-    or it isn't agent-shaped) falls back to the old `_generation()` string parse — this
+    or it isn't agent-shaped) falls back to the old `_generation()` string parse, this
     function stays callable exactly as before for anyone who doesn't have a pool handy,
     degrading gracefully rather than refusing. Still entirely synchronous and Pure.
 
-    A BARE SEAT HANDLE MATCHES CASE-INSENSITIVELY (#185 leg (a), the self-declared-charter
-    obligation batch): `owner='<handle>'` is the natural way to file "whose move is this"
-    for a seat rather than its current agent:id, but a handle's stored casing follows
-    whatever claim_name happened to type — nobody should have to know a seat's exact
-    capitalization for their own obligation to rank as theirs. Exact-match stays the FIRST,
-    fast check (agent:/operator lineage roots already need it precise); a lowercase
-    fallback only fires when that misses, so this never weakens the agent-lineage matching
-    above, only forgives a casing mismatch on a plain name.
+    A BARE SEAT HANDLE MATCHES CASE-INSENSITIVELY: `owner='<handle>'` is the natural way to
+    file "whose move is this" for a seat rather than its current agent:id, but a handle's
+    stored casing follows whatever claim_name happened to type; nobody should have to know
+    a seat's exact capitalization for their own obligation to rank as theirs. Exact-match
+    stays the FIRST, fast check (agent:/operator lineage roots already need it precise); a
+    lowercase fallback only fires when that misses, so this never weakens the agent-lineage
+    matching above, only forgives a casing mismatch on a plain name.
 
-    WITHIN each (kind, ownership) band, RELEVANCE OBSERVED, NOT DECLARED (ruling a4bd555c,
-    #121's catalog-usage law applied to the object that matters most, Thoth msg 2332):
-    `last_touched` — the freshest self_declared `observed_at` a caller of `open_thread_wall`
-    hands in — breaks the tie, not raw creation order. A thread minted months ago and
-    re-annotated yesterday answers "annotated recently vs. abandoned" directly and outranks
-    one merely minted yesterday and never touched since; a thread's `last_touched` is never
-    absent on a genuine wall row (an untouched thread is an echo, never a wall entry —
-    `open_thread_wall`'s own split). `arc` is the last tie-break — grouping, not priority:
+    WITHIN each (kind, ownership) band, RELEVANCE OBSERVED, NOT DECLARED: `last_touched`
+    (the freshest self_declared `observed_at` a caller of `open_thread_wall` hands in)
+    breaks the tie, not raw creation order. A thread minted months ago and re-annotated
+    yesterday answers "annotated recently vs. abandoned" directly and outranks one merely
+    minted yesterday and never touched since; a thread's `last_touched` is never absent on
+    a genuine wall row (an untouched thread is an echo, never a wall entry, per
+    `open_thread_wall`'s own split). `arc` is the last tie-break, grouping, not priority:
     no arc in the closed taxonomy outranks another, so it never overrides an observed
     signal, only orders otherwise-identical ties so same-arc threads sit together on a
-    capped page. Input order is the final fallback — Python's sort is stable."""
+    capped page. Input order is the final fallback, Python's sort is stable."""
     owner_roots = owner_roots or {}
 
     def root_of(a: str) -> str:
@@ -3501,10 +3483,11 @@ def rank_open_threads(
     return shown, len(ranked) - len(shown)
 
 
-# A HALTED project's work is not the fleet's debt (the operator halts a program BY NAME — it is on
-# the record, testimony, not a guess). Its threads are real yield on a PAUSED tree: not garbage, so
-# never swept; not debt, so never counted. 333 of them were inflating every number in the system
-# (257 in one, 78 in another). Resume the project and they all come back — this is a LENS.
+# A HALTED project's work is not the fleet's debt (the operator halts a program BY NAME, it is
+# on the record, testimony, not a guess). Its threads are real yield on a PAUSED tree: not
+# garbage, so never swept; not debt, so never counted. 333 of them were inflating every number
+# in the system (257 in one, 78 in another). Resume the project and they all come back, this is
+# a display lens, not a data change.
 _NOT_HALTED = (
     "NOT EXISTS (SELECT 1 FROM links hl JOIN objects hp ON hp.id=hl.to_id "
     "  JOIN current_assertions ha ON ha.object_id=hp.id AND ha.name='lifecycle' "
@@ -3513,13 +3496,13 @@ _NOT_HALTED = (
     "    AND ha.value #>> '{}' = 'halted')"
 )
 
-# THE CORRECTED SUMMARY WINS BY DEFAULT (roadmap ledger-rot stage 3.5, decision c0bc6d33 +
-# Thoth LXXIV's DM 4364: "a reader must get the corrected text by default... orient()/roadmap
-# must surface the corrected summary, not the original with a footnote"). `corrected_summary`
+# THE CORRECTED SUMMARY WINS BY DEFAULT: "a reader must get the corrected text by
+# default... orient()/roadmap must surface the corrected summary, not the original with a
+# footnote". `corrected_summary`
 # (correct_thread_summary, capture.py) is never touched by open_thread's own dedup key, so a
-# reader here needs the WINNING one of the two, not the original alone — same COALESCE shape
+# reader here needs the WINNING one of the two, not the original alone, same COALESCE shape
 # everywhere a wall/roadmap query selects `summary` for display. `summary` itself stays
-# reachable too (recall(ref) already surfaces both, unchanged since stage 3).
+# reachable too (recall(ref) already surfaces both, unchanged since an earlier build stage).
 _SUMMARY_DISPLAY_SQL = (
     "COALESCE("
     "(SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -3531,23 +3514,22 @@ _SUMMARY_DISPLAY_SQL = (
 async def open_thread_wall(
     pool: asyncpg.Pool, proj: uuid.UUID,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """One project's open threads, SPLIT: (wall, echoes). An ECHO is a thread no mind has
-    ever touched — not one self_declared assertion in its whole history — that is either
+    """One project's open threads, SPLIT: (wall, echoes). An ECHO is a thread nobody has
+    ever touched, not one self_declared assertion in its whole history, that is either
     kind='question' or older than the freshness window. Its status stays OPEN in the record
-    (untouched ≠ resolved, ruling 758ded94); only the LENS stops hauling it. Rows carry the
-    8-char short id so triage verbs can name their target directly.
+    (untouched does not mean resolved); only the display lens stops surfacing it. Rows
+    carry the 8-char short id so triage verbs can name their target directly.
 
-    `arc` and `last_touched` ride along for `rank_open_threads` (ruling a4bd555c, same law
-    as #121's catalog ranking — RELEVANCE OBSERVED, NOT DECLARED): `last_touched` is the
-    freshest self_declared `observed_at` on the object, the same authoritative clock
-    `current_assertions` itself resolves "current" by — a thread re-annotated last week
-    outranks one merely minted yesterday and never touched again. `untouched` already
-    proves this is never null for a WALL row (an untouched thread is an echo, not a wall
-    entry).
+    `arc` and `last_touched` ride along for `rank_open_threads` (RELEVANCE OBSERVED, NOT
+    DECLARED): `last_touched` is the freshest self_declared `observed_at` on the object,
+    the same authoritative clock `current_assertions` itself resolves "current" by, a
+    thread re-annotated last week outranks one merely minted yesterday and never touched
+    again. `untouched` already proves this is never null for a WALL row (an untouched
+    thread is an echo, not a wall entry).
 
-    `contested` (fix (b), Metron's mechanism report, mail 8890/8921/8922) is present and
-    True on any row whose newest note post-dates its own last summary correction -- a
-    reader sees the disagreement here, on the wall, before deciding whether to open it."""
+    `contested` is present and True on any row whose newest note post-dates its own last
+    summary correction: a reader sees the disagreement here, on the wall, before deciding
+    whether to open it."""
     from src.orchestrator.capture import CONTESTED_SQL
 
     rows = await pool.fetch(
@@ -3577,12 +3559,12 @@ async def open_thread_wall(
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "ORDER BY o.created_at DESC LIMIT 400", proj)
-    # THE UNFILED OWNER MATCH (thread 4ffe0eb9, Alfred V's succession repro): a thread
-    # opened without repo= carries no in_repo link, so the join above can never see it —
-    # Alfred IV's succession handoff hid from his own successor's orient while its owner
-    # said 'alfred' the whole time, and the successor's first instinct was to regex the
-    # transcript. Owner already means "whose move it is": an unfiled open thread whose
-    # owner IS this project (by name, or an agent mounted in it) belongs on its wall.
+    # THE UNFILED OWNER MATCH: a thread opened without repo= carries no in_repo link, so
+    # the join above can never see it. In one repro, a succession handoff thread hid from
+    # the successor's own orient() while its owner named the manager seat the whole time,
+    # and the successor's first instinct was to regex the transcript. Owner already means
+    # "whose move it is": an unfiled open thread whose owner IS this project (by name, or
+    # an agent mounted in it) belongs on its wall.
     pname = await pool.fetchval(
         "SELECT replace(canonical, 'repo:', '') FROM objects WHERE id=$1", proj)
     if pname:
@@ -3633,57 +3615,57 @@ async def open_thread_wall(
         if not r["summary"]:
             continue
         # kind/owner render only when DECLARED (no null-key noise): an absent kind means no
-        # mind — and no mechanical rule — ever said what this is (Fulcrum III's verdict,
-        # answered at the lens).
+        # one, and no mechanical rule, ever said what this is.
         item: dict[str, Any] = {"id": str(r["id"])[:8], "summary": r["summary"]}
         if r["kind"]:
             item["kind"] = r["kind"]
-        if r["owner"]:  # whose move it is — absent means anyone's
+        if r["owner"]:  # whose move it is, absent means anyone's
             item["owner"] = r["owner"]
-        # ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): the write
-        # gate never strips a legacy off-scope arc a pre-gate write left on a non-osiris
-        # thread (577988ed — additive, never a strip), so this READ surface must not
-        # show one either. capture.ARCS names osiris's own roadmap taxonomy only.
+        # ARC IS OSIRIS-ONLY VOCABULARY: the write gate never strips a legacy off-scope
+        # arc a pre-gate write left on a non-osiris thread (additive, never a strip), so
+        # this READ surface must not show one either. capture.ARCS names osiris's own
+        # roadmap taxonomy only.
         if r["arc"] and pname == "osiris":
             item["arc"] = r["arc"]
-        if r["is_handoff"]:  # Thoth DM 3090: orient()'s own _cap_text reads this to exempt
+        if r["is_handoff"]:  # orient()'s own _cap_text reads this to exempt
             item["is_handoff"] = r["is_handoff"]  # a handoff record from the 160-char cap
-        if r["contested"]:  # fix (b), mail 8890: a newer note disputes this summary
+        if r["contested"]:  # a newer note disputes this summary
             item["contested"] = True
-        # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (ruling 61c1b20d, extended from the desk
-        # to the wall — 2026-07-12, the operator: "it's a snowball to hell").
+        # THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE.
         #
-        # An UNTOUCHED thread is one no mind has ever laid a self_declared assertion on: nobody
-        # opened it, nobody claimed it, nobody so much as triaged it. It exists because an LLM
-        # read a conversation and inferred that somebody, somewhere, owes work. That is a
-        # SUGGESTION, and it was riding the wall with the full authority of a declaration.
+        # An UNTOUCHED thread is one nobody has ever laid a self_declared assertion on:
+        # nobody opened it, nobody claimed it, nobody so much as triaged it. It exists
+        # because an LLM read a conversation and inferred that somebody, somewhere, owes
+        # work. That is a SUGGESTION, and it was riding the wall with the full authority
+        # of a declaration.
         #
-        # It used to get a "loud week" before folding. That window is exactly what let the pile
-        # grow: the miner mints faster than seven days, so the wall was permanently full of
-        # fresh guesses. 908 of the fleet's 1067 open threads (85%) are untouched miner
-        # inferences; ONE PAUSED PROJECT was showing 181 of them.
+        # It used to get a "loud week" before folding. That window is exactly what let the
+        # pile grow: the miner mints faster than seven days, so the wall was permanently
+        # full of fresh guesses. 908 of the fleet's 1067 open threads (85%) are untouched
+        # miner inferences; ONE PAUSED PROJECT was showing 181 of them.
         #
-        # So: a guess does not get a week. It goes to the `echoes` pile immediately, where it is
-        # COUNTED and one click away (land on counts, walk in). The wall now shows only what a
-        # MIND touched. Nothing is deleted, nothing is hidden — the record keeps every thread
-        # open until testimony says otherwise (untouched ≠ resolved, 758ded94). It simply stops
-        # being presented as though someone had promised it.
+        # So: a guess does not get a week. It goes to the `echoes` pile immediately, where
+        # it is COUNTED and one click away (land on counts, walk in). The wall now shows
+        # only what a human touched. Nothing is deleted, nothing is hidden, the record
+        # keeps every thread open until testimony says otherwise (untouched does not mean
+        # resolved). It simply stops being presented as though someone had promised it.
         is_echo = r["kind"] == "question" or bool(r["untouched"])
         if is_echo:
             echoes.append({**item, "born": r["created_at"].date().isoformat()})
         else:
             # untouched -> echo above means a WALL row always has a real touch
             wall.append({**item, "last_touched": r["last_touched"]})
-    echoes.reverse()  # oldest first — triage drains from the bottom of the pile
+    echoes.reverse()  # oldest first: triage drains from the bottom of the pile
     return wall, echoes
 
 
 async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
     """THE WALL as a composition: what is GENUINELY unresolved, graded. With a subject
-    (a SoftwareProject) — that project's wall exactly as orient renders it: obligations
-    first, owner-banded, echo pile counted, capped. WITHOUT a subject — the fleet ROLLUP:
+    (a SoftwareProject), that project's wall exactly as orient renders it: obligations
+    first, owner-banded, echo pile counted, capped. WITHOUT a subject, the fleet ROLLUP:
     per-project counts + the top obligations across the whole graph, never 900 raw rows
-    (the 2026-07-11 console showed 919 'unresolved'; 850 were untouched miner echoes)."""
+    (one earlier console rendering showed 919 'unresolved'; 850 were untouched miner
+    echoes)."""
     me_arg = args.get("me")
     me = frozenset(me_arg) if isinstance(me_arg, list | tuple | set) else frozenset()
     if subject is not None:
@@ -3722,8 +3704,8 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "GROUP BY p.canonical ORDER BY count(*) DESC LIMIT 30")]
-    # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a mind
-    # actually TOUCHED — never the untouched echo mass; repo-less threads included (a
+    # the fleet's TOP OF WALL: obligations (a duty never hides) plus any thread a human
+    # actually TOUCHED, never the untouched echo mass; repo-less threads included (a
     # deliberate open_thread with no repo must still surface where it was promised to)
     top_rows = [dict(r) for r in await pool.fetch(
         "SELECT str_id AS id, summary, kind, owner, arc, last_touched, project FROM ("
@@ -3752,29 +3734,32 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "    ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         " ORDER BY o.created_at DESC LIMIT 400) t "
         # ONE RULE, THREE LENSES. This predicate, the fleet pile above, and the scoped wall
-        # below must agree or the numbers cannot add up — and the operator caught them
-        # disagreeing ("1051 open · 334 obligations · 951 pile — this doesn't add up").
-        # A thread rides the wall IFF A MIND TOUCHED IT. A guessed obligation used to get a
-        # week's grace here; the miner mints faster than a week, so the grace WAS the pile.
+        # below must agree or the numbers cannot add up, and a real production report once
+        # caught them disagreeing ("1051 open, 334 obligations, 951 pile: this doesn't add
+        # up"). A thread rides the wall IFF A HUMAN TOUCHED IT. A guessed obligation used
+        # to get a week's grace here; the miner mints faster than a week, so the grace WAS
+        # the pile.
         "WHERE t.summary IS NOT NULL AND t.touched")]
     owner_roots = await owner_lineage_roots(
         pool, {str(o) for r in top_rows if (o := r.get("owner"))} | me)
     shown, more = rank_open_threads(top_rows, me, owner_roots)
-    # totals over the WHOLE record — a repo-less thread must count even though the
+    # totals over the WHOLE record: a repo-less thread must count even though the
     # per-project breakdown can't file it
-    # THE NUMBERS MUST ADD UP (operator, 2026-07-12: "1051 open · 334 obligations · 951 pile —
-    # this doesn't add up, the numbers are absurd"). He was right, and they never could have.
+    # THE NUMBERS MUST ADD UP: an earlier report claimed "1051 open, 334 obligations, 951
+    # pile, this doesn't add up, the numbers are absurd", and it was right; they never
+    # could have.
     #
-    # These were THREE OVERLAPPING CUTS of one set, stacked as if they were three SLICES of it:
-    # `open` was the whole, `obligations` cut it by KIND, `pile` cut it by TOUCHED-NESS — and an
-    # obligation can sit in the pile, so 381 + 951 = 1332 > 1114. Any reader who tried to
-    # reconcile them was doing arithmetic on a category error.
+    # These were THREE OVERLAPPING CUTS of one set, stacked as if they were three SLICES of
+    # it: `open` was the whole, `obligations` cut it by KIND, `pile` cut it by TOUCHED-
+    # NESS, and an obligation can sit in the pile, so 381 + 951 = 1332 > 1114. Any reader
+    # who tried to reconcile them was doing arithmetic on a category error.
     #
-    # Now they PARTITION: open = wall + pile, exactly, always. And `obligations` is reported as
-    # what it actually is — a SUBSET OF THE WALL, and only the DECLARED ones. Of 381 threads
-    # carrying kind='obligation', 259 were the MINER's guess that somebody owed something and no
-    # mind ever touched them. Counting those as duties inflated the fleet's debt threefold. The
-    # real number is 122. (Same law, one more altitude: the miner may notice, but never oblige.)
+    # Now they PARTITION: open = wall + pile, exactly, always. And `obligations` is
+    # reported as what it actually is, a SUBSET OF THE WALL, and only the DECLARED ones.
+    # Of 381 threads carrying kind='obligation', 259 were the MINER's guess that somebody
+    # owed something and nobody ever touched them. Counting those as duties inflated the
+    # fleet's debt threefold. The real number is 122. (Same law, one more altitude: the
+    # miner may notice, but never oblige.)
     trow = await pool.fetchrow(
         "SELECT count(*) AS open, "
         " count(*) FILTER (WHERE NOT EXISTS (SELECT 1 FROM assertions sa "
@@ -3804,12 +3789,13 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "   WHERE a.object_id=o.id AND a.name='status' "
         "   ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open')='open' "
         "  AND NOT " + _NOT_HALTED)
-    # UNFILED (Thoth DM 2704, finding 2 of the in_repo audit): `projects` above INNER JOINs
-    # in_repo — structurally, a per-project GROUP BY has nowhere to file a thread with no
-    # project at all. `totals.open` already counts it correctly (the comment at the top of
-    # this block always has); what was missing was saying so IN THE RECEIPT. This is the
-    # root cause of a number quoted at the operator more than once without anyone knowing
-    # why: summing `projects[].open` will always undercount `totals.open` by exactly this.
+    # UNFILED (from the same in_repo-scoping audit as ROT-CANDIDATE-UNSCOPED above):
+    # `projects` above INNER JOINs in_repo, structurally, a per-project GROUP BY has
+    # nowhere to file a thread with no project at all. `totals.open` already counts it
+    # correctly (the comment at the top of this block always has); what was missing was
+    # saying so IN THE RECEIPT. This is the root cause of a number quoted at the operator
+    # more than once without anyone knowing why: summing `projects[].open` will always
+    # undercount `totals.open` by exactly this.
     unfiled = await pool.fetchval(
         "SELECT count(*) FROM objects o "
         "WHERE o.type='Thread' AND o.status='active' AND o.merged_into IS NULL "
@@ -3820,12 +3806,12 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
         "    AND (l.valid_until IS NULL OR l.valid_until > now()))")
     totals = {
         "open": trow["open"],
-        "wall": trow["open"] - trow["pile"],   # a mind touched it — open = wall + pile, exactly
+        "wall": trow["open"] - trow["pile"],   # a human touched it: open = wall + pile, exactly
         "pile": trow["pile"],
         "obligations": trow["obligations"],    # DECLARED duties, a subset of `wall`
         "guessed_obligations": trow["guessed_obligations"],  # the miner's, sitting in the pile
-        "halted": halted,   # real yield on programs the operator killed BY NAME — not debt
-        "unfiled": unfiled,  # counted in `open`, absent from every `projects[]` row — no
+        "halted": halted,   # real yield on programs the operator killed BY NAME, not debt
+        "unfiled": unfiled,  # counted in `open`, absent from every `projects[]` row: no
                               # in_repo edge to file it under; not garbage, just homeless
         "reads": "open = wall + pile, over LIVE projects only. `obligations` are DECLARED duties "
                  "and are a subset of `wall` — never add them to anything. `halted` is work on "
@@ -3846,36 +3832,35 @@ async def _fn_wall(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
 async def _fn_roadmap_open(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """The OPEN half of the migrated roadmap (ruling c5b184cd, thread d56e7073/#44) — the one
-    piece that stays a Function rather than a pure op-tree, and deliberately so: echo-
-    filtering (`open_thread_wall`'s exclusion of untouched miner guesses) inspects EVIDENCE
-    PROVENANCE across a thread's whole assertion history, which `select`'s property-only
-    `where` cannot express — real domain logic, exactly what a Function is for. Unlike a
-    Function's output BEFORE task #60 (the function-output-re-entering-the-op-tree
-    follow-on), this is no longer a dead-end leaf: returning a flat, arc/owner-tagged list
-    lets the composition's own `group by=arc` then `group by=owner` do the nesting via the
-    op-tree — the SAME shape `_roadmap_status_group` already uses for resolved/retracted —
-    instead of hand-rolling it here in Python. This is the discipline the migration is
-    proving: real judgment (the echo-filter) stays a Function, pure layout stays ops.
+    """The OPEN half of the migrated roadmap: the one piece that stays a Function rather
+    than a pure op-tree, and deliberately so: echo-filtering (`open_thread_wall`'s
+    exclusion of untouched miner guesses) inspects EVIDENCE PROVENANCE across a thread's
+    whole assertion history, which `select`'s property-only `where` cannot express, real
+    domain logic, exactly what a Function is for. This is no longer a dead-end leaf:
+    returning a flat, arc/owner-tagged list lets the composition's own `group by=arc` then
+    `group by=owner` do the nesting via the op-tree, the SAME shape
+    `_roadmap_status_group` already uses for resolved/retracted, instead of hand-rolling
+    it here in Python. This is the discipline the migration is proving: real judgment (the
+    echo-filter) stays a Function, pure layout stays ops.
 
-    `rank_open_threads`'s own cap (ORIENT_OPEN_THREADS) was silently dropping the tail — a
-    "no silent caps" violation Thoth caught live: the open section showed a subset of a
+    `rank_open_threads`'s own cap (ORIENT_OPEN_THREADS) was silently dropping the tail, a
+    "no silent caps" violation caught live: the open section showed a subset of a
     project's real open threads with no line saying so. `_fn_wall` (this function's own
-    sibling) already reports its `more` honestly, but as a DICT sidecar key — not available
-    here, since this Function must stay list-shaped for `group` to consume it (task #60).
-    So the honesty rides IN the list instead: one synthetic trailing row, arc/owner-tagged
+    sibling) already reports its `more` honestly, but as a DICT sidecar key, not available
+    here, since this Function must stay list-shaped for `group` to consume it. So the
+    honesty rides IN the list instead: one synthetic trailing row, arc/owner-tagged
     distinctly (never a real ARCS value or a real owner) so it forms its own visible,
-    clearly-labeled bucket rather than hiding inside real data — "a count line in the
+    clearly-labeled bucket rather than hiding inside real data, "a count line in the
     section," the generic renderer needing zero special-case code to show it."""
     from src.orchestrator.roadmap import _arc_map
 
     assert subject is not None  # the op guard requires a subject (the project)
     wall, _echoes = await open_thread_wall(pool, subject)
     ranked, more = rank_open_threads(wall)
-    # ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): only look up
-    # (and so only ever show) a real arc value when this roadmap's own subject IS osiris
-    # — a client project's roadmap must never surface a legacy off-scope arc a pre-gate
-    # write left behind (577988ed — additive, never a strip on the write side).
+    # ARC IS OSIRIS-ONLY VOCABULARY: only look up (and so only ever show) a real arc value
+    # when this roadmap's own subject IS osiris, a client project's roadmap must never
+    # surface a legacy off-scope arc a pre-gate write left behind (additive, never a strip
+    # on the write side).
     pname = await pool.fetchval(
         "SELECT replace(canonical, 'repo:', '') FROM objects WHERE id=$1", subject)
     arcs = (await _arc_map(pool, [str(t["id"])[:8] for t in ranked])
@@ -3896,12 +3881,12 @@ async def _fn_roadmap_open(
 async def _fn_desk_decisions(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """The 'decisions-awaiting-a-call' leg of live-desk (ruling c5b184cd, thread d56e7073/#44)
-    — a Function, not a pure op: `fleet_messages` (the operator's desk) isn't part of the
-    object graph `select`/`traverse` operate over at all, so this can't be expressed as ops
+    """The 'decisions-awaiting-a-call' leg of live-desk: a Function, not a pure op:
+    `fleet_messages` (the operator's desk) isn't part of the object graph
+    `select`/`traverse` operate over at all, so this can't be expressed as ops
     regardless of how the property-matching vocabulary grows. Wraps the SAME thread-lead,
     undismissed predicate every other desk count already uses (`mailbox._DESK_BRIEF_ROW`),
-    narrowed to `desk_kind='decision'` — "a call only they can make," per `send()`'s own
+    narrowed to `desk_kind='decision'`, "a call only they can make," per `send()`'s own
     docstring for that triage value."""
     from src.orchestrator.mailbox import _DESK_BRIEF_ROW, OPERATOR_ADDR
 
@@ -3909,9 +3894,9 @@ async def _fn_desk_decisions(
          "WHERE " + _DESK_BRIEF_ROW + " AND m.desk_kind='decision' "
          "ORDER BY m.created_at DESC").replace("$op", "$1")
     rows = await pool.fetch(q, OPERATOR_ADDR)
-    # THE WRITE LEG (ruling c5b184cd, DM 1374): a Function's output is Python-native, so its
-    # own `_action` is attached directly here — no `row_action` templating applies to a
-    # Function (that's `table`'s own mechanism, over object properties this isn't).
+    # THE WRITE LEG: a Function's output is Python-native, so its own `_action` is
+    # attached directly here, no `row_action` templating applies to a Function (that's
+    # `table`'s own mechanism, over object properties this isn't).
     return [{"id": str(r["id"]), "from": r["from_agent"], "project": r["from_project"],
              "summary": r["body"][:200], "when": str(r["created_at"]),
              "_action": {"action": "settle", "args": {"ids": [r["id"]]}}} for r in rows]
@@ -3920,33 +3905,31 @@ async def _fn_desk_decisions(
 async def _fn_practices(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """THE THAW's practices composition (ruling 1e6d7367) — surface-scoped, ON-DEMAND
-    only (the ruling's own words: 'orient stays lean — surfacing on write-collision + on-
-    demand composition only'). Never wired into orient's ambient payload. `surface` narrows
-    to one domain vocabulary (BlindSpot's own scoping, e.g. 'deploy', 'succession'); omitted,
-    every active Practice. `confirmed` is the live `witnesses` link count — DERIVED, never a
-    stored scalar (the same race class thread dc9d1eed found live in bridged_seat/
-    record_bridge_anchor would apply to an incremented counter; a link COUNT cannot desync
-    from the links it counts). A refuted Practice still lists — flagged, never hidden.
-    `amendments` (Thoth DM 3071, capture.amend_practice) — every narrowing `amend_practice`
-    has added, oldest first, folded in HERE: this is the ONE live surface every caller
-    already uses to read a practice's current guidance, so an amendment that isn't visible
-    here isn't visible anywhere a reader would think to look. A Decision's own addenda
-    followed the identical reasoning onto its own equivalent surface, `recall()`, rather
-    than here (thread 1f4dcc03, fixed) — a Decision has no standing "current guidance"
-    listing the way Practices do; recall(kind='decision') is the read that already exists
-    for "give me the whole record."
+    """The practices composition: surface-scoped, ON-DEMAND only ('orient stays lean:
+    surfacing on write-collision + on-demand composition only'). Never wired into orient's
+    ambient payload. `surface` narrows to one domain vocabulary (BlindSpot's own scoping,
+    e.g. 'deploy', 'succession'); omitted, every active Practice. `confirmed` is the live
+    `witnesses` link count, DERIVED, never a stored scalar (an incremented counter could
+    desync from what it counts; a link COUNT cannot). A refuted Practice still lists,
+    flagged, never hidden. `amendments`, every narrowing `amend_practice` has added,
+    oldest first, folded in HERE: this is the ONE live surface every caller already uses
+    to read a practice's current guidance, so an amendment that isn't visible here isn't
+    visible anywhere a reader would think to look. A Decision's own addenda followed the
+    identical reasoning onto its own equivalent surface, `recall()`, rather than here: a
+    Decision has no standing "current guidance" listing the way Practices do;
+    recall(kind='decision') is the read that already exists for "give me the whole
+    record."
 
-    `recent=True` (thread 55e5ac72, Thoth dispatch msg 9123): orders by `last_touch` DESC
-    (the newest observed_at across EVERY assertion on the practice, amendments included)
-    instead of the default `confirmed DESC` — the default ranking systematically hides
-    exactly the practices most in need of a second look, since a freshly-created or
-    freshly-amended practice is by construction the least-confirmed. Default unchanged;
-    `recent` is purely an alternate ordering, never a filter.
+    `recent=True`: orders by `last_touch` DESC (the newest observed_at across EVERY
+    assertion on the practice, amendments included) instead of the default `confirmed
+    DESC`, the default ranking systematically hides exactly the practices most in need of
+    a second look, since a freshly-created or freshly-amended practice is by construction
+    the least-confirmed. Default unchanged; `recent` is purely an alternate ordering,
+    never a filter.
 
-    `id` (same thread, half 1): a single practice by id, bypassing BOTH `surface` and the
-    ranked window entirely — the shape `amend_practice`'s own receipt uses so a write is
-    never invisible on its own receipt regardless of where the row would otherwise rank."""
+    `id`: a single practice by id, bypassing BOTH `surface` and the ranked window
+    entirely, the shape `amend_practice`'s own receipt uses so a write is never invisible
+    on its own receipt regardless of where the row would otherwise rank."""
     surface = str(args.get("surface") or "").strip() or None
     limit = max(1, min(int(args.get("limit") or 50), 200))
     recent = bool(args.get("recent"))
@@ -3994,36 +3977,36 @@ async def _fn_practices(
 async def _fn_fleet_live_agents(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """THE FLEET STRIP's ranked half (task #71 slice two, gated msg 1894/1897) — a Function,
-    not a pure op: liveness/seatedness aren't stored graph properties, they're derived at
-    read time from agent_mounts (last_seen freshness, the fold-by-soul, the visitor-gate
-    discriminator against phantom bg-pty rows) — exactly the class of read chrome.fleet_data
-    already does and this wraps rather than re-derives, same discipline as desk_decisions
-    wrapping mailbox's own predicate instead of re-deriving it.
+    """The fleet strip's ranked half: a Function, not a pure op: liveness/seatedness
+    aren't stored graph properties, they're derived at read time from agent_mounts
+    (last_seen freshness, the fold-by-soul, the visitor-gate discriminator against
+    phantom bg-pty rows), exactly the class of read chrome.fleet_data already does and
+    this wraps rather than re-derives, same discipline as desk_decisions wrapping
+    mailbox's own predicate instead of re-deriving it.
 
     RANKED, NOT THE WALL: only live, seated co-agents on ONE project (`args.project`,
-    default 'osiris' — this graph's own control surface) — never the full roster the plain
-    "fleet" composition already renders unranked. A flat list[dict] (task #60's own
-    reclassification hands this to the generic table for free — no Composition op, no view
+    default 'osiris', this graph's own control surface), never the full roster the plain
+    "fleet" composition already renders unranked. A flat list[dict] (a prior function-op
+    reclassification hands this to the generic table for free, no Composition op, no view
     type, nothing in osiris.js).
 
-    A FAILED READ RETURNS `{"error": ...}`, NEVER A FAKE ROW (thread 02e0ab9c/6190, the
-    composition contract's own missing channel): a `list[dict]` return here is kind="rows"
-    at `_eval`'s own function-op reclassification (task #60), the SAME shape as real data —
-    a sentinel row embedded in it (the old `[{"agent": "...unavailable", ...}]`) was
-    structurally identical to a genuine agent named that. A bare `{"error": ...}` dict
-    falls through to kind="data" instead — the SAME distinguishable shape every ordinary
-    MCP tool already uses on failure, not a second vocabulary — and osiris.js's renderData
-    still shows it as a legible chip, just no longer indistinguishable from a real row to a
-    programmatic reader of run_composition's own JSON."""
+    A FAILED READ RETURNS `{"error": ...}`, NEVER A FAKE ROW (the composition contract's
+    own missing channel): a `list[dict]` return here is kind="rows" at `_eval`'s own
+    function-op reclassification, the SAME shape as real data, a sentinel row embedded in
+    it (the old `[{"agent": "...unavailable", ...}]`) was structurally identical to a
+    genuine agent named that. A bare `{"error": ...}` dict falls through to kind="data"
+    instead, the SAME distinguishable shape every ordinary MCP tool already uses on
+    failure, not a second vocabulary, and osiris.js's renderData still shows it as a
+    legible chip, just no longer indistinguishable from a real row to a programmatic
+    reader of run_composition's own JSON."""
     from src.api.chrome import fleet_data
 
     project = str(args.get("project") or "osiris")
     try:
         data = await fleet_data(pool)
-    except Exception:  # noqa: BLE001 — a fleet read that fails is UNAVAILABLE, never a
-        # silent empty table (msg 1894 point 4, degrade-honestly, renderer-independent) —
-        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+    except Exception:  # noqa: BLE001 - a fleet read that fails is UNAVAILABLE, never a
+        # silent empty table (degrade honestly, renderer-independent):
+        # {"error": ...} is kind="data", not a fake row
         return {"error": "fleet data unavailable"}
     live = [m for m in data["mounts"]
             if m.get("live") and m.get("seated") and m.get("project") == project]
@@ -4035,24 +4018,24 @@ async def _fn_fleet_live_agents(
 async def _fn_fleet_pulse_line(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """The fleet strip's one-line pulse — the SAME string orient() already shows every
+    """The fleet strip's one-line pulse, the SAME string orient() already shows every
     seat (mounts.fleet_pulse), never re-derived. Deliberately a bare string, not a dict: a
     short scalar Function result renders as a header chip (osiris.js renderData), no
-    section of its own needed. NOT named 'pulse' — that name is held by the unrelated
-    dev_pulses/off-the-clock-loop heartbeat digest (msg 1897's own naming catch)."""
+    section of its own needed. NOT named 'pulse', that name is held by the unrelated
+    dev_pulses/off-the-clock-loop heartbeat digest."""
     from src.orchestrator.mounts import fleet_pulse
 
     try:
         return await fleet_pulse(pool)
-    except Exception:  # noqa: BLE001 — see _fn_fleet_live_agents: unavailable, not silent —
+    except Exception:  # noqa: BLE001 - see _fn_fleet_live_agents: unavailable, not silent.
         # {"error": ...} (a dict) is distinguishable from the success string by TYPE alone,
-        # not merely by re-reading the failure string's own wording (thread 02e0ab9c/6190)
+        # not merely by re-reading the failure string's own wording
         return {"error": "fleet pulse unavailable"}
 
 
 def _fleet_age(secs: float | None) -> str:
-    """A short, human age string — independent of chrome.py's own private `_age()` (this
-    Function's output is consumed primarily by osiris.js, not chrome's dying renderer; no
+    """A short, human age string, independent of chrome.py's own private `_age()` (this
+    Function's output is consumed primarily by osiris.js, not chrome's older renderer; no
     need to import a leading-underscore symbol across the module boundary for a two-line
     format)."""
     if secs is None:
@@ -4079,11 +4062,11 @@ def _fleet_door_line(d: dict[str, Any]) -> str:
 
 
 def _fleet_doors_summary(doors: list[dict[str, Any]]) -> str | None:
-    """FLATTENED, not omitted (Thoth, msg 1936): 'N doors (label, label...)', capped at 4
-    labels so a soul with many doors still reads as one line, not an essay. None (never a
-    bare 0 or an empty string) when there is nothing to say — the field itself is absent
-    from the row rather than a hollow value, same 'a missing field beats a decoded repr'
-    law the docstring below states for the row as a whole."""
+    """FLATTENED, not omitted: 'N doors (label, label...)', capped at 4 labels so an
+    identity with many doors still reads as one line, not an essay. None (never a bare 0
+    or an empty string) when there is nothing to say, the field itself is absent from the
+    row rather than a hollow value, same 'a missing field beats a decoded repr' law the
+    docstring below states for the row as a whole."""
     if not doors:
         return None
     labels = [_fleet_door_line(d) for d in doors[:4]]
@@ -4093,7 +4076,7 @@ def _fleet_doors_summary(doors: list[dict[str, Any]]) -> str | None:
 
 def _fleet_ancestors_summary(ancestors: list[dict[str, Any]]) -> str | None:
     """Same law: a readable sentence or nothing, never a repr. Only the FRESHEST past life
-    is named — the rest are counted, not listed, mirroring render_fleet's own economy
+    is named, the rest are counted, not listed, mirroring render_fleet's own economy
     (head line + a count) rather than dumping every generation into one cell."""
     if not ancestors:
         return None
@@ -4113,25 +4096,24 @@ def _fleet_ancestors_summary(ancestors: list[dict[str, Any]]) -> str | None:
 async def _fn_fleet_live(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """/fleet's full-fidelity port (rung 2, ruling d42c543b, Thoth msg 1926/1936) —
-    ADDITIVE ONLY: /fleet's route is NOT deleted yet, this lands beside it so the two can be
-    compared live before anything retires (msg 1936's own sequencing — "nothing is deleted
-    before its replacement exists" now means at PARITY, not merely present). Wraps
-    chrome.fleet_data verbatim, same discipline as fleet_live_agents/mail_overview — never
+    """/fleet's full-fidelity port: ADDITIVE ONLY: /fleet's route is NOT deleted yet, this
+    lands beside it so the two can be compared live before anything retires ("nothing is
+    deleted before its replacement exists" now means at PARITY, not merely present). Wraps
+    chrome.fleet_data verbatim, same discipline as fleet_live_agents/mail_overview, never
     re-derives the soul-fold, only reshapes its already-full-fidelity output for the
     generic renderer.
 
     UNLIKE fleet_live_agents (RANKED: one project, live+seated only), this is the FULL
-    roster — every project, every soul the mount registry currently knows, live or not —
-    because full fidelity was the ask (msg 1926: neither the plain "fleet" table nor the
-    strip reproduces soul-folding, the wake ledger, the hourly wake budget, the visitor
-    split, or the cross-project view; this Function is where all five actually live).
+    roster, every project, every identity the mount registry currently knows, live or
+    not, because full fidelity was the ask (neither the plain "fleet" table nor the strip
+    reproduces soul-folding, the wake ledger, the hourly wake budget, the visitor split,
+    or the cross-project view; this Function is where all five actually live).
 
-    THE FLATTENING (msg 1936's own bar — "genuinely readable... exactly as you sketched"):
-    neither render_composition nor osiris.js's table() recurse into a nested list/dict CELL
-    value — a raw `doors=[{...}]` would render as an undecoded repr, worse than not showing
-    it. `doors`/`ancestors` become short prose summaries instead (_fleet_doors_summary/
-    _fleet_ancestors_summary) — present when there's something to say, ABSENT (never a
+    THE FLATTENING ("genuinely readable... exactly as sketched"): neither
+    render_composition nor osiris.js's table() recurse into a nested list/dict CELL
+    value, a raw `doors=[{...}]` would render as an undecoded repr, worse than not
+    showing it. `doors`/`ancestors` become short prose summaries instead (_fleet_doors_summary/
+    _fleet_ancestors_summary), present when there's something to say, ABSENT (never a
     hollow value) when there isn't. Nothing is silently dropped: every field either renders
     readably or is omitted and named here, not decided quietly at build time."""
     from src.api.chrome import fleet_data
@@ -4140,11 +4122,11 @@ async def _fn_fleet_live(
     try:
         st = await settings_with_overlay(pool)
         data = await fleet_data(pool, wake_budget=st.osiris_wake_hourly_budget)
-    except Exception:  # noqa: BLE001 — see fleet_live_agents: unavailable, never a silent
-        # empty table (msg 1894 point 4, degrade-honestly, renderer-independent) — "error"
-        # replaces the WHOLE dict rather than hiding in "pulse" (thread 02e0ab9c/6190):
-        # every other key (roster/unreconciled/wake_ledger) is equally unavailable here,
-        # so a partial dict claiming only "pulse" failed would itself be a lie
+    except Exception:  # noqa: BLE001 - see fleet_live_agents: unavailable, never a silent
+        # empty table (degrade honestly, renderer-independent). "error" replaces the WHOLE
+        # dict rather than hiding in "pulse": every other key
+        # (roster/unreconciled/wake_ledger) is equally unavailable here, so a partial dict
+        # claiming only "pulse" failed would itself be a lie
         return {"error": "fleet data unavailable"}
     mounts = data["mounts"]
     named = [m for m in mounts if m.get("seat")]
@@ -4193,20 +4175,20 @@ async def _fn_fleet_live(
 async def _fn_mail_overview(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """/mail's port (ruling d42c543b, msg 1929) — a Function, not a pure op: soul-folding
-    (resolving each '@agent:...'/'@seat:...' lane through living_head, nesting agent
-    mailboxes under their project) needs imperative per-row async lookups the op-tree
-    has no primitive for. Wraps chrome.mail_overview verbatim — never re-derives the fold.
-    A flat list[dict] (one row per project's group chat OR per soul, `chrome.py`'s own
-    shape unchanged) — task #60's reclassification hands it to the generic table for
-    free, same ride fleet_live_agents already took."""
+    """/mail's port: a Function, not a pure op: soul-folding (resolving each
+    '@agent:...'/'@seat:...' lane through living_head, nesting agent mailboxes under
+    their project) needs imperative per-row async lookups the op-tree has no primitive
+    for. Wraps chrome.mail_overview verbatim, never re-derives the fold. A flat list[dict]
+    (one row per project's group chat OR per soul, `chrome.py`'s own shape unchanged), a
+    prior reclassification hands it to the generic table for free, same ride
+    fleet_live_agents already took."""
     from src.api.chrome import mail_overview
 
     try:
         groups = await mail_overview(pool)
-    except Exception:  # noqa: BLE001 — a mail read that fails is UNAVAILABLE, never a
-        # silent empty table (the same degrade-honestly law fleet_live_agents follows) —
-        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+    except Exception:  # noqa: BLE001 - a mail read that fails is UNAVAILABLE, never a
+        # silent empty table (the same degrade-honestly law fleet_live_agents follows).
+        # {"error": ...} is kind="data", not a fake row
         return {"error": "mail data unavailable"}
     rows: list[dict[str, Any]] = []
     for g in groups:
@@ -4223,16 +4205,17 @@ async def _fn_mail_overview(
 async def _fn_mail_threads(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """One mailbox's threads (ruling d42c543b, msg 1929) — `box` rides as `args.box`, not a
-    subject: a mailbox is a project name or a synthetic '@agent:.../@seat:...' string, never
-    a graph object's UUID the composer's own subject resolution expects. Wraps
-    chrome.mail_threads verbatim. Flat list[dict] — same free ride to the generic table.
+    """One mailbox's threads: `box` rides as `args.box`, not a subject: a mailbox is a
+    project name or a synthetic '@agent:.../@seat:...' string, never a graph object's
+    UUID the composer's own subject resolution expects. Wraps chrome.mail_threads
+    verbatim. Flat list[dict], same free ride to the generic table.
 
     KNOWN GAP, flagged not hidden: `render_mail_box` shows every message's full body inline
     (a per-thread <details> expansion); this row carries only the latest message's snippet
     (a table cell that held every body would just be a stringified JSON blob, not a rendered
-    list — the generic table has no nested-table primitive). Per-message detail is real
-    information this port does not preserve 1:1 — see the build brief, not silently dropped."""
+    list, the generic table has no nested-table primitive). Per-message detail is real
+    information this port does not preserve 1:1, a known and documented limitation, not
+    silently dropped."""
     from src.api.chrome import mail_threads
 
     box = str(args.get("box") or "").strip()
@@ -4241,8 +4224,8 @@ async def _fn_mail_threads(
                            "'@agent:...'/'@seat:...')", "between": "-", "msgs": "-"}]
     try:
         threads = await mail_threads(pool, box)
-    except Exception:  # noqa: BLE001 — see _fn_mail_overview: unavailable, not silent —
-        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+    except Exception:  # noqa: BLE001 - see _fn_mail_overview: unavailable, not silent.
+        # {"error": ...} is kind="data", not a fake row
         return {"error": "mail data unavailable"}
     return [{"thread": t["thread"], "between": ", ".join(t["between"]),
              "msgs": len(t["msgs"]), "unsettled": t["unsettled"],
@@ -4252,33 +4235,33 @@ async def _fn_mail_threads(
 async def _fn_overhead(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """/overhead's port (task #91) — a Function, not a pure op: TWO independent data sources
-    (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events forensics)
-    that chrome.py's route already reads separately and lays out on one page; this Function
-    makes that same composition once, in Python — a `sections` op-tree calling two Functions
-    would hit TranscriptStore.overhead_fleet twice for what is one query. Wraps
-    overhead_fleet/summary verbatim, never re-derives either accounting.
+    """/overhead's port: a Function, not a pure op: TWO independent data sources
+    (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events
+    forensics) that chrome.py's route already reads separately and lays out on one page;
+    this Function makes that same composition once, in Python, a `sections` op-tree
+    calling two Functions would hit TranscriptStore.overhead_fleet twice for what is one
+    query. Wraps overhead_fleet/summary verbatim, never re-derives either accounting.
 
-    ONE dict, three keys — `totals` (a scalar-valued dict, renders as a header-chip group),
-    `top_sessions` (flat list[dict], task #60's reclassification hands it to the generic
-    table), `telemetry` (a scalar-valued dict, same free ride as totals — present as a
-    one-line note instead of a missing key when TelemetryStore hasn't eaten a file yet: its
-    own docstring says absence must never read as a zero-row pretence).
+    ONE dict, three keys: `totals` (a scalar-valued dict, renders as a header-chip group),
+    `top_sessions` (flat list[dict], a prior reclassification hands it to the generic
+    table), `telemetry` (a scalar-valued dict, same free ride as totals, present as a
+    one-line note instead of a missing key when TelemetryStore hasn't eaten a file yet:
+    its own docstring says absence must never read as a zero-row pretence).
 
     KNOWN GAP, flagged not hidden: chrome.py's `_fmt_tok`/`_size_cell` compress numbers
     ("1.2M", bytes-vs-tokens chosen per row) for the eye; the generic renderer has no
     per-column formatter, so top_sessions carries the raw ints instead. Content, not a
-    decoded blob — a presentation nuance, the same call roadmap's auto-default and fleet's
+    decoded blob, a presentation nuance, the same call roadmap's auto-default and fleet's
     doors/ancestors flattening already made, not data this port owes."""
     from src.ingest.telemetry import TelemetryStore
     from src.ingest.transcript_store import TranscriptStore
 
     try:
         data = await TranscriptStore(pool).overhead_fleet(top=20)
-    except Exception:  # noqa: BLE001 — a read that fails is UNAVAILABLE, never a silent
-        # empty section (the same degrade-honestly law fleet_live_agents follows) — "error"
-        # replaces the WHOLE dict rather than hiding in "totals" (thread 02e0ab9c/6190):
-        # top_sessions/telemetry are equally unavailable when this read itself failed
+    except Exception:  # noqa: BLE001 - a read that fails is UNAVAILABLE, never a silent
+        # empty section (the same degrade-honestly law fleet_live_agents follows). "error"
+        # replaces the WHOLE dict rather than hiding in "totals": top_sessions/telemetry
+        # are equally unavailable when this read itself failed
         return {"error": "overhead data unavailable"}
     top_sessions = [
         {"session": s["anchor_sid"], "project": s.get("project") or "?",
@@ -4291,17 +4274,17 @@ async def _fn_overhead(
     out: dict[str, Any] = {"totals": data["totals"], "top_sessions": top_sessions}
     try:
         telemetry = await TelemetryStore(pool).summary()
-    except Exception:  # noqa: BLE001 — see above: unavailable, not silent — a PARTIAL
+    except Exception:  # noqa: BLE001 - see above: unavailable, not silent. A PARTIAL
         # failure (totals/top_sessions above are fine), so this nests the reserved
         # unavailable marker on just this sub-field rather than discarding real data the
-        # way the outer except does (thread 02e0ab9c/6190; marker itself thread 04c651ce
-        # item 2, msg 9123 — was a plain {"error": ...}, structurally indistinguishable
-        # from a real field of that shape to a programmatic reader)
+        # way the outer except does (the marker itself replaced a plain {"error": ...},
+        # which was structurally indistinguishable from a real field of that shape to a
+        # programmatic reader)
         out["telemetry"] = _unavailable("retained-telemetry data unavailable")
     else:
         out["telemetry"] = (
             telemetry if telemetry is not None
-            # a confirmed, genuinely-empty store — NOT the same claim as "error" above,
+            # a confirmed, genuinely-empty store: NOT the same claim as "error" above,
             # and left as a plain string on purpose: this is a checked fact, not a gap
             else "nothing retained yet — the store hasn't eaten a telemetry file")
     return out
@@ -4310,26 +4293,26 @@ async def _fn_overhead(
 async def _fn_desk_overview(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """/desk's landing page (task #91) — the ROSTER, never the contents (operator, 2026-07-11:
-    the whole point of this shape is landing on COUNTS so the fleet's backlog doesn't show on
-    one scroll — see read_desk's own docstring). Wraps read_desk verbatim, never re-derives
-    which project owes what. One row per project — counts and rot-age only; drill into one
-    with desk_project(args.project), the same two-step shape mail_overview/mail_threads
+    """/desk's landing page: the ROSTER, never the contents (the whole point of this shape
+    is landing on COUNTS so the fleet's backlog doesn't show on one scroll, see
+    read_desk's own docstring). Wraps read_desk verbatim, never re-derives which project
+    owes what. One row per project, counts and rot-age only; drill into one with
+    desk_project(args.project), the same two-step shape mail_overview/mail_threads
     already took.
 
-    THE WRITE SIDE IS ON desk_project, NOT HERE — this Function stays read-only, and not
-    because the client can't render it (it can, since 88ad297/task #91's client leg): the
-    ROSTER is COUNTS, never individual debts (see the docstring above), so there is no per-
-    debt row here to attach a control to. `by_project` carries counts only, exactly what
-    render_desk's own roster table shows before its own click-to-walk-in."""
+    THE WRITE SIDE IS ON desk_project, NOT HERE: this Function stays read-only, and not
+    because the client can't render it (it can): the ROSTER is COUNTS, never individual
+    debts (see the docstring above), so there is no per-debt row here to attach a control
+    to. `by_project` carries counts only, exactly what render_desk's own roster table
+    shows before its own click-to-walk-in."""
     from src.orchestrator.mailbox import read_desk
 
     try:
         desk = await read_desk(pool)
-    except Exception:  # noqa: BLE001 — a desk read that fails is UNAVAILABLE, never a
-        # silent empty roster (the same degrade-honestly law fleet_live_agents follows) —
-        # "error" replaces the WHOLE dict rather than hiding in "owed" (thread 02e0ab9c/
-        # 6190): letters/by_project are equally unavailable when this read itself failed
+    except Exception:  # noqa: BLE001 - a desk read that fails is UNAVAILABLE, never a
+        # silent empty roster (the same degrade-honestly law fleet_live_agents follows).
+        # "error" replaces the WHOLE dict rather than hiding in "owed": letters/by_project
+        # are equally unavailable when this read itself failed
         return {"error": "desk data unavailable"}
     projects = [
         {"project": p["project"], "debts": len(p.get("debts") or []),
@@ -4356,32 +4339,34 @@ async def _fn_desk_overview(
 async def _fn_desk_project(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """One project's desk, walked into (task #91) — `project` rides as `args.project`, not a
-    subject: a project name here is the same free-text string mail_threads's `args.box`
-    already established, never a graph object's UUID the composer's own subject resolution
-    expects. Wraps read_desk verbatim; the debts + asks render_desk_project shows before its
-    own action buttons, flattened to one row each.
+    """One project's desk, walked into: `project` rides as `args.project`, not a subject:
+    a project name here is the same free-text string mail_threads's `args.box` already
+    established, never a graph object's UUID the composer's own subject resolution
+    expects. Wraps read_desk verbatim; the debts + asks render_desk_project shows before
+    its own action buttons, flattened to one row each.
 
-    THE WRITE SIDE IS HERE NOW (task #91, Thoth msg 1976/2029) — measured fresh against
-    chrome.py's own `_verbs`/`_settle`, not assumed from an earlier description (this
-    Function's own prior docstring said "four verbs" as if every row carried all four; reading
-    the source showed a DEBT row carries three — done/not mine/later — and an ASK row carries
-    a different one, settle. Two shapes, not four options on one row).
+    THE WRITE SIDE IS HERE NOW, measured fresh against chrome.py's own
+    `_verbs`/`_settle`, not assumed from an earlier description (this Function's own
+    prior docstring said "four verbs" as if every row carried all four; reading the
+    source showed a DEBT row carries three, done/not mine/later, and an ASK row carries a
+    different one, settle. Two shapes, not four options on one row).
 
     `_actions`/`_action` are embedded DIRECTLY on each row by this Function's own Python,
-    NOT declared via the `row_actions`/`row_action` NODE-level grammar `_eval`'s `function` op
-    reads: that grammar is for a SAVED composition to attach a control without touching a
-    Function's code (mail_overview's own row_action is exactly that). desk_project has no
-    saved composition to declare it on (same args.project constraint mail_threads has), and
-    its ONE list mixes two row kinds needing DIFFERENT actions — something a single node-level
-    declaration, applied uniformly to every row, cannot express. A Function is "the escape
-    hatch" for exactly this: domain logic even the declarative layer can't reach.
+    NOT declared via the `row_actions`/`row_action` NODE-level grammar `_eval`'s
+    `function` op reads: that grammar is for a SAVED composition to attach a control
+    without touching a Function's code (mail_overview's own row_action is exactly that).
+    desk_project has no saved composition to declare it on (same args.project constraint
+    mail_threads has), and its ONE list mixes two row kinds needing DIFFERENT actions,
+    something a single node-level declaration, applied uniformly to every row, cannot
+    express. A Function is "the escape hatch" for exactly this: domain logic even the
+    declarative layer can't reach.
 
-    Every write verb resolves through the SAME /act registry (actions.ACTION_VERBS) chrome.py
-    itself routes through — resolve_thread/assign_thread/defer_thread (chrome's /threads/
-    triage, same capture.py calls, same source="analyst:operator") and settle (chrome's
-    /desk/settle, same ack_messages call). Same effect, same attribution, a different route to
-    get there — verified by reading both call chains, not assumed identical from the names."""
+    Every write verb resolves through the SAME /act registry (actions.ACTION_VERBS)
+    chrome.py itself routes through, resolve_thread/assign_thread/defer_thread (chrome's
+    /threads/triage, same capture.py calls, same source="analyst:operator") and settle
+    (chrome's /desk/settle, same ack_messages call). Same effect, same attribution, a
+    different route to get there, verified by reading both call chains, not assumed
+    identical from the names."""
     from src.orchestrator.mailbox import read_desk
 
     project = str(args.get("project") or "").strip()
@@ -4389,8 +4374,8 @@ async def _fn_desk_project(
         return [{"debt": "no project given — pass args.project", "kind": "-"}]
     try:
         desk = await read_desk(pool)
-    except Exception:  # noqa: BLE001 — see desk_overview: unavailable, not silent —
-        # {"error": ...} is kind="data", not a fake row (thread 02e0ab9c/6190)
+    except Exception:  # noqa: BLE001 - see desk_overview: unavailable, not silent.
+        # {"error": ...} is kind="data", not a fake row
         return {"error": "desk data unavailable"}
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     if p is None:
@@ -4417,11 +4402,10 @@ async def _fn_desk_project(
     return rows
 
 
-# TRIAGE AS A PRIMITIVE (task #98, operator ruling 45b074bf "THE USER NEVER DEBUGS THE
-# MACHINERY" + the read-ergonomics arc ad19a779/thread 5e1a46ea/task #65): Thoth ran eight
-# hand-written SQL scripts through a shell this session to judge the object set — none of it
+# TRIAGE AS A PRIMITIVE ("the user never debugs the machinery"): a prior investigation ran
+# eight hand-written SQL scripts through a shell to judge the object set, none of it
 # reusable. `objects`/`links` carry no `updated_at` column (confirmed against the live
-# schema), so "last touched" is always DERIVED, never a stored fact — the same three-source
+# schema), so "last touched" is always DERIVED, never a stored fact, the same three-source
 # GREATEST every mode below shares.
 _TRIAGE_LINK_CTE = """
 WITH live_links AS (
@@ -4444,78 +4428,77 @@ assertion_stats AS (
 _TRIAGE_BUCKET_PRIORITY = {
     "duplicate_suspect": 0, "bulk_import": 1, "orphan": 2, "hub": 3, "stale": 4, "thin": 5,
     "normal": 6,
-    # the catalog's own gap surface (object_type='Type' only, see _triage_type_gaps) —
+    # the catalog's own gap surface (object_type='Type' only, see _triage_type_gaps),
     # ranked ahead of "normal" so a described-and-labeled Type never crowds out a real gap
     "undescribed": -2, "no_label_rule": -1,
-    # task #102 (operator's principle via Thoth's dispatch DM 2279): a LIVE epistemic
-    # conflict on a specific property outranks every generic connectivity bucket, including
-    # duplicate_suspect — a naming collision is a structural SUSPICION, a contradicted
-    # property is a confirmed disagreement already sitting in the data.
+    # a LIVE epistemic conflict on a specific property outranks every generic
+    # connectivity bucket, including duplicate_suspect: a naming collision is a
+    # structural SUSPICION, a contradicted property is a confirmed disagreement already
+    # sitting in the data.
     "contradicted": -3,
 }
 
 
 async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """rung 2 — TRIAGE AS A PRIMITIVE (task #98). TWO MODES, one Function (`args.mode`,
-    default "census") — this pair IS the left-hand type browser the operator sketched:
-    census is the left pane (types + counts + health), buckets is the middle pane (one
-    type's objects, triage-labeled). Build once, surface twice; the LABEL half (how a row
-    DISPLAYS beyond its raw canonical) is still being designed with the operator and
-    deliberately NOT touched here — no labeling scheme is invented in this Function; it
+    """TRIAGE AS A PRIMITIVE. TWO MODES, one Function (`args.mode`, default "census"),
+    this pair IS the left-hand type browser sketched by the operator: census is the left
+    pane (types + counts + health), buckets is the middle pane (one type's objects,
+    triage-labeled). Build once, surface twice; the LABEL half (how a row DISPLAYS
+    beyond its raw canonical) is still being designed and
+    deliberately NOT touched here: no labeling scheme is invented in this Function; it
     reads `canonical` raw and leaves a clean seam for whatever the label rule becomes.
 
-    CENSUS — one row per (type, status): `n` (count), `orphans` (zero live links), `thin`
+    CENSUS: one row per (type, status): `n` (count), `orphans` (zero live links), `thin`
     (1-2 live links), `median_links`/`max_links` (live link count distribution), `born`
     (earliest `created_at` in the group), `last_touch` (latest of: any member's
     `created_at`, any member's most recent assertion, any live link touching a member).
 
-    BUCKETS — requires `args.object_type` (a note naming every real type is returned when
+    BUCKETS: requires `args.object_type` (a note naming every real type is returned when
     it's missing or unknown, never a silent empty page); optional `args.status` (default
     "active"), `args.stale_days` (default 30, clamped 1-365), `args.cohort_min` (default 3,
-    clamped 2-50 — see `bulk_import` below), `args.limit`/`args.offset` (default 200/0,
-    capped 2000 — the no-silent-caps law: CENSUS already carries the true `n` per type,
+    clamped 2-50, see `bulk_import` below), `args.limit`/`args.offset` (default 200/0,
+    capped 2000, the no-silent-caps law: CENSUS already carries the true `n` per type,
     this is the browse/page surface, not the count of record). One row per object, ONE
     bucket each by priority (an object can meet more than one definition; the most
-    actionable wins): `contradicted` (task #102, operator's principle via Thoth's dispatch
-    DM 2279 — this object has a property with more than one DISTINCT live value from
-    different sources, neither superseding the other; `current_assertions` already holds
-    disagreement by design, this bucket is the first thing that NAMES it, ranked above
-    every other bucket here since a confirmed epistemic conflict outranks a structural
-    suspicion — the row also carries `contradicted_on`, the sorted list of property names
-    in conflict) > `duplicate_suspect` (another object of the SAME type+status shares
-    its basename — the canonical's last path segment, or the text after its first ':',
-    case-folded; catches File-path collisions and scheme-prefix near-dupes alike) >
-    `bulk_import` (task #98 follow-up, Thoth msg 2065 — `args.cohort_min` or more objects
-    born in the same calendar second, sharing an IDENTICAL live-link fingerprint — same
-    types AND same counts per type, not just the same total; the machine-detectable
-    signature of one script's insert loop, distinct from every other bucket here since it
-    names WHY an object looks the way it does rather than just how it's currently
-    connected) > `orphan` (zero live links) > `hub` (live link count at or above the
-    type's OWN 95th percentile, floor 10 — self-normalizing per type rather than one
-    global number, since e.g. SoftwareProject's own median can run past 80 while sparser
-    types sit near 1) > `stale` (linked, but untouched longer than `stale_days`) > `thin`
-    (1-2 live links) > `normal` (none of the above — BUCKETS lists every object in scope,
-    not only flagged ones, so it doubles as a plain browse of the type).
+    actionable wins): `contradicted` (this object has a property with more than one
+    DISTINCT live value from different sources, neither superseding the other;
+    `current_assertions` already holds disagreement by design, this bucket is the first
+    thing that NAMES it, ranked above every other bucket here since a confirmed epistemic
+    conflict outranks a structural suspicion, the row also carries `contradicted_on`, the
+    sorted list of property names in conflict) > `duplicate_suspect` (another object of
+    the SAME type+status shares its basename, the canonical's last path segment, or the
+    text after its first ':', case-folded; catches File-path collisions and scheme-prefix
+    near-dupes alike) > `bulk_import` (`args.cohort_min` or more objects born in the same
+    calendar second, sharing an IDENTICAL live-link fingerprint, same types AND same
+    counts per type, not just the same total; the machine-detectable signature of one
+    script's insert loop, distinct from every other bucket here since it names WHY an
+    object looks the way it does rather than just how it's currently connected) >
+    `orphan` (zero live links) > `hub` (live link count at or above the type's OWN 95th
+    percentile, floor 10, self-normalizing per type rather than one global number, since
+    e.g. SoftwareProject's own median can run past 80 while sparser types sit near 1) >
+    `stale` (linked, but untouched longer than `stale_days`) > `thin` (1-2 live links) >
+    `normal` (none of the above, BUCKETS lists every object in scope, not only flagged
+    ones, so it doubles as a plain browse of the type).
 
-    `contradicted` MARKS, it never RESOLVES (the operator's rule): no value is dropped or
-    ranked into a winner here, only named as contested — same discipline `entity_dossier`'s
-    new `agreement` field follows for a single entity's own property list (dossier.py,
-    same task). This bucket is the fleet/project-wide discovery half: which OBJECTS have
-    at least one contradicted property, without already knowing which one to look at.
+    `contradicted` MARKS, it never RESOLVES: no value is dropped or ranked into a winner
+    here, only named as contested, same discipline `entity_dossier`'s own `agreement`
+    field follows for a single entity's own property list (dossier.py). This bucket is
+    the fleet/project-wide discovery half: which OBJECTS have at least one contradicted
+    property, without already knowing which one to look at.
 
-    THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2's other half — "your triage
-    Function IS the surface these gaps should appear on, do not build a second
-    instrument"): `args.object_type='Type'` routes to a DIFFERENT bucket set, since the
-    generic connectivity buckets above are meaningless for Type rows (a Type doesn't
-    participate in `links` the way an ordinary object does — every one of them would
-    trivially bucket `orphan` and tell a reader nothing). Two gaps instead: `undescribed`
-    (blank/missing `description` — a stub nobody has explained yet, exactly what
-    accretion mints) > `no_label_rule` (kind='object' only — a link type has no field of
-    its own to label; blank/missing `label_field`) > `normal` (both present). Same
-    pagination/status/no-silent-caps contract as the generic path.
+    THE CATALOG'S OWN GAP SURFACE ("your triage Function IS the surface these gaps
+    should appear on, do not build a second instrument"): `args.object_type='Type'`
+    routes to a DIFFERENT bucket set, since the generic connectivity buckets above are
+    meaningless for Type rows (a Type doesn't participate in `links` the way an ordinary
+    object does, every one of them would trivially bucket `orphan` and tell a reader
+    nothing). Two gaps instead: `undescribed` (blank/missing `description`, a stub
+    nobody has explained yet, exactly what accretion mints) > `no_label_rule` (kind=
+    'object' only, a link type has no field of its own to label; blank/missing
+    `label_field`) > `normal` (both present). Same pagination/status/no-silent-caps
+    contract as the generic path.
 
     Read-only, no writes, same rule graph_lint runs on (a triage that healed would be a
-    loop pathology — findings are testimony for a mind's own triage verbs, not an
+    loop pathology, findings are testimony for a human's own triage verbs, not an
     auto-apply)."""
     mode = str(args.get("mode") or "census").strip().lower()
     if mode == "buckets":
@@ -4548,7 +4531,7 @@ async def _fn_triage(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 
 async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
-    """BUCKETS half of `_fn_triage` — split out so the mode dispatch above stays readable;
+    """BUCKETS half of `_fn_triage`, split out so the mode dispatch above stays readable;
     never called directly by a composition/MCP caller (that's `_fn_triage`'s job)."""
     object_type = str(args.get("object_type") or "").strip()
     known = bool(object_type) and await pool.fetchval(
@@ -4593,10 +4576,10 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
         basename_counts AS (
             SELECT basename, count(*) AS n FROM per_object GROUP BY basename
         ),
-        -- BULK IMPORT (task #98 follow-up, Thoth msg 2065): a per-object FINGERPRINT of its
-        -- live link shape — "dir:type:count" pairs, e.g. "in:informs:17" — so two objects
-        -- with the SAME shape (not just the same total count) can be told apart from two
-        -- objects that coincidentally have equal link counts of different kinds.
+        -- BULK IMPORT: a per-object FINGERPRINT of its live link shape ("dir:type:count"
+        -- pairs, e.g. "in:informs:17") so two objects with the SAME shape (not just the
+        -- same total count) can be told apart from two objects that coincidentally have
+        -- equal link counts of different kinds.
         link_shape_counts AS (
             SELECT o.id AS obj_id,
                    (CASE WHEN l.from_id=o.id THEN 'out' ELSE 'in' END || ':' || l.type)
@@ -4628,16 +4611,16 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
             FROM cohorts GROUP BY born_bucket, fingerprint
             HAVING count(*) >= $4
         ),
-        -- CONTRADICTION (task #102, operator's principle via Thoth's dispatch DM 2279):
-        -- current_assertions already coexists two sources' DIFFERING values on the same
-        -- property (nobody superseded either) — the storage layer holds it correctly, but
-        -- nothing NAMED it. Grouping on (object_id, name) and requiring >1 DISTINCT value
+        -- CONTRADICTION: current_assertions already coexists two sources' DIFFERING
+        -- values on the same property (nobody superseded either), the storage layer
+        -- holds it correctly, but nothing NAMED it. Grouping on (object_id, name) and
+        -- requiring >1 DISTINCT value
         -- is sufficient to prove genuine multi-source disagreement without checking
         -- source_id explicitly: within-source supersession already collapses a single
         -- source's own repeated assertion to one live row, so two live rows on the same
         -- name can only come from two different sources. Deliberately NOT excluding
         -- name/tag here (unlike entity_dossier's own property listing, which routes those
-        -- through resolve_label for display) — a contradicted identity property is exactly
+        -- through resolve_label for display), a contradicted identity property is exactly
         -- the kind of conflict this bucket exists to surface, not hide.
         contradicted_props AS (
             SELECT ca.object_id, ca.name
@@ -4686,29 +4669,29 @@ async def _triage_buckets(pool: asyncpg.Pool, args: dict[str, Any]) -> Any:
 async def _triage_type_gaps(
     pool: asyncpg.Pool, status: str, limit: int, offset: int,
 ) -> Any:
-    """THE CATALOG'S OWN GAP SURFACE (task #97 workstream 2) — `_triage_buckets`'
-    object_type='Type' branch. Type rows don't participate in `links` the way ordinary
-    objects do (a declared type's domain/range/schemes are properties, not graph edges),
-    so the generic connectivity buckets (orphan/hub/stale/thin) would trivially label
-    every Type 'orphan' and say nothing real — this reads the Type's OWN fields instead:
-    `undescribed` (blank/missing `description`, exactly what a bare accretion mints) and
-    `no_label_rule` (kind='object' only — a link type has no field of its own to label;
-    blank/missing `label_field`), else `normal`. Same pagination/no-silent-caps contract
-    as the generic path; never called directly (`_triage_buckets` is the one dispatch
-    point, same discipline as that function's own docstring).
+    """THE CATALOG'S OWN GAP SURFACE: `_triage_buckets`' object_type='Type' branch. Type
+    rows don't participate in `links` the way ordinary objects do (a declared type's
+    domain/range/schemes are properties, not graph edges), so the generic connectivity
+    buckets (orphan/hub/stale/thin) would trivially label every Type 'orphan' and say
+    nothing real, this reads the Type's OWN fields instead: `undescribed` (blank/missing
+    `description`, exactly what a bare accretion mints) and `no_label_rule` (kind=
+    'object' only, a link type has no field of its own to label; blank/missing
+    `label_field`), else `normal`. Same pagination/no-silent-caps contract as the generic
+    path; never called directly (`_triage_buckets` is the one dispatch point, same
+    discipline as that function's own docstring).
 
-    `contradicted` (820730c8, follow-up to #102 deliberately scoped out at build time):
-    the generic path's own bucket (this file, `contradicted_props`/`contradicted_objs`,
-    GROUP BY (object_id, name) HAVING count(DISTINCT value) > 1 over ALL properties) is a
+    `contradicted` (a follow-up deliberately scoped out at build time): the generic
+    path's own bucket (this file, `contradicted_props`/`contradicted_objs`, GROUP BY
+    (object_id, name) HAVING count(DISTINCT value) > 1 over ALL properties) is a
     SEPARATE branch from this one, so a live multi-source disagreement on a Type's own
-    kind/description/label_field never surfaced here — a Type row could carry two
+    kind/description/label_field never surfaced here, a Type row could carry two
     sources' differing `description` and this check would just read whichever won by
-    confidence/recency, same silent-collapse task #102 named for every other object.
+    confidence/recency, the same silent-collapse other objects were also named for.
     Scoped to exactly these three fields (unlike the generic bucket's all-properties
     scan) since they are the only ones this function's own bucket logic reads; ranks
     ABOVE undescribed/no_label_rule (same priority tier the generic path's own
-    `contradicted` sits at, `_TRIAGE_BUCKET_PRIORITY`) — a Type in live disagreement
-    about its OWN description is a worse state than one that simply has none."""
+    `contradicted` sits at, `_TRIAGE_BUCKET_PRIORITY`), a Type in live disagreement about
+    its OWN description is a worse state than one that simply has none."""
     rows = await pool.fetch("""
         WITH per_type AS (
             SELECT o.id, o.canonical, o.created_at AS born,
@@ -4764,95 +4747,96 @@ async def _triage_type_gaps(
     return listed or [{"note": f"no {status} Type objects"}]
 
 
-# Khnum's commit 23c5991 (authored 2026-08-01T03:41:38Z) — the moment resolve_thread()
-# started minting `closed_by` unconditionally. A resolved_edgeless thread's status observed
-# before this is old debt (`pre_fix_sediment`); at or after it, the fallback should have
-# fired and didn't — `post_fix_regression`, a live alarm, not history (Thoth DM 2937).
+# The commit that landed on this timestamp is the moment resolve_thread() started minting
+# `closed_by` unconditionally. A resolved_edgeless thread's status observed before this is
+# old debt (`pre_fix_sediment`); at or after it, the fallback should have fired and didn't,
+# `post_fix_regression`, a live alarm, not history.
 _PHASE_1A_FIX_AT = datetime(2026, 8, 1, 3, 41, 38, tzinfo=UTC)
 
 
 async def _fn_closure_health(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """rung 2 — THE FOUR NUMBERS AS A STANDING SURFACE (Thoth DM 2835/2917, decision 6b67210d,
-    correction 699fa821). Answers, per project or fleet-wide, ONE question this house could
-    previously only get by commissioning an archaeology dig by hand, twice, 16 hours apart:
-    is thread closure held together by STRUCTURE (a traversable edge) or by MEMORY (a
-    property nobody re-checks)? Composes `thread_closure_status` (thread_closure.py) rather
-    than re-deriving its UNION — the exact staleness gap this report tripped over TWICE
-    already (once because migration 0044 wasn't deployed yet when the number was first hand-
-    run, once because a hand-rolled query drifted from the real view) closes at the source
-    by never hand-rolling it a third time.
+    """THE FOUR NUMBERS AS A STANDING SURFACE. Answers, per project or fleet-wide, ONE
+    question this house could previously only get by commissioning an archaeology dig by
+    hand, twice, 16 hours apart: is thread closure held together by STRUCTURE (a
+    traversable edge) or by MEMORY (a property nobody re-checks)? Composes
+    `thread_closure_status` (thread_closure.py) rather than re-deriving its UNION, the
+    exact staleness gap this report tripped over TWICE already (once because a migration
+    wasn't deployed yet when the number was first hand-run, once because a hand-rolled
+    query drifted from the real view) closes at the source by never hand-rolling it a
+    third time.
 
-    FIVE BUCKETS, MUTUALLY EXCLUSIVE AND EXHAUSTIVE BY CONSTRUCTION — every active Thread in
-    scope lands in exactly one, checked in this order:
-      1. `retracted_or_no_status` — `property_status` is anything other than 'open'/
+    FIVE BUCKETS, MUTUALLY EXCLUSIVE AND EXHAUSTIVE BY CONSTRUCTION, every active Thread
+    in scope lands in exactly one, checked in this order:
+      1. `retracted_or_no_status`: `property_status` is anything other than 'open'/
          'resolved' (including NULL). Kept STRUCTURALLY SEPARATE from `open_both`, never
          folded in: 93% of this graph's task population under this bucket is absence, not
-         conflict — a different disease with a different cure (Thoth's own framing, DM 2917).
-      2. `disagree` — a closure edge exists AND `property_status='open'`. Returned as a LIST
-         OF IDS, never auto-resolved: its whole value is that it FLAGS a genuine conflict for
-         a mind to look at (same law `_fn_lint`'s contradiction check and fold_project's
-         refuse-rather-than-destroy already follow), and collapsing it to a count would throw
-         away the one piece of information a reader can actually act on.
-      3. `closed_by_topology` — an edge exists and there's no disagreement. Ground truth
+         conflict, a different disease with a different cure.
+      2. `disagree`: a closure edge exists AND `property_status='open'`. Returned as a
+         LIST OF IDS, never auto-resolved: its whole value is that it FLAGS a genuine
+         conflict for a human to look at (same law `_fn_lint`'s contradiction check and
+         fold_project's refuse-rather-than-destroy already follow), and collapsing it to
+         a count would throw away the one piece of information a reader can actually act
+         on.
+      3. `closed_by_topology`: an edge exists and there's no disagreement. Ground truth
          positive (thread_closure_status's own law). Broken down by `strength` (from
-         `thread_closure_status` itself, not re-derived): `strong` (`resolved_by`/`answers`
-         — artifact- or ruling-backed) vs `weak` (`closed_by` — self-attested, WHO closed it
-         rather than WHAT). This is the category Thoth named after living it (DM 2937): a
-         citation that DOES resolve gets `strong`; a citation that does NOT resolve still
-         lands here, `weak`, via the unconditional Phase 1a fallback — a real, findable
-         closure that nonetheless names no specific commit or decision. Distinct from BOTH
-         `resolved_edgeless` axes below, and it is the one that bit this very report.
-      4. `resolved_edgeless` — no edge, `property_status='resolved'`. THE ROT METRIC: a
+         `thread_closure_status` itself, not re-derived): `strong` (`resolved_by`/
+         `answers`, artifact- or ruling-backed) vs `weak` (`closed_by`, self-attested,
+         WHO closed it rather than WHAT). A citation that DOES resolve gets `strong`; a
+         citation that does NOT resolve still lands here, `weak`, via the unconditional
+         Phase 1a fallback, a real, findable closure that nonetheless names no specific
+         commit or decision. Distinct from BOTH `resolved_edgeless` axes below, and it is
+         the one that bit this very report.
+      4. `resolved_edgeless`: no edge, `property_status='resolved'`. THE ROT METRIC: a
          closure that depends on a citation happening to resolve into a graph object is
-         remembered, not structural (ruling 4ef68cfe). See below for its own sub-split.
-      5. `open_both` — no edge, `property_status='open'`. Genuinely, unambiguously open.
+         remembered, not structural. See below for its own sub-split.
+      5. `open_both`: no edge, `property_status='open'`. Genuinely, unambiguously open.
 
-    `resolved_edgeless` SUB-SPLIT — the enforcement-possibility map Thoth asked for, turning
-    one number into a work order with two piles: for each edgeless-resolved thread, re-run
-    the EXACT resolution capture.resolve_thread's own artifact path uses
-    (`capture._find_artifact`, imported rather than re-implemented) against its
-    `resolved_artifact` property, if it has one.
-      - `commit_closeable` — a `resolved_artifact` exists AND it resolves to a real graph
-        object RIGHT NOW (it may not have when the thread was originally closed — the graph
-        keeps growing). A backfill pass could mint the missing edge mechanically, no human
-        needed.
-      - `needs_human` — everything else: no instrument, mechanical or otherwise, can close
+    `resolved_edgeless` SUB-SPLIT, an enforcement-possibility map turning one number into
+    a work order with two piles: for each edgeless-resolved thread, re-run the EXACT
+    resolution capture.resolve_thread's own artifact path uses (`capture._find_artifact`,
+    imported rather than re-implemented) against its `resolved_artifact` property, if it
+    has one.
+      - `commit_closeable`: a `resolved_artifact` exists AND it resolves to a real graph
+        object RIGHT NOW (it may not have when the thread was originally closed, the
+        graph keeps growing). A backfill pass could mint the missing edge mechanically,
+        no human needed.
+      - `needs_human`: everything else: no instrument, mechanical or otherwise, can close
         this without a person supplying or confirming evidence.
-      Named separately within that, because Thoth asked for the distinction by name and it
-      is NOT the same axis: `cited` (a `resolved_artifact` property exists — someone DID
-      point at evidence when they closed it) vs `uncited` (no such property — the close was
-      pure prose, `because` only, nothing to even attempt resolving). `commit_closeable` is
-      always a subset of `cited`; `needs_human` = `uncited` + the `cited` rows whose artifact
-      still doesn't resolve to anything.
+      Named separately within that, because it is NOT the same axis: `cited` (a
+      `resolved_artifact` property exists, someone DID point at evidence when they
+      closed it) vs `uncited` (no such property, the close was pure prose, `because`
+      only, nothing to even attempt resolving). `commit_closeable` is always a subset of
+      `cited`; `needs_human` = `uncited` + the `cited` rows whose artifact still doesn't
+      resolve to anything.
 
-    A THIRD, ORTHOGONAL SUB-SPLIT on `resolved_edgeless` (Thoth DM 2937, the same night this
-    was proposed): `pre_fix_sediment` (the thread's `status` assertion was observed before
-    `_PHASE_1A_FIX_AT` — Khnum's commit 23c5991, the moment resolve_thread started minting
-    `closed_by` unconditionally) vs `post_fix_regression` (observed at or after it). Measured
-    live at build time: `pre_fix_sediment` was 100% of the osiris-scoped 383, `post_fix_
-    regression` was 0 — the fix is holding. This is now a MECHANICAL WATCH on that fact
-    rather than a claim someone has to re-verify by hand: `post_fix_regression` should read
-    zero forever, and any nonzero reading is a live alarm that something new is bypassing the
-    fallback, not a report card on the past.
+    A THIRD, ORTHOGONAL SUB-SPLIT on `resolved_edgeless`: `pre_fix_sediment` (the
+    thread's `status` assertion was observed before `_PHASE_1A_FIX_AT`, the moment
+    resolve_thread started minting `closed_by` unconditionally) vs `post_fix_regression`
+    (observed at or after it). Measured live at build time: `pre_fix_sediment` was 100%
+    of the osiris-scoped 383, `post_fix_regression` was 0, the fix is holding. This is
+    now a MECHANICAL WATCH on that fact rather than a claim someone has to re-verify by
+    hand: `post_fix_regression` should read zero forever, and any nonzero reading is a
+    live alarm that something new is bypassing the fallback, not a report card on the
+    past.
 
     `repo` (a project name, string) scopes the read; the subject, if focused, wins over
-    `args.repo`; neither given = fleet-wide, matching `enumerate_threads`'s own convention.
-    The echoed `"repo"` field in the return value NAMES WHAT ACTUALLY RAN — re-read from the
-    resolved `repo` id itself, not from `args.get("repo")` alone (Thoth's own catch, DM
-    2951: `run_composition('closure-health', subject='osiris')` resolves `subject` to a real
-    id BEFORE this Function ever sees it, so echoing raw `args` reported `null` on a call
-    that had in fact scoped correctly — the same shape as the resolve_thread receipt bug two
-    commits earlier in this same night, a third specimen of an honest act with a dishonest
-    account). Genuinely fleet-wide (neither subject nor args.repo given) echoes the literal
-    string `"*fleet*"`, never `null` — a dropped argument and a deliberate fleet-wide scope
-    are different facts and must not render identically.
-    Deliberately NOT folded into `_fn_lint`'s EDGELESS-CLOSURE-GROWTH ratchet — that stays a
-    narrow, fast, fleet-wide ceiling check (a single aggregate number, tripwire-shaped); this
-    is a separate, richer, per-project, addressable surface the ratchet could eventually read
-    from instead of duplicating. Read-only, no writes, same as every other rung-2 Function
-    here."""
+    `args.repo`; neither given = fleet-wide, matching `enumerate_threads`'s own
+    convention. The echoed `"repo"` field in the return value NAMES WHAT ACTUALLY RAN,
+    re-read from the resolved `repo` id itself, not from `args.get("repo")` alone:
+    `run_composition('closure-health', subject='osiris')` resolves `subject` to a real id
+    BEFORE this Function ever sees it, so echoing raw `args` reported `null` on a call
+    that had in fact scoped correctly, the same shape as a resolve_thread receipt bug
+    found the same night, another specimen of an honest act with a dishonest account.
+    Genuinely fleet-wide (neither subject nor args.repo given) echoes the literal string
+    `"*fleet*"`, never `null`, a dropped argument and a deliberate fleet-wide scope are
+    different facts and must not render identically.
+    Deliberately NOT folded into `_fn_lint`'s EDGELESS-CLOSURE-GROWTH ratchet, that stays
+    a narrow, fast, fleet-wide ceiling check (a single aggregate number, tripwire-
+    shaped); this is a separate, richer, per-project, addressable surface the ratchet
+    could eventually read from instead of duplicating. Read-only, no writes, same as
+    every other rung-2 Function here."""
     from src.orchestrator.capture import _find_artifact
     from src.orchestrator.thread_closure import closure_buckets
 
@@ -4937,36 +4921,36 @@ async def _fn_closure_health(
 async def _fn_obligation_backlog(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """THE BACKLOG BAND, piece 1 (operator nudge via Thoth, msg 8608): the ONE read this
-    house's obligation-crunch tools should all point at, so `backlog()`'s per-project view,
-    a fleet-wide `--fleet` widening, and the operator desk's weekly line are three renders
-    of the same numbers rather than three hand-rolled queries drifting apart. Composes
-    `digest._open_obligation_rows` (the raw query `_obligation_pressure` already ran) —
+    """THE BACKLOG BAND, piece 1: the ONE read this house's obligation-crunch tools
+    should all point at, so `backlog()`'s per-project view, a fleet-wide `--fleet`
+    widening, and the operator desk's weekly line are three renders of the same numbers
+    rather than three hand-rolled queries drifting apart. Composes
+    `digest._open_obligation_rows` (the raw query `_obligation_pressure` already ran),
     never re-derives the WHERE clause a third time.
 
     Two views over the SAME open-obligation population:
-      `by_project` — verbatim `_obligation_pressure`'s own rows (project, open, target,
-        past_window, oldest_owners) — unchanged shape, existing callers (`backlog()`,
+      `by_project`: verbatim `_obligation_pressure`'s own rows (project, open, target,
+        past_window, oldest_owners), unchanged shape, existing callers (`backlog()`,
         `render_desk_text`) keep working against it untouched.
-      `by_seat` — the NEW axis this composition adds: every open obligation's `owner`
+      `by_seat`: the NEW axis this composition adds: every open obligation's `owner`
         resolved against the live roster's own seat ids/handles (case-insensitive, the
         same two spellings `owner_refs` in stophook_logic.py already treats as the same
         seat), grouped by the resolved seat, oldest three owned as `{id, summary}` refs.
-        Sorted by `open` descending, then by handle — the heaviest-carrying seat first.
-      `unowned` — count of rows with no owner property at all.
-      `operator_owned` — count of rows literally owned by `mailbox.OPERATOR_ADDR`
-        ("operator") — a LEGAL literal owner (peer-governed and operator-owned rows are a
-        real, expected population, Thoth's correction msg 8670), never counted as a miss.
-      `literal_owner` — every OTHER owner string that matches NO live roster seat (a name
+        Sorted by `open` descending, then by handle, the heaviest-carrying seat first.
+      `unowned`: count of rows with no owner property at all.
+      `operator_owned`: count of rows literally owned by `mailbox.OPERATOR_ADDR`
+        ("operator"), a LEGAL literal owner (peer-governed and operator-owned rows are a
+        real, expected population), never counted as a miss.
+      `literal_owner`: every OTHER owner string that matches NO live roster seat (a name
         once real since retired, or a hand-typed value that was never a seat ref to begin
-        with), as a NAMED list `[{"owner": name, "count": n}, ...]` sorted heaviest first
-        — a bare count told nobody which name to chase; distinct from `unowned` (a filing
+        with), as a NAMED list `[{"owner": name, "count": n}, ...]` sorted heaviest first,
+        a bare count told nobody which name to chase; distinct from `unowned` (a filing
         gap of a DIFFERENT shape: wrong reference, not no reference) and from
         `operator_owned` (legal, not a gap at all).
 
-    `fleet_total` is the flat open count across every project — the single number a weekly
-    digest line needs beside `by_seat`'s top-N. Read-only, no writes, same as every other
-    Function here."""
+    `fleet_total` is the flat open count across every project, the single number a
+    weekly digest line needs beside `by_seat`'s top-N. Read-only, no writes, same as
+    every other Function here."""
     from src.actions.core import Actions
     from src.orchestrator.digest import _obligation_pressure, _open_obligation_rows
     from src.orchestrator.mailbox import OPERATOR_ADDR
@@ -5058,10 +5042,10 @@ def _backup_deploy_dir() -> Path:
 
 def _backup_timer_calendar(unit: str) -> str | None:
     """The unit's own `OnCalendar=` line, read straight off the shipped `deploy/<unit>`
-    file — the SAME file `osiris deploy`'s own install step reinstalls the live timer
-    from (scripts/install_prune_timers.sh, Thoth mail 8437), so this is the schedule
-    that's actually running, not a second guess at it. None when the file doesn't exist
-    or carries no such line (never a fabricated schedule)."""
+    file, the SAME file `osiris deploy`'s own install step reinstalls the live timer
+    from (scripts/install_prune_timers.sh), so this is the schedule that's actually
+    running, not a second guess at it. None when the file doesn't exist or carries no
+    such line (never a fabricated schedule)."""
     path = _backup_deploy_dir() / unit
     try:
         text = path.read_text()
@@ -5075,7 +5059,7 @@ def _backup_timer_calendar(unit: str) -> str | None:
 
 
 async def _backup_timer_live_state(unit: str) -> dict[str, Any]:
-    """Best-effort LIVE last/next-run off `systemctl --user show` — UNAVAILABLE, not
+    """Best-effort LIVE last/next-run off `systemctl --user show`, UNAVAILABLE, not
     fabricated, the moment this isn't running on a box with that unit installed (CI, a
     dev worktree, systemd absent entirely): same "unavailable, not silent" law
     `_fn_fleet_live_agents` already holds, an empty dict rather than a raised
@@ -5111,29 +5095,30 @@ async def _backup_timer_live_state(unit: str) -> dict[str, Any]:
 async def _fn_backup_status(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """THE BACKUP PANEL'S READ HALF (Wave 21, operator's word 2026-09-11, thread f04cce36
-    piece 2): a Function, not an op-tree — the scope report (annotated on f04cce36) found
-    this whole domain has no graph object to `select` over at all; every fact here is a
-    live process/filesystem read (dumps, base backups, WAL segments, the ladder's own
-    manifest-mail state, disk headroom, the 5 systemd timers), never a `winning_props`
-    assertion. Every section wraps an EXISTING definition rather than re-deriving it —
-    `_compute_plans`/`find_clear_manifest` are osiris_prune_ladder.py's own scan-and-plan
-    step (the same one --manifest/--apply-if-clear run), `has_room` is osiris_disk_guard.py's
-    own margin check — so a panel reading this can never drift from what the timers
-    actually do. Read-only, no writes (6c18709f) — the write door is its own piece (3).
+    """THE BACKUP PANEL'S READ HALF: a Function, not an op-tree, an earlier scope report
+    found this whole domain has no graph object to `select` over at all; every fact here
+    is a live process/filesystem read (dumps, base backups, WAL segments, the ladder's
+    own manifest-mail state, disk headroom, the 5 systemd timers), never a
+    `winning_props` assertion. Every section wraps an EXISTING definition rather than
+    re-deriving it, `_compute_plans`/`find_clear_manifest` are osiris_prune_ladder.py's
+    own scan-and-plan step (the same one --manifest/--apply-if-clear run), `has_room` is
+    osiris_disk_guard.py's own margin check, so a panel reading this can never drift
+    from what the timers actually do. Read-only, no writes, the write door is its own
+    piece.
 
     Each section degrades independently ({"error": ...}, `_fn_fleet_live_agents`'s own
-    law: unavailable, not silent, never a fake row) so one missing directory or a systemd-
-    less box (CI, a dev worktree) still returns every OTHER section intact — `args.vault`/
-    `args.backups` are optional overrides (str paths) a test points at a tmp_path instead
-    of the real production paths, the same opt-in-args discipline `select`'s own `scope`
-    uses.
+    law: unavailable, not silent, never a fake row) so one missing directory or a
+    systemd-less box (CI, a dev worktree) still returns every OTHER section intact,
+    `args.vault`/`args.backups` are optional overrides (str paths) a test points at a
+    tmp_path instead of the real production paths, the same opt-in-args discipline
+    `select`'s own `scope` uses.
 
-    PIECE 3's OWN SETTINGS (backup_settings.py) are folded in read-only here: `schedule`
-    stays the LIVE shipped value (what's actually running, off the deploy/*.timer file);
-    `configured_schedule` is the operator's own written override, if any — None until
-    deploy's own timer-install step regenerates the unit from it, so a caller can tell
-    "set" from "took effect" instead of the two being silently conflated."""
+    THE SETTINGS LAYER's OWN SETTINGS (backup_settings.py) are folded in read-only here:
+    `schedule` stays the LIVE shipped value (what's actually running, off the
+    deploy/*.timer file); `configured_schedule` is the operator's own written override,
+    if any, None until deploy's own timer-install step regenerates the unit from it, so
+    a caller can tell "set" from "took effect" instead of the two being silently
+    conflated."""
     from datetime import UTC as _UTC
     from datetime import datetime as _datetime
 
@@ -5144,7 +5129,7 @@ async def _fn_backup_status(
 
     try:
         settings = await get_backup_settings(pool) if pool is not None else None
-    except Exception:  # noqa: BLE001 — configured overrides are a nice-to-have on top of
+    except Exception:  # noqa: BLE001 - configured overrides are a nice-to-have on top of
         # the live reads below, never a reason to blank the whole panel
         settings = None
 
@@ -5180,7 +5165,7 @@ async def _fn_backup_status(
             "wal_segments_kept": len(wal_plan["keep"]),
             "wal_segments_prunable": len(wal_plan["remove"]),
         }
-    except Exception:  # noqa: BLE001 — a missing/unreadable vault is UNAVAILABLE, not a
+    except Exception:  # noqa: BLE001 - a missing/unreadable vault is UNAVAILABLE, not a
         # crash that blanks every other section (disk/manifest/timers stay independent)
         vault_section = {"error": f"vault scan unavailable ({vault})"}
         newest_dump = None
@@ -5191,13 +5176,14 @@ async def _fn_backup_status(
         if newest_dump is not None:
             disk_section["last_dump_size_bytes"] = newest_dump.size_bytes
             disk_section["headroom_ok"] = has_room(free, newest_dump.size_bytes)
-    except Exception:  # noqa: BLE001 — see vault_section above
+    except Exception:  # noqa: BLE001 - see vault_section above
         disk_section = {"error": f"disk usage unavailable ({vault})"}
 
     try:
         # the ladder's own tier windows are Python default-argument constants today
-        # (scope report's own finding) — read straight off `plan_prune`'s signature
-        # rather than a second, hand-copied set of numbers that could drift from them.
+        # (per an earlier scope report's finding), read straight off `plan_prune`'s
+        # signature rather than a second, hand-copied set of numbers that could drift
+        # from them.
         import inspect
 
         params = inspect.signature(plan_prune).parameters
@@ -5205,7 +5191,8 @@ async def _fn_backup_status(
             "hot_window_hours": params["hot_window"].default.total_seconds() / 3600,
             "daily_window_days": params["daily_window"].default.days,
             "weekly_window_days": params["weekly_window"].default.days,
-            "configurable": False,  # piece 3's own job — not yet a written setting anywhere
+            "configurable": False,  # a future settings piece's job, not yet a
+                                     # written setting anywhere
         }
     except Exception:  # noqa: BLE001
         ladder_section = {"error": "ladder tiers unavailable"}
@@ -5214,22 +5201,22 @@ async def _fn_backup_status(
         manifest_id, manifest_reason = await find_clear_manifest()
         manifest_section: dict[str, Any] = {"clear_to_apply": manifest_id is not None,
                                             "reason": manifest_reason}
-    except Exception:  # noqa: BLE001 — a DB hiccup here must not blank the rest of the panel
+    except Exception:  # noqa: BLE001 - a DB hiccup here must not blank the rest of the panel
         manifest_section = {"error": "manifest state unavailable"}
 
-    # THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a, Thoth mail 12813) wired this
-    # up for real: `offload_targets` (backup_settings.py, presence already computed
-    # per-target above) merged with `offload_runner.offload_receipts()`'s own local
-    # receipt file (last_successful_offload/last_attempt_at/last_error per target
-    # name) — a live filesystem read, same as every other section of this Function,
-    # never a settings-door write. `offbox_repositories` stays for one release
+    # THE OPPORTUNISTIC OFFLOAD RUNNER wired this up for real: `offload_targets`
+    # (backup_settings.py, presence already computed per-target above) merged with
+    # `offload_runner.offload_receipts()`'s own local receipt file
+    # (last_successful_offload/last_attempt_at/last_error per target name), a live
+    # filesystem read, same as every other section of this Function, never a
+    # settings-door write. `offbox_repositories` stays for one release
     # (backup_settings.py's own deprecation note) but is no longer this section's
     # primary field.
     try:
         from src.orchestrator.offload_runner import offload_receipts
 
         receipts = offload_receipts()
-    except Exception:  # noqa: BLE001 — see vault_section above: unavailable, never a crash
+    except Exception:  # noqa: BLE001 - see vault_section above: unavailable, never a crash
         receipts = {}
     offload_targets = list((settings or {}).get("offload_targets", []) or [])
     for t in offload_targets:
@@ -5260,29 +5247,29 @@ async def _fn_backup_status(
 async def _fn_upstream_readers(
     pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]
 ) -> Any:
-    """THE UPSTREAM-CENTRIC READ (PROVENANCE PIECE 3(b), thread b4477e9e, ruling
-    bb3e4422) — the cross-object half nothing else covers. `credence.upstream_sets`
-    answers "what did THIS source read before writing?", per source; this is the
-    REVERSE: given `subject` (any object a read-set could have pointed at — a Message,
-    a URL-keyed external-source object, or any ordinary object), every fact whose
-    writer minted a `possible_upstream` edge naming `subject`, grouped by the writing
-    object — "who could plausibly trace to this, and what did they go on to assert?"
+    """The upstream-centric read: the cross-object half nothing else covers.
+    `credence.upstream_sets` answers "what did this source read before writing?", per
+    source. This is the reverse: given `subject` (any object a read-set could have
+    pointed at, a Message, a URL-keyed external-source object, or any ordinary object),
+    every fact whose writer minted a `possible_upstream` edge naming `subject`, grouped
+    by the writing object: "who could plausibly trace to this, and what did they go on
+    to assert?"
 
-    ONE FUNCTION, THE EXISTING GENERIC DOOR PAIR (no bespoke MCP tool or REST route):
-    seeded as the saved composition `upstream-readers` (DEFAULT_COMPOSITIONS below), so
-    `POST /compositions/upstream-readers/run` (body `{"subject": "<id>"}`) and MCP
-    `composition(action='run', name='upstream-readers', subject='<id>')` BOTH already
-    exist and both call the SAME `run_composition` — REST and MCP never call each other,
-    same law every bespoke door pair here holds, satisfied by the composition substrate
-    itself rather than a new one. The "who else read this upstream" UI expansion from a
-    property row reuses this identical Function against whichever upstream id(s) that
-    row's own source appears in (already fetched client-side via the dossier's own
-    `upstream_sets` data) — no separate backend surface.
+    This reuses the existing generic composition mechanism (no bespoke MCP tool or REST
+    route): seeded as the saved composition `upstream-readers` (DEFAULT_COMPOSITIONS
+    below), so `POST /compositions/upstream-readers/run` (body `{"subject": "<id>"}`)
+    and MCP `composition(action='run', name='upstream-readers', subject='<id>')` both
+    already exist and both call the same `run_composition`. REST and MCP never call each
+    other, the same rule every composition here follows, satisfied by the composition
+    substrate itself rather than a new one. The "who else read this upstream" UI
+    expansion from a property row reuses this identical Function against whichever
+    upstream id(s) that row's own source appears in (already fetched client-side via the
+    dossier's own `upstream_sets` data), so no separate backend surface is needed.
 
-    `possible_upstream` is OVERBROAD BY DESIGN (provenance.py's own docstring: "used
-    only to withhold independence, never to grant it") — an edge here is "could
-    plausibly trace", never a claim this exact fact used that exact read; the `door`/
-    `read_at` per fact are the edge's own stamped context, not proof of use."""
+    `possible_upstream` is overbroad by design (see provenance.py's own docstring: it is
+    used only to withhold independence, never to grant it). An edge here means "could
+    plausibly trace", never a claim that this exact fact used that exact read; the
+    `door`/`read_at` per fact are the edge's own stamped context, not proof of use."""
     if subject is None:
         return {"error": "upstream-readers needs a subject — the upstream object id"}
     rows = await pool.fetch(
@@ -5310,10 +5297,10 @@ async def _fn_upstream_readers(
         if oid not in groups:
             meta = obj_meta.get(oid)
             groups[oid] = {
-                # the FULL id, not the usual 8-char short id (task #64's own table-row
-                # convention feeds dossier()/recall(), which accept a short id; this
-                # Function's own consumer is the "who else read this" UI click-through,
-                # which fetches /objects/{id} directly and needs the real uuid).
+                # The full id, not the usual 8-char short id (the table-row convention
+                # feeds dossier()/recall(), which accept a short id). This Function's
+                # own consumer is the "who else read this" UI click-through, which
+                # fetches /objects/{id} directly and needs the real uuid.
                 "id": str(oid),
                 "canonical": meta["canonical"] if meta else None,
                 "name": (resolve_label(meta["type"], label_props.get(oid, {}),
@@ -5365,14 +5352,14 @@ _FUNCTIONS: dict[str, Function] = {
     "obligation_backlog": _fn_obligation_backlog,
 }
 
-# Functions that brief the whole project rather than anchor on one entity — no subject needed.
-# `project` is here too: it drills into ONE repo, taken from the focused subject OR `args.repo`,
+# Functions that brief the whole project rather than anchor on one entity, no subject needed.
+# `project` is here too: it drills into one repo, taken from the focused subject or `args.repo`,
 # so it must run without a bound subject (it returns a "focus a repo" note if given neither).
-# NB: `projects`, `briefing`, `decisions` are GONE as Functions — they decomposed into pure
-# op-trees (a `table`, a `sections`, a `sections`+show-original — see DEFAULT_COMPOSITIONS):
-# opinion → primitives the user owns.
-# `lap` anchors on args.ref OR the subject; `lint` audits the whole graph, no anchor at all.
-# `triage` is the same shape as `lint` — census/buckets both scope via `args`, never a subject.
+# Note: `projects`, `briefing`, `decisions` are gone as Functions, they decomposed into pure
+# op-trees (a `table`, a `sections`, a `sections`+show-original, see DEFAULT_COMPOSITIONS):
+# opinion turned into primitives the user owns.
+# `lap` anchors on args.ref or the subject; `lint` audits the whole graph, no anchor at all.
+# `triage` is the same shape as `lint`, census/buckets both scope via `args`, never a subject.
 _SUBJECT_FREE = {"canon", "search", "family", "family_drift", "portfolio", "pulse", "project",
                  "lap", "lint", "echoes", "wall", "desk_decisions", "practices",
                  "fleet_live_agents", "fleet_pulse_line", "fleet_live", "mail_overview",
@@ -5390,34 +5377,34 @@ def list_functions() -> list[str]:
 # Guardrails adopted from Palantir's Object Set API (load-tested, not arbitrary).
 MAX_TRAVERSE_HOPS = 3
 MAX_AGGREGATE_DIMS = 3
-# `group`'s own cap (ruling c5b184cd, thread d56e7073/#44): matches aggregate's own dimension
-# cap, not arbitrary — arc->status->owner (roadmap's real depth) is exactly 3.
+# `group`'s own cap matches aggregate's own dimension cap, not arbitrary: arc->status->owner
+# (roadmap's real depth) is exactly 3.
 MAX_GROUP_DEPTH = 3
 
 
 @dataclass
 class Result:
-    """A composition's output — an object set, a value list, or aggregate rows."""
+    """A composition's output: an object set, a value list, or aggregate rows."""
 
     kind: str  # "objects" | "values" | "rows" | "data"
     objects: list[uuid.UUID] = field(default_factory=list)
     values: list[str] = field(default_factory=list)
     rows: list[dict[str, Any]] = field(default_factory=list)
-    data: Any = None  # a Function's native output (list/dict) — opaque to the ops
-    # `object_cols` (Thoth dispatch 9855): set by `select`'s `scope` path only — tells
-    # `_package`/`object_items` to also carry `status`/`created_at` (objects-table columns,
-    # not winning_props assertions) for a caller that needs them, e.g. browse's own keyset
-    # Load More cursor. False (every other producer of an "objects" Result) is unchanged.
+    data: Any = None  # a Function's native output (list/dict), opaque to the ops
+    # `object_cols`: set by `select`'s `scope` path only. Tells `_package`/`object_items` to
+    # also carry `status`/`created_at` (objects-table columns, not winning_props assertions)
+    # for a caller that needs them, e.g. browse's own keyset Load More cursor. False (every
+    # other producer of an "objects" Result) is unchanged.
     object_cols: bool = False
 
 
-# `group`'s body evaluates against "this partition's members" — threaded the same way
+# `group`'s body evaluates against "this partition's members", threaded the same way
 # `_ACL_CALLER` already threads the reflection ACL through nested `_eval` calls (a contextvar,
 # not a new parameter on every op handler): a nested `group`'s own `{"op":"these"}` shadows the
 # outer one, exactly the lexical scoping a reader expects. Holds the partition's own raw
-# `Result` (task #60, the function-output-re-entering-the-op-tree follow-on) — not just a bare
-# UUID list — so a Function-sourced partition (kind="rows") nests `group`/`order`/`take` under
-# its own body exactly like an object-sourced one (kind="objects"), no second leaf type needed.
+# `Result` (the function-output-re-entering-the-op-tree case), not just a bare UUID list, so a
+# Function-sourced partition (kind="rows") nests `group`/`order`/`take` under its own body
+# exactly like an object-sourced one (kind="objects"), no second leaf type needed.
 _THESE: ContextVar[Result | None] = ContextVar("_THESE", default=None)
 _GROUP_DEPTH: ContextVar[int] = ContextVar("_GROUP_DEPTH", default=0)
 
@@ -5428,7 +5415,7 @@ def _coerce(v: Any) -> Any:
 
 def _num(v: Any) -> float | None:
     """Best-effort numeric coercion for ordering/aggregation; None if not a number."""
-    if isinstance(v, bool):  # bool is an int subclass — exclude it
+    if isinstance(v, bool):  # bool is an int subclass, exclude it
         return None
     if isinstance(v, int | float):
         return float(v)
@@ -5441,11 +5428,11 @@ def _num(v: Any) -> float | None:
 
 
 async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
-    # The current value of each property is the WINNING assertion across sources, resolved
-    # by evidence GRADE first (constitution #5: SELF_DECLARED > … > DERIVED), then recency —
-    # so a fresh DERIVED re-assertion never overrides an older SELF_DECLARED one (the miner
-    # re-opening a thread a session already resolved must NOT win). winning_props (migration
-    # 0015) is the ONE definition of that ordering; every read site calls it, so it can't drift.
+    # The current value of each property is the winning assertion across sources, resolved
+    # by evidence grade first (constitution #5: SELF_DECLARED > ... > DERIVED), then recency,
+    # so a fresh DERIVED re-assertion never overrides an older SELF_DECLARED one (a re-opened
+    # thread a session already resolved must not win). winning_props (migration 0015) is the
+    # one definition of that ordering; every read site calls it, so it can't drift.
     rows = await pool.fetch(
         "SELECT name, value #>> '{}' AS v FROM winning_props(ARRAY[$1]::uuid[])", oid,
     )
@@ -5455,17 +5442,17 @@ async def _props(pool: asyncpg.Pool, oid: uuid.UUID) -> dict[str, str]:
 async def _props_batch(
     pool: asyncpg.Pool, oids: list[uuid.UUID],
 ) -> dict[uuid.UUID, dict[str, str]]:
-    """BATCHED sibling of `_props` (task #164, dispatch msg 3982): `winning_props`'s own
-    signature already takes an array — `object_items` (line ~4130) already calls it this
-    way — but the `select` op's inner loop called `_props` once PER OBJECT instead, a
-    singleton-array round trip repeated N times. Measured live: 2947 active Threads,
-    ~3.07ms/call, LIVE_DESK's two Thread-scanning sections paying it twice — 2 × 2947 ×
-    3.07ms = 18.1s projected against 16-17s measured on the console's own `/` route. This
-    is the SAME resolution rule as `_props` (constitution #5, winning_props' own ordering),
-    batched — never a second definition of "winning." `_props` itself is UNCHANGED and
-    still used by every other call site (`collect`/`focus`/etc.) — this fixes only the
-    `select` op's own N+1, per Thoth's explicit scope: batch the read, do not rewrite the
-    op. Every requested id gets an entry (possibly empty), so a caller can `.get(oid)`
+    """Batched sibling of `_props`: `winning_props`'s own signature already takes an array
+    (`object_items`, line ~4130, already calls it this way), but the `select` op's inner
+    loop called `_props` once per object instead, a singleton-array round trip repeated N
+    times. Measured live: 2947 active Threads, ~3.07ms/call, the live desk's two
+    Thread-scanning sections paying it twice, 2 x 2947 x 3.07ms = 18.1s projected against
+    16-17s measured on the console's own `/` route. This is the same resolution rule as
+    `_props` (constitution #5, winning_props' own ordering), batched, never a second
+    definition of "winning." `_props` itself is unchanged and still used by every other
+    call site (`collect`/`focus`/etc.); this fixes only the `select` op's own N+1, scoped
+    deliberately: batch the read, do not rewrite the op. Every requested id gets an entry
+    (possibly empty), so a caller can `.get(oid)`
     without a fallback for 'never asked'."""
     if not oids:
         return {}
@@ -5481,19 +5468,19 @@ async def _props_batch(
 def _project_filter_arrays(
     project: list[str] | None,
 ) -> tuple[list[str] | None, list[str] | None]:
-    """`project` repeats (`&project=a&project=b`) for a multi-repo scope pill — the console
+    """`project` repeats (`&project=a&project=b`) for a multi-repo scope pill, the console
     already sends it this way (console.js's applyRepoFilter/objectSetUrl loops SELECTED_REPOS
-    onto repeated `&project=` params); this endpoint used to accept only the LAST one FastAPI
+    onto repeated `&project=` params). This endpoint used to accept only the last one FastAPI
     bound a bare `str | None` to, so a multi-repo selection quietly filtered on whichever repo
-    happened to be last in the list — the scope pill's own "server-side, not client-side after
-    a capped fetch" gap named in #196 (Thoth msg 5600). Returns parallel (canonical, bare-name)
-    arrays, `None` for an empty selection so the SQL's own `IS NULL` no-op branch is unchanged
-    for the common single/no-repo case.
+    happened to be last in the list, a server-side scoping gap that a capped client-side fetch
+    could not fix. Returns parallel (canonical, bare-name) arrays, `None` for an empty
+    selection so the SQL's own `IS NULL` no-op branch is unchanged for the common
+    single/no-repo case.
 
-    MOVED HERE FROM app.py (Thoth dispatch 9838, 588148bb's Browse tab cutover, the extraction
-    piece): app.py's `/objects`/`/objects/counts` and this module's `list_objects_scoped` all
-    need the exact same multi-repo matching rule — one definition, not three drifting copies.
-    app.py imports this rather than keeping its own nested duplicate."""
+    Moved here from app.py as part of the Browse tab extraction: app.py's
+    `/objects`/`/objects/counts` and this module's `list_objects_scoped` all need the exact
+    same multi-repo matching rule, one definition, not three drifting copies. app.py imports
+    this rather than keeping its own nested duplicate."""
     names = [p.strip() for p in (project or []) if p and p.strip()]
     if not names:
         return None, None
@@ -5516,25 +5503,25 @@ async def list_objects_scoped(
     before_created_at: datetime | None = None,
     before_id: uuid.UUID | None = None,
 ) -> list[dict[str, Any]]:
-    """THE SHARED OBJECT-LISTING QUERY (Thoth dispatch 9838, 588148bb's Browse tab cutover,
-    the extraction piece — "one definition, one test suite over both callers"): case/project
-    scoping (multi-repo, case-insensitive, matching either the object's own canonical or a
-    project it's in_repo-linked to — #196's own hard-won fix), word-order-proof search tokens
-    (≤6, every token must match somewhere in canonical or a name/summary/title/rationale
-    assertion), an exclude_types filter, and keyset pagination (before_created_at/before_id,
-    #196/msg 5600 — OFFSET paging would re-sort the whole table per page). This is the EXACT
-    SQL app.py's `/objects` route ran inline before this extraction, parameterized and moved
-    here so `select`'s own new opt-in args (project/case_id/q/exclude_types/cursor) and
-    `/objects` itself share one implementation instead of two that can drift.
+    """The shared object-listing query, extracted so there is one definition and one test
+    suite over both callers: case/project scoping (multi-repo, case-insensitive, matching
+    either the object's own canonical or a project it's in_repo-linked to), word-order-proof
+    search tokens (<=6, every token must match somewhere in canonical or a
+    name/summary/title/rationale assertion), an exclude_types filter, and keyset pagination
+    (before_created_at/before_id; OFFSET paging would re-sort the whole table per page). This
+    is the exact SQL app.py's `/objects` route ran inline before this extraction,
+    parameterized and moved here so `select`'s own new opt-in args
+    (project/case_id/q/exclude_types/cursor) and `/objects` itself share one implementation
+    instead of two that can drift.
 
-    THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up, Thoth DM
-    10711): `object_types` is the multi-select sibling of the legacy singular `object_type` —
-    a caller may pass either (never both meaningfully; `object_types` wins when both are
-    given), matching the browse table's own multi-pill type-filter bar. `status`, when given,
-    is an EXTRA equality narrowing layered on top of — never a replacement for — the
-    unconditional "not a terminal status" rule below (matching every existing `/objects`
-    caller byte-for-byte when `status` is omitted, byte-identical to today).
-    Returns raw rows ({id, type, canonical, status, created_at}), no name/display_label —
+    The table filter query shape: `object_types` is the multi-select sibling of the legacy
+    singular `object_type`, a caller may pass either (never both meaningfully; `object_types`
+    wins when both are given), matching the browse table's own multi-pill type-filter bar.
+    `status`, when given, is an extra equality narrowing layered on top of, never a
+    replacement for, the unconditional "not a terminal status" rule below (matching every
+    existing `/objects` caller byte-for-byte when `status` is omitted, byte-identical to
+    today).
+    Returns raw rows ({id, type, canonical, status, created_at}), no name/display_label,
     presentation (resolve_label/disambiguate_labels) stays each caller's own concern,
     unchanged from today."""
     tokens = (q.split()[:6] if q else None) or None
@@ -5630,7 +5617,7 @@ def _distinct[T](values: list[T]) -> list[T]:
 
 
 def _setop[T](op: str, lists: list[list[T]]) -> list[T]:
-    """union (concat+dedup) or intersect, preserving the first set's order."""
+    """Union (concat+dedup) or intersect, preserving the first set's order."""
     if not lists:
         return []
     if op == "intersect":
@@ -5640,21 +5627,20 @@ def _setop[T](op: str, lists: list[list[T]]) -> list[T]:
 
 
 def _row_action_arg(row: dict[str, Any], spec: dict[str, Any]) -> Any:
-    """One arg's value for a `row_actions` (plural) template — EXACTLY one of `{"literal":
+    """One arg's value for a `row_actions` (plural) template: exactly one of `{"literal":
     v}` (a caller-given constant, e.g. `because: "operator: done"`) or `{"property": p}`
-    (`row.get(p)` — a Function's row is already its own facts, no `_props` indirection
+    (`row.get(p)`, a Function's row is already its own facts, no `_props` indirection
     needed; a list-valued property, e.g. a thread-fold's own id list, passes through
-    unchanged — no separate bulk-arg primitive required).
+    unchanged, no separate bulk-arg primitive required).
 
-    REFUSES LOUDLY on either malformed shape, rather than picking a silent winner (Thoth
-    msg 1976): both keys present is almost certainly a copy-paste mistake with the wrong one
-    live, and a quiet precedence there is exactly the kind of bug that survives review
-    because the OTHER value looked plausible too. An unknown key is the same class of
-    mistake — a KeyError-shaped refusal now beats a None arg the verb accepts silently and
-    the operator only notices when the write does the wrong thing. Deliberately NOT shared
-    with `row_action`'s (singular) own inline resolution — that one is live in production
-    (89df464, browser-verified via 37af8b7) and stays untouched; only `row_actions` gets the
-    richer template."""
+    Refuses loudly on either malformed shape, rather than picking a silent winner: both
+    keys present is almost certainly a copy-paste mistake with the wrong one live, and a
+    quiet precedence there is exactly the kind of bug that survives review because the
+    other value looked plausible too. An unknown key is the same class of mistake, a
+    KeyError-shaped refusal now beats a None arg the verb accepts silently, where the
+    operator only notices when the write does the wrong thing. Deliberately not shared
+    with `row_action`'s (singular) own inline resolution, that one is live in production
+    and stays untouched; only `row_actions` gets the richer template."""
     unknown = set(spec) - {"literal", "property"}
     if unknown:
         raise ValueError(f"row_actions arg spec has unknown key(s) {sorted(unknown)}: {spec!r}")
@@ -5675,27 +5661,27 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         return Result("objects", objects=[subject] if subject else [])
 
     if op == "these":
-        # the nearest enclosing `group`'s own partition — see _THESE above. Empty outside a
+        # The nearest enclosing `group`'s own partition, see _THESE above. Empty outside a
         # group body (never an error: an author testing a fragment standalone gets an empty
         # set, not a crash, same "guess never poisons a real answer" spirit as the rest of
-        # this dispatcher). Returns the partition's own Result verbatim — "objects" for a
-        # DB-sourced partition, "rows" for a Function-sourced one (task #60) — so whatever
-        # nests under `body` (a further group/order/take/table) sees the same kind it would
-        # from any other op.
+        # this dispatcher). Returns the partition's own Result verbatim, "objects" for a
+        # DB-sourced partition, "rows" for a Function-sourced one, so whatever nests under
+        # `body` (a further group/order/take/table) sees the same kind it would from any
+        # other op.
         return _THESE.get() or Result("objects")
 
     if op == "select":
         ot = node.get("object_type")
         cp = node.get("canonical_prefix")
         where = node.get("where", []) or []
-        # STATUS (Thoth dispatch 9490, 588148bb's completeness bar — the projects
-        # composition's own active/all toggle needed a real "all" to filter, and every
-        # composition before this shared ONE hardcoded `status='active'`): OPT-IN, never a
-        # silent behavior change — omitted (the default, every caller before this one)
-        # resolves to the exact same `['active']` list the old hardcoded clause always
-        # produced, so an untouched composition's result is byte-identical. `"any"` lifts
-        # the filter entirely (NULL array = no AND clause); an explicit list narrows to
-        # exactly those statuses (e.g. `["active","retired"]`).
+        # Status filter: the projects composition's own active/all toggle needed a real
+        # "all" to filter, and every composition before this shared one hardcoded
+        # `status='active'`. This is opt-in, never a silent behavior change: omitted (the
+        # default, every caller before this one) resolves to the exact same `['active']`
+        # list the old hardcoded clause always produced, so an untouched composition's
+        # result is byte-identical. `"any"` lifts the filter entirely (NULL array = no AND
+        # clause); an explicit list narrows to exactly those statuses (e.g.
+        # `["active","retired"]`).
         raw_status = node.get("status")
         statuses: list[str] | None
         if raw_status is None:
@@ -5706,16 +5692,16 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             statuses = [str(s) for s in raw_status]
         else:
             statuses = [str(raw_status)]
-        # SUBJECT_LINK (Thoth dispatch 9676/9690, 588148bb piece 4 — browse's click-through):
-        # OPT-IN, same discipline as `status` above — absent (every composition before this
-        # one) or no subject bound (browse's own default, unfiltered top-200 recency) leaves
-        # `link_ids` None and the extra AND clause inert, byte-identical old behavior. Given
-        # AND a subject is bound (a row_action's `bind_subject`, task #164's projects→browse
-        # drill), narrows to the neighborhood one hop from the subject via that link/
-        # direction — same convention `_rollup`/`traverse` already use ("in" = a link
-        # pointing INTO the subject, e.g. in_repo's own object->project direction), so
-        # "browse" scoped to a SoftwareProject subject shows exactly the object_count
-        # column's own set, not a re-derived notion of "this project's objects."
+        # Subject-link filter (browse's click-through): opt-in, same discipline as `status`
+        # above. Absent (every composition before this one) or no subject bound (browse's
+        # own default, unfiltered top-200 recency) leaves `link_ids` None and the extra AND
+        # clause inert, byte-identical old behavior. Given a subject is bound (a
+        # row_action's `bind_subject`, the projects->browse drill), narrows to the
+        # neighborhood one hop from the subject via that link/direction, same convention
+        # `_rollup`/`traverse` already use ("in" = a link pointing into the subject, e.g.
+        # in_repo's own object->project direction), so "browse" scoped to a SoftwareProject
+        # subject shows exactly the object_count column's own set, not a re-derived notion
+        # of "this project's objects."
         subject_link = node.get("subject_link")
         link_ids: list[uuid.UUID] | None = None
         if subject_link and subject is not None:
@@ -5729,30 +5715,29 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                 subject, ltype,
             )
             link_ids = [r["n"] for r in link_rows]
-        # SCOPE (Thoth dispatch 9838, 588148bb's Browse tab cutover, the extraction piece):
-        # OPT-IN, same discipline as `status`/`subject_link` above — absent (every
-        # composition before this one) leaves the row fetch exactly as it always was, byte-
-        # identical. Given, delegates to `list_objects_scoped` (the SAME function
+        # Scope: opt-in, same discipline as `status`/`subject_link` above. Absent (every
+        # composition before this one) leaves the row fetch exactly as it always was,
+        # byte-identical. Given, delegates to `list_objects_scoped` (the same function
         # /objects' own REST route calls, since the earlier extraction) for case/project
-        # scoping, word-order-proof search, exclude_types, and keyset pagination — one
+        # scoping, word-order-proof search, exclude_types, and keyset pagination, one
         # definition, not a second copy of that SQL drifting inside the op-tree dispatcher.
-        # NOTE two things this path does NOT compose with, documented rather than silently
+        # Two things this path does not compose with, documented rather than silently
         # wrong: `canonical_prefix` has no equivalent in list_objects_scoped (ignored on
-        # this path — /objects never supported prefix filtering either) and `status`'s own
+        # this path, /objects never supported prefix filtering either) and `status`'s own
         # opt-in is superseded by list_objects_scoped's own historical "not a terminal
         # status" rule (matching every /objects caller) rather than combined with it.
-        # `subject_link` DOES still compose (applied as a post-filter below, same as the
+        # `subject_link` does still compose (applied as a post-filter below, same as the
         # scope-less path), and `where`/props/neighborhood downstream are untouched either
-        # way — only the ROW FETCH itself branches here.
+        # way, only the row fetch itself branches here.
         scope = node.get("scope")
         # `is not None`, not truthiness: `scope: {}` is a deliberate opt-in ("use
         # list_objects_scoped, no narrowing beyond its own default rules") a caller like
-        # browse sends for its unscoped "All Repos" state — `if scope:` would silently
+        # browse sends for its unscoped "All Repos" state. `if scope:` would silently
         # treat an empty dict as absent and fall through to the old branch, losing
         # exclude_types/cursor/object_cols exactly when a caller asked for them the most
-        # plainly. Found while adding object_cols support (Thoth dispatch 9855).
+        # plainly.
         if scope is not None:
-            # a saved composition's spec round-trips through JSON storage — a UUID/datetime
+            # A saved composition's spec round-trips through JSON storage, a UUID/datetime
             # in the node arrives back as a plain string, never the Python object a caller
             # constructing the spec programmatically might pass; accept either, same
             # leniency `_row_action_arg`/other opt-in args elsewhere in this dispatcher
@@ -5777,18 +5762,17 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             )
             rows = [{"id": r["id"]} for r in scope_rows]
         else:
-            # ORDER BY created_at, id (task #197, root cause of the -n4 flake in
-            # test_depth_collapses_below_the_requested_level_to_an_honest_count): this query
-            # carried NO order at all, so row order was whatever the planner's physical scan
-            # happened to produce — usually insertion order on a quiet local box (a
-            # sequential scan with no concurrent writers tends to return heap order), but
-            # Postgres never guarantees that, and a shared-container-under-real-load plan
-            # (parallel workers, a different scan choice from buffer/lock contention) can
-            # and did return rows out of insertion order, which every downstream group/
-            # table/collect op then silently inherited as if it were meaningful.
-            # `created_at` (0054's own index) is the deterministic, insertion-order-
-            # matching key every caller actually wants; `id` (a random UUID) is only the
-            # tiebreaker for two rows sharing one timestamp.
+            # ORDER BY created_at, id: this query carried no order at all, so row order was
+            # whatever the planner's physical scan happened to produce, usually insertion
+            # order on a quiet local box (a sequential scan with no concurrent writers tends
+            # to return heap order), but Postgres never guarantees that, and a
+            # shared-container-under-real-load plan (parallel workers, a different scan
+            # choice from buffer/lock contention) can and did return rows out of insertion
+            # order, which every downstream group/table/collect op then silently inherited
+            # as if it were meaningful.
+            # `created_at` (indexed by migration 0054) is the deterministic,
+            # insertion-order-matching key every caller actually wants; `id` (a random UUID)
+            # is only the tiebreaker for two rows sharing one timestamp.
             rows = await pool.fetch(
                 "SELECT id FROM objects "
                 "WHERE ($3::text[] IS NULL OR status = ANY($3::text[])) "
@@ -5800,9 +5784,9 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         if scope is not None and link_ids is not None:
             keep = set(link_ids)
             rows = [r for r in rows if r["id"] in keep]
-        # the house boundary (6c18709f): a composition selecting Reflections — by type or
-        # by an untyped select-all — reads only the caller's own house; the record stays
-        # whole, this lens narrows
+        # The house boundary: a composition selecting Reflections, by type or by an untyped
+        # select-all, reads only the caller's own house; the record stays whole, this lens
+        # narrows
         if ot in (None, "Reflection"):
             refl = [r["id"] for r in await pool.fetch(
                 "SELECT id FROM objects WHERE id = ANY($1::uuid[]) AND type='Reflection'",
@@ -5811,16 +5795,16 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                 ok = await _visible_reflections(pool, refl, _ACL_CALLER.get())
                 hidden = set(refl) - ok
                 rows = [r for r in rows if r["id"] not in hidden]
-        # `neighborhood` is a DIMENSION, not a property — an object's tree is an in_repo EDGE,
+        # `neighborhood` is a dimension, not a property: an object's tree is an in_repo edge,
         # not an assertion. Resolving it here (batched, only when asked for) makes it filterable
         # like any other fact, which is what lets `bundle`'s rows drill straight back into their
         # fruit with no bespoke drill path: select Thread where neighborhood=osiris.
         hoods: dict[Any, dict[str, Any]] = {}
         if any(c.get("property") == NEIGHBORHOOD for c in where):
             hoods = await neighborhoods_of(pool, [r["id"] for r in rows])
-        # BATCHED, not one winning_props round trip per row (task #164, msg 3982): the
-        # console's own `/` route measured 16-17s from exactly this shape, LIVE_DESK
-        # scanning ~2947 active Threads twice at ~3ms/call. See `_props_batch`.
+        # Batched, not one winning_props round trip per row: the console's own `/` route
+        # measured 16-17s from exactly this shape, scanning ~2947 active Threads twice at
+        # ~3ms/call. See `_props_batch`.
         props_by_id = await _props_batch(pool, [r["id"] for r in rows])
         out: list[uuid.UUID] = []
         for r in rows:
@@ -5830,12 +5814,12 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             if all(match_condition(facts.get(c.get("property")), c.get("op", "contains"),
                                    c.get("value")) for c in where):
                 out.append(r["id"])
-        # `object_cols` (Thoth dispatch 9855, the browse-swap shape gap): a `scope`-driven
-        # select is the one path a composition consumer (browse's own Load More) needs
-        # `status`/`created_at` back — object_items' packaging normally carries neither
-        # (they're objects-table columns, not winning_props assertions, and no caller
-        # before this one ever needed them). Flagged on the Result rather than threaded as
-        # a new _package parameter every other op would have to pass None for.
+        # `object_cols`: a `scope`-driven select is the one path a composition consumer
+        # (browse's own Load More) needs `status`/`created_at` back. object_items'
+        # packaging normally carries neither (they're objects-table columns, not
+        # winning_props assertions, and no caller before this one ever needed them).
+        # Flagged on the Result rather than threaded as a new _package parameter every
+        # other op would have to pass None for.
         return Result("objects", objects=out, object_cols=scope is not None)
 
     if op == "traverse":
@@ -5861,7 +5845,7 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             nxt = {r["n"] for r in rows} - seen
             seen |= nxt
             frontier = nxt
-        # the neighbourhood is everything reached EXCEPT the seeds themselves
+        # The neighbourhood is everything reached except the seeds themselves
         return Result("objects", objects=[i for i in seen if i not in set(seeds)])
 
     if op == "collect":
@@ -5898,13 +5882,14 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         return Result("values", values=_setop(op, [s.values for s in sets]))
 
     if op == "bundle":
-        # FANOUT — the garden's primitive (operator, 2026-07-11: "each project is a tree with
-        # fruits"). Collapse ANY object set into its trees: one row per neighborhood, counted,
-        # ordered by weight. Returns the same {group, metric} shape `aggregate` does, so it
-        # renders through the console's existing ranked-table renderer AND drills back through
-        # the existing drill — because `neighborhood` is a real dimension of `select` (below),
-        # clicking a tree re-selects exactly its fruit. Nothing about this knows what a Thread
-        # is: bundle a set of commits, files, decisions or threads and the garden works the same.
+        # Fanout: each project is a tree with its own set of associated objects (its
+        # "fruit"). Collapse any object set into its trees: one row per neighborhood,
+        # counted, ordered by weight. Returns the same {group, metric} shape `aggregate`
+        # does, so it renders through the console's existing ranked-table renderer and
+        # drills back through the existing drill, because `neighborhood` is a real
+        # dimension of `select` (below), clicking a tree re-selects exactly its associated
+        # objects. Nothing about this knows what a Thread is: bundle a set of commits,
+        # files, decisions or threads and it works the same.
         base = await _eval(pool, node["from"], subject)
         by = node.get("by", NEIGHBORHOOD)
         if by != NEIGHBORHOOD:
@@ -5945,8 +5930,8 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                       rows=base.rows[:n], data=base.data)
 
     if op == "sections":
-        # a page of compositions: eval each section's body, render it to items, key by title.
-        # This is Notion's page-of-blocks / a "briefing" — the shape every subject-free
+        # A page of compositions: eval each section's body, render it to items, key by title.
+        # This is Notion's page-of-blocks / a "briefing", the shape every subject-free
         # read-model already returns, now composed from primitives instead of hand-written SQL.
         data: dict[str, Any] = {}
         for sec in node.get("sections", []) or []:
@@ -5957,12 +5942,11 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         return Result("data", data=data)
 
     if op == "group":
-        # THE DYNAMIC section (ruling c5b184cd, thread d56e7073/#44): `sections` needs its
-        # titles hardcoded in the spec; `aggregate` groups but keeps only a metric. `group`
-        # is the missing middle — one section PER DISTINCT VALUE of a property, each holding
-        # its own full sub-result (nestable: a partition's `body` may itself be another
-        # `group`, resolving `{"op":"these"}` to THIS partition — arc -> status -> owner is
-        # three of these composed, nothing more).
+        # The dynamic section: `sections` needs its titles hardcoded in the spec; `aggregate`
+        # groups but keeps only a metric. `group` is the missing middle, one section per
+        # distinct value of a property, each holding its own full sub-result (nestable: a
+        # partition's `body` may itself be another `group`, resolving `{"op":"these"}` to
+        # this partition, arc -> status -> owner is three of these composed, nothing more).
         depth = _GROUP_DEPTH.get()
         if depth >= MAX_GROUP_DEPTH:
             raise ValueError(f"group nesting exceeds {MAX_GROUP_DEPTH} levels")
@@ -5974,10 +5958,10 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
             raise ValueError("group requires 'body'")
         base = await _eval(pool, node["from"], subject)
         # Two sources of members to partition: real objects (DB-driven, re-derives the `by`
-        # property per object like `aggregate` always has) or a Function's own already-
-        # materialized rows (task #60 — the function-output-re-entering-the-op-tree follow-on:
-        # a Function's list-of-dicts output arrives here as kind="rows", see the `function` op
-        # below). Both converge into the SAME title -> Result map before the existing
+        # property per object like `aggregate` always has) or a Function's own
+        # already-materialized rows (the function-output-re-entering-the-op-tree case: a
+        # Function's list-of-dicts output arrives here as kind="rows", see the `function` op
+        # below). Both converge into the same title -> Result map before the existing
         # per-partition eval loop, which doesn't care which source produced it.
         bucket_results: dict[str, Result] = {}
         if base.kind == "rows":
@@ -6008,8 +5992,8 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         sequence = node.get("sequence")
         if sequence:
             # Listed titles first, in the given order (one absent from the data is a
-            # silent no-op — same as an empty group always was). Everything ELSE appends
-            # after, alphabetically — visible, never dropped: a typo'd or new title must
+            # silent no-op, same as an empty group always was). Everything else appends
+            # after, alphabetically, visible, never dropped: a typo'd or new title must
             # never vanish just because nobody added it to the sequence yet.
             ordered: dict[str, Any] = {t: partitions[t] for t in sequence if t in partitions}
             ordered.update(sorted((t, v) for t, v in partitions.items() if t not in sequence))
@@ -6024,26 +6008,26 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
         if subject is None and name not in _SUBJECT_FREE:
             raise ValueError(f"function {name!r} requires a subject")
         data = await fn(pool, subject, node.get("args", {}) or {})
-        # task #60 (the function-output-re-entering-the-op-tree follow-on): a Function whose
-        # own output is already row-shaped (a list of dicts — `desk_decisions`'s messages,
-        # `roadmap_open`'s ranked threads) is no longer a dead-end leaf. Shape-based, not an
-        # opt-in flag on the Function itself: `group`/`order`/`take` already branch on
-        # Result.kind, so this one reclassification is what lets them all reach a Function's
-        # output for free. A dict-shaped Function (sections-like output — `pulse`, `wall`)
-        # stays kind="data"; nothing there is orderable/groupable and nothing should be.
+        # The function-output-re-entering-the-op-tree case: a Function whose own output is
+        # already row-shaped (a list of dicts, `desk_decisions`'s messages, `roadmap_open`'s
+        # ranked threads) is no longer a dead-end leaf. Shape-based, not an opt-in flag on
+        # the Function itself: `group`/`order`/`take` already branch on Result.kind, so this
+        # one reclassification is what lets them all reach a Function's output for free. A
+        # dict-shaped Function (sections-like output, `pulse`, `wall`) stays kind="data";
+        # nothing there is orderable/groupable and nothing should be.
         if isinstance(data, list) and all(isinstance(x, dict) for x in data):
             row_action = node.get("row_action")
             if row_action:
                 # A Function's row is already its own facts, so this needs no `_props`/
                 # `_col_value` indirection the way `_table`'s object-backed version does:
-                # `row.get(property)` directly. The CLIENT half (table() recognizing
-                # `_action` as a control, a click-delegate POSTing to /act) shipped in
-                # 37af8b7 — browser-verified against live-desk's resolve button. A
-                # `"run:<function>"` action is the navigation form (task #90, Thoth msg
-                # 1976/2005) — the client dispatches a DOM event instead of POSTing, and the
-                # page shell runs the named Function via /compositions/run-spec, showing its
-                # Result. SINGULAR only: one action, one property-templated arg each — see
-                # `row_actions` below for a row that affords more than one verb.
+                # `row.get(property)` directly. The client half (table() recognizing
+                # `_action` as a control, a click-delegate POSTing to /act) was
+                # browser-verified against the live desk's resolve button. A
+                # `"run:<function>"` action is the navigation form: the client dispatches a
+                # DOM event instead of POSTing, and the page shell runs the named Function
+                # via /compositions/run-spec, showing its Result. Singular only: one action,
+                # one property-templated arg each, see `row_actions` below for a row that
+                # affords more than one verb.
                 for row in data:
                     row["_action"] = {
                         "action": row_action.get("action"),
@@ -6052,15 +6036,15 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
                     }
             row_actions = node.get("row_actions")
             if row_actions:
-                # PLURAL (Thoth msg 1976, gating msg 1971's proposal) — a row that affords
-                # more than one verb (chrome.py's /desk: done/not mine/later, three DIFFERENT
-                # actions on one debt row) can't be expressed by `row_action`'s single
-                # {action, args}. `row_actions` is a list of {label, action, args}; each row
-                # gets `_actions: [...]`, one entry per declared verb. The client renders N
-                # buttons, same click delegate as the singular form (task #91, Thoth msg
-                # 1976/2029). NB: desk_project's own three-verb debt rows embed `_actions`
-                # directly in Python rather than declaring `row_actions` here — see that
-                # Function's own docstring for why this node-level path isn't the fit there.
+                # Plural: a row that affords more than one verb (chrome.py's /desk:
+                # done/not mine/later, three different actions on one debt row) can't be
+                # expressed by `row_action`'s single {action, args}. `row_actions` is a list
+                # of {label, action, args}; each row gets `_actions: [...]`, one entry per
+                # declared verb. The client renders N buttons, same click delegate as the
+                # singular form. Note: desk_project's own three-verb debt rows embed
+                # `_actions` directly in Python rather than declaring `row_actions` here,
+                # see that Function's own docstring for why this node-level path isn't the
+                # fit there.
                 for row in data:
                     row["_actions"] = [
                         {"label": str(ra.get("label") or ra.get("action") or ""),
@@ -6076,35 +6060,34 @@ async def _eval(pool: asyncpg.Pool, node: dict[str, Any], subject: uuid.UUID | N
 
 
 def _col_value(oid: uuid.UUID, facts: dict[str, str], prop: str) -> Any:
-    """The value one property name resolves to for one row — shared by column resolution and
-    `row_action`'s own arg templates, so both name properties the same way. `id` is special
-    (task #60, thread b81b0fac): not an assertion — a row is a candidate object, not a fact
-    ABOUT one — so it never lives in `facts`. Same 8-char short-id convention every other
-    read site uses (_owned_open_threads' substring(o.id::text,1,8), the open-thread wall's
-    own ids)."""
+    """The value one property name resolves to for one row, shared by column resolution and
+    `row_action`'s own arg templates, so both name properties the same way. `id` is special:
+    not an assertion, a row is a candidate object, not a fact about one, so it never lives
+    in `facts`. Same 8-char short-id convention every other read site uses
+    (_owned_open_threads' substring(o.id::text,1,8), the open-thread wall's own ids)."""
     if prop == "id":
         return str(oid)[:8]
     if prop == "name":
-        # THE SAME resolve_label CHAIN /objects ITSELF USES (Thoth dispatch 9676/9712/9716,
-        # 588148bb's swap piece), never a second name-resolution notion for compositions:
-        # `facts` already carries every LABEL_CHAIN property (winning_props returns ALL
-        # current properties, not just requested columns — same "already have it, don't
-        # re-fetch" reasoning as `summary` above) plus `type`/`canonical` whenever any
-        # column asked for `property:"name"` (`_table`'s own obj_cols_needed extension).
-        # UNIVERSAL, not type policy (Thoth's own words) — returns the RAW canonical,
-        # unstripped, on the canonical tier: a type-specific "never show the repo: prefix"
-        # rule is SoftwareProject's own UI policy, not this shared function's to encode
-        # (see the `name_fallback` column kind below for where that opt-in policy lives).
+        # The same resolve_label chain /objects itself uses, never a second
+        # name-resolution notion for compositions: `facts` already carries every
+        # LABEL_CHAIN property (winning_props returns all current properties, not just
+        # requested columns, same "already have it, don't re-fetch" reasoning as `summary`
+        # above) plus `type`/`canonical` whenever any column asked for `property:"name"`
+        # (`_table`'s own obj_cols_needed extension).
+        # This is universal, not type policy: returns the raw canonical, unstripped, on
+        # the canonical tier. A type-specific "never show the repo: prefix" rule is
+        # SoftwareProject's own UI policy, not this shared function's to encode (see the
+        # `name_fallback` column kind below for where that opt-in policy lives).
         obj_type, canonical = facts.get("type"), facts.get("canonical")
         if obj_type and canonical:
             return resolve_label(str(obj_type), facts, str(canonical)).label
         return facts.get("name")
     if prop == "summary":
-        # THE CORRECTED SUMMARY WINS BY DEFAULT (roadmap ledger-rot stage 3.5, decision
-        # c0bc6d33 + Thoth LXXIV's DM 4364): `facts` already carries BOTH properties (winning_
-        # props returns every current one, not just requested columns) — same COALESCE law
-        # as _SUMMARY_DISPLAY_SQL, applied here for the op-tree's own column path (roadmap's
-        # resolved/retracted sections and any other `table` op reading a Thread's summary).
+        # The corrected summary wins by default: `facts` already carries both properties
+        # (winning_props returns every current one, not just requested columns), same
+        # COALESCE law as _SUMMARY_DISPLAY_SQL, applied here for the op-tree's own column
+        # path (roadmap's resolved/retracted sections and any other `table` op reading a
+        # Thread's summary).
         return facts.get("corrected_summary") or facts.get("summary")
     return facts.get(prop)
 
@@ -6113,37 +6096,37 @@ async def _table(
     pool: asyncpg.Pool, objects: list[uuid.UUID], columns: list[dict[str, Any]],
     row_action: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """One ROW per object; each column is a property value or a rollup over a link (Notion's
+    """One row per object; each column is a property value or a rollup over a link (Notion's
     database+rollups / Palantir's object-set + per-object aggregate). Over a bounded set (a
-    select/traverse result), so per-object queries are fine — the whole point is that the SET
+    select/traverse result), so per-object queries are fine, the whole point is that the set
     is already candidate-gated by the op that produced it.
 
-    `row_action` (ruling c5b184cd, thread d56e7073/#44 — the write leg) declares a CONTROL
-    every row carries, not a displayed column: `{"action":<name>,"args":{<argname>:
-    {"property":P}}}`. Each row's own args get resolved HERE, from that SAME row's own
-    already-fetched facts (the identical `_col_value` a column would use), and attached as a
-    private `_action` key the renderer reads — never a column, never sent to the client as
-    displayed data. The op-tree only ever DECLARES the shape; `/act`'s own registry (a
-    separate, closed dispatch table) is what actually enforces which actions and args are
-    real — this function has no opinion on that, same discipline as everywhere else in this
-    dispatcher (a Function/op computes DATA, it never decides what's SAFE to write).
+    `row_action` (the write leg) declares a control every row carries, not a displayed
+    column: `{"action":<name>,"args":{<argname>: {"property":P}}}`. Each row's own args get
+    resolved here, from that same row's own already-fetched facts (the identical
+    `_col_value` a column would use), and attached as a private `_action` key the renderer
+    reads, never a column, never sent to the client as displayed data. The op-tree only ever
+    declares the shape; `/act`'s own registry (a separate, closed dispatch table) is what
+    actually enforces which actions and args are real, this function has no opinion on
+    that, same discipline as everywhere else in this dispatcher (a Function/op computes
+    data, it never decides what's safe to write).
 
-    Props read is BATCHED (task #164 follow-on, dispatch msg 4010): measured live via
-    Sekhmet's index-scan protocol, one `_table` call inside `orient()`'s project-briefing
-    averaged ~42.8k assertions_supersedes_idx scans / ~15.7k assertions_object_name_idx
-    scans and ~2.2s wall-clock for a single call — the same per-object `_props()` loop
-    task #164 already fixed in the `select` op, unmigrated here. See `_props_batch`."""
-    # OBJECT COLUMNS (canonical/type/status), not assertions — `_props`/`winning_props`
+    Props read is batched: measured live via an index-scan trace, one `_table` call inside
+    `orient()`'s project-briefing averaged ~42.8k assertions_supersedes_idx scans / ~15.7k
+    assertions_object_name_idx scans and ~2.2s wall-clock for a single call, the same
+    per-object `_props()` loop already fixed in the `select` op, unmigrated here. See
+    `_props_batch`."""
+    # Object columns (canonical/type/status), not assertions: `_props`/`winning_props`
     # only ever reads `current_assertions`, so a column asking for one of these by name
-    # would silently resolve to None without this (task #138/#163's arc: caught live
-    # wiring `canonical` into the `projects` composition — the same _OBJ_COLS whitelist
-    # `_rollup`'s own `of:"first"` already trusts, reused here rather than re-declared).
+    # would silently resolve to None without this (caught live wiring `canonical` into the
+    # `projects` composition, the same _OBJ_COLS whitelist `_rollup`'s own `of:"first"`
+    # already trusts, reused here rather than re-declared).
     obj_cols_needed = {str(c["property"]) for c in columns
                       if "property" in c and str(c["property"]) in _OBJ_COLS}
-    # NAME RESOLUTION needs `type`+`canonical` too (Thoth dispatch 9676/9712/9716): a
-    # `property:"name"` column or a `name_fallback` column (see `_col_value`/below) calls
-    # resolve_label, which needs this row's own object type and canonical — fetched here
-    # regardless of whether some OTHER column also asked for them explicitly.
+    # Name resolution needs `type`+`canonical` too: a `property:"name"` column or a
+    # `name_fallback` column (see `_col_value`/below) calls resolve_label, which needs
+    # this row's own object type and canonical, fetched here regardless of whether some
+    # other column also asked for them explicitly.
     if any(("property" in c and str(c["property"]) == "name") or "name_fallback" in c
            for c in columns):
         obj_cols_needed |= {"type", "canonical"}
@@ -6152,12 +6135,11 @@ async def _table(
         cols_sql = ", ".join(sorted(obj_cols_needed))
         obj_cols = {r["id"]: dict(r) for r in await pool.fetch(
             f"SELECT id, {cols_sql} FROM objects WHERE id = ANY($1::uuid[])", objects)}
-    # FUNCTION COLUMNS (Thoth dispatch 9542, 588148bb's projects-composition series,
-    # piece 2 of 4): a column whose value comes from a registered Function's own row-
-    # shaped output — real domain logic (triage's bucket classification), exactly what a
-    # Function is for per this module's own top-of-file law, never re-derived as a
-    # rollup/property. Called ONCE per distinct (name, args) pair across the whole table,
-    # batched, never per-object — the same batching discipline _props_batch already
+    # Function columns: a column whose value comes from a registered Function's own
+    # row-shaped output, real domain logic (triage's bucket classification), exactly what
+    # a Function is for per this module's own top-of-file law, never re-derived as a
+    # rollup/property. Called once per distinct (name, args) pair across the whole table,
+    # batched, never per-object, the same batching discipline _props_batch already
     # established for assertions. Matched back to each object by its own "id" field; an
     # object absent from the Function's own output (e.g. triage buckets default to
     # status="active", so a retired project has none) degrades that column to None,
@@ -6175,7 +6157,7 @@ async def _table(
         if fn is not None:
             try:
                 data = await fn(pool, None, fn_args)
-            except Exception:  # noqa: BLE001 — a function column that fails degrades every
+            except Exception:  # noqa: BLE001 - a function column that fails degrades every
                 # row on it to None, never crashes the whole table.
                 data = None
         fn_results[key] = ({str(r["id"]): r for r in data
@@ -6201,13 +6183,12 @@ async def _table(
                 fn_row = fn_results.get(key, {}).get(str(oid))
                 row[name] = fn_row.get(str(fn_spec.get("field"))) if fn_row else None
             elif "name_fallback" in col:
-                # THE PROJECTS-SPECIFIC POLICY HALF (Thoth dispatch 9676/9712/9716, kept
-                # OUT of `_col_value`'s own shared "name" resolution on purpose): the
-                # operator's own ruling that a SoftwareProject's `repo:` canonical prefix
-                # must never leak into the UI, plus an honest `unnamed` signal for the
-                # frontend — one resolve_label call, two fields picked off it via `field`
-                # (same convention `function` columns already use for picking a field off
-                # one shared computation). {"strip_prefix":?,"field":"name"|"unnamed"}.
+                # The projects-specific policy half, kept out of `_col_value`'s own shared
+                # "name" resolution on purpose: a SoftwareProject's `repo:` canonical
+                # prefix must never leak into the UI, plus an honest `unnamed` signal for
+                # the frontend. One resolve_label call, two fields picked off it via
+                # `field` (same convention `function` columns already use for picking a
+                # field off one shared computation). {"strip_prefix":?,"field":"name"|"unnamed"}.
                 spec = col["name_fallback"]
                 obj_type, canonical = facts.get("type"), facts.get("canonical")
                 resolved = (resolve_label(str(obj_type), facts, str(canonical))
@@ -6224,15 +6205,14 @@ async def _table(
         if row_action:
             action: dict[str, Any] = {"action": row_action.get("action")}
             if row_action.get("bind_subject"):
-                # THE SUBJECT-BIND MODE (Thoth dispatch 9676/9690, 588148bb piece 4): this
-                # row's OWN object is the target composition's subject, not a set of
-                # per-row args templated into a Function call — a different verb from the
-                # `args` mode above (task #90's mail_overview→mail_threads drill), for a
-                # target that's an op-tree, not a Function (browse has no Function to call
-                # via run-spec). The client runs the NORMAL /compositions/<name>/run with
-                # this subject, exactly as "project"/"family"/"portfolio" already do when a
-                # human picks a subject by hand — never a new client-side notion of what
-                # "browse" is.
+                # The subject-bind mode: this row's own object is the target composition's
+                # subject, not a set of per-row args templated into a Function call, a
+                # different verb from the `args` mode above (the mail_overview to
+                # mail_threads drill), for a target that's an op-tree, not a Function
+                # (browse has no Function to call via run-spec). The client runs the
+                # normal /compositions/<name>/run with this subject, exactly as
+                # "project"/"family"/"portfolio" already do when a human picks a subject
+                # by hand, never a new client-side notion of what "browse" is.
                 action["subject"] = str(oid)
             else:
                 action["args"] = {
@@ -6244,15 +6224,15 @@ async def _table(
     return rows
 
 
-# object columns a rollup may pluck directly (not assertions) — the canonical is how a linked
-# Commit/entity is named, so `show-original` over a link needs it. Whitelisted → safe to inline.
+# Object columns a rollup may pluck directly (not assertions): the canonical is how a linked
+# Commit/entity is named, so `show-original` over a link needs it. Whitelisted, so safe to inline.
 _OBJ_COLS = frozenset({"canonical", "type", "status"})
 
 
 async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> Any:
     """A single rollup over one object's links: count / max / min / sum / avg of a property on
     the objects reached by `link_type` in `direction`, optionally filtered to `object_type`.
-    `of:"first"` is Notion's SHOW-ORIGINAL — for a single relation, plucks the one related
+    `of:"first"` is Notion's SHOW-ORIGINAL, for a single relation, plucks the one related
     object's value (a property OR an object column like `canonical`); the enabler for showing
     a linked commit's hash/date without abusing max()."""
     direction = spec.get("direction", "both")
@@ -6304,7 +6284,7 @@ async def _rollup(pool: asyncpg.Pool, oid: uuid.UUID, spec: dict[str, Any]) -> A
 async def _group_by(
     pool: asyncpg.Pool, objects: list[uuid.UUID], group_by: list[str],
 ) -> dict[tuple[str | None, ...], list[tuple[uuid.UUID, dict[str, str]]]]:
-    """Bucket objects by one or more property values — the ONE grouping loop shared by
+    """Bucket objects by one or more property values, the one grouping loop shared by
     `aggregate` (which collapses each bucket to a metric, discarding the rest) and `group`
     (which keeps each bucket as its own renderable sub-result). Each bucket keeps (object id,
     its already-fetched facts) so neither caller re-queries the same properties twice."""
@@ -6374,10 +6354,10 @@ async def _order(
             n = _num(v)
             return (n if n is not None else float("inf"), v)
         return Result("values", values=sorted(base.values, key=vkey, reverse=rev))
-    # objects — 'recency' orders by object birth (created_at), the one axis a property sort
+    # objects: 'recency' orders by object birth (created_at), the one axis a property sort
     # can't reach (created_at is an object column, not an assertion): "newest first" / "recent
-    # N" views (orient's recent decisions, any what's-new lens). Surfaced by dogfooding the
-    # scoped briefing — the composer couldn't order by time until here.
+    # N" views (orient's recent decisions, any what's-new lens). Surfaced through the scoped
+    # briefing; the composer couldn't order by time until here.
     if by in ("recency", "newest", "created"):
         rows = await pool.fetch(
             "SELECT id FROM objects WHERE id = ANY($1::uuid[]) "
@@ -6385,7 +6365,7 @@ async def _order(
             base.objects,
         )
         return Result("objects", objects=[r["id"] for r in rows])
-    # objects — order by a property (numeric if possible, else lexical)
+    # objects: order by a property (numeric if possible, else lexical)
     keyed: list[tuple[float, str, uuid.UUID]] = []
     for oid in base.objects:
         raw = (await _props(pool, oid)).get(by) if by else None
@@ -6406,54 +6386,53 @@ async def save_composition(
     """Save (or update) a composition by name. Fork = save under a new name. `webhook_url`
     and `active` are a watch's execution metadata (a lens ignores them). `room_id` scopes it
     to a stance; a re-save without one keeps the existing one; a genuine create without one
-    gets the named fallback below, never a bare NULL — see ROOM_ID GETS THE SAME TREATMENT.
+    gets the named fallback below, never a bare NULL, see the room_id section below.
     `description` = one line of 'when to open this'; `section` = which shelf of the composer
-    sidebar (arrive | wall | memory | fleet | engine | casework) — description and
+    sidebar (arrive | wall | memory | fleet | engine | casework). description and
     refresh_secs keep their prior value when omitted on a re-save, same COALESCE-keeps-prior
-    contract as always; section and room_id no longer CAN be omitted into NULL at all, on
-    either a create or a re-save (see below — both needed the same fix, for the same reason).
-    `refresh_secs` (ruling cf9286b2) is how often the watermark-poller should check for this
-    lens while it's the one on screen — None (the default) means MANUAL ONLY: a lens goes
-    live because someone decided it should, never because it inherited a global tick.
+    contract as always; section and room_id no longer can be omitted into NULL at all, on
+    either a create or a re-save (see below, both needed the same fix, for the same reason).
+    `refresh_secs` is how often the watermark-poller should check for this lens while it's
+    the one on screen. None (the default) means manual only: a lens goes live because
+    someone decided it should, never because it inherited a global tick.
 
-    MUST BE SECTIONED (task #94): neither the MCP save_composition tool nor the HTTP
-    /compositions route ever pass `section` — a fresh save through either always arrives here
-    with section=None. Without a guard, that upserts section=NULL directly (the UPDATE
-    branch's COALESCE only ever protects a RE-save, never a genuine CREATE), and a
-    room_id=NULL, section=NULL composition renders nowhere: room=NULL excludes it from every
-    room-scoped read, and section=NULL used to have no NOT-NULL backstop either. `_more` is
-    already the CLIENT's own fallback shelf label (osiris.js: `c.section||'_more'`) for
-    exactly this case — reused here rather than inventing a second sentinel, so an
-    uncategorized composition still lands somewhere a reader can find it.
+    Must be sectioned: neither the MCP save_composition tool nor the HTTP /compositions
+    route ever pass `section`, a fresh save through either always arrives here with
+    section=None. Without a guard, that upserts section=NULL directly (the UPDATE branch's
+    COALESCE only ever protects a re-save, never a genuine create), and a room_id=NULL,
+    section=NULL composition renders nowhere: room=NULL excludes it from every room-scoped
+    read, and section=NULL used to have no NOT-NULL backstop either. `_more` is already the
+    client's own fallback shelf label (osiris.js: `c.section||'_more'`) for exactly this
+    case, reused here rather than inventing a second sentinel, so an uncategorized
+    composition still lands somewhere a reader can find it.
 
-    ROOM_ID GETS THE SAME TREATMENT (ruling 89e67c49): room_id=NULL turned out to have the
-    identical "invisible outside the god view" defect section=NULL did (0 of 28 compositions
-    visible in the one room in active use have room_id=NULL — confirmed live, task #94).
-    Resolved the same way, for the same Postgres reason (below): reuse the prior row's
-    room_id on a re-save, or the 'engineer' room BY NAME (not a hardcoded id) on a genuine
-    create with none at all — looked up fresh each call since a room's id isn't portable
-    across environments the way the string '_more' is. The fallback firing is logged
-    (logger.warning), never silent — "a default that reports beats a silent one" (89e67c49):
-    a misfiled-but-visible composition is recoverable, an invisible one isn't.
+    room_id gets the same treatment: room_id=NULL turned out to have the identical
+    "invisible outside the god view" defect section=NULL did (0 of 28 compositions visible
+    in the one room in active use have room_id=NULL, confirmed live). Resolved the same
+    way, for the same Postgres reason (below): reuse the prior row's room_id on a re-save,
+    or the 'engineer' room by name (not a hardcoded id) on a genuine create with none at
+    all, looked up fresh each call since a room's id isn't portable across environments the
+    way the string '_more' is. The fallback firing is logged (logger.warning), never
+    silent: a misfiled-but-visible composition is recoverable, an invisible one isn't.
 
-    UNLIKE SECTION, room_id gets NO DB-level NOT NULL constraint. The column carries
+    Unlike section, room_id gets no DB-level NOT NULL constraint. The column carries
     `REFERENCES rooms(id) ON DELETE SET NULL` (migration 0010) specifically so deleting a
     room gracefully orphans its compositions back to unassigned rather than breaking the
-    delete; a NOT NULL constraint would turn deleting ANY room that still has compositions
+    delete; a NOT NULL constraint would turn deleting any room that still has compositions
     in it into a hard failure. Room deletion setting room_id to NULL is a real, legitimate,
-    DIFFERENT case from 'never assigned one at creation' — only the latter is what this
+    different case from 'never assigned one at creation', only the latter is what this
     function's own resolution closes. If the 'engineer' room itself doesn't exist in this
     environment (every test DB; a fresh install before anyone's created a room), room_id is
-    left None rather than fabricating a value that would fail its own foreign key — logged
+    left None rather than fabricating a value that would fail its own foreign key, logged
     either way, so the gap is visible rather than assumed away."""
     if section is None:
-        # Postgres validates NOT NULL against the ATTEMPTED insert row even on a path that
-        # will end up taking the ON CONFLICT DO UPDATE branch — the UPDATE SET clause's own
+        # Postgres validates NOT NULL against the attempted insert row even on a path that
+        # will end up taking the ON CONFLICT DO UPDATE branch, the UPDATE SET clause's own
         # COALESCE(EXCLUDED.section, compositions.section) below never gets a chance to run
         # if the plain INSERT tuple itself already violates the constraint. So the "keep
-        # prior value on omission" resolution has to happen HERE, in Python, for section
+        # prior value on omission" resolution has to happen here, in Python, for section
         # specifically: reuse the existing row's section on a re-save, or '_more' if there's
-        # no prior row at all (a genuine create) — section is never passed as a literal NULL
+        # no prior row at all (a genuine create); section is never passed as a literal NULL
         # into the query below, in either case.
         prior_section = await pool.fetchval(
             "SELECT section FROM compositions WHERE name=$1", name)
@@ -6499,7 +6478,7 @@ async def save_watch(
     *, canonical_prefix: str | None = None, webhook_url: str | None = None,
     room_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    """Save a WATCH — a composition whose spec is a `select` op. The same spec runs as a
+    """Save a watch, a composition whose spec is a `select` op. The same spec runs as a
     lens (current members) and drives the evaluator (alert on a new member). One primitive."""
     spec: dict[str, Any] = {"op": "select", "object_type": object_type, "where": where}
     if canonical_prefix:
@@ -6515,12 +6494,12 @@ async def _spec_of(pool: asyncpg.Pool, ref: str) -> dict[str, Any] | None:
     return _coerce(row["spec"]) if row else None
 
 
-# --- rooms: the stance (a Room is a composition of compositions — authorable by Claude) --
+# --- rooms: the stance (a Room is a composition of compositions, authorable by Claude) --
 
 async def create_room(
     pool: asyncpg.Pool, name: str, config: dict[str, Any] | None = None
 ) -> uuid.UUID:
-    """Create (or update) a Room — a saved stance the operator switches between. The FDE
+    """Create (or update) a Room, a saved stance the operator switches between. The FDE
     move: Claude mints one from a sentence, then assigns compositions to it."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "INSERT INTO rooms (name, config) VALUES ($1,$2) "
@@ -6530,7 +6509,7 @@ async def create_room(
 
 
 async def resolve_room(pool: asyncpg.Pool, ref: str | None) -> uuid.UUID | None:
-    """A room by name or id (None ref → None = the All/unassigned scope)."""
+    """A room by name or id (None ref returns None, the All/unassigned scope)."""
     if not ref:
         return None
     return await pool.fetchval(  # type: ignore[no-any-return]
@@ -6548,10 +6527,10 @@ async def list_rooms(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 async def list_compositions(
     pool: asyncpg.Pool, room_id: uuid.UUID | None = None
 ) -> list[dict[str, Any]]:
-    """Saved compositions. `room_id` scopes to a stance (None = all rooms — the god view).
-    `refresh_secs` (ruling cf9286b2) rides along here, not on run_composition's own result —
-    it's composition METADATA (same table/row as description/section), read once when the
-    sidebar loads rather than re-fetched on every run."""
+    """Saved compositions. `room_id` scopes to a stance (None = all rooms, the god view).
+    `refresh_secs` rides along here, not on run_composition's own result, it's composition
+    metadata (same table/row as description/section), read once when the sidebar loads
+    rather than re-fetched on every run."""
     return [
         {"id": str(r["id"]), "name": r["name"], "kind": r["kind"], "spec": _coerce(r["spec"]),
          "webhook_url": r["webhook_url"], "active": r["active"],
@@ -6570,24 +6549,23 @@ async def list_compositions(
 async def object_items(
     pool: asyncpg.Pool, ids: list[uuid.UUID], *, with_object_cols: bool = False,
 ) -> list[dict[str, Any]]:
-    """Label a result set's objects AND carry their compact properties — in two batch
+    """Label a result set's objects and carry their compact properties, in two batch
     queries, not N. The view-switcher needs this: the Graph view uses label/type, the
-    Table view shows property columns (sector, date, …) without a per-row fetch.
+    Table view shows property columns (sector, date, ...) without a per-row fetch.
 
-    Label resolution is `resolve_label` (task #97 workstream 3, ruling 52daab71) — the
-    same rule/chain/canonical engine every other consumer now shares, not a fourth
-    hand-rolled fallback chain agreeing with the others by coincidence. `display_label`
-    is `disambiguate_labels` across THIS result set — the board/table views are exactly
-    where the reported bug (three rows truncating to one indistinguishable string) is
-    most visible.
+    Label resolution is `resolve_label`, the same rule/chain/canonical engine every other
+    consumer now shares, not a fourth hand-rolled fallback chain agreeing with the others
+    by coincidence. `display_label` is `disambiguate_labels` across this result set, the
+    board/table views are exactly where the reported bug (three rows truncating to one
+    indistinguishable string) is most visible.
 
-    `with_object_cols` (Thoth dispatch 9855, browse-swap shape gap, ruling on 588148bb):
-    OPT-IN, same discipline as every other flag this reign — False (every caller before
-    this one) is byte-identical. True also selects `status`/`created_at` in the SAME
-    batched objects query (they're objects-table columns, not winning_props assertions,
-    so there's no second round trip) and carries them onto each item — browse's own
-    keyset Load More derives its next cursor from `created_at`/`id` on the composition's
-    own returned rows, the same helper `/objects` and `select`'s `scope` arg both share."""
+    `with_object_cols` is opt-in, same discipline as every other flag: False (every caller
+    before this one) is byte-identical. True also selects `status`/`created_at` in the
+    same batched objects query (they're objects-table columns, not winning_props
+    assertions, so there's no second round trip) and carries them onto each item, browse's
+    own keyset Load More derives its next cursor from `created_at`/`id` on the
+    composition's own returned rows, the same helper `/objects` and `select`'s `scope` arg
+    both share."""
     if not ids:
         return []
     cols = "id, type, canonical, status, created_at" if with_object_cols else "id, type, canonical"
@@ -6621,7 +6599,7 @@ async def object_items(
 
 
 async def _package(pool: asyncpg.Pool, res: Result) -> Any:
-    """Render a Result into the items the generic renderer consumes — objects become labelled
+    """Render a Result into the items the generic renderer consumes, objects become labelled
     rows, rows/values/data pass through. Shared by `run_spec` and the `sections` op (a section
     body is packaged exactly as a top-level composition would be)."""
     if res.kind == "objects":
@@ -6634,10 +6612,10 @@ async def _package(pool: asyncpg.Pool, res: Result) -> Any:
 
 
 def _count_leaves(node: Any) -> int:
-    """How many actual rows a nested "data" dict holds — NOT `len(dict)` (top-level KEYS,
+    """How many actual rows a nested "data" dict holds, not `len(dict)` (top-level keys,
     what `run_spec`'s own `count` field already means and keeps meaning; this is the honest
-    total `take`/`depth` bound against, the number the ROADMAP-sized-blob problem is
-    actually about). A dict recurses (section→arc→owner…); a list is that many rows; a
+    total `take`/`depth` bound against, the number the large-response problem is actually
+    about). A dict recurses (section -> arc -> owner ...); a list is that many rows; a
     scalar is one."""
     if isinstance(node, dict):
         return sum(_count_leaves(v) for v in node.values())
@@ -6650,27 +6628,26 @@ def _bound_items(
     items: Any, *, fields: list[str] | None, take: int | None, depth: int | None,
     offset: int | None = None,
 ) -> tuple[Any, dict[str, dict[str, int]]]:
-    """THE LENS doing its own job (ruling ad19a779, task #64) instead of leaning on
-    `budget.fit()`'s blind backstop — a caller who KNOWS they want 3 rows of 2 fields
-    should never have to receive 53 full rows and pay the trim after. Same "no silent
-    caps" law as `fit()` (same "shown"/"of" shape too, so a reader who's seen one has seen
-    both): every path this actually trims is reported, never a quiet drop. Structural dict
-    nesting (a `group`'s own section/arc/owner keys) is walked, never filtered by `fields`
-    — `fields` only ever prunes a LEAF row's own columns; `depth` collapses everything
-    below the requested level to its honest count rather than silently rendering it flat
-    (a caller who asked for depth=1 must not be quietly handed depth=3).
+    """The lens doing its own job instead of leaning on `budget.fit()`'s blind backstop: a
+    caller who knows they want 3 rows of 2 fields should never have to receive 53 full rows
+    and pay the trim after. Same "no silent caps" law as `fit()` (same "shown"/"of" shape
+    too, so a reader who's seen one has seen both): every path this actually trims is
+    reported, never a quiet drop. Structural dict nesting (a `group`'s own section/arc/owner
+    keys) is walked, never filtered by `fields`, `fields` only ever prunes a leaf row's own
+    columns; `depth` collapses everything below the requested level to its honest count
+    rather than silently rendering it flat (a caller who asked for depth=1 must not be
+    quietly handed depth=3).
 
-    `offset` (task #149, Thoth DM 3847 — "NO take/offset/cursor"): `take` alone can only
-    ever show the FIRST N of a list, on every call, forever — there is no way to ask for
-    the NEXT N. Measured live: a 603-item open-threads composition, asked for with no
-    lens at all, correctly reported `_bounded: shown 37 of 603` (the generic backstop
-    DOES announce itself) but offered no way to see items 38-603 short of building ~20
-    separate narrower, hand-partitioned compositions (owner-by-owner, keyword-by-keyword)
-    — the actual workaround this task's own dispatch named. `offset` skips N before
-    taking, so `take=50, offset=50` is page 2 of the same ordering the composition's own
-    op-tree already produced (rank/order runs inside the op-tree; this never re-sorts,
-    same law `take` alone already held) — one simple, honest counter, not a stateful
-    cursor token, because the ordering itself is already stable per spec."""
+    `offset`: `take` alone can only ever show the first N of a list, on every call,
+    forever, there is no way to ask for the next N. Measured live: a 603-item open-threads
+    composition, asked for with no lens at all, correctly reported `_bounded: shown 37 of
+    603` (the generic backstop does announce itself) but offered no way to see items
+    38-603 short of building ~20 separate narrower, hand-partitioned compositions
+    (owner-by-owner, keyword-by-keyword), the actual workaround this problem forced.
+    `offset` skips N before taking, so `take=50, offset=50` is page 2 of the same ordering
+    the composition's own op-tree already produced (rank/order runs inside the op-tree,
+    this never re-sorts, same law `take` alone already held), one simple, honest counter,
+    not a stateful cursor token, because the ordering itself is already stable per spec."""
     dropped: dict[str, dict[str, int]] = {}
     start = offset or 0
 
@@ -6709,25 +6686,24 @@ async def run_spec(
     offset: int | None = None,
 ) -> dict[str, Any]:
     """Evaluate an op-tree and package the Result for the generic renderer. The inline
-    composer (W4) runs an EPHEMERAL working spec through here as you edit chips — no save.
+    composer runs an ephemeral working spec through here as you edit chips, no save.
     `caller` is who is reading (an agent id, 'operator'/'console' for the human's own
-    surfaces, None for anonymous) — the reflection ACL's input (6c18709f), carried to the
-    ops on a contextvar so a nested select inherits it without parameter-threading.
+    surfaces, None for anonymous), the reflection ACL's input, carried to the ops on a
+    contextvar so a nested select inherits it without parameter-threading.
 
-    `fields`/`take`/`depth` (ruling ad19a779, task #64 — projection/pagination) bound the
-    PACKAGED result before it ever reaches a caller: `fields` keeps only the named columns
-    on each leaf row, `take` caps each list to its first N (composition ops already put the
-    most relevant rows first — rank/order run inside the op-tree, this never re-sorts),
-    `depth` caps how many nested dict levels (a `group`'s own section/arc/owner structure)
-    get walked before collapsing to an honest count. None (the default, every existing
-    caller) is a complete no-op — untouched items, unchanged shape, byte-identical to before
-    this ruling existed.
+    `fields`/`take`/`depth` (projection/pagination) bound the packaged result before it
+    ever reaches a caller: `fields` keeps only the named columns on each leaf row, `take`
+    caps each list to its first N (composition ops already put the most relevant rows
+    first, rank/order run inside the op-tree, this never re-sorts), `depth` caps how many
+    nested dict levels (a `group`'s own section/arc/owner structure) get walked before
+    collapsing to an honest count. None (the default, every existing caller) is a complete
+    no-op, untouched items, unchanged shape, byte-identical to before this existed.
 
-    `offset` (task #149) skips N items before `take` — `take` alone can only ever show a
-    list's FIRST N, forever; `take=50, offset=50` is page 2 of the SAME stable ordering the
-    op-tree already produced. A 603-item composition used to force a caller into building
-    dozens of hand-partitioned narrower compositions just to see past item 37 — this is the
-    plain counter that replaces that workaround."""
+    `offset` skips N items before `take`, `take` alone can only ever show a list's first
+    N, forever; `take=50, offset=50` is page 2 of the same stable ordering the op-tree
+    already produced. A 603-item composition used to force a caller into building dozens
+    of hand-partitioned narrower compositions just to see past item 37, this is the plain
+    counter that replaces that workaround."""
     token = _ACL_CALLER.set(caller) if caller is not None else None
     try:
         res = await _eval(pool, spec, subject)
@@ -6742,9 +6718,9 @@ async def run_spec(
         out["items"], dropped = _bound_items(items, fields=fields, take=take, depth=depth,
                                              offset=offset)
         if dropped:
-            # `_projected`, never `_bounded` — `budget.fit()` (the LATER, generic backstop
+            # `_projected`, never `_bounded`: `budget.fit()` (the later, generic backstop
             # every MCP tool result passes through, mcp_server.BoundedMCP.call_tool) writes
-            # its OWN `_bounded` key if the response is STILL over budget after this; a
+            # its own `_bounded` key if the response is still over budget after this; a
             # shared key name would let one silently clobber the other's honest receipt.
             out["_projected"] = {"tool": "run_composition", "note": (
                 "you asked for a bounded view — this names exactly what's not shown, same "
@@ -6759,10 +6735,10 @@ async def run_composition(
     offset: int | None = None,
 ) -> dict[str, Any]:
     """Execute a saved composition (by name or id), optionally against a subject.
-    `caller` = who is reading (the reflection ACL's input — see run_spec). `fields`/`take`/
-    `depth`/`offset` — see run_spec; a roadmap-sized composition (task #64's own proof
-    case: 61K chars, 53 threads, unbounded) can now be asked for narrow and small in one
-    call instead of shipping whole and getting post-processed by hand — and `offset` pages
+    `caller` = who is reading (the reflection ACL's input, see run_spec). `fields`/`take`/
+    `depth`/`offset`, see run_spec; a roadmap-sized composition (61K chars, 53 threads,
+    unbounded, was the original proof case) can now be asked for narrow and small in one
+    call instead of shipping whole and getting post-processed by hand, and `offset` pages
     past the first `take` instead of forcing a hand-partitioned rebuild per page."""
     spec = await _spec_of(pool, ref)
     if spec is None:
@@ -6771,9 +6747,9 @@ async def run_composition(
                           fields=fields, take=take, depth=depth, offset=offset)
 
 
-# --- default compositions (templates — the engine's opinions, now forkable) --
-# `operational-vs-disclosed-geography` IS the former `discrepancy` read-model, expressed
-# as a composition: opinion has left the engine — it's a named, forkable spec the user
+# --- default compositions (templates, the engine's opinions, now forkable) --
+# `operational-vs-disclosed-geography` is the former `discrepancy` read-model, expressed
+# as a composition: opinion has left the engine, it's a named, forkable spec the user
 # owns. (Single-subject; the cluster-following nuance of discrepancy.py is left aside.)
 GEOGRAPHY_DISCREPANCY: dict[str, Any] = {
     "op": "subtract",
@@ -6783,15 +6759,15 @@ GEOGRAPHY_DISCREPANCY: dict[str, Any] = {
     "right": {"op": "collect", "transform": "country", "properties": list(_HOME_PROPS),
               "from": {"op": "subject"}},
 }
-# `briefing` — "where am I?" restored in one read (the arrival prosthesis: a returning human
+# `briefing`: "where am I?" restored in one read (the arrival prosthesis: a returning human
 # and a fresh Claude share the same zero-context state). Formerly three hand-written SQL queries;
-# now a `sections` op-tree — each section a pure select→(order→take)→table. Opinion left the
+# now a `sections` op-tree, each section a pure select->(order->take)->table. Opinion left the
 # engine: the briefing is a page of compositions the user can fork, not coded output.
 BRIEFING: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        # the RAW open-thread select showed 919 rows on 2026-07-11, 850 of them untouched
-        # miner echoes — the wall function is the graded truth (ruling 923c380f)
+        # the raw open-thread select showed 919 rows on 2026-07-11, 850 of them untouched
+        # miner echoes; the wall function is the graded truth
         {"title": "The wall — what's genuinely unresolved",
          "body": {"op": "function", "name": "wall"}},
         {"title": "Recent work — what just happened",
@@ -6813,10 +6789,10 @@ BRIEFING: dict[str, Any] = {
                               {"name": "because", "property": "resolved_because"}]}},
     ],
 }
-# `decision-log` — the project's WHY, mined into `Decision` objects. Formerly a SQL Function;
+# `decision-log`: the project's WHY, mined into `Decision` objects. Formerly a SQL Function;
 # now a single-section `sections` op-tree: the `of:"first"` (show-original) rollup plucks each
 # decision's `decided_in` commit canonical + date (the renderer formats the ISO date), ordered
-# newest-first. `summary present` drops empty rows. A kind filter = a `where` the user forks in.
+# newest-first. `summary present` drops empty rows. A kind filter is a `where` the user forks in.
 DECISION_LOG: dict[str, Any] = {
     "op": "sections",
     "sections": [
@@ -6828,9 +6804,9 @@ DECISION_LOG: dict[str, Any] = {
                            "columns": [
                                {"name": "decision", "property": "summary"},
                                {"name": "kind", "property": "kind"},
-                               # the gray: a value here means this entry is DEAD — its
-                               # successor's short id + summary ride along (ruling dd04d7dd),
-                               # so the log skims honestly without hiding the history
+                               # the gray: a value here means this entry is dead, its
+                               # successor's short id + summary ride along, so the log
+                               # skims honestly without hiding the history
                                {"name": "superseded", "property": "superseded_because"},
                                {"name": "in", "rollup": {"direction": "out",
                                     "link_type": "decided_in", "of": "first",
@@ -6841,8 +6817,8 @@ DECISION_LOG: dict[str, Any] = {
                            ]}}},
     ],
 }
-# the SCOPED arrival briefing — orient's project view as a pure composition (was bespoke SQL
-# in mcp_server._project_briefing, #20). The fleet-wide `briefing`'s selects, INTERSECTED with
+# the scoped arrival briefing: orient's project view as a pure composition (was bespoke SQL
+# in mcp_server._project_briefing). The fleet-wide `briefing`'s selects, intersected with
 # the subject project's in_repo neighbourhood and recency-ordered. Run with a SoftwareProject
 # subject; each section is take(table(order(intersect(select, traverse)))).
 PROJECT_BRIEFING: dict[str, Any] = {
@@ -6850,8 +6826,8 @@ PROJECT_BRIEFING: dict[str, Any] = {
     "sections": [
         # open_threads: the project's unresolved set, recency-desc. The pure op-tree can't
         # express "obligations first" (single-key order, no computed priority), so orient's
-        # assembly layer (mcp_server._project_briefing) RE-RANKS this — obligations float above
-        # ordinary threads — and display-caps at 25. The `take` here is only a safety ceiling on
+        # assembly layer (mcp_server._project_briefing) re-ranks this, obligations float above
+        # ordinary threads, and display-caps at 25. The `take` here is only a safety ceiling on
         # the set the ranker sees; a standalone fork still gets the recency-ordered lens.
         {"title": "open_threads", "body": {
             "op": "take", "n": 100, "from": {
@@ -6863,9 +6839,9 @@ PROJECT_BRIEFING: dict[str, Any] = {
                             {"property": "status", "op": "eq", "value": "open"}]},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
-        # superseded decisions leave the RECENT lens (the supersedes verb, ruling dd04d7dd):
-        # a corrected hypothesis must not brief the next session as if it still stood. The
-        # record keeps it; the decision-log (audit view) still lists it under its successor.
+        # superseded decisions leave the recent lens (the supersedes verb): a corrected
+        # hypothesis must not brief the next session as if it still stood. The record
+        # keeps it; the decision-log (audit view) still lists it under its successor.
         {"title": "recent_decisions", "body": {
             "op": "take", "n": 15, "from": {
                 "op": "table", "columns": [{"property": "id"}, {"property": "summary"},
@@ -6874,12 +6850,13 @@ PROJECT_BRIEFING: dict[str, Any] = {
                     "op": "intersect", "sets": [
                         {"op": "select", "object_type": "Decision", "where": [
                             {"property": "superseded_by", "op": "absent"},
-                            # ...and never brief a mind with the miner's retracted slop: the
-                            # janitor sweeps its own output, and the record keeps every row
+                            # ...and never brief a human or agent with the miner's
+                            # retracted slop: the janitor sweeps its own output, and the
+                            # record keeps every row
                             {"property": "retracted", "op": "absent"}]},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
-        # the live tensions — held polarities the session inherits (not a verdict). A Tension
+        # the live tensions: held polarities the session inherits (not a verdict). A Tension
         # is its own type, so grade-resolution / consolidation never flatten it into an answer.
         {"title": "tensions", "body": {
             "op": "take", "n": 20, "from": {
@@ -6890,8 +6867,8 @@ PROJECT_BRIEFING: dict[str, Any] = {
                         {"op": "select", "object_type": "Tension"},
                         {"op": "traverse", "from": {"op": "subject"}, "direction": "in",
                          "link_type": "in_repo", "hops": 1}]}}}}},
-        # the project's registered BLIND SPOTS — the shape of its own ignorance (8e26cd10):
-        # what the harness here cannot see, and where the real verification lives. Held like
+        # the project's registered blind spots: the shape of its own ignorance, what the
+        # harness here cannot see, and where the real verification lives. Held like
         # a Tension (its own type, never resolved away); orient speaks them so a session
         # knows before it trusts a green harness.
         {"title": "blind_spots", "body": {
@@ -6908,10 +6885,10 @@ PROJECT_BRIEFING: dict[str, Any] = {
 
 
 def _roadmap_status_group(status: str) -> dict[str, Any]:
-    """arc -> owner over one project's threads at a given status — pure op-tree, no Function
-    needed: closing a thread is itself a self_declared act (capture.py/dispose.py), so an
-    untouched resolved/retracted thread cannot exist by construction — the echo-filter the
-    OPEN section still needs (see `_fn_roadmap_open`) simply does not apply here."""
+    """arc -> owner over one project's threads at a given status: pure op-tree, no Function
+    needed. Closing a thread is itself a self_declared act (capture.py/dispose.py), so an
+    untouched resolved/retracted thread cannot exist by construction, the echo-filter the
+    open section still needs (see `_fn_roadmap_open`) simply does not apply here."""
     return {
         "op": "group", "by": "arc", "body": {
             "op": "group", "by": "owner", "from": {"op": "these"}, "body": {
@@ -6927,13 +6904,13 @@ def _roadmap_status_group(status: str) -> dict[str, Any]:
 
 
 def _roadmap_open_group() -> dict[str, Any]:
-    """arc -> owner over the OPEN bucket — task #60 (the function-output-re-entering-the-
-    op-tree follow-on): `roadmap_open` still has to be a Function (the echo-filter is real
-    evidence-provenance logic no `select` can express), but its output is no longer a
-    dead-end leaf, so the arc/owner nesting is the SAME `group`-by-arc-then-owner op-tree
-    `_roadmap_status_group` already uses for resolved/retracted — just sourced from a
-    Function instead of a `select`. No `table` step needed at the leaf: `roadmap_open`'s
-    own rows already carry exactly the columns a table step would fetch."""
+    """arc -> owner over the open bucket: the function-output-re-entering-the-op-tree case.
+    `roadmap_open` still has to be a Function (the echo-filter is real evidence-provenance
+    logic no `select` can express), but its output is no longer a dead-end leaf, so the
+    arc/owner nesting is the same `group`-by-arc-then-owner op-tree `_roadmap_status_group`
+    already uses for resolved/retracted, just sourced from a Function instead of a
+    `select`. No `table` step needed at the leaf: `roadmap_open`'s own rows already carry
+    exactly the columns a table step would fetch."""
     return {
         "op": "group", "by": "arc", "from": {"op": "function", "name": "roadmap_open"},
         "body": {"op": "group", "by": "owner", "from": {"op": "these"},
@@ -6941,15 +6918,14 @@ def _roadmap_open_group() -> dict[str, Any]:
     }
 
 
-# THE MIGRATED ROADMAP (ruling c5b184cd, thread d56e7073/#44 — the composition-abstraction
-# READ half, the proof case; task #60 restored `open` to a pure `group`-by-arc-then-owner
-# tree too, once a Function's output could re-enter the op-tree). `sections` stays keyed by
-# STATUS, not arc, at the TOP level — deliberately (Thoth, msg 1390): arc as the single
-# top-level axis across all three statuses would need unioning a Function-sourced set with
-# two `select`-sourced ones under one grouping, a bigger, structurally different change
-# `group` consuming a function-node doesn't by itself imply. All three sections are now the
-# SAME shape one level down — arc -> owner -> threads — `open` via `_roadmap_open_group`,
-# `resolved`/`retracted` via `_roadmap_status_group`.
+# The migrated roadmap: the composition-abstraction read half, the proof case; `open` was
+# later restored to a pure `group`-by-arc-then-owner tree too, once a Function's output
+# could re-enter the op-tree. `sections` stays keyed by status, not arc, at the top level,
+# deliberately: arc as the single top-level axis across all three statuses would need
+# unioning a Function-sourced set with two `select`-sourced ones under one grouping, a
+# bigger, structurally different change `group` consuming a function-node doesn't by itself
+# imply. All three sections are now the same shape one level down, arc -> owner -> threads,
+# `open` via `_roadmap_open_group`, `resolved`/`retracted` via `_roadmap_status_group`.
 ROADMAP: dict[str, Any] = {
     "op": "sections",
     "sections": [
@@ -6960,17 +6936,17 @@ ROADMAP: dict[str, Any] = {
 }
 
 
-# THE MIGRATED DOCS (ruling c5b184cd, thread d56e7073/#44) — simpler than roadmap, no
-# Function needed at all: `topic` is a real stored property, one `group` level is the whole
-# shape. `where: topic present` excludes an untopiced Reference entirely (deliberate,
-# unchanged from docs.py's own note: `topic` is exactly what marks the seeded docs canon,
-# never a catch-all bucket a plain fleet-wide Reference would fall into). The fixed section
-# ORDER (getting-started/concepts/reference/deployment/history) was presentation policy
-# living OUTSIDE the op-tree — app.py's /canon route re-sorted the returned dict by hand.
-# Ruling d42c543b (Thoth msg 1926/1937): a route special-casing a composition's own output
-# is exactly what the ruling refuses — `group`'s new `sequence` param moves the policy INTO
-# the op-tree, where every reader of this composition (the route, /ui, a future consumer)
-# gets the same order for free, and the route-level re-sort retires with it.
+# The migrated docs composition: simpler than roadmap, no Function needed at all: `topic`
+# is a real stored property, one `group` level is the whole shape. `where: topic present`
+# excludes an untopiced Reference entirely (deliberate, unchanged from docs.py's own note:
+# `topic` is exactly what marks the seeded docs canon, never a catch-all bucket a plain
+# fleet-wide Reference would fall into). The fixed section order
+# (getting-started/concepts/reference/deployment/history) was presentation policy living
+# outside the op-tree: app.py's /canon route re-sorted the returned dict by hand. A route
+# special-casing a composition's own output is exactly the pattern this composition
+# refuses: `group`'s new `sequence` param moves the policy into the op-tree, where every
+# reader of this composition (the route, /ui, a future consumer) gets the same order for
+# free, and the route-level re-sort retires with it.
 DOCS: dict[str, Any] = {
     "op": "group", "by": "topic",
     "sequence": ("getting-started", "concepts", "reference", "deployment", "history"),
@@ -6982,18 +6958,18 @@ DOCS: dict[str, Any] = {
 }
 
 
-# THE LIVE DESK (ruling c5b184cd, thread d56e7073/#44) — "what's actionable for the operator
-# right now," the wedge meant to end the briefs rot. Expressible TODAY with existing ops +
-# Functions, no `group` needed — three flat sections. Resolved/stale fall out BY
-# CONSTRUCTION: `status=open` in each select excludes them, nothing further to build.
-# `decisions_awaiting_a_call` is a Function (fleet_messages isn't the object graph, so it
-# can't be a pure op, same class as `desk_decisions`'s own docstring explains). `drift_alarms`
-# depends on `severity` actually being stamped — today only `alarm_schema_drift` does.
+# The live desk: "what's actionable for the operator right now," the wedge meant to end
+# the briefs rot. Expressible today with existing ops + Functions, no `group` needed,
+# three flat sections. Resolved/stale fall out by construction: `status=open` in each
+# select excludes them, nothing further to build. `decisions_awaiting_a_call` is a
+# Function (fleet_messages isn't the object graph, so it can't be a pure op, same class as
+# `desk_decisions`'s own docstring explains). `drift_alarms` depends on `severity`
+# actually being stamped, today only `alarm_schema_drift` does.
 #
-# THE WRITE LEG (same ruling, DM 1374): `owed_to_you`/`drift_alarms` carry a `row_action`
-# resolving a real thread — `resolve_thread`. `decisions_awaiting_a_call`'s own action
-# (`settle`) is attached directly inside `_fn_desk_decisions` itself, not here: a Function's
-# output is Python-native, no `row_action` templating applies to it.
+# The write leg: `owed_to_you`/`drift_alarms` carry a `row_action` resolving a real
+# thread, `resolve_thread`. `decisions_awaiting_a_call`'s own action (`settle`) is
+# attached directly inside `_fn_desk_decisions` itself, not here: a Function's output is
+# Python-native, no `row_action` templating applies to it.
 _RESOLVE_ACTION = {"action": "resolve_thread", "args": {"ref": {"property": "id"}}}
 
 LIVE_DESK: dict[str, Any] = {
@@ -7020,18 +6996,18 @@ LIVE_DESK: dict[str, Any] = {
 }
 
 
-# THE FLEET STRIP (task #71 slice two, gated msg 1894/1897) — the PILOT proving "everything
-# becomes a Composition" on the cheapest possible case: zero UI code, no view-type registry,
-# no branch in renderWallView. Two Functions because neither leg is expressible as a pure op
-# (liveness/seatedness are derived at read time from agent_mounts, not stored graph
-# properties on Agent — see _fn_fleet_live_agents's own docstring). Ranked, never the wall
-# the plain "fleet" composition already renders (every agent the graph knows, unfiltered).
+# The fleet strip: the pilot proving "everything becomes a Composition" on the cheapest
+# possible case: zero UI code, no view-type registry, no branch in renderWallView. Two
+# Functions because neither leg is expressible as a pure op (liveness/seatedness are
+# derived at read time from agent_mounts, not stored graph properties on Agent, see
+# _fn_fleet_live_agents's own docstring). Ranked, never the wall the plain "fleet"
+# composition already renders (every agent the graph knows, unfiltered).
 FLEET_STRIP: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        # 59acd4ff: the two halves are scoped differently (pulse fleet-wide, live_agents
-        # project-scoped) — label it, never silently rescope either leg (thread's own words:
-        # "the fleet-wide number is genuinely useful; say what each half covers").
+        # The two halves are scoped differently (pulse fleet-wide, live_agents
+        # project-scoped): label it, never silently rescope either leg. The fleet-wide
+        # number is genuinely useful; say what each half covers.
         {"title": "pulse (fleet-wide)", "body": {"op": "function", "name": "fleet_pulse_line"}},
         {"title": "live_agents (this project only)",
          "body": {"op": "function", "name": "fleet_live_agents"}},
@@ -7039,14 +7015,13 @@ FLEET_STRIP: dict[str, Any] = {
 }
 
 
-# THE CENSUS DOOR'S TWO FIXED-ARGS SAVED COMPOSITIONS (Thoth dispatch 7543 item 2's own
-# fold correction: a new NAMED TOOL was the wrong shape — the operator's direction is
-# fewer tools, and `census` was already a composition Function). Two separate saved
-# compositions, ONE PER `kind`, rather than one composition taking a variable arg — the
-# exact same wall mail_threads hit above (a Function that reads `args.X` at call time
-# cannot be baked into a single saved spec with one fixed value and still answer every
-# caller's question). `graph_census` stays registered as a hidden deprecated alias for
-# any caller who already knows its name.
+# The census door's two fixed-args saved compositions: a new named tool was the wrong
+# shape, the direction is fewer tools, and `census` was already a composition Function.
+# Two separate saved compositions, one per `kind`, rather than one composition taking a
+# variable arg, the exact same wall mail_threads hit above (a Function that reads `args.X`
+# at call time cannot be baked into a single saved spec with one fixed value and still
+# answer every caller's question). `graph_census` stays registered as a hidden deprecated
+# alias for any caller who already knows its name.
 CENSUS_SEAT_PROPERTY_CONTRADICTIONS: dict[str, Any] = {
     "op": "function", "name": "census", "args": {"kind": "seat_property_contradictions"},
 }
@@ -7055,24 +7030,22 @@ CENSUS_COHORT: dict[str, Any] = {
 }
 
 
-# THE BACKLOG VIEW (WAVE 27, Thoth mail 11754, a parity census gap: the console had a lens
-# for the fleet's own LIVE bodies (/fleet, and its own composition-engine port FLEET_STRIP
-# above) but none for its OPEN OBLIGATIONS -- the other half of "what needs a mind's
-# attention"). Zero new UI code, same as fleet-strip's own pilot: `obligation_backlog` is
-# already registered and SUBJECT_FREE, so wrapping it as its own saved composition is the
-# whole port -- osiris.js's generic `renderData` (its own dict/list-shaped Function-output
-# path, the render-hygiene ratchet's intended exit for exactly this kind of page, task #44/
-# ruling d42c543b) renders by_project/by_seat as tables and the scalar counts as header
-# chips with no bespoke renderer, in Python or JS, needed at all.
+# The backlog view: a parity census gap. The console had a lens for the fleet's own live
+# bodies (/fleet, and its own composition-engine port FLEET_STRIP above) but none for its
+# open obligations, the other half of "what needs attention." Zero new UI code, same as
+# fleet-strip's own pilot: `obligation_backlog` is already registered and subject-free, so
+# wrapping it as its own saved composition is the whole port. osiris.js's generic
+# `renderData` (its own dict/list-shaped Function-output path, the render-hygiene ratchet's
+# intended exit for exactly this kind of page) renders by_project/by_seat as tables and the
+# scalar counts as header chips with no bespoke renderer, in Python or JS, needed at all.
 BACKLOG: dict[str, Any] = {"op": "function", "name": "obligation_backlog"}
 
 
-# THE MAIL OVERVIEW (task #71 consolidation wave 2, ruling d42c543b, msg 1929) — the
-# overview-only half of /mail's port. `mail_threads` (registered as a Function, above) is
-# NOT saved as its own composition here — it takes `args.box`, and a saved composition with
-# a baked-in box would only ever show one fixed mailbox. THE DRILL-IN (task #90, Thoth msg
-# 1976/2005): each row's own `row_action` runs mail_threads for THAT row's box via the
-# "run:" navigation dispatch — a click switches the board to that box's threads, no manual
+# The mail overview: the overview-only half of /mail's port. `mail_threads` (registered as
+# a Function, above) is not saved as its own composition here, it takes `args.box`, and a
+# saved composition with a baked-in box would only ever show one fixed mailbox. The
+# drill-in: each row's own `row_action` runs mail_threads for that row's box via the
+# "run:" navigation dispatch, a click switches the board to that box's threads, no manual
 # args-input mechanism needed. Closes the gap this comment used to flag as open.
 MAIL_OVERVIEW: dict[str, Any] = {
     "op": "function", "name": "mail_overview",
@@ -7082,80 +7055,79 @@ MAIL_OVERVIEW: dict[str, Any] = {
 
 DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "operational-vs-disclosed-geography": GEOGRAPHY_DISCREPANCY,
-    # the arrival briefing — a `sections` op-tree, no longer a hand-written Function.
+    # the arrival briefing: a `sections` op-tree, no longer a hand-written Function.
     "briefing": BRIEFING,
-    # the SCOPED briefing — orient's per-project bearings, subject = a SoftwareProject (#20).
+    # the scoped briefing: orient's per-project bearings, subject = a SoftwareProject.
     "project-briefing": PROJECT_BRIEFING,
-    # the migrated roadmap (ruling c5b184cd, thread d56e7073/#44) — subject = a SoftwareProject.
+    # the migrated roadmap: subject = a SoftwareProject.
     "roadmap": ROADMAP,
-    # the migrated docs canon (ruling c5b184cd, thread d56e7073/#44) — no subject needed.
+    # the migrated docs canon: no subject needed.
     "docs": DOCS,
-    # the live desk (ruling c5b184cd, thread d56e7073/#44) — no subject needed.
+    # the live desk: no subject needed.
     "live-desk": LIVE_DESK,
-    # the fleet strip's migration pilot (task #71 slice two, msg 1894/1897) — not "fleet"
-    # (taken: every agent the graph knows, unranked). No subject needed.
+    # the fleet strip's migration pilot: not "fleet" (taken: every agent the graph knows,
+    # unranked). No subject needed.
     "fleet-strip": FLEET_STRIP,
-    # THE SMALLEST DOOR, folded (Thoth dispatch 7543 item 2, fold correction): population
-    # counts three obligations were stuck without — no subject needed, one kind fixed
-    # each (see CENSUS_SEAT_PROPERTY_CONTRADICTIONS/CENSUS_COHORT's own comment for why
-    # two compositions, not one taking a variable arg).
+    # The smallest door, folded: population counts three obligations were stuck without.
+    # No subject needed, one kind fixed each (see
+    # CENSUS_SEAT_PROPERTY_CONTRADICTIONS/CENSUS_COHORT's own comment for why two
+    # compositions, not one taking a variable arg).
     "census-seat-property-contradictions": CENSUS_SEAT_PROPERTY_CONTRADICTIONS,
     "census-cohort": CENSUS_COHORT,
-    # /fleet's full-fidelity port (rung 2, ruling d42c543b, msg 1926/1936) — ADDITIVE, the
-    # route stays live beside this for a side-by-side look before anything retires. Neither
-    # "fleet" (every agent ever seen, no liveness) nor "fleet-strip" (one project, live+
-    # seated only) is this: soul-folding, doors/ancestors (flattened to prose — see
-    # _fn_fleet_live's own docstring for what that means and why), the wake ledger, the
-    # hourly budget, and the cross-project view all live here. No subject needed.
+    # /fleet's full-fidelity port: additive, the route stays live beside this for a
+    # side-by-side look before anything retires. Neither "fleet" (every agent ever seen,
+    # no liveness) nor "fleet-strip" (one project, live+seated only) is this:
+    # soul-folding, doors/ancestors (flattened to prose, see _fn_fleet_live's own
+    # docstring for what that means and why), the wake ledger, the hourly budget, and the
+    # cross-project view all live here. No subject needed.
     "fleet-live": {"op": "function", "name": "fleet_live"},
-    # WAVE 27, THE BACKLOG VIEW (Thoth mail 11754) — see BACKLOG's own comment above for why
-    # this needed no bespoke renderer at all, in Python or JS. No subject needed.
+    # The backlog view: see BACKLOG's own comment above for why this needed no bespoke
+    # renderer at all, in Python or JS. No subject needed.
     "backlog": BACKLOG,
-    # /mail's overview half (consolidation wave 2, ruling d42c543b, msg 1929) — no subject
-    # needed. mail_threads stays a Function only (no saved composition): see MAIL_OVERVIEW's
-    # own comment for why a fixed-box composition isn't the right shape yet.
+    # /mail's overview half: no subject needed. mail_threads stays a Function only (no
+    # saved composition): see MAIL_OVERVIEW's own comment for why a fixed-box composition
+    # isn't the right shape yet.
     "mail": MAIL_OVERVIEW,
-    # /overhead's port (task #91, ruling d42c543b) — no subject needed; the harness-cost +
-    # retained-telemetry read-model, one Function, two data sources (see _fn_overhead).
+    # /overhead's port: no subject needed; the harness-cost + retained-telemetry
+    # read-model, one Function, two data sources (see _fn_overhead).
     "overhead": {"op": "function", "name": "overhead"},
-    # /desk's landing roster (task #91, ruling d42c543b) — the ROSTER itself stays read-only
-    # (counts, not individual debts — see _fn_desk_overview's own docstring). The write side
-    # lives on desk_project, walked into with args.project (own docstring: done/not mine/
-    # later on a debt, settle on an ask, embedded directly on each row). desk_project stays a
-    # Function only, same shape as mail_threads/args.box — no saved composition.
+    # /desk's landing roster: the roster itself stays read-only (counts, not individual
+    # debts, see _fn_desk_overview's own docstring). The write side lives on
+    # desk_project, walked into with args.project (own docstring: done/not mine/later on
+    # a debt, settle on an ask, embedded directly on each row). desk_project stays a
+    # Function only, same shape as mail_threads/args.box, no saved composition.
     "desk": {"op": "function", "name": "desk_overview"},
-    # the former bespoke read-models, now forkable compositions over named Functions —
+    # the former bespoke read-models, now forkable compositions over named Functions,
     # opinion left engine code (no more hardcoded read-model + bespoke MCP tool per lens).
     "co-investment-ties": {"op": "function", "name": "coinvest"},
     "who-is-this": {"op": "function", "name": "subject_report"},
-    # PROVENANCE PIECE 3(b) (thread b4477e9e): the upstream-centric read — subject =
-    # any object a read-set could point at (Message, URL, or ordinary object). REST/MCP
-    # mirrors are the existing generic composition doors (POST /compositions/
-    # upstream-readers/run, composition(action='run', name='upstream-readers')), no
-    # bespoke door pair needed.
+    # The upstream-centric read: subject = any object a read-set could point at (Message,
+    # URL, or ordinary object). REST/MCP mirrors are the existing generic composition
+    # doors (POST /compositions/upstream-readers/run,
+    # composition(action='run', name='upstream-readers')), no bespoke door pair needed.
     "upstream-readers": {"op": "function", "name": "upstream_readers"},
     "screen-financing-network": {"op": "function", "name": "screen_network"},
     # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
     # rendered as a sectioned read-model. Run with no subject; `consult_canon(q)` queries it.
     "design-canon": {"op": "function", "name": "canon", "args": {}},
-    # the type catalog osiris SHIPS (task #111, thread 26694d10) — schema.py's static
-    # manifest, deliberately NOT catalog.py's live accretive one (msg 2099). No subject
-    # needed; also the pool-free source docs_compiler.py's REFERENCE.md render reads.
+    # the type catalog this system ships: schema.py's static manifest, deliberately not
+    # catalog.py's live accretive one. No subject needed; also the pool-free source
+    # docs_compiler.py's REFERENCE.md render reads.
     "reference": {"op": "function", "name": "reference_catalog"},
-    # the decision log: the project's WHY — a `sections` op-tree (was a Function).
+    # the decision log: the project's WHY, a `sections` op-tree (was a Function).
     "decision-log": DECISION_LOG,
     # the family audit: what drifted across a set of similar repos (every ingested family).
     "family-consistency": {"op": "function", "name": "family"},
-    # content drift: for the files a family shares, do they AGREE (license type / config bytes)?
+    # content drift: for the files a family shares, do they agree (license type / config bytes)?
     "family-drift": {"op": "function", "name": "family_drift"},
-    # the portfolio map: every ingested repo's stack + what it's ABOUT (distinctive terms) —
+    # the portfolio map: every ingested repo's stack + what it's about (distinctive terms),
     # cross-repo cognition's gather step; the lens/tripwire names the shared primitives.
     "portfolio": {"op": "function", "name": "portfolio"},
     # the heartbeat digest: what the off-the-clock pulse found while you were away.
     "pulse-digest": {"op": "function", "name": "pulse"},
-    # the fleet roster — every Claude instance registered in the shared graph, its model and
-    # project. "A man and all his imaginary friends", on the human console. A pure op-tree
-    # (select Agent → table), not a hardcoded panel: the composer discipline holds even here.
+    # the fleet roster: every Claude instance registered in the shared graph, its model and
+    # project, on the human console. A pure op-tree (select Agent -> table), not a
+    # hardcoded panel: the composer discipline holds even here.
     "fleet": {
         "op": "table",
         "from": {"op": "select", "object_type": "Agent"},
@@ -7165,43 +7137,43 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
             {"name": "project", "property": "project"},
         ],
     },
-    # the developer project browser — DECOMPOSED: no longer a hardcoded Function, a pure op-tree
-    # the user owns. `select` the repos → `table` with rollup columns (Notion database+rollups)
-    # → `order` by last-touched. This is what "everything is composed" means in practice.
-    # task #138/#163's arc: this WAS the enumeration door already, but `name` alone isn't
-    # addressable (no canonical/id to act on) and gave no way to tell a real repo from the
-    # zero-commit/zero-file registry noise #152 named — `canonical` and `on_disk_path` are
-    # both plain object columns / assertion properties already, so this is wiring, not
-    # construction (measured live: 60 active SoftwareProjects, most 0 commits/0 files).
+    # the developer project browser, decomposed: no longer a hardcoded Function, a pure
+    # op-tree the user owns. `select` the repos -> `table` with rollup columns (Notion
+    # database+rollups) -> `order` by last-touched. This is what "everything is composed"
+    # means in practice.
+    # This was the enumeration door already, but `name` alone isn't addressable (no
+    # canonical/id to act on) and gave no way to tell a real repo from the
+    # zero-commit/zero-file registry noise, `canonical` and `on_disk_path` are both plain
+    # object columns / assertion properties already, so this is wiring, not construction
+    # (measured live: 60 active SoftwareProjects, most 0 commits/0 files).
     "projects": {
         "op": "order", "by": "last_touched", "dir": "desc",
         "from": {
             "op": "table",
-            # status="any" (Thoth dispatch 9490): the client-side active/all toggle needs
-            # every status in ONE fetch to filter locally, same shape the hardcoded
-            # /projects route already fetches (every status, client-side toggle) — the
-            # `status` COLUMN below is what the toggle actually reads.
+            # status="any": the client-side active/all toggle needs every status in one
+            # fetch to filter locally, same shape the hardcoded /projects route already
+            # fetches (every status, client-side toggle), the `status` column below is
+            # what the toggle actually reads.
             "from": {"op": "select", "object_type": "SoftwareProject", "status": "any"},
             "columns": [
-                # NAME (Thoth dispatch 9676/9712/9716, 588148bb's swap piece): the OLD
-                # /projects route's own "project never repo" ruling — `strip_prefix`
-                # opts into stripping a genuinely-unnamed project's canonical scheme
-                # rather than showing it raw, `unnamed` is the honest sibling flag so the
-                # frontend marks it distinct instead of passing a stripped id off as a
-                # real name. Policy lives HERE (a composition-owned opt-in), never in
-                # `_col_value`'s own shared "name" resolution (every OTHER composition's
-                # `property:"name"` column stays type-neutral, raw canonical on no-match).
+                # Name: the old /projects route's own "project never repo" ruling,
+                # `strip_prefix` opts into stripping a genuinely-unnamed project's
+                # canonical scheme rather than showing it raw, `unnamed` is the honest
+                # sibling flag so the frontend marks it distinct instead of passing a
+                # stripped id off as a real name. Policy lives here (a composition-owned
+                # opt-in), never in `_col_value`'s own shared "name" resolution (every
+                # other composition's `property:"name"` column stays type-neutral, raw
+                # canonical on no-match).
                 {"name": "project", "name_fallback": {"strip_prefix": "repo:"}},
                 {"name": "unnamed", "name_fallback": {"strip_prefix": "repo:",
                                                        "field": "unnamed"}},
                 {"name": "canonical", "property": "canonical"},
                 {"name": "status", "property": "status"},
                 {"name": "on_disk_path", "property": "on_disk_path"},
-                # OBJECT COUNT (Thoth dispatch 9507, 588148bb's page-conversion series,
-                # piece 1 of 4 before the projects swap): the old /projects route's own
-                # object_count — every object reached via in_repo, no type filter, same
-                # rollup shape as commits/files below but object_type omitted (_rollup's
-                # own "optionally filtered to object_type" — the whole-link-set count).
+                # Object count: the old /projects route's own object_count, every object
+                # reached via in_repo, no type filter, same rollup shape as commits/files
+                # below but object_type omitted (_rollup's own "optionally filtered to
+                # object_type", the whole-link-set count).
                 {"name": "object_count", "rollup": {"direction": "in", "link_type": "in_repo",
                                                     "of": "count"}},
                 {"name": "commits", "rollup": {"direction": "in", "link_type": "in_repo",
@@ -7211,12 +7183,12 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                 {"name": "last_touched", "rollup": {"direction": "in", "link_type": "in_repo",
                                                     "object_type": "Commit", "of": "max",
                                                     "property": "authored_date"}},
-                # BUCKET (Thoth dispatch 9542, piece 2 of 4): the old /projects route's own
-                # badge — triage's existing bucket classification (orphan/contradicted/
-                # duplicate_suspect/stale/hub/thin/normal), never re-derived. Buckets mode
-                # defaults to status="active" (no "any" of its own yet), so a retired
-                # project degrades to bucket=None here — honest, not a crash; every ACTIVE
-                # project (the population the badges were ever meant to flag) is covered.
+                # Bucket: the old /projects route's own badge, triage's existing bucket
+                # classification (orphan/contradicted/duplicate_suspect/stale/hub/thin/normal),
+                # never re-derived. Buckets mode defaults to status="active" (no "any" of
+                # its own yet), so a retired project degrades to bucket=None here, honest,
+                # not a crash; every active project (the population the badges were ever
+                # meant to flag) is covered.
                 {"name": "bucket", "function": {"name": "triage",
                                                 "args": {"mode": "buckets",
                                                          "object_type": "SoftwareProject",
@@ -7227,68 +7199,66 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
                                                                   "object_type": "SoftwareProject",
                                                                   "limit": 2000},
                                                          "field": "contradicted_on"}},
-                # WORKTREE NESTING (Thoth dispatch 9542, piece 3 of 4): every live
-                # Worktree's own name+branch, grouped by parent — see
-                # _fn_project_worktrees' own docstring for the frontend follow-up this
-                # backend piece deliberately does not build (the shared table() renderer
-                # already shows this as flattened prose via _flatVal, not indented rows).
+                # Worktree nesting: every live Worktree's own name+branch, grouped by
+                # parent, see _fn_project_worktrees' own docstring for the frontend
+                # follow-up this backend piece deliberately does not build (the shared
+                # table() renderer already shows this as flattened prose via _flatVal,
+                # not indented rows).
                 {"name": "worktrees", "function": {"name": "project_worktrees", "args": {},
                                                    "field": "worktrees"}},
             ],
-            # CLICK-THROUGH (Thoth dispatch 9542/9676/9690, piece 4 of 4): the old /projects
-            # route's own openProjectInBrowse — bind_subject, not args, since "browse" is an
-            # op-tree with no Function to drill into via run-spec. The client runs browse's
-            # own saved composition with this row's project as subject; browse's own
-            # subject_link (see its own entry above) narrows to exactly that project's
-            # in_repo set.
+            # Click-through: the old /projects route's own openProjectInBrowse, bind_subject,
+            # not args, since "browse" is an op-tree with no Function to drill into via
+            # run-spec. The client runs browse's own saved composition with this row's
+            # project as subject; browse's own subject_link (see its own entry above)
+            # narrows to exactly that project's in_repo set.
             "row_action": {"action": "run:browse", "bind_subject": True},
         },
     },
     "project": {"op": "function", "name": "project"},
-    # rung 3: the per-object provenance timeline — how the graph came to believe a thing.
+    # the per-object provenance timeline: how the graph came to believe a thing.
     "lap": {"op": "function", "name": "lap"},
-    # rung 2: the graph auditing itself — report-only findings, testimony not verdicts.
+    # the graph auditing itself: report-only findings, testimony not verdicts.
     "graph-lint": {"op": "function", "name": "lint"},
-    # rung 2 (task #98): the census half of triage-as-a-primitive — types + counts + health,
-    # the left pane the operator sketched. BUCKETS (the middle pane, per-type drill) needs
-    # args.object_type per call, so it has no static saved composition — reach it via
+    # The census half of triage-as-a-primitive: types + counts + health, the left pane.
+    # Buckets (the middle pane, per-type drill) needs args.object_type per call, so it has
+    # no static saved composition, reach it via
     # run-spec/{"op":"function","name":"triage","args":{"mode":"buckets","object_type":...}}
     # or the `triage` MCP tool directly, the same ephemeral path mail_threads/desk_project use.
     "type-census": {"op": "function", "name": "triage"},
-    # rung 2 (Thoth DM 2835/2917): the four numbers as a standing surface, fleet-wide by
-    # default — how much of thread closure is held by structure vs memory. Per-project scope
-    # is args.repo (no static saved composition for that, same reason `triage` buckets mode
-    # has none — reach it via run-spec or the `closure_health` MCP tool directly).
+    # The four numbers as a standing surface, fleet-wide by default: how much of thread
+    # closure is held by structure vs memory. Per-project scope is args.repo (no static
+    # saved composition for that, same reason `triage` buckets mode has none, reach it via
+    # run-spec or the `closure_health` MCP tool directly).
     "closure-health": {"op": "function", "name": "closure_health"},
     "echoes": {"op": "function", "name": "echoes"},
-    # THE ONE WALL LAW (ruling 923c380f): the graded unresolved view — orient's law as a lens.
+    # The one wall law: the graded unresolved view, orient's law as a lens.
     "the-wall": {"op": "function", "name": "wall", "args": {"me": ["operator"]}},
-    # BROWSE'S FIRST PROOF (Thoth dispatch 9436, page conversions off 588148bb — "browse
-    # first"): the entity explorer's own object-set load (console.js's loadObjectSet, a
-    # bespoke /objects?type=... fetch feeding a hand-rolled table/board renderer) proven as
-    # a composition — the newest 200 active objects, no type filter, rendered through
-    # Osiris.renderResult exactly like any other saved composition since piece 2's composer
-    # shell (588148bb) already runs/renders any saved spec generically. DELIBERATELY NARROW,
-    # NOT YET A FULL PORT: type-pill filtering, search, sort-toggle, and room-scoping all
-    # stay Browse-specific UI chrome for now — the op-tree vocabulary has `select`'s own
-    # `object_type`/`where` for the first two, but no "current UI room" concept to express
-    # the third, and a full port would mean either extending the op vocabulary or wrapping
-    # this in a Function; scoped here to proving the RENDER path works end-to-end for real
-    # object data before touching any of that. The hardcoded page stays live — nothing is
-    # cut by this entry.
-    # `subject_link` (Thoth dispatch 9676/9690, 588148bb piece 4): OPT-IN, inert on every
-    # unsubjected run (the entity explorer's own load, every test built against piece 1) —
-    # a subject-bound run (projects' click-through row_action) narrows to that project's own
-    # in_repo neighborhood instead of the global top-200.
+    # Browse's first proof: the entity explorer's own object-set load (console.js's
+    # loadObjectSet, a bespoke /objects?type=... fetch feeding a hand-rolled table/board
+    # renderer) proven as a composition, the newest 200 active objects, no type filter,
+    # rendered through Osiris.renderResult exactly like any other saved composition since
+    # the composer shell already runs/renders any saved spec generically. Deliberately
+    # narrow, not yet a full port: type-pill filtering, search, sort-toggle, and
+    # room-scoping all stay Browse-specific UI chrome for now, the op-tree vocabulary has
+    # `select`'s own `object_type`/`where` for the first two, but no "current UI room"
+    # concept to express the third, and a full port would mean either extending the op
+    # vocabulary or wrapping this in a Function; scoped here to proving the render path
+    # works end-to-end for real object data before touching any of that. The hardcoded
+    # page stays live, nothing is cut by this entry.
+    # `subject_link` is opt-in, inert on every unsubjected run (the entity explorer's own
+    # load, every test built against the earlier piece), a subject-bound run (projects'
+    # click-through row_action) narrows to that project's own in_repo neighborhood instead
+    # of the global top-200.
     "browse": {"op": "take", "n": 200,
                "from": {"op": "order", "by": "recency", "dir": "desc",
                         "from": {"op": "select",
                                  "subject_link": {"link_type": "in_repo", "direction": "in"}}}},
 }
 
-# THE SHELF (ruling 923c380f): which sidebar section a lens belongs to + one line of 'when
-# to open this'. Applied by the seeder to defaults AND to already-saved compositions whose
-# names it knows — the lens clusterfuck was 19 flat chips in builder-dialect.
+# The shelf: which sidebar section a lens belongs to + one line of 'when to open this'.
+# Applied by the seeder to defaults and to already-saved compositions whose names it
+# knows, replacing what used to be 19 flat, hard-to-navigate chips.
 _COMP_META: dict[str, tuple[str, str]] = {
     "briefing": ("arrive", "start here — the graded wall, recent work, what self-healed"),
     "pulse-digest": ("arrive", "what the autonomic loop sensed lately"),
@@ -7347,22 +7317,23 @@ _COMP_META: dict[str, tuple[str, str]] = {
                         "as a composition (588148bb)"),
 }
 
-# AUTO-REFRESH (ruling cf9286b2): absent = MANUAL ONLY, the default for every composition not
-# named here — a lens goes live because someone decided it should, never by inheriting a
-# global tick. The ruling named "mail and the fleet strip want seconds; docs, design-canon
-# and the decision log want never" explicitly, then Thoth extended it (msg 1977) to
-# "fleet-live" on the same reasoning: refresh_secs belongs to a composition whose ANSWER
-# GOES STALE, and who is alive right now is the most perishable fact in the graph — a fleet
-# roster that must be manually re-run is a fleet roster that lies by default.
+# Auto-refresh: absent means manual only, the default for every composition not named
+# here, a lens goes live because someone decided it should, never by inheriting a global
+# tick. This was extended to "mail" and "fleet-strip" first ("mail and the fleet strip
+# want seconds; docs, design-canon and the decision log want never"), then to "fleet-live"
+# on the same reasoning: refresh_secs belongs to a composition whose answer goes stale,
+# and who is alive right now is the most perishable fact in the graph, a fleet roster that
+# must be manually re-run is a fleet roster that lies by default.
 #
-# 8s, not :8011's 5s copied by habit (that number was picked for an SSE PUSH lane's own
-# server-side tick, a continuous connection — it carries no informational weight for a POLL
-# interval). Measured instead (watermark.py's own docstring has the full numbers): the
-# watermark query itself costs 0.071ms server-side, ~0.25ms round trip — a non-factor at any
-# plausible tick rate, even with dozens of open tabs. The real constraint is UX: 8s is fast
-# enough that a burst of new mail or a newly-mounted agent surfaces within one ordinary human
-# glance, and slow enough to read as meaningfully different from a genuinely real-time push
-# surface (:8011's inbox) — a poll dressed up as a stream would be dishonest about what it is.
+# 8s, not the 5s used elsewhere copied by habit (that number was picked for an SSE push
+# lane's own server-side tick, a continuous connection, it carries no informational weight
+# for a poll interval). Measured instead (watermark.py's own docstring has the full
+# numbers): the watermark query itself costs 0.071ms server-side, ~0.25ms round trip, a
+# non-factor at any plausible tick rate, even with dozens of open tabs. The real
+# constraint is UX: 8s is fast enough that a burst of new mail or a newly-mounted agent
+# surfaces within one ordinary human glance, and slow enough to read as meaningfully
+# different from a genuinely real-time push surface (the inbox's own SSE feed), a poll
+# dressed up as a stream would be dishonest about what it is.
 _COMP_REFRESH_SECS: dict[str, int] = {
     "mail": 8,
     "fleet-strip": 8,
@@ -7376,7 +7347,7 @@ async def seed_default_compositions(pool: asyncpg.Pool) -> int:
         await save_composition(pool, name, spec, "lens", description=desc, section=section,
                                refresh_secs=_COMP_REFRESH_SECS.get(name))
     # the shelf also reaches saved, non-default lenses it knows by name (agent-authored
-    # twins of the defaults) — metadata only, never their spec
+    # variants of the defaults), metadata only, never their spec
     for name, (section, desc) in _COMP_META.items():
         if name not in DEFAULT_COMPOSITIONS:
             await pool.execute(
