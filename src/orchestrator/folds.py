@@ -1,22 +1,22 @@
-"""AGENT FOLDS — the reconciliation primitive (operator directive 2026-07-16, thread
-b975851b: "there needs to be a primitive for merging and resolving the mess, append only
-... the scattered nodes need to be reconciled into their live/current lane").
+"""Agent folds: the reconciliation primitive for merging and resolving duplicate agent
+records, append-only, so scattered nodes get reconciled into their live/current lane.
 
-The kernel HAS an identity merge — `Actions.merge_objects`: an append-only 'merge' event,
-the `status='merged'` + `merged_into` projection, a `same_as` link, resolve-on-read.
-It was built for the entity commons (Person/Company dedup) and never allowed near Agents:
-constitution #1's "never AUTO-merge" had culturally over-extended into "never merge".
-A fold is the review-gated form the constitution actually prescribes.
+The kernel already has an identity merge, `Actions.merge_objects`: an append-only
+'merge' event, the `status='merged'` + `merged_into` projection, a `same_as` link,
+resolve-on-read. It was built for the entity commons (Person/Company dedup) and never
+used for Agents: the founding rule against auto-merging had culturally over-extended
+into "never merge at all." A fold is the review-gated form that rule actually allows.
 
-`fold_agent` wraps the kernel merge with the AGENT ESTATE — the three routing surfaces a
-mind owns that a Person does not: unread mail, durable mount rows, thread ownership. The
-same shape as succession's estate transfer (`mint_heir`, agents.py), generalized from
-"death" to "recognition": a fold says two labels were always one mind, so the living
-label inherits, and nothing is deleted or rewritten — the dupe's words stay stamped with
-the dupe's id, and provenance resolves at read time through `merged_into`.
+`fold_agent` wraps the kernel merge with the agent's associated routing records: the
+three surfaces an agent owns that a Person does not: unread mail, durable mount rows,
+thread ownership. This is the same shape as succession's transfer of those records
+(`mint_heir`, agents.py), generalized from "death" to "recognition": a fold says two
+labels were always one agent, so the living label inherits, and nothing is deleted or
+rewritten. The duplicate's words stay stamped with the duplicate's id, and provenance
+resolves at read time through `merged_into`.
 
-REVIEW-GATED, ALWAYS: a fold executes only on the operator's word or an approved
-merge_candidate, and `evidence` is mandatory — a fold without citations is an auto-merge
+Review-gated, always: a fold executes only on explicit authorization or an approved
+merge_candidate, and `evidence` is mandatory. A fold without citations is an auto-merge
 wearing a signature.
 """
 from __future__ import annotations
@@ -32,39 +32,39 @@ from src.actions.core import Actions
 
 _log = logging.getLogger("osiris.folds")
 
-# THE SCHEDULED REAPER'S OWN NAME (fleet_reconcile.py's reconcile_scheduled_tick) — the
-# ONE non-operator actor fold_agent trusts, because that tick is ALREADY gated separately
-# by osiris_fleet_reconcile_enabled (a distinct, operator-flipped signature). Defined here
-# (not in fleet_reconcile.py) so the authority check and the identity it recognizes live
-# in the same file; fleet_reconcile.py imports this constant rather than repeating the
-# literal, so the two can never drift apart.
+# The name of the scheduled reconciliation tick (fleet_reconcile.py's
+# reconcile_scheduled_tick): the one non-human actor fold_agent trusts, because that tick
+# is already gated separately by osiris_fleet_reconcile_enabled, a distinct feature flag.
+# Defined here, not in fleet_reconcile.py, so the authority check and the identity it
+# recognizes live in the same file; fleet_reconcile.py imports this constant rather than
+# repeating the literal, so the two can never drift apart.
 _SANCTIONED_AUTO_FOLD_ACTOR = "cron:fleet_reconcile_heartbeat"
 
 
 async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
-    """The lineage's living head — where a folded estate LANDS. THE GRAPH DECIDES
-    (auto-heal, operator 2026-07-17: 'the folds have to auto heal'): resolve the label
-    through the merge chain, then walk succeeded_by to the last ACTIVE generation — a
-    walk that crosses REBASED lineages wherever a succession was recorded (Ra XV →
-    XVI), so a tray row citing a dead generation still lands its estate on the one who
-    answers to the name today. The registry only breaks the tie for a label with no
-    succession record (an anonymous base), and its answer may never REGRESS to an
-    older generation than the graph's. Estate must never land on a dead generation:
-    succession's own transfer (mint_heir) would just have to move it again.
+    """The lineage's living head: where a folded agent's associated records land. The
+    graph decides this via auto-heal behavior (folds must self-heal): resolve the label
+    through the merge chain, then walk succeeded_by to the last active generation. This
+    walk crosses rebased lineages wherever a succession was recorded, so a record citing
+    a dead generation still lands its records on whoever answers to the name today. The
+    registry only breaks the tie for a label with no succession record (an anonymous
+    base), and its answer may never regress to an older generation than the graph's. The
+    result must never land on a dead generation: succession's own transfer (mint_heir)
+    would just have to move it again.
 
-    THE INVARIANT, MADE UNCONDITIONAL (thread 20af2c95, msg 5052, live specimen: Imhotep
-    XX -> XXXI): a BROKEN MID-CHAIN LINK — the walk's own succeeded_by resolution genuinely
-    winning on a stale retraction partway through (e.g. a "seam-debounce" cleanup at a
-    later, non-tied timestamp than the real pointer it invalidated, distinct from
-    lineage_head's own true-tie fix) — used to escape this safety net entirely, because it
-    only ever fired when `head == canon`, i.e. the walk advanced ZERO hops from the very
-    base. A walk that advances NINETEEN real hops and only then hits a broken link looked
-    identical to a genuine, correctly-resolved head — `head != canon` short-circuited
-    straight past the live-mount check below. Fixed by making the comparison UNCONDITIONAL:
-    always compute the freshest live-mounted candidate in this family and take whichever of
-    {the walk's own answer, that candidate} names the NEWER generation — head resolution
-    must never name a generation older than one with a live mount, regardless of how far
-    the walk itself got before stopping."""
+    The invariant is unconditional. A broken mid-chain link (the walk's own succeeded_by
+    resolution genuinely winning on a stale retraction partway through, e.g. a
+    timing-based cleanup at a later, non-tied timestamp than the real pointer it
+    invalidated, distinct from lineage_head's own true-tie fix) used to escape this
+    safety net entirely, because it only ever fired when `head == canon`, i.e. the walk
+    advanced zero hops from the very base. A walk that advances many real hops and only
+    then hits a broken link looked identical to a genuine, correctly-resolved head:
+    `head != canon` short-circuited straight past the live-mount check below. Fixed by
+    making the comparison unconditional: always compute the freshest live-mounted
+    candidate in this family and take whichever of {the walk's own answer, that
+    candidate} names the newer generation. Head resolution must never name a generation
+    older than one with a live mount, regardless of how far the walk itself got before
+    stopping."""
     from src.orchestrator.agents import _generation, lineage_head
 
     canon = await canonical_agent(pool, agent_id)
@@ -79,19 +79,19 @@ async def living_head(pool: asyncpg.Pool, agent_id: str) -> str:
 
 
 async def wakeable_identity(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """WAKE's own question — 'which OS session can be resumed' — answered independently of
-    `living_head`'s DELIVERY question ('whose mailbox owns this name'). A succession is a
-    DECLARED act (mint_heir) and living_head trusts it unconditionally, exactly as delivery
-    should (ruling 1db1ff41: declared beats derived) — but a successor that was declared and
-    never actually mounted has no OS session behind it, and a wake path that walks
-    living_head's own answer strands mail in a live body's own inbox (thread 28842543: the
-    mailbox honored an explicit live id, the wake still resolved through a never-mounted
-    lineage head, and reported "has never mounted" beside a receipt naming that SAME live
-    body's fresh last_seen). The most recently mounted id anywhere in `agent_id`'s lineage —
-    the same auto-heal query `living_head` itself falls back to for an unsucceeded base
-    (below), generalized here to fire even when a succession WAS declared, because wake cares
-    which body can answer, not which name is now correct. None only when nothing in the
-    whole lineage has ever mounted."""
+    """Answers the wake question, "which OS session can be resumed," independently of
+    `living_head`'s delivery question, "whose mailbox owns this name." A succession is a
+    declared act (mint_heir) and living_head trusts it unconditionally, exactly as
+    delivery should: declared beats derived. But a successor that was declared and never
+    actually mounted has no OS session behind it, and a wake path that walks
+    living_head's own answer strands mail in a live session's own inbox. (Live specimen:
+    the mailbox honored an explicit live id, the wake still resolved through a
+    never-mounted lineage head, and reported "has never mounted" beside a result naming
+    that same live session's fresh last_seen.) Returns the most recently mounted id
+    anywhere in `agent_id`'s lineage, the same auto-heal query `living_head` itself falls
+    back to for an unsucceeded base (below), generalized here to fire even when a
+    succession was declared, because wake cares which session can answer, not which name
+    is now correct. None only when nothing in the whole lineage has ever mounted."""
     from src.orchestrator.agents import _generation
 
     base = _generation(agent_id)[0]
@@ -102,7 +102,7 @@ async def wakeable_identity(pool: asyncpg.Pool, agent_id: str) -> str | None:
 
 
 async def canonical_agent(pool: asyncpg.Pool, agent_id: str) -> str:
-    """Resolve an agent LABEL through the merged_into chain to its living label — the
+    """Resolve an agent label through the merged_into chain to its living label: the
     read-time half of a fold. A never-folded (or unknown) label returns itself."""
     current = agent_id
     for _ in range(10):  # chain guard: folds of folds terminate fast or not at all
@@ -119,20 +119,21 @@ async def _reversible_moved_links(
     pool: asyncpg.Pool, *, dupe_id: uuid.UUID, into_id: uuid.UUID, link_type: str,
     from_dupe: bool,
 ) -> list[dict[str, Any]]:
-    """MERGE/UNMERGE's shared estate-reversal probe (ruling 31c02dca, built for
-    unfold_seat/unfold_project's parity with unfold_agent): every OTHER object whose live
-    `link_type` edge now points at `into` but which ALSO carries a now-invalid edge of the
-    same type that once pointed at `dupe` — the exact trail an event-sourced
-    (`invalidate_link` + `create_link`) estate move leaves behind, safe to auto-reverse
-    because nothing has touched it since. Generalizes `unfold_agent`'s own thread-ownership
-    check (`assert_property`'s history) from PROPERTIES to LINKS: fold_seat's holders and
-    managed_by edges, fold_project's estate links. `from_dupe=True` reads edges pointing
-    INTO dupe/into (holds, in_repo, works_in, governs, informs — the other object is the
-    link's `from_id`); `from_dupe=False` reads edges pointing OUT of dupe/into (the
-    managed_by direction where dupe/into is itself the manager — the other object is the
-    link's `to_id`). A raw-UPDATE-moved estate item (mail, agent_mounts) leaves no such
-    trail and is never found here — the caller reports those as `estate_unreturnable`
-    instead, exactly as `unfold_agent` already does for its own mail/mounts."""
+    """Shared reversal probe used by both merge and unmerge, built so unfold_seat and
+    unfold_project can match unfold_agent's behavior. Finds every other object whose live
+    `link_type` edge now points at `into` but which also carries a now-invalid edge of
+    the same type that once pointed at `dupe`. That is the exact trail an event-sourced
+    (`invalidate_link` + `create_link`) record move leaves behind, safe to auto-reverse
+    because nothing has touched it since. Generalizes `unfold_agent`'s own thread-
+    ownership check (`assert_property`'s history) from properties to links: fold_seat's
+    holders and managed_by edges, fold_project's associated links. `from_dupe=True` reads
+    edges pointing into dupe/into (holds, in_repo, works_in, governs, informs; the other
+    object is the link's `from_id`); `from_dupe=False` reads edges pointing out of
+    dupe/into (the managed_by direction where dupe/into is itself the manager; the other
+    object is the link's `to_id`). A record moved by a raw UPDATE (mail, agent_mounts)
+    leaves no such trail and is never found here; the caller reports those as
+    `estate_unreturnable` instead, exactly as `unfold_agent` already does for its own
+    mail/mounts."""
     if from_dupe:
         rows = await pool.fetch(
             "SELECT DISTINCT f.id AS fid, f.canonical AS label "
@@ -157,34 +158,34 @@ async def _reversible_moved_links(
 async def _move_agent_estate(
     actions: Actions, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:
-    """The agent estate-move itself, factored out of `fold_agent` so `reconcile_agent_fold`
-    (#127) can run the EXACT same repair on an already-merged pair rather than a second
-    implementation that could drift from what a normal fold already does. Resolves
-    `into`'s CURRENT living head fresh — never trusts a stale `merged_into` pointer, the
-    same live-resolution `fold_agent` itself always used — and moves whatever is STILL
-    live and addressed to `dupe`: unread mail, mount rows, open-thread ownership, and (as
-    of thread 20af2c95, 2026-08-03 — fold_agent's OWN gap, distinct from mint_heir's:
-    this estate-move never covered works_in/governs at all, not even a stale pointer, a
-    plain omission) works_in/governs edges, via `agents.move_agent_project_links` — the
-    SAME shared mover `mint_heir` now uses for its own, different gap on ordinary
-    succession, never a second implementation. Every move here is individually idempotent
-    (an item already moved no longer matches its own WHERE clause), so running this
-    twice, or running it after `fold_agent`'s own inline call already did the same work,
-    changes nothing on the second pass.
+    """The move of an agent's associated records itself, factored out of `fold_agent` so
+    `reconcile_agent_fold` can run the exact same repair on an already-merged pair rather
+    than a second implementation that could drift from what a normal fold already does.
+    Resolves `into`'s current living head fresh (never trusts a stale `merged_into`
+    pointer, the same live-resolution `fold_agent` itself always used) and moves
+    whatever is still live and addressed to `dupe`: unread mail, mount rows, open-thread
+    ownership, and (a gap distinct from mint_heir's own: this record-move never covered
+    works_in/governs at all, not even a stale pointer, a plain omission, closed here)
+    works_in/governs edges, via `agents.move_agent_project_links`, the same shared mover
+    `mint_heir` now uses for its own, different gap on ordinary succession, never a
+    second implementation. Every move here is individually idempotent (an item already
+    moved no longer matches its own WHERE clause), so running this twice, or running it
+    after `fold_agent`'s own inline call already did the same work, changes nothing on
+    the second pass.
 
-    THE DUAL READ-MARKER GAP (thread 25b57dca item 6, operator ruling 2f42d429, live
-    specimen: messages 7578-7585 — dupe's recipient rows read by an old generation,
-    fleet_messages.read_at NULL): the mail UPDATE above re-addresses `fleet_messages.
+    The dual read-marker gap: the mail UPDATE above re-addresses `fleet_messages.
     to_agent` from `dupe` to `head`, but `message_recipients` rows stay keyed to `dupe`'s
-    id — every reader's own "have I already read this" check (`NOT EXISTS ... WHERE
+    id. Every reader's own "have I already read this" check (`NOT EXISTS ... WHERE
     r3.agent_id=<head's lineage>`) then finds nothing, and mail `dupe` genuinely already
-    read reappears as deliverable to `head`. `mint_heir` (agents.py) closed this exact
-    gap for ORDINARY succession years ago (its own INSERT ... ON CONFLICT DO NOTHING
-    copy) — `fold_agent`'s estate-move never got the same fix, because it is a second,
-    independent implementation of "one mind inherits another's mail." Mirrored here,
-    verbatim in shape: a non-destructive COPY (dupe keeps its own rows — unfold_agent's
-    own `estate_unreturnable` framing for the raw to_agent/agent_id UPDATEs is untouched
-    by this, since nothing here is destroyed, only duplicated forward)."""
+    read reappears as deliverable to `head`. (Live specimen: a run of dupe's recipient
+    rows read by an old generation, with fleet_messages.read_at left NULL.) `mint_heir`
+    (agents.py) closed this exact gap for ordinary succession years ago (its own INSERT
+    ... ON CONFLICT DO NOTHING copy); `fold_agent`'s record-move never got the same fix,
+    because it is a second, independent implementation of "one agent inherits another's
+    mail." Mirrored here, verbatim in shape: a non-destructive copy (dupe keeps its own
+    rows; unfold_agent's own `estate_unreturnable` framing for the raw to_agent/agent_id
+    UPDATEs is untouched by this, since nothing here is destroyed, only duplicated
+    forward)."""
     from datetime import UTC, datetime
 
     from src.orchestrator.agents import move_agent_project_links
@@ -229,26 +230,27 @@ async def fold_agent(
     actions: Actions, *, dupe: str, into: str, evidence: str, actor: str,
 ) -> dict[str, Any]:
     """Fold agent `dupe` into agent `into`: the kernel merge (event, projection, same_as
-    link) plus the estate — unread mail re-addressed to `into`'s LIVING HEAD, mount rows
-    re-pointed, owned threads re-owned (evented via assert_property, never UPDATEd).
+    link) plus its associated records: unread mail re-addressed to `into`'s living head,
+    mount rows re-pointed, owned threads re-owned (evented via assert_property, never
+    UPDATEd).
 
-    ENFORCED, not just documented (census a5e53ed8/3f97f9c7, 2026-08-02: this docstring
-    claimed "operator's word or an approved merge_candidate" for weeks while any mounted
-    caller could fold any two agents): `actor` must resolve to a recognized operator
-    identity (`charter.is_operator_actor` — global recognition, no project in scope for
-    a fleet-wide identity merge; thread 1d5b9773, "authority by charter"), or the
-    scheduled reaper's own name (`_SANCTIONED_AUTO_FOLD_ACTOR` — that tick is already
-    gated separately by `osiris_fleet_reconcile_enabled`, a distinct operator signature).
+    This authorization check is enforced, not just documented: earlier this docstring
+    claimed authorization was required while any mounted caller could in fact fold any
+    two agents. `actor` must resolve to a recognized operator identity
+    (`charter.is_operator_actor`; global recognition, no project in scope for a
+    fleet-wide identity merge; authority is granted by charter), or the scheduled
+    reconciliation tick's own name (`_SANCTIONED_AUTO_FOLD_ACTOR`; that tick is already
+    gated separately by `osiris_fleet_reconcile_enabled`, a distinct feature flag).
     `resolve_fold_candidate`'s `decision='merged'` branch calls this function unchanged,
-    so ITS caller inherits the same gate through this one check — no separate copy to
-    drift out of sync. Refuses LOUDLY, naming who was refused.
+    so its caller inherits the same gate through this one check, with no separate copy to
+    drift out of sync. Refuses loudly, naming who was refused.
 
-    Refuses LOUDLY (an error dict, nothing written) when: evidence is empty; the actor is
+    Refuses loudly (an error dict, nothing written) when: evidence is empty; the actor is
     not authorized (above); either label is unknown or not an Agent; dupe==into or same
-    lineage (generations are SUCCESSION, not duplication — folding one would collapse a
-    death boundary the mind ruling keeps); dupe actively holds a Seat (transfer the seat
-    first — a deliberate act, never a side effect); dupe is already folded. `into` may be
-    any generation — the estate finds the living head regardless."""
+    lineage (generations are succession, not duplication; folding one would collapse a
+    death boundary the succession rule keeps); dupe actively holds a Seat (transfer the
+    seat first, a deliberate act, never a side effect); dupe is already folded. `into`
+    may be any generation: the record move finds the living head regardless."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.charter import is_operator_actor
 
@@ -291,26 +293,26 @@ async def fold_agent(
         return {"error": f"{dupe} actively holds {held} — a seat transfer is a deliberate "
                          "act, never a fold's side effect; release or transfer the seat "
                          "first"}
-    # THE ESTATE MOVES FIRST (#59's own precondition fix, mirroring fold_project's
-    # already-safe pattern): a crash between here and the kernel merge below leaves
-    # dupe.status=='active', so a retry re-enters this same function and simply
-    # continues — every estate move here is idempotent (a mail row already re-addressed
-    # no longer matches `to_agent=dupe`; a mount row the same; a thread already re-owned
-    # no longer matches `owner=dupe`). The OLD order (merge first, estate after) made a
-    # crash mid-fold PERMANENT: the merge's own "already folded — nothing to do" guard
-    # refused every retry, stranding the estate forever — exactly the #127 class of bug,
-    # now closed here before the reaper (task #59) could pour bulk, unattended volume
-    # through it. `living_head(into)` is independent of dupe's own merge status (into is
-    # already guaranteed unmerged by the guard above), so computing it before the merge
-    # changes nothing about what it resolves to.
+    # The record move happens first, mirroring fold_project's already-safe pattern: a
+    # crash between here and the kernel merge below leaves dupe.status=='active', so a
+    # retry re-enters this same function and simply continues. Every record move here is
+    # idempotent (a mail row already re-addressed no longer matches `to_agent=dupe`; a
+    # mount row the same; a thread already re-owned no longer matches `owner=dupe`). The
+    # old order (merge first, records moved after) made a crash mid-fold permanent: the
+    # merge's own "already folded, nothing to do" guard refused every retry, stranding
+    # the records forever. That class of bug is now closed here before the scheduled
+    # reconciliation tick could pour bulk, unattended volume through it. `living_head
+    # (into)` is independent of dupe's own merge status (into is already guaranteed
+    # unmerged by the guard above), so computing it before the merge changes nothing
+    # about what it resolves to.
     estate = await _move_agent_estate(actions, dupe, into, actor)
-    # the kernel merge: event, projection, same_as, case union, audit — resolve-on-read
+    # the kernel merge: event, projection, same_as, case union, audit; resolve-on-read
     await actions.merge_objects(by_label[into]["id"], by_label[dupe]["id"],
                                 justification=evidence, actor=actor)
-    # a standing proposal for this pair (either order) is answered by the act itself —
-    # AFTER the merge, deliberately: this is not estate (nothing is stranded if a crash
-    # lands between the merge and here, only a tray row stays open a beat longer, and
-    # resolve_fold_candidate's own re-check would just find the pair already merged)
+    # A standing proposal for this pair (either order) is answered by the act itself,
+    # after the merge, deliberately: this is not a record move (nothing is stranded if a
+    # crash lands between the merge and here, only a tray row stays open a beat longer,
+    # and resolve_fold_candidate's own re-check would just find the pair already merged)
     await actions.pool.execute(
         "UPDATE merge_candidates SET resolved='merged', resolved_by=$3, resolved_at=now() "
         "WHERE resolved IS NULL AND (a_id, b_id) IN (($1,$2),($2,$1))",
@@ -336,31 +338,31 @@ async def fold_agent(
 async def reconcile_agent_fold(
     actions: Actions, *, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:
-    """THE REPAIR PATH fold_agent never had (#127, Thoth's framing verbatim: "folds are
-    idempotent-by-REFUSAL when they need to be idempotent-by-REPAIR"): re-points any live
-    mail/mount/thread estate item still aimed at an ALREADY-merged dupe, using the SAME
-    `_move_agent_estate` `fold_agent` itself calls — not a second implementation that
-    could drift from what a normal fold already does.
+    """The repair path fold_agent never had: folds were idempotent by refusal when they
+    actually needed to be idempotent by repair. Re-points any live mail/mount/thread
+    record still aimed at an already-merged dupe, using the same `_move_agent_estate`
+    `fold_agent` itself calls, not a second implementation that could drift from what a
+    normal fold already does.
 
-    THE INVERSE PRECONDITION of fold_agent, on purpose, so the two verbs' refusal
-    conditions never overlap: fold_agent REQUIRES status=='active' and refuses a merged
-    dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into` pointing
-    at exactly `into` (refuses to redirect a dupe merged into some OTHER agent — never
-    guesses which pair a caller means).
+    This is the inverse precondition of fold_agent, on purpose, so the two functions'
+    refusal conditions never overlap: fold_agent requires status=='active' and refuses a
+    merged dupe; reconcile requires dupe.status=='merged' and dupe's own `merged_into`
+    pointing at exactly `into` (refuses to redirect a dupe merged into some other agent,
+    never guessing which pair a caller means).
 
-    NEVER re-performs the fold: no `merge_objects` call, no same-lineage/actively-seated
-    checks (those decide whether a fold SHOULD happen; this object already IS folded, so
-    the only question is whether its estate move finished). UNMERGE-THEN-REMERGE IS NOT A
-    SUBSTITUTE for this verb: `unfold_agent`'s own `estate_unreturnable` path would report
-    — and drop — exactly the mail/mount items a partial fold already broke.
+    Never re-performs the fold: no `merge_objects` call, no same-lineage/actively-seated
+    checks (those decide whether a fold should happen; this object already is folded, so
+    the only question is whether its record move finished). Unmerge-then-remerge is not
+    a substitute for this function: `unfold_agent`'s own `estate_unreturnable` path
+    would report, and drop, exactly the mail/mount items a partial fold already broke.
 
-    SAME ACTOR GATE AS fold_agent, ENFORCED (finding 962579a6: a repair verb touching a
-    merged estate needs the SAME authority as making the merge, not less — repairing is
-    the same act, continued, never a lesser one).
+    Enforces the same actor gate as fold_agent: a repair action touching an already-
+    merged agent's records needs the same authority as making the merge, not less.
+    Repairing is the same act, continued, never a lesser one.
 
-    Refuses LOUDLY on: unauthorized actor; blank dupe/into; dupe==into; dupe not
+    Refuses loudly on: unauthorized actor; blank dupe/into; dupe==into; dupe not
     resolving to an Agent; dupe.status != 'merged' (fold_agent's job, not this one's);
-    dupe's own `merged_into` not equal to `into`'s id; into not resolving to an ACTIVE
+    dupe's own `merged_into` not equal to `into`'s id; into not resolving to an active
     Agent."""
     from src.orchestrator.charter import is_operator_actor
 
@@ -400,20 +402,21 @@ async def reconcile_agent_fold(
 async def fold_justification_and_parity_check(
     pool: asyncpg.Pool, object_id: uuid.UUID, because: str, *, label: str,
 ) -> tuple[asyncpg.Record | None, str, dict[str, Any] | None]:
-    """THE OPERATOR-PARITY HEURISTIC, ONE COPY (DM 9438, "keep cooking" — was
-    byte-for-byte duplicated across unfold_agent/unfold_project/unfold_seat): fetches the
+    """The authorization-parity heuristic, kept as one shared copy instead of being
+    duplicated byte-for-byte across unfold_agent/unfold_project/unfold_seat: fetches the
     most recent 'merge' event for `object_id` and refuses an unfold whose own `because`
-    doesn't ALSO carry the operator's word when the ORIGINAL fold's own justification did
-    — a fold the operator blessed by name is not quietly undone by a different hand's
-    say-so; it takes the same authority to reverse it that it took to make it. (Heuristic,
-    not NLP: "cites the operator" = the word 'operator' appears in the justification text.)
+    doesn't also carry the operator's word when the original fold's own justification
+    did. A fold the operator blessed by name is not quietly undone by a different hand's
+    say-so; it takes the same authority to reverse it that it took to make it. (This is a
+    heuristic, not NLP: "cites the operator" means the word 'operator' appears in the
+    justification text.)
 
-    Returns `(ev, original_evidence, error)`: `ev` is the raw event row (or None — no
-    merge event on record) and `original_evidence` its justification text, BOTH returned
-    unconditionally (not only on success) because every one of the three call sites reuses
-    `ev["actor"]`/`ev["created_at"]`/`original_evidence` in its own report AFTER this
-    check — a second fetch was the alternative, and this avoids it. `error` is an
-    `{"error": ...}` dict when parity fails, else `None` (proceed normally)."""
+    Returns `(ev, original_evidence, error)`: `ev` is the raw event row (or None if no
+    merge event is on record) and `original_evidence` its justification text, both
+    returned unconditionally, not only on success, because every one of the three call
+    sites reuses `ev["actor"]`/`ev["created_at"]`/`original_evidence` in its own report
+    after this check. A second fetch was the alternative, and this avoids it. `error` is
+    an `{"error": ...}` dict when parity fails, else `None` (proceed normally)."""
     ev = await pool.fetchrow(
         "SELECT payload, actor, created_at FROM object_events "
         "WHERE event_type='merge' AND related_id=$1 ORDER BY created_at DESC LIMIT 1",
@@ -430,34 +433,34 @@ async def fold_justification_and_parity_check(
 async def unfold_agent(
     actions: Actions, *, dupe: str, because: str, actor: str, execute: bool = False,
 ) -> dict[str, Any]:
-    """Reverse a wrongful fold — the promise `fold_agent`'s own docstring makes
-    ("reversible by compensating event") and the primitive that never existed to keep it
-    (THE UNFOLD, Ferryman's resurrection, operator's word 2026-07-28). DRY RUN IS THE
-    DEFAULT (`execute=False`): returns the exact plan — the kernel unmerge, any chain-
-    integrity fix, and the estate items that CAN'T cleanly return — without writing
-    anything. `execute=True` performs it.
+    """Reverse a wrongful fold: the promise `fold_agent`'s own docstring makes
+    ("reversible by compensating event"), implemented here after having been missing for
+    some time. Dry run is the default (`execute=False`): returns the exact plan, the
+    kernel unmerge, any chain-integrity fix, and the record items that can't cleanly
+    return, without writing anything. `execute=True` performs it.
 
-    Refuses LOUDLY (an error dict, nothing written) when: `because` is blank; `dupe` is
-    unknown or not currently folded (status != 'merged' — nothing to unfold); the
-    ORIGINAL fold's own justification cites the operator's word and `because` does not
-    ALSO carry a fresh one — a fold the operator blessed by name is not quietly undone by
-    a different hand's say-so; it takes the same authority to reverse it that it took to
-    make it. (Heuristic, not NLP: "cites the operator" = the word 'operator' appears in
-    the original justification text.)
+    Refuses loudly (an error dict, nothing written) when: `because` is blank; `dupe` is
+    unknown or not currently folded (status != 'merged', nothing to unfold); the original
+    fold's own justification cites the operator's word and `because` does not also carry
+    a fresh one. A fold the operator blessed by name is not quietly undone by a different
+    hand's say-so; it takes the same authority to reverse it that it took to make it.
+    (Heuristic, not NLP: "cites the operator" means the word 'operator' appears in the
+    original justification text.)
 
-    CHAIN INTEGRITY: if `dupe`'s own `succeeded_by` currently points at a label from a
-    DIFFERENT lineage (a cross-base pointer — successors are always same-base, by
-    `_generation`'s own definition), that pointer is the fold's other half — a stitch,
-    not a real succession — and gets cleared (asserted empty, superseding; the old value
-    stays on the record, never deleted) so `dupe` reads as its own lineage's tail again.
-    A same-base successor is never touched — real succession is not this verb's business.
+    Chain integrity: if `dupe`'s own `succeeded_by` currently points at a label from a
+    different lineage (a cross-base pointer; successors are always same-base, by
+    `_generation`'s own definition), that pointer is the fold's other half, a stand-in
+    link rather than a real succession, and gets cleared (asserted empty, superseding;
+    the old value stays on the record, never deleted) so `dupe` reads as its own
+    lineage's tail again. A same-base successor is never touched: real succession is not
+    this function's business.
 
-    ESTATE: `fold_agent`'s mail/mount transfer is a raw UPDATE, not an event — the
-    original `to_agent`/`agent_id` is gone the moment it moves, so nothing can PROVE
+    Associated records: `fold_agent`'s mail/mount transfer is a raw UPDATE, not an event.
+    The original `to_agent`/`agent_id` is gone the moment it moves, so nothing can prove
     which pre-fold messages or mount rows were `dupe`'s versus already the living head's
     own. Reported as `estate_unreturnable` for a human to read and judge, never guessed
     back. Thread ownership, by contrast, moved via `assert_property` (event-sourced): any
-    thread whose CURRENT owner is the fold's living head but whose SUPERSEDED owner
+    thread whose current owner is the fold's living head but whose superseded owner
     assertion names `dupe` is cleanly reversible, and `execute=True` re-asserts it."""
     from datetime import UTC, datetime
 
@@ -486,7 +489,7 @@ async def unfold_agent(
     head = await living_head(actions.pool, str(into_canon))
     fold_time = ev["created_at"] if ev else datetime.now(UTC)
 
-    # CHAIN INTEGRITY — a cross-base succeeded_by is the fold's other half
+    # Chain integrity: a cross-base succeeded_by is the fold's other half
     cur_base = _generation(dupe)[0]
     succ = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -494,8 +497,8 @@ async def unfold_agent(
         row["id"])
     stitch = bool(succ) and _generation(str(succ))[0] != cur_base
 
-    # ESTATE — mail/mounts moved by a raw UPDATE (no event) can't be proven back;
-    # thread ownership moved via assert_property (event-sourced) can be
+    # Associated records: mail/mounts moved by a raw UPDATE (no event) can't be proven
+    # back; thread ownership moved via assert_property (event-sourced) can be
     unreturnable_mail = [dict(r) for r in await actions.pool.fetch(
         "SELECT id, from_agent, created_at, read_at, left(body,120) AS body "
         "FROM fleet_messages WHERE to_agent=$1 AND created_at < $2 ORDER BY created_at",
@@ -570,30 +573,30 @@ async def find_agent_fold_candidates(
     pool: asyncpg.Pool, *, projects_root: Path | None = None,
     jobs_home: Path | None = None,
 ) -> dict[str, Any]:
-    """THE ARCHAEOLOGIST (thread b975851b) — mine the registry and the disk for anonymous
-    agents that EVIDENCE says were never distinct minds, and queue them as review-gated
-    merge_candidates. PROPOSALS ONLY: nothing folds here; the operator judges the tray
-    (constitution #1's spirit — flag, never guess; the phantom-twin lint's law at census
-    scale). Two evidence classes this pass:
+    """Mines the registry and the disk for anonymous agents that the evidence says were
+    never distinct agents, and queues them as review-gated merge_candidates. Proposals
+    only: nothing folds here; a human judges the tray (flag, never guess, applied at
+    census scale, the same principle behind the duplicate-detection lint). Two evidence
+    classes this pass:
 
-    VIEW-ALIAS (score .9): an anonymous agent whose whole presence is a mount row with NO
-    transcript for its sid anywhere and no state.json in its jobs dir — a doorbell ring —
-    co-resident at the same cwd with a session that HAS a body. Propose fold into that
-    session's agent (the 10802085/bef1d349/d1848828 class, decoded live 2026-07-16).
+    View-alias (score .9): an anonymous agent whose whole presence is a mount row with no
+    transcript for its sid anywhere and no state.json in its jobs dir, a doorbell ring,
+    co-resident at the same cwd with a session that has a running process. Propose fold
+    into that session's agent.
 
-    RESTART-MINT (score .75 single-seat / .55 multi-seat): an anonymous agent mounted at
-    a cwd where a NAMED lineage anchors — the b86de6c1-beside-628ef839 class. The
-    single-seat presumption (operator rule): in a one-seat project the anon is presumed
-    the seat's child or fold; where several seats share the project it is nuanced and
-    the low score says verify by hand.
+    Restart-mint (score .75 single-seat / .55 multi-seat): an anonymous agent mounted at
+    a cwd where a named lineage anchors. The single-seat presumption: in a one-seat
+    project the anonymous agent is presumed the seat's child or fold; where several
+    seats share the project it is nuanced and the low score says verify by hand.
 
-    CHARTER-MATCH (same scores, thread 3430c32b): when no named lineage anchors at the
-    anon's cwd — the office migrations moved every seat's mount row home to
-    ~/.osiris/seats/<handle>, stranding anons in the seats' OLD project rooms — the
-    room's seat is still a GRAPH fact: a named lineage holding a live works_in or
-    governs link to repo:<project>. Mount rows move house; the charter does not. A room
-    whose charter names NO seat proposes nothing (its anons are the visitor class —
-    demotion candidates for the visitor gate, never folds) and is counted in `seatless`.
+    Charter-match (same scores): when no named lineage anchors at the anonymous agent's
+    cwd (office migrations moved every seat's mount row home to
+    ~/.osiris/seats/<handle>, stranding anonymous agents in the seats' old project
+    rooms), the room's seat is still a graph fact: a named lineage holding a live
+    works_in or governs link to repo:<project>. Mount rows move house; the charter does
+    not. A room whose charter names no seat proposes nothing (its anonymous agents are
+    the visitor class, demotion candidates for the visitor gate, never folds) and is
+    counted in `seatless`.
 
     Pairs already rejected or linked not_same_as are never re-proposed."""
     from src.ontology.resolution import _suppressed
@@ -651,10 +654,9 @@ async def find_agent_fold_candidates(
                 "        OR m2.agent_id LIKE ho.canonical||'-%')) "
                 "ORDER BY m2.last_seen DESC LIMIT 1", cwd, mine)
             if named and _generation(str(named))[0] != _generation(mine)[0]:
-                # THE SINGLE-SEAT PRESUMPTION (operator rule, 2026-07-16): 'an anon agent
-                # in phanspeed — if the project only has one seat, we have to assume it
-                # was a child or a fold of the only agent there; for projects with 2 like
-                # xxit or monsterhouse, it's more nuanced.'
+                # The single-seat presumption: for an anonymous agent mounted in a project
+                # with only one seat, assume it was a child or a fold of the only agent
+                # there; for a project with two or more seats it's more nuanced.
                 seats_here = await pool.fetchval(
                     "SELECT count(DISTINCT h.value #>> '{}') FROM agent_mounts m2 "
                     "JOIN objects ho2 ON (m2.agent_id = ho2.canonical "
@@ -673,25 +675,25 @@ async def find_agent_fold_candidates(
                                f"{named} — but {seats_here} seats share this project; "
                                "nuanced, verify by hand"]
         if target is None and r["project"]:
-            # THE CHARTER MATCH (thread 3430c32b): nobody named anchors at this cwd —
-            # but the ROOM may still have a seat on the graph's record. Mount rows are
-            # mortal and move house (the office migrations); works_in/governs edges are
-            # the durable evidence of whose room this is.
-            # governs' from_type used to span BOTH Agent (pre-1db1ff41-ruling-3) and Seat
-            # (post-re-key) so the re-key wouldn't silently stop matching every governs
-            # link the moment it landed (Imhotep, DM 2415/2416, caught before it shipped).
-            # SEAT-ONLY NOW (Thoth ruling, e0712df8, msg 7666): 1db1ff41 re-keyed charter
-            # authority onto the Seat entirely, so a legacy Agent-origin governs edge is
-            # no longer a live declaration of anything — it's pre-rekey history a mind
-            # never re-confirmed post-migration. Matching it here let Atlas's own 29
-            # garbled fragments ('repo:?', hyphen-split junk, bulk-seeded 2026-07-18, never
-            # migrated) keep outranking real residents in ~7-8 rooms; charter_for/
-            # set_charter are already blind to these edges by construction (they can't see,
-            # heal, or interact with an Agent-origin row at all) — this tie-break was the
-            # one place still reading them. works_in stays Agent-only (a room's live
-            # resident, never re-keyed); governs is Seat-only (a room's declared
-            # governor) — a Seat-origin edge is resolved to its current holder below,
-            # before it ever reaches the souls bookkeeping.
+            # The charter match: nobody named anchors at this cwd, but the room may
+            # still have a seat on the graph's record. Mount rows are mortal and move
+            # house (the office migrations); works_in/governs edges are the durable
+            # evidence of whose room this is.
+            # governs' from_type used to span both Agent (pre-rekey) and Seat (post-
+            # rekey) so the rekey wouldn't silently stop matching every governs link the
+            # moment it landed; that gap was caught before it shipped.
+            # Seat-only now: a prior rekey moved charter authority onto the Seat
+            # entirely, so a legacy Agent-origin governs edge is no longer a live
+            # declaration of anything, it's pre-rekey history an agent never
+            # re-confirmed post-migration. Matching it here let a batch of garbled,
+            # bulk-seeded fragments ('repo:?', hyphen-split junk, never migrated) keep
+            # outranking real residents in several rooms; charter_for/set_charter are
+            # already blind to these edges by construction (they can't see, heal, or
+            # interact with an Agent-origin row at all), so this tie-break was the one
+            # place still reading them. works_in stays Agent-only (a room's live
+            # resident, never rekeyed); governs is Seat-only (a room's declared
+            # governor); a Seat-origin edge is resolved to its current holder below,
+            # before it ever reaches the bookkeeping of distinct agents.
             from src.orchestrator.seats import seat_occupancy
 
             holders = await pool.fetch(
@@ -717,9 +719,8 @@ async def find_agent_fold_candidates(
                         continue
                 else:
                     holder_agent = str(h["holder"])
-                # key souls by the LIVING head's base — a rebased lineage (Ra:
-                # c7ef52a9 -> 443cd9d4) is one soul, not two, and must not
-                # deflate the single-seat score
+                # key distinct agents by the living head's base: a rebased lineage is
+                # one agent, not two, and must not deflate the single-seat score
                 head_ = await living_head(pool, _generation(str(holder_agent))[0])
                 base = _generation(head_)[0]
                 if base != _generation(mine)[0]:
@@ -727,16 +728,16 @@ async def find_agent_fold_candidates(
             if not souls:
                 seatless[r["project"]] = seatless.get(r["project"], 0) + 1
                 continue
-            # DECLARED BEATS DERIVED (operator ruling 1db1ff41, verbatim: "declared, all
-            # roads lead to explicit") — REVERSES this tie-break's prior rule, which ranked
-            # the room's RESIDENT (works_in) above a supervising charter (governs) on the
-            # reasoning that "an Alfred governs coldspot, but coldspot's anons presumptively
-            # belong to the seat that lives there." That reasoning is SUPERSEDED, not
-            # forgotten: decision 2655a0a8 found the opposite holds on the two hardest real
-            # cases in the fleet — alfred's DECLARED charter correctly named mudra->vajra and
-            # sutra->tantra when both seats' own derived/resident pins were wrong. A charter
-            # is a deliberate, operator-reviewed declaration; residence is wherever a session
-            # happened to mount. The room's DECLARED governor now outranks its resident.
+            # Declared beats derived. This reverses this tie-break's prior rule, which
+            # ranked the room's resident (works_in) above a supervising charter (governs)
+            # on the reasoning that a managing seat governs a room, but the room's
+            # anonymous agents presumptively belong to the seat that lives there. That
+            # reasoning is superseded, not forgotten: a later review found the opposite
+            # holds on the two hardest real cases in the fleet, where a managing seat's
+            # declared charter correctly named the true owners when both seats' own
+            # derived/resident pins were wrong. A charter is a deliberate, reviewed
+            # declaration; residence is wherever a session happened to mount. The room's
+            # declared governor now outranks its resident.
             governors = sorted(b for b, via in souls.items() if "governs" in via)
             if len(souls) == 1:
                 base = next(iter(souls))
@@ -776,7 +777,7 @@ async def find_agent_fold_candidates(
             continue
         if frozenset((r["oid"], trow["id"])) in sup:
             continue
-        # the table orders pairs by uuid (CHECK a_id < b_id) — the ROLES live in reasons
+        # the table orders pairs by uuid (CHECK a_id < b_id); the roles live in reasons
         lo, hi = sorted((r["oid"], trow["id"]))
         row = await pool.fetchrow(
             "INSERT INTO merge_candidates (a_id, b_id, score, reasons) "
@@ -793,7 +794,7 @@ async def find_agent_fold_candidates(
         "FROM merge_candidates c "
         "WHERE c.resolved IS NULL AND c.reasons->>'kind'='agent-fold' "
         "ORDER BY c.score DESC, c.id LIMIT 100")]
-    # labels the census can no longer resolve (folded meanwhile) would confuse the tray —
+    # labels the census can no longer resolve (folded meanwhile) would confuse the tray;
     # they are stamped by fold_agent itself, so pending here is always actionable
     from src.orchestrator.succession_repair import unresumed_heads
     succession = await unresumed_heads(pool)
@@ -811,18 +812,19 @@ async def find_agent_fold_candidates(
 async def resolve_fold_candidate(
     actions: Actions, *, candidate_id: int, decision: str, actor: str,
 ) -> dict[str, Any]:
-    """Judge one agent-fold proposal from the tray. 'merged' executes fold_agent — the
-    ESTATE-carrying fold, never the bare kernel merge (an agent folded without its mail,
-    rows, and threads is the orphan machine again) — and INHERITS fold_agent's own
-    operator-actor gate unchanged (census a5e53ed8: this used to be the exact self-
-    approval gap the constitution forbids — an agent proposing AND judging its own
-    candidate — since fixed by fold_agent's own check, not a second copy here). 'rejected'
-    mints not_same_as both ways and the pair is never re-proposed — OPEN to any mounted
-    caller, deliberately: rejecting is a judgment that two things are NOT the same mind,
-    never an identity mutation, so it carries none of 'merged's blast radius and needs
-    none of its gate. Either way the candidate row is stamped with the judge's name. The
-    entity tray's twin (resolution.resolve_candidate) stays for Person/Company — this one
-    exists because agents have estates."""
+    """Judge one agent-fold proposal from the tray. 'merged' executes fold_agent, the
+    fold that carries the agent's associated records along, never the bare kernel merge
+    (an agent folded without its mail, rows, and threads is the orphan machine again),
+    and inherits fold_agent's own operator-actor gate unchanged. (This used to have the
+    exact self-approval gap the founding rules forbid, an agent proposing and judging its
+    own candidate, since fixed by fold_agent's own check, not a second copy here.)
+    'rejected' mints not_same_as both ways and the pair is never re-proposed, open to any
+    mounted caller, deliberately: rejecting is a judgment that two things are not the
+    same agent, never an identity mutation, so it carries none of 'merged's blast radius
+    and needs none of its gate. Either way the candidate row is stamped with the judge's
+    name. The entity tray's counterpart (resolution.resolve_candidate) stays for
+    Person/Company; this one exists because agents carry these extra associated
+    records."""
     row = await actions.pool.fetchrow(
         "SELECT c.id, c.resolved, c.reasons FROM merge_candidates c WHERE c.id=$1",
         candidate_id)
@@ -835,14 +837,14 @@ async def resolve_fold_candidate(
         return {"error": f"candidate {candidate_id} is not an agent-fold proposal — "
                          "judge it in the entity tray (resolution.resolve_candidate)"}
     if decision == "merged":
-        # the pair's ROLES live in reasons — the table's columns are uuid-ordered
+        # the pair's roles live in reasons; the table's columns are uuid-ordered
         signals = "; ".join(reasons.get("signals") or []) or "approved from the tray"
         out = await fold_agent(actions, dupe=str(reasons.get("dupe") or ""),
                                into=str(reasons.get("into") or ""),
                                evidence=f"approved candidate {candidate_id}: {signals}",
                                actor=actor)
         if "error" in out:
-            return out  # the row stays unresolved — a refused fold is not a judgment
+            return out  # the row stays unresolved: a refused fold is not a judgment
         return {**out, "candidate": candidate_id, "resolved": "merged"}
     if decision == "rejected":
         from datetime import UTC, datetime
