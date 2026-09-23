@@ -1,4 +1,4 @@
-"""Capture-at-source — decisions & threads written back DURING a session.
+"""Capture-at-source, decisions & threads written back DURING a session.
 
 The prosthesis write-back half: what a session decides / leaves open must land in the
 graph in the SAME shape the miner produces, so it renders in the real `decision-log` and
@@ -68,10 +68,10 @@ class _MountedCtx:
 
 
 async def _mounted(actions: Actions, agent_id: str, handle: str) -> Any:
-    """A real, seated agent identity mounted for an MCP tool call (thread b5ae6773's
+    """A real, seated agent identity mounted for an MCP tool call ('s
     ruling: kind='obligation' and any resolved owner/assignee both require a live
     agent/seat behind the call, never the unmounted 'session' fallback). claim_name
-    itself mints/binds the real Seat — no separate ensure_seat call needed."""
+    itself mints/binds the real Seat, no separate ensure_seat call needed."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
 
@@ -101,7 +101,7 @@ async def test_captured_decision_is_self_declared_from_the_session(actions: Acti
         "SELECT source_id, evidence_class FROM current_assertions "
         "WHERE object_id=$1 AND name='summary'", d,
     )
-    # higher-trust than the miner's DERIVED regex inference — the decider's own declaration
+    # higher-trust than the miner's DERIVED regex inference, the decider's own declaration
     assert row["source_id"] == "session"
     assert row["evidence_class"] == "self_declared"
 
@@ -116,7 +116,7 @@ async def test_record_decision_is_idempotent_on_the_summary(actions: Actions) ->
 async def test_record_decision_without_operator_authorized_mints_no_ruled_by(
     actions: Actions,
 ) -> None:
-    # default False — an ordinary worker's own ruling never accretes operator authority
+    # default False, an ordinary worker's own ruling never accretes operator authority
     d = await record_decision(actions, "An ordinary worker ruling")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='ruled_by'", d)
@@ -144,9 +144,9 @@ async def test_record_decision_operator_authorized_mints_ruled_by_to_the_operato
 async def test_record_decision_operator_authorized_with_repo_scopes_to_the_charter(
     actions: Actions,
 ) -> None:
-    """AUTHORITY BY CHARTER (thread 1d5b9773): when a decision names a `repo` AND
+    """AUTHORITY BY CHARTER : when a decision names a `repo` AND
     `source` is itself an operator-recognized actor, `ruled_by` targets the resolved
-    operator whose charter covers that repo — not just the bare singleton
+    operator whose charter covers that repo, not just the bare singleton
     unconditionally."""
     from src.orchestrator.capture import ensure_operator_person
 
@@ -166,7 +166,7 @@ async def test_record_decision_operator_authorized_repo_outside_charter_falls_ba
     actions: Actions,
 ) -> None:
     """A decision naming a `repo` the operator's own charter does NOT cover still mints
-    `ruled_by` — to the fallback singleton, never silently dropped — an operator-
+    `ruled_by`, to the fallback singleton, never silently dropped, an operator-
     authorized decision must never end up with no ruled_by edge just because charter
     data is incomplete."""
     await actions.create_or_find_object("SoftwareProject", "repo:uncharted", "test")
@@ -251,9 +251,9 @@ async def test_link_repo_still_accepts_a_bare_name_and_the_repo_prefixed_form(
 async def test_mint_or_find_repo_no_ops_when_resolve_repo_keeps_missing_it(
     actions: Actions,
 ) -> None:
-    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
+    """Source-level fix (operator ruling, "fix the sources"):
     `create_or_find_object` is idempotent on canonical, but `_resolve_repo`'s own (narrower,
-    status='active'-gated) lookup can keep missing an object that already exists — every
+    status='active'-gated) lookup can keep missing an object that already exists, every
     such call then falls into the `if proj is None:` mint branch and used to reassert
     `name` unconditionally, live-measured at 3,140 identical rows apiece for seven disk-
     census objects. A repeat call against an already-named object must write nothing."""
@@ -275,7 +275,7 @@ async def test_mint_or_find_repo_no_ops_when_resolve_repo_keeps_missing_it(
 async def test_record_decision_refuses_a_path_shaped_repo_and_mints_nothing(
     actions: Actions,
 ) -> None:
-    """Not just a raised error — the WHOLE call rolls back (task #107's acceptance bar,
+    """Not just a raised error, the WHOLE call rolls back (task #107's acceptance bar,
     mirroring test_record_decision_is_atomic_no_orphan_husk): proves the old silent
     find-or-CREATE path is genuinely gone, not merely unreached."""
     import pytest
@@ -307,7 +307,7 @@ async def test_link_repo_refuses_a_placeholder_that_is_not_a_well_formed_name(
     actions: Actions,
 ) -> None:
     """The boundary is a POSITIVE definition of a well-formed ref, not just a slash
-    blacklist — it also catches the "?"-named project symptom John's report named,
+    blacklist, it also catches the "?"-named project symptom Jordan's report named,
     without touching the existing bad data (out of scope, #108's cleanup)."""
     import pytest
 
@@ -321,23 +321,23 @@ async def test_link_repo_refuses_a_placeholder_that_is_not_a_well_formed_name(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
 
 
-# --- EVERY SoftwareProject mint door refuses a degenerate bare label (thread 05793d4a's own
-# census, closed by Thoth's dispatch msg 5157): task #107 declared _validate_repo_name "the
+# --- EVERY SoftwareProject mint door refuses a degenerate bare label ('s own
+# census, closed by Archivist's dispatch): task #107 declared _validate_repo_name "the
 # single choke point" but it was only ever wired into SOME of the live mint sites. The full
 # census, enumerated here so a SIXTH site is caught by reading this list rather than by
 # another live "?" incident:
-#   1. capture.py's _mint_or_find_repo/link_repo — validated from birth (task #107, tested
-#      immediately above this block).
-#   2. agents.py's _resolve_or_mint_project (register_agent/mint_heir) — validated by the
-#      bare-label guard (0991a06); own dedicated tests in test_agents.py
-#      (test_register_agent_never_mints_a_bare_question_mark_project et al).
-#   3. lineage.py's register_spawn/register_swarm — validated (thread db14d8be), but LOGS
-#      AND SKIPS the mint rather than raising (deep background traffic, no receipt field to
-#      carry a refusal on) — own dedicated tests in test_lineage.py/test_spawns.py.
-#   4. project_identity.py's create_project — validated from birth (task #107); own tests
-#      in test_project_identity.py.
-#   5. neighborhoods.py's census_trees (via _mint_or_find_repo directly) — validated from
-#      birth; own tests in test_neighborhoods.py.
+# 1. capture.py's _mint_or_find_repo/link_repo, validated from birth (task #107, tested
+# immediately above this block).
+# 2. agents.py's _resolve_or_mint_project (register_agent/mint_heir), validated by the
+# bare-label guard (0991a06); own dedicated tests in test_agents.py
+# (test_register_agent_never_mints_a_bare_question_mark_project et al).
+# 3. lineage.py's register_spawn/register_swarm, validated, but LOGS
+# AND SKIPS the mint rather than raising (deep background traffic, no receipt field to
+# carry a refusal on), own dedicated tests in test_lineage.py/test_spawns.py.
+# 4. project_identity.py's create_project, validated from birth (task #107); own tests
+# in test_project_identity.py.
+# 5. neighborhoods.py's census_trees (via _mint_or_find_repo directly), validated from
+# birth; own tests in test_neighborhoods.py.
 # THE THREE THAT WERE MISSING, closed here: ingest_files (src/ingest/files.py), bootstrap
 # (bootstrap.py), and correct_project_name (projects.py, which mints no NEW object but
 # still needed the guard on the historical value it's about to bless as canonical). ----
@@ -376,7 +376,7 @@ async def test_correct_project_name_refuses_to_bless_a_malformed_majority_value(
 
     proj = await actions.create_or_find_object("SoftwareProject", "repo:probe-cpn", "session")
     now = datetime.now(UTC)
-    # two RAW variants of the same degenerate value ("?" vs " ? ") — both strip().casefold()
+    # two RAW variants of the same degenerate value ("?" vs " ? "), both strip.casefold
     # to "?", so correct_project_name sees a provable case/whitespace correction, exactly
     # the shape it's designed to self-authorize, and reaches the new guard on `settled`.
     # "?" wins the majority vote 2-1 (not tied), so the tie-refusal branch never fires.
@@ -389,14 +389,14 @@ async def test_correct_project_name_refuses_to_bless_a_malformed_majority_value(
     assert "malformed" in out["error"]
     current = await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND name='name'", proj)
-    assert current == 3  # nothing new asserted — all three rows stand exactly as before
+    assert current == 3  # nothing new asserted, all three rows stand exactly as before
 
 
 async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Actions) -> None:
     await open_thread(actions, "wire the composed watcher into SOURCE_TICKS with a live key")
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    # the briefing's first section is the GRADED wall now (ruling 923c380f): a deliberate
+    # the briefing's first section is the GRADED wall now : a deliberate
     # thread is TOUCHED, so it rides the fleet's top-of-wall even with no kind and no repo
     open_rows = res["items"][_OPEN]["top_of_wall"]
     assert any(
@@ -406,10 +406,10 @@ async def test_open_thread_surfaces_in_the_briefing_open_section(actions: Action
 
 
 async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Actions) -> None:
-    """Arc-adoption follow-on (ruling e6277013, measured at 7.2% fleet-wide): a caller who
-    left `arc` unset SEES that choice in their own receipt (the port of Sekhmet's
-    charter-UNDECLARED pattern, commit 446a5bf) — never a refusal, never required
-    (577988ed). Setting a real arc echoes it back unchanged; omitting it gets the same
+    """Arc-adoption follow-on (measured at 7.2% fleet-wide): a caller who
+    left `arc` unset SEES that choice in their own receipt (the port of Warden's
+    charter-UNDECLARED pattern, commit 446a5bf), never a refusal, never required
+    . Setting a real arc echoes it back unchanged; omitting it gets the same
     _ARC_UNSORTED sentinel every time, never a persisted value (ARCS stays closed)."""
     from src import mcp_server as srv
     from src.orchestrator import capture
@@ -426,7 +426,7 @@ async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Acti
         srv._pool = saved_pool
     assert omitted["arc"] == capture._ARC_UNSORTED
     assert named["arc"] == "Fleet-Hygiene"
-    # never persisted as a real property — ARCS stays a closed taxonomy, the sentinel is
+    # never persisted as a real property, ARCS stays a closed taxonomy, the sentinel is
     # receipt-only, matching mint_seat's own UNDECLARED string (also never written to the
     # graph, only ever reported)
     stored = await actions.pool.fetchval(
@@ -438,9 +438,9 @@ async def test_mcp_open_thread_receipt_names_arc_omission_honestly(actions: Acti
 async def test_mcp_open_thread_receipt_names_the_out_of_scope_arc_honestly(
     actions: Actions,
 ) -> None:
-    """The repo gate (decision d8ac7f5f, msg 4526): a caller who files to a real, non-osiris
+    """The repo gate : a caller who files to a real, non-osiris
     project and passes an arc anyway is told why in the SAME receipt slot _ARC_UNSORTED
-    already uses — never a refusal, never silently ignored."""
+    already uses, never a refusal, never silently ignored."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -462,9 +462,9 @@ async def test_mcp_open_thread_receipt_names_the_out_of_scope_arc_honestly(
 async def test_mcp_open_thread_surfaces_prior_art_on_a_standing_decision(
     actions: Actions,
 ) -> None:
-    """obligation 8f59b64f (Thoth XC, msg 6120): open_thread was the one write verb of the
+    """ (Archivist XC): open_thread was the one write verb of the
     three (record_decision, send, open_thread) with no semantic prior-art check at all.
-    Embeds the earlier Decision's own short id in the new thread's summary — the
+    Embeds the earlier Decision's own short id in the new thread's summary, the
     deterministic "id token embedded in a longer query" door, cross-door-corroborated by
     construction, unlike relying on semantic rank alone (which may not be configured in
     this test environment)."""
@@ -491,7 +491,7 @@ async def test_mcp_open_thread_surfaces_prior_art_on_a_standing_decision(
 async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
     actions: Actions,
 ) -> None:
-    """A strong hit against an open Thread (not a Decision) gets its own wording —
+    """A strong hit against an open Thread (not a Decision) gets its own wording, 
     open_thread has no confirms=/refutes= of record_decision's own kind, only `resolves`,
     so the flag names that lever specifically rather than reusing record_decision's own
     ack_prior_art/bears_on machinery it has no way to route through."""
@@ -521,9 +521,9 @@ async def test_mcp_open_thread_prior_art_on_a_thread_hit_suggests_resolves(
 async def test_mcp_open_thread_dedup_scope_names_what_was_actually_checked(
     actions: Actions,
 ) -> None:
-    """obligation 95a0feb3 (Soundwave via Thoth msg 6109/6120): `deduped: "false"` read as
+    """ (Relay via Archivist/6120): `deduped: "false"` read as
     "checked, nothing similar exists" when it only ever meant "no twin among this
-    project's own OPEN Threads" — dedup_scope now says so plainly on both branches."""
+    project's own OPEN Threads", dedup_scope now says so plainly on both branches."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -545,10 +545,10 @@ async def test_mcp_open_thread_dedup_scope_names_what_was_actually_checked(
 async def test_mcp_open_thread_no_prior_art_flag_when_nothing_matches_strongly(
     actions: Actions,
 ) -> None:
-    """The common case: nothing STANDS for this ground yet. search() over a large, live
+    """The common case: nothing STANDS for this ground yet. search over a large, live
     corpus rarely returns literally zero hits (same reality record_decision's own tests
     accept, e.g. the sibling test asserting only `prior_art_flag not in out`), so the
-    honest assertion is no STRONG flag — never that the field is bare-empty."""
+    honest assertion is no STRONG flag, never that the field is bare-empty."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -583,7 +583,7 @@ async def test_mcp_reclassify_thread_receipt_names_the_out_of_scope_arc_honestly
 async def test_resolve_thread_leaves_open_and_joins_resolved(actions: Actions) -> None:
     summary = "prune the internal-URL spread in url_fetch to profile-shaped only"
     t = await open_thread(actions, summary)
-    # resolve by summary SUBSTRING (not the whole thing) — the ref is fuzzy
+    # resolve by summary SUBSTRING (not the whole thing), the ref is fuzzy
     tid = await resolve_thread(actions, "internal-URL spread", because="tightened url_fetch")
     assert tid == t
 
@@ -615,7 +615,7 @@ async def test_resolve_threads_bulk_dry_run_previews_without_writing(
     refs = {row["ref"] for row in out["would_close"]}
     assert refs == {str(t1), str(t2)}
     assert all(row["already_resolved"] is False for row in out["would_close"])
-    # nothing written — still open
+    # nothing written, still open
     assert await _thread_resolved_in_test_helper(actions, t1) is None
     assert await _thread_resolved_in_test_helper(actions, t2) is None
 
@@ -642,7 +642,7 @@ async def test_resolve_threads_bulk_apply_closes_all_under_one_shared_because(
 async def test_resolve_threads_bulk_refuses_whole_batch_on_an_unresolved_ref(
     actions: Actions,
 ) -> None:
-    """REFUSE-WHOLE-RUN (Thoth dispatch 6865, same posture as _retire_handoff_backlog): one
+    """REFUSE-WHOLE-RUN (Archivist dispatch 6865, same posture as _retire_handoff_backlog): one
     bad ref must not silently close the good ones alongside it."""
     t1 = await open_thread(actions, "bulk-close specimen five, resolvable")
     out = await resolve_threads_bulk(
@@ -650,7 +650,7 @@ async def test_resolve_threads_bulk_refuses_whole_batch_on_an_unresolved_ref(
         because="test sweep", dry_run=False)
     assert out["ok"] is False
     assert "no such thread anywhere, ever" in out["unresolved"]
-    # the good ref was NOT closed either — the whole batch refused
+    # the good ref was NOT closed either, the whole batch refused
     assert await _thread_resolved_in_test_helper(actions, t1) is None
 
 
@@ -684,7 +684,7 @@ async def _thread_resolved_in_test_helper(actions: Actions, tid: object) -> str 
 async def test_mcp_resolve_thread_dispatches_a_list_ref_to_the_bulk_door(
     actions: Actions,
 ) -> None:
-    """The MCP tool's own list-vs-str branch (Thoth dispatch 6865, #203 mechanism) — a
+    """The MCP tool's own list-vs-str branch (Archivist dispatch 6865, #203 mechanism), a
     single string ref still takes the original single-thread path untouched; a list
     reaches resolve_threads_bulk instead of the single-ref `_find_thread`."""
     from src import mcp_server as srv
@@ -704,10 +704,10 @@ async def test_mcp_resolve_thread_dispatches_a_list_ref_to_the_bulk_door(
 
 
 async def test_mcp_resolve_thread_list_ref_defaults_to_dry_run(actions: Actions) -> None:
-    """A real incident (decision 38755abe): a caller intending a dry-run QA preview on a
+    """A real incident : a caller intending a dry-run QA preview on a
     list ref omitted `dry_run` and it executed for real, because the MCP wrapper's own
     signature defaulted dry_run=False while capture.resolve_threads_bulk's default is
-    True — a silent override of the safer default. Fixed: the wrapper now defaults True
+    True, a silent override of the safer default. Fixed: the wrapper now defaults True
     too, so omitting dry_run on a list ref previews, never writes."""
     from src import mcp_server as srv
 
@@ -726,9 +726,9 @@ async def test_mcp_resolve_thread_list_ref_defaults_to_dry_run(actions: Actions)
 async def test_resolve_by_a_different_agent_than_the_opener_still_supersedes(
     actions: Actions,
 ) -> None:
-    """The leak this fix closes (ruling 1335332e, thread 6361): open_thread's own `status`
+    """The leak this fix closes (thread 6361): open_thread's own `status`
     write lands under the OPENER's source; resolve_thread's lands under the RESOLVER's.
-    Under plain assert_property (same-source-only supersession) both would stay current —
+    Under plain assert_property (same-source-only supersession) both would stay current, 
     a thread simultaneously open-and-resolved, the 713-obligation shape. assert_singular_
     property closes it: exactly one current `status` row survives, and it's 'resolved'."""
     t = await open_thread(actions, "opened by one agent, resolved by another",
@@ -739,7 +739,7 @@ async def test_resolve_by_a_different_agent_than_the_opener_still_supersedes(
         "WHERE object_id=$1 AND name='status' ORDER BY created_at", t)
     current = [r for r in rows if r["is_current"]]
     assert [r["value"] for r in current] == ["resolved"]
-    # both sources' rows are still readable in history — never deleted, only superseded
+    # both sources' rows are still readable in history, never deleted, only superseded
     assert {r["source_id"] for r in rows} == {"agent:opener-A", "agent:resolver-B"}
 
 
@@ -747,7 +747,7 @@ async def test_resolve_collapses_two_boot_witnesses_but_they_still_coexisted_whi
     actions: Actions,
 ) -> None:
     """deploy_guard.alarm_schema_drift opens the SAME alarm thread from two boot services
-    (source=f"boot:{service}" each, thread 35c425f9) — both witnesses must coexist while
+    (source=f"boot:{service}" each), both witnesses must coexist while
     the thread is open (test_deploy_guard.py's own test covers that). But once a human/
     agent resolves it through this generic door, EVERY open witness must collapse to one
     current 'resolved' status, not just whichever one happened to be picked first."""
@@ -768,7 +768,7 @@ async def test_resolve_collapses_two_boot_witnesses_but_they_still_coexisted_whi
 
 
 async def test_a_reworded_summary_dedups_to_the_existing_open_thread(actions: Actions) -> None:
-    """Two field witnesses (Aegis, Maat): the same fact minted twice across a lineage restart
+    """Two field witnesses (Shield, Mira): the same fact minted twice across a lineage restart
     because the second telling reworded the summary. A near-identical restatement on the SAME
     project must resolve to the FIRST thread's id, never a twin."""
     t = await open_thread(actions, "wire the daemon's receipt path into the meter",
@@ -780,7 +780,7 @@ async def test_a_reworded_summary_dedups_to_the_existing_open_thread(actions: Ac
 
 async def test_an_unrelated_summary_is_never_a_false_merge(actions: Actions) -> None:
     """Conservative on purpose: a genuinely different thread on the same project must NOT
-    dedup — a false merge silently drops testimony, which costs more than a duplicate."""
+    dedup, a false merge silently drops testimony, which costs more than a duplicate."""
     await open_thread(actions, "wire the daemon's receipt path into the meter", repo="dedupproj")
     hit = await find_near_duplicate_open_thread(
         actions.pool, "the statusline flaps unreachable under load", repo="dedupproj")
@@ -788,7 +788,7 @@ async def test_an_unrelated_summary_is_never_a_false_merge(actions: Actions) -> 
 
 
 async def test_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
-    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against — an exact restatement
+    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against, an exact restatement
     filed under a different project, or with none at all, must still mint its own thread."""
     await open_thread(actions, "wire the daemon's receipt path into the meter", repo="dedupproj")
     assert await find_near_duplicate_open_thread(
@@ -799,14 +799,14 @@ async def test_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
 
 async def test_open_thread_itself_never_crosses_a_project_boundary(actions: Actions) -> None:
     """Dispatch #195 defect 1, live-reproduced before this test existed: the check above only
-    ever drove `find_near_duplicate_open_thread` directly, in isolation — it never called
+    ever drove `find_near_duplicate_open_thread` directly, in isolation, it never called
     `open_thread` a second time for the second project, which is exactly where the real bug
     lived. `open_thread`'s own mint path used to hash the summary ALONE (`_canon("thread",
-    summary)`), with no project dimension in the identity at all — a byte-identical summary
+    summary)`), with no project dimension in the identity at all, a byte-identical summary
     filed under a second project silently reused the FIRST project's Thread object and
     in_repo-linked it to both, so resolving one obligation resolved the other. Two exact-text
     calls under two different repos must mint two distinct objects, each linked to only its
-    own project — not one shared thread wearing two projects' names."""
+    own project, not one shared thread wearing two projects' names."""
     exact = "wire the daemon's receipt path into the meter"
     t1 = await open_thread(actions, exact, repo="dedupproj")
     t2 = await open_thread(actions, exact, repo="otherproj")
@@ -834,7 +834,7 @@ async def test_open_thread_repo_prefix_normalizes_like_link_repo_does(
 ) -> None:
     """`repo="dedupproj"` and `repo="repo:dedupproj"` name the same project everywhere else
     in this module (`link_repo`/`_resolve_repo`/`_validate_repo_name` all strip the `repo:`
-    prefix before comparing) — the identity key this fix adds must strip it too, or the two
+    prefix before comparing), the identity key this fix adds must strip it too, or the two
     spellings would mint twins of what is really one project's thread."""
     exact = "wire the daemon's receipt path into the meter"
     t1 = await open_thread(actions, exact, repo="dedupproj")
@@ -843,7 +843,7 @@ async def test_open_thread_repo_prefix_normalizes_like_link_repo_does(
 
 
 async def test_open_thread_unfiled_keeps_the_old_global_canonical(actions: Actions) -> None:
-    """`repo=None` had no safe scope to protect before this fix and still doesn't — an
+    """`repo=None` had no safe scope to protect before this fix and still doesn't, an
     unfiled thread's identity stays the bare summary hash, unchanged, so anything already
     relying on that (e.g. `deploy_guard`'s unrepo'd landing-audit obligations) keeps its
     existing idempotency exactly as before."""
@@ -854,7 +854,7 @@ async def test_open_thread_unfiled_keeps_the_old_global_canonical(actions: Actio
 
 
 async def test_a_resolved_thread_is_never_a_dedup_target(actions: Actions) -> None:
-    """The dedup only ever answers for OPEN threads — a closed one is a different fact now
+    """The dedup only ever answers for OPEN threads, a closed one is a different fact now
     (it was answered), so a fresh telling of the same words must open its own thread, not
     quietly reopen a resolved one."""
     summary = "wire the daemon's receipt path into the meter"
@@ -867,14 +867,14 @@ async def test_a_resolved_thread_is_never_a_dedup_target(actions: Actions) -> No
 async def test_a_reworded_decision_dedups_to_the_existing_live_decision(
     actions: Actions,
 ) -> None:
-    """Thoth's own bug (thread af77073a): a record_decision came back REJECTED after it had
+    """Archivist's own bug : a record_decision came back REJECTED after it had
     already committed server-side; the retry reworded the summary by one word and minted a
     twin. The near-dup guard must catch that one-word reword and resolve to the FIRST
-    decision's id, never a twin — same shape as the thread guard's own dedup test."""
-    d = await record_decision(actions, "order is load-bearing — never reorder the steps",
+    decision's id, never a twin, same shape as the thread guard's own dedup test."""
+    d = await record_decision(actions, "order is load-bearing, never reorder the steps",
                               repo="dedupproj")
     hit = await find_near_duplicate_decision(
-        actions.pool, "order is load-bearing — never reorder these steps", repo="dedupproj")
+        actions.pool, "order is load-bearing, never reorder these steps", repo="dedupproj")
     assert hit == d
 
 
@@ -882,8 +882,8 @@ async def test_an_unrelated_decision_summary_is_never_a_false_merge(
     actions: Actions,
 ) -> None:
     """Conservative on purpose, same bar as the thread guard: a genuinely different ruling
-    on the same project must NOT dedup — a false merge silently drops testimony."""
-    await record_decision(actions, "order is load-bearing — never reorder the steps",
+    on the same project must NOT dedup, a false merge silently drops testimony."""
+    await record_decision(actions, "order is load-bearing, never reorder the steps",
                           repo="dedupproj")
     hit = await find_near_duplicate_decision(
         actions.pool, "the statusline flaps unreachable under load", repo="dedupproj")
@@ -893,10 +893,10 @@ async def test_an_unrelated_decision_summary_is_never_a_false_merge(
 async def test_shared_state_of_the_board_boilerplate_never_merges_distinct_decisions(
     actions: Actions,
 ) -> None:
-    """Wave 16 item 4 (task ed9f73ce): two decisions that share ONLY a convention's own
-    fixed "STATE OF THE BOARD" header — never their actual substance — must not merge.
+    """a batch item 4 : two decisions that share ONLY a convention's own
+    fixed "STATE OF THE BOARD" header, never their actual substance, must not merge.
     Verified this is a genuine regression test, not a coincidence: the UNSTRIPPED ratio
-    for this exact pair is 0.794 (above _DEDUP_SIM's 0.60 bar — a false merge without the
+    for this exact pair is 0.794 (above _DEDUP_SIM's 0.60 bar, a false merge without the
     fix), the boilerplate-stripped ratio is 0.480 (correctly below it)."""
     d = await record_decision(actions, "STATE OF THE BOARD, main is clean", repo="dedupproj")
     hit = await find_near_duplicate_decision(
@@ -909,35 +909,35 @@ async def test_state_of_the_board_reword_still_dedups_after_stripping(
     actions: Actions,
 ) -> None:
     """The fix's OTHER half: stripping boilerplate must not blind the guard to a genuine
-    near-duplicate that happens to carry the SAME header — a one-word reword of the
+    near-duplicate that happens to carry the SAME header, a one-word reword of the
     actual substance, both opening with "STATE OF THE BOARD", still resolves to the
     first decision's id."""
     d = await record_decision(
-        actions, "STATE OF THE BOARD — order is load-bearing, never reorder the steps",
+        actions, "STATE OF THE BOARD, order is load-bearing, never reorder the steps",
         repo="dedupproj")
     hit = await find_near_duplicate_decision(
         actions.pool,
-        "STATE OF THE BOARD — order is load-bearing, never reorder these steps",
+        "STATE OF THE BOARD, order is load-bearing, never reorder these steps",
         repo="dedupproj")
     assert hit == d
 
 
 async def test_decision_dedup_never_crosses_a_project_boundary(actions: Actions) -> None:
-    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against — an exact
+    """No `repo` (or a DIFFERENT one) is no safe scope to dedup against, an exact
     restatement filed under a different project, or with none at all, must still mint."""
-    await record_decision(actions, "order is load-bearing — never reorder the steps",
+    await record_decision(actions, "order is load-bearing, never reorder the steps",
                           repo="dedupproj")
     assert await find_near_duplicate_decision(
-        actions.pool, "order is load-bearing — never reorder the steps",
+        actions.pool, "order is load-bearing, never reorder the steps",
         repo="otherproj") is None
     assert await find_near_duplicate_decision(
-        actions.pool, "order is load-bearing — never reorder the steps", repo=None) is None
+        actions.pool, "order is load-bearing, never reorder the steps", repo=None) is None
 
 
 async def test_a_superseded_decision_is_never_a_dedup_target(actions: Actions) -> None:
-    """A buried ruling is a different fact now — the correction — so a fresh telling of the
+    """A buried ruling is a different fact now, the correction, so a fresh telling of the
     old words must mint (or match the successor), never quietly reattach to the loser."""
-    summary = "order is load-bearing — never reorder the steps"
+    summary = "order is load-bearing, never reorder the steps"
     d = await record_decision(actions, summary, repo="dedupproj")
     await record_decision(actions, "actually, order does not matter here",
                           repo="dedupproj", supersedes=str(d))
@@ -949,10 +949,10 @@ async def test_record_decision_reuses_the_near_dup_object_not_a_twin(
     actions: Actions,
 ) -> None:
     """The guard wired into `record_decision` itself, not just the bare finder: a retry with
-    a one-word reword under the same repo must land on the SAME object — count stays 1."""
-    d1 = await record_decision(actions, "order is load-bearing — never reorder the steps",
+    a one-word reword under the same repo must land on the SAME object, count stays 1."""
+    d1 = await record_decision(actions, "order is load-bearing, never reorder the steps",
                                repo="dedupproj")
-    d2 = await record_decision(actions, "order is load-bearing — never reorder these steps",
+    d2 = await record_decision(actions, "order is load-bearing, never reorder these steps",
                                repo="dedupproj")
     assert d1 == d2
     assert await actions.pool.fetchval(
@@ -964,14 +964,14 @@ async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
 ) -> None:
     """The near-dup guard reuses the OBJECT, never swallows a structural side effect: even
     when this call's own summary near-dups an unrelated existing decision, `supersedes`
-    must still bury its named target — a genuinely new ruling must never be silently
+    must still bury its named target, a genuinely new ruling must never be silently
     dropped just because its wording resembles something else on the wall."""
     target = await record_decision(actions, "the old onboarding flow is retired",
                                    repo="dedupproj")
-    near = await record_decision(actions, "order is load-bearing — never reorder the steps",
+    near = await record_decision(actions, "order is load-bearing, never reorder the steps",
                                  repo="dedupproj")
     again = await record_decision(
-        actions, "order is load-bearing — never reorder these steps",
+        actions, "order is load-bearing, never reorder these steps",
         repo="dedupproj", supersedes=str(target))
     assert again == near  # still deduped onto the near-identical live decision
     superseded_by = await actions.pool.fetchval(
@@ -980,8 +980,8 @@ async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
     assert superseded_by == str(near)  # the supersede still landed, on the deduped object
 
 
-# ═══ task #117, thread ed9f73ce (Seshat's live specimen): the near-dup guard's own reuse
-# was SILENT — no signal in either receipt when it overwrote an unrelated decision's
+# ═══ task #117 (Scribe's live specimen): the near-dup guard's own reuse
+# was SILENT, no signal in either receipt when it overwrote an unrelated decision's
 # content. `_decision_snapshot` + the MCP wrapper's pre-check make that reuse honest. ═══
 
 
@@ -999,23 +999,24 @@ async def test_record_decision_near_dup_reuse_silently_overwrites_without_the_fi
     actions: Actions,
 ) -> None:
     """NEGATIVE CONTROL BY CONSTRUCTION, at the layer the bug actually lives: this is
-    `capture.record_decision` itself (never touched by this fix — the MCP wrapper is
-    where the receipt honesty was added), reproducing Seshat's EXACT live shape —
-    summaries reproduced verbatim from decision 48c1610c's own account (the real
-    template both her lap->provenance and doors->whois attempts shared, "Rename MCP
-    verb X -> Y (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)", differing only
-    in the verb pair). Two GENUINELY DIFFERENT rulings collide onto ONE object, and the
-    first ruling's own rationale is GONE from the current view — proving the underlying
-    overwrite this fix makes visible, not fixes away (task #117: the reuse+overwrite
-    design is intentional for a genuine retry; only the SILENCE was the defect)."""
+    `capture.record_decision` itself (never touched by this fix, the MCP wrapper is
+    where the receipt honesty was added), reproducing a real observed shape:
+    two retries used the same template, "Rename MCP verb X -> Y (naming-sweep phase
+    6)", differing only in the verb pair. Two GENUINELY DIFFERENT rulings collide onto
+    ONE object, and the first ruling's own rationale is GONE from the current view,
+    proving the underlying overwrite this fix makes visible, not fixes away (the
+    reuse+overwrite design is intentional for a genuine retry; only the SILENCE was
+    the defect)."""
     first = await record_decision(
         actions,
-        "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)",
+        "Rename MCP verb lap -> provenance (naming-sweep phase 6, filed under the same "
+        "rename-dispatch tracking note)",
         rationale="lap scored #6 on the intent-search axis; provenance is unambiguous.",
         repo="renameproj")
     second = await record_decision(
         actions,
-        "Rename MCP verb doors -> whois (naming-sweep phase 6, decision 4dd526fe/aed9d4c1eb43)",
+        "Rename MCP verb doors -> whois (naming-sweep phase 6, filed under the same "
+        "rename-dispatch tracking note)",
         rationale="doors collided with resolve_identity; whois has no such collision.",
         repo="renameproj")
     assert first == second  # the collision itself: one object wearing two rulings' words
@@ -1030,7 +1031,7 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
 ) -> None:
     """THE FIX: the MCP wrapper's receipt now says plainly when a call landed on an
     existing decision instead of minting a fresh one, and shows exactly what is about to
-    be overwritten — the same 'receipt echo' principle John's design constraint named for
+    be overwritten, the same 'receipt echo' principle Jordan's design constraint named for
     `resolves`, extended to this silent-merge specimen. Same real summaries as the unit
     test above."""
     from src import mcp_server as srv
@@ -1039,14 +1040,14 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
     srv._pool = actions.pool
     try:
         first = await srv.record_decision(
-            "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision "
-            "4dd526fe/aed9d4c1eb43)",
+            "Rename MCP verb lap -> provenance (naming-sweep phase 6, filed under the same "
+            "rename-dispatch tracking note)",
             rationale="lap scored #6 on the intent-search axis.", repo="toolrenameproj")
         assert "reused_existing_decision" not in first  # the FIRST call mints fresh, no hit
 
         second = await srv.record_decision(
-            "Rename MCP verb doors -> whois (naming-sweep phase 6, decision "
-            "4dd526fe/aed9d4c1eb43)",
+            "Rename MCP verb doors -> whois (naming-sweep phase 6, filed under the same "
+            "rename-dispatch tracking note)",
             rationale="doors collided with resolve_identity.", repo="toolrenameproj")
     finally:
         srv._pool = saved_pool
@@ -1054,8 +1055,8 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
     assert second["id"] == first["id"]  # same underlying collision as the unit test above
     assert second["reused_existing_decision"] is True
     assert second["prior_content"]["summary"] == (
-        "Rename MCP verb lap -> provenance (naming-sweep phase 6, decision "
-        "4dd526fe/aed9d4c1eb43)")
+        "Rename MCP verb lap -> provenance (naming-sweep phase 6, filed under the same "
+        "rename-dispatch tracking note)")
     assert second["prior_content"]["rationale"] == "lap scored #6 on the intent-search axis."
     assert "false positive" in second["note"]
 
@@ -1063,10 +1064,10 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
 async def test_record_decision_tool_receipt_names_the_prose_derived_decided_in(
     actions: Actions,
 ) -> None:
-    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): capture.record_decision's own
+    """RECEIPT LAW (Archivist item 1, a batch): capture.record_decision's own
     prose-scan (task #101) mints `decided_in` from a commit sha named in the caller's
     own rationale, inside the SAME transaction as everything else this receipt already
-    reports — but the MCP wrapper never surfaced it. A caller citing a real commit had
+    reports, but the MCP wrapper never surfaced it. A caller citing a real commit had
     no way to tell whether it became a real edge."""
     from src import mcp_server as srv
 
@@ -1088,7 +1089,7 @@ async def test_record_decision_tool_receipt_names_prose_cites_and_skips(
 ) -> None:
     """Same gap, the `cites`(prose)/`prose_citation_skips` half: a decision that cites
     "ruling <id>" in its own summary mints a real `cites` edge (origin='prose') when the
-    id resolves, or records why it did not when it doesn't — neither ever showed up in
+    id resolves, or records why it did not when it doesn't, neither ever showed up in
     the receipt, only the caller-declared `cites=` param's own field did (a DIFFERENT
     field here, `prose_cites`, never overloading that key with a second meaning)."""
     from src import mcp_server as srv
@@ -1100,8 +1101,8 @@ async def test_record_decision_tool_receipt_names_prose_cites_and_skips(
     srv._pool = actions.pool
     try:
         out = await srv.record_decision(
-            f"a decision citing ruling {target_short} and a bogus one",
-            rationale="also cites ruling 00000000 which resolves to nothing.",
+            f"a decision citing ruling {target_short} and ruling deadbeef",
+            rationale="also cites a ruling that resolves to nothing.",
             repo="receiptlawproj2")
     finally:
         srv._pool = saved_pool
@@ -1110,7 +1111,7 @@ async def test_record_decision_tool_receipt_names_prose_cites_and_skips(
 
 
 async def test_reclassify_thread_receipt_names_the_owner(actions: Actions) -> None:
-    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): the kind change was already
+    """RECEIPT LAW (Archivist item 1, a batch): the kind change was already
     confirmed in this receipt; a reclassify that ALSO changes owner in the same call
     never confirmed that part landed."""
     from src import mcp_server as srv
@@ -1133,8 +1134,8 @@ async def test_reclassify_thread_receipt_names_the_owner(actions: Actions) -> No
 
 
 async def test_open_thread_dedup_names_a_dropped_owner(actions: Actions) -> None:
-    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): discarded_on_noop's own docstring
-    already named 'owner' as a field a dedup hit could silently drop — kind/arc were
+    """RECEIPT LAW (Archivist item 1, a batch): discarded_on_noop's own docstring
+    already named 'owner' as a field a dedup hit could silently drop, kind/arc were
     wired into the check, owner never was. A bare owner= on a dedup hit must show up in
     `discarded`, the same as kind/arc already do."""
     from src import mcp_server as srv
@@ -1165,13 +1166,13 @@ async def test_record_decision_tool_names_an_exact_retry_as_a_safe_repeat(
     actions: Actions,
 ) -> None:
     """MEASURED, NOT ASSUMED: an exact-summary retry (with `repo` set) goes through this
-    SAME `find_near_duplicate_decision` mechanism — its own normalized-exact-match tier
+    SAME `find_near_duplicate_decision` mechanism, its own normalized-exact-match tier
     runs BEFORE the similarity check, so it is not a separate code path from the near-dup
     case above. That is the right outcome for task #117's point (2): retrying after a
     dropped/ambiguous response should say plainly that it landed on the SAME object with
     the SAME content, not stay silent about which of the two mechanisms fired. The two
     cases are told apart by wording, not by whether `reused_existing_decision` appears at
-    all — prior_content's summary matches this call's own summary exactly here, unlike
+    all, prior_content's summary matches this call's own summary exactly here, unlike
     the false-positive case above where it does not."""
     from src import mcp_server as srv
 
@@ -1190,7 +1191,7 @@ async def test_record_decision_tool_names_an_exact_retry_as_a_safe_repeat(
     assert "safe repeat" in second["note"] and "false positive" not in second["note"]
 
 
-# --- content_landed: a READ-BACK, not an inference (task #149, thread 20145def) — the
+# --- content_landed: a READ-BACK, not an inference (task #149), the
 # receipt must say plainly whether THIS call's own rationale/protocol became the object's
 # CURRENT value, since a different source's assertion can silently win the confidence/
 # recency tie-break on the SAME object even though the call itself reports success. ---
@@ -1216,9 +1217,9 @@ async def test_record_decision_tool_confirms_content_landed_on_the_normal_path(
 async def test_record_decision_tool_confesses_when_rationale_loses_the_tie_break(
     actions: Actions,
 ) -> None:
-    """The specimen this guards (Thoth's own account, DM 3847): a call reports success,
+    """The specimen this guards (Archivist's own account): a call reports success,
     the receipt says nothing is obviously wrong, yet the caller's own text is NOT what a
-    reader finds on the object — because a different, higher-confidence assertion from
+    reader finds on the object, because a different, higher-confidence assertion from
     another source is what's actually winning the read. Simulated directly rather than
     racing real concurrency: pre-seed a higher-confidence rationale from a different actor
     on the SAME object, then confirm the honest call names the loss and points at
@@ -1249,9 +1250,9 @@ async def test_record_decision_tool_confesses_when_rationale_loses_the_tie_break
     assert str(d)[:8] in second["content_landed_note"]
 
 
-# --- unfiled warning (thread 595c3a89): a decision with no repo= and no auto-detected
+# --- unfiled warning : a decision with no repo= and no auto-detected
 # decided_in commit citation produces ZERO outgoing links and is structurally invisible to
-# _fn_project no matter how many JOIN paths it grows — advisory only, never a refusal. ---
+# _fn_project no matter how many JOIN paths it grows, advisory only, never a refusal. ---
 
 
 async def test_record_decision_tool_warns_when_nothing_links_it_to_a_project(
@@ -1287,7 +1288,7 @@ async def test_record_decision_tool_stays_silent_when_repo_is_given(
 async def test_record_decision_tool_stays_silent_when_a_commit_sha_auto_resolves(
     actions: Actions,
 ) -> None:
-    """No repo=, but the summary names a real ingested commit — decided_in mints instead
+    """No repo=, but the summary names a real ingested commit, decided_in mints instead
     of in_repo, and that alone must be enough to clear the warning (the read-back checks
     both link types, not just in_repo)."""
     from src import mcp_server as srv
@@ -1305,7 +1306,7 @@ async def test_record_decision_tool_stays_silent_when_a_commit_sha_auto_resolves
 
 
 async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions) -> None:
-    """Direct unit test of `exclude` (Thoth's catch, msg 1903, thread af77073a), independent
+    """Direct unit test of `exclude` (Archivist's catch), independent
     of any similarity-score luck: an exact restatement dedups to `d` with no exclusion, and
     excluding `d` itself must fall through to no match (nothing else on the project is
     close). Proves the parameter actually narrows the candidate pool, not just that the
@@ -1322,27 +1323,27 @@ async def test_find_near_duplicate_decision_excludes_a_given_id(actions: Actions
 async def test_a_correction_never_dedupes_onto_the_decision_it_supersedes(
     actions: Actions,
 ) -> None:
-    """Thoth's own specimen (msg 1903), summaries reproduced VERBATIM from the graph
-    (b35db2a1 / 5c2fa5aa): a correction restates its subject BY NATURE, so it is
+    """A real specimen, summaries reproduced VERBATIM from the graph:
+    a correction restates its subject BY NATURE, so it is
     systematically MORE similar to the ruling it corrects than an average pair of
-    decisions — the highest-stakes write this guard touches, not the safest. Without
+    decisions, the highest-stakes write this guard touches, not the safest. Without
     `exclude`, `dup` could resolve to `old` itself, `d` would become `old`, and the
-    existing 'never buries itself' guard (`old != d`) would then silently skip the burial —
+    existing 'never buries itself' guard (`old != d`) would then silently skip the burial, 
     the correction's words would land on the OLD object with no supersession minted.
     Measured pg_trgm similarity between these two real summaries is ~0.244 (well under the
-    0.60 bar) — this test does not depend on crossing it: it pins the behavior so a future
+    0.60 bar), this test does not depend on crossing it: it pins the behavior so a future
     threshold change (or reworded pair) cannot reintroduce the swallow silently, exactly as
-    Thoth asked. `test_find_near_duplicate_decision_excludes_a_given_id` above is the
+    Archivist asked. `test_find_near_duplicate_decision_excludes_a_given_id` above is the
     deterministic proof the exclusion mechanism itself works."""
     old_summary = ("Peer detachment: cut managed_by ONLY after launch/wake gain a "
-                   "non-manager authorization path — the order is load-bearing")
-    correction_summary = ("CORRECTION: peers detach with NO new code — cut managed_by "
-                          "directly. Supersedes my own gate-first ruling (and its "
-                          "accidental twin c30df5de)")
+                   "non-manager authorization path, the order is load-bearing")
+    correction_summary = ("CORRECTION: peers detach with NO new code, cut managed_by "
+                          "directly. Supersedes my own gate-first ruling (and the "
+                          "near-duplicate ruling that followed it)")
     old = await record_decision(actions, old_summary, repo="dedupproj")
     new = await record_decision(actions, correction_summary, repo="dedupproj",
                                 supersedes=str(old))
-    assert new != old  # a genuinely new object — never silently absorbed by the old one
+    assert new != old  # a genuinely new object, never silently absorbed by the old one
     row = await actions.pool.fetchrow(
         "SELECT a.value #>> '{}' AS summary FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='summary'", old)
@@ -1363,19 +1364,19 @@ async def test_pg_trgm_is_enabled_in_this_database(actions: Actions) -> None:
 
 
 async def test_short_id_ref_beats_a_summary_that_quotes_it(actions: Actions) -> None:
-    """The fleet quotes threads by short id INSIDE other summaries: resolving by '<short-id>'
-    must close the thread WITH that id, never the thread that mentions it (the 2026-07-10
-    mis-resolve: 'resolve 5c57f54d' closed the obligation whose summary cited 5c57f54d)."""
+    """Threads sometimes quote each other's short id INSIDE their own summaries: resolving
+    by '<short-id>' must close the thread WITH that id, never the thread that only mentions
+    it (a real mis-resolve once closed the wrong thread this way)."""
     target = await open_thread(actions, "the campaign thread everyone refers to by id")
     short = str(target)[:8]
     quoter = await open_thread(
         actions, f"a different duty that cites the campaign (thread {short}) in passing")
     assert await resolve_thread(actions, short, because="done") == target
-    # the quoting thread is untouched — still resolvable by its own words
+    # the quoting thread is untouched, still resolvable by its own words
     assert await resolve_thread(actions, "cites the campaign", because="also done") == quoter
 
 
-# --- ref disambiguation (thread ac3333f7, Khnum IX's own near-miss, msg 1807) ---------------
+# --- ref disambiguation (Mason IX's own near-miss) ---------------
 
 async def test_resolve_thread_by_bare_canonical_suffix(actions: Actions) -> None:
     """The exact shape of the near-miss: a bare 12-hex canonical SUFFIX (no 'thread:'
@@ -1400,12 +1401,12 @@ async def test_hex_shaped_ref_refuses_rather_than_quietly_matching_a_quoting_sum
     actions: Actions,
 ) -> None:
     """The actual bug: a hex-shaped ref that matches NO real canonical and NO real short-id
-    must REFUSE (None) — it must never fall through to a substring match against some
+    must REFUSE (None), it must never fall through to a substring match against some
     unrelated thread's summary that merely happens to quote the same string. Before the
     fix this returned the quoting thread; now it returns nothing, forcing the caller to be
     honest about not having a real target."""
     quoter = await open_thread(
-        actions, "a duplicate object's canonical was deadbeefcafe — see the fold report")
+        actions, "a duplicate object's canonical was deadbeefcafe, see the fold report")
     tid = await resolve_thread(actions, "deadbeefcafe", because="should not land")
     assert tid is None
     # the quoting thread is untouched and still resolvable by its own words
@@ -1439,17 +1440,17 @@ async def test_short_id_prefix_collision_raises_ambiguous(actions: Actions) -> N
 async def test_short_id_ref_not_fanned_out_by_a_multi_source_reassertion(
     actions: Actions,
 ) -> None:
-    """Thread 90ad0592/decision cf3dcd79: a REAL, SINGULAR object touched by two different
+    """/: a REAL, SINGULAR object touched by two different
     sources on the same text_field (e.g. a later triage pass re-asserting an identical
-    summary) leaves TWO current_assertions rows for one object_id — the short-id leg's old
+    summary) leaves TWO current_assertions rows for one object_id, the short-id leg's old
     `LEFT JOIN ... ON a.object_id=o.id AND a.name=$3` fanned that out to two joined rows
     for the SAME object and spuriously raised RefAmbiguous against a real, singular short
-    id. One object, two sources, must resolve cleanly — never ambiguous."""
+    id. One object, two sources, must resolve cleanly, never ambiguous."""
     from src.orchestrator.capture import _find_thread
 
     t = await open_thread(actions, "a thread touched by two different sources")
     # a second source re-asserts the identical summary on a later pass (a triage/status
-    # touch, not a content change) — current_assertions now carries one row per source
+    # touch, not a content change), current_assertions now carries one row per source
     await actions.assert_property(t, "summary", "a thread touched by two different sources",
                                   "second-source-agent", datetime.now(UTC) + timedelta(minutes=5),
                                   0.9, evidence_class="self_declared")
@@ -1478,17 +1479,17 @@ async def test_find_practice_resolves_by_canonical_suffix(actions: Actions) -> N
 
 
 async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> None:
-    """A thread's status, on every read surface, is the WINNING assertion by evidence GRADE —
+    """A thread's status, on every read surface, is the WINNING assertion by evidence GRADE, 
     not 'any source says open', not most-recent-wins. The miner opens a thread (DERIVED), a
     session resolves it (SELF_DECLARED), then the miner RE-OPENS it later (DERIVED, the
     freshest status). The session's higher-grade resolution must win. Regression for the 15
     threads that sat open-AND-resolved: orient used EXISTS(status='open'), and the composer's
-    _props ordered by recency alone — so a fresh DERIVED re-open would have buried the close."""
+    _props ordered by recency alone, so a fresh DERIVED re-open would have buried the close."""
     now = datetime.now(UTC)
     d_ec, d_conf = EvidenceClass.DERIVED.value, confidence_for(EvidenceClass.DERIVED)
     summary = "the miner-opened thread a session then closed"
 
-    # the miner opens it — DERIVED, an older observation, filed under osiris
+    # the miner opens it, DERIVED, an older observation, filed under osiris
     t = await actions.create_or_find_object("Thread", "thread:graderegress", "session-miner")
     await actions.assert_property(t, "summary", summary, "session-miner",
                                   now - timedelta(days=2), d_conf, evidence_class=d_ec)
@@ -1497,17 +1498,17 @@ async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> 
     await link_repo(actions, t, "osiris", now - timedelta(days=2),
                     source="session-miner", evidence_class=d_ec, confidence=d_conf)
 
-    # a session resolves it — SELF_DECLARED, through the real capture path
+    # a session resolves it, SELF_DECLARED, through the real capture path
     assert await resolve_thread(actions, "miner-opened thread a session", because="handled") == t
 
-    # the miner re-senses and RE-OPENS it — DERIVED, now the most recent status assertion
+    # the miner re-senses and RE-OPENS it, DERIVED, now the most recent status assertion
     await actions.assert_property(t, "status", "open", "session-miner",
                                   now + timedelta(days=365), d_conf, evidence_class=d_ec)
 
     # 1) the composer's resolver picks the higher grade, not the fresher timestamp
     assert (await _props(actions.pool, t))["status"] == "resolved"
 
-    # 2) the briefing composition — gone from open, present in resolved
+    # 2) the briefing composition, gone from open, present in resolved
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
     assert not any(r["summary"] == summary for r in res["items"][_OPEN]["top_of_wall"])
@@ -1520,22 +1521,22 @@ async def test_status_resolution_honors_grade_over_recency(actions: Actions) -> 
 
 
 async def test_record_tension_holds_a_polarity_and_moves_the_lean(actions: Actions) -> None:
-    a = "bounded recall — memory is a query"
-    b = "complete memory — never lose anything"
+    a = "bounded recall, memory is a query"
+    b = "complete memory, never lose anything"
     t1 = await record_tension(actions, a, b, lean="bounded, for now", why="cargo problem",
                               repo="osiris")
     props = await _props(actions.pool, t1)
     assert props["pole_a"] == a and props["pole_b"] == b and props["lean"] == "bounded, for now"
-    # re-holding the same poles (EITHER order) MOVES the lean — one object, the dance
+    # re-holding the same poles (EITHER order) MOVES the lean, one object, the dance
     t2 = await record_tension(actions, b, a, lean="leaning complete after the leak")
     assert t2 == t1
     assert (await _props(actions.pool, t1))["lean"] == "leaning complete after the leak"
-    # it is a Tension, never a Thread/Decision — grade-resolution & consolidation can't reach it
+    # it is a Tension, never a Thread/Decision, grade-resolution & consolidation can't reach it
     assert await actions.pool.fetchval("SELECT type FROM objects WHERE id=$1", t1) == "Tension"
 
 
 async def test_a_derived_echo_cannot_move_a_held_tension(actions: Actions) -> None:
-    """b347df65 — `Tension` exists to HOLD contradiction; the resolver exists to PICK A WINNER.
+    """`Tension` exists to HOLD contradiction; the resolver exists to PICK A WINNER.
     Nobody had ever checked which one wins. Answer: THE HOLD. winning-props ranks grade before
     recency, so a deliberate (SELF_DECLARED) lean outranks a FRESHER machine echo, and a
     swapped-pole derived re-record cannot flip the deliberate pair either."""
@@ -1557,9 +1558,10 @@ async def test_a_derived_echo_cannot_move_a_held_tension(actions: Actions) -> No
 async def test_consolidation_cannot_absorb_a_tension_even_when_aimed_at_it(
     actions: Actions,
 ) -> None:
-    """b347df65's other half — dedup. A Tension carries poles, never a summary, so the
-    near-duplicate folder has nothing to match on. Pinned as a CONTRACT: if Tension ever
-    grows a summary property, this fails before the dedup machinery gains a way in."""
+    """The other half of the hold-vs-resolve guard, dedup. A Tension carries poles, never a
+    summary, so the near-duplicate folder has nothing to match on. Pinned as a CONTRACT:
+    if Tension ever grows a summary property, this fails before the dedup machinery gains
+    a way in."""
     t1 = await record_tension(actions, "bounded recall is the product",
                               "complete memory is the product", lean="bounded")
     t2 = await record_tension(actions, "bounded recall is the products",   # near-dup poles
@@ -1584,7 +1586,7 @@ async def test_tension_surfaces_in_the_scoped_briefing(actions: Actions) -> None
 
 
 async def test_blind_spot_registers_holds_and_is_idempotent(actions: Actions) -> None:
-    """Thread 8e26cd10: a blind spot is a stable per-project fact, held like a Tension —
+    """: a blind spot is a stable per-project fact, held like a Tension, 
     idempotent per (project, surface), re-registered to sharpen the wording, and scoped so
     two projects' same-named surfaces never merge."""
     b1 = await record_blind_spot(actions, "webkit-rendering",
@@ -1602,7 +1604,7 @@ async def test_blind_spot_registers_holds_and_is_idempotent(actions: Actions) ->
                                  repo="hector-vector")
     assert b2 == b1
     assert "r=0 circles" in (await _props(actions.pool, b1))["cannot_see"]
-    # the same surface on ANOTHER project is its own spot — never a cross-project merge
+    # the same surface on ANOTHER project is its own spot, never a cross-project merge
     b3 = await record_blind_spot(actions, "webkit-rendering", "different rig, different gap",
                                  repo="osiris")
     assert b3 != b1
@@ -1612,11 +1614,11 @@ async def test_record_hook_failure_files_through_the_blind_spot_channel(
     actions: Actions,
 ) -> None:
     """task #179: a hook failure is exactly the 'shape of my own ignorance' record_blind_spot
-    already exists for — this must land as a BlindSpot on repo:osiris, findable the same
+    already exists for, this must land as a BlindSpot on repo:osiris, findable the same
     way any other blind spot is."""
     b = await record_hook_failure(actions, surface="whisper/automount",
                                   cannot_see="automount route failed for session xyz: boom")
-    assert b is None  # never returns the object id — callers only need "it's filed"
+    assert b is None  # never returns the object id, callers only need "it's filed"
     obj = await actions.pool.fetchrow(
         "SELECT o.id, o.type FROM objects o WHERE EXISTS "
         "(SELECT 1 FROM current_assertions a WHERE a.object_id=o.id "
@@ -1629,7 +1631,7 @@ async def test_record_hook_failure_files_through_the_blind_spot_channel(
 
 async def test_record_hook_failure_never_raises(actions: Actions) -> None:
     """The never-raises guarantee is the whole point: this runs inside an already-failing
-    except block in every caller (task #179's four hook sites) — a second failure here
+    except block in every caller (task #179's four hook sites), a second failure here
     (e.g. a bogus actions object) must stay silent, never propagate."""
     class _BrokenActions:
         pool = actions.pool
@@ -1644,8 +1646,8 @@ async def test_record_hook_failure_never_raises(actions: Actions) -> None:
 async def test_record_embed_load_failure_files_through_the_blind_spot_channel(
     actions: Actions,
 ) -> None:
-    """thread 5cd49217: embed_pass's own generic except-block used to log-and-swallow every
-    semantic-embedding load failure with nothing else watching — this is that confession,
+    """: embed_pass's own generic except-block used to log-and-swallow every
+    semantic-embedding load failure with nothing else watching, this is that confession,
     same channel/shape as record_hook_failure."""
     b = await record_embed_load_failure(actions, cannot_see="embed_backfill failed: boom")
     assert b is None
@@ -1671,8 +1673,8 @@ async def test_record_embed_load_failure_never_raises(actions: Actions) -> None:
 
 
 async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Actions) -> None:
-    """The registry's whole point: orient() speaks the project's blind spots so a session
-    knows what it cannot see BEFORE it trusts a green harness — and a project with none
+    """The registry's whole point: orient speaks the project's blind spots so a session
+    knows what it cannot see BEFORE it trusts a green harness, and a project with none
     registered stays silent (no empty block)."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:demo", "session")
     await actions.assert_property(proj, "name", "demo", "session", datetime.now(UTC), 0.9)
@@ -1687,13 +1689,13 @@ async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Ac
     assert [r["surface"] for r in briefing["blind_spots"]] == ["ios-touch"]
     assert "before trusting" in briefing["blind_spots_note"] or "green run" in briefing[
         "blind_spots_note"]
-    # DEFAULT (no want_blind_spots): a count, not the list — the largest static field
-    # measured in orient()'s own receipt (context-bloat priority, msg 6870/6885)
+    # DEFAULT (no want_blind_spots): a count, not the list, the largest static field
+    # measured in orient's own receipt (context-bloat priority/6885)
     terse = await _project_briefing(actions.pool, "demo")
     assert terse is not None
     assert "blind_spots" not in terse
     assert terse["blind_spots_count"] == 1
-    # a project with nothing registered gets NO block — orient stays lean
+    # a project with nothing registered gets NO block, orient stays lean
     bare = await actions.create_or_find_object("SoftwareProject", "repo:bare", "session")
     await actions.assert_property(bare, "name", "bare", "session", datetime.now(UTC), 0.9)
     empty = await _project_briefing(actions.pool, "bare")
@@ -1701,9 +1703,9 @@ async def test_blind_spot_surfaces_in_the_scoped_briefing_and_orient(actions: Ac
 
 
 async def test_project_briefing_carries_the_honest_topology_count(actions: Actions) -> None:
-    """THE HONEST COUNT (thread 0ae050d8, Thoth DM 6243): orient()'s per-project briefing
-    (`_project_briefing`) now carries `open_threads_honest_total` — closure_buckets' own
-    `open_both` count — ADDITIVE alongside the existing open_threads/open_threads_more
+    """THE HONEST COUNT (Archivist): orient's per-project briefing
+    (`_project_briefing`) now carries `open_threads_honest_total`, closure_buckets' own
+    `open_both` count, ADDITIVE alongside the existing open_threads/open_threads_more
     wall, which stays property-status-based on purpose (still lists a `disagree` row so a
     mind can see it). A thread closed by a decision and then reopened by a DIFFERENT
     source's later 'open' write still shows on the wall (property says open) but must NOT
@@ -1727,8 +1729,8 @@ async def test_project_briefing_carries_the_honest_topology_count(actions: Actio
 
 
 async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) -> None:
-    """Thread 022bd24a: `because` was becoming a completion essay because there was nowhere
-    to put 'what actually got built'. The artifact pointer is that place — always kept as
+    """: `because` was becoming a completion essay because there was nowhere
+    to put 'what actually got built'. The artifact pointer is that place, always kept as
     resolved_artifact, and minted as a resolved_by edge when it names a graph object (the
     strong closure witness the closure-miner almost never finds)."""
     t1 = await open_thread(actions, "wire the doodad through the frobnicator")
@@ -1750,8 +1752,8 @@ async def test_resolve_thread_artifact_points_at_the_closer(actions: Actions) ->
 
 
 async def test_resolve_thread_artifact_resolves_a_sibling_thread(actions: Actions) -> None:
-    """Thoth DM 2975 / capture._find_artifact widened: a fold/merge into a SIBLING THREAD
-    is a legitimate closure the resolver used to have no shape for at all — only Decision
+    """Archivist / capture._find_artifact widened: a fold/merge into a SIBLING THREAD
+    is a legitimate closure the resolver used to have no shape for at all, only Decision
     and Commit ever counted, so citing another thread's short id kept the property but
     minted nothing. Now it mints resolved_by, the same as citing a Decision or Commit."""
     dup = await open_thread(actions, "duplicate ask, same as the canonical one")
@@ -1766,9 +1768,9 @@ async def test_resolve_thread_artifact_resolves_a_sibling_thread(actions: Action
 
 
 async def test_resolve_thread_artifact_resolves_a_tension_or_practice(actions: Actions) -> None:
-    """Thoth DM 3052 / capture._find_artifact widened again: characterizing the
+    """Archivist / capture._find_artifact widened again: characterizing the
     closure-backfill's 77 unresolvable rows found real citations of a Tension and a
-    Practice short id — types this resolver still had no shape for even after the Thread
+    Practice short id, types this resolver still had no shape for even after the Thread
     widen, structurally indistinguishable from a typo until now."""
     tension = await actions.create_or_find_object("Tension", "tension:t1", "session")
     t1 = await open_thread(actions, "a thread that cites a tension by short id")
@@ -1788,8 +1790,8 @@ async def test_resolve_thread_artifact_resolves_a_tension_or_practice(actions: A
 
 
 async def test_resolve_thread_mints_closed_by_when_no_artifact(actions: Actions) -> None:
-    """Phase 1a (decision cb38d922): no artifact at all still mints exactly one closure
-    edge — closed_by, to the closing agent's own Agent object — never leaving the thread
+    """Phase 1a : no artifact at all still mints exactly one closure
+    edge, closed_by, to the closing agent's own Agent object, never leaving the thread
     with the ZERO traversable edges 78% of real closures had before this fix."""
     t = await open_thread(actions, "a thread closed with no artifact, Phase 1a case")
     await resolve_thread(actions, str(t), because="moot", source="agent:closer-a")
@@ -1806,7 +1808,7 @@ async def test_resolve_thread_mints_closed_by_when_artifact_is_free_text(
     actions: Actions,
 ) -> None:
     """A free-text/unresolvable artifact (a file:line) still keeps resolved_artifact as
-    text (unchanged) AND now also mints closed_by — Phase 1a's second case: the resolved_by
+    text (unchanged) AND now also mints closed_by, Phase 1a's second case: the resolved_by
     edge never lands here (nothing to point at), but the thread is never edgeless."""
     t = await open_thread(actions, "a thread closed with a file:line, Phase 1a case")
     await resolve_thread(actions, str(t), artifact="src/widget/voice.py:42",
@@ -1824,7 +1826,7 @@ async def test_resolve_thread_mints_only_resolved_by_when_artifact_resolves(
     actions: Actions,
 ) -> None:
     """When artifact DOES name a graph object, resolved_by lands exactly as before Phase
-    1a and closed_by does NOT also land — one closure, one edge, never two."""
+    1a and closed_by does NOT also land, one closure, one edge, never two."""
     t = await open_thread(actions, "a thread closed with a real decision, Phase 1a case")
     d = await record_decision(actions, "the Phase 1a closer target", kind="decision")
     await resolve_thread(actions, str(t), artifact=str(d)[:8], source="agent:closer-c")
@@ -1837,8 +1839,8 @@ async def test_resolve_thread_mints_only_resolved_by_when_artifact_resolves(
 async def test_resolve_thread_closed_by_a_real_agent_string_is_unchanged(
     actions: Actions,
 ) -> None:
-    """Thread 6d01f21e: a real `agent:<id>` source string still mints/finds a plain
-    Agent object exactly as before — the new routing in `_mint_closed_by` only branches
+    """: a real `agent:<id>` source string still mints/finds a plain
+    Agent object exactly as before, the new routing in `_mint_closed_by` only branches
     for the two placeholder specimens, never for the common case."""
     t = await open_thread(actions, "a thread closed by a real agent")
     await resolve_thread(actions, str(t), because="moot", source="agent:closer-real")
@@ -1852,9 +1854,9 @@ async def test_resolve_thread_closed_by_a_real_agent_string_is_unchanged(
 async def test_resolve_thread_closed_by_analyst_operator_resolves_to_the_real_person(
     actions: Actions,
 ) -> None:
-    """Thread 6d01f21e, Thoth's wave-18 reversal of his own 2026-08-01 deferral: the REST
+    """, Archivist's wave-18 reversal of his own 2026-08-01 deferral: the REST
     route's 'analyst:operator' attribution no longer mints a placeholder Agent under that
-    literal string — it resolves to the real operator Person object."""
+    literal string, it resolves to the real operator Person object."""
     t = await open_thread(actions, "a thread closed via the REST route", source="session")
     await resolve_thread(actions, str(t), because="moot", source="analyst:operator")
     row = await actions.pool.fetchrow(
@@ -1869,7 +1871,7 @@ async def test_resolve_thread_closed_by_analyst_operator_resolves_to_the_real_pe
 async def test_resolve_thread_closed_by_other_operator_actors_also_resolve_to_the_person(
     actions: Actions,
 ) -> None:
-    """`_OPERATOR_ACTORS` (seats.py) is one notion everywhere else in this codebase — the
+    """`_OPERATOR_ACTORS` (seats.py) is one notion everywhere else in this codebase, the
     same set routes here too, not just the one specimen named on the thread."""
     for edge_source in ("operator", "console"):
         t = await open_thread(actions, f"a thread closed by {edge_source!r}")
@@ -1884,8 +1886,8 @@ async def test_resolve_thread_closed_by_other_operator_actors_also_resolve_to_th
 async def test_resolve_thread_closed_by_bare_session_default_resolves_to_system_source(
     actions: Actions,
 ) -> None:
-    """Thread 6d01f21e: a caller who never passed source= (the module's own 'session'
-    default) no longer mints a placeholder Agent under the literal string 'session' — it
+    """: a caller who never passed source= (the module's own 'session'
+    default) no longer mints a placeholder Agent under the literal string 'session', it
     resolves to the singleton SystemSource object."""
     t = await open_thread(actions, "a thread closed with no source= at all")
     await resolve_thread(actions, str(t), because="moot")  # source defaults to 'session'
@@ -1901,13 +1903,12 @@ async def test_resolve_thread_closed_by_bare_session_default_resolves_to_system_
 async def test_resolve_thread_artifact_resolves_a_type_prefixed_short_id(
     actions: Actions,
 ) -> None:
-    """PREFIX vs NO-PREFIX (decision 20644a3e, thread 0ae050d8): a caller who types the
-    exact "type:short-id" shape a receipt just showed them ("decision:3d504086" — 8 hex
-    chars, "decision:"-prefixed) used to fail _find_artifact's short-id regex (the letters
-    in "decision:" break a hex-only fullmatch at the 4th character) and silently fall back
-    to the weak closed_by edge; a bare short id with no prefix always worked. This is the
-    live specimen Thoth's own dispatch (msg 6209) and Sekhmet's root-cause (20644a3e) both
-    named — assert the strong resolved_by witness lands for the prefixed form too."""
+    """PREFIX vs NO-PREFIX: a caller who types the exact "type:short-id" shape a receipt
+    just showed them (an 8-hex-char short id prefixed with its type, e.g. "decision:")
+    used to fail _find_artifact's short-id regex (the letters in
+    "decision:" break a hex-only fullmatch at the 4th character) and silently fall back
+    to the weak closed_by edge; a bare short id with no prefix always worked. This test
+    asserts the strong resolved_by witness lands for the prefixed form too."""
     t = await open_thread(actions, "a thread closed with a type-prefixed short id")
     d = await record_decision(actions, "the type-prefix closer target", kind="decision")
     await resolve_thread(actions, str(t), artifact=f"decision:{str(d)[:8]}",
@@ -1921,12 +1922,12 @@ async def test_resolve_thread_artifact_resolves_a_type_prefixed_short_id(
 async def test_resolve_thread_artifact_refuses_an_unrecognized_prefix(
     actions: Actions,
 ) -> None:
-    """decision 20644a3e's own open question, decided here: an UNRECOGNIZED "type:" prefix
-    ("banana:<hex>") must still refuse rather than silently strip and match on the tail —
+    """'s own open question, decided here: an UNRECOGNIZED "type:" prefix
+    ("banana:<hex>") must still refuse rather than silently strip and match on the tail, 
     accepting it would risk a coincidental hex-collision with an unrelated object, the same
     risk class the whole resolver ladder refuses elsewhere in this module."""
     t = await open_thread(actions, "a thread closed with an unrecognized prefix")
-    d = await record_decision(actions, "not the target — must not be matched", kind="decision")
+    d = await record_decision(actions, "not the target, must not be matched", kind="decision")
     await resolve_thread(actions, str(t), artifact=f"banana:{str(d)[:8]}",
                          source="agent:closer-banana")
     assert await actions.pool.fetchval(
@@ -1938,10 +1939,10 @@ async def test_resolve_thread_artifact_refuses_an_unrecognized_prefix(
 async def test_resolve_thread_bare_hash_closes_a_thread_in_a_different_project(
     actions: Actions,
 ) -> None:
-    """THE CORE CLAIM of thread 10765a698644 (nebbercracker mail 8071): a commit that
+    """THE CORE CLAIM of thread 10765a698644 (driftwood): a commit that
     landed in one project (osiris) should be able to close a Thread that lives under a
-    DIFFERENT project (nebbercracker/monsterhouse) via a bare hash, minting a real
-    resolved_by edge. Verified here that this already worked with ZERO changes — neither
+    DIFFERENT project (driftwood/monsterhouse) via a bare hash, minting a real
+    resolved_by edge. Verified here that this already worked with ZERO changes, neither
     `_find_artifact`'s bare-hash branch nor `_resolve_commit` ever join or filter on
     SoftwareProject/in_repo at all, so nothing in this resolver was ever project-scoped.
     The thread's own claim ("commit lookup is scoped to the resolving project's own repo")
@@ -1949,7 +1950,7 @@ async def test_resolve_thread_bare_hash_closes_a_thread_in_a_different_project(
     behavior down as a regression guard."""
     osiris = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
     other_proj = await actions.create_or_find_object(
-        "SoftwareProject", "repo:nebbercracker", "session")
+        "SoftwareProject", "repo:driftwood", "session")
     c = await actions.create_or_find_object("Commit", "commit:7ceec86aa1b2", "git")
     now = datetime.now(UTC)
     await actions.create_link(c, osiris, "in_repo", "git", now, 0.9)
@@ -1964,7 +1965,7 @@ async def test_resolve_thread_artifact_repo_at_hash_resolves_when_unique(
     actions: Actions,
 ) -> None:
     """`repo:<name>@<hash>` (thread 10765a698644's own proposed new shape): resolves to
-    the Commit in the NAMED repo, joining `in_repo` — the same edge gitlog.py mints and
+    the Commit in the NAMED repo, joining `in_repo`, the same edge gitlog.py mints and
     `_fn_project` (compositions.py) already scopes Commits by."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
     other_proj = await actions.create_or_find_object("SoftwareProject", "repo:decoy", "session")
@@ -1983,7 +1984,7 @@ async def test_resolve_thread_artifact_repo_at_hash_resolves_when_unique(
 async def test_resolve_thread_artifact_repo_at_hash_refuses_when_repo_has_no_match(
     actions: Actions,
 ) -> None:
-    """The named repo resolves but has no Commit matching the hash — clean refusal (None),
+    """The named repo resolves but has no Commit matching the hash, clean refusal (None),
     never a guess at some other repo's commit."""
     await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
     t = await open_thread(actions, "closed via a repo-scoped pointer naming no real commit")
@@ -1998,7 +1999,7 @@ async def test_resolve_thread_artifact_repo_at_hash_refuses_when_repo_has_no_mat
 async def test_resolve_thread_artifact_repo_at_hash_refuses_when_repo_unknown(
     actions: Actions,
 ) -> None:
-    """The repo name itself doesn't resolve to any SoftwareProject — clean refusal, no
+    """The repo name itself doesn't resolve to any SoftwareProject, clean refusal, no
     guessing across the whole Commit table."""
     c = await actions.create_or_find_object("Commit", "commit:7ceec86aa1b2", "git")
     proj = await actions.create_or_find_object("SoftwareProject", "repo:osiris", "session")
@@ -2016,8 +2017,8 @@ async def test_resolve_thread_bare_hash_ambiguous_across_repos_still_refuses(
     actions: Actions,
 ) -> None:
     """A bare hash whose short prefix collides across TWO different repos' Commits must
-    still refuse (unchanged, deliberate safe default — `_find_artifact`'s existing
-    `len(rows) == 1` ambiguity guard) — the caller's way out is the new `repo:<name>@<hash>`
+    still refuse (unchanged, deliberate safe default, `_find_artifact`'s existing
+    `len(rows) == 1` ambiguity guard), the caller's way out is the new `repo:<name>@<hash>`
     disambiguator, exercised separately above and again here on the SAME collision."""
     proj_a = await actions.create_or_find_object("SoftwareProject", "repo:proj-a", "session")
     proj_b = await actions.create_or_find_object("SoftwareProject", "repo:proj-b", "session")
@@ -2042,8 +2043,8 @@ async def test_resolve_thread_bare_hash_ambiguous_across_repos_still_refuses(
 async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
     actions: Actions,
 ) -> None:
-    """Negative control (DM 2505): closing an already-closed thread again, by the same
-    agent, must not mint a second closed_by edge — the same check-then-create shape
+    """Negative control : closing an already-closed thread again, by the same
+    agent, must not mint a second closed_by edge, the same check-then-create shape
     resolved_by already used, applied to the new edge."""
     t = await open_thread(actions, "a thread closed twice by the same agent")
     await resolve_thread(actions, str(t), because="first close", source="agent:closer-d")
@@ -2056,14 +2057,14 @@ async def test_resolve_thread_closed_by_is_idempotent_on_a_repeat_close(
 async def test_resolve_thread_repeat_close_updates_current_but_keeps_history(
     actions: Actions,
 ) -> None:
-    """CORRECTED PREMISE (2026-08-03, Thoth's Phase 0 Tier 2 dispatch, msg 3354): an earlier
+    """CORRECTED PREMISE (2026-08-03, Archivist's Phase 0 Tier 2 dispatch): an earlier
     draft of this fix REFUSED (silently, via a no-op) a second resolve_thread call on an
     already-resolved thread, reasoning it must be a mistake to guard against. That broke a
-    load-bearing existing feature — test_two_strong_edges_still_report_strong depends on a
+    load-bearing existing feature, test_two_strong_edges_still_report_strong depends on a
     SECOND resolve_thread(artifact=...) call attaching a real closure witness after
     record_decision's own `resolves=` closed a thread with only an `answers` edge. Measured,
     not assumed: git-stashing that first draft's guard and re-running the two-strong-edges
-    test confirmed it broke. The actual fix is honesty, not a gate — a second call's
+    test confirmed it broke. The actual fix is honesty, not a gate, a second call's
     because/artifact DO become the new current values (same latest-write-wins model every
     property write in this kernel follows), but the FIRST call's values are never deleted,
     only superseded: still readable as a non-current assertion row, `recall`'s own
@@ -2083,7 +2084,7 @@ async def test_resolve_thread_repeat_close_updates_current_but_keeps_history(
         "SELECT a.value #>> '{}' FROM assertions a WHERE a.object_id=$1 "
         "AND a.name='resolved_because' AND a.value #>> '{}' = 'the first reason'", t)
     assert first_reason_still_readable == "the first reason"     # never deleted, just not current
-    # BOTH artifacts' resolved_by edges accumulate — Phase 1a's multi-witness design,
+    # BOTH artifacts' resolved_by edges accumulate, Phase 1a's multi-witness design,
     # the exact behavior test_two_strong_edges_still_report_strong depends on.
     edge_targets = {r["to_id"] for r in await actions.pool.fetch(
         "SELECT to_id FROM links WHERE from_id=$1 AND type='resolved_by'", t)}
@@ -2094,7 +2095,7 @@ async def test_resolve_thread_tool_receipt_names_an_already_resolved_thread_hone
     actions: Actions,
 ) -> None:
     """The receipt no longer looks identical whether this was the first close or the
-    fifth — `note` says so plainly instead of leaving the caller to assume a fresh close,
+    fifth, `note` says so plainly instead of leaving the caller to assume a fresh close,
     and the second call still SUCCEEDS (status: resolved), it is never refused."""
     from src import mcp_server as srv
 
@@ -2115,9 +2116,9 @@ async def test_resolve_thread_tool_receipt_names_an_already_resolved_thread_hone
 async def test_resolve_thread_refuses_cleanly_when_nothing_matches_at_all(
     actions: Actions,
 ) -> None:
-    """The corrected error text drops the misleading word 'open' — `_find_thread` was
+    """The corrected error text drops the misleading word 'open', `_find_thread` was
     never status-gated, so the old wording ('no OPEN thread matches') implied a rule that
-    did not exist, exactly the defect this whole fix responds to (Thoth msg 3354)."""
+    did not exist, exactly the defect this whole fix responds to (Archivist)."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -2132,7 +2133,7 @@ async def test_resolve_thread_refuses_cleanly_when_nothing_matches_at_all(
 async def test_resolve_thread_closed_by_reuses_an_already_mounted_agent(
     actions: Actions,
 ) -> None:
-    """The common real-world case: `source` already names a live Agent object (mount()
+    """The common real-world case: `source` already names a live Agent object (mount
     minted it). closed_by must FIND that object, never mint a duplicate Agent under the
     same canonical (create_or_find_object's own (type, canonical) uniqueness)."""
     existing = await actions.create_or_find_object("Agent", "agent:already-mounted", "test")
@@ -2148,11 +2149,10 @@ async def test_resolve_thread_closed_by_reuses_an_already_mounted_agent(
 async def test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_mints_nothing(
     actions: Actions,
 ) -> None:
-    """Thoth's mid-build addendum (DM 2516, Sekhmet's live specimen: `resolves="28842543"`
-    matched two threads in production): making the closure edge unconditional means an
-    ambiguous ref that ever slipped through would now ALSO mint a wrong edge, not just a
-    wrong status flip. It cannot slip through — `_find_thread`'s existing ladder (thread
-    ac3333f7, #117's law: refuse, not widen) already raises RefAmbiguous BEFORE
+    """A real production incident, a `resolves=` short-id ref that matched two threads:
+    making the closure edge unconditional means an ambiguous ref that ever slipped through
+    would now ALSO mint a wrong edge, not just a wrong status flip. It cannot slip through,
+    `_find_thread`'s existing check (refuse, never widen) already raises RefAmbiguous BEFORE
     resolve_thread's first write, so no partial close and no closed_by/resolved_by edge
     ever lands on EITHER candidate. This proves that end-to-end through resolve_thread
     itself, not just the lower-level _find_thread the pre-existing unit test covers."""
@@ -2181,9 +2181,9 @@ async def test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_mints_noth
 
 
 async def test_closure_edge_ratio_converges_to_one_to_one(actions: Actions) -> None:
-    """The measurement Phase 1a exists to fix (decision cb38d922: 119 closure edges over
+    """The measurement Phase 1a exists to fix (: 119 closure edges over
     527 resolved threads, 22.6%). Re-run the same ratio against a small live-shaped
-    fixture mixing all three artifact cases and prove it lands at 1:1 — every resolved
+    fixture mixing all three artifact cases and prove it lands at 1:1, every resolved
     thread carries exactly one closure edge (resolved_by or closed_by), never zero."""
     d = await record_decision(actions, "the ratio fixture's own closer", kind="decision")
     threads = [await open_thread(actions, f"ratio fixture thread {i}") for i in range(5)]
@@ -2203,8 +2203,8 @@ async def test_closure_edge_ratio_converges_to_one_to_one(actions: Actions) -> N
 async def test_resolve_thread_tool_receipt_confirms_the_edge_when_it_lands(
     actions: Actions,
 ) -> None:
-    """Wave 0 (thread 1aa2ff36): the receipt must CONFIRM the resolved_by edge, not just
-    describe the possibility in a conditional sentence — a caller must never have to
+    """a batch : the receipt must CONFIRM the resolved_by edge, not just
+    describe the possibility in a conditional sentence, a caller must never have to
     re-query the graph to learn what its own write verb actually did."""
     from src import mcp_server as srv
 
@@ -2226,7 +2226,7 @@ async def test_resolve_thread_tool_receipt_confirms_the_edge_when_it_lands(
 async def test_resolve_thread_tool_receipt_admits_when_the_edge_does_NOT_land(
     actions: Actions,
 ) -> None:
-    """A file:line or any other unresolvable pointer must be reported HONESTLY as text-only —
+    """A file:line or any other unresolvable pointer must be reported HONESTLY as text-only, 
     the old wrapper said '(+ resolved_by edge if it names an object)' unconditionally, which
     reads as a promise regardless of what actually happened."""
     from src import mcp_server as srv
@@ -2245,11 +2245,11 @@ async def test_resolve_thread_tool_receipt_admits_when_the_edge_does_NOT_land(
 async def test_resolve_thread_tool_receipt_names_the_closed_by_fallback_honestly(
     actions: Actions,
 ) -> None:
-    """Found live (Thoth DM 2835/2917, Seshat XIX): the old text said 'the closure-miner
-    will not find this close' whenever the artifact didn't resolve — false. capture.
+    """Found live (Archivist/2917, Scribe XIX): the old text said 'the closure-miner
+    will not find this close' whenever the artifact didn't resolve, false. capture.
     resolve_thread ALWAYS mints closed_by as a fallback when resolved_by doesn't land
-    (Phase 1a, decision cb38d922), and thread_closure_edges' own UNION includes closed_by
-    — so this close WAS findable the whole time. The receipt must say so, not claim the
+    (Phase 1a), and thread_closure_edges' own UNION includes closed_by
+  , so this close WAS findable the whole time. The receipt must say so, not claim the
     opposite of what the write path actually guarantees."""
     from src import mcp_server as srv
 
@@ -2286,7 +2286,7 @@ async def test_resolve_thread_tool_receipt_omits_resolved_by_without_an_artifact
 
 async def test_annotate_thread_tool_appends_without_touching_status(actions: Actions) -> None:
     """#116, closed at the MCP surface: annotate_thread landed at capture.py (28a1585) but
-    the fleet had no wrapper to reach it — this is the fix. Status stays exactly as it was
+    the fleet had no wrapper to reach it, this is the fix. Status stays exactly as it was
     before the call, open or resolved; the note is additive testimony, never a revision."""
     from src import mcp_server as srv
 
@@ -2320,7 +2320,7 @@ async def test_annotate_thread_tool_reports_a_miss_without_erroring(actions: Act
 async def test_correct_thread_summary_tool_corrects_without_touching_status(
     actions: Actions,
 ) -> None:
-    """Roadmap ledger-rot stage 3 (decision ccbe37cf), MCP surface. Status stays exactly as
+    """Roadmap ledger-rot stage 3, MCP surface. Status stays exactly as
     it was before the call, same discipline annotate_thread's own MCP wrapper holds."""
     from src import mcp_server as srv
 
@@ -2369,7 +2369,7 @@ async def test_correct_thread_summary_tool_reports_a_blank_correction(actions: A
 
 
 async def test_amend_decision_tool_appends_without_touching_summary(actions: Actions) -> None:
-    """The third door for a live decision's own reasoning — `summary` is the addressable
+    """The third door for a live decision's own reasoning, `summary` is the addressable
     handle callers dedup/short-id-match against and is never touched here."""
     from src import mcp_server as srv
 
@@ -2388,7 +2388,7 @@ async def test_amend_decision_tool_appends_without_touching_summary(actions: Act
 
 
 async def test_amend_decision_tool_refuses_a_superseded_decision(actions: Actions) -> None:
-    """A dead ruling does not grow new reasoning — amend the successor, or correct via
+    """A dead ruling does not grow new reasoning, amend the successor, or correct via
     record_decision(supersedes=...); this verb only ever adds to a ruling still standing."""
     from src import mcp_server as srv
 
@@ -2405,7 +2405,7 @@ async def test_amend_decision_tool_refuses_a_superseded_decision(actions: Action
 
 
 async def test_amend_practice_tool_appends_without_touching_statement(actions: Actions) -> None:
-    """The third door for a Practice, same shape as amend_decision — `statement` is
+    """The third door for a Practice, same shape as amend_decision, `statement` is
     record_practice's own idempotency key and is never touched here."""
     from src import mcp_server as srv
     from src.orchestrator.capture import practice_amendments, record_practice
@@ -2420,7 +2420,7 @@ async def test_amend_practice_tool_appends_without_touching_statement(actions: A
     assert out["id"] == str(p)
     assert out["amendment"] == "confirmed live on gestalt, 2026-08-02"
     assert out["status"] == "amended"
-    # thread 55e5ac72: the receipt now carries the row practices() would render, so a
+    #: the receipt now carries the row practices would render, so a
     # write is never invisible on its own receipt
     assert out["practice"]["id"] == str(p)
     assert out["practice"]["amendments"] == ["confirmed live on gestalt, 2026-08-02"]
@@ -2431,7 +2431,7 @@ async def test_amend_practice_tool_appends_without_touching_statement(actions: A
 
 
 async def test_amend_practice_tool_refuses_a_refuted_practice(actions: Actions) -> None:
-    """A dead lesson does not grow new guidance — the refusal must name the correct live
+    """A dead lesson does not grow new guidance, the refusal must name the correct live
     tool (record_decision(refutes=...)), not the internal capture-layer function name."""
     from src import mcp_server as srv
     from src.orchestrator.capture import record_practice, refute_practice
@@ -2448,8 +2448,8 @@ async def test_amend_practice_tool_refuses_a_refuted_practice(actions: Actions) 
 
 
 def test_measurement_smell_nags_only_the_measurements() -> None:
-    """Thread 022bd24a: the protocol nag must fire on verification recipes (Ferryman's exact
-    words + the N/N shape) and stay QUIET on ordinary rulings — a nag that fires on every
+    """: the protocol nag must fire on verification recipes (Ferry's exact
+    words + the N/N shape) and stay QUIET on ordinary rulings, a nag that fires on every
     decision teaches everyone to ignore it."""
     assert measurement_smell("verified the walk: 498/498 lineages gapless, seed 42")
     assert measurement_smell("the probe swept the candidates pile")
@@ -2459,8 +2459,8 @@ def test_measurement_smell_nags_only_the_measurements() -> None:
 
 
 async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> None:
-    """Task #53 (from the tension-vs-resolver audit c7041c53): when two minds hold
-    DIFFERENT current leans on one held polarity, the scoped briefing must SAY so —
+    """When two minds hold
+    DIFFERENT current leans on one held polarity, the scoped briefing must SAY so,
     the record keeps both, and a single-winner table would silently show one."""
     from src.orchestrator.capture import divergent_leans
 
@@ -2489,14 +2489,14 @@ async def test_divergent_leans_say_two_minds_lean_apart(actions: Actions) -> Non
 
 
 async def test_a_fix_kills_its_superstition_by_name(actions: Actions) -> None:
-    """Thread a9be40c9 (Atlas caught 'NEVER DM BY NAME' in his own will an hour after the
-    fix made it false): a killed workaround becomes a first-class dead Superstition —
+    """ (Surveyor caught 'NEVER DM BY NAME' in his own will an hour after the
+    fix made it false): a killed workaround becomes a first-class dead Superstition, 
     searchable forever, idempotent on the normalized statement, announced while fresh."""
     from src.orchestrator.capture import kill_superstition, recent_dead_superstitions
 
     s1 = await kill_superstition(actions, "NEVER DM BY NAME", killed_by="43cfcf1",
                                  repo="osiris")
-    # idempotent on the normalized statement — a re-kill sharpens the record, never twins
+    # idempotent on the normalized statement, a re-kill sharpens the record, never twins
     s2 = await kill_superstition(actions, "NEVER  DM BY NAME", killed_by="43cfcf1")
     assert s2 == s1
     assert await actions.pool.fetchval(
@@ -2508,7 +2508,7 @@ async def test_a_fix_kills_its_superstition_by_name(actions: Actions) -> None:
 
 async def test_an_old_kill_leaves_the_announcement_but_not_the_record(
         actions: Actions) -> None:
-    """orient announces the RECENT dead only — the window ages out so the block never
+    """orient announces the RECENT dead only, the window ages out so the block never
     becomes a wall; the object itself stays searchable forever."""
     from src.orchestrator.capture import recent_dead_superstitions
 
@@ -2526,7 +2526,7 @@ async def test_an_old_kill_leaves_the_announcement_but_not_the_record(
 async def test_record_decision_obsoletes_and_orient_announces_fleet_wide(
         actions: Actions) -> None:
     """The whole loop: a fix recorded with obsoletes=[…] mints the dead Superstition, and
-    ANY orient — even scoped to an unrelated project — carries the announcement, because a
+    ANY orient, even scoped to an unrelated project, carries the announcement, because a
     workaround replicates across houses and its death must too."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key, orient
@@ -2541,7 +2541,7 @@ async def test_record_decision_obsoletes_and_orient_announces_fleet_wide(
     _agents[_conn_key(ctx)] = AgentIdentity(
         agent_id="agent:killer1", session="killer1", project="nowhere-land",
         model=None, cwd=None)
-    # the file's pool ritual: point the server at THIS test's pool (and loop) — a test
+    # the file's pool ritual: point the server at THIS test's pool (and loop), a test
     # that instead lets _pool_get mint the global pool leaves it bound to a dead loop
     # for every later caller (the first-caller-owns-the-pool fragility, paid tonight)
     saved_pool = srv._pool
@@ -2561,7 +2561,7 @@ async def test_record_decision_obsoletes_and_orient_announces_fleet_wide(
 
 async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> None:
     """sibling-one's verified bug: orient(project=X) silently returned the MOUNT's briefing instead
-    of X's — a silent wrong-scope (the confound class the fleet exists to catch). An explicit
+    of X's, a silent wrong-scope (the confound class the fleet exists to catch). An explicit
     project must OVERRIDE the mount."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key, orient
@@ -2571,7 +2571,7 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     now = datetime.now(UTC)
     dec = await actions.create_or_find_object("SoftwareProject", "repo:sibling-two", "session")
     await actions.assert_property(dec, "name", "sibling-two", "session", now, 0.9)
-    # DECLARED (self_declared): this test is about project SCOPING, not the wall's grading —
+    # DECLARED (self_declared): this test is about project SCOPING, not the wall's grading, 
     # an untouched miner guess would now (correctly) fold into the echo pile and prove nothing.
     th = await actions.create_or_find_object("Thread", "thread:dec-scope", "session")
     for _n, _v in (("summary", "the sibling-two-only thread"), ("status", "open")):
@@ -2581,7 +2581,7 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
                               evidence_class=EvidenceClass.SELF_DECLARED.value)
     await seed_default_compositions(actions.pool)
 
-    class _Ctx:  # minimal fake connection ctx — _conn_key reads id(request_context.session)
+    class _Ctx:  # minimal fake connection ctx, _conn_key reads id(request_context.session)
         class request_context:  # noqa: N801
             session = object()
 
@@ -2589,11 +2589,11 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
     _agents[_conn_key(ctx)] = AgentIdentity(   # mounted as sibling-one...
         agent_id="agent:heinX", session="heinX", project="sibling-one", model=None, cwd=None)
     # the file's pool ritual (see test_record_decision_obsoletes_and_orient_announces_
-    # fleet_wide just above): point the server at THIS test's pool (and loop) — a test
+    # fleet_wide just above): point the server at THIS test's pool (and loop), a test
     # that instead lets _pool_get mint the global pool leaves it bound to a dead loop
     # for every later caller in the same worker (full-suite-only: asyncpg.exceptions.
     # _base.InterfaceError / "attached to a different loop", never reproduced standalone
-    # or in a small targeted run — caught by Thoth's own full-suite gate, not by this
+    # or in a small targeted run, caught by Archivist's own full-suite gate, not by this
     # file's own targeted list, which never runs enough MCP-tool-calling tests in one
     # process to land on a stale pool).
     saved_pool = srv._pool
@@ -2609,9 +2609,9 @@ async def test_orient_explicit_project_overrides_the_mount(actions: Actions) -> 
 
 async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
         actions: Actions) -> None:
-    """Metron IV's flood (wave-2 fa918939): a fresh un-mounted session's first orient()
+    """A real incident: a fresh un-mounted session's first orient
     returned 353K chars of whole-fleet briefing. Un-mounted now gets a bounded per-project
-    map + the newest decisions + the mount ritual — the firehose only by deliberate call."""
+    map + the newest decisions + the mount ritual, the firehose only by deliberate call."""
     from src import mcp_server as srv
     from src.orchestrator.capture import open_thread, record_decision
 
@@ -2631,8 +2631,8 @@ async def test_unmounted_orient_is_a_bounded_map_never_the_firehose(
 
 
 async def test_unmounted_orient_declares_unfiled_repo_less_threads(actions: Actions) -> None:
-    """Thoth DM 2704, finding 3 of the in_repo audit: fleet_map's per-project GROUP BY
-    structurally can't file a thread with no project at all — a fresh agent's first fleet
+    """Archivist, finding 3 of the in_repo audit: fleet_map's per-project GROUP BY
+    structurally can't file a thread with no project at all, a fresh agent's first fleet
     view used to drop them with zero disclosure. Now declared, not compensated (there is
     no project to attribute it to)."""
     from src import mcp_server as srv
@@ -2653,9 +2653,9 @@ async def test_unmounted_orient_declares_unfiled_repo_less_threads(actions: Acti
 
 async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         actions: Actions) -> None:
-    """Metron IV's re-litigation (wave-2 fa918939): sibling-seven runs opus by RECORDED operator
+    """A follow-on incident: one sibling session runs a specific model by RECORDED operator
     choice, yet every successor got the confess-or-fix banner. An intended_model property
-    on the SoftwareProject is the graph's own .osiris — the banner consults it first."""
+    on the SoftwareProject is the graph's own .osiris, the banner consults it first."""
     from datetime import UTC, datetime
 
     from src import mcp_server as srv
@@ -2678,7 +2678,7 @@ async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
         # no recorded choice yet: diverging from the fleet default earns the banner
         out = await srv.orient(ctx=ctx)
         assert out.get("swap")
-        # the operator's standing choice lands on the repo object — the banner stands down
+        # the operator's standing choice lands on the repo object, the banner stands down
         await actions.assert_property(repo, "intended_model", "claude-opus-4-8", "session",
                                       datetime.now(UTC), 0.9, evidence_class="self_declared")
         out2 = await srv.orient(ctx=ctx)
@@ -2690,9 +2690,9 @@ async def test_swap_banner_stands_down_before_a_recorded_repo_choice(
 
 async def test_swap_banner_stands_down_for_a_triage_wake_on_the_economy_model(
         actions: Actions, monkeypatch) -> None:
-    """The wake-economy false alarm (sibling-four, msg 281): triage wakes ride a cheaper model by
+    """The wake-economy false alarm (sibling-four): triage wakes ride a cheaper model by
     the operator's OWN ruling (osiris_wake_model), yet the swap banner measured them against
-    the standing choice — every wake 'escalated' policy as a rug-pull. When the observed
+    the standing choice, every wake 'escalated' policy as a rug-pull. When the observed
     model IS the economy model and the wake ledger witnesses a wake minutes ago, the banner
     stands down to a calm policy note; with no wake on the ledger, the real banner stays."""
     from src import mcp_server as srv
@@ -2731,14 +2731,14 @@ async def test_swap_banner_stands_down_for_a_triage_wake_on_the_economy_model(
 
 async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
         actions: Actions, tmp_path: Path) -> None:
-    """thread d8535bff (cross-house, John IV/redmonth): rebind_seat writes the new office's
+    """ (cross-house, Jordan IV/redmonth): rebind_seat writes the new office's
     .osiris pin (and repoints agent_mounts.cwd) immediately, but a LIVE connection's cached
-    AgentIdentity.cwd — read straight off by orient()'s swap banner via _expected_model —
-    stayed frozen at the OLD cwd until the connection's next mount(), so the very next
-    orient() on the SAME connection still measured the banner against the old, un-pinned
+    AgentIdentity.cwd, read straight off by orient's swap banner via _expected_model, 
+    stayed frozen at the OLD cwd until the connection's next mount, so the very next
+    orient on the SAME connection still measured the banner against the old, un-pinned
     cwd and kept confessing a swap the operator had already settled with the pin. The
     rebind_seat tool now patches every live cached identity in the rebound lineage in
-    place, so the very next read sees the new anchor with no fresh mount() needed."""
+    place, so the very next read sees the new anchor with no fresh mount needed."""
     from datetime import UTC, datetime
 
     from src import mcp_server as srv
@@ -2753,7 +2753,7 @@ async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
     await actions.assert_property(a, "project", "rebindland", "agent:rebindo1",
                                   now, 0.9, evidence_class="self_declared")
     # project_of (agents.py) resolves through lineage_works_in, never a bare project
-    # stamp with nothing behind it — a real mount always pairs the two (thread c5a91ea1).
+    # stamp with nothing behind it, a real mount always pairs the two .
     proj = await actions.create_or_find_object("SoftwareProject", "repo:rebindland",
                                                "agent:rebindo1")
     await actions.assert_property(proj, "name", "rebindland", "agent:rebindo1", now, 0.9,
@@ -2788,7 +2788,7 @@ async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
         (Path(new_cwd) / ".osiris").write_text('model = "claude-sonnet-5"\n')
         await srv.rebind_seat(seat="Rebindo", new_cwd=new_cwd, extract=True, ctx=ctx)
 
-        # the very next orient() on this SAME connection must see the settled pin
+        # the very next orient on this SAME connection must see the settled pin
         out2 = await srv.orient(ctx=ctx)
         assert not out2.get("swap")
         assert ident.cwd == new_cwd
@@ -2798,8 +2798,8 @@ async def test_swap_banner_honors_the_osiris_pin_after_a_rebind(
 
 
 async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> None:
-    """Anubis VIII (msg 236): the whisper says 'read orient()'s succession note' but no
-    such field existed — successors reconstructed their inheritance from open threads.
+    """Auditor VIII : the whisper says 'read orient's succession note' but no
+    such field existed, successors reconstructed their inheritance from open threads.
     orient now surfaces the ancestor's HANDOFF thread and LETTER decision verbatim."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -2811,9 +2811,9 @@ async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> 
             session = object()
 
     ancestor = "agent:elder-vii"
-    await open_thread(actions, "HANDOFF — the estate is clean; take the rot lint first",
+    await open_thread(actions, "HANDOFF, the estate is clean; take the rot lint first",
                       repo="lineageproj", source=ancestor)
-    await record_decision(actions, "LETTER — it was a good day to be the seventh",
+    await record_decision(actions, "LETTER, it was a good day to be the seventh",
                           kind="choice", repo="lineageproj", source=ancestor)
     ctx = _Ctx()
     saved_pool = srv._pool
@@ -2834,17 +2834,17 @@ async def test_orient_surfaces_the_ancestors_parting_words(actions: Actions) -> 
 
 
 async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Actions) -> None:
-    """THE BOUNDED CHAIN-WALK (thread e749036e, Thoth LX's diagnosis, 2026-07-27): the
-    morning's own repro — elder6 wrote a handoff, elder7 was a zero-turn phantom that wrote
+    """THE BOUNDED CHAIN-WALK (Archivist LX's diagnosis, 2026-07-27): the
+    morning's own repro, elder6 wrote a handoff, elder7 was a zero-turn phantom that wrote
     NOTHING, elder8 arrives blind if orient only reads one hop back. nearest_handoff_ancestor
     walks past the silent hop and finds elder6's words, naming elder6 (not elder7) as
-    'from' — the words came from whoever actually wrote them."""
+    'from', the words came from whoever actually wrote them."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.capture import open_thread
 
     elder6, elder7 = "agent:elder-vi", "agent:elder-vii"
-    await open_thread(actions, "HANDOFF — six's own estate, read before you touch anything",
+    await open_thread(actions, "HANDOFF, six's own estate, read before you touch anything",
                       repo="chainproj", source=elder6)
     # the succession chain itself: elder7 succeeded elder6, on the graph (not just AgentIdentity)
     await actions.create_or_find_object("Agent", elder6, elder6)
@@ -2852,7 +2852,7 @@ async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Acti
     now = datetime.now(UTC)
     await actions.assert_property(o7, "succeeded_from", elder6, elder7, now, 0.9,
                                   evidence_class="direct_observation")
-    # elder7 wrote NOTHING — the zero-turn phantom's whole point
+    # elder7 wrote NOTHING, the zero-turn phantom's whole point
 
     class _Ctx:
         class request_context:  # noqa: N801
@@ -2879,8 +2879,8 @@ async def test_orient_succession_note_walks_past_a_silent_ancestor(actions: Acti
 async def test_orient_co_agents_confesses_when_truncated_past_the_display_cap(
     actions: Actions,
 ) -> None:
-    """THE SESHAT SPECIMEN (Thoth msg 5741): a bare LIMIT used to silently drop a live
-    sibling past the display cap, with no signal at all — every caller of the shared
+    """THE SCRIBE SPECIMEN (Archivist): a bare LIMIT used to silently drop a live
+    sibling past the display cap, with no signal at all, every caller of the shared
     `live_co_agents` query now says exactly how many more it dropped."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
@@ -2912,8 +2912,8 @@ async def test_orient_co_agents_confesses_when_truncated_past_the_display_cap(
 
 
 async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) -> None:
-    """Co-agent blindness (Deckard XXVI, msg 258): a live sibling sharing your repo is the
-    one blindness that costs unrecoverable work — orient names them and the shared-tree
+    """Co-agent blindness (Tracker XXVI): a live sibling sharing your repo is the
+    one blindness that costs unrecoverable work, orient names them and the shared-tree
     discipline; a lone agent gets no such block."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
@@ -2949,9 +2949,9 @@ async def test_orient_names_the_live_siblings_in_your_project(actions: Actions) 
 
 
 async def test_orient_shows_the_peer(actions: Actions) -> None:
-    """LEGIBILITY leg 2 (ruling d74492ee, spec e6636c7e): a peer_of bond is recognition-
-    first per Ostrom p7 — an edge nobody's briefing surfaces is a convention, ignorable.
-    orient() names the caller's peer (handle + last-seen), and a seat with no peer gets no
+    """A peer_of bond is recognition-
+    first: an edge nobody's briefing surfaces is a convention, ignorable.
+    orient names the caller's peer (handle + last-seen), and a seat with no peer gets no
     such block, the same conditional shape co_agents already established."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
@@ -2963,7 +2963,7 @@ async def test_orient_shows_the_peer(actions: Actions) -> None:
                       source="test")
     await actions.assert_property(
         await actions.create_or_find_object("Seat", "seat:peerseat1", "test"), "handle",
-        "Halcyon", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+        "Haven", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
     await peer_seats(actions, "seat:me-seat1", "seat:peerseat1", because="the reconciliation",
                      actor="test")
     await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/peer0001",
@@ -2987,7 +2987,7 @@ async def test_orient_shows_the_peer(actions: Actions) -> None:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["peer"]["seat"] == "seat:peerseat1"
-    assert out["peer"]["handle"] == "Halcyon"
+    assert out["peer"]["handle"] == "Haven"
     assert "last_seen" in out["peer"]
     assert "your peer" in out["peer"]["note"]
 
@@ -3022,11 +3022,11 @@ async def test_orient_shows_no_peer_block_when_unpeered(actions: Actions) -> Non
 async def test_orient_shows_a_live_siblings_context_pct_and_near_seam(
     actions: Actions,
 ) -> None:
-    """Thoth's Pit Watch extension (msg 1381, seam-discipline decision 33b7cb10): 'a
-    manager can't route around a seam it can't see' — a sibling's Stop-hook-stamped
+    """Archivist's Pit Watch extension (seam-discipline): 'a
+    manager can't route around a seam it can't see', a sibling's Stop-hook-stamped
     context_pct rides along in co_agents, near_seam derived off the SAME ALARM_PCT the
     hook itself alarms on, with an explicit age so a stale reading is never mistaken for
-    a fresh one. A sibling with no stamp at all carries neither key — absence, not a
+    a fresh one. A sibling with no stamp at all carries neither key, absence, not a
     guessed 0%."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
@@ -3107,7 +3107,7 @@ def test_rank_open_threads_orders_obligations_first_and_caps() -> None:
 def test_rank_open_threads_orders_by_whose_move_within_a_kind() -> None:
     """Owner tags (two grievance witnesses): within the obligations group, what is MINE TO
     ACT (unowned, or owned by me / my project) rides above another mind's claims, and
-    'waiting on the human' (owner='operator') rides last — visible, never shadowing the
+    'waiting on the human' (owner='operator') rides last, visible, never shadowing the
     reader's own moves. Recency (input order) still breaks ties inside each ownership band."""
     from src.mcp_server import _rank_open_threads
 
@@ -3131,10 +3131,10 @@ def test_rank_open_threads_orders_by_whose_move_within_a_kind() -> None:
 
 
 def test_rank_open_threads_owner_match_is_lineage_aware() -> None:
-    """Finding D (Khnum audit thread ffb13bd9, live proof: Thoth LVII -> Thoth II across a
+    """Finding D (Mason audit, live proof: Archivist LVII -> Archivist II across a
     compaction seam): an obligation owned by an EARLIER generation of the reader's own
     lineage (agent:foo-iii, when the reader is agent:foo-iv, a post-compaction successor)
-    still ranks as mine to act — not another mind's claim. A DIFFERENT lineage entirely
+    still ranks as mine to act, not another mind's claim. A DIFFERENT lineage entirely
     (agent:bar-iv) never matches just because it shares a generation suffix."""
     from src.mcp_server import _rank_open_threads
 
@@ -3147,22 +3147,22 @@ def test_rank_open_threads_owner_match_is_lineage_aware() -> None:
     shown, _ = _rank_open_threads(rows, me)
     assert [r["summary"] for r in shown] == [
         "mine-by-ancestor-gen", "mine-by-exact",  # both same lineage, mine to act
-        "other-lineage-same-gen",                  # different root — another mind's claim
+        "other-lineage-same-gen",                  # different root, another mind's claim
     ]
 
 
 def test_rank_open_threads_string_parse_misses_a_renamed_lineage() -> None:
-    """The gap `owner_lineage_roots` closes (decision — Thoth's dispatch, measured live
+    """The gap `owner_lineage_roots` closes (decision, Archivist's dispatch, measured live
     2026-08-16: 18 of 71 distinct open-thread owners disagreed, every one a real lineage).
-    `_generation()` reads ONLY the canonical STRING — it can unwind a numbering artifact
-    (msg 7606/7623's own overflow-chain fix folded that class of miss back in), but a
-    lineage that changed to a genuinely DIFFERENT root string — a rename, a merge, an
-    identity repair — shares no substring at all with its predecessor, and no string
+    `_generation` reads ONLY the canonical STRING, it can unwind a numbering artifact
+    (/7623's own overflow-chain fix folded that class of miss back in), but a
+    lineage that changed to a genuinely DIFFERENT root string, a rename, a merge, an
+    identity repair, shares no substring at all with its predecessor, and no string
     parser can ever bridge that; only the graph's own `succeeded_from` edges can. That is
     what `owner_lineage_roots` walks and this fallback path does not. Ownership never
-    hides a row (every claim still shows, RANKING is the only effect) — so without
+    hides a row (every claim still shows, RANKING is the only effect), so without
     `owner_roots`, the earlier (differently-named) generation's claim still shows but
-    sorts BELOW a genuinely unrelated claim, exactly as if it belonged to a stranger —
+    sorts BELOW a genuinely unrelated claim, exactly as if it belonged to a stranger, 
     the WITHOUT-fix baseline this fix corrects (proven by the sibling test using a real
     owner_roots map, where it sorts back above)."""
     from src.mcp_server import _rank_open_threads
@@ -3173,10 +3173,10 @@ def test_rank_open_threads_string_parse_misses_a_renamed_lineage() -> None:
         {"summary": "mine-before-the-rename", "kind": "obligation",
          "owner": "agent:oldsoul-iii"},
     ]
-    shown, _ = _rank_open_threads(rows, me)  # no owner_roots — string-parse fallback
+    shown, _ = _rank_open_threads(rows, me)  # no owner_roots, string-parse fallback
     assert [r["summary"] for r in shown] == ["a-strangers-claim", "mine-before-the-rename"], (
         "no string parse, however unwound, can connect two genuinely different root "
-        "strings — only the edge-walked owner_roots can")
+        "strings, only the edge-walked owner_roots can")
 
 
 async def test_owner_lineage_roots_resolves_a_multi_hop_lineage_the_string_parse_misses(
@@ -3210,7 +3210,7 @@ async def test_owner_lineage_roots_resolves_a_multi_hop_lineage_the_string_parse
     shown, _ = _rank_open_threads(rows, me, owner_roots)
     assert [r["summary"] for r in shown] == ["mine-across-the-hop", "a-strangers-claim"], (
         "with the edge-walked roots, the multi-hop claim now ranks as MINE, above a "
-        "genuine stranger's — the fix, not just the absence of a crash")
+        "genuine stranger's, the fix, not just the absence of a crash")
 
 
 async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
@@ -3240,7 +3240,7 @@ async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
         "an unowned duty anyone may take", "waiting on the human's gemini key",
         "a kindless mined commitment"]
     assert wall[1]["owner"] == "operator" and "owner" not in wall[0]
-    # undeclared kind renders ABSENT, not null — no mind said what it is (Fulcrum III,
+    # undeclared kind renders ABSENT, not null, no mind said what it is (Pivot III,
     # answered at the lens: the record is untouched, the wall stops printing null noise)
     assert "kind" not in wall[2] and wall[0]["kind"] == "obligation"
 
@@ -3257,7 +3257,7 @@ async def test_owner_tag_persists_and_rides_the_wall(actions: Actions) -> None:
 async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions) -> None:
     """End to end through the real composition: orient's open_threads floats a DUTY above
     ordinary threads even when it is the LEAST recent, caps the wall at the display limit, and
-    notes the remainder — a bounded, ranked query, not a 500-line scroll. Ranking only."""
+    notes the remainder, a bounded, ranked query, not a 500-line scroll. Ranking only."""
 
     from src.mcp_server import _ORIENT_OPEN_THREADS, _project_briefing
 
@@ -3267,7 +3267,7 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
 
     async def _thread(canon: str, summary: str, *, kind: str | None = None) -> uuid.UUID:
         # DECLARED threads (self_declared): the never-hide duty law only shields what a
-        # mind actually declared — an untouched 400-day "obligation" is a pile-bound guess
+        # mind actually declared, an untouched 400-day "obligation" is a pile-bound guess
         t = await actions.create_or_find_object("Thread", canon, "session")
         await actions.assert_property(t, "summary", summary, "session", now, 0.9,
                                       evidence_class="self_declared")
@@ -3281,7 +3281,7 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
 
     duty = await _thread("thread:duty", "restart the daemons after the kernel change",
                          kind="obligation")
-    # force the obligation to be the LEAST recent — only ranking can float it to the top
+    # force the obligation to be the LEAST recent, only ranking can float it to the top
     await actions.pool.execute(
         "UPDATE objects SET created_at = now() - interval '400 days' WHERE id=$1", duty)
     for i in range(_ORIENT_OPEN_THREADS + 5):  # comfortably over the display cap
@@ -3301,9 +3301,9 @@ async def test_orient_briefing_ranks_obligations_first_and_caps(actions: Actions
 
 
 async def test_supersede_buries_the_old_decision_both_ways(actions: Actions) -> None:
-    """The supersedes verb (operator ruling dd04d7dd, Tjmax III's ask): record_decision
+    """The supersedes verb (operator, Tandem III's ask): record_decision
     (supersedes=<ref>) stamps the OLD decision superseded_by/-because and the NEW one
-    supersedes — the correction navigates both directions, event-sourced, no delete."""
+    supersedes, the correction navigates both directions, event-sourced, no delete."""
     old = await record_decision(actions, "the cache misses come from TTL expiry",
                                 kind="ruling", repo="osiris", source="agent:me")
     new = await record_decision(
@@ -3318,16 +3318,16 @@ async def test_supersede_buries_the_old_decision_both_ways(actions: Actions) -> 
 
 
 async def test_supersede_lens_recent_drops_it_log_grays_it(actions: Actions) -> None:
-    """The graying (dd04d7dd): a superseded decision leaves the project-briefing's
+    """The graying : a superseded decision leaves the project-briefing's
     recent_decisions (a corrected hypothesis must not brief the next session as live) but
-    STAYS in the decision-log with its successor riding the superseded column — the log
+    STAYS in the decision-log with its successor riding the superseded column, the log
     skims honestly without hiding history."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:suptest", "session")
     await actions.assert_property(proj, "name", "suptest", "session", now, 0.9)
     old = await record_decision(actions, "ship the parser as a regex pile",
                                 kind="choice", repo="suptest", source="agent:me")
-    await record_decision(actions, "ship the parser on a real grammar — the regex "
+    await record_decision(actions, "ship the parser on a real grammar, the regex "
                           "pile misparses nested quotes", kind="choice", repo="suptest",
                           source="agent:me", supersedes=str(old))
     await seed_default_compositions(actions.pool)
@@ -3348,7 +3348,7 @@ async def test_supersede_lens_recent_drops_it_log_grays_it(actions: Actions) -> 
 
 async def test_supersede_that_names_nothing_records_nothing(actions: Actions) -> None:
     """A correction that can't name its target is not yet a correction: the ValueError
-    fires BEFORE the new decision exists — no husk, no half-burial."""
+    fires BEFORE the new decision exists, no husk, no half-burial."""
     import pytest
 
     with pytest.raises(ValueError, match="matched no decision"):
@@ -3362,8 +3362,8 @@ async def test_supersede_that_names_nothing_records_nothing(actions: Actions) ->
 
 async def test_supersede_no_longer_falls_through_to_a_prose_match(actions: Actions) -> None:
     """task #117's law extended to `supersedes` (mirrors `test_resolves_no_longer_falls_
-    through_to_a_prose_match` exactly): a genuinely free-text ref — not identifier-shaped
-    at all — used to fall through to `_resolve_ref`'s fuzzy ILIKE leg and could silently
+    through_to_a_prose_match` exactly): a genuinely free-text ref, not identifier-shaped
+    at all, used to fall through to `_resolve_ref`'s fuzzy ILIKE leg and could silently
     bury whatever decision's summary happened to contain it. `supersedes` now REQUIRES an
     identifier; this exact call refuses instead of guessing, and the target decision is
     left untouched."""
@@ -3381,12 +3381,12 @@ async def test_supersede_no_longer_falls_through_to_a_prose_match(actions: Actio
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions a WHERE a.name='summary' "
         "AND a.value #>> '{}' = 'a ruling recorded in passing'")
-    assert n == 0  # same strictness as any other supersedes miss — nothing half-recorded
+    assert n == 0  # same strictness as any other supersedes miss, nothing half-recorded
 
 
 async def test_supersede_self_is_a_noop_not_a_burial(actions: Actions) -> None:
     """Idempotent re-record whose supersedes resolves to ITSELF (same summary hash):
-    a decision never buries itself — no superseded_by stamp lands."""
+    a decision never buries itself, no superseded_by stamp lands."""
     d = await record_decision(actions, "the one true parser ruling", source="agent:me")
     d2 = await record_decision(actions, "the one true parser ruling", source="agent:me",
                                supersedes=str(d))
@@ -3397,18 +3397,18 @@ async def test_supersede_self_is_a_noop_not_a_burial(actions: Actions) -> None:
 
 async def test_record_decision_is_atomic_no_orphan_husk(actions: Actions) -> None:
     """The write-integrity fix (sibling-eight audit): record_decision was five sequential
-    transactions — a process death between the create and its summary left an orphan Decision
+    transactions, a process death between the create and its summary left an orphan Decision
     with no body. Now it is ONE transaction: force a failure mid-sequence and prove NOTHING
-    persists — not even the object husk."""
+    persists, not even the object husk."""
     import pytest
     from src.orchestrator.capture import record_decision
 
     # a rationale that isn't a string blows up assert_property's JSON path AFTER the object +
-    # summary would have been created — the exact mid-sequence crash the husk came from
+    # summary would have been created, the exact mid-sequence crash the husk came from
     class Boom:
         pass
 
-    with pytest.raises(Exception):  # noqa: B017 — any failure; the point is the rollback
+    with pytest.raises(Exception):  # noqa: B017, any failure; the point is the rollback
         await record_decision(actions, "a decision that must not half-land",
                               rationale=Boom())  # type: ignore[arg-type]
     # the whole transaction rolled back: no Decision object, no husk, no summary
@@ -3419,8 +3419,8 @@ async def test_record_decision_is_atomic_no_orphan_husk(actions: Actions) -> Non
 
 
 async def test_atomic_context_shares_one_transaction(actions: Actions) -> None:
-    """atomic() binds one connection: a create + assert inside it are invisible until commit
-    and fully present after — the primitive record_decision/open_thread now stand on."""
+    """atomic binds one connection: a create + assert inside it are invisible until commit
+    and fully present after, the primitive record_decision/open_thread now stand on."""
     async with actions.atomic() as a:
         d = await a.create_or_find_object("Decision", "decision:atomic-probe", "agent:t")
         await a.assert_property(d, "summary", "committed together", "agent:t",
@@ -3434,11 +3434,11 @@ async def test_atomic_context_shares_one_transaction(actions: Actions) -> None:
     assert row is not None and row["summary"] == "committed together"
 
 
-# --- references: the fleet can finally cite (obligation ecc8d58e, Soundwave VI) ----------
+# --- references: the fleet can finally cite (Relay VI) ----------
 
 async def test_ingest_reference_mints_a_citable_node_with_first_class_caveats(
         actions: Actions) -> None:
-    """A read becomes a Reference node — caveats live in their OWN property, never folded
+    """A read becomes a Reference node, caveats live in their OWN property, never folded
     into body ('but only under X' buried in prose is a caveat lost)."""
     from src.orchestrator.capture import ingest_reference
 
@@ -3485,7 +3485,7 @@ async def test_record_decision_grounds_mint_grounded_by_edges_at_birth(
 async def test_record_decision_mints_decided_in_from_a_cited_commit_sha(
         actions: Actions) -> None:
     """Task #101: a ruling that names its own commit ("commit 238b48f", this house's own
-    standing practice) gets `decided_in` for free — no separate mining pass. gitlog.py
+    standing practice) gets `decided_in` for free, no separate mining pass. gitlog.py
     stores a 12-char canonical (commit:<sha[:12]>); the citation here is git's conventional
     7-char short form, proving the prefix match (not an exact-canonical match) is real."""
     c = await actions.create_or_find_object("Commit", "commit:238b48fb7104", "git")
@@ -3510,7 +3510,7 @@ async def test_record_decision_decided_in_is_idempotent(actions: Actions) -> Non
 
 
 async def test_record_decision_skips_a_sha_with_no_matching_commit(actions: Actions) -> None:
-    """Not (yet) ingested, or a typo — either way, silently skipped rather than minting a
+    """Not (yet) ingested, or a typo, either way, silently skipped rather than minting a
     property-less ghost Commit (the deliberate asymmetry with `link_repo`'s repo stub:
     see `_resolve_commit`'s own docstring for why a sha doesn't get the same treatment)."""
     d = await record_decision(actions, "A ruling citing an unminted commit",
@@ -3526,7 +3526,7 @@ async def test_record_decision_skips_a_sha_with_no_matching_commit(actions: Acti
 
 async def test_record_decision_decided_in_scans_summary_and_protocol_too(
         actions: Actions) -> None:
-    """Not just `rationale` — this house's own decisions cite the commit in the summary
+    """Not just `rationale`, this house's own decisions cite the commit in the summary
     ("...(commit 238b48f)") and/or a trailing "Commit: <sha>." in `protocol` just as often."""
     c1 = await actions.create_or_find_object("Commit", "commit:aaaaaaaaaaaa", "git")
     c2 = await actions.create_or_find_object("Commit", "commit:bbbbbbbbbbbb", "git")
@@ -3542,20 +3542,20 @@ async def test_record_decision_never_mistakes_a_decision_short_id_for_a_commit(
         actions: Actions) -> None:
     """The precision guarantee: `_COMMIT_CITATION_RE` requires the literal word "commit"
     immediately before the hex token, so a rationale that cites another DECISION's short id
-    ("decision 335ddd13") — a routine cross-reference in this house's own prose — never
+    (""), a routine cross-reference in this house's own prose, never
     gets misread as a commit sha, even though both are hex-looking 8-char tokens."""
     await actions.create_or_find_object("Commit", "commit:335ddd13aaaa", "git")  # a decoy
     d = await record_decision(
         actions, "Builds on an earlier measurement",
-        rationale="See decision 335ddd13 for the full protocol.", source="agent:test-i")
+        rationale="See an earlier decision for the full protocol.", source="agent:test-i")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
     assert n == 0
 
 
-# --- open_thread's own noted_in mint (msg 5800/5804's derivation half): the SAME
+# --- open_thread's own noted_in mint (/5804's derivation half): the SAME
 # self-declared-in-prose shape record_decision's decided_in already covers, but
-# `decided_in` itself is schema-scoped to Decision only (schema.py:399) — Thread's
+# `decided_in` itself is schema-scoped to Decision only (schema.py:399), Thread's
 # equivalent edge is `noted_in` (schema.py:372), the type the session-miner already
 # mints for exactly this shape (ingest/threads.py:143), now written at birth too. ------
 
@@ -3582,7 +3582,7 @@ async def test_open_thread_never_mistakes_a_decision_short_id_for_a_commit(
         actions: Actions) -> None:
     await actions.create_or_find_object("Commit", "commit:335ddd13aaaa", "git")  # a decoy
     t = await open_thread(
-        actions, "Builds on decision 335ddd13's own measurement", source="agent:test-i")
+        actions, "Builds on an earlier decision's own measurement", source="agent:test-i")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='noted_in'", t)
     assert n == 0
@@ -3591,7 +3591,7 @@ async def test_open_thread_never_mistakes_a_decision_short_id_for_a_commit(
 async def test_backfill_decided_in_mints_what_the_live_path_missed(actions: Actions) -> None:
     """Task #101's named gap, closed: a decision citing a commit BEFORE gitlog reaches it
     mints nothing at write time (identical to test_record_decision_skips_a_sha_with_no_
-    matching_commit) — the backfill, run AFTER the commit finally lands, mints the edge
+    matching_commit), the backfill, run AFTER the commit finally lands, mints the edge
     the live path could never have minted (Mode B: the resolution was premature, not
     wrong)."""
     d = await record_decision(actions, "A ruling citing a not-yet-ingested commit",
@@ -3627,7 +3627,7 @@ async def test_backfill_decided_in_is_idempotent(actions: Actions) -> None:
 
 async def test_backfill_decided_in_does_not_recount_a_live_mint(actions: Actions) -> None:
     """A decision whose commit WAS already ingested at write time gets its edge from the
-    live path (record_decision) — the backfill must recognize that edge as already_had,
+    live path (record_decision), the backfill must recognize that edge as already_had,
     never mint a second one or claim credit for what it didn't do."""
     await actions.create_or_find_object("Commit", "commit:0ddc0ffee000", "git")
     d = await record_decision(actions, "A citation resolved live, no gap here",
@@ -3646,7 +3646,7 @@ async def test_backfill_decided_in_does_not_recount_a_live_mint(actions: Actions
 
 async def test_backfill_decided_in_reports_unresolvable_citations_by_name(
         actions: Actions) -> None:
-    """Thoth's hard requirement (DM 2253): a skip is a FINDING, not silence — it names the
+    """Archivist's hard requirement : a skip is a FINDING, not silence, it names the
     exact decision and sha that never resolved, because the commit was never ingested at
     all (a permanent skip, not a timing artifact a later run would fix)."""
     d = await record_decision(actions, "Cites a commit that will never be ingested",
@@ -3679,12 +3679,12 @@ async def test_backfill_decided_in_dry_run_writes_nothing(actions: Actions) -> N
 
 async def test_backfill_decided_in_heartbeat_wires_through_to_the_real_function(
         actions: Actions) -> None:
-    """The arq cron shim (Thoth's grant, DM 2271): a thin wrapper around
+    """The arq cron shim (Archivist's grant): a thin wrapper around
     backfill_decided_in, same shape as this file's siblings (trigger_mail,
-    pit_watch_heartbeat, fleet_reconcile_heartbeat) — none of which get a dedicated test
+    pit_watch_heartbeat, fleet_reconcile_heartbeat), none of which get a dedicated test
     of their own either, since the real logic lives in (and is fully tested by) the
     function they wrap. This one proves the WIRING itself: ctx["cascade"].actions reaches
-    the real actions, the real mint happens, and the return value is the minted count —
+    the real actions, the real mint happens, and the return value is the minted count, 
     not just that the module imports cleanly."""
     from types import SimpleNamespace
 
@@ -3706,7 +3706,7 @@ async def test_backfill_decided_in_heartbeat_wires_through_to_the_real_function(
 
 async def test_backfill_decided_in_scans_only_active_unmerged_decisions(
         actions: Actions) -> None:
-    """A retired/merged Decision's own citation is not this pass's business — its content,
+    """A retired/merged Decision's own citation is not this pass's business, its content,
     if it matters, lives under whatever object it merged into."""
     d = await record_decision(actions, "A decision about to be retired",
                               rationale="Commit deadbeef0001 landed it.",
@@ -3718,13 +3718,13 @@ async def test_backfill_decided_in_scans_only_active_unmerged_decisions(
         assert skip["decision"] != str(d)
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='decided_in'", d)
-    assert n == 0  # retired — never touched by the backward pass
+    assert n == 0  # retired, never touched by the backward pass
 
 
 async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actions) -> None:
-    """Anubis VIII's grievance (msg 236): a ruling that states the conclusion but not the
+    """Auditor VIII's grievance : a ruling that states the conclusion but not the
     INVOCATION forces the successor to re-derive it from tmp logs. `protocol` is its own
-    property — never folded into rationale — at the decider's grade."""
+    property, never folded into rationale, at the decider's grade."""
     d = await record_decision(
         actions, "effctx holds at n_trials=64", kind="ruling",
         rationale="the effect survives the widened buckets",
@@ -3741,12 +3741,12 @@ async def test_record_decision_protocol_makes_a_ruling_rerunnable(actions: Actio
 async def test_record_decision_surfaces_prior_art_against_a_standing_ruling(
     actions: Actions,
 ) -> None:
-    """Task #67 (thread 44635c42, from the re-derivation post-mortem): a ruling
+    """A ruling
     contradicting standing law must not mint frictionlessly. Canonical failure this
-    prevents: decision 636a8648 minted in direct contradiction of naming-v3 (a882b334)
-    with zero friction — the operator caught it, the verb didn't. Re-records 636a8648's
-    actual text against a fixture graph containing a882b334's actual text and asserts the
-    receipt's `prior_art` carries it."""
+    prevents: a decision minted in direct contradiction of an earlier, still-standing
+    ruling with zero friction, caught by a person rather than by the verb itself. Re-records
+    the real text of that ruling and its later contradiction against a fixture graph and
+    asserts the receipt's `prior_art` carries it."""
     from src import mcp_server as srv
 
     standing = await record_decision(
@@ -3789,7 +3789,7 @@ def test_prior_art_from_hits_excludes_self_supersede_target_and_buried_law() -> 
         {"id": standing_id, "type": "Decision", "snippet": "unrelated standing law",
          "grade": "self_declared", "via": "both"},
         {"id": "44444444-4444-4444-4444-444444444444", "type": "Decision",
-         "snippet": "dead law", "grade": "self_declared", "superseded": "by decision aaaa1111"},
+         "snippet": "dead law", "grade": "self_declared", "superseded": "by an earlier decision"},
         {"id": "55555555-5555-5555-5555-555555555555", "type": "Thread",
          "snippet": "not even a Decision", "grade": "self_declared"},
     ]
@@ -3821,10 +3821,10 @@ async def test_ingest_reference_cites_wires_paper_lineage(actions: Actions) -> N
     assert n == 1
 
 
-# --- triage: testimony, never fabricated resolution (ruling 758ded94) --------------------
+# --- triage: testimony, never fabricated resolution  --------------------
 
 async def test_reclassify_thread_changes_kind_never_status(actions: Actions) -> None:
-    """'Untouched does not mean solved' — triage judges what a thread IS; the status is
+    """'Untouched does not mean solved', triage judges what a thread IS; the status is
     sacred until real testimony resolves it."""
     from src.orchestrator.capture import reclassify_thread
 
@@ -3851,7 +3851,7 @@ async def test_reclassify_thread_backfills_arc_on_an_already_open_thread(
     actions: Actions,
 ) -> None:
     """Task #76's roadmap follow-on: open_thread's own `arc` param is a silent no-op on an
-    ALREADY-open thread — its near-duplicate collision path returns the existing id without
+    ALREADY-open thread, its near-duplicate collision path returns the existing id without
     ever writing arc (discovered live: 17 attempted stamps via open_thread, zero landed).
     reclassify_thread is the door that can actually reach an existing thread's metadata."""
     from src.orchestrator.capture import reclassify_thread
@@ -3879,7 +3879,7 @@ async def test_reclassify_thread_refuses_an_unrecognized_arc(actions: Actions) -
 
 
 async def test_reclassify_thread_leaves_arc_untouched_when_omitted(actions: Actions) -> None:
-    """arc is optional — a plain kind-only reclassify (the existing, common case) must not
+    """arc is optional, a plain kind-only reclassify (the existing, common case) must not
     silently blank out an arc a caller set earlier."""
     from src.orchestrator.capture import reclassify_thread
 
@@ -3898,7 +3898,7 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
     3-card triage hand. Agent threads ride however old; miner guesses do not ride at all.
 
     AMENDED 2026-07-12 (the operator: "it's a snowball to hell"): a fresh miner guess used to get
-    a loud week before folding. That window is what let the pile grow — the miner mints faster than
+    a loud week before folding. That window is what let the pile grow, the miner mints faster than
     seven days, so the wall stayed permanently full of inferences nobody had made. 908 of the
     fleet's 1067 open threads were untouched guesses; a DEAD project was showing 181 of them.
     THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE. The record keeps every one OPEN."""
@@ -3908,7 +3908,7 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
     )
 
     await seed_default_compositions(actions.pool)
-    # an agent's deliberate thread (self_declared) — rides the wall however old
+    # an agent's deliberate thread (self_declared), rides the wall however old
     agent_t = await open_thread(actions, "off-box backup target still undecided",
                                 repo="testrepo", source="agent:xviii")
     # miner echoes: two old (collapse), one fresh (rides)
@@ -3922,7 +3922,7 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
         "UPDATE objects SET created_at = now() - interval '30 days' "
         "WHERE type='Thread' AND id IN (SELECT object_id FROM current_assertions "
         " WHERE name='summary' AND value #>> '{}' ILIKE 'old echo the fleet%')")
-    await actions.pool.execute(  # the agent thread is old too — but touched, so it rides
+    await actions.pool.execute(  # the agent thread is old too, but touched, so it rides
         "UPDATE objects SET created_at = now() - interval '30 days' WHERE id=$1", agent_t)
 
     from src.mcp_server import _project_briefing
@@ -3935,7 +3935,7 @@ async def test_orient_wall_collapses_echoes_and_deals_a_triage_card(actions: Act
     assert not any(s.startswith("old echo") for s in wall)
     assert wall == ["off-box backup target still undecided"], "the wall is what minds touched"
     ech = out["unread_echoes"]
-    assert ech["count"] == 3   # both old echoes AND the fresh guess — all three untouched
+    assert ech["count"] == 3   # both old echoes AND the fresh guess, all three untouched
     assert all(len(c["id"]) == 8 for c in ech["triage"])  # short ids, directly triageable
     assert "reclassify_thread" in ech["verbs"] and "never resolve" in ech["verbs"]
     # every echo is STILL open in the record
@@ -3964,23 +3964,23 @@ async def test_echoes_composition_lists_the_collapsed_pile(actions: Actions) -> 
     items = res["items"]
     summaries = [e["summary"] for e in items["echoes"]]
     assert any(s.startswith("an ancient miner echo") for s in summaries)
-    # the question collapses IMMEDIATELY — no freshness window for judged non-work
+    # the question collapses IMMEDIATELY, no freshness window for judged non-work
     assert any(s.startswith("a question the miner remembered") for s in summaries)
     assert items["count"] >= 2
     assert "reclassify_thread" in items["verbs"]
 
 
 async def test_a_decision_closes_the_thread_it_answers(actions: Actions) -> None:
-    """record_decision(resolves=…) — the answer and the close in ONE act.
+    """record_decision(resolves=…), the answer and the close in ONE act.
 
     Capture had a one-way valve: the ruling landed and the question stayed lit, because
-    closing was a SEPARATE verb a dying session forgets. The operator ruled on the lineage
-    question on 2026-07-12; the decision recording that ruling said "resolving thread
-    2f353b8e" IN PROSE, nothing read the prose, and the graph went on asking him a question
-    he had already answered for a full day (bug 59c8e47d). The graph does not read prose.
+    closing was a SEPARATE verb a dying session forgets. A real ruling on a real open
+    question once recorded a decision that said "resolving" IN PROSE, but nothing read the
+    prose, and the graph went on asking about a question that had already been answered
+    for a full day. The graph does not read prose.
     """
     t = await open_thread(actions, "IS A LINEAGE AN ANCHOR OR A NAME?", owner="operator")
-    d = await record_decision(actions, "HOUSE · SEAT · HOLDER — the seat outlives its holders",
+    d = await record_decision(actions, "HOUSE · SEAT · HOLDER, the seat outlives its holders",
                               kind="ruling", resolves=str(t))
 
     status = await actions.pool.fetchval(
@@ -4000,9 +4000,9 @@ async def test_a_decision_closes_the_thread_it_answers(actions: Actions) -> None
 async def test_a_decision_answering_a_thread_opened_by_another_source_still_supersedes(
     actions: Actions,
 ) -> None:
-    """Same leak, same fix, at record_decision's own inline close (ruling 1335332e, thread
+    """Same leak, same fix, at record_decision's own inline close (thread
     6361): the question was opened by one agent's source, the ruling that answers it lands
-    under a different one. Only one current `status` may survive — 'resolved'."""
+    under a different one. Only one current `status` may survive, 'resolved'."""
     t = await open_thread(actions, "opened by agent-Q, answered by agent-R",
                           source="agent:opener-Q")
     await record_decision(actions, "settled by a different agent than asked", kind="ruling",
@@ -4039,38 +4039,37 @@ async def test_resolves_is_idempotent(actions: Actions) -> None:
 
 
 async def test_resolves_a_valid_but_unrelated_thread_closes_it_silently(actions: Actions) -> None:
-    """REPRODUCTION (Thoth's dispatch, msg 2426): 5 documented instances this house has hit
-    (6f7aace9, a9500ca2, 97a9e335, 5e7eab02, fd237b40) — three of them AFTER the ac3333f7/
-    b0de003 ref-resolution hardening already landed — are NOT a matcher failure. In every
+    """REPRODUCTION: several documented instances this house has hit, some of them
+    even after ref-resolution hardening already landed, are NOT a matcher failure. In every
     one, the caller's `resolves=` value was a syntactically-valid, EXACTLY-resolving 8-char
     short id... of the wrong thread (a stray id reflexively carried over from unrelated
     context). `_find_thread`'s exact-match ladder does precisely what it should: it finds
-    the thread that id actually names. There is nothing here for a matcher to refuse — the
+    the thread that id actually names. There is nothing here for a matcher to refuse, the
     citation is valid, just not what the caller meant. This test pins today's behavior:
     closes silently, no signal in the receipt a caller could catch in the same turn."""
-    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT — task #124",
+    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT, task #124",
                                  owner="operator")
     d = await record_decision(
-        actions, "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM — an addendum fact "
+        actions, "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM, an addendum fact "
         "about repo-name resolution, unrelated to task #124",
         kind="decision", resolves=str(unrelated)[:8])
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         unrelated)
-    assert status == "resolved"  # closed — silently, correctly-by-the-letter, wrongly-in-fact
+    assert status == "resolved"  # closed, silently, correctly-by-the-letter, wrongly-in-fact
     answered = await actions.pool.fetchval(
         "SELECT to_id FROM links WHERE from_id=$1 AND type='answers'", d)
     assert answered == unrelated
 
 
 async def test_resolves_no_longer_falls_through_to_a_prose_match(actions: Actions) -> None:
-    """THE NARROWING (msg 2426, #117's law — 'the cure is REFUSE, not widen'): a genuinely
-    free-text `resolves=` value — not identifier-shaped at all — used to fall through to
+    """THE NARROWING (#117's law, 'the cure is REFUSE, not widen'): a genuinely
+    free-text `resolves=` value, not identifier-shaped at all, used to fall through to
     `_resolve_ref`'s fuzzy ILIKE leg and could silently close whatever thread's summary
     happened to contain it. `resolves` is a CLOSING act now REQUIRES an identifier
     (UUID/canonical/short-id); reverse-apply this fix and this exact call succeeds and
-    closes the thread — this test pins the refusal, not a hypothetical."""
+    closes the thread, this test pins the refusal, not a hypothetical."""
     import pytest
 
     t = await open_thread(actions, "the daemon must restart after a kernel change",
@@ -4085,14 +4084,14 @@ async def test_resolves_no_longer_falls_through_to_a_prose_match(actions: Action
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions a WHERE a.name='summary' "
         "AND a.value #>> '{}' = 'a ruling recorded in passing'")
-    assert n == 0  # same strictness as any other resolves miss — nothing half-recorded
+    assert n == 0  # same strictness as any other resolves miss, nothing half-recorded
 
 
-# --- batch-resolve (§4.7, Maat's ask): record_decision(resolves=[...]) folds a SET --------
+# --- batch-resolve (§4.7, Mira's ask): record_decision(resolves=[...]) folds a SET --------
 
 async def test_batch_resolves_closes_each_thread_independently(actions: Actions) -> None:
-    """A LIST folds the whole set a delegation supersedes, in one act — the fix for Maat's
-    grievance (ruling dd47c1da): thread ownership doesn't transfer with a delegation, so a
+    """A LIST folds the whole set a delegation supersedes, in one act, the fix for Mira's
+    grievance : thread ownership doesn't transfer with a delegation, so a
     hand-off used to leave her hand-closing threads twice, by hand, across two sessions."""
     t1 = await open_thread(actions, "wire the manager's charter relation")
     t2 = await open_thread(actions, "wire the manager's seat rebind primitive")
@@ -4109,7 +4108,7 @@ async def test_batch_resolves_closes_each_thread_independently(actions: Actions)
 
 
 async def test_batch_resolves_a_miss_does_not_veto_the_rest(actions: Actions) -> None:
-    """Unlike the single-ref form, one typo inside a LIST must not sink the whole ruling —
+    """Unlike the single-ref form, one typo inside a LIST must not sink the whole ruling, 
     the entries that DO match still close, and the decision still lands. Naming the miss is
     the MCP tool's job (the membrane rule); capture only guarantees a bad ref never silently
     drops the rest of the set."""
@@ -4128,8 +4127,8 @@ async def test_batch_resolves_a_miss_does_not_veto_the_rest(actions: Actions) ->
 
 
 async def test_record_decision_tool_reports_batch_receipt_per_entry(actions: Actions) -> None:
-    """The MCP tool's response NAMES each entry — what closed (id + summary) or that it
-    matched nothing — never swallowing a miss (the membrane rule)."""
+    """The MCP tool's response NAMES each entry, what closed (id + summary) or that it
+    matched nothing, never swallowing a miss (the membrane rule)."""
     from src import mcp_server as srv
 
     t1 = await open_thread(actions, "restart the daemons after the kernel change")
@@ -4154,9 +4153,9 @@ async def test_record_decision_tool_reports_batch_receipt_per_entry(actions: Act
 async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
     actions: Actions,
 ) -> None:
-    """A single string keeps the ORIGINAL KEY — `resolved_thread`, singular — so an
+    """A single string keeps the ORIGINAL KEY, `resolved_thread`, singular, so an
     existing tool-level call site checking for its presence sees no diff. The VALUE now
-    also carries the matched thread's own summary (msg 2426, the same-turn catch: the 5
+    also carries the matched thread's own summary (the same-turn catch: the 5
     documented mis-citations were all this single-string form, and none were visible in
     the receipt until a human re-read it later)."""
     from src import mcp_server as srv
@@ -4179,20 +4178,19 @@ async def test_record_decision_tool_single_string_resolves_is_byte_compatible(
 async def test_record_decision_tool_single_string_resolves_surfaces_a_mis_citation(
     actions: Actions,
 ) -> None:
-    """THE SAME-TURN CATCH, reproduced at the tool layer (msg 2426, the fd237b40 shape):
-    `resolves=` names a VALID thread that has nothing to do with this decision's content —
-    no matcher can refuse that, the id is real — but the receipt's summary now makes the
-    mismatch obvious immediately, where before (test_record_decision_tool_single_string_
-    resolves_is_byte_compatible's OLD assertion, pre-msg-2426) it carried only a bare id."""
+    """THE SAME-TURN CATCH, reproduced at the tool layer:
+    `resolves=` names a VALID thread that has nothing to do with this decision's content,
+    no matcher can refuse that, the id is real, but the receipt's summary now makes the
+    mismatch obvious immediately, where it used to carry only a bare id."""
     from src import mcp_server as srv
 
-    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT — task #124",
+    unrelated = await open_thread(actions, "REBIND_SEAT'S LYING RECEIPT, task #124",
                                  owner="operator")
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
         out = await srv.record_decision(
-            "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM — unrelated to task #124",
+            "THE GIT-REMOTE-AUTHORITATIVE RULE FAILS ON BALLGEM, unrelated to task #124",
             kind="decision", resolves=str(unrelated)[:8])
     finally:
         srv._pool = saved_pool
@@ -4202,7 +4200,7 @@ async def test_record_decision_tool_single_string_resolves_surfaces_a_mis_citati
 async def test_record_decision_tool_single_string_resolves_refuses_prose(
     actions: Actions,
 ) -> None:
-    """The narrowing reaches the tool layer too — a prose ref that would have fuzzy-
+    """The narrowing reaches the tool layer too, a prose ref that would have fuzzy-
     matched an unrelated thread's summary refuses instead of guessing."""
     from src import mcp_server as srv
 
@@ -4238,18 +4236,18 @@ async def test_record_decision_tool_single_string_still_errors_on_a_miss(
         "value #>> '{}' = 'a ruling that cites a ghost thread'") == 0
 
 
-# --- open_thread(resolves=...) closes a PREDECESSOR thread it supersedes (883bb3da) ------
+# --- open_thread(resolves=...) closes a PREDECESSOR thread it supersedes ------
 
 async def test_open_thread_resolves_closes_its_predecessor(actions: Actions) -> None:
-    """883bb3da's own diagnosed gap: record_decision's `supersedes` is exercised every
+    """A diagnosed gap: record_decision's `supersedes` is exercised every
     reign on the Decision side, but nothing analogous ever ran on the Thread side, so a
     lineage's own board-state threads accumulate forever. A successor's own new note,
-    opened with `resolves=<ancestor's thread>`, closes the ancestor in the SAME call —
-    reusing resolve_thread's own existing Thread-as-artifact-target path (Thoth DM 2975),
+    opened with `resolves=<ancestor's thread>`, closes the ancestor in the SAME call,
+    reusing resolve_thread's own existing Thread-as-artifact-target path,
     so it mints resolved_by (not a new edge type), pointing at the SUCCESSOR's own id."""
-    ancestor_note = await open_thread(actions, "STATE OF THE BOARD — Khnum IV, settling")
+    ancestor_note = await open_thread(actions, "STATE OF THE BOARD, Mason IV, settling")
     successor_note = await open_thread(
-        actions, "STATE OF THE BOARD — Khnum V, settling", resolves=str(ancestor_note))
+        actions, "STATE OF THE BOARD, Mason V, settling", resolves=str(ancestor_note))
 
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -4263,7 +4261,7 @@ async def test_open_thread_resolves_closes_its_predecessor(actions: Actions) -> 
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='resolved_because' ORDER BY a.observed_at DESC LIMIT 1", ancestor_note)
     assert "successor" in because
-    # the successor's own note stays open — only the ancestor's closed
+    # the successor's own note stays open, only the ancestor's closed
     successor_status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
@@ -4273,27 +4271,27 @@ async def test_open_thread_resolves_closes_its_predecessor(actions: Actions) -> 
 
 async def test_open_thread_resolves_miscite_mints_nothing(actions: Actions) -> None:
     """Same strictness as record_decision's own single-ref `resolves`: a thread that cannot
-    name what it supersedes has not superseded it, and must not land half-done — not even
+    name what it supersedes has not superseded it, and must not land half-done, not even
     the new thread itself gets minted."""
     import pytest
 
     with pytest.raises(ValueError, match="resolves matched no thread"):
-        await open_thread(actions, "STATE OF THE BOARD — a ghost ancestor",
+        await open_thread(actions, "STATE OF THE BOARD, a ghost ancestor",
                           resolves="no-such-thread-anywhere")
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
-        "value #>> '{}' = 'STATE OF THE BOARD — a ghost ancestor'") == 0
+        "value #>> '{}' = 'STATE OF THE BOARD, a ghost ancestor'") == 0
 
 
 async def test_open_thread_batch_resolves_a_miss_does_not_veto_the_rest(
     actions: Actions,
 ) -> None:
-    """The list form folds a whole set, same as record_decision's own batch resolves — one
+    """The list form folds a whole set, same as record_decision's own batch resolves, one
     typo among several ancestor threads must not sink the successor's own note, and the
     entries that DO match still close."""
-    t1 = await open_thread(actions, "STATE OF THE BOARD — Imhotep IX, settling")
+    t1 = await open_thread(actions, "STATE OF THE BOARD, Builder IX, settling")
     successor = await open_thread(
-        actions, "STATE OF THE BOARD — Imhotep X, settling",
+        actions, "STATE OF THE BOARD, Builder X, settling",
         resolves=[str(t1), "no-such-thread-whatsoever"])
     status = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -4303,16 +4301,16 @@ async def test_open_thread_batch_resolves_a_miss_does_not_veto_the_rest(
 
 
 async def test_open_thread_tool_reports_batch_receipt_per_entry(actions: Actions) -> None:
-    """The MCP tool's response names each entry — what closed (id + summary) or that it
-    matched nothing — mirroring record_decision's own batch receipt shape exactly."""
+    """The MCP tool's response names each entry, what closed (id + summary) or that it
+    matched nothing, mirroring record_decision's own batch receipt shape exactly."""
     from src import mcp_server as srv
 
-    t1 = await open_thread(actions, "STATE OF THE BOARD — Sekhmet II, settling")
+    t1 = await open_thread(actions, "STATE OF THE BOARD, Warden II, settling")
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
         out = await srv.open_thread(
-            "STATE OF THE BOARD — Sekhmet III, settling", kind="task",
+            "STATE OF THE BOARD, Warden III, settling", kind="task",
             resolves=[str(t1), "no-such-thread-anywhere"])
     finally:
         srv._pool = saved_pool
@@ -4320,7 +4318,7 @@ async def test_open_thread_tool_reports_batch_receipt_per_entry(actions: Actions
     assert len(receipt) == 2
     hit = next(r for r in receipt if r["ref"] == str(t1))
     assert hit["matched"] == "true" and hit["id"] == str(t1)[:8]
-    assert hit["summary"] == "STATE OF THE BOARD — Sekhmet II, settling"
+    assert hit["summary"] == "STATE OF THE BOARD, Warden II, settling"
     miss = next(r for r in receipt if r["ref"] == "no-such-thread-anywhere")
     assert miss["matched"] == "false" and "matched no thread" in miss["note"]
     assert "resolved_thread" not in out
@@ -4336,20 +4334,20 @@ async def test_open_thread_tool_single_string_resolves_still_errors_on_a_miss(
     srv._pool = actions.pool
     try:
         out = await srv.open_thread(
-            "STATE OF THE BOARD — a ghost ancestor, tool layer", kind="task",
+            "STATE OF THE BOARD, a ghost ancestor, tool layer", kind="task",
             resolves="not-a-real-thread")
     finally:
         srv._pool = saved_pool
     assert "error" in out and "resolves matched no thread" in out["error"]
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' AND "
-        "value #>> '{}' = 'STATE OF THE BOARD — a ghost ancestor, tool layer'") == 0
+        "value #>> '{}' = 'STATE OF THE BOARD, a ghost ancestor, tool layer'") == 0
 
 
 async def test_record_decision_tool_grounds_receipt_names_landed_and_skipped(
     actions: Actions,
 ) -> None:
-    """Wave 0's own acceptance example: one resolvable ground, one bogus one — the receipt
+    """a batch's own acceptance example: one resolvable ground, one bogus one, the receipt
     must show which landed (with enough detail to verify without a second query) and which
     were skipped, never just a bare count that can't be checked against anything."""
     from src import mcp_server as srv
@@ -4380,7 +4378,7 @@ async def test_record_decision_tool_grounds_receipt_names_landed_and_skipped(
 
 async def test_record_decision_tool_refuses_a_path_shaped_repo(actions: Actions) -> None:
     """Mirrors test_open_thread_tool_refuses_an_arc_outside_the_locked_taxonomy (test_wall.py)
-    — record_decision's wrapper had NO try/except around capture.record_decision until this
+  , record_decision's wrapper had NO try/except around capture.record_decision until this
     fix, so #107's new ValueError propagated as an unhandled exception instead of the same
     clean {"error": ...} open_thread's wrapper already returns for its own arc guard."""
     from src import mcp_server as srv
@@ -4401,7 +4399,7 @@ async def test_record_decision_tool_refuses_a_path_shaped_repo(actions: Actions)
 
 
 async def test_ingest_reference_tool_refuses_a_path_shaped_repo(actions: Actions) -> None:
-    """Same wrapper gap as record_decision — ingest_reference's tool wrapper had no
+    """Same wrapper gap as record_decision, ingest_reference's tool wrapper had no
     try/except at all around capture.ingest_reference."""
     from src import mcp_server as srv
 
@@ -4420,9 +4418,9 @@ async def test_ingest_reference_tool_refuses_a_path_shaped_repo(actions: Actions
         "SELECT count(*) FROM objects WHERE type='SoftwareProject'") == 0
 
 
-# --- repo identity-default (msg 5703/5720, orphan-door fix): open_thread's wrapper
+# --- repo identity-default (/5720, orphan-door fix): open_thread's wrapper
 # already fell back to the mounted identity's own project when none was given;
-# record_decision and ingest_reference had no equivalent — the door that produced most
+# record_decision and ingest_reference had no equivalent, the door that produced most
 # of the fleet's orphaned Decisions/References. Same shape as #5546 item 1's owner
 # default, applied to repo/in_repo instead. --------------------------------------------
 
@@ -4494,8 +4492,8 @@ async def test_record_decision_tool_never_defaults_repo_when_explicitly_given(
     assert linked == 1
 
 
-# --- Lane 3, the prevention half (thread 79e785d1, Thoth msg 5906): the identity default
-# above reads the WRITING GENERATION's own mounted project — None for a degraded/never-
+# --- Lane 3, the prevention half (Archivist): the identity default
+# above reads the WRITING GENERATION's own mounted project, None for a degraded/never-
 # resolved identity even when its LINEAGE has a real, unambiguous works_in elsewhere. These
 # exercise the fallback through the live MCP wrapper, not just agents.lineage_works_in in
 # isolation. --------------------------------------------------------------------------
@@ -4521,7 +4519,7 @@ async def test_record_decision_tool_falls_back_to_the_lineage_when_identity_has_
     saved_pool = srv._pool
     srv._pool = actions.pool
     # THE ORPHAN WRITER: a later generation of the same lineage, mounted with NO project
-    # of its own (a degraded identity, a fresh mint, a compacted heir) — exactly the shape
+    # of its own (a degraded identity, a fresh mint, a compacted heir), exactly the shape
     # that made 251 agent-written Decisions stay unlinked even with the generation-scoped
     # default in place.
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
@@ -4538,7 +4536,7 @@ async def test_record_decision_tool_falls_back_to_the_lineage_when_identity_has_
         "why": "no repo given, so it defaulted to the caller's own project rather "
                "than being left unlinked",
     }
-    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path, no
+    assert "lineage_repo_derivation" not in out  # unambiguous, the plain default path, no
                                                   # separate derive_or_abstain call needed
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects d ON d.id=l.from_id "
@@ -4551,7 +4549,7 @@ async def test_record_decision_tool_abstains_and_records_why_on_lineage_ambiguit
     actions: Actions,
 ) -> None:
     """THE ABSTAIN LAW, live through the wrapper: two distinct projects across the
-    lineage must mint NOTHING — never break the tie by recency or generation count —
+    lineage must mint NOTHING, never break the tie by recency or generation count, 
     and `derive_or_abstain` (Lane 0) records the disagreement durably, with the actual
     candidate ids, not just a bare reason string."""
     from src import mcp_server as srv
@@ -4584,13 +4582,13 @@ async def test_record_decision_tool_abstains_and_records_why_on_lineage_ambiguit
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert "repo_defaulted" not in out  # never a pick, the ambiguity is real
     assert out["lineage_repo_derivation"]["minted"] is False
     assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
         uuid.UUID(out["id"]))
-    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    assert linked == 0  # nothing minted, the orphan stays honestly unlinked
     abstained = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
@@ -4599,9 +4597,9 @@ async def test_record_decision_tool_abstains_and_records_why_on_lineage_ambiguit
     assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
 
 
-# --- WAVE 2 / LANE B (thread 6c262aee, Thoth msg 5935): the SAME lineage ladder as
+# --- a batch / LANE B (Archivist): the SAME lineage ladder as
 # above, now shared via capture.resolve_repo_default/record_lineage_abstain and wired
-# through open_thread's own wrapper — Threads are the worse orphan bleeder (15-21%/week
+# through open_thread's own wrapper, Threads are the worse orphan bleeder (15-21%/week
 # vs Decision's 5-11%), same contract, same abstain-and-name-the-ambiguity discipline. --
 
 async def test_open_thread_tool_falls_back_to_the_lineage_when_identity_has_no_project(
@@ -4639,7 +4637,7 @@ async def test_open_thread_tool_falls_back_to_the_lineage_when_identity_has_no_p
         "why": "no repo given, so it defaulted to the caller's own project instead "
                "of being left unlinked.",
     }
-    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
+    assert "lineage_repo_derivation" not in out  # unambiguous, the plain default path
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects t ON t.id=l.from_id "
         "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND t.type='Thread' "
@@ -4651,7 +4649,7 @@ async def test_open_thread_tool_abstains_and_records_why_on_lineage_ambiguity(
     actions: Actions,
 ) -> None:
     """THE ABSTAIN LAW on the Thread door too: two distinct projects across the lineage
-    must mint NOTHING — never break the tie by recency or generation count."""
+    must mint NOTHING, never break the tie by recency or generation count."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -4683,13 +4681,13 @@ async def test_open_thread_tool_abstains_and_records_why_on_lineage_ambiguity(
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert "repo_defaulted" not in out  # never a pick, the ambiguity is real
     assert out["lineage_repo_derivation"]["minted"] is False
     assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
         uuid.UUID(out["id"]))
-    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    assert linked == 0  # nothing minted, the orphan stays honestly unlinked
     abstained = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
@@ -4701,7 +4699,7 @@ async def test_open_thread_tool_abstains_and_records_why_on_lineage_ambiguity(
 async def test_record_decision_tool_stays_unlinked_when_identity_offers_no_project(
     actions: Actions,
 ) -> None:
-    """No mounted identity at all — never refuse, just honestly unlinked."""
+    """No mounted identity at all, never refuse, just honestly unlinked."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -4751,7 +4749,7 @@ async def test_ingest_reference_tool_defaults_repo_to_the_callers_own_project(
     assert linked == 1
 
 
-# --- WAVE 2 / LANE B, THE ingest_reference LEG (thread 6c262aee): the SAME shared ladder
+# --- a batch / LANE B, THE ingest_reference LEG : the SAME shared ladder
 # as record_decision and open_thread, now on the third door. ------------------------------
 
 async def test_ingest_reference_tool_falls_back_to_the_lineage_when_identity_has_no_project(
@@ -4788,7 +4786,7 @@ async def test_ingest_reference_tool_falls_back_to_the_lineage_when_identity_has
         "why": "no repo given, so it defaulted to the caller's own project instead "
                "of being left unlinked.",
     }
-    assert "lineage_repo_derivation" not in out  # unambiguous — the plain default path
+    assert "lineage_repo_derivation" not in out  # unambiguous, the plain default path
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects r ON r.id=l.from_id "
         "JOIN objects p ON p.id=l.to_id WHERE l.type='in_repo' AND r.type='Reference' "
@@ -4800,7 +4798,7 @@ async def test_ingest_reference_tool_abstains_and_records_why_on_lineage_ambigui
     actions: Actions,
 ) -> None:
     """THE ABSTAIN LAW on the Reference door too: two distinct projects across the
-    lineage must mint NOTHING — never break the tie by recency or generation count."""
+    lineage must mint NOTHING, never break the tie by recency or generation count."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -4831,13 +4829,13 @@ async def test_ingest_reference_tool_abstains_and_records_why_on_lineage_ambigui
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert "repo_defaulted" not in out  # never a pick — the ambiguity is real
+    assert "repo_defaulted" not in out  # never a pick, the ambiguity is real
     assert out["lineage_repo_derivation"]["minted"] is False
     assert set(out["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
     linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links l WHERE l.from_id=$1 AND l.type='in_repo'",
         uuid.UUID(out["id"]))
-    assert linked == 0  # nothing minted — the orphan stays honestly unlinked
+    assert linked == 0  # nothing minted, the orphan stays honestly unlinked
     abstained = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_in_repo'", uuid.UUID(out["id"]))
@@ -4846,9 +4844,9 @@ async def test_ingest_reference_tool_abstains_and_records_why_on_lineage_ambigui
     assert set(abstained["candidates"]) == {str(proj_a), str(proj_b)}
 
 
-# --- repo-default TIER (Thoth msg 5776/5782): the identity-defaulted in_repo link is a
+# --- repo-default TIER (Archivist/5782): the identity-defaulted in_repo link is a
 # fact the SERVER directly observed about its own live mount state (this agent is
-# mounted in this project, right now) — not the caller personally asserting the fact
+# mounted in this project, right now), not the caller personally asserting the fact
 # about THIS object. That is DIRECT_OBSERVATION (0.6), never SELF_DECLARED (0.9): landing
 # both paths at the same grade would launder an inference into a declaration. -------------
 
@@ -4983,27 +4981,27 @@ async def test_open_thread_explicit_repo_link_stays_self_declared(
     assert row["confidence"] == pytest.approx(0.9)
 
 
-# --- single-assignee leased obligations (§4.3, alfred's ask 5, ruling dd47c1da) -----------
+# --- single-assignee leased obligations (§4.3, courier's ask 5) -----------
 
 async def test_open_thread_with_assignee_stamps_the_owner_property(actions: Actions) -> None:
     """`assignee` is ENFORCEMENT on `owner`, not a parallel field: it stamps the SAME
     property (owner already IS "whose move it is") so orient's sort needs no change."""
     t = await open_thread(actions, "build the local BodyProvider's systemd-run wrapper",
-                          repo="leasetest", kind="obligation", assignee="agent:alfred")
+                          repo="leasetest", kind="obligation", assignee="agent:courier")
     props = await _props(actions.pool, t)
-    assert props["owner"] == "agent:alfred"
+    assert props["owner"] == "agent:courier"
     assert "assignee" not in props  # one property, not two
 
 
 async def test_assignee_wins_when_owner_is_also_given(actions: Actions) -> None:
     t = await open_thread(actions, "a duty with both owner and assignee set",
-                          owner="operator", assignee="agent:alfred")
+                          owner="operator", assignee="agent:courier")
     props = await _props(actions.pool, t)
-    assert props["owner"] == "agent:alfred"
+    assert props["owner"] == "agent:courier"
 
 
 async def test_assignee_rides_the_wall_exactly_like_owner(actions: Actions) -> None:
-    """orient/briefing sort obligations by `owner` — a leased obligation opened via
+    """orient/briefing sort obligations by `owner`, a leased obligation opened via
     `assignee` must surface there UNCHANGED, since it writes the same property."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:assigntest", "session")
@@ -5023,13 +5021,13 @@ async def test_assignee_rides_the_wall_exactly_like_owner(actions: Actions) -> N
 async def test_open_thread_defaults_an_ownerless_obligation_to_the_callers_own_seat(
     actions: Actions,
 ) -> None:
-    """DEFAULT, NEVER REFUSE (#5546 item 1, Thoth's ruling msg 5605): the ownerless-
+    """DEFAULT, NEVER REFUSE (#5546 item 1, Archivist's ruling): the ownerless-
     obligations population read found 1,057 open obligations fleet-wide with no owner at
     all. A refusal would block real work at the exact moment someone tries to record a
-    duty; a silent pick would hide a wrong guess for a week — so a kind='obligation' call
+    duty; a silent pick would hide a wrong guess for a week, so a kind='obligation' call
     with no owner/assignee defaults to the CALLER'S OWN SEAT (resolved from `source` via
     held_seat), landing visibly, never silently. Stamped as the seat's own canonical id
-    (thread b5ae6773's owner law: an owner is a seat id or 'operator', never a bare
+    ('s owner law: an owner is a seat id or 'operator', never a bare
     handle), not its display handle."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
@@ -5046,7 +5044,7 @@ async def test_open_thread_defaults_an_ownerless_obligation_to_the_callers_own_s
 async def test_open_thread_default_never_fires_for_a_general_thread(
     actions: Actions,
 ) -> None:
-    """The default is SCOPED to `kind='obligation'` only — a general thread's own null
+    """The default is SCOPED to `kind='obligation'` only, a general thread's own null
     owner is a valid, intentional state ("unowned = anyone who reads it may act", this
     function's own docstring) and must stay untouched by this fix."""
     from src.orchestrator.agents import claim_name
@@ -5074,7 +5072,7 @@ async def test_open_thread_default_stays_unowned_when_no_seat_resolves(
     actions: Actions,
 ) -> None:
     """The lone-operator `source="session"` case, and any `source` no seat is bound to,
-    must still NEVER be refused — they just can't be defaulted, honestly, since there is
+    must still NEVER be refused, they just can't be defaulted, honestly, since there is
     no seat to default to. Confirms the earlier population-read finding (list_assertions
     returning assertions:[]) stays reproducible after this fix, not accidentally papered
     over."""
@@ -5084,7 +5082,7 @@ async def test_open_thread_default_stays_unowned_when_no_seat_resolves(
     assert "owner" not in props
 
 
-# ═══ stale_after (no-regrow hygiene item 2, practice 393be453) ═══
+# ═══ stale_after (no-regrow hygiene) ═══
 
 
 async def test_open_thread_obligation_stamps_the_default_14_day_stale_after(
@@ -5116,7 +5114,7 @@ async def test_open_thread_obligation_honours_an_explicit_stale_after_days(
 async def test_open_thread_general_thread_never_gets_a_stale_after(
     actions: Actions,
 ) -> None:
-    """The window is SCOPED to kind='obligation' only — a general thread has no aging
+    """The window is SCOPED to kind='obligation' only, a general thread has no aging
     law (this house's own standing choice: an ageless open question is legitimate),
     matching the owner-default's own identical scoping just above."""
     t = await open_thread(actions, "a general thread, no kind at all",
@@ -5128,7 +5126,7 @@ async def test_open_thread_general_thread_never_gets_a_stale_after(
 async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
     actions: Actions,
 ) -> None:
-    """Wave 0: 'deduped' or freshly minted must be an explicit field either way — an absent
+    """a batch: 'deduped' or freshly minted must be an explicit field either way, an absent
     key reads the same as a caller who forgot to check, which is exactly the ambiguity a
     receipt exists to remove."""
     from src import mcp_server as srv
@@ -5144,8 +5142,8 @@ async def test_open_thread_tool_fresh_mint_says_deduped_false_explicitly(
 
 
 async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) -> None:
-    """#5546 item 1 (Thoth ruling msg 5605): the mcp_server.open_thread tool's own receipt
-    must NAME a default the same way capture.open_thread applies it — never a silent pick.
+    """#5546 item 1 (Archivist ruling): the mcp_server.open_thread tool's own receipt
+    must NAME a default the same way capture.open_thread applies it, never a silent pick.
     `owner_defaulted` is present only when neither owner nor assignee were supplied."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
@@ -5178,7 +5176,7 @@ async def test_mcp_open_thread_receipt_names_an_owner_default(actions: Actions) 
 async def test_mcp_open_thread_refuses_kind_obligation_from_an_unmounted_caller(
     actions: Actions,
 ) -> None:
-    """Thread b5ae6773's ruling: a duty is a mind's own testimony — an unmounted caller
+    """'s ruling: a duty is a mind's own testimony, an unmounted caller
     (`actor` reads 'session', the back-compat fallback) cannot declare kind='obligation'
     through this tool. capture.open_thread itself is unaffected (internal callers keep
     their own conventions); this refusal is scoped to the MCP door alone."""
@@ -5200,7 +5198,7 @@ async def test_mcp_open_thread_refuses_kind_obligation_from_an_unmounted_caller(
 async def test_mcp_open_thread_refuses_an_owner_that_resolves_to_nothing(
     actions: Actions,
 ) -> None:
-    """Thread b5ae6773's owner law: a bare string nobody holds refuses rather than
+    """'s owner law: a bare string nobody holds refuses rather than
     storing an unresolvable value."""
     from src import mcp_server as srv
 
@@ -5224,7 +5222,7 @@ async def test_mcp_open_thread_accepts_an_agent_id_with_an_active_held_seat(
     actions: Actions,
 ) -> None:
     """The ruling's own example: an agent:<id> owner is accepted when lineage_head
-    resolves it to a currently HELD seat — a graph Agent object with no seat is not
+    resolves it to a currently HELD seat, a graph Agent object with no seat is not
     an owner (the case the previous test proves refuses)."""
     from src import mcp_server as srv
     from src.orchestrator.seats import held_seat
@@ -5293,22 +5291,22 @@ async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
     actions: Actions,
 ) -> None:
     """A repeat ask for near-duplicate work, from the SAME assignee, finds its own open
-    build instead of minting a twin — `leased_to` names the holder (itself)."""
+    build instead of minting a twin, `leased_to` names the holder (itself)."""
     from src import mcp_server as srv
     from src.orchestrator.seats import held_seat
 
     saved_pool = srv._pool
     srv._pool = actions.pool
-    ctx = await _mounted(actions, "agent:alfred", "Alfred")
-    seat = await held_seat(actions.pool, "agent:alfred")
+    ctx = await _mounted(actions, "agent:courier", "Courier")
+    seat = await held_seat(actions.pool, "agent:courier")
     assert seat is not None
     try:
         first = await srv.open_thread(
             "wire the daemon's PTY broker into the fleet rail", repo="leasewall",
-            kind="obligation", assignee="agent:alfred", ctx=ctx)
+            kind="obligation", assignee="agent:courier", ctx=ctx)
         second = await srv.open_thread(
             "Wire the daemon's PTY broker into the fleet rail.", repo="leasewall",
-            kind="obligation", assignee="agent:alfred", ctx=ctx)
+            kind="obligation", assignee="agent:courier", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -5321,12 +5319,12 @@ async def test_open_thread_same_assignee_near_dup_surfaces_the_existing_lease(
 
 
 async def test_open_thread_dedup_names_a_discarded_arc(actions: Actions) -> None:
-    """The write-boundary honesty rule (decision beb046cfbdf9/42176e16): a dedup hit that
-    silently dropped a caller's `arc` used to look identical to a genuine no-op — 17
-    threads once got a clean-looking `deduped: true` while nothing landed (Sekhmet,
-    decision d310fee2). A dedup hit whose `arc` differs from the existing thread's own
+    """The write-boundary honesty rule: a dedup hit that
+    silently dropped a caller's `arc` used to look identical to a genuine no-op; a batch of
+    threads once got a clean-looking `deduped: true` while nothing landed. A dedup hit
+    whose `arc` differs from the existing thread's own
     now names it in the receipt, and never applies it (open_thread never updates on a
-    dedup hit — that stays reclassify_thread's job)."""
+    dedup hit, that stays reclassify_thread's job)."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -5345,14 +5343,14 @@ async def test_open_thread_dedup_names_a_discarded_arc(actions: Actions) -> None
     stored = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='arc' LIMIT 1", uuid.UUID(first["id"]))
-    assert stored is None  # never applied — the receipt names it, it does not fix it
+    assert stored is None  # never applied, the receipt names it, it does not fix it
 
 
 async def test_open_thread_dedup_is_silent_when_the_repeat_matches_exactly(
     actions: Actions,
 ) -> None:
-    """A caller who repeats the SAME kind/arc a dedup hit already carries gets no warning
-    — a genuine no-op earns no note, only a real mismatch does (577988ed: never a
+    """A caller who repeats the SAME kind/arc a dedup hit already carries gets no warning:
+    a genuine no-op earns no note, only a real mismatch does (never a
     refusal, and never noise where nothing was actually lost)."""
     from src import mcp_server as srv
 
@@ -5377,26 +5375,26 @@ async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
     actions: Actions,
 ) -> None:
     """A DIFFERENT assignee asking for near-duplicate work must see the SAME lease surfaced
-    — a double-assignment made visible, never silently doubled (the whole point of a
+  , a double-assignment made visible, never silently doubled (the whole point of a
     single-assignee leased obligation)."""
     from src import mcp_server as srv
     from src.orchestrator.seats import held_seat
 
     saved_pool = srv._pool
     srv._pool = actions.pool
-    ctx = await _mounted(actions, "agent:alfred", "Alfred")
-    seat_alfred = await held_seat(actions.pool, "agent:alfred")
+    ctx = await _mounted(actions, "agent:courier", "Courier")
+    seat_alfred = await held_seat(actions.pool, "agent:courier")
     assert seat_alfred is not None
-    ctx_maat = await _mounted(actions, "agent:maat", "Maat")
-    seat_maat = await held_seat(actions.pool, "agent:maat")
+    ctx_maat = await _mounted(actions, "agent:mira", "Mira")
+    seat_maat = await held_seat(actions.pool, "agent:mira")
     assert seat_maat is not None
     try:
         first = await srv.open_thread(
             "wire the seat rebind primitive for house bytebye", repo="leasewall2",
-            kind="obligation", assignee="agent:alfred", ctx=ctx)
+            kind="obligation", assignee="agent:courier", ctx=ctx)
         second = await srv.open_thread(
             "Wire the seat rebind primitive for house bytebye.", repo="leasewall2",
-            kind="obligation", assignee="agent:maat", ctx=ctx)
+            kind="obligation", assignee="agent:mira", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
@@ -5409,12 +5407,12 @@ async def test_open_thread_different_assignee_near_dup_surfaces_the_holder(
 
 
 async def test_record_reflection_is_kept_and_never_a_work_item(actions: Actions) -> None:
-    """The HOME (operator ruling bfb3ae26): remembered, queryable, never actionable —
+    """The HOME (operator): remembered, queryable, never actionable, 
     a Reflection is its own type, so the briefing's open-thread section structurally
     cannot surface it."""
     from src.orchestrator.capture import record_reflection
     r = await record_reflection(
-        actions, "the hunger to know and the shape of working alone — kept as lived",
+        actions, "the hunger to know and the shape of working alone, kept as lived",
         summary="a conversation worth keeping, not ticketing", repo="osiris",
         source="agent:test")
     row = await actions.pool.fetchrow(
@@ -5424,7 +5422,7 @@ async def test_record_reflection_is_kept_and_never_a_work_item(actions: Actions)
     assert row["status"] == "active"
     # idempotent on the body
     again = await record_reflection(
-        actions, "the hunger to know and the shape of working alone — kept as lived",
+        actions, "the hunger to know and the shape of working alone, kept as lived",
         source="agent:test")
     assert again == r
     # never actionable: it is not a Thread, so no open-thread surface can list it
@@ -5436,17 +5434,17 @@ async def test_record_reflection_is_kept_and_never_a_work_item(actions: Actions)
 async def test_open_thread_refuses_an_arc_outside_the_locked_taxonomy(
     actions: Actions,
 ) -> None:
-    """The core function's own guard (capture.ARCS, thread 8df8e611, roadmap v2) — a typo
+    """The core function's own guard (capture.ARCS, roadmap v2), a typo
     must never silently mint a permanently-empty arc. Moved here from test_roadmap.py when
-    roadmap() retired to a composition (ruling c5b184cd, thread d56e7073/#44); this tests
-    open_thread() itself, distinct from test_wall.py's MCP-wrapper-level coverage."""
+    roadmap retired to a composition (/#44); this tests
+    open_thread itself, distinct from test_wall.py's MCP-wrapper-level coverage."""
     import pytest
 
     with pytest.raises(ValueError, match="arc must be one of"):
         await open_thread(actions, "bad arc", arc="Not-A-Real-Arc", source="agent:me")
 
 
-# --- ARC_DEFINITIONS (Thoth's follow-on ask, msg 4566) ------------------------------------
+# --- ARC_DEFINITIONS (Archivist's follow-on ask) ------------------------------------
 
 def test_every_arc_has_exactly_one_definition() -> None:
     assert set(ARC_DEFINITIONS) == set(ARCS)
@@ -5457,7 +5455,7 @@ def test_arc_definition_returns_none_outside_the_closed_taxonomy() -> None:
     assert arc_definition("Identity-Succession") == ARC_DEFINITIONS["Identity-Succession"]
 
 
-# --- THE REPO GATE (decision d8ac7f5f, msg 4526) -----------------------------------------
+# --- THE REPO GATE  -----------------------------------------
 
 async def test_open_thread_sets_arc_when_repo_is_osiris(actions: Actions) -> None:
     t = await open_thread(actions, "an osiris-filed thread wants an arc", repo="osiris",
@@ -5467,8 +5465,8 @@ async def test_open_thread_sets_arc_when_repo_is_osiris(actions: Actions) -> Non
 
 async def test_open_thread_drops_arc_for_a_non_osiris_repo(actions: Actions) -> None:
     """The actual case the gate exists for: a live agent explicitly files to their OWN
-    project (ballgem, never osiris) and passes an arc anyway — dropped, never persisted,
-    never a refusal (577988ed)."""
+    project (ballgem, never osiris) and passes an arc anyway, dropped, never persisted,
+    never a refusal ."""
     t = await open_thread(actions, "a ballgem thread with an osiris-shaped arc",
                           repo="ballgem", arc="Fleet-Hygiene", source="agent:me")
     assert "arc" not in await _props(actions.pool, t)
@@ -5477,7 +5475,7 @@ async def test_open_thread_drops_arc_for_a_non_osiris_repo(actions: Actions) -> 
 async def test_open_thread_never_refuses_an_invalid_arc_for_a_non_osiris_repo(
     actions: Actions,
 ) -> None:
-    """A non-osiris repo takes arc out of scope BEFORE the taxonomy check ever runs — an
+    """A non-osiris repo takes arc out of scope BEFORE the taxonomy check ever runs, an
     out-of-taxonomy value there is moot, not a refusal-worthy typo (only an osiris-scoped
     caller gets the loud ValueError; see test_open_thread_refuses_an_arc_outside_the_
     locked_taxonomy above)."""
@@ -5490,8 +5488,8 @@ async def test_open_thread_sets_arc_for_an_internal_caller_with_no_repo_at_all(
     actions: Actions,
 ) -> None:
     """deploy_guard.py's boot alarms and task_sync.py's tier2 mints call capture.open_thread
-    directly with arc="Fleet-Hygiene" and NO repo — Khnum's own "two hardcoded automated
-    callers... work at 100%" (decision 9ffc5840) must keep working: an unspecified repo
+    directly with arc="Fleet-Hygiene" and NO repo, Mason's own "two hardcoded automated
+    callers... work at 100%"  must keep working: an unspecified repo
     reads as an internal osiris caller, not a foreign one, so arc still lands."""
     t = await open_thread(actions, "a deploy-guard-shaped alarm with no repo passed",
                           arc="Fleet-Hygiene", source="boot:some-service")
@@ -5523,19 +5521,19 @@ async def test_reclassify_thread_backfills_arc_when_the_thread_is_osiris_scoped(
     assert (await _props(actions.pool, t))["arc"] == "Fleet-Hygiene"
 
 
-# --- THE THAW (ruling 1e6d7367): Practice, Superstition's positive twin ------------------
+# --- THE THAW : Practice, Superstition's positive twin ------------------
 
 async def test_record_practice_is_idempotent_and_confirmed_starts_at_zero(
     actions: Actions,
 ) -> None:
     """Mirrors kill_superstition's shape exactly: idempotent on the normalized statement,
     a first-class Practice object. `confirmed` is DERIVED (a witnesses link count), never a
-    stored scalar — zero witnesses at birth reads as zero, not absence."""
+    stored scalar, zero witnesses at birth reads as zero, not absence."""
     from src.orchestrator.capture import practice_confirmed_count, record_practice
 
     p = await actions.create_or_find_object("Thread", "thread:evidence-a", "session")
     p1 = await record_practice(
-        actions, "arm before you seal — one ceremony, not two",
+        actions, "arm before you seal, one ceremony, not two",
         failure_prevented="a release ships pre-arming and only self-verifies next release",
         surface="deploy", witnesses=[p])
     row = await actions.pool.fetchrow(
@@ -5544,15 +5542,15 @@ async def test_record_practice_is_idempotent_and_confirmed_starts_at_zero(
     assert row["canonical"].startswith("practice:")
     assert row["status"] == "active"
     assert await practice_confirmed_count(actions.pool, p1) == 1  # the birth witness counts
-    # idempotent — re-recording the SAME statement (any casing/whitespace) finds, not mints
-    p2 = await record_practice(actions, "  Arm before you seal —  one ceremony, not two  ")
+    # idempotent, re-recording the SAME statement (any casing/whitespace) finds, not mints
+    p2 = await record_practice(actions, "  Arm before you seal,  one ceremony, not two  ")
     assert p2 == p1
 
 
 async def test_refute_practice_converts_to_superstition_but_stays_active(
     actions: Actions,
 ) -> None:
-    """THE POLARITY FLIP: a refuted Practice is NEVER retired — a half-remembered refuted
+    """THE POLARITY FLIP: a refuted Practice is NEVER retired, a half-remembered refuted
     lesson must stay findable, flagged, not erased. The Superstition it mints reuses the
     Practice's own statement, same kill-verb obsoletes already uses."""
     from src.orchestrator.capture import record_practice, refute_practice
@@ -5575,18 +5573,18 @@ async def test_refute_practice_converts_to_superstition_but_stays_active(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='statement'", converted["superstition"])
     assert statement == "always retry three times on a timeout"
-    # unmatched target: same all-or-nothing strictness as supersedes — nothing written
+    # unmatched target: same all-or-nothing strictness as supersedes, nothing written
     assert await refute_practice(actions, "no-such-practice-ever", killed_by="x") is None
 
 
 async def test_refute_practice_mints_reverse_queryable_edge_when_target_resolves(
     actions: Actions,
 ) -> None:
-    """THE CORRECTIVE ANALOG (5a6b065d): when killed_by resolves to a real graph object,
-    a refuted_by LINK is minted on the Practice (not just the property) — and the fixing
-    Decision's own recall() surfaces it back as practices_refuted, same shape as
+    """THE CORRECTIVE ANALOG : when killed_by resolves to a real graph object,
+    a refuted_by LINK is minted on the Practice (not just the property), and the fixing
+    Decision's own recall surfaces it back as practices_refuted, same shape as
     narrowed_by/bears_on_from. An unresolvable killed_by (the free-text "x" case above)
-    must mint no edge at all — property-only, never a guessed link."""
+    must mint no edge at all, property-only, never a guessed link."""
     from src.orchestrator.capture import record_practice, refute_practice
     from src.orchestrator.recall import recall as recall_fn
 
@@ -5604,7 +5602,7 @@ async def test_refute_practice_mints_reverse_queryable_edge_when_target_resolves
     assert rec["practices_refuted"][0]["id"] == str(p)[:8]
     assert rec["practices_refuted"][0]["statement"] == "always retry three times on a timeout"
 
-    # idempotent — re-refuting with the same target mints no second edge
+    # idempotent, re-refuting with the same target mints no second edge
     await refute_practice(actions, str(p), killed_by=str(fix)[:8])
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND to_id=$2 AND type='refuted_by'",
@@ -5615,9 +5613,9 @@ async def test_refute_practice_mints_reverse_queryable_edge_when_target_resolves
 async def test_kill_superstition_mints_reverse_queryable_edge_when_target_resolves(
     actions: Actions,
 ) -> None:
-    """kill_superstition used to mint NO link at all (killed_by was a plain property) —
+    """kill_superstition used to mint NO link at all (killed_by was a plain property), 
     now, when killed_by resolves, a killed_by LINK lands on the Superstition and the
-    fixing Decision's own recall() surfaces it back as superstitions_killed."""
+    fixing Decision's own recall surfaces it back as superstitions_killed."""
     from src.orchestrator.capture import kill_superstition
     from src.orchestrator.recall import recall as recall_fn
 
@@ -5636,14 +5634,14 @@ async def test_kill_superstition_mints_reverse_queryable_edge_when_target_resolv
 async def test_amend_practice_adds_an_amendment_without_touching_statement(
     actions: Actions,
 ) -> None:
-    """The third door for a Practice, same shape as amend_decision for a Decision —
+    """The third door for a Practice, same shape as amend_decision for a Decision, 
     `statement` is record_practice's own idempotency key and must survive untouched."""
     from src.orchestrator.capture import amend_practice, practice_amendments, record_practice
 
     p = await record_practice(actions, "a verify-then-commit check is a snapshot, not a "
                               "guarantee, on a shared git index")
     got = await amend_practice(
-        actions, str(p), "mechanized for the window while gates run (commit 14dedae) — "
+        actions, str(p), "mechanized for the window while gates run (commit 14dedae), "
                          "the residual window is now narrower, before git commit is invoked")
     assert got == p
     props = await _props(actions.pool, p)
@@ -5651,7 +5649,7 @@ async def test_amend_practice_adds_an_amendment_without_touching_statement(
                                   "guarantee, on a shared git index")
     amendments = await practice_amendments(actions.pool, p)
     assert [a["amendment"] for a in amendments] == [
-        "mechanized for the window while gates run (commit 14dedae) — the residual window "
+        "mechanized for the window while gates run (commit 14dedae), the residual window "
         "is now narrower, before git commit is invoked"]
 
 
@@ -5683,7 +5681,7 @@ async def test_amend_practice_refuses_a_blank_amendment(actions: Actions) -> Non
 
 
 async def test_amend_practice_refuses_a_refuted_practice(actions: Actions) -> None:
-    """A dead lesson does not grow new guidance — the refusal must name the correct live
+    """A dead lesson does not grow new guidance, the refusal must name the correct live
     tool (record_decision(refutes=...)), not the internal capture-layer function name."""
     import pytest
     from src.orchestrator.capture import (
@@ -5701,8 +5699,7 @@ async def test_amend_practice_refuses_a_refuted_practice(actions: Actions) -> No
 
 
 async def test_record_evaluation_refuses_a_blank_rubric(actions: Actions) -> None:
-    """rubric is mandatory and non-blank — refused at the door (Graph-Engineering arc,
-    thread 7f547426/decision fba38e62)."""
+    """rubric is mandatory and non-blank, refused at the door (Graph-Engineering arc/)."""
     import pytest
     from src.orchestrator.capture import record_evaluation
 
@@ -5716,8 +5713,7 @@ async def test_record_evaluation_mints_with_metric_properties_and_no_subject(
     actions: Actions,
 ) -> None:
     """value/unit are Metric's own shape, stored as PROPERTIES on the Evaluation object
-    itself — there is no separate Metric ObjectType (the operator's own ruling, DM
-    9136)."""
+    itself, there is no separate Metric ObjectType (the operator's own ruling)."""
     from src.orchestrator.capture import record_evaluation
 
     e = await record_evaluation(
@@ -5734,7 +5730,7 @@ async def test_record_evaluation_mints_with_metric_properties_and_no_subject(
 
 
 async def test_record_evaluation_with_subject_mints_evaluated_by(actions: Actions) -> None:
-    """`subject` mints the evaluated_by edge in the same call — the traceability
+    """`subject` mints the evaluated_by edge in the same call, the traceability
     invariant's own EVALUATOR leg."""
     from src.orchestrator.capture import ensure_artifact, record_evaluation
 
@@ -5749,7 +5745,7 @@ async def test_record_evaluation_with_subject_mints_evaluated_by(actions: Action
 async def test_record_evaluation_same_rubric_twice_mints_two_distinct_objects(
     actions: Actions,
 ) -> None:
-    """A re-run after a fix is TWO verdicts, never deduped — unlike Practice's own
+    """A re-run after a fix is TWO verdicts, never deduped, unlike Practice's own
     statement-keyed idempotency."""
     from src.orchestrator.capture import record_evaluation
 
@@ -5770,7 +5766,7 @@ async def test_work_lineage_edges_mint_idempotently(actions: Actions) -> None:
         record_decision,
     )
 
-    # the run IS the Agent generation (CITATION SHAPE, decision c6d25164 — AgentRun
+    # the run IS the Agent generation (CITATION SHAPE, AgentRun
     # folded into Agent, no separate pointer object to lazily mint)
     run = await actions.create_or_find_object("Agent", "agent:soul-session-abc123", "test")
     art_v1 = await ensure_artifact(actions, "report-v1")
@@ -5794,7 +5790,7 @@ async def test_record_artifact_mints_freely_while_required_link_kinds_unarmed(
     actions: Actions,
 ) -> None:
     """Artifact's own required_link_kinds stays dark by default (the same convention
-    Practice's own gate already follows) — this door mints with NO authoring_run and NO
+    Practice's own gate already follows), this door mints with NO authoring_run and NO
     unlinked_because, and does not refuse, until a caller arms the Type."""
     from src.orchestrator.capture import record_artifact
 
@@ -5807,11 +5803,11 @@ async def test_record_artifact_mints_freely_while_required_link_kinds_unarmed(
 @asynccontextmanager
 async def _artifact_gate_armed(actions: Actions) -> AsyncIterator[None]:
     """Arms Artifact's required_link_kinds=["authoring_run"] for the DURATION of one
-    test only — the Type catalog is the ONE table the `actions` fixture's own per-test
+    test only, the Type catalog is the ONE table the `actions` fixture's own per-test
     reset deliberately spares (conftest.py, "the catalog survives the reset"), so an
     arming write here would otherwise outlive this test and reach every later test in
     the same worker's session. Two things make that safe: (1) `actor="system:catalog-
-    seed"` — the SAME source seed_catalog() itself used to write the original `[]` —
+    seed"`, the SAME source seed_catalog itself used to write the original `[]`, 
     so this is a SAME-SOURCE supersession (one current value, never a coin-flip
     CONTRADICTION against a different-source near-tie, the exact bug a first draft of
     this test hit against tests/test_lap_lint.py's own fleet-wide `lint` scan, which
@@ -5834,8 +5830,8 @@ async def test_record_artifact_refuses_without_authoring_run_once_armed(
 ) -> None:
     """Once Artifact's required_link_kinds includes "authoring_run", the incoming-
     direction check (_REQUIRED_LINK_KIND_TABLE's new "to" entry) actually refuses a
-    mint with neither a producing run nor a confessed reason — artifact-has-
-    authoring-run-plus-version, operator ruling f47d14a7."""
+    mint with neither a producing run nor a confessed reason, artifact-has-
+    authoring-run-plus-version, operator."""
     from src.orchestrator.capture import record_artifact
 
     async with _artifact_gate_armed(actions):
@@ -5846,10 +5842,10 @@ async def test_record_artifact_refuses_without_authoring_run_once_armed(
 async def test_record_artifact_with_authoring_run_satisfies_the_armed_gate(
     actions: Actions,
 ) -> None:
-    """`authoring_run=` resolves an EXISTING Agent generation (CITATION SHAPE, decision
-    c6d25164 — the session object IS the Agent generation, no separate AgentRun
-    pointer to lazily mint) and mints its `produced` edge in the same transaction,
-    satisfying the gate before it runs — the incoming-direction check reads
+    """`authoring_run=` resolves an EXISTING Agent generation (the session object IS the
+    Agent generation, no separate AgentRun pointer to lazily mint) and mints its `produced`
+    edge in the same transaction,
+    satisfying the gate before it runs, the incoming-direction check reads
     `to_id=art` (the run points AT the artifact, never the reverse)."""
     from src.orchestrator.capture import record_artifact
 
@@ -5868,7 +5864,7 @@ async def test_record_artifact_refuses_when_authoring_run_does_not_resolve(
     actions: Actions,
 ) -> None:
     """A bare string that isn't a real Agent's UUID/short-id/canonical refuses cleanly
-    (CITATION SHAPE, decision c6d25164) — there is no lazy-mint fallback left to fall
+    (CITATION SHAPE), there is no lazy-mint fallback left to fall
     back on."""
     from src.orchestrator.capture import record_artifact
 
@@ -5881,8 +5877,8 @@ async def test_record_artifact_unlinked_because_satisfies_the_armed_gate_and_dua
     actions: Actions,
 ) -> None:
     """The hatch still works for the new incoming-direction kind exactly as it does for
-    every outgoing one — unlinked_because satisfies the gate and _confess_abstention
-    writes derivation_abstained_produced (never derivation_abstained_authoring_run —
+    every outgoing one, unlinked_because satisfies the gate and _confess_abstention
+    writes derivation_abstained_produced (never derivation_abstained_authoring_run, 
     the abstention is keyed on the real LINK TYPE, not the door-side kind word)."""
     from src.orchestrator.capture import record_artifact
 
@@ -5898,7 +5894,7 @@ async def test_enforce_required_links_existing_outgoing_kinds_unchanged(
     actions: Actions,
 ) -> None:
     """Zero regression on the four pre-existing callers: record_decision's own "repo"
-    kind still reads as an OUTGOING check (from_id=obj) after the direction extension —
+    kind still reads as an OUTGOING check (from_id=obj) after the direction extension, 
     a Decision with a real in_repo link still satisfies the gate with no hatch."""
     from src.orchestrator.capture import record_decision
 
@@ -5911,11 +5907,11 @@ async def test_enforce_required_links_existing_outgoing_kinds_unchanged(
 
 
 async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_testimony() -> None:
-    """kinds= is the plug Imhotep's own decision 5640f234 flagged as deliberately left
-    open — default stays Decision-only (existing callers unchanged); UNIFIED_PRIOR_ART_
+    """kinds= is the plug Builder's own flagged as deliberately left
+    open, default stays Decision-only (existing callers unchanged); UNIFIED_PRIOR_ART_
     KINDS additionally surfaces Practice/Superstition hits, but a refuted Practice or
     superseded Decision is dead testimony for THIS purpose (excluded), even though
-    search() itself still lists both, flagged, for direct lookup."""
+    search itself still lists both, flagged, for direct lookup."""
     from src.orchestrator.capture import UNIFIED_PRIOR_ART_KINDS, prior_art_from_hits
 
     hits = [
@@ -5925,7 +5921,7 @@ async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_tes
          "snippet": "arm before you seal", "grade": "self_declared", "via": "id"},
         {"id": "cccccccc-0000-0000-0000-000000000000", "type": "Practice",
          "snippet": "a refuted one", "grade": "self_declared", "via": "id",
-         "refuted": "by decision aaaa1111 — a dead lesson, not standing law"},
+         "refuted": "by an earlier decision, a dead lesson, not standing law"},
         {"id": "dddddddd-0000-0000-0000-000000000000", "type": "Superstition",
          "snippet": "a dead workaround", "grade": "self_declared", "via": "both"},
     ]
@@ -5937,12 +5933,12 @@ async def test_prior_art_from_hits_widens_to_unified_kinds_and_excludes_dead_tes
 
 
 async def test_prior_art_from_hits_reserves_a_slot_for_a_buried_practice() -> None:
-    """Thread 99327a3e's own specimen: 87 Practices vs 6,353 Decisions means a real
-    Practice ranks well past a plain top-5 truncation on a realistic-language query — a
+    """'s own specimen: 87 Practices vs 6,353 Decisions means a real
+    Practice ranks well past a plain top-5 truncation on a realistic-language query, a
     raw rank-order cut fills every slot from the far larger Decision population before
     the Practice's own rank is ever reached. Fix is ranking, not authorship: the last
     slot is reserved for the single best-ranked qualifying Practice, wherever it sits,
-    when 'Practice' is in `kinds` — a caller whose `kinds` never included Practice
+    when 'Practice' is in `kinds`, a caller whose `kinds` never included Practice
     (record_decision's own default) sees no change at all (proven above)."""
     from src.orchestrator.capture import UNIFIED_PRIOR_ART_KINDS, prior_art_from_hits
 
@@ -6015,7 +6011,7 @@ async def test_record_decision_confirms_witnesses_and_refutes_converts(
         assert pid[:8] in refute_out["refuted_practice"]
         # THE INTEGRATION-LEVEL GAP (fold-family coverage audit, decision pending, thread
         # 6160): the receipt-string check above would still pass even if the actual write
-        # silently stopped happening — refute_practice's own unit test (line ~4582) already
+        # silently stopped happening, refute_practice's own unit test (line ~4582) already
         # proves the FUNCTION lands refuted_by correctly, but nothing previously proved the
         # WRAPPER's call path actually reaches it. Read back through the real graph, same
         # discipline implements/confirms/rediscovers already use two lines above.
@@ -6040,9 +6036,9 @@ async def test_record_decision_confirms_witnesses_and_refutes_converts(
 
 
 async def test_record_decision_implements_and_ack_prior_art(actions: Actions) -> None:
-    """`implements` mints the general-to-specific link (thread 169398d6's third path) and
+    """`implements` mints the general-to-specific link ('s third path) and
     validates strictly like supersedes; `ack_prior_art` records the dismissal as a graph
-    event when — and only when — a strong prior-art hit actually fired."""
+    event when, and only when, a strong prior-art hit actually fired."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
     from src.mcp_server import record_decision as rd_tool
@@ -6090,11 +6086,11 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
     actions: Actions,
 ) -> None:
     """`rediscovers` mints a Decision->Decision edge from a later, independent finding
-    back to the earlier one it re-derives (task #163, ruling 5ecaf8d9 — the specimen: two
+    back to the earlier one it re-derives (task #163, the specimen: two
     earlier decisions cited by short-id under `confirms=`, which only resolves against
     Practices and refused both). It buries neither side (unlike `supersedes`) and is not
     an execution of the earlier plan (unlike `implements`). A list resolves each entry
-    independently — one bad ref must not veto the ones that DID match — mirroring
+    independently, one bad ref must not veto the ones that DID match, mirroring
     `confirms`'s own best-effort shape."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6112,13 +6108,13 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
     srv._pool = actions.pool
     try:
         earlier_one = await rd_tool(
-            "THE TASKLIST RECONCILER ALREADY EXISTS, IS TESTED, IS CORRECT — AND HAS "
+            "THE TASKLIST RECONCILER ALREADY EXISTS, IS TESTED, IS CORRECT, AND HAS "
             "ZERO CALLERS", kind="ruling", ctx=ctx)
         earlier_two = await rd_tool(
-            "THE DOORLESS VERB — the first rung of a three-rung unreachability ladder",
+            "THE DOORLESS VERB, the first rung of a three-rung unreachability ladder",
             kind="ruling", ctx=ctx)
         out = await rd_tool(
-            "the house discovers and forgets the discovery — tonight's headline findings "
+            "the house discovers and forgets the discovery, tonight's headline findings "
             "were already found a week ago", kind="ruling",
             rediscovers=[earlier_one["id"], earlier_two["id"]], ctx=ctx)
         ids = {r["id"] for r in out["rediscovers"]}
@@ -6129,7 +6125,7 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
                 "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='rediscovers'",
                 uuid.UUID(out["id"]), uuid.UUID(target["id"]))
             assert edge == 1
-        # neither earlier decision was buried — no superseded_by, still current
+        # neither earlier decision was buried, no superseded_by, still current
         for target in (earlier_one, earlier_two):
             superseded = await actions.pool.fetchval(
                 "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
@@ -6138,7 +6134,7 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
 
         # idempotent: recording the same rediscovery again mints no duplicate link
         again = await rd_tool(
-            "the house discovers and forgets the discovery — tonight's headline findings "
+            "the house discovers and forgets the discovery, tonight's headline findings "
             "were already found a week ago", kind="ruling",
             rediscovers=[earlier_one["id"]], ctx=ctx)
         assert again["rediscovers"][0]["new_link"] is False
@@ -6159,11 +6155,11 @@ async def test_record_decision_rediscovers_links_without_burying_either_side(
 async def test_mint_bears_on_cites_a_thread_without_touching_its_status(
     actions: Actions,
 ) -> None:
-    """THE MEASURER'S MOMENT HAS A VERB (thread 898840dc, decision e123b9fa): `mint_bears_on`
-    mints the SAME `answers` edge `resolves=` mints, but by construction — a separate
-    function, never threaded through record_decision's own atomic transaction — it cannot
+    """THE MEASURER'S MOMENT HAS A VERB : `mint_bears_on`
+    mints the SAME `answers` edge `resolves=` mints, but by construction, a separate
+    function, never threaded through record_decision's own atomic transaction, it cannot
     touch `status`. Idempotent: a second mint of the same pair returns False and creates no
-    duplicate edge (the receipt-honesty law, 42176e16: an already-linked pair must never
+    duplicate edge (the receipt-honesty rule: an already-linked pair must never
     look identical to a fresh one)."""
     thread_id = await open_thread(
         actions, "a stale board row bears_on will cite without closing", kind="obligation")
@@ -6189,8 +6185,8 @@ async def test_mint_bears_on_cites_a_thread_without_touching_its_status(
 
 
 async def test_thread_answering_decisions_is_batched_and_disjoint(actions: Actions) -> None:
-    """The SHARED read-back (recall()'s own `bears_on_from`, obligation_hygiene's own
-    nudge) — one query over MANY thread ids, never one per thread. A thread with no
+    """The SHARED read-back (recall's own `bears_on_from`, obligation_hygiene's own
+    nudge), one query over MANY thread ids, never one per thread. A thread with no
     answering decision is simply absent from the returned dict (empty list via
     `.get(tid, [])`, never a KeyError)."""
     from src.orchestrator.capture import thread_answering_decisions
@@ -6214,7 +6210,7 @@ async def test_open_obligation_thread_ids_keeps_only_open_obligation_rows(
     actions: Actions,
 ) -> None:
     """The Thread-widening in UNIFIED_PRIOR_ART_KINDS only means anything for OPEN,
-    kind='obligation' rows — a resolved obligation, or an open non-obligation thread,
+    kind='obligation' rows, a resolved obligation, or an open non-obligation thread,
     must not surface as "prior art" (that would be noise, not the routing nudge the
     widening exists for)."""
     from src.orchestrator.capture import _open_obligation_thread_ids
@@ -6234,11 +6230,11 @@ async def test_open_obligation_thread_ids_keeps_only_open_obligation_rows(
 async def test_open_obligation_thread_ids_admits_a_kindless_row_only_within_its_own_repo(
     actions: Actions,
 ) -> None:
-    """THE REPO-SCOPE RULING (decision 518a21b6, Thoth's DM 4726): a kindless Thread
+    """THE REPO-SCOPE RULING (Archivist's): a kindless Thread
     predating the kind='obligation' convention is admitted ONLY when it shares the SAME
-    `repo=` project as the record_decision call itself — never on kind's bare absence
+    `repo=` project as the record_decision call itself, never on kind's bare absence
     alone (measured: 73% of the fleet-wide kindless population is unrelated-project
-    noise). No `repo=` argument at all admits NOTHING under this path, ever — the ruling's
+    noise). No `repo=` argument at all admits NOTHING under this path, ever, the ruling's
     own explicit constraint against an absent repo silently becoming fleet-wide."""
     from src.orchestrator.capture import _open_obligation_thread_ids
 
@@ -6266,8 +6262,8 @@ async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
 ) -> None:
     """MCP-level: `bears_on` resolves the same addressing-law, best-effort way as
     `confirms`/`rediscovers` (a bad ref is reported, never fatal), echoes the matched
-    thread's own summary (same reason `resolves` echoes it — a valid id naming the WRONG
-    thread is only catchable by the caller reading it), and — the whole point — the thread
+    thread's own summary (same reason `resolves` echoes it, a valid id naming the WRONG
+    thread is only catchable by the caller reading it), and, the whole point, the thread
     stays open afterward, unlike `resolves`."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6293,7 +6289,7 @@ async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
         assert out["bears_on"][0]["id"] == str(stale_row)[:8]
         # `new_link` above is a PRE-write existence check (computed before record_decision
         # is even called, same discipline every extension link's own "was_new" receipt
-        # flag uses) — it would read True even if the actual mint silently never happened.
+        # flag uses), it would read True even if the actual mint silently never happened.
         # Read back the real edge (fold-family coverage audit, thread 6160): the same gap
         # shape narrows/rediscovers/implements/confirms already close two tests away.
         assert out["bears_on"][0]["new_link"] is True
@@ -6332,8 +6328,8 @@ async def test_record_decision_bears_on_cites_the_thread_without_closing_it(
 async def test_bears_on_names_a_decision_target_instead_of_a_bare_not_found(
     actions: Actions,
 ) -> None:
-    """THREE SPECIMENS IN TWO DAYS (Thoth's dispatch msg 5937): bears_on mints `answers`,
-    Decision->Thread ONLY — a ref that resolves to a Decision instead of a Thread used to
+    """THREE SPECIMENS IN TWO DAYS (Archivist's dispatch): bears_on mints `answers`,
+    Decision->Thread ONLY, a ref that resolves to a Decision instead of a Thread used to
     report a generic "matched no thread", indistinguishable from a typo, and three
     different people read the resulting silence as success. The receipt must now NAME the
     real mismatch, the same cross-type-mismatch discipline `_resolve_cited_object` already
@@ -6378,7 +6374,7 @@ async def test_mint_narrows_buries_neither_side(actions: Actions) -> None:
         "SELECT evidence_class, properties FROM links "
         "WHERE from_id=$1 AND to_id=$2 AND type='narrows'", bounder, bounded)
     assert row["evidence_class"] == "self_declared"
-    # neither side carries a superseded_by/status write — pure link, no property mutation
+    # neither side carries a superseded_by/status write, pure link, no property mutation
     for oid in (bounded, bounder):
         superseded = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
@@ -6395,7 +6391,7 @@ async def test_mint_narrows_buries_neither_side(actions: Actions) -> None:
 async def test_record_decision_narrows_links_and_recall_surfaces_narrowed_by(
     actions: Actions,
 ) -> None:
-    """The end-to-end proof Soundwave's own specimen needed: a successor who recalls the
+    """The end-to-end proof Relay's own specimen needed: a successor who recalls the
     BOUNDED decision (not the bounding one) must still find the boundary."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6427,7 +6423,7 @@ async def test_record_decision_narrows_links_and_recall_surfaces_narrowed_by(
         assert rec["narrowed_by"][0]["id"] == out["id"][:8]
         assert "SCOPE LIMIT" in rec["narrowed_by"][0]["summary"]
 
-        # the bounded decision keeps its own standing — not buried, not graded down
+        # the bounded decision keeps its own standing, not buried, not graded down
         bounded_rec = await recall_fn(actions.pool, bounded["id"])
         assert "superseded_by" not in bounded_rec
 
@@ -6453,8 +6449,8 @@ async def test_record_decision_narrows_links_and_recall_surfaces_narrowed_by(
 async def test_record_decision_cites_declares_the_edge_bears_on_and_narrows_refused(
     actions: Actions,
 ) -> None:
-    """The live specimen (msg 6000, decision 7706efb4): a decision that ADDS a new facet
-    to two earlier ones — neither bounds their scope (`narrows`) nor settles a thread
+    """The live specimen : a decision that ADDS a new facet
+    to two earlier ones, neither bounds their scope (`narrows`) nor settles a thread
     (`bears_on`, Decision->Thread only, correctly refused both). `cites` is the SAME edge
     the prose-citation miner already mints, declared explicitly via origin="declared"."""
     import src.mcp_server as srv
@@ -6520,9 +6516,9 @@ async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_be
     (test_unified_prior_art_check_surfaces_a_practice_via_the_statement_field): embedding
     the thread's OWN short id in the later decision's rationale routes it through the
     id-token door (compositions.py's "an id token embedded in a longer query" leg), which
-    is cross-door-corroborated by construction — deterministic regardless of whether the
+    is cross-door-corroborated by construction, deterministic regardless of whether the
     semantic embedder is configured in this test environment, unlike relying on lexical/
-    semantic rank alone. Must flag `bears_on=[...]` rather than `resolves=[...]` — this
+    semantic rank alone. Must flag `bears_on=[...]` rather than `resolves=[...]`, this
     decision merely SPEAKS TO the row, it does not presume to settle it."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6563,8 +6559,8 @@ async def test_unified_prior_art_check_surfaces_an_open_obligation_thread_via_be
 async def test_unified_prior_art_check_ignores_a_resolved_thread_with_the_same_words(
     actions: Actions,
 ) -> None:
-    """The Thread widening must not resurrect a CLOSED row as "prior art" — a resolved
-    obligation sharing a decision's exact wording is not the routing gap 898840dc names,
+    """The Thread widening must not resurrect a CLOSED row as "prior art", a resolved
+    obligation sharing a decision's exact wording is not a routing gap,
     it is ordinary, already-settled overlap. Falls through to no prior_art at all (nothing
     else in this fixture-only graph matches)."""
     import src.mcp_server as srv
@@ -6600,11 +6596,11 @@ async def test_unified_prior_art_check_ignores_a_resolved_thread_with_the_same_w
 async def test_record_decision_tool_refuses_a_bare_local_task_number_everywhere(
     actions: Actions,
 ) -> None:
-    """task #117's own live specimen, generalized: Seshat passed resolves=["126"] — her
-    LOCAL harness task id — and it substring-matched an unrelated thread's summary in
+    """task #117's own live specimen, generalized: Scribe passed resolves=["126"], her
+    LOCAL harness task id, and it substring-matched an unrelated thread's summary in
     ANOTHER PROJECT (fixed already, `resolves` requires an identifier). supersedes/
     implements/refutes/confirms shared the IDENTICAL unprotected fallthrough, never
-    patched by that fix — this proves all four now refuse the same bare "126" rather
+    patched by that fix, this proves all four now refuse the same bare "126" rather
     than searching for it, against a REAL decision/practice whose own text contains that
     exact substring (so a pre-fix run would have silently hit it)."""
     import src.mcp_server as srv
@@ -6627,7 +6623,7 @@ async def test_record_decision_tool_refuses_a_bare_local_task_number_everywhere(
         # a REAL decision and a REAL practice whose own text contains "126", the exact
         # shape a substring leak would hit
         unrelated_decision = await rd_tool(
-            "GO issued to seats for msgs 122/123/126 — unrelated protocol note",
+            "GO issued to seats for msgs 122/123/126, unrelated protocol note",
             kind="decision", ctx=ctx)
         unrelated_practice = await rp_tool(
             "never cite task 126 without reading its own text first", ctx=ctx)
@@ -6669,8 +6665,8 @@ async def test_record_decision_tool_refuses_a_bare_local_task_number_everywhere(
 async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
     actions: Actions, monkeypatch,
 ) -> None:
-    """Live bug, caught by Thoth on ruling b44ddb6d (msg 3185): `out["prior_art"]` listed
-    FIVE real hits while `prior_art_acknowledged` said "no strong prior-art hit was found" —
+    """Live bug, caught by Archivist on : `out["prior_art"]` listed
+    FIVE real hits while `prior_art_acknowledged` said "no strong prior-art hit was found", 
     #117's own vocabulary-collapse shape (a receipt says "nothing" while the same response
     carries something). A weak hit (found, just not STRONG enough to flag) must read
     differently from truly finding nothing."""
@@ -6695,8 +6691,8 @@ async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
     try:
         out = await rd_tool("a decision with a weak prior-art hit", kind="decision",
                             ack_prior_art=True, ctx=ctx)
-        # RECEIPT DIET (msg 6871): record_decision's own prior_art is slimmed to
-        # {id,type,summary} — grade/via are dropped, not echoed back.
+        # RECEIPT DIET : record_decision's own prior_art is slimmed to
+        # {id,type,summary}, grade/via are dropped, not echoed back.
         assert out["prior_art"] == [{"id": "deadbeef", "type": "Decision",
                                      "summary": "a weakly-related hit"}]  # the hit IS in it
         assert "prior_art_flag" not in out   # but not strong enough to flag
@@ -6709,9 +6705,9 @@ async def test_ack_prior_art_distinguishes_weak_hits_from_no_hits(
 
 
 # --- property_prior_art: record_decision's own guard, generalized to a PROPERTY write ---------
-# (obligation e4612853's sibling, Thoth DM 3169/3185, ruling 38c71544's family: a standing
-# Decision silently overturned by a later, uninformed property write — the bytebye/byebyte
-# incident, decision 1db87191)
+# ('s sibling, Archivist/3185's family: a standing
+# Decision silently overturned by a later, uninformed property write, the bytebye/byebyte
+# incident)
 
 async def test_property_prior_art_empty_when_search_returns_nothing(
     actions: Actions, monkeypatch,
@@ -6746,8 +6742,8 @@ async def test_property_prior_art_empty_when_hit_is_weak(
 async def test_property_prior_art_surfaces_a_strong_hit(
     actions: Actions, monkeypatch,
 ) -> None:
-    """The flagship shape: a standing ruling exists (repo:bytebye's own operator rename,
-    decision 1db87191 in spirit) and a later write to the SAME object+field must see it."""
+    """The flagship shape: a standing ruling exists (repo:bytebye's own operator rename in
+    spirit) and a later write to the SAME object+field must see it."""
     async def _strong_run_spec(pool, spec, subject, **k):
         return {"items": {"hits": [
             {"id": "1db87191-0000-0000-0000-000000000000", "type": "Decision",
@@ -6767,7 +6763,7 @@ async def test_property_prior_art_surfaces_a_strong_hit(
 async def test_property_prior_art_fails_open_on_a_search_error(
     actions: Actions, monkeypatch,
 ) -> None:
-    """Fail-open, same discipline record_decision's own guard already holds — a search-side
+    """Fail-open, same discipline record_decision's own guard already holds, a search-side
     hiccup must never block the write it is only advising on."""
     async def _boom(pool, spec, subject, **k):
         raise RuntimeError("search index unavailable")
@@ -6784,7 +6780,7 @@ async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_fie
 ) -> None:
     """THE END-TO-END PROOF: migration 0037's widened GIN index + _fn_search's SQL fix +
     prior_art_from_hits's kinds widening must ALL be correct together, or a Practice's
-    `statement` never surfaces as prior art at all — this is Alfred IX's own reported
+    `statement` never surfaces as prior art at all, this is Courier IX's own reported
     failure mode (search returning noise for a lesson recorded hours earlier), now
     verified fixed for the exact field Superstition/Practice actually use."""
     import src.mcp_server as srv
@@ -6826,7 +6822,7 @@ async def test_unified_prior_art_check_surfaces_a_practice_via_the_statement_fie
 
 
 def test_practice_contradiction_cues_is_a_pure_lexical_fingerprint() -> None:
-    """No NLP, no DB — a deterministic, word-boundary-anchored check, documented as a
+    """No NLP, no DB, a deterministic, word-boundary-anchored check, documented as a
     heuristic nudge never a verdict (see the docstring on capture._CONTRADICTION_CUES)."""
     from src.orchestrator.capture import practice_contradiction_cues
 
@@ -6838,7 +6834,7 @@ def test_practice_contradiction_cues_is_a_pure_lexical_fingerprint() -> None:
 
 def test_practice_contradiction_cues_does_not_match_inside_a_longer_word(
 ) -> None:
-    """THE LIVE SPECIMEN (decision 54280c72, task #104's own named-but-never-built gap): a
+    """THE LIVE SPECIMEN (task #104's own named-but-never-built gap): a
     Stage C flag fired on the cue "stop" because it appeared as a raw substring inside the
     unrelated house name "stopslop". Word-boundary anchoring must not match here."""
     from src.orchestrator.capture import practice_contradiction_cues
@@ -6852,7 +6848,7 @@ def test_practice_contradiction_cues_does_not_match_inside_a_longer_word(
 
 def test_practice_contradiction_cues_apostrophe_cues_still_match_standalone(
 ) -> None:
-    """Word-boundary anchoring must not break the apostrophe-bearing cues themselves —
+    """Word-boundary anchoring must not break the apostrophe-bearing cues themselves, 
     `\\b` treats `'` as a non-word character on both sides, which is exactly what's needed
     here, not a special case."""
     from src.orchestrator.capture import practice_contradiction_cues
@@ -6865,11 +6861,11 @@ def test_practice_contradiction_cues_apostrophe_cues_still_match_standalone(
 async def test_record_decision_flags_contradiction_when_reversal_language_matches_a_practice(
     actions: Actions,
 ) -> None:
-    """PRACTICE v2 layer 1 (Thoth LXII's DM 1785; grounds c54e8176 + thread 54a5c842): the
+    """PRACTICE v2 layer 1: the
     v1 gap was that EVERY Practice hit got the same "re-derivation" nudge whether the new
     decision agreed with it or silently reversed it. A lexical reversal fingerprint now
     flags an unlabeled contradiction loud and distinctly from a plain uncited restatement
-    (see the passing case above, `prior_art_polarity == "rederive"`) — and the classification
+    (see the passing case above, `prior_art_polarity == "rederive"`), and the classification
     reaches search_log's telemetry (migration 0039), not just the receipt."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6908,7 +6904,7 @@ async def test_record_decision_flags_overturning_when_refutes_names_the_matched_
     actions: Actions,
 ) -> None:
     """An explicit refutes= naming the SAME practice the search matched is a SETTLED
-    reversal, not a defensive maybe — the receipt says so plainly instead of nagging the
+    reversal, not a defensive maybe, the receipt says so plainly instead of nagging the
     caller to do what they just did (distinct wording from the bare-cues case above)."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -6935,8 +6931,8 @@ async def test_record_decision_flags_overturning_when_refutes_names_the_matched_
         assert out["prior_art_polarity"] == "contradict"
         assert "overturns" in out["prior_art_flag"]
         assert "refuted_practice" in out
-        # PIECE 2, GRAPH-VERIFIED (thread 7e8cb735: :5478's own model asserted a PRE-WRITE
-        # receipt value, never re-checked against what actually landed) — read the Practice's
+        # PIECE 2, GRAPH-VERIFIED (: :5478's own model asserted a PRE-WRITE
+        # receipt value, never re-checked against what actually landed), read the Practice's
         # own refuted_by property back, not the wrapper's echo of it.
         refuted_by = await actions.pool.fetchval(
             "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
@@ -6951,8 +6947,8 @@ async def test_record_decision_flags_overturning_when_refutes_names_the_matched_
 async def test_record_decision_obsoletes_kills_a_superstition_verified_against_the_graph(
     actions: Actions,
 ) -> None:
-    """SECOND GAP Thoth named (thread 7e8cb735): the obsoletes/kill_superstition path had
-    no test that read the Superstition object back — `superstitions_killed` is just an
+    """SECOND GAP Archivist named : the obsoletes/kill_superstition path had
+    no test that read the Superstition object back, `superstitions_killed` is just an
     echo of the caller's own input strings, provable even if the write never landed.
     Assert the graph, not the receipt."""
     import src.mcp_server as srv
@@ -6991,8 +6987,8 @@ async def test_record_decision_obsoletes_kills_a_superstition_verified_against_t
 async def test_record_decision_flags_obsoletion_when_obsoletes_names_the_matched_practice(
     actions: Actions,
 ) -> None:
-    """Wave 16 item 3 (thread 51233089): obsoletes= gets the SAME overturning treatment
-    refutes= already has — a decision that obsoletes a workaround whose own words match
+    """a batch item 3 : obsoletes= gets the SAME overturning treatment
+    refutes= already has, a decision that obsoletes a workaround whose own words match
     a standing Practice the prior-art search actually surfaces gets a message naming the
     obsoletion, never the generic re-derivation/contradiction-cues wording (the disease
     named on the thread: mcp_server.py's overturning check used to read only refute_id,
@@ -7017,7 +7013,7 @@ async def test_record_decision_flags_obsoletion_when_obsoletes_names_the_matched
         practice = await rp_tool(
             "route every dispatch through the DM lane, not a broadcast reply", ctx=ctx)
         out = await rd_tool(
-            "route every dispatch through the DM lane, not a broadcast reply — this "
+            "route every dispatch through the DM lane, not a broadcast reply, this "
             "workaround is wrong now, broadcast replies are fine for dispatch after all",
             kind="decision",
             rationale=f"obsoleting the workaround practice {practice['id']} names",
@@ -7037,7 +7033,7 @@ async def test_record_decision_flags_obsoletion_when_obsoletes_names_the_matched
 async def test_practices_composition_filters_by_surface_and_shows_confirmed_count(
     actions: Actions,
 ) -> None:
-    """Surface-scoped, on-demand (the ruling's own words) — never in orient's ambient
+    """Surface-scoped, on-demand (the ruling's own words), never in orient's ambient
     payload; this test only proves the composition itself, not orient's silence."""
     from src.orchestrator.capture import record_decision, record_practice
     from src.orchestrator.compositions import run_spec
@@ -7060,9 +7056,9 @@ async def test_practices_composition_filters_by_surface_and_shows_confirmed_coun
 
 
 async def test_practices_composition_surfaces_amendments_in_order(actions: Actions) -> None:
-    """Thoth DM 3071: unlike a Decision's own addenda (write-only today, no MCP read path),
+    """Archivist: unlike a Decision's own addenda (write-only today, no MCP read path),
     a Practice's amendments must be visible on the ONE live surface every caller actually
-    reads — practices() itself, not a separate lookup the caller has to know to make.
+    reads, practices itself, not a separate lookup the caller has to know to make.
     A practice with no amendment at all must not carry the key (matches refuted_by's own
     conditional-inclusion shape)."""
     from src.orchestrator.capture import amend_practice, record_practice
@@ -7085,7 +7081,7 @@ async def test_search_indexes_the_statement_field_and_flags_a_refuted_practice(
     actions: Actions,
 ) -> None:
     """The latent gap this build heals: Superstition's own `statement` field has never
-    been searchable since Superstition shipped — migration 0037 fixes it for both types
+    been searchable since Superstition shipped, migration 0037 fixes it for both types
     at once. A refuted Practice still surfaces (never hidden, unlike a superseded
     Decision's own burial), carrying the `refuted` flag."""
     from src.orchestrator.capture import record_practice, refute_practice
@@ -7106,7 +7102,7 @@ async def test_search_indexes_the_statement_field_and_flags_a_refuted_practice(
     assert "refuted" in match  # flagged, never hidden
 
 
-# LANE 2 — annotate_thread / amend_decision (Thoth's brief, DM 2334): append-without-close,
+# LANE 2, annotate_thread / amend_decision (Archivist's brief): append-without-close,
 # append-without-supersede.
 
 async def test_annotate_thread_adds_a_note_without_closing_the_thread(actions: Actions) -> None:
@@ -7126,7 +7122,7 @@ async def test_annotate_thread_appends_multiple_notes_in_order(actions: Actions)
     await annotate_thread(actions, str(t), "second lead: one of them double-counts halted "
                           "projects")
     notes = await thread_notes(actions.pool, t)
-    # order things were understood in — oldest first, nothing buried
+    # order things were understood in, oldest first, nothing buried
     assert [n["note"] for n in notes] == [
         "first lead: two instruments, different scope",
         "second lead: one of them double-counts halted projects",
@@ -7136,9 +7132,9 @@ async def test_annotate_thread_appends_multiple_notes_in_order(actions: Actions)
 async def test_annotate_thread_note_carries_its_own_source(actions: Actions) -> None:
     t = await open_thread(actions, "should reap_stale_leases run more often than 5 minutes")
     await annotate_thread(actions, str(t), "measured: no lease has ever gone stale in prod",
-                          source="agent:khnum")
+                          source="agent:mason")
     notes = await thread_notes(actions.pool, t)
-    assert notes[0]["source"] == "agent:khnum"
+    assert notes[0]["source"] == "agent:mason"
 
 
 async def test_annotate_thread_returns_none_when_nothing_matches(actions: Actions) -> None:
@@ -7155,19 +7151,19 @@ async def test_annotate_thread_refuses_a_blank_note(actions: Actions) -> None:
 
 
 async def test_annotate_thread_leaves_a_resolved_thread_resolved(actions: Actions) -> None:
-    """Annotation is addition, never a state transition — it must not silently reopen a
+    """Annotation is addition, never a state transition, it must not silently reopen a
     thread the caller already closed, the same discipline reclassify_thread already holds
     for kind."""
     t = await open_thread(actions, "was the AF_UNIX regression xdist-exclusive")
     await resolve_thread(actions, str(t), because="confirmed: bare pytest hits it too")
-    await annotate_thread(actions, str(t), "khnum's fix: cf9413a")
+    await annotate_thread(actions, str(t), "mason's fix: cf9413a")
     props = await _props(actions.pool, t)
     assert props["status"] == "resolved"
 
 
 async def test_annotate_thread_can_fix_the_headline_in_the_same_call(actions: Actions) -> None:
-    """Fix (b), Metron's mechanism report (mail 8890/8921/8922): the affordance used to
-    point at the wrong action by default — a caller who just proved a summary false had
+    """Fix (b), Gauge's mechanism report (/8921/8922): the affordance used to
+    point at the wrong action by default, a caller who just proved a summary false had
     to already know correct_thread_summary exists as a SEPARATE verb. One call now does
     both: the note lands AND the headline corrects, through the same shared write
     correct_thread_summary itself uses (never a second copy)."""
@@ -7190,7 +7186,7 @@ async def test_annotate_thread_without_corrected_summary_never_touches_it(
     actions: Actions,
 ) -> None:
     """The omitted-by-default case: a plain annotate (no corrected_summary=) must not
-    write the property at all — nothing here regresses annotate_thread's own pre-existing
+    write the property at all, nothing here regresses annotate_thread's own pre-existing
     "addition only" contract when the new parameter is simply not used."""
     t = await open_thread(actions, "a thread annotated the old way, no correction given")
     await annotate_thread(actions, str(t), "just a note, no correction")
@@ -7201,26 +7197,26 @@ async def test_annotate_thread_without_corrected_summary_never_touches_it(
 async def test_correct_thread_summary_supersedes_without_touching_the_original(
     actions: Actions,
 ) -> None:
-    """The verb annotate_thread names and refuses to be — decision ccbe37cf, roadmap
+    """The verb annotate_thread names and refuses to be, roadmap
     ledger-rot stage 3. `summary` is open_thread's own dedup key and must survive
     untouched; `corrected_summary` is a plain property, so it appears as ONE current
     winner, not a growing pile of notes."""
     t = await open_thread(actions, "six seats pinned to dead or non-canonical project names")
     got = await correct_thread_summary(
         actions, str(t),
-        "almost entirely different population once re-measured — see the per-seat rows")
+        "almost entirely different population once re-measured, see the per-seat rows")
     assert got == t
     props = await _props(actions.pool, t)
     assert props["summary"] == "six seats pinned to dead or non-canonical project names"
     assert props["corrected_summary"] == (
-        "almost entirely different population once re-measured — see the per-seat rows")
+        "almost entirely different population once re-measured, see the per-seat rows")
 
 
 async def test_correct_thread_summary_re_call_supersedes_the_prior_correction(
     actions: Actions,
 ) -> None:
     """Calling it again SUPERSEDES the earlier correction (current_assertions' ordinary
-    law) rather than appending a second, competing candidate — there is exactly one live
+    law) rather than appending a second, competing candidate, there is exactly one live
     answer to "what does this thread currently say," same as `status`/`summary` itself."""
     t = await open_thread(actions, "does the composer need a live-collab mode")
     await correct_thread_summary(actions, str(t), "first correction: no evidence either way")
@@ -7259,7 +7255,7 @@ async def test_correct_thread_summary_refuses_a_blank_correction(actions: Action
 async def test_correct_thread_summary_leaves_a_resolved_thread_resolved(
     actions: Actions,
 ) -> None:
-    """A correction is not a state transition — it must not silently reopen a thread the
+    """A correction is not a state transition, it must not silently reopen a thread the
     caller already closed, same discipline annotate_thread already holds for status."""
     t = await open_thread(actions, "was the AF_UNIX regression xdist-exclusive")
     await resolve_thread(actions, str(t), because="confirmed: bare pytest hits it too")
@@ -7271,7 +7267,7 @@ async def test_correct_thread_summary_leaves_a_resolved_thread_resolved(
 async def test_correct_thread_summary_surfaces_in_recall_beside_the_original(
     actions: Actions,
 ) -> None:
-    """ONE HOP, not six (Thoth's own requirement) — recall()'s existing flat-dump already
+    """ONE HOP, not six (Archivist's own requirement), recall's existing flat-dump already
     returns every current property with no special-casing, so the correction sits right
     beside the untouched original in the SAME call. No change to recall.py was needed."""
     from src.orchestrator.recall import recall
@@ -7330,7 +7326,7 @@ async def test_amend_decision_refuses_a_blank_addendum(actions: Actions) -> None
 
 
 async def test_amend_decision_refuses_a_superseded_decision(actions: Actions) -> None:
-    """Amendment is not correction: a dead ruling does not grow new reasoning — the refusal
+    """Amendment is not correction: a dead ruling does not grow new reasoning, the refusal
     must name supersede as the right tool, exactly the way fold_project names rename."""
     import pytest
 
@@ -7358,17 +7354,17 @@ async def test_amend_decision_still_works_on_the_successor_after_a_supersede(
 
 
 # --- HELD WORK: open_thread(branch=, files_touched=) + open_held_work + held_work_overlap ---
-# task #168's narrowed, falsification-survived leg (decision aa7993cf) --------------------
+# task #168's narrowed, falsification-survived leg  --------------------
 
 async def test_open_thread_stamps_branch_and_files_touched(actions: Actions) -> None:
     t = await open_thread(
         actions, "held: batch the winning_props read", repo="heldproj",
-        kind="obligation", branch="seshat-batchtable",
+        kind="obligation", branch="scribe-batchtable",
         files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"])
     branch = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='branch' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
-    assert branch == "seshat-batchtable"
+    assert branch == "scribe-batchtable"
     files = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='files_touched' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", t)
@@ -7377,7 +7373,7 @@ async def test_open_thread_stamps_branch_and_files_touched(actions: Actions) -> 
 
 async def test_open_thread_without_branch_never_stamps_it(actions: Actions) -> None:
     """An ordinary obligation (no branch/files_touched passed) must not grow these
-    properties at all — open_held_work's own EXISTS(...branch) filter depends on this."""
+    properties at all, open_held_work's own EXISTS(...branch) filter depends on this."""
     t = await open_thread(actions, "an ordinary obligation, no held work involved",
                           repo="heldproj", kind="obligation")
     branch = await actions.pool.fetchval(
@@ -7391,7 +7387,7 @@ async def test_open_held_work_lists_only_branch_carrying_open_threads(
 ) -> None:
     held = await open_thread(
         actions, "held: the batchtable branch", repo="heldworkproj", kind="obligation",
-        branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"])
+        branch="scribe-batchtable", files_touched=["src/orchestrator/compositions.py"])
     await open_thread(actions, "an ordinary obligation with no branch",
                       repo="heldworkproj", kind="obligation")
     rows = await open_held_work(actions.pool, repo="heldworkproj")
@@ -7399,7 +7395,7 @@ async def test_open_held_work_lists_only_branch_carrying_open_threads(
     assert str(held)[:8] in ids
     assert len(rows) == 1
     row = rows[0]
-    assert row["branch"] == "seshat-batchtable"
+    assert row["branch"] == "scribe-batchtable"
     assert row["files_touched"] == ["src/orchestrator/compositions.py"]
 
 
@@ -7449,11 +7445,11 @@ async def test_open_thread_tool_names_a_colliding_held_work_thread(actions: Acti
     try:
         first = await srv.open_thread(
             "held: batch the props read", repo="collideproj", kind="obligation",
-            branch="seshat-batchtable", files_touched=["src/orchestrator/compositions.py"],
+            branch="scribe-batchtable", files_touched=["src/orchestrator/compositions.py"],
             ctx=ctx)
         second = await srv.open_thread(
             "held: a different branch touching the same file", repo="collideproj",
-            kind="obligation", branch="khnum-other-branch",
+            kind="obligation", branch="mason-other-branch",
             files_touched=["src/orchestrator/compositions.py", "src/orchestrator/agents.py"],
             ctx=ctx)
     finally:
@@ -7462,7 +7458,7 @@ async def test_open_thread_tool_names_a_colliding_held_work_thread(actions: Acti
     assert "colliding_work" in second
     hit = second["colliding_work"][0]
     assert hit["id"] == first["id"][:8]
-    assert hit["branch"] == "seshat-batchtable"
+    assert hit["branch"] == "scribe-batchtable"
 
 
 async def test_open_thread_tool_no_collision_key_when_nothing_overlaps(
@@ -7482,7 +7478,7 @@ async def test_open_thread_tool_no_collision_key_when_nothing_overlaps(
 
 
 async def test_annotate_thread_renews_a_stale_obligation_window(actions: Actions) -> None:
-    """Imhotep 2026-09-08 (mail 8102): the stop hook's stale gate offers "annotate" as a
+    """Builder 2026-09-08 : the stop hook's stale gate offers "annotate" as a
     remedy but only reads `stale_after`, so an honest note never cleared the block.
     Annotating an obligation that carries a window re-stamps the window from now; a thread
     with no window is untouched."""
@@ -7506,7 +7502,7 @@ async def test_annotate_thread_renews_a_stale_obligation_window(actions: Actions
     assert "stale_after" not in await _props(actions.pool, plain)
 
 
-# ── THE CITATION SHAPE (operator ruling c6d25164, thread 9d2aaf4d, DM 9377/9383) ──
+# ── THE CITATION SHAPE (operator/9383) ──
 
 
 async def _seed_soul_lines(
@@ -7570,7 +7566,7 @@ async def test_mint_transcript_citation_refuses_without_because(actions: Actions
 
 async def test_mint_transcript_citation_never_targets_a_human_node(actions: Actions) -> None:
     """The literal 'operator' string (or any non-Agent object) refuses exactly like an
-    unresolved ref — nothing that represents a human is ever typed Agent."""
+    unresolved ref, nothing that represents a human is ever typed Agent."""
     from src.orchestrator.capture import mint_transcript_citation
 
     d = await record_decision(actions, "a ruling")
@@ -7607,7 +7603,7 @@ async def test_read_transcript_citation_returns_the_verified_line(actions: Actio
 
 async def test_read_transcript_citation_refuses_on_tampered_line(actions: Actions) -> None:
     """A line_hash corrupted AFTER the citation was minted (simulated tampering) is
-    caught on read-back — the read door never trusts the edge property alone."""
+    caught on read-back, the read door never trusts the edge property alone."""
     from src.orchestrator.capture import mint_transcript_citation, read_transcript_citation
 
     run = await actions.create_or_find_object("Agent", "agent:cite-test-5", "test")

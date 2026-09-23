@@ -1,4 +1,4 @@
-"""Compositions — the composer's primitive. The key claim: an opinionated read-model
+"""Compositions, the composer's primitive. The key claim: an opinionated read-model
 (`discrepancy`) is just a composition of neutral ops, so opinion leaves the engine and
 becomes a saved, forkable spec the user owns. Also proves the ops and persistence.
 """
@@ -93,7 +93,7 @@ async def test_project_briefing_composition_scopes_to_its_subject(actions: Actio
 
 
 async def test_table_op_id_property_returns_the_rows_own_short_id(actions: Actions) -> None:
-    """task #60 (thread b81b0fac): a truncated summary must stay addressable — `id` is a
+    """A truncated summary must stay addressable: `id` is a
     row's own identity, never an assertion, so `_table` special-cases it rather than
     looking it up in `_props`."""
     d = await actions.create_or_find_object("Decision", "decision:idtest-1", "session")
@@ -112,7 +112,7 @@ async def test_discrepancy_is_just_a_composition(actions: Actions) -> None:
     await seed_default_compositions(actions.pool)
 
     res = await run_composition(actions.pool, "operational-vs-disclosed-geography", co)
-    # the composition surfaces the foreign operational country — the SAME signal the
+    # the composition surfaces the foreign operational country: the SAME signal the
     # hardcoded read-model produced, now a forkable spec instead of engine code.
     assert res["kind"] == "values"
     assert res["items"] == ["United Arab Emirates"]
@@ -145,7 +145,7 @@ async def test_traverse_then_collect(actions: Actions) -> None:
 
 async def test_intersect_neighbourhood_with_type(actions: Actions) -> None:
     """'Organizations within 2 hops of the subject' = intersect(neighbourhood, orgs).
-    The trial (a ClinicalTrial) and the subject itself fall out — set algebra, no join."""
+    The trial (a ClinicalTrial) and the subject itself fall out: set algebra, no join."""
     co = await _scenario(actions)
     spec = {"op": "intersect", "sets": [
         {"op": "traverse", "from": {"op": "subject"}, "hops": 2},
@@ -194,7 +194,7 @@ async def test_aggregate_sum_over_field(actions: Actions) -> None:
 
 
 async def test_aggregate_dimension_cap(actions: Actions) -> None:
-    """Palantir's ≤3-dimension cap is enforced — a 4-dim aggregate is rejected."""
+    """Palantir's <=3-dimension cap is enforced: a 4-dim aggregate is rejected."""
     await _filings(actions)
     spec = {"op": "aggregate", "group_by": ["a", "b", "c", "d"], "metric": {"type": "count"},
             "from": {"op": "select", "object_type": "Organization"}}
@@ -202,11 +202,11 @@ async def test_aggregate_dimension_cap(actions: Actions) -> None:
         await run_composition(actions.pool, await _save(actions, "too-wide", spec))
 
 
-# --- `group` (ruling c5b184cd, thread d56e7073/#44): the dynamic-titled sibling of `sections`,
-# and the middle `aggregate` never had — one section PER DISTINCT VALUE, keeping members. ------
+# --- `group`: the dynamic-titled sibling of `sections`,
+# and the middle `aggregate` never had. One section PER DISTINCT VALUE, keeping members. ------
 
 async def test_group_is_a_dynamic_sections_keeping_members(actions: Actions) -> None:
-    """One partition per distinct sector, each holding its own real objects (not a metric) —
+    """One partition per distinct sector, each holding its own real objects (not a metric):
     exactly what aggregate discards and sections can't produce (no static titles here)."""
     await _filings(actions)
     spec = {"op": "group", "by": "sector", "from": {"op": "select", "object_type": "Organization"},
@@ -219,7 +219,7 @@ async def test_group_is_a_dynamic_sections_keeping_members(actions: Actions) -> 
 
 async def test_group_untagged_objects_bucket_as_none(actions: Actions) -> None:
     """A missing property value groups under the SAME literal osiris.js's own aggregate
-    renderer already uses for a missing group dimension — one convention, not two."""
+    renderer already uses for a missing group dimension: one convention, not two."""
     org = await actions.create_or_find_object("Organization", "cik:99", "edgar")
     await actions.assert_property(org, "amount", "10", "edgar", NOW, 0.85)  # no `sector`
     spec = {"op": "group", "by": "sector", "from": {"op": "select", "object_type": "Organization"},
@@ -229,7 +229,7 @@ async def test_group_untagged_objects_bucket_as_none(actions: Actions) -> None:
 
 
 async def test_group_nests_via_its_own_body(actions: Actions) -> None:
-    """arc->status->owner IS just group-in-group's-body, nothing more — proved with sector
+    """arc->status->owner IS just group-in-group's-body, nothing more: proved with sector
     then a second dimension, each {"op":"these"} resolving to the RIGHT enclosing partition."""
     for cik, sector, amt in [("20", "ai", "1"), ("21", "ai", "2"), ("22", "bio", "3")]:
         o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
@@ -246,8 +246,8 @@ async def test_group_nests_via_its_own_body(actions: Actions) -> None:
 
 
 async def test_group_depth_is_capped(actions: Actions) -> None:
-    """The same closed-set discipline as aggregate's own ≤3-dimension cap (MAX_AGGREGATE_DIMS)
-    — group nesting must not become an unbounded recursion an author can accidentally write."""
+    """The same closed-set discipline as aggregate's own <=3-dimension cap (MAX_AGGREGATE_DIMS):
+    group nesting must not become an unbounded recursion an author can accidentally write."""
     from src.orchestrator.compositions import MAX_GROUP_DEPTH
 
     def _nested(n: int) -> dict:
@@ -269,8 +269,8 @@ async def test_group_depth_is_capped(actions: Actions) -> None:
 
 
 async def test_these_outside_a_group_is_empty_not_an_error(actions: Actions) -> None:
-    """A fragment tested standalone (the inline composer, W4) gets an empty set, never a
-    crash — same 'a guess never poisons a real answer' spirit as the rest of this dispatcher."""
+    """A fragment tested standalone (the inline composer) gets an empty set, never a
+    crash: same 'a guess never poisons a real answer' spirit as the rest of this dispatcher."""
     res = await run_composition(actions.pool, await _save(actions, "bare-these", {"op": "these"}))
     assert res["kind"] == "objects" and res["count"] == 0
 
@@ -286,8 +286,8 @@ async def test_group_requires_by_and_body(actions: Actions) -> None:
             actions, "no-body", {"op": "group", "by": "sector", **base}))
 
 
-# --- Function output re-entering the op-tree (task #60, follow-on to ruling c5b184cd): a
-# Function's own output is no longer a dead-end leaf — group/order/take can consume a
+# --- Function output re-entering the op-tree: a
+# Function's own output is no longer a dead-end leaf. group/order/take can consume a
 # `{"op":"function"}` node whose data is a flat list of dicts. Proven against `desk_decisions`,
 # a real registered Function, not a test-only stand-in. ---------------------------------------
 
@@ -310,7 +310,7 @@ async def test_function_output_is_reclassified_as_rows_when_list_of_dicts(
 
 
 async def test_dict_shaped_function_output_stays_data_not_rows(actions: Actions) -> None:
-    """The reclassification is shape-based, not a blanket promotion — a Function returning a
+    """The reclassification is shape-based, not a blanket promotion: a Function returning a
     dict (sections-like output, e.g. `wall`) stays kind="data"; nothing there is list-shaped
     to group/order/take over."""
     res = await run_composition(actions.pool, await _save(
@@ -319,7 +319,7 @@ async def test_dict_shaped_function_output_stays_data_not_rows(actions: Actions)
 
 
 async def test_group_consumes_a_function_node_yielding_a_list(actions: Actions) -> None:
-    """The proof case: a Function's output can be the `from` of a `group` — partitioned in
+    """The proof case: a Function's output can be the `from` of a `group`, partitioned in
     Python from the already-materialized rows, no re-query of the (nonexistent) objects."""
     await _desk_decision(actions, "agent:x", "call A")
     await _desk_decision(actions, "agent:y", "call B")
@@ -331,10 +331,10 @@ async def test_group_consumes_a_function_node_yielding_a_list(actions: Actions) 
     assert {d["summary"] for d in res["items"]["agent:y"]} == {"call B"}
 
 
-# --- group's `sequence` (rung 3, ruling d42c543b, Thoth msg 1937) — a caller-given key
+# --- group's `sequence`: a caller-given key
 # ORDER over `group`'s dynamic titles, distinct from `order` (which sorts by a derived
-# property value, never a caller-literal sequence). The three absent-case tests are the
-# ones Thoth named specifically ("those three are where a reordering bug hides").
+# property value, never a caller-literal sequence). The three absent-case tests cover
+# the cases where a reordering bug is most likely to hide.
 
 async def test_group_sequence_orders_titles_and_appends_unlisted_ones_alphabetically(
     actions: Actions,
@@ -347,7 +347,7 @@ async def test_group_sequence_orders_titles_and_appends_unlisted_ones_alphabetic
             "from": {"op": "select", "object_type": "Organization"},
             "body": {"op": "table", "from": {"op": "these"}, "columns": [{"property": "amount"}]}}
     res = await run_composition(actions.pool, await _save(actions, "seq-basic", spec))
-    # listed titles first, IN THE GIVEN ORDER — reversed from insertion/alphabetical
+    # listed titles first, IN THE GIVEN ORDER: reversed from insertion/alphabetical
     assert list(res["items"].keys()) == ["bio", "ai", "zz-unlisted"]
 
 
@@ -355,7 +355,7 @@ async def test_group_sequence_key_with_no_matching_data_is_a_silent_skip(
     actions: Actions,
 ) -> None:
     """A sequence naming a title that doesn't exist in this run's data must not appear, and
-    must not error — same as an ordinary empty group today (msg 1937's first absent case)."""
+    must not error: same as an ordinary empty group today (the first of the absent-key cases)."""
     await _filings(actions)  # only "ai" and "bio" sectors exist
     spec = {"op": "group", "by": "sector", "sequence": ["nonexistent", "bio", "ai"],
             "from": {"op": "select", "object_type": "Organization"},
@@ -368,8 +368,8 @@ async def test_group_key_absent_from_sequence_appends_visibly_not_dropped(
     actions: Actions,
 ) -> None:
     """A data value the sequence never anticipated (a typo, a new category) must still
-    render — appended after the sequenced titles, never silently lost (msg 1937's second
-    absent case, the no-silent-caps law applied to reordering)."""
+    render, appended after the sequenced titles, never silently lost (the second
+    absent-key case, the no-silent-caps rule applied to reordering)."""
     await _filings(actions)  # "ai", "bio"
     o = await actions.create_or_find_object("Organization", "cik:31", "edgar")
     await actions.assert_property(o, "sector", "biotech-typo", "edgar", NOW, 0.85)
@@ -384,7 +384,7 @@ async def test_group_key_absent_from_sequence_appends_visibly_not_dropped(
 
 async def test_group_sequence_is_independent_per_nesting_level(actions: Actions) -> None:
     """A nested group's own `sequence` (or lack of one) never leaks to its parent's, and
-    vice versa (msg 1937's third absent case) — each `group` node reads its own `node`."""
+    vice versa (the third absent-key case): each `group` node reads its own `node`."""
     for cik, sector, band in [("40", "ai", "hi"), ("41", "ai", "lo"),
                               ("42", "bio", "hi"), ("43", "bio", "lo")]:
         o = await actions.create_or_find_object("Organization", f"cik:{cik}", "edgar")
@@ -406,7 +406,7 @@ async def test_docs_composition_renders_sections_in_the_fixed_topic_order(
 ) -> None:
     """The real payoff: DOCS's own `sequence` (folded in from the former route-level
     DOCS_SECTION_ORDER re-sort) produces getting-started/concepts/reference/deployment/
-    history in that order straight from the composition — no post-step needed anywhere."""
+    history in that order straight from the composition, no post-step needed anywhere."""
     from src.orchestrator.compositions import DOCS
 
     for topic in ("history", "getting-started", "reference"):  # deliberately out of order
@@ -419,7 +419,7 @@ async def test_docs_composition_renders_sections_in_the_fixed_topic_order(
 
 
 async def test_order_and_take_already_worked_over_a_function_node(actions: Actions) -> None:
-    """order/take needed NO code changes for this — they already branched on Result.kind.
+    """order/take needed NO code changes for this: they already branched on Result.kind.
     Pins that a function-sourced "rows" result orders/takes exactly like `table`'s does."""
     await _desk_decision(actions, "agent:x", "zzz-last")
     await _desk_decision(actions, "agent:x", "aaa-first")
@@ -432,7 +432,7 @@ async def test_order_and_take_already_worked_over_a_function_node(actions: Actio
 
 async def test_nested_ops_work_inside_a_function_sourced_partition(actions: Actions) -> None:
     """The real payoff of widening `_THESE` to hold the partition's raw Result, not a bare
-    UUID list: a Function-sourced partition's own body can itself order/take further — not
+    UUID list: a Function-sourced partition's own body can itself order/take further, not
     just render its rows flat via a bare `{"op":"these"}`."""
     await _desk_decision(actions, "agent:x", "zzz-x-last")
     await _desk_decision(actions, "agent:x", "aaa-x-first")
@@ -446,10 +446,10 @@ async def test_nested_ops_work_inside_a_function_sourced_partition(actions: Acti
     assert res["items"]["agent:y"][0]["summary"] == "only-y"
 
 
-# --- projection/pagination (ruling ad19a779, task #64): a caller who knows they want 3 rows
+# --- projection/pagination: a caller who knows they want 3 rows
 # of 2 fields must never have to receive 53 full rows and pay the trim after. Proven against
-# the SAME nested shape (group-by-arc-then-owner) that produced the real 61K-char roadmap
-# blob this ruling names. -----------------------------------------------------------------
+# the SAME nested shape (group-by-arc-then-owner) that produced a real, very large roadmap
+# payload historically. -----------------------------------------------------------------
 
 async def _arc_owner_threads(actions: Actions) -> None:
     for cik, arc, owner, amt in [
@@ -481,9 +481,9 @@ async def test_take_caps_a_flat_list_and_reports_the_real_total(actions: Actions
     assert res["_projected"]["dropped"]["(root)"] == {"shown": 1, "of": 3}
 
 
-# --- offset: `take` alone can only ever show a list's FIRST N, forever — task #149
-# (Thoth DM 3847, "NO take/offset/cursor") names this as the real gap behind the
-# workaround of hand-building dozens of narrower compositions just to see past a trim. ---
+# --- offset: `take` alone can only ever show a list's FIRST N, forever. This is
+# the real gap behind the historical workaround of hand-building dozens of narrower
+# compositions just to see past a trim. ---
 
 
 async def test_offset_pages_past_the_first_take_with_no_overlap(actions: Actions) -> None:
@@ -499,7 +499,7 @@ async def test_offset_pages_past_the_first_take_with_no_overlap(actions: Actions
     ids = [page1["items"][0]["id"], page2["items"][0]["id"], page3["items"][0]["id"]]
     assert len(set(ids)) == 3  # three DIFFERENT rows, not the same one three times
     assert page2["_projected"]["dropped"]["(root)"] == {"shown": 1, "of": 3, "offset": 1}
-    # the SAME stable ordering the op-tree produced, just walked further — page2 picks up
+    # the SAME stable ordering the op-tree produced, just walked further: page2 picks up
     # exactly where page1 left off, matching a plain take=2 read from the start
     whole = await run_composition(actions.pool, name, take=2)
     assert [r["id"] for r in whole["items"]] == ids[:2]
@@ -544,7 +544,7 @@ async def test_depth_collapses_below_the_requested_level_to_an_honest_count(
     assert depth1["items"]["bio"] == {"_count": 1}
     assert depth1["_projected"]["dropped"]["ai"] == {"shown": 0, "of": 3}
 
-    # depth=2 walks BOTH dict levels this shape has (sector, owner_field) — nothing left to
+    # depth=2 walks BOTH dict levels this shape has (sector, owner_field): nothing left to
     # collapse, so the leaf lists come through intact; `depth` bounds dict STRUCTURE only,
     # `take` bounds LIST length (composed together in the roadmap-shaped test below).
     depth2 = await run_composition(actions.pool, name, depth=2)
@@ -558,8 +558,8 @@ async def test_depth_collapses_below_the_requested_level_to_an_honest_count(
 async def test_fields_take_and_depth_compose_on_the_real_roadmap_shape(
     actions: Actions,
 ) -> None:
-    """The actual proof case named in the ruling: arc->owner->threads, asked for narrow AND
-    small in one call — not the full nested tree, not a flat post-processed dump."""
+    """The actual proof case: arc->owner->threads, asked for narrow AND
+    small in one call, not the full nested tree, not a flat post-processed dump."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ROADMAP
 
@@ -582,7 +582,7 @@ async def test_fields_take_and_depth_compose_on_the_real_roadmap_shape(
 async def test_the_mcp_run_composition_tool_wires_bound_params_through(
     actions: Actions,
 ) -> None:
-    """srv._pool swap (mirrors test_describe.py's own pattern) — proves the ACTUAL tool
+    """srv._pool swap (mirrors test_describe.py's own pattern): proves the ACTUAL tool
     passes fields/take/depth to the core function, not just that the core function works."""
     from src import mcp_server as srv
 
@@ -631,10 +631,10 @@ async def test_default_compositions_seeded(actions: Actions) -> None:
 async def test_projects_composition_surfaces_canonical_and_on_disk_path(
     actions: Actions,
 ) -> None:
-    """task #138/#163's arc: the `projects` browser composition already enumerated every
-    active SoftwareProject by NAME, but named alone isn't addressable — no canonical id
+    """The `projects` browser composition already enumerated every
+    active SoftwareProject by NAME, but named alone isn't addressable: no canonical id
     to act on, no on_disk_path to tell a real repo from registry noise. `canonical` and
-    `status` are object COLUMNS, not assertions (`_OBJ_COLS`) — `_table`'s per-object loop
+    `status` are object COLUMNS, not assertions (`_OBJ_COLS`); `_table`'s per-object loop
     only ever read `winning_props` (assertions), so a bare `{"property": "canonical"}`
     column would have silently resolved to None without wiring object columns in too."""
     await seed_default_compositions(actions.pool)
@@ -661,10 +661,10 @@ async def test_projects_composition_surfaces_canonical_and_on_disk_path(
     assert bare_row["on_disk_path"] is None
 
 
-# select's opt-in `status` arg (Thoth dispatch 9490, 588148bb's completeness bar): the
+# select's opt-in `status` arg: the
 # projects composition's active/all toggle needed a real "all" to filter, and every
 # composition before this shared ONE hardcoded `status='active'`. OPT-IN, never a silent
-# behavior change — omitted resolves to the exact `['active']` list the old hardcoded
+# behavior change: omitted resolves to the exact `['active']` list the old hardcoded
 # clause always produced.
 
 
@@ -721,8 +721,8 @@ async def test_select_status_explicit_list_narrows(actions: Actions) -> None:
 
 
 async def test_select_scope_is_inert_when_absent(actions: Actions) -> None:
-    """Thoth dispatch 9838, 588148bb's Browse tab cutover extraction piece: `scope` is
-    OPT-IN, same discipline as `status`/`subject_link` — absent leaves the row fetch
+    """The Browse tab cutover extraction piece: `scope` is
+    OPT-IN, same discipline as `status`/`subject_link`. Absent leaves the row fetch
     exactly as it always was (the pre-existing select tests above already prove this by
     never declaring `scope` at all; this one is the explicit byte-identical proof)."""
     now = datetime.now(UTC)
@@ -804,10 +804,9 @@ async def test_select_scope_exclude_types_drops_the_matching_type(actions: Actio
 
 
 async def test_select_scope_types_narrows_to_the_multi_select(actions: Actions) -> None:
-    """THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up,
-    Thoth DM 10711): the browse table's pill bar allows more than one type selected at
-    once — `scope.types` is that multi-select's own server-side lever, sibling to the
-    node-level singular `object_type` (which stays untouched, still equality-only)."""
+    """THE TABLE FILTER QUERY SHAPE: the browse table's pill bar allows more than one type
+    selected at once. `scope.types` is that multi-select's own server-side lever, sibling to
+    the node-level singular `object_type` (which stays untouched, still equality-only)."""
     now = datetime.now(UTC)
     thread = await actions.create_or_find_object("Thread", "thread:scope-types", "test")
     await actions.assert_property(thread, "summary", "a thread", "test", now, 0.9,
@@ -830,8 +829,8 @@ async def test_select_scope_types_narrows_to_the_multi_select(actions: Actions) 
 async def test_select_scope_status_narrows_on_top_of_the_terminal_status_exclusion(
     actions: Actions,
 ) -> None:
-    """`scope.status` is an EXTRA equality narrowing, layered on top of — never replacing
-    — list_objects_scoped's own unconditional "not archived/merged/retired" rule: a
+    """`scope.status` is an EXTRA equality narrowing, layered on top of, never replacing,
+    list_objects_scoped's own unconditional "not archived/merged/retired" rule: a
     proposed Thread matches `status: 'proposed'`, an active one does not, and an archived
     one matches neither (the base exclusion still wins)."""
     now = datetime.now(UTC)
@@ -894,11 +893,11 @@ async def test_select_scope_composes_with_subject_link_post_filter(actions: Acti
 
 
 async def test_select_scope_items_carry_status_and_created_at(actions: Actions) -> None:
-    """Thoth dispatch 9855 (588148bb, the browse-swap shape gap): `object_items`'
-    packaging normally carries neither `status` nor `created_at` — they're objects-table
+    """The browse-swap shape gap: `object_items`'
+    packaging normally carries neither `status` nor `created_at`, they're objects-table
     columns, not winning_props assertions, and no consumer before browse's own keyset
     Load More ever needed them back off a composition run. A `scope`-driven select is the
-    ONE path that does (the cursor it needs IS created_at/id) — proven here as an opt-in
+    ONE path that does (the cursor it needs IS created_at/id), proven here as an opt-in
     that rides along automatically with `scope`, never a separate flag callers forget."""
     await actions.create_or_find_object("Thread", "thread:scope-cols", "test")
     spec = {"op": "select", "object_type": "Thread", "scope": {}}
@@ -911,7 +910,7 @@ async def test_select_scope_items_carry_status_and_created_at(actions: Actions) 
 
 
 async def test_select_without_scope_carries_no_object_cols(actions: Actions) -> None:
-    """The inverse of the above — every select before `scope` existed (and every select
+    """The inverse of the above: every select before `scope` existed (and every select
     that still doesn't use it) is byte-identical: no status/created_at on its items."""
     await actions.create_or_find_object("Thread", "thread:no-scope-cols", "test")
     spec = {"op": "select", "object_type": "Thread"}
@@ -926,7 +925,7 @@ async def test_select_without_scope_carries_no_object_cols(actions: Actions) -> 
 def test_only_projects_opts_into_a_non_default_select_status() -> None:
     """Static proof that the opt-in is honored fleet-wide, not just by the primitive's own
     default: walks every DEFAULT_COMPOSITIONS spec for a "select" node and asserts none
-    but "projects" declares a status — every other composition's behavior is therefore
+    but "projects" declares a status: every other composition's behavior is therefore
     unchanged by construction, without having to run all 30 of them (several need
     subjects/args this test has no business fabricating)."""
     def _select_statuses(node: Any) -> list[Any]:
@@ -952,8 +951,8 @@ def test_only_projects_opts_into_a_non_default_select_status() -> None:
 async def test_projects_composition_surfaces_status_and_includes_retired_rows(
     actions: Actions,
 ) -> None:
-    """Thoth dispatch 9476/9490: renderProjects()'s active/all toggle reads `status`
-    client-side over ONE fetch — the composition now opts into status="any" so a
+    """renderProjects()'s active/all toggle reads `status`
+    client-side over ONE fetch: the composition now opts into status="any" so a
     retired/merged project reaches the client at all, same shape the hardcoded /projects
     route already fetches (every status, filtered client-side)."""
     await seed_default_compositions(actions.pool)
@@ -976,8 +975,8 @@ async def test_projects_composition_surfaces_status_and_includes_retired_rows(
 
 
 async def test_projects_composition_surfaces_object_count(actions: Actions) -> None:
-    """Thoth dispatch 9507, piece 1 of 4 before the projects swap: the old /projects
-    route's own object_count column — every object reached via in_repo, ANY type, not
+    """Before the projects swap: the old /projects
+    route's own object_count column, every object reached via in_repo, ANY type, not
     just commits/files (the two rollups the composition already had)."""
     await seed_default_compositions(actions.pool)
     now = datetime.now(UTC)
@@ -991,12 +990,12 @@ async def test_projects_composition_surfaces_object_count(actions: Actions) -> N
 
     out = await run_composition(actions.pool, "projects")
     row = next(r for r in out["items"] if r["project"] == "objcounttest")
-    assert row["object_count"] == 2       # both a Commit and a Thread — no type filter
+    assert row["object_count"] == 2       # both a Commit and a Thread, no type filter
     assert row["commits"] == 1            # unchanged: the type-filtered rollup still works
 
 
-# table's new "function" column (Thoth dispatch 9542, projects piece 2 of 4): a column
-# whose value comes from a registered Function's own row-shaped output — real domain
+# table's new "function" column: a column
+# whose value comes from a registered Function's own row-shaped output, real domain
 # logic (triage's bucket classification) no property/rollup can express.
 
 
@@ -1017,14 +1016,14 @@ async def test_projects_composition_surfaces_the_triage_bucket(actions: Actions)
     out = await run_composition(actions.pool, "projects")
     orphan_row = next(r for r in out["items"] if r["project"] == "buckettest-orphan")
     linked_row = next(r for r in out["items"] if r["project"] == "buckettest-linked")
-    assert orphan_row["bucket"] == "orphan"       # zero live links — triage's own rule
-    assert linked_row["bucket"] != "orphan"       # a real link — never a false orphan
+    assert orphan_row["bucket"] == "orphan"       # zero live links, triage's own rule
+    assert linked_row["bucket"] != "orphan"       # a real link, never a false orphan
 
 
 async def test_projects_composition_bucket_and_contradicted_on_share_one_triage_call(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """bucket and contradicted_on both declare the SAME function+args — _table must call
+    """bucket and contradicted_on both declare the SAME function+args: _table must call
     triage ONCE for the whole table, not once per column (the batching discipline the
     mechanism's own docstring promises)."""
     from src.orchestrator import compositions as comp_mod
@@ -1051,7 +1050,7 @@ async def test_projects_composition_bucket_and_contradicted_on_share_one_triage_
 async def test_projects_composition_retired_project_bucket_degrades_to_none(
     actions: Actions,
 ) -> None:
-    """triage buckets defaults to status="active" (no "any" of its own yet) — a retired
+    """triage buckets defaults to status="active" (no "any" of its own yet): a retired
     project is honestly absent from that read, never a stale or fabricated bucket."""
     await seed_default_compositions(actions.pool)
     now = datetime.now(UTC)
@@ -1067,8 +1066,8 @@ async def test_projects_composition_retired_project_bucket_degrades_to_none(
 
 
 async def test_projects_composition_surfaces_worktrees(actions: Actions) -> None:
-    """Thoth dispatch 9542, piece 3 of 4: the old /projects route's own nested worktree
-    sub-rows — grouped by parent via worktree_of, name+branch per Worktree."""
+    """The old /projects route's own nested worktree
+    sub-rows, grouped by parent via worktree_of, name+branch per Worktree."""
     await seed_default_compositions(actions.pool)
     now = datetime.now(UTC)
     parent = await actions.create_or_find_object("SoftwareProject", "repo:wttest", "test")
@@ -1089,12 +1088,12 @@ async def test_projects_composition_surfaces_worktrees(actions: Actions) -> None
     row = next(r for r in out["items"] if r["project"] == "wttest")
     assert row["worktrees"] == [{"name": "feature-branch-checkout", "branch": "feature/x"}]
     lonely_row = next(r for r in out["items"] if r["project"] == "wtlonely")
-    assert lonely_row["worktrees"] is None  # no worktree_of edges — honest absence
+    assert lonely_row["worktrees"] is None  # no worktree_of edges, honest absence
 
 
 async def test_select_subject_link_is_inert_without_a_subject_bound(actions: Actions) -> None:
-    """Thoth dispatch 9676/9690, 588148bb piece 4: `subject_link` is OPT-IN the same way
-    `status` was — declaring it on a `select` node must not change an unsubjected run's
+    """`subject_link` is OPT-IN the same way
+    `status` was: declaring it on a `select` node must not change an unsubjected run's
     result at all (browse's own default load, every caller before this one)."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:sublink-noop", "test")
@@ -1107,13 +1106,13 @@ async def test_select_subject_link_is_inert_without_a_subject_bound(actions: Act
     spec = {"op": "select", "subject_link": {"link_type": "in_repo", "direction": "in"}}
     out = await run_composition(actions.pool, await _save(actions, "sel-sublink-noop", spec))
     ids = {i["id"] for i in out["items"]}
-    assert str(proj) in ids and str(thread) in ids  # no subject bound — nothing narrowed
+    assert str(proj) in ids and str(thread) in ids  # no subject bound, nothing narrowed
 
 
 async def test_select_subject_link_narrows_to_the_subject_neighborhood_when_bound(
     actions: Actions,
 ) -> None:
-    """With a subject bound, `subject_link` narrows to the one-hop in_repo neighborhood —
+    """With a subject bound, `subject_link` narrows to the one-hop in_repo neighborhood:
     same convention _rollup/traverse already use ("in" = a link pointing INTO the subject)."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:sublink-narrow", "test")
@@ -1138,8 +1137,8 @@ async def test_select_subject_link_narrows_to_the_subject_neighborhood_when_boun
 async def test_browse_composition_subject_bound_narrows_to_that_projects_objects(
     actions: Actions,
 ) -> None:
-    """588148bb piece 4's own motivating case: browse run with a SoftwareProject as subject
-    (the projects click-through's target) shows only that project's own in_repo set — same
+    """The motivating case: browse run with a SoftwareProject as subject
+    (the projects click-through's target) shows only that project's own in_repo set, same
     population the `object_count` column already counts, not a re-derived notion."""
     await seed_default_compositions(actions.pool)
     now = datetime.now(UTC)
@@ -1163,8 +1162,8 @@ async def test_browse_composition_subject_bound_narrows_to_that_projects_objects
 async def test_projects_composition_row_action_binds_subject_to_browse(
     actions: Actions,
 ) -> None:
-    """Thoth dispatch 9542/9676/9690, piece 4 of 4: the old /projects route's own
-    openProjectInBrowse click-through. `bind_subject`, not `args` — browse is an op-tree,
+    """The old /projects route's own
+    openProjectInBrowse click-through. `bind_subject`, not `args`: browse is an op-tree,
     not a Function, so there's nothing to drill into via run-spec's function wrapping."""
     await seed_default_compositions(actions.pool)
     now = datetime.now(UTC)
@@ -1180,7 +1179,7 @@ async def test_projects_composition_row_action_binds_subject_to_browse(
 async def test_property_name_column_resolves_through_the_label_chain_generically(
     actions: Actions,
 ) -> None:
-    """Thoth dispatch 9676/9712/9716: a `property:"name"` column is TYPE-NEUTRAL — the same
+    """A `property:"name"` column is TYPE-NEUTRAL: the same
     resolve_label rule/chain tiers /objects itself uses, for ANY object type, not just
     SoftwareProject. A named object resolves through the chain (here: `summary`, since Thread
     has no `name` property but LABEL_CHAIN falls through to it)."""
@@ -1200,7 +1199,7 @@ async def test_property_name_column_returns_raw_unstripped_canonical_on_no_match
     actions: Actions,
 ) -> None:
     """Nothing in the LABEL_CHAIN resolved: the shared `property:"name"` path returns the
-    RAW canonical, honestly, with no type-specific prefix-stripping — that policy is
+    RAW canonical, honestly, with no type-specific prefix-stripping: that policy is
     `name_fallback`'s own opt-in (see the projects-composition tests below), never baked
     into this generic path."""
     now = datetime.now(UTC)
@@ -1212,14 +1211,14 @@ async def test_property_name_column_returns_raw_unstripped_canonical_on_no_match
                         {"name": "c", "property": "canonical"}]}
     out = await run_composition(actions.pool, await _save(actions, "namecol-bare-test", spec))
     row = next(r for r in out["items"] if r["c"] == "repo:namecol-bare")
-    assert row["n"] == "repo:namecol-bare"  # unstripped — the shared path never trims it
+    assert row["n"] == "repo:namecol-bare"  # unstripped, the shared path never trims it
 
 
 async def test_projects_composition_unnamed_project_strips_the_repo_prefix_and_flags_unnamed(
     actions: Actions,
 ) -> None:
-    """Thoth dispatch 9676/9712/9716, the (b) half: SoftwareProject's own "never show a bare
-    repo: canonical" policy — opt-in on the projects composition via `name_fallback`, not the
+    """SoftwareProject's own "never show a bare
+    repo: canonical" policy, opt-in on the projects composition via `name_fallback`, not the
     shared property path. A project with no LABEL_CHAIN property at all falls to the
     canonical tier, gets `repo:` stripped, and is flagged `unnamed`."""
     await seed_default_compositions(actions.pool)
@@ -1249,9 +1248,9 @@ async def test_projects_composition_named_project_is_not_flagged_unnamed(
 async def test_seeding_gives_only_mail_fleet_strip_and_fleet_live_a_refresh_secs(
     actions: Actions,
 ) -> None:
-    """ruling cf9286b2: "mail and the fleet strip want seconds; docs, design-canon and the
-    decision log want never" — absent/None is the default for every OTHER composition, not
-    just the named ones. Thoth extended the ruling to "fleet-live" (msg 1977): a fleet
+    """Mail and the fleet strip want seconds; docs, design-canon and the
+    decision log want never. Absent/None is the default for every OTHER composition, not
+    just the named ones. The same rule was later extended to "fleet-live": a fleet
     roster that must be manually re-run is a fleet roster that lies by default. A future
     addition to DEFAULT_COMPOSITIONS that forgets to stay out of _COMP_REFRESH_SECS would
     silently start auto-polling; this pins the set."""
@@ -1275,7 +1274,7 @@ async def test_save_composition_round_trips_refresh_secs(actions: Actions) -> No
 async def test_save_composition_omitting_refresh_secs_keeps_the_prior_value(
     actions: Actions,
 ) -> None:
-    """Same COALESCE-keeps-prior contract as description/section (msg 1938's own note): a
+    """Same COALESCE-keeps-prior contract as description/section: a
     re-save that doesn't mention refresh_secs must never silently clear it."""
     await save_composition(actions.pool, "wm-comp2", {"op": "select"}, refresh_secs=20)
     await save_composition(actions.pool, "wm-comp2", {"op": "select", "object_type": "X"})
@@ -1285,7 +1284,7 @@ async def test_save_composition_omitting_refresh_secs_keeps_the_prior_value(
 
 
 async def test_save_composition_defaults_refresh_secs_to_none(actions: Actions) -> None:
-    """Manual only, the default (ruling cf9286b2) — a plain save/fork never inherits a tick
+    """Manual only, the default: a plain save/fork never inherits a tick
     it wasn't given."""
     await save_composition(actions.pool, "wm-comp3", {"op": "select"})
     rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-comp3"]
@@ -1298,8 +1297,8 @@ async def test_save_composition_defaults_missing_section_to_more_on_create(
     actions: Actions,
 ) -> None:
     """Neither the MCP save_composition tool nor the HTTP /compositions route ever pass
-    section — a fresh create through either must never land with section=NULL (the exact
-    room=NULL + section=NULL shape that rendered nowhere, task #94's own finding)."""
+    section: a fresh create through either must never land with section=NULL (the exact
+    room=NULL + section=NULL shape that rendered nowhere)."""
     await save_composition(actions.pool, "wm-nosec", {"op": "select"})
     rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-nosec"]
     assert rows[0]["section"] == "_more"  # the client's own existing fallback label, reused
@@ -1314,7 +1313,7 @@ async def test_save_composition_explicit_section_wins_on_create(actions: Actions
 async def test_save_composition_omitting_section_keeps_the_prior_value_on_resave(
     actions: Actions,
 ) -> None:
-    """The default-to-_more guard must only fire on a genuine CREATE — a re-save that omits
+    """The default-to-_more guard must only fire on a genuine CREATE: a re-save that omits
     section keeps the COALESCE-keeps-prior contract the docstring already promises for it."""
     await save_composition(actions.pool, "wm-resec", {"op": "select"}, section="fleet")
     await save_composition(actions.pool, "wm-resec", {"op": "select", "object_type": "X"})
@@ -1323,8 +1322,8 @@ async def test_save_composition_omitting_section_keeps_the_prior_value_on_resave
     assert rows[0]["spec"]["object_type"] == "X"  # the actual edit still landed
 
 
-# --- room_id GETS THE SAME TREATMENT (ruling 89e67c49): the identical invisibility defect,
-# the identical Postgres NOT-NULL-on-INSERT-tuple trap, the identical fix shape — with one
+# --- room_id GETS THE SAME TREATMENT: the identical invisibility defect,
+# the identical Postgres NOT-NULL-on-INSERT-tuple trap, the identical fix shape, with one
 # deliberate difference (no DB-level NOT NULL; see save_composition's own docstring for why
 # ON DELETE SET NULL makes that unsafe here) that these tests exercise directly. -------------
 
@@ -1341,7 +1340,7 @@ async def test_save_composition_leaves_room_unassigned_when_no_engineer_room_exi
     actions: Actions,
 ) -> None:
     """The fallback degrades gracefully rather than fabricating a room that would fail its
-    own foreign key — every test DB starts with zero rooms, so this is also the default
+    own foreign key: every test DB starts with zero rooms, so this is also the default
     coverage for that shape, not a contrived edge case."""
     await save_composition(actions.pool, "wm-noroomatall", {"op": "select"})
     rows = [c for c in await list_compositions(actions.pool) if c["name"] == "wm-noroomatall"]
@@ -1371,7 +1370,7 @@ async def test_save_composition_omitting_room_keeps_the_prior_value_on_resave(
 async def test_a_composition_with_former_room_id_set_still_lists_and_runs(
     actions: Actions,
 ) -> None:
-    """ROOM RETIREMENT step (v) (decision 31717ca7, Thoth mail 10792): migration 0070
+    """ROOM RETIREMENT step (v): migration 0070
     backfills room_id -> former_room_id on the 31 pre-existing scoped compositions,
     leaving room_id NULL. Neither list_compositions (an explicit room_id=None param
     means "every room", not "only unassigned") nor run_composition (looks up by name/id,
@@ -1396,8 +1395,8 @@ async def _save(actions: Actions, name: str, spec: dict) -> str:
 
 
 async def _seed_project(pool: object, project: str) -> None:
-    """send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
-    #117) — alive=False registers `project` as existing without a live pulse, matching
+    """send_message refuses a to_project nobody has ever mounted under: alive=False
+    registers `project` as existing without a live pulse, matching
     test_mailbox.py's own `_seed()` idiom."""
     from src.orchestrator.mounts import save_mount
 
@@ -1407,7 +1406,7 @@ async def _seed_project(pool: object, project: str) -> None:
 
 async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions) -> None:
     """Resolver-unify regression: object_items (the composer's object-list / Table renderer)
-    resolved each property by RECENCY ONLY — a fresh DERIVED re-assertion buried an older
+    resolved each property by RECENCY ONLY: a fresh DERIVED re-assertion buried an older
     SELF_DECLARED (the stuck-open-threads bug class). It now routes through winning_props (grade,
     THEN recency) like _props, so the cross-source winner ordering is one definition, not five."""
     from src.orchestrator.compositions import object_items
@@ -1430,9 +1429,9 @@ async def test_object_items_resolves_props_by_grade_not_recency(actions: Actions
 async def test_object_items_labels_a_tension_via_its_rule_and_disambiguates_the_set(
     actions: Actions,
 ) -> None:
-    """Task #97 workstream 3: object_items now shares resolve_label/disambiguate_labels
+    """object_items now shares resolve_label/disambiguate_labels
     with every other consumer (search, etc.) instead of its own fourth hand-rolled
-    chain — a Tension (pole_a/pole_b/lean_why, none of which match the universal
+    chain: a Tension (pole_a/pole_b/lean_why, none of which match the universal
     chain) needs the RULE tier to avoid falling to its raw canonical hash, and a
     genuine label collision within one result set must stay distinguishable."""
     from src.orchestrator.compositions import object_items
@@ -1454,8 +1453,8 @@ async def test_object_items_labels_a_tension_via_its_rule_and_disambiguates_the_
     assert by_id[str(dup1)]["display_label"] != by_id[str(dup2)]["display_label"]
 
 
-# --- the migrated ROADMAP (ruling c5b184cd, thread d56e7073/#44): the proof case for the
-# Function/op line — `open` stays a Function (echo-filter, a real domain gap), `resolved`/
+# --- the migrated ROADMAP: the proof case for the
+# Function/op line. `open` stays a Function (echo-filter, a real domain gap), `resolved`/
 # `retracted` are pure `group`-by-arc-then-owner over live data. ---------------------------
 
 async def test_roadmap_composition_open_section_is_echo_filtered_and_arc_grouped(
@@ -1483,16 +1482,16 @@ async def test_roadmap_composition_open_section_is_echo_filtered_and_arc_grouped
     open_data = res["items"]["open"]
     assert "Fleet-Hygiene" in open_data
     assert any(t["summary"] == "a real duty" for t in open_data["Fleet-Hygiene"]["agent:x"])
-    # the echo never appears anywhere in the open section — the filter is real, not cosmetic
+    # the echo never appears anywhere in the open section: the filter is real, not cosmetic
     assert "a guessed duty nobody touched" not in str(open_data)
 
 
 async def test_roadmap_open_section_names_its_own_dropped_tail(actions: Actions) -> None:
-    """Thoth's own finding, live (2026-07-27): rank_open_threads' cap (ORIENT_OPEN_THREADS)
-    was silently dropping everything past 25 — a "no silent caps" violation. The Function
-    must stay list-shaped for `group` to consume it (task #60), so the honest count rides
+    """A live finding from 2026-07-27: rank_open_threads' cap (ORIENT_OPEN_THREADS)
+    was silently dropping everything past 25, a "no silent caps" violation. The Function
+    must stay list-shaped for `group` to consume it, so the honest count rides
     IN the list as one distinctly-tagged trailing row rather than a sidecar dict key
-    (`_fn_wall`'s own pattern, unavailable here) — forming its own visible bucket, never
+    (`_fn_wall`'s own pattern, unavailable here), forming its own visible bucket, never
     mixed into a real arc/owner's own threads."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ORIENT_OPEN_THREADS, ROADMAP
@@ -1529,15 +1528,15 @@ async def test_roadmap_composition_resolved_is_pure_op_tree_group(actions: Actio
     res = await run_composition(actions.pool, "roadmap", proj)
     resolved = res["items"]["resolved"]
     assert list(resolved["Token-Cost"]["agent:builder"])[0]["summary"] == "shipped work"
-    assert res["items"]["retracted"] == {}  # nothing retracted — an empty group, not missing
+    assert res["items"]["retracted"] == {}  # nothing retracted, an empty group, not missing
 
 
 async def test_roadmap_open_section_shows_the_corrected_summary_by_default(
     actions: Actions,
 ) -> None:
-    """Roadmap ledger-rot stage 3.5 (Thoth LXXIV, DM 4364): "the reader must get the
-    corrected text by default... not the original with a footnote." open_thread_wall feeds
-    the OPEN section (roadmap AND orient's own wall, _fn_wall) — the corrected text must
+    """Roadmap ledger-rot stage 3.5: the reader must get the
+    corrected text by default, not the original with a footnote. open_thread_wall feeds
+    the OPEN section (roadmap AND orient's own wall, _fn_wall); the corrected text must
     win there without the caller asking for it."""
     from src.orchestrator.capture import correct_thread_summary, open_thread
     from src.orchestrator.compositions import ROADMAP
@@ -1562,7 +1561,7 @@ async def test_roadmap_open_section_shows_the_corrected_summary_by_default(
 async def test_roadmap_resolved_section_shows_the_corrected_summary_by_default(
     actions: Actions,
 ) -> None:
-    """Same law for the RESOLVED section — a different code path (_col_value's `table` op,
+    """Same law for the RESOLVED section: a different code path (_col_value's `table` op,
     not open_thread_wall's raw SQL) must not disagree with the OPEN section on which text
     is current."""
     from src.orchestrator.capture import correct_thread_summary, open_thread, resolve_thread
@@ -1589,7 +1588,7 @@ async def test_fn_wall_orient_surface_shows_the_corrected_summary_by_default(
     actions: Actions,
 ) -> None:
     """orient()'s own wall (`_fn_wall`, docstring: "exactly as orient renders it") reuses
-    open_thread_wall directly — proving the fix once at that shared function covers both
+    open_thread_wall directly, proving the fix once at that shared function covers both
     surfaces, not just roadmap's."""
     from src.orchestrator.capture import correct_thread_summary, open_thread
     from src.orchestrator.compositions import _fn_wall
@@ -1608,10 +1607,10 @@ async def test_fn_wall_orient_surface_shows_the_corrected_summary_by_default(
 async def test_fn_wall_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_project(
     actions: Actions,
 ) -> None:
-    """ARC IS OSIRIS-ONLY VOCABULARY (decision d8ac7f5f, thread 91732d77): the write gate
+    """ARC IS OSIRIS-ONLY VOCABULARY: the write gate
     (open_thread/reclassify_thread) never SET an arc on a non-osiris thread going forward,
     but it also never STRIPS one a pre-gate write already left ("additive, never a strip",
-    577988ed — the 219 legacy rows). A read surface must still not display an osiris arc
+    a set of 219 legacy rows). A read surface must still not display an osiris arc
     label on a client project's own wall, so simulate one of those legacy rows directly
     (bypassing the write gate, exactly like the pre-existing data would) and prove it never
     surfaces."""
@@ -1623,7 +1622,7 @@ async def test_fn_wall_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_projec
                                   evidence_class="self_declared")
     tid = await open_thread(actions, "clientco's own duty, no arc taxonomy here",
                             repo="clientco", owner="agent:x", source="agent:me")
-    # a legacy off-scope stamp, pre-dating the write gate — asserted directly, the write
+    # a legacy off-scope stamp, pre-dating the write gate: asserted directly, the write
     # door would refuse to create this today
     await actions.assert_property(tid, "arc", "Fleet-Hygiene", "test", NOW, 0.9,
                                   evidence_class="self_declared")
@@ -1636,7 +1635,7 @@ async def test_roadmap_open_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_p
     actions: Actions,
 ) -> None:
     """Same law, the roadmap's own OPEN section (`_fn_roadmap_open`'s separate `_arc_map`
-    lookup, not `open_thread_wall`'s own arc column) — a distinct leak point, proven
+    lookup, not `open_thread_wall`'s own arc column): a distinct leak point, proven
     separately rather than assumed covered by the `_fn_wall` fix above."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.compositions import ROADMAP
@@ -1660,10 +1659,10 @@ async def test_roadmap_open_never_shows_a_legacy_off_scope_arc_on_a_non_osiris_p
 async def test_open_thread_wall_never_double_counts_a_thread_with_a_retracted_in_repo_link(
     actions: Actions,
 ) -> None:
-    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): `open_thread_wall`'s own main JOIN onto
+    """THE IN-REPO JOIN AUDIT: `open_thread_wall`'s own main JOIN onto
     `links` (the single-project wall `_fn_wall(pool, subject, {})` renders, same surface
-    orient() shows) had no `valid_until` filter — the same defect class as the ramstein
-    double-thread specimen (thread 1ba9d9be), on a DIFFERENT implementation of a near-
+    orient() shows) had no `valid_until` filter, the same defect class as a prior
+    double-thread specimen bug, on a DIFFERENT implementation of a near-
     identical query than get_thread_list's own (already fixed). A thread whose `in_repo`
     edge was retracted and re-created must appear on the wall exactly once."""
     from src.orchestrator.capture import open_thread
@@ -1683,12 +1682,12 @@ async def test_open_thread_wall_never_double_counts_a_thread_with_a_retracted_in
 
 
 # The end-to-end proof that a composition's own output fed chrome.py's render_composition
-# with no adapter RETIRED alongside it (task #96, second cut, 2026-07-30) — the shared
+# with no adapter RETIRED alongside it. The shared
 # {kind,items} contract now runs solely through osiris.js's table()/renderResult, exercised
 # live in /ui, not this suite.
 
 
-# --- the migrated DOCS (ruling c5b184cd, thread d56e7073/#44): the simpler proof case — no
+# --- the migrated DOCS: the simpler proof case, no
 # Function at all, one `group by=topic` level, subject-free. ---------------------------------
 
 async def test_docs_composition_groups_by_topic_and_excludes_untopiced(
@@ -1712,8 +1711,8 @@ async def test_docs_composition_groups_by_topic_and_excludes_untopiced(
     assert "Stray Doc" not in str(res["items"])  # untopiced -> excluded, not a catch-all
 
 
-# --- desk_decisions (ruling c5b184cd, thread d56e7073/#44): the live-desk composition's
-# 'decisions-awaiting-a-call' leg — a Function, since fleet_messages isn't the object graph.
+# --- desk_decisions: the live-desk composition's
+# 'decisions-awaiting-a-call' leg, a Function, since fleet_messages isn't the object graph.
 
 async def test_desk_decisions_function_finds_unresolved_decision_briefs(
     actions: Actions,
@@ -1728,17 +1727,17 @@ async def test_desk_decisions_function_finds_unresolved_decision_briefs(
 
     spec = {"op": "function", "name": "desk_decisions"}
     res = await run_composition(actions.pool, await _save(actions, "decisions", spec))
-    # "rows", not "data" (task #60, the function-output-re-entering-the-op-tree follow-on):
-    # a list-of-dicts Function output is reclassified so group/order/take can reach it —
+    # "rows", not "data" (the function-output-re-entering-the-op-tree follow-on):
+    # a list-of-dicts Function output is reclassified so group/order/take can reach it:
     # `items` itself is unchanged, `_package` passes rows/data through identically.
     assert res["kind"] == "rows"
     bodies = [d["summary"] for d in res["items"]]
     assert any("which approach" in b for b in bodies)
-    assert not any("all done here" in b for b in bodies)  # fyi, not a decision — excluded
+    assert not any("all done here" in b for b in bodies)  # fyi, not a decision, excluded
 
 
-# --- LIVE_DESK end to end (ruling c5b184cd, thread d56e7073/#44): the wedge that ends the
-# briefs rot — "what's actionable for the operator right now," built with existing ops +
+# --- LIVE_DESK end to end: the wedge that ends the
+# briefs rot, "what's actionable for the operator right now," built with existing ops +
 # Functions, no `group` needed. Resolved/stale fall out by construction (status=open).
 
 async def test_live_desk_composition_end_to_end(actions: Actions) -> None:
@@ -1775,8 +1774,8 @@ async def test_live_desk_composition_end_to_end(actions: Actions) -> None:
     assert "SCHEMA DRIFT" in str(res["items"]["drift_alarms"])
 
 
-# --- fleet_live_agents / fleet_pulse_line / FLEET_STRIP (task #71 slice two, gated msg
-# 1894/1897) — the /ui migration pilot: a Composition + two Functions, zero UI code. Both
+# --- fleet_live_agents / fleet_pulse_line / FLEET_STRIP: the /ui migration pilot:
+# a Composition + two Functions, zero UI code. Both
 # are Functions because liveness/seatedness are derived at read time from agent_mounts,
 # never stored graph properties on Agent (see _fn_fleet_live_agents's own docstring).
 
@@ -1796,15 +1795,15 @@ async def test_fleet_live_agents_lists_only_live_seated_agents_on_one_project(
 
     spec = {"op": "function", "name": "fleet_live_agents"}
     res = await run_composition(p, await _save(actions, "fleet-agents", spec))
-    assert res["kind"] == "rows"          # task #60's own reclassification, proven above
+    assert res["kind"] == "rows"          # the function-output reclassification, proven above
     agents = [r["agent"] for r in res["items"]]
     assert any("deadbeef" in a for a in agents)
     assert not any("c0ffee01" in a for a in agents)
 
 
 async def test_fleet_live_agents_degrades_honestly_on_a_pool_failure() -> None:
-    """A broken pool must say so, never silently render an empty table (msg 1894 point 4,
-    degrade-honestly — renderer-independent, the same law build_inbox already follows)."""
+    """A broken pool must say so, never silently render an empty table:
+    degrade-honestly, renderer-independent, the same law build_inbox already follows."""
     from src.orchestrator.compositions import _fn_fleet_live_agents
 
     class _BrokenPool:
@@ -1815,7 +1814,6 @@ async def test_fleet_live_agents_degrades_honestly_on_a_pool_failure() -> None:
 
     out = await _fn_fleet_live_agents(_BrokenPool(), None, {})  # type: ignore[arg-type]
     # {"error": ...} (kind="data"), never a fake row indistinguishable from real data
-    # (thread 02e0ab9c/6190)
     assert out == {"error": "fleet data unavailable"}
 
 
@@ -1830,7 +1828,7 @@ async def test_fleet_pulse_line_returns_the_same_string_orient_shows(actions: Ac
 
 async def test_fleet_pulse_line_degrades_to_a_distinguishable_error_on_a_pool_failure() -> None:
     """The success case is a bare string; a same-typed failure string would be identical
-    by shape (thread 02e0ab9c/6190) — the failure must be a DIFFERENT type, not just
+    by shape. The failure must be a DIFFERENT type, not just
     different wording, so a programmatic reader can tell them apart without parsing text."""
     from src.orchestrator.compositions import _fn_fleet_pulse_line
 
@@ -1861,10 +1859,10 @@ async def test_fleet_strip_composition_end_to_end(actions: Actions) -> None:
     assert "agent:feedface" in str(res["items"]["live_agents (this project only)"])
 
 
-# --- fleet_live / "fleet-live" (rung 2, ruling d42c543b, Thoth msg 1926/1936) — /fleet's
+# --- fleet_live / "fleet-live": /fleet's
 # full-fidelity port: additive, the route stays live beside it. UNLIKE fleet_live_agents
-# (ranked, one project, live+seated only), this is the whole roster — every project, every
-# soul the mount registry knows — with doors/ancestors FLATTENED to readable prose rather
+# (ranked, one project, live+seated only), this is the whole roster: every project, every
+# soul the mount registry knows, with doors/ancestors FLATTENED to readable prose rather
 # than a nested list a table cell can't render (see _fn_fleet_live's own docstring).
 
 async def test_fleet_live_lists_the_full_cross_project_roster(actions: Actions) -> None:
@@ -1880,7 +1878,7 @@ async def test_fleet_live_lists_the_full_cross_project_roster(actions: Actions) 
                      project="neo", cwd="/w/neo", model="claude-opus-5",
                      session_key="sid:otherconn")
     await p.execute("UPDATE agent_mounts SET last_seen = now() - interval '2 days' "
-                    "WHERE agent_id='agent:c0ffee01'")  # stale — still must appear
+                    "WHERE agent_id='agent:c0ffee01'")  # stale, still must appear
 
     spec = {"op": "function", "name": "fleet_live"}
     res = await run_composition(p, await _save(actions, "fleet-live-t1", spec))
@@ -1901,8 +1899,8 @@ async def test_fleet_live_degrades_honestly_on_a_pool_failure() -> None:
             return _raise
 
     out = await _fn_fleet_live(_BrokenPool(), None, {})  # type: ignore[arg-type]
-    # the WHOLE dict becomes {"error": ...} — roster/unreconciled/wake_ledger are equally
-    # unavailable, never left implying only "pulse" failed (thread 02e0ab9c/6190)
+    # the WHOLE dict becomes {"error": ...}: roster/unreconciled/wake_ledger are equally
+    # unavailable, never left implying only "pulse" failed
     assert out == {"error": "fleet data unavailable"}
 
 
@@ -1978,8 +1976,8 @@ async def test_fleet_live_pulse_and_wake_ledger(actions: Actions) -> None:
 async def test_browse_composition_is_registered_and_runs_newest_first(
     actions: Actions,
 ) -> None:
-    """BROWSE'S FIRST PROOF (Thoth dispatch 9436, page conversions off 588148bb): the
-    entity explorer's own object-set load, proven as a composition — kind="objects",
+    """BROWSE'S FIRST PROOF: the
+    entity explorer's own object-set load, proven as a composition, kind="objects",
     newest-first, so it renders through Osiris.renderResult exactly like any other saved
     composition (piece 2's composer shell already runs/renders any saved spec)."""
     older = await actions.create_or_find_object("Thread", "thread:browse-comp-older", "test")
@@ -2010,8 +2008,8 @@ async def test_fleet_live_composition_is_registered_and_runs_end_to_end(
     assert "agent:0ddba11" in str(res["items"]["unreconciled"])
 
 
-# --- mail_overview / mail_threads / MAIL_OVERVIEW (task #71 consolidation wave 2, ruling
-# d42c543b, msg 1929) — /mail's overview half ported as a Function + Composition. Both
+# --- mail_overview / mail_threads / MAIL_OVERVIEW: /mail's overview half ported
+# as a Function + Composition. Both
 # Functions wrap chrome.py's own mail_overview/mail_threads verbatim, never re-deriving
 # the soul-fold or the box-routing logic.
 
@@ -2024,7 +2022,7 @@ async def test_mail_overview_function_lists_boxes_with_traffic(actions: Actions)
 
     spec = {"op": "function", "name": "mail_overview"}
     res = await run_composition(actions.pool, await _save(actions, "mail-ov", spec))
-    assert res["kind"] == "rows"          # task #60's own reclassification
+    assert res["kind"] == "rows"          # the function-output reclassification
     boxes = [r["box"] for r in res["items"]]
     assert "neo" in boxes
 
@@ -2099,7 +2097,7 @@ async def test_mail_composition_end_to_end(actions: Actions) -> None:
 
 
 async def test_mail_composition_rows_carry_the_drill_in_run_action(actions: Actions) -> None:
-    """task #90 (Thoth msg 1976/2005) — each box's own row runs mail_threads for THAT box via
+    """Each box's own row runs mail_threads for THAT box via
     the "run:" navigation dispatch, not a fixed/shared action across every row."""
     from src.orchestrator.compositions import MAIL_OVERVIEW
     from src.orchestrator.mailbox import send_message
@@ -2114,14 +2112,14 @@ async def test_mail_composition_rows_carry_the_drill_in_run_action(actions: Acti
     assert row["_action"] == {"action": "run:mail_threads", "args": {"box": "neo"}}
 
 
-# --- overhead (task #91, ruling d42c543b, msg 1959) — /overhead ported as one Function, two
+# --- overhead: /overhead ported as one Function, two
 # data sources (TranscriptStore's harness-cost accounting, TelemetryStore's retained-events
 # forensics) composed once in Python. Wraps overhead_fleet/summary verbatim.
 
 async def test_overhead_function_shows_zero_totals_with_no_sessions_ingested(
     actions: Actions,
 ) -> None:
-    """Nothing eaten yet is an honest empty totals dict, not an error — same 'absence, never
+    """Nothing eaten yet is an honest empty totals dict, not an error: same 'absence, never
     a zero-row pretence' law TelemetryStore.summary's own docstring states."""
     from src.orchestrator.compositions import _fn_overhead
 
@@ -2147,8 +2145,8 @@ async def test_overhead_degrades_honestly_on_a_pool_failure() -> None:
 async def test_overhead_telemetry_partial_failure_carries_the_reserved_unavailable_marker(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thread 04c651ce item 2 (Thoth dispatch msg 9123): totals/top_sessions succeed, only
-    telemetry's own read breaks — a PARTIAL failure, distinguished from the outer
+    """A partial-failure case: totals/top_sessions succeed, only
+    telemetry's own read breaks: a PARTIAL failure, distinguished from the outer
     connection-failure test above by its `_unavailable` shape, never the fleet-wide
     `{"error": ...}` refusal idiom (real data sits right beside it in the same result)."""
     import src.orchestrator.compositions as compositions_mod
@@ -2168,19 +2166,19 @@ async def test_overhead_telemetry_partial_failure_carries_the_reserved_unavailab
 async def test_overhead_composition_end_to_end(actions: Actions) -> None:
     await save_composition(actions.pool, "overhead", {"op": "function", "name": "overhead"})
     res = await run_composition(actions.pool, "overhead")
-    assert res["kind"] == "data"          # a dict, not a list — no rows reclassification
+    assert res["kind"] == "data"          # a dict, not a list, no rows reclassification
     assert res["items"]["totals"]["sessions"] == 0
 
 
 # --- _fn_practices: `id` (bypasses ranking), `recent` (last-touched first) --------------
-# Thread 55e5ac72, Thoth dispatch msg 9123: the default confirmed-first ranking
+# The default confirmed-first ranking
 # systematically hides exactly the practices most in need of a second look.
 
 async def test_practices_id_bypasses_the_ranked_window(
     actions: Actions,
 ) -> None:
     """The shape amend_practice's own receipt uses: a single practice by id, found
-    regardless of its confirmed rank — the exact gap thread 55e5ac72 named (a just-
+    regardless of its confirmed rank (a just-
     amended practice is the least-confirmed shape by construction, so it sorted
     outside the default limit=50 window on the very next read)."""
     from src.orchestrator.capture import record_practice
@@ -2214,7 +2212,7 @@ async def test_practices_recent_orders_by_last_touch_not_confirmed(
     actions: Actions,
 ) -> None:
     """A heavily-witnessed old practice must NOT out-rank a just-amended one under
-    `recent=True` — the exact reversal the default confirmed-first ranking can't give."""
+    `recent=True`: the exact reversal the default confirmed-first ranking can't give."""
     from src.orchestrator.capture import amend_practice, record_practice
 
     old_well_confirmed = await record_practice(
@@ -2240,8 +2238,8 @@ async def test_practices_recent_orders_by_last_touch_not_confirmed(
 
 
 async def test_amend_practice_mcp_receipt_carries_the_amended_row(actions: Actions) -> None:
-    """Thread 55e5ac72, half 1: `practice(action='amend')`'s own receipt is never
-    invisible on itself — it carries the row `practices()` would render, fetched via
+    """`practice(action='amend')`'s own receipt is never
+    invisible on itself: it carries the row `practices()` would render, fetched via
     `id=` so it lands regardless of confirmed rank."""
     from src import mcp_server as srv
     from src.orchestrator.capture import record_practice
@@ -2263,9 +2261,9 @@ async def test_amend_practice_mcp_receipt_carries_the_amended_row(actions: Actio
         "confirmed live, gate_hook's own fan-out cap"]
 
 
-# --- desk_overview / desk_project (task #91, ruling d42c543b, msg 1959) — /desk's READ side
-# only. The four action verbs (done/not mine/later/settle) are a rung-3 gap, proposed to
-# Thoth separately, not built here — see _fn_desk_overview's own docstring.
+# --- desk_overview / desk_project: /desk's READ side
+# only. The four action verbs (done/not mine/later/settle) are a further gap, tracked
+# separately, not built here, see _fn_desk_overview's own docstring.
 
 async def test_desk_overview_lists_projects_with_asks(actions: Actions) -> None:
     from src.orchestrator.mailbox import send_message
@@ -2310,8 +2308,8 @@ async def test_desk_project_function_lists_one_projects_asks_via_args_project(
 
 
 async def test_desk_project_ask_row_carries_the_settle_action(actions: Actions) -> None:
-    """task #91 (Thoth msg 1976/2029) — measured against chrome.py's own render_desk_project:
-    an ASK row (a brief message) gets ONE action, settle — the same /act verb chrome's own
+    """Measured against chrome.py's own render_desk_project:
+    an ASK row (a brief message) gets ONE action, settle: the same /act verb chrome's own
     /desk/settle route wraps (ack_messages), same single-id shape _settle([m["id"]]) sends."""
     from src.orchestrator.mailbox import send_message
 
@@ -2327,8 +2325,8 @@ async def test_desk_project_ask_row_carries_the_settle_action(actions: Actions) 
 async def test_desk_project_debt_row_carries_the_three_triage_actions(
     actions: Actions,
 ) -> None:
-    """A DEBT row (an open Thread owned by 'operator') gets THREE actions — done/not mine/
-    later — matching chrome.py's own _verbs() exactly: resolve_thread/assign_thread/
+    """A DEBT row (an open Thread owned by 'operator') gets THREE actions, done/not mine/
+    later, matching chrome.py's own _verbs() exactly: resolve_thread/assign_thread/
     defer_thread through the SAME /act registry chrome's /threads/triage route wraps."""
     from src.orchestrator.capture import open_thread
 
@@ -2351,7 +2349,7 @@ async def test_desk_project_debt_row_carries_the_three_triage_actions(
 
 
 async def test_echoes_row_carries_the_three_triage_actions(actions: Actions) -> None:
-    """task #92 — replacing index.html's own bespoke checkbox+bulk-triage bar (renderWallView's
+    """Replacing index.html's own bespoke checkbox+bulk-triage bar (renderWallView's
     third branch) with the same row_actions mechanism task #91 armed for desk's debt rows.
     An untouched miner echo gets THREE per-row actions matching the Function's own `verbs`
     field, which documented this exact interaction model ("triage with testimony, never bulk
@@ -2410,12 +2408,12 @@ async def test_desk_composition_end_to_end(actions: Actions) -> None:
     assert "neo" in [p["project"] for p in res["items"]["by_project"]]
 
 
-# --- row_action on a `function` node (msg 1952, gating msg 1950's proposal) — SERVER HALF
+# --- row_action on a `function` node: SERVER HALF
 # ONLY. A Function's row is already its own facts, so args resolve via row.get(property)
 # directly, no `_props`/`_col_value` indirection the way `_table`'s object-backed version
-# needs. Not wired into any real composition's own saved spec yet — the client half
-# (table() recognizing `_action` as a control, a "run:" dispatch) isn't built. UPDATE
-# (37af8b7): the singular client now IS built and browser-verified — see the row_actions
+# needs. Not wired into any real composition's own saved spec yet, the client half
+# (table() recognizing `_action` as a control, a "run:" dispatch) isn't built. UPDATE:
+# the singular client now IS built and browser-verified, see the row_actions
 # (plural) block below for what's still not.
 
 async def test_function_row_action_resolves_args_from_the_rows_own_keys(
@@ -2439,7 +2437,7 @@ async def test_function_row_action_is_absent_without_a_declared_row_action(
     actions: Actions,
 ) -> None:
     """No row_action on the node -> no `_action` key at all (never a default, never
-    inferred) — the same opt-in discipline `table`'s own row_action already follows."""
+    inferred): the same opt-in discipline `table`'s own row_action already follows."""
     from src.orchestrator.mailbox import send_message
 
     await _seed_project(actions.pool, "neo")
@@ -2454,8 +2452,8 @@ async def test_function_row_action_is_absent_without_a_declared_row_action(
 async def test_function_row_action_does_not_apply_to_dict_shaped_output(
     actions: Actions,
 ) -> None:
-    """A dict-shaped Function (kind stays "data", task #60) has no rows to attach a
-    per-row control to — row_action is silently a no-op there, never an error."""
+    """A dict-shaped Function (kind stays "data") has no rows to attach a
+    per-row control to: row_action is silently a no-op there, never an error."""
     spec = {"op": "function", "name": "fleet_pulse_line",
             "row_action": {"action": "run:whatever", "args": {}}}
     res = await run_composition(actions.pool, await _save(actions, "pulse-drill", spec))
@@ -2463,15 +2461,15 @@ async def test_function_row_action_does_not_apply_to_dict_shaped_output(
     assert isinstance(res["items"], str)
 
 
-# --- row_actions (plural) on a `function` node (Thoth msg 1976, gating msg 1971's proposal)
-# — SERVER GRAMMAR ONLY. A row that affords more than one verb (chrome.py's /desk: done/not
+# --- row_actions (plural) on a `function` node: SERVER GRAMMAR ONLY.
+# A row that affords more than one verb (chrome.py's /desk: done/not
 # mine/later, three DIFFERENT actions on one debt row) needs more than row_action's single
 # {action, args}. `row_actions` is a list of {label, action, args}; each row gets
 # `_actions: [...]`. Its own arg templates add `{"literal": v}` alongside `{"property": p}`
-# (via `_row_action_arg`) — refusing loudly on either malformed shape rather than picking a
-# silent winner. NOT wired into any saved composition's own spec — the client has no case
+# (via `_row_action_arg`), refusing loudly on either malformed shape rather than picking a
+# silent winner. NOT wired into any saved composition's own spec, the client has no case
 # for `_actions` (plural) yet, same "don't arm a control with no client" discipline
-# row_action's own build (89df464) already followed for the singular form.
+# row_action's own build already followed for the singular form.
 
 async def test_function_row_actions_produces_a_labeled_action_list_per_row(
     actions: Actions,
@@ -2540,7 +2538,7 @@ async def test_row_action_arg_resolves_a_property_lookup_including_list_values()
 
     row = {"box": "neo", "thread_folded_ids": [1, 2, 3]}
     assert _row_action_arg(row, {"property": "box"}) == "neo"
-    # a list-valued property passes through unchanged — no separate bulk-arg primitive
+    # a list-valued property passes through unchanged, no separate bulk-arg primitive
     assert _row_action_arg(row, {"property": "thread_folded_ids"}) == [1, 2, 3]
 
 
@@ -2566,12 +2564,12 @@ async def test_row_action_arg_refuses_on_an_empty_spec() -> None:
 
 
 async def test_desk_project_composition_run_is_armed_end_to_end(actions: Actions) -> None:
-    """THE GUARD, FLIPPED (task #91, Thoth msg 1976/2029): the client now has a case for
-    `_actions` — the risk this test originally caught (a control declared with no way to
+    """THE GUARD, FLIPPED: the client now has a case for
+    `_actions`; the risk this test originally caught (a control declared with no way to
     render it) no longer exists, so a negative "nothing is armed" assertion would just rot
     into dead friction. Replaced with a POSITIVE guard: run desk_project through the actual
     composer engine (run_spec, not a raw _fn_desk_project call) with real seeded debt+ask
-    data, and assert the returned rows carry properly-shaped `_actions`/`_action` — the same
+    data, and assert the returned rows carry properly-shaped `_actions`/`_action`, the same
     round trip a real /ui click depends on, so this keeps guarding the thing that matters
     (the ARMED composition actually renders its buttons) instead of guarding its absence."""
     from src.orchestrator.capture import open_thread
@@ -2596,9 +2594,9 @@ async def test_desk_project_composition_run_is_armed_end_to_end(actions: Actions
 
 async def test_no_default_composition_arms_row_actions_declaratively() -> None:
     """The NODE-LEVEL `row_actions` grammar (as opposed to a Function embedding `_actions`
-    directly — see desk_project's own docstring for why it took that path instead) still has
+    directly, see desk_project's own docstring for why it took that path instead) still has
     no real caller: nothing DECLARES `row_actions` on a saved composition's spec yet. Kept as
-    a narrower, still-true guard — not "nothing is armed" (desk_project is, now), but "this
+    a narrower, still-true guard: not "nothing is armed" (desk_project is, now), but "this
     ONE mechanism specifically isn't exercised by a saved spec yet," so arming it that way
     later doesn't silently skip verification."""
 
@@ -2638,8 +2636,8 @@ async def test_triage_census_reports_n_orphans_thin_median_and_max_per_type_stat
     assert row["thin"] == 2
     assert row["median_links"] == 1.0
     assert row["max_links"] == 2
-    # objects.created_at is DB-generated at insert (DEFAULT now()) — not the fixture's own
-    # NOW constant, which only stamps assertions/links — so "born" is checked for shape,
+    # objects.created_at is DB-generated at insert (DEFAULT now()), not the fixture's own
+    # NOW constant, which only stamps assertions/links, so "born" is checked for shape,
     # not an exact value the test can control.
     assert datetime.fromisoformat(row["born"]).year >= 2026
 
@@ -2684,7 +2682,7 @@ async def test_triage_buckets_flags_stale_when_linked_but_long_untouched(
     p = await actions.create_or_find_object("Person", "person:stale-link", "test")
     await actions.create_link(stale, p, "owns", "test", NOW, 0.9)
     # last_touch is GREATEST of THREE created_at-shaped columns (the object's own, the
-    # link's own) — both DB-generated at insert (always "now"), so an object can never
+    # link's own): both DB-generated at insert (always "now"), so an object can never
     # read as stale on its own creation/link timestamps. Backdating both directly is the
     # only way to manufacture a genuinely old, genuinely untouched-since object here.
     await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, stale)
@@ -2719,9 +2717,9 @@ async def test_triage_buckets_flags_duplicate_suspect_on_basename_collision(
 async def test_triage_buckets_flags_contradicted_when_two_sources_disagree(
     actions: Actions,
 ) -> None:
-    """Task #102 (operator's principle via Thoth's dispatch DM 2279): two DIFFERENT
+    """Two DIFFERENT
     sources asserting DIFFERENT values on the same property, neither superseding the
-    other — current_assertions already holds this as live disagreement; this proves the
+    other: current_assertions already holds this as live disagreement; this proves the
     bucket NAMES it, and names WHICH property, without touching the underlying data."""
     obj = await actions.create_or_find_object("Organization", "org:contra", "test")
     await actions.assert_property(obj, "status", "active", "agent:alice", NOW, 0.9)
@@ -2738,8 +2736,8 @@ async def test_triage_buckets_flags_contradicted_when_two_sources_disagree(
 async def test_triage_buckets_does_not_flag_agreeing_sources_as_contradicted(
     actions: Actions,
 ) -> None:
-    """SAME tag, SAME data — two sources corroborating one fact must never render as a
-    conflict (the operator's categorical distinction, not a similarity threshold)."""
+    """SAME tag, SAME data: two sources corroborating one fact must never render as a
+    conflict (a categorical distinction, not a similarity threshold)."""
     obj = await actions.create_or_find_object("Organization", "org:agree", "test")
     await actions.assert_property(obj, "status", "active", "agent:alice", NOW, 0.9)
     await actions.assert_property(obj, "status", "active", "agent:bob", NOW, 0.9)
@@ -2755,7 +2753,7 @@ async def test_triage_buckets_does_not_flag_agreeing_sources_as_contradicted(
 async def test_triage_buckets_contradicted_outranks_duplicate_suspect(
     actions: Actions,
 ) -> None:
-    """MARK, DO NOT RESOLVE — but among the marks, priority still has to pick ONE bucket
+    """MARK, DO NOT RESOLVE: but among the marks, priority still has to pick ONE bucket
     per object: a confirmed live disagreement outranks a structural naming suspicion."""
     a = await actions.create_or_find_object("Organization", "repo:bothflags", "test")
     b = await actions.create_or_find_object("Organization", "file:/x/bothflags", "test")
@@ -2777,7 +2775,7 @@ async def test_triage_buckets_flags_bulk_import_cohort(actions: Actions) -> None
         p = await actions.create_or_find_object("Person", f"person:bulk-link{i}", "test")
         await actions.create_link(oid, p, "owns", "test", NOW, 0.9)
         ids.append(oid)
-    # pin all three to the SAME calendar second — a real bulk import's actual signature,
+    # pin all three to the SAME calendar second: a real bulk import's actual signature,
     # not left to luck that the test happens to execute fast enough to land in one second.
     for oid in ids:
         await actions.pool.execute("UPDATE objects SET created_at=$1 WHERE id=$2", NOW, oid)
@@ -2807,7 +2805,7 @@ async def test_triage_buckets_does_not_flag_a_pair_below_the_default_cohort_min(
                             {"mode": "buckets", "object_type": "Organization",
                              "stale_days": 999_999})
     by_canon = {r["canonical"]: r["bucket"] for r in rows}
-    assert by_canon["org:pair0"] == "thin"  # cohort_min defaults to 3 — a pair isn't enough
+    assert by_canon["org:pair0"] == "thin"  # cohort_min defaults to 3, a pair isn't enough
     assert by_canon["org:pair1"] == "thin"
 
 
@@ -2846,7 +2844,7 @@ async def test_triage_buckets_flags_no_label_rule_for_described_object_type(
     actions: Actions,
 ) -> None:
     """A described object-kind type with no label_field is a narrower, later-stage gap
-    than 'undescribed' — must not be conflated with it."""
+    than 'undescribed': must not be conflated with it."""
     await ensure_type(actions, name="GapNoLabel", kind="object", actor="test",
                       description="has a description but no label_field")
 
@@ -2869,8 +2867,8 @@ async def test_triage_buckets_type_normal_when_described_and_labeled(
 async def test_triage_buckets_link_kind_type_never_flagged_no_label_rule(
     actions: Actions,
 ) -> None:
-    """label_field is an OBJECT-kind concept (a data field an object shows as its label)
-    — a link type has no field of its own to label, so a described link type with no
+    """label_field is an OBJECT-kind concept (a data field an object shows as its label):
+    a link type has no field of its own to label, so a described link type with no
     label_field is 'normal', never 'no_label_rule'."""
     await ensure_type(actions, name="gap_link_rel", kind="link", actor="test",
                       description="a described link type, no label_field ever expected")
@@ -2882,17 +2880,17 @@ async def test_triage_buckets_link_kind_type_never_flagged_no_label_rule(
 
 
 async def test_triage_buckets_flags_type_metadata_contradiction(actions: Actions) -> None:
-    """820730c8, follow-up to #102 (deliberately scoped out at build time): the generic
+    """Deliberately scoped out at build time originally: the generic
     path's own `contradicted` bucket (GROUP BY (object_id, name) HAVING count(DISTINCT
     value) > 1) is a SEPARATE branch from Type's own gap surface, so two sources'
-    differing `description` on the same Type never surfaced here before — the reader
+    differing `description` on the same Type never surfaced here before. The reader
     just silently saw whichever won by confidence/recency, the exact "storage layer
-    holds it correctly, nothing NAMED it" gap task #102 closed for every other type.
+    holds it correctly, nothing NAMED it" gap this test closes for every other type.
 
     RETIRES ITS OWN SPECIMEN AFTER ASSERTING (unlike ordinary Organization-type
     contradiction tests elsewhere in this file): Type rows are DELIBERATELY SPARED from
     the per-test reset (conftest.py's own catalog-survives-the-reset design, `actions`
-    fixture) so the seeded ontology persists across the whole suite — a genuine,
+    fixture) so the seeded ontology persists across the whole suite. A genuine,
     unhealed multi-source contradiction left on an ACTIVE Type row would otherwise leak
     into every later test in the same worker that scans `_fn_lint`'s own generic
     contradiction check (which is also `o.status='active'`-scoped), a real cross-test
@@ -2916,9 +2914,9 @@ async def test_triage_buckets_type_contradiction_outranks_no_label_rule(
     actions: Actions,
 ) -> None:
     """A Type in live disagreement about its own description never quietly falls back
-    to 'no_label_rule' just because label_field also happens to be genuinely missing —
+    to 'no_label_rule' just because label_field also happens to be genuinely missing:
     contradicted ranks first, same priority tier the generic path's own `contradicted`
-    bucket sits at. Retires its own specimen after asserting — see the sibling test
+    bucket sits at. Retires its own specimen after asserting, see the sibling test
     above for why (Type rows are never reset between tests)."""
     await ensure_type(actions, name="GapPriority", kind="object", actor="source-a",
                       description="one telling")
@@ -2966,7 +2964,7 @@ async def test_type_census_composition_end_to_end(actions: Actions) -> None:
     assert row["orphans"] == 1
 
 
-# --- closure_health: the four numbers as a standing surface (Thoth DM 2835/2917) -------
+# --- closure_health: the four numbers as a standing surface -------
 
 async def test_closure_health_classifies_five_mutually_exclusive_buckets(
     actions: Actions,
@@ -2991,7 +2989,7 @@ async def test_closure_health_classifies_five_mutually_exclusive_buckets(
     await actions.assert_property(retracted, "status", "retracted", "test", NOW, 0.9)
 
     no_status = await actions.create_or_find_object("Thread", "thread:no-status", "test")
-    del no_status  # exists only to be counted — no status assertion at all
+    del no_status  # exists only to be counted, no status assertion at all
 
     out = await _fn_closure_health(actions.pool, None, {})
     assert out["total"] == 6
@@ -3007,9 +3005,9 @@ async def test_closure_health_classifies_five_mutually_exclusive_buckets(
 async def test_closure_health_closed_by_topology_splits_strong_vs_weak(
     actions: Actions,
 ) -> None:
-    """The category Thoth named after living it (DM 2937): a `closed_by` fallback edge is
+    """A `closed_by` fallback edge is
     still a real, findable closure (`closed_by_topology`), but it names WHO closed the
-    thread, not WHAT closed it — `weak`, distinct from a `resolved_by`/`answers` edge that
+    thread, not WHAT closed it: `weak`, distinct from a `resolved_by`/`answers` edge that
     points at a specific commit or decision (`strong`)."""
     strong = await actions.create_or_find_object("Thread", "thread:strong-close", "test")
     await actions.assert_property(strong, "status", "resolved", "test", NOW, 0.9)
@@ -3028,11 +3026,11 @@ async def test_closure_health_closed_by_topology_splits_strong_vs_weak(
 async def test_closure_health_resolved_edgeless_splits_pre_and_post_fix(
     actions: Actions,
 ) -> None:
-    """Thoth DM 2937: a mechanical watch on Phase 1a's own fix, not a report card on the
-    past — post_fix_regression must read zero on ordinary data and only counts a thread
+    """A mechanical watch on Phase 1a's own fix, not a report card on the
+    past: post_fix_regression must read zero on ordinary data and only counts a thread
     whose status was observed AT OR AFTER the fix landed."""
     old = await actions.create_or_find_object("Thread", "thread:old-sediment", "test")
-    # NOW (2026-06-27) predates _PHASE_1A_FIX_AT (2026-08-01T03:41:38Z) — old sediment
+    # NOW (2026-06-27) predates _PHASE_1A_FIX_AT (2026-08-01T03:41:38Z): old sediment
     await actions.assert_property(old, "status", "resolved", "test", NOW, 0.9)
 
     fresh = await actions.create_or_find_object("Thread", "thread:new-regression", "test")
@@ -3094,8 +3092,8 @@ async def test_closure_health_scopes_by_repo_arg(actions: Actions) -> None:
 async def test_closure_health_repo_echo_names_the_subject_not_just_args(
     actions: Actions,
 ) -> None:
-    """Thoth DM 2951: run_composition resolves `subject='osiris'` to a real object id
-    BEFORE this Function ever sees it — echoing `args.get('repo')` alone reported null on a
+    """run_composition resolves `subject='osiris'` to a real object id
+    BEFORE this Function ever sees it: echoing `args.get('repo')` alone reported null on a
     call that had, in fact, scoped correctly. The echo must reflect what actually ran."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:via-subject", "test")
     await actions.assert_property(proj, "name", "via-subject", "test", NOW, 0.9)
@@ -3112,16 +3110,16 @@ async def test_closure_health_repo_echo_is_starred_fleet_not_null_when_unscoped(
     actions: Actions,
 ) -> None:
     """A dropped argument and a deliberate fleet-wide scope are different facts and must
-    not render identically (Thoth DM 2951)."""
+    not render identically."""
     out = await _fn_closure_health(actions.pool, None, {})
     assert out["repo"] == "*fleet*"
 
 
-# --- EDGELESS-CLOSURE-GROWTH: the cb38d922 ratchet (Thoth DM 2581/2603) -----------------
+# --- EDGELESS-CLOSURE-GROWTH: the ratchet -----------------
 
 async def test_lint_edgeless_closure_growth_clean_on_a_fresh_tree(actions: Actions) -> None:
     """A fresh tree has zero resolved-with-no-edge threads, trivially under the real
-    (measured-against-production) ceiling — no finding, the check reports clean."""
+    (measured-against-production) ceiling: no finding, the check reports clean."""
     result = await _fn_lint(actions.pool, None, {})
     assert result["counts"]["edgeless-closure-growth"] == 0
     assert "edgeless-closure-growth" in result["clean"]
@@ -3131,7 +3129,7 @@ async def test_lint_edgeless_closure_growth_flags_past_the_ceiling(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The ceiling constant is measured against production (949 fleet-wide) so a real test
-    fixture can't organically exceed it — monkeypatch it down instead of minting 950
+    fixture can't organically exceed it: monkeypatch it down instead of minting 950
     threads. One thread, status='resolved', no closure edge of any kind (simulating the
     pre-Phase-1a case thread_closure.py's own tests already cover) must trip it."""
     import src.orchestrator.compositions as compositions_mod
@@ -3151,7 +3149,7 @@ async def test_lint_edgeless_closure_growth_flags_past_the_ceiling(
 
 
 async def test_lint_rot_candidate_unscoped_clean_on_a_fresh_tree(actions: Actions) -> None:
-    """No repo-less open threads yet — the boundary check has nothing to declare."""
+    """No repo-less open threads yet: the boundary check has nothing to declare."""
     result = await _fn_lint(actions.pool, None, {})
     assert result["counts"]["rot-candidate-unscoped"] == 0
     assert "rot-candidate-unscoped" in result["clean"]
@@ -3160,8 +3158,8 @@ async def test_lint_rot_candidate_unscoped_clean_on_a_fresh_tree(actions: Action
 async def test_lint_rot_candidate_unscoped_counts_a_repo_less_open_thread(
     actions: Actions,
 ) -> None:
-    """Thoth DM 2704, finding 2: rot-candidate INNER JOINs in_repo by structural necessity
-    (no repo means no commit corpus to compare against) — the fix is declaring how many
+    """rot-candidate INNER JOINs in_repo by structural necessity
+    (no repo means no commit corpus to compare against): the fix is declaring how many
     open threads it structurally cannot evaluate, not pretending to evaluate them."""
     from src.orchestrator.capture import open_thread
 
@@ -3183,8 +3181,8 @@ async def test_lint_kindless_open_thread_clean_on_a_fresh_tree(actions: Actions)
 async def test_lint_kindless_open_thread_flags_a_thread_with_no_kind(
     actions: Actions,
 ) -> None:
-    """Thread b5ae6773's write-time law refuses this going forward (open_thread's own
-    MCP tool); this is the standing audit for anything that slipped past it — an
+    """The write-time law refuses this going forward (open_thread's own
+    MCP tool); this is the standing audit for anything that slipped past it: an
     internal caller, or a pre-law row migration 0060 hasn't reached yet."""
     from src.orchestrator.capture import open_thread
 
@@ -3218,9 +3216,8 @@ async def test_lint_unresolvable_owner_clean_on_a_fresh_tree(actions: Actions) -
 async def test_lint_unresolvable_owner_flags_a_bare_string_nobody_holds(
     actions: Actions,
 ) -> None:
-    """Thread b5ae6773's owner law: an owner must resolve to an active seat or
-    'operator' — a bare handle nobody holds (the exact shape my own five rows carried
-    this reign) is exactly what this check catches."""
+    """The owner law: an owner must resolve to an active seat or
+    'operator': a bare handle nobody holds is exactly what this check catches."""
     from src.orchestrator.capture import open_thread
 
     await open_thread(actions, "a duty owned by a bare string nobody holds",
@@ -3260,9 +3257,9 @@ async def test_lint_zero_recipient_dm_clean_on_a_fresh_tree(actions: Actions) ->
 async def test_lint_zero_recipient_dm_flags_a_dm_with_no_recipient_row(
     actions: Actions,
 ) -> None:
-    """Thread 9d1d41c8 (Thoth's follow-up on 24f52959): a DM (to_agent set) that never
-    got a message_recipients row is the exact silent-loss shape that fix closed one
-    cause of — this is the standing tripwire for any other cause."""
+    """A DM (to_agent set) that never
+    got a message_recipients row is the exact silent-loss shape a prior fix closed one
+    cause of: this is the standing tripwire for any other cause."""
     await actions.pool.execute(
         "INSERT INTO fleet_messages (from_agent, to_agent, body) "
         "VALUES ('agent:sender', 'agent:lost-recipient', 'nobody will ever read this')")
@@ -3277,7 +3274,7 @@ async def test_lint_zero_recipient_dm_flags_a_dm_with_no_recipient_row(
 
 
 async def test_lint_zero_recipient_dm_never_flags_a_broadcast(actions: Actions) -> None:
-    """A project broadcast (to_agent IS NULL) is not a DM — every agent in the project
+    """A project broadcast (to_agent IS NULL) is not a DM: every agent in the project
     is its own implicit recipient, so no message_recipients row is expected until one
     of them actually reads it."""
     await actions.pool.execute(
@@ -3303,7 +3300,7 @@ async def test_lint_zero_recipient_dm_never_flags_a_dm_with_a_recipient_row(
     assert result["counts"]["zero-recipient-dm"] == 0
 
 
-# --- ORPHAN (THE ORPHAN LAWS item 1, operator's word wave 15, Thoth DM 8841) ------------
+# --- ORPHAN (THE ORPHAN LAWS item 1) ------------
 
 async def test_lint_orphan_clean_on_a_fresh_tree(actions: Actions) -> None:
     result = await _fn_lint(actions.pool, None, {})
@@ -3314,7 +3311,7 @@ async def test_lint_orphan_clean_on_a_fresh_tree(actions: Actions) -> None:
 
 
 async def test_lint_orphan_flags_a_fully_disconnected_object(actions: Actions) -> None:
-    """No incoming link, no outgoing link, no abstention on record — the genuinely
+    """No incoming link, no outgoing link, no abstention on record: the genuinely
     unexamined shape this check exists to surface."""
     await actions.create_or_find_object("SoftwareProject", "repo:orphan-fresh", "test")
 
@@ -3334,9 +3331,8 @@ async def test_lint_orphan_marks_an_acknowledged_abstention_differently(
     actions: Actions,
 ) -> None:
     """A live `derivation_abstained_<link_type>` record on an otherwise-unlinked object
-    is a mind (or a miner) having already looked and found nothing — a materially
-    different fact from one nobody has ever examined, per Thoth's own ask ('the
-    abstention count beside it')."""
+    is a mind (or a miner) having already looked and found nothing: a materially
+    different fact from one nobody has ever examined."""
     obj = await actions.create_or_find_object("Thread", "thread:orphan-abstained", "test")
     await actions.assert_property(
         obj, "derivation_abstained_in_repo",
@@ -3356,8 +3352,8 @@ async def test_lint_orphan_marks_an_acknowledged_abstention_differently(
 async def test_lint_orphan_never_counts_a_resolved_abstention_as_live(
     actions: Actions,
 ) -> None:
-    """Khnum's own catch (DM 8855): `derive_or_abstain`'s later successful mint
-    supersedes a live abstention with a `resolved: true` marker — a since-answered
+    """`derive_or_abstain`'s later successful mint
+    supersedes a live abstention with a `resolved: true` marker: a since-answered
     abstention must never masquerade as an unresolved one, the same
     `NOT (value ? 'resolved')` predicate `backfill_lineage_repo_links` already checks."""
     obj = await actions.create_or_find_object("Thread", "thread:orphan-resolved", "test")
@@ -3390,7 +3386,7 @@ async def test_lint_orphan_never_flags_an_object_with_a_live_link(actions: Actio
 
 
 async def test_lint_orphan_excludes_type_nodes(actions: Actions) -> None:
-    """A Type object is a taxonomy entry, never meant to carry an edge of its own —
+    """A Type object is a taxonomy entry, never meant to carry an edge of its own:
     excluded outright, never counted as an unexamined disconnection."""
     await actions.create_or_find_object("Type", "type:orphan-taxonomy-entry", "test")
 
@@ -3402,7 +3398,7 @@ async def test_lint_orphan_excludes_type_nodes(actions: Actions) -> None:
 async def test_lint_a_clean_run_carries_no_could_not_evaluate_key_at_all(
     actions: Actions,
 ) -> None:
-    """A healthy pass — every check actually ran — must not carry `could_not_evaluate`
+    """A healthy pass, every check actually ran, must not carry `could_not_evaluate`
     at all (present ONLY when non-empty), so a caller can gate on the key's mere
     presence rather than checking it's an empty dict."""
     result = await _fn_lint(actions.pool, None, {})
@@ -3412,9 +3408,8 @@ async def test_lint_a_clean_run_carries_no_could_not_evaluate_key_at_all(
 async def test_seat_holder_census_flags_a_borrowed_job_dir(
     actions: Actions,
 ) -> None:
-    """`osiris lint --check seat-holders` (thread b33fa26b, Thoth mail 13351 — the
-    jenny/dustin crossing): a seat whose holder is actually a different agent's own
-    live job_dir slug is flagged in the `borrowed` arm, naming the real owner."""
+    """`osiris lint --check seat-holders`: a seat whose holder is actually a different
+    agent's own live job_dir slug is flagged in the `borrowed` arm, naming the real owner."""
     from src.orchestrator import mounts as mounts_module
     from src.orchestrator.compositions import seat_holder_census
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -3441,8 +3436,8 @@ async def test_seat_holder_census_flags_a_borrowed_job_dir(
 async def test_seat_holder_census_flags_an_unprovenanced_holder(
     actions: Actions,
 ) -> None:
-    """A holder with no minted_because/handle/succeeded_from of its own — never
-    borrowed from anyone, just never actually minted — lands in the `unprovenanced`
+    """A holder with no minted_because/handle/succeeded_from of its own, never
+    borrowed from anyone, just never actually minted, lands in the `unprovenanced`
     arm, a WARN for a human to verify, not proof of corruption."""
     from src.orchestrator.compositions import seat_holder_census
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -3463,7 +3458,7 @@ async def test_seat_holder_census_clears_a_genuinely_minted_holder(
     actions: Actions,
 ) -> None:
     """A holder with real provenance (minted_because, the ordinary _bind_before_spawn
-    no-ancestor shape) and no job_dir collision with anyone else — the healthy case,
+    no-ancestor shape) and no job_dir collision with anyone else: the healthy case,
     flagged in neither arm."""
     from datetime import UTC, datetime
 
@@ -3510,13 +3505,13 @@ async def test_lint_check_seat_holders_reaches_the_composition(actions: Actions)
 async def test_lint_isolates_one_broken_check_from_every_other(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thread 04c651ce item 2 (Thoth dispatch msg 9123): a check whose own query breaks
+    """A check whose own query breaks
     must not crash the whole lint call OR silently read as counts[check]==0 (a clean
-    pass) — it lands in `could_not_evaluate` with the real exception as its reason.
+    pass): it lands in `could_not_evaluate` with the real exception as its reason.
     Every check that already ran before the break (contradiction, first in run order)
     keeps its real findings; the broken check itself (orphan) AND every check still to
     come after it (contested-summary, one of several later in run order) are both
-    named — genuinely true, since neither one ever got the chance to run."""
+    named: genuinely true, since neither one ever got the chance to run."""
     import src.orchestrator.compositions as compositions_mod
 
     async def boom(pool: object) -> None:
@@ -3536,8 +3531,8 @@ async def test_lint_isolates_one_broken_check_from_every_other(
 
 
 async def test_orphan_census_agent_bucket_deflates_visit_class(actions: Actions) -> None:
-    """9dc3ce8b: an orphaned visit-class Agent (a doorbell ring nobody ever linked to
-    anything — exactly the shape most likely to end up here) must not read as an
+    """An orphaned visit-class Agent (a doorbell ring nobody ever linked to
+    anything, exactly the shape most likely to end up here) must not read as an
     unexplained orphan indistinguishable from a real, forgotten mind. `visit` rides
     beside `count` on the Agent bucket only; every other type's bucket carries no such
     key at all."""
@@ -3559,8 +3554,7 @@ async def test_orphan_census_agent_bucket_deflates_visit_class(actions: Actions)
     assert result["by_type"]["Thread"] == {"count": 1, "abstained": 0}  # no `visit` key
 
 
-# --- _fn_lint: untraceable-output, THE TRACEABILITY INVARIANT (Graph-Engineering, ---------
-# operator decision f47d14a7, thread 7f547426, item 3/3) --------------------------------
+# --- _fn_lint: untraceable-output, THE TRACEABILITY INVARIANT (Graph-Engineering) --------
 
 async def test_lint_untraceable_output_clean_on_a_fresh_tree(actions: Actions) -> None:
     result = await _fn_lint(actions.pool, None, {})
@@ -3570,7 +3564,7 @@ async def test_lint_untraceable_output_clean_on_a_fresh_tree(actions: Actions) -
 
 
 async def test_lint_untraceable_output_flags_all_four_legs_missing(actions: Actions) -> None:
-    """No producing run, no source, no evaluator — the genuinely unexamined shape."""
+    """No producing run, no source, no evaluator: the genuinely unexamined shape."""
     await actions.create_or_find_object("Artifact", "artifact:untraceable-fresh", "test")
 
     result = await _fn_lint(actions.pool, None, {})
@@ -3591,7 +3585,7 @@ async def test_lint_untraceable_output_run_and_plan_satisfied_via_live_edges(
 ) -> None:
     """A real `produced` edge from an Agent generation, and that generation's own
     `authorized_by` edge to a Decision, satisfy the run and plan legs without any
-    confession — source and evaluator remain genuinely missing."""
+    confession: source and evaluator remain genuinely missing."""
     art = await actions.create_or_find_object("Artifact", "artifact:untraceable-partial",
                                                "test")
     run = await actions.create_or_find_object("Agent", "agent:untraceable-partial", "test")
@@ -3611,9 +3605,9 @@ async def test_lint_untraceable_output_run_and_plan_satisfied_via_live_edges(
 async def test_lint_untraceable_output_a_confession_on_every_leg_excludes_the_row(
     actions: Actions,
 ) -> None:
-    """A live confession on EVERY leg fully satisfies the invariant — the row disappears
-    from findings entirely, matching the operator's own 'acceptance is zero rows after
-    confession' wording (f47d14a7)."""
+    """A live confession on EVERY leg fully satisfies the invariant: the row disappears
+    from findings entirely, matching the rule that acceptance is zero rows after
+    confession."""
     art = await actions.create_or_find_object("Artifact", "artifact:untraceable-confessed",
                                                "test")
     run = await actions.create_or_find_object("Agent", "agent:untraceable-confessed", "test")
@@ -3636,8 +3630,8 @@ async def test_lint_untraceable_output_a_confession_on_every_leg_excludes_the_ro
 async def test_lint_untraceable_output_a_resolved_confession_still_counts_as_missing(
     actions: Actions,
 ) -> None:
-    """Khnum's own catch (DM 8855), reused here: a `resolved: true` marker means the run
-    was FOUND elsewhere — the leg's own real edge must exist now, never the stale marker
+    """A `resolved: true` marker means the run
+    was FOUND elsewhere: the leg's own real edge must exist now, never the stale marker
     on trust. A resolved-only confession does NOT excuse the leg."""
     art = await actions.create_or_find_object("Artifact", "artifact:untraceable-resolved",
                                                "test")
@@ -3656,7 +3650,7 @@ async def test_lint_untraceable_output_missing_run_makes_plan_missing_too(
     actions: Actions,
 ) -> None:
     """With no producing run at all, there is no run whose `authorized_by` edge could
-    ever be checked or confessed — plan is unconditionally missing alongside run."""
+    ever be checked or confessed: plan is unconditionally missing alongside run."""
     await actions.create_or_find_object("Artifact", "artifact:untraceable-no-run", "test")
 
     result = await _fn_lint(actions.pool, None, {})
@@ -3669,8 +3663,8 @@ async def test_lint_untraceable_output_missing_run_makes_plan_missing_too(
 # --- _fn_project: a Decision's own in_repo edge, not just its cited commit's -------------
 
 async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions) -> None:
-    """Thoth DM 2704, finding 1: record_decision(repo=...) already mints a direct in_repo
-    edge on the Decision itself (link_repo, at birth) — the old query only ever found
+    """record_decision(repo=...) already mints a direct in_repo
+    edge on the Decision itself (link_repo, at birth). The old query only ever found
     decisions via decided_in -> Commit -> in_repo, so a ruling filed under a repo but
     citing no commit sha (the common case) was invisible in its own project's browser."""
     from src.orchestrator.capture import record_decision
@@ -3689,7 +3683,7 @@ async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions)
 async def test_fn_project_decisions_still_finds_one_reachable_only_via_its_commit(
     actions: Actions,
 ) -> None:
-    """UNION, not replace — a decision reachable ONLY through decided_in -> Commit ->
+    """UNION, not replace: a decision reachable ONLY through decided_in -> Commit ->
     in_repo (no direct edge of its own) must keep working exactly as before."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:proj2", "session")
     await actions.assert_property(proj, "name", "proj2", "session", NOW, 0.9)
@@ -3706,12 +3700,12 @@ async def test_fn_project_decisions_still_finds_one_reachable_only_via_its_commi
     assert any("cited via its commit only" in (d["decision"] or "") for d in decisions)
 
 
-# --- _fn_wall: totals.unfiled (Thoth DM 2704, finding 2) --------------------------------
+# --- _fn_wall: totals.unfiled --------------------------------
 
 async def test_fn_wall_totals_declares_unfiled_repo_less_threads(actions: Actions) -> None:
     """`projects[]` structurally can't file a repo-less thread (no project to group it
-    under); `totals.open` already counted it correctly. What was missing was saying so —
-    this is the root cause of a number quoted at the operator without anyone knowing why
+    under); `totals.open` already counted it correctly. What was missing was saying so:
+    this is the root cause of a number quoted without anyone knowing why
     ('N open for osiris out of M active')."""
     from src.orchestrator.capture import open_thread
 
@@ -3735,11 +3729,11 @@ async def test_fn_wall_totals_declares_unfiled_repo_less_threads(actions: Action
 async def test_fn_wall_never_double_counts_a_thread_with_a_retracted_in_repo_link(
     actions: Actions,
 ) -> None:
-    """THE IN-REPO JOIN AUDIT (Thoth DM 7112/7163): `_fn_wall`'s per-project GROUP BY and
-    its fleet-wide `totals` both JOIN onto `links` with no `valid_until` filter — the same
-    defect class as the ramstein double-thread specimen (thread 1ba9d9be), one level up:
+    """THE IN-REPO JOIN AUDIT: `_fn_wall`'s per-project GROUP BY and
+    its fleet-wide `totals` both JOIN onto `links` with no `valid_until` filter, the same
+    defect class as a prior double-thread specimen bug, one level up:
     there it duplicated a LIST, here it would have inflated a COUNT that feeds the exact
-    'the numbers don't add up' complaint (operator, 2026-07-12) this module's own totals
+    'the numbers don't add up' complaint this module's own totals
     were built to end. A thread whose `in_repo` edge was retracted and re-created (an
     ordinary fold/re-file) must count exactly once, in exactly one project's bucket."""
     from src.orchestrator.capture import open_thread
@@ -3758,21 +3752,21 @@ async def test_fn_wall_never_double_counts_a_thread_with_a_retracted_in_repo_lin
     assert len(out["top_of_wall"]) == 1  # not duplicated on the top-of-wall list too
 
 
-# ═══ THE CENSUS DOOR (Thoth dispatch 7543 item 2): the smallest read-only fix for three
-# obligations that were stuck on a direct-DB-script workaround — a real house-law
+# ═══ THE CENSUS DOOR: the smallest read-only fix for three
+# obligations that were stuck on a direct-DB-script workaround, a real house-law
 # violation, since raw SQL against the kernel is a defect report, never a shortcut. ═══
 
 async def test_census_seat_property_contradictions_reports_a_contradicting_pair(
     actions: Actions,
 ) -> None:
-    """The exact population Alfred first named as uncounted (thread a78b6987): a SEAT
-    property with two currently-live, disagreeing values — the same shape as a
+    """A previously uncounted population: a SEAT
+    property with two currently-live, disagreeing values, the same shape as a
     contradicting `governs` EDGE, but on a plain property, never invalidated, only
     outvoted. Two sources, same timestamp, same object, same property name: both stay
     current (mirrors test_triage_buckets_flags_contradicted_when_two_sources_disagree's
     own proven construction)."""
     seat = await actions.create_or_find_object("Seat", "seat:censustest", "test")
-    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "warden", "agent:alice", NOW, 0.9)
     await actions.assert_property(seat, "house", "bytebye", "agent:bob", NOW, 0.9)
 
     out = await _fn_census(actions.pool, None, {"kind": "seat_property_contradictions"})
@@ -3780,25 +3774,25 @@ async def test_census_seat_property_contradictions_reports_a_contradicting_pair(
     row = next(r for r in out["rows"] if r["seat"] == "seat:censustest")
     assert row["property"] == "house"
     assert row["distinct_values"] == 2
-    assert set(row["values"]) == {"alfred", "bytebye"}
+    assert set(row["values"]) == {"warden", "bytebye"}
 
 
 async def test_census_seat_property_contradictions_ignores_agreeing_sources(
     actions: Actions,
 ) -> None:
-    """SAME tag, SAME data from two sources is corroboration, never a contradiction — the
+    """SAME tag, SAME data from two sources is corroboration, never a contradiction: the
     same categorical distinction triage's own contradicted bucket already draws."""
     seat = await actions.create_or_find_object("Seat", "seat:censusagree", "test")
-    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
-    await actions.assert_property(seat, "house", "alfred", "agent:bob", NOW, 0.9)
+    await actions.assert_property(seat, "house", "warden", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "warden", "agent:bob", NOW, 0.9)
 
     out = await _fn_census(actions.pool, None, {"kind": "seat_property_contradictions"})
     assert not any(r["seat"] == "seat:censusagree" for r in out["rows"])
 
 
 async def test_census_cohort_delegates_to_adoption_meter(actions: Actions) -> None:
-    """Thread 7917b404: this door must not re-derive adoption_meter's own cohort SQL a
-    second time — it just exposes the same figures a session without direct DB access
+    """This door must not re-derive adoption_meter's own cohort SQL a
+    second time: it just exposes the same figures a session without direct DB access
     could not otherwise read."""
     out = await _fn_census(actions.pool, None, {"kind": "cohort"})
     assert out["kind"] == "cohort"
@@ -3819,11 +3813,11 @@ async def test_census_refuses_an_unknown_kind_rather_than_guessing(actions: Acti
 async def test_census_seat_property_contradictions_composition_is_registered_and_runs(
     actions: Actions,
 ) -> None:
-    """Thoth's own fold correction (dispatch 7543 item 2): census is reached through the
-    generic composition door, not a bespoke named tool — one fixed-args saved composition
+    """A fold correction: census is reached through the
+    generic composition door, not a bespoke named tool. One fixed-args saved composition
     per kind, same shape mail_overview/fleet_live already prove out end to end."""
     seat = await actions.create_or_find_object("Seat", "seat:censuscomptest", "test")
-    await actions.assert_property(seat, "house", "alfred", "agent:alice", NOW, 0.9)
+    await actions.assert_property(seat, "house", "warden", "agent:alice", NOW, 0.9)
     await actions.assert_property(seat, "house", "bytebye", "agent:bob", NOW, 0.9)
 
     await save_composition(actions.pool, "census-seat-property-contradictions",
@@ -3842,7 +3836,7 @@ async def test_census_cohort_composition_is_registered_and_runs(actions: Actions
 
 
 async def test_backlog_composition_is_registered_and_runs(actions: Actions) -> None:
-    """WAVE 27, THE BACKLOG VIEW (Thoth mail 11754): a parity census gap closed with zero
+    """THE BACKLOG VIEW: a parity census gap closed with zero
     bespoke rendering, same shape as fleet-strip/fleet-live/mail/overhead/desk above --
     `obligation_backlog` wrapped as its own saved composition, osiris.js's generic
     `renderData` does the rest (its own test lives in tests/test_render_hygiene.py and
@@ -3855,7 +3849,7 @@ async def test_backlog_composition_is_registered_and_runs(actions: Actions) -> N
         assert key in res["items"]
 
 
-# ── UNVERIFIED-CITATION (CITATION SHAPE, operator ruling c6d25164, thread 9d2aaf4d) ──
+# ── UNVERIFIED-CITATION (CITATION SHAPE) ──
 
 
 async def test_lint_unverified_citation_clean_on_a_genuinely_verified_citation(
@@ -3908,8 +3902,7 @@ async def test_lint_unverified_citation_flags_a_tampered_citation(
     assert finding["subject"] == "agent:lint-cite-tampered"
 
 
-# --- _fn_lint: project-identity (operator ruling b5663511, PROJECT IDENTITY DRIFT, -----
-# Thoth dispatch 12401) -------------------------------------------------------------
+# --- _fn_lint: project-identity (PROJECT IDENTITY DRIFT) -------------------------------
 
 
 async def test_lint_project_identity_clean_on_a_fresh_tree(actions: Actions) -> None:
@@ -3924,7 +3917,7 @@ async def test_lint_project_identity_flags_an_empty_stub_colliding_by_name(
     """The live specimen: repo:xxit renamed to 'handlingtheloop' (a real, referenced
     project); a stub repo:handlingtheloop with no inbound link sits beside it under a
     canonical that happens to spell the SAME string the real project's name now
-    reads — exactly the twin a rename-blind mint would have produced."""
+    reads: exactly the duplicate pair a rename-blind mint would have produced."""
     now = datetime.now(UTC)
     real = await actions.create_or_find_object("SoftwareProject", "repo:xxit", "test")
     await actions.assert_property(real, "name", "handlingtheloop", "test", now, 0.95,
@@ -3949,7 +3942,7 @@ async def test_lint_project_identity_never_flags_a_stub_with_no_collision(
     actions: Actions,
 ) -> None:
     """An empty stub whose name/canonical matches nothing else is a genuinely new,
-    not-yet-referenced project — never this check's business (orphan's own, if
+    not-yet-referenced project: never this check's business (orphan's own, if
     anyone's)."""
     await actions.create_or_find_object("SoftwareProject", "repo:lint-pi-lonely", "test")
 
@@ -3961,7 +3954,7 @@ async def test_lint_project_identity_flags_a_project_with_more_than_one_current_
     actions: Actions,
 ) -> None:
     """The other live specimen: repo:bytebye's 27 competing current names, collapsed
-    here to two sources disagreeing — genuinely DISTINCT values, never merely
+    here to two sources disagreeing: genuinely DISTINCT values, never merely
     redundant agreement across sources (count(DISTINCT ...), not a raw row count)."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
@@ -3981,7 +3974,7 @@ async def test_lint_project_identity_never_flags_redundant_agreement(
     actions: Actions,
 ) -> None:
     """Two sources asserting the IDENTICAL name value are agreement, not
-    contradiction — count(DISTINCT value), never a raw >1-row count."""
+    contradiction: count(DISTINCT value), never a raw >1-row count."""
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", "repo:lint-pi-agree",
                                                 "test")

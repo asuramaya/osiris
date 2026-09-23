@@ -1,8 +1,8 @@
-"""The soul store — verbatim ingest + hash chain (task #51 piece 1, ruling 62dc6397).
+"""The soul store: verbatim ingest and hash chain (task #51 piece 1).
 
 Proves the round trip against real Postgres (testcontainers): every line stored exactly
 as written, the hash chain detects a gap or a tamper, incremental ingest resumes the
-chain correctly, and re_materialize() reconstructs the source byte-for-byte — the
+chain correctly, and re_materialize() reconstructs the source byte-for-byte. This is the
 acceptance test this piece stands or falls on.
 """
 from __future__ import annotations
@@ -72,8 +72,8 @@ async def test_ingest_stores_every_line_verbatim(store: SoulStore, tmp_path: Pat
     fernet = get_soul_fernet()
     assert [fernet.decrypt(bytes(r["raw_line"])).decode() for r in rows] == lines
     assert [r["line_idx"] for r in rows] == list(range(5))
-    # ENCRYPTED AT REST (Thoth mail 9134): the stored bytes are never the plaintext —
-    # confirms this isn't accidentally a no-op Fernet passthrough.
+    # ENCRYPTED AT REST: the stored bytes are never the plaintext, confirming this
+    # isn't accidentally a no-op Fernet passthrough.
     assert bytes(rows[0]["raw_line"]).decode(errors="replace") != lines[0]
 
 
@@ -93,15 +93,15 @@ async def test_ingest_is_idempotent(store: SoulStore, tmp_path: Path) -> None:
 async def test_a_checkpoint_failure_rolls_back_its_own_batchs_soul_lines_too(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE CHECKPOINT RACE FIX (thread ce3ddbb6): before this, a batch's soul_lines
-    INSERT and the soul_sessions upsert (`_checkpoint`) ran as two SEPARATE
-    transactions on two separate connections — a process death between them left
-    orphaned soul_lines rows with no soul_sessions row at all, so the store read the
-    session as never-ingested despite holding its content (confirmed live:
-    a39e60d9e4fbd5292 sat with 89 orphaned rows for hours). Now they share one
-    transaction: forcing the checkpoint to fail must roll back that batch's soul_lines
-    rows too — the atomicity guarantee this fix actually buys, proven by making the
-    SECOND write fail and confirming the FIRST didn't survive it either."""
+    """THE CHECKPOINT RACE FIX: before this, a batch's soul_lines INSERT and the
+    soul_sessions upsert (`_checkpoint`) ran as two SEPARATE transactions on two
+    separate connections. A process death between them left orphaned soul_lines rows
+    with no soul_sessions row at all, so the store read the session as never-ingested
+    despite holding its content (confirmed live: one real session sat with 89 orphaned
+    rows for hours). Now they share one transaction: forcing the checkpoint to fail
+    must roll back that batch's soul_lines rows too. This is the atomicity guarantee
+    this fix actually buys, proven by making the SECOND write fail and confirming the
+    FIRST didn't survive it either."""
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
 
     async def _boom(*_a: object, **_kw: object) -> None:
@@ -175,7 +175,7 @@ async def test_re_materialize_byte_compares_against_the_source(
     await store.ingest_path(str(p), "decafbad")
     materialized = await store.re_materialize("decafbad")
     assert materialized is not None
-    # source carries a trailing newline the join form doesn't reproduce — the documented
+    # source carries a trailing newline the join form doesn't reproduce: the documented
     # "mod a trailing newline" equivalence
     assert p.read_text() == materialized + "\n"
     assert materialized == "\n".join(lines)
@@ -212,8 +212,8 @@ async def test_ingest_via_discover_returns_zero_when_nothing_found(
 # --- rematerialize_to_disk (task #51 piece 2) -------------------------------
 
 def _fixture_with_compaction_boundary() -> list[str]:
-    """A realistic mix including a compaction-summary line — the exact shape piece 2's
-    dispatch named: 1:1 must survive a compaction boundary untouched, no filtering."""
+    """A realistic mix including a compaction-summary line: the exact shape piece 2's
+    spec named. 1:1 must survive a compaction boundary untouched, no filtering."""
     lines = []
     for i in range(3):
         ts = datetime(2026, 8, 17, 9, 0, i, tzinfo=UTC).isoformat()
@@ -234,7 +234,7 @@ async def test_rematerialize_to_disk_is_byte_identical_across_a_compaction_bound
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """THE CONTRACT TEST (piece 2's own acceptance bar): ingest -> rematerialize ->
-    sha256 equal, on a fixture including a compaction boundary — 1:1 means no
+    sha256 equal, on a fixture including a compaction boundary. 1:1 means no
     filtering, ever, not even around the one line type the OTHER store (harness_turns)
     treats specially for its own token math."""
     lines = _fixture_with_compaction_boundary()
@@ -253,7 +253,7 @@ async def test_rematerialize_to_disk_is_byte_identical_across_a_compaction_bound
     assert receipt["sha256"] == hashlib.sha256(dest.read_text().encode()).hexdigest()
 
 
-# --- thread 78efd46d item 2: the round-trip proof -----------------------------------
+# --- the round-trip proof -----------------------------------------------------------
 
 async def test_verify_round_trip_sample_is_clean_on_a_healthy_ingest(
     store: SoulStore, tmp_path: Path,
@@ -270,7 +270,7 @@ async def test_verify_round_trip_sample_skips_a_session_whose_file_is_gone(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """Pruned/moved/archived since ingest is item 4's own concern (cache with a
-    budget), never proof the store's own content is wrong — the round-trip proof only
+    budget), never proof the store's own content is wrong. The round-trip proof only
     ever speaks to sessions it can actually compare against something."""
     p = _write_transcript(tmp_path / "gone.jsonl", _synthetic_lines(3))
     await store.ingest_path(str(p), "va n1shed0")
@@ -284,8 +284,8 @@ async def test_verify_round_trip_sample_skips_a_live_session_never_as_a_failure(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """A file touched AFTER the store's last ingest is a moving target, not proof of
-    a defect (Thoth's ruling off the 2026-09-08 full sweep: 2 of 5 raw mismatches
-    were exactly this shape) — counted in skipped_live, never in failures."""
+    a defect (a full sweep on 2026-09-08 found 2 of 5 raw mismatches were exactly this
+    shape). Counted in skipped_live, never in failures."""
     p = _write_transcript(tmp_path / "live1.jsonl", _synthetic_lines(3))
     await store.ingest_path(str(p), "l1vesess1")
     await store.pool.execute(
@@ -313,7 +313,7 @@ async def test_verify_round_trip_sample_catches_a_tampered_session(
 
 
 def _cwd_lines(n: int, cwd: str) -> list[str]:
-    """Lines shaped like a real Claude Code transcript's own `cwd`-carrying JSON —
+    """Lines shaped like a real Claude Code transcript's own `cwd`-carrying JSON.
     `_synthetic_lines`'s own shape has none, deliberately never touching this new
     class of check; these do."""
     out = []
@@ -328,10 +328,10 @@ def _cwd_lines(n: int, cwd: str) -> list[str]:
 def _rewrite_cwd_like_the_healer(path: Path, new_cwd: str) -> None:
     """Reproduces mounts.py's own `_rewrite_transcript_cwd` exactly: the same
     re-serialization (`json.dumps(obj, ensure_ascii=False, separators=(",", ":"))`) AND
-    its own deliberate mtime preservation (`os.utime` restore) — the exact mechanism
-    that lets a cwd heal slip past verify_round_trip_sample's skipped_live guard in
-    real life; a test that let mtime advance would never actually reach the check this
-    test exists to prove."""
+    its own deliberate mtime preservation (`os.utime` restore). This is the exact
+    mechanism that lets a cwd heal slip past verify_round_trip_sample's skipped_live
+    guard in real life; a test that let mtime advance would never actually reach the
+    check this test exists to prove."""
     import os
 
     orig_stat = path.stat()
@@ -348,11 +348,11 @@ def _rewrite_cwd_like_the_healer(path: Path, new_cwd: str) -> None:
 async def test_verify_round_trip_sample_names_a_cwd_rewrite_as_its_own_class(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """Thread 6e56cf7e, Thoth mail 9382 item 4: heal_slug_transcripts' own sanctioned
-    re-addressing (mounts._rewrite_transcript_cwd) changes only each line's `cwd` field
-    and deliberately preserves mtime — a byte mismatch this check would otherwise
-    report as an undifferentiated 'byte mismatch' failure, indistinguishable from real
-    corruption. cwd_rewrites names it separately; failures stays empty."""
+    """heal_slug_transcripts' own sanctioned re-addressing (mounts._rewrite_transcript_cwd)
+    changes only each line's `cwd` field and deliberately preserves mtime, a byte
+    mismatch this check would otherwise report as an undifferentiated 'byte mismatch'
+    failure, indistinguishable from real corruption. cwd_rewrites names it separately;
+    failures stays empty."""
     p = _write_transcript(tmp_path / "healed.jsonl", _cwd_lines(4, "/old/path"))
     await store.ingest_path(str(p), "cwdheal001")
     _rewrite_cwd_like_the_healer(p, "/new/path")
@@ -361,14 +361,14 @@ async def test_verify_round_trip_sample_names_a_cwd_rewrite_as_its_own_class(
     assert report.failures == []
     assert report.skipped_live == 0
     assert report.cwd_rewrites == 1
-    assert bool(report) is False  # a clean pass — a named, benign class, never an alarm
+    assert bool(report) is False  # a clean pass: a named, benign class, never an alarm
 
 
 async def test_verify_round_trip_sample_a_cwd_rewrite_plus_a_real_edit_still_fails(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """The check only ever explains away the ONE sanctioned shape (cwd, and nothing
-    else, changed) — a line that also changed something real falls straight through
+    else, changed). A line that also changed something real falls straight through
     to the ordinary failure path, never silently waved through as 'just a cwd heal'."""
     import os
 
@@ -401,11 +401,11 @@ async def test_hash_file_streamed_matches_a_plain_whole_file_hash(tmp_path: Path
 
 
 async def test_ingest_survives_an_embedded_nul_byte(store: SoulStore, tmp_path: Path) -> None:
-    """THE ACCEPTANCE TEST FOR 0052 (thread 173cbf11, Thoth DM 5350): a real transcript
-    line carrying a literal NUL byte — Postgres `text` cannot hold 0x00 at all, confirmed
-    live on both of Thoth's own named transcripts (Ptah 4780, Ra 18591 NUL bytes).
-    Ingest must not raise, the hash chain must verify clean, and rematerialize must
-    reproduce the exact bytes, NUL included — `bytea` end to end is the whole fix."""
+    """THE ACCEPTANCE TEST FOR 0052: a real transcript line carrying a literal NUL byte.
+    Postgres `text` cannot hold 0x00 at all, confirmed live on two real transcripts with
+    thousands of NUL bytes between them. Ingest must not raise, the hash chain must
+    verify clean, and rematerialize must reproduce the exact bytes, NUL included:
+    `bytea` end to end is the whole fix."""
     lines = _synthetic_lines(2)
     poisoned = json.dumps({"type": "user", "message": {"content": "binary garbage: "}})
     poisoned_bytes = poisoned.encode() + b"\x00\x00\x00binary tail"
@@ -431,11 +431,10 @@ async def test_ingest_survives_an_embedded_nul_byte(store: SoulStore, tmp_path: 
 async def test_ingest_never_stores_a_trailing_unterminated_line(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """THE LIVE-WRITE SAFETY GUARD (msg 6583, Jesus resumed and appending mid-lane): a
-    session mid-write of its own last line leaves that line on disk with no trailing
-    `\\n` yet. Ingesting it as if complete would bake a half-written JSON object
-    permanently into the chain at that line_idx. The fix is structural (never trust an
-    unterminated tail), not an occupancy check."""
+    """THE LIVE-WRITE SAFETY GUARD: a session resumed and appending mid-write leaves its
+    own last line on disk with no trailing `\\n` yet. Ingesting it as if complete would
+    bake a half-written JSON object permanently into the chain at that line_idx. The
+    fix is structural (never trust an unterminated tail), not an occupancy check."""
     complete = _synthetic_lines(2)
     p = tmp_path / "live.jsonl"
     partial = json.dumps({"type": "user", "message": {"content": "still writ"}})
@@ -445,7 +444,7 @@ async def test_ingest_never_stores_a_trailing_unterminated_line(
     rows = await store.raw_lines("11ff11ff")
     assert rows == complete
 
-    # the write "finishes" — the file now ends in a real newline
+    # the write "finishes": the file now ends in a real newline
     full_line = partial + " and now done"
     p.write_bytes(("\n".join(complete) + "\n").encode() + full_line.encode() + b"\n")
     added = await store.ingest_path(str(p), "11ff11ff")
@@ -458,7 +457,7 @@ async def test_ingest_never_stores_a_trailing_unterminated_line(
 async def test_ingest_returns_zero_when_the_only_content_is_an_unterminated_line(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """A brand-new file, mid-write of its very first line — nothing complete yet."""
+    """A brand-new file, mid-write of its very first line: nothing complete yet."""
     p = tmp_path / "brandnew.jsonl"
     p.write_bytes(b'{"type": "user", "message": {"content": "not done ye')  # no \n at all
     n = await store.ingest_path(str(p), "0a11a11a")
@@ -466,13 +465,13 @@ async def test_ingest_returns_zero_when_the_only_content_is_an_unterminated_line
     assert await store.raw_lines("0a11a11a") is None
 
 
-# --- streaming (msg 6583, the 307MB question) --------------------------------
+# --- streaming (the large-transcript question) --------------------------------
 
 async def test_ingest_streams_across_several_batches(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Forces a tiny batch size so a modest line count still spans several INSERT +
-    checkpoint round trips — proving the batch loop itself, not just its single-batch
+    checkpoint round trips, proving the batch loop itself, not just its single-batch
     fallback (every other test in this file uses too few lines to exercise it)."""
     import src.ingest.soul_store as soul_store_mod
 
@@ -496,7 +495,7 @@ async def test_ingest_streams_across_several_batches(
 async def test_rematerialize_to_disk_streams_across_several_pages(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Forces a tiny page size on the READ side too — proving `_stream_verified_write`'s
+    """Forces a tiny page size on the READ side too, proving `_stream_verified_write`'s
     own multi-page loop reconstructs byte-identical content, not just its single-page
     fallback."""
     import src.ingest.soul_store as soul_store_mod
@@ -516,8 +515,8 @@ async def test_rematerialize_to_disk_streams_across_several_pages(
 async def test_rematerialize_to_disk_leaves_no_temp_file_on_a_broken_chain(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The streaming rewrite writes to a sibling temp file before the atomic rename —
-    a broken chain must discard that temp file too, not just refuse to create `dest`."""
+    """The streaming rewrite writes to a sibling temp file before the atomic rename.
+    A broken chain must discard that temp file too, not just refuse to create `dest`."""
     import src.ingest.soul_store as soul_store_mod
 
     monkeypatch.setattr(soul_store_mod, "_REMATERIALIZE_PAGE_LINES", 2)
@@ -541,11 +540,11 @@ async def test_rematerialize_to_disk_defaults_dest_to_the_recorded_source_path(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """No `dest` given -> writes to soul_sessions' own recorded source_path, the
-    harness's projects-slug convention — so `claude --resume` on any host finds it
+    harness's projects-slug convention, so `claude --resume` on any host finds it
     where a live session would have."""
     lines = _synthetic_lines(3)
     source = _write_transcript(tmp_path / "orig" / "5ee7f0d5-session.jsonl", lines)
-    os.remove(source)  # the ORIGINAL is gone — this IS the "any host" scenario
+    os.remove(source)  # the ORIGINAL is gone: this IS the "any host" scenario
     # ingest normally via a temp copy, THEN delete it, to exercise the real path
     tmp_copy = tmp_path / "tmp-ingest.jsonl"
     _write_transcript(tmp_copy, lines)
@@ -564,7 +563,7 @@ async def test_rematerialize_to_disk_refuses_a_live_transcript(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """A destination modified more recently than the store's last ingest is a LIVE
-    transcript — refuse, name why, touch nothing."""
+    transcript: refuse, name why, touch nothing."""
     lines = _synthetic_lines(3)
     source = _write_transcript(tmp_path / "s" / "a11ce00b-session.jsonl", lines)
     await store.ingest_path(str(source), "a11ce00b")
@@ -602,7 +601,7 @@ async def test_rematerialize_to_disk_force_overwrites_a_live_transcript(
 async def test_rematerialize_to_disk_writes_nothing_on_a_broken_chain(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """A break is a NAMED state, never a silent partial file — the destination must not
+    """A break is a NAMED state, never a silent partial file: the destination must not
     even be CREATED when the chain fails verification."""
     lines = _synthetic_lines(5)
     source = _write_transcript(tmp_path / "s" / "b0e0be00-session.jsonl", lines)
@@ -650,7 +649,7 @@ async def test_rematerialize_mcp_tool_wraps_the_same_verb(
     assert dest.read_text() == "\n".join(lines) + "\n"
 
 
-# --- heal_seat_transcript (the jesus/chad repair, made a callable MCP door) -------------
+# --- heal_seat_transcript (a live splice repair, made a callable MCP tool) -------------
 
 class _Ctx:
     class request_context:  # noqa: N801
@@ -726,7 +725,7 @@ async def test_heal_seat_transcript_dry_run_reports_a_refused_pair(
     from src import mcp_server as srv
 
     lines_a = _chained_lines(2, seed="healrefa")
-    lines_b = _chained_lines(2, seed="healrefb")  # unrelated — not a real continuation
+    lines_b = _chained_lines(2, seed="healrefb")  # unrelated: not a real continuation
     sid = "healrefa-0000-0000-0000-000000000002"
     a = _write_transcript(tmp_path / f"{sid}.jsonl", lines_a)
     b = _write_transcript(tmp_path / "b.jsonl", lines_b)
@@ -805,18 +804,18 @@ async def test_raw_lines_none_when_never_ingested(store: SoulStore) -> None:
     assert await store.raw_lines("neverseen1") is None
 
 
-# --- a non-claude-code harness round-trips (thread 6483/6587, the recurring catch) -----
+# --- a non-claude-code harness round-trips (the recurring catch) -----------------------
 #
-# `ingest_path`/`splice_sources` have always accepted a real `harness` — but every
-# READ-back door (verify_chain, re_materialize, raw_lines, mining_view,
+# `ingest_path`/`splice_sources` have always accepted a real `harness`, but every
+# READ-back path (verify_chain, re_materialize, raw_lines, mining_view,
 # _stream_verified_write, rematerialize_to_disk) at one point or another hardcoded the
 # module constant `_HARNESS = "claude-code"` instead of taking the caller's own value.
-# Found once (Seshat, msg 6483/6587), fixed (Khnum), silently REGRESSED by Imhotep's
-# streaming rewrite (verify_chain + the new _stream_verified_write both reverted to the
-# constant), found again while reconciling khnum-splice-seek against that rewrite. Zero
-# tests asserted the round trip for any harness other than 'claude-code' through any of
-# this — every one of the three regressions shipped past a green suite. This is that
-# test: ingest under a non-claude-code harness and prove every read-back door honors it.
+# Found once, fixed, then silently REGRESSED by a later streaming rewrite (verify_chain
+# and the new _stream_verified_write both reverted to the constant), found again while
+# reconciling a splice-seek change against that rewrite. Zero tests asserted the round
+# trip for any harness other than 'claude-code' through any of this: every one of the
+# three regressions shipped past a green suite. This is that test: ingest under a
+# non-claude-code harness and prove every read-back path honors it.
 
 async def test_non_claude_code_harness_round_trips_through_every_read_door(
     store: SoulStore, tmp_path: Path,
@@ -843,7 +842,7 @@ async def test_non_claude_code_harness_ignored_reports_never_ingested(
 ) -> None:
     """THE EXACT LIE the bug tells: a caller that forgets (or a regression that drops)
     the harness kwarg on read-back sees a session that was genuinely, fully ingested as
-    though it had never been touched at all — not an error, a silent false negative. This
+    though it had never been touched at all, not an error, a silent false negative. This
     locks in the CONTRAST as the regression test: same anchor_sid, same store, the only
     difference is which harness the reader asks for."""
     lines = _synthetic_lines(3)
@@ -851,9 +850,9 @@ async def test_non_claude_code_harness_ignored_reports_never_ingested(
     await store.ingest_path(str(source), "crush01", harness="crush")
 
     assert await store.verify_chain("crush01", harness="crush") is True
-    # the SAME session, read back under the wrong (default) harness — reports exactly
+    # the SAME session, read back under the wrong (default) harness: reports exactly
     # as if nothing had ever been ingested, never an error naming the mismatch
-    assert await store.verify_chain("crush01") is True  # vacuously — zero rows match
+    assert await store.verify_chain("crush01") is True  # vacuously: zero rows match
     assert await store.re_materialize("crush01") is None
     assert await store.raw_lines("crush01") is None
     assert await store.mining_view("crush01") is None
@@ -862,10 +861,10 @@ async def test_non_claude_code_harness_ignored_reports_never_ingested(
 async def test_resume_diagnostics_honors_a_non_claude_code_harness(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """THE FOURTH `_HARNESS` OCCURRENCE (Thoth dispatch 6715), worse than its five
-    siblings: `resume_diagnostics` took no `harness` override at all until this fix —
-    a session ingested under any harness but 'claude-code' reported as never-ingested
-    (`None`) regardless of what a caller passed, because there was nothing to pass."""
+    """THE FOURTH `_HARNESS` OCCURRENCE, worse than its five siblings:
+    `resume_diagnostics` took no `harness` override at all until this fix. A session
+    ingested under any harness but 'claude-code' reported as never-ingested (`None`)
+    regardless of what a caller passed, because there was nothing to pass."""
     lines = _synthetic_lines(4)
     source = _write_transcript(tmp_path / "dsh02-session.jsonl", lines)
     await store.ingest_path(str(source), "dsh02", harness="dsh")
@@ -903,7 +902,7 @@ async def test_mining_view_extracts_role_text_and_tool_calls(
             {"type": "text", "text": "found it"},
         ]}}),
         json.dumps({"type": "user", "isSidechain": True,
-                   "message": {"content": "a subagent's own turn — out of scope"}}),
+                   "message": {"content": "a subagent's own turn, out of scope"}}),
         json.dumps({"type": "user", "isCompactSummary": True,
                    "message": {"content": "the whole history replayed"}}),
     ]
@@ -925,11 +924,10 @@ async def test_mining_view_none_when_never_ingested(store: SoulStore) -> None:
 
 
 # --- splice_sources / verify_jsonl_chain_boundary / rematerialize_to_disk(upto=...)
-# (thread 6483/6534/6540/6543 — the operator's injection thesis landing on a real
-# specimen: whole transcripts in, any resume point out, defaulting to latest) ------------
+# (whole transcripts in, any resume point out, defaulting to latest) --------------------
 
 def _chained_lines(n: int, *, seed: str, session: str = "chainsession") -> list[str]:
-    """A genuine `user`/`assistant` parentUuid chain — `_synthetic_lines`' own fixture
+    """A genuine `user`/`assistant` parentUuid chain. `_synthetic_lines`' own fixture
     carries no uuid/parentUuid at all, the one thing this feature's own tests need.
     Deterministic, readable uuids: f"{seed}-000...-line{i:04d}"."""
     out = []
@@ -996,13 +994,13 @@ async def test_verify_jsonl_chain_boundary_refuses_a_file_with_no_uuid_bearing_e
 async def test_verify_jsonl_chain_boundary_sees_through_an_attachment_link(
     tmp_path: Path,
 ) -> None:
-    """THE REGRESSION jesus/chad's live splice caught (thread 6483/6559/6565): the join
-    itself is genuinely chained through a `type:"attachment"` line — a real link, never a
-    valid seek target, but a link `verify_jsonl_chain_boundary` must still see through or
-    it reports a false orphan on the entry right after it."""
+    """THE REGRESSION a real live splice caught: the join itself is genuinely chained
+    through a `type:"attachment"` line, a real link, never a valid seek target, but a
+    link `verify_jsonl_chain_boundary` must still see through or it reports a false
+    orphan on the entry right after it."""
     lines = _chained_lines(4, seed="attachlink")
     # splice an attachment line, chained correctly, between B's join point and its
-    # next real entry — the exact shape found live
+    # next real entry: the exact shape found live
     b_raw = json.loads(lines[2])
     attach_uuid = "attachlink-attach-0000-0000-000000000000"
     attachment = json.dumps({
@@ -1021,8 +1019,8 @@ async def test_verify_jsonl_chain_boundary_still_refuses_a_real_break_through_an
     tmp_path: Path,
 ) -> None:
     """Widening the walk to see attachment links must not make it MORE permissive on a
-    genuine break — Thoth's own instruction (thread 6567): prove the widened verifier
-    still refuses, on the same shape the fix just legitimized."""
+    genuine break: prove the widened verifier still refuses, on the same shape the fix
+    just legitimized."""
     lines = _chained_lines(4, seed="attachbreak")
     b_raw = json.loads(lines[2])
     attachment = json.dumps({
@@ -1030,7 +1028,7 @@ async def test_verify_jsonl_chain_boundary_still_refuses_a_real_break_through_an
         "parentUuid": b_raw["parentUuid"], "sessionId": b_raw["sessionId"],
     })
     # the next real entry's parentUuid points at neither the attachment NOR anything
-    # else in A or B — a genuine, unrelated break, even with an attachment link present
+    # else in A or B: a genuine, unrelated break, even with an attachment link present
     b_raw["parentUuid"] = "points-at-nothing-real-at-all"
     lines[2] = json.dumps(b_raw)
     a = _write_transcript(tmp_path / "a.jsonl", lines[:2])
@@ -1078,14 +1076,14 @@ async def test_splice_sources_refuses_and_writes_nothing_on_a_broken_pair(
         await store.splice_sources("refusedsid", [str(a), str(b)])
     rows = await store.pool.fetch(
         "SELECT count(*) AS n FROM soul_lines WHERE anchor_sid='refusedsid'")
-    assert rows[0]["n"] == 0  # nothing written — the refusal is atomic, not partial
+    assert rows[0]["n"] == 0  # nothing written: the refusal is atomic, not partial
 
 
 async def test_splice_sources_verify_false_bypasses_the_check(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """An explicit opt-out for a caller that already verified continuity itself moments
-    earlier — still writes the chain, even though the pair alone wouldn't pass."""
+    earlier: still writes the chain, even though the pair alone wouldn't pass."""
     lines_a = _chained_lines(2, seed="skipa")
     lines_b = _chained_lines(2, seed="skipb")
     a = _write_transcript(tmp_path / "a.jsonl", lines_a)
@@ -1104,7 +1102,7 @@ async def test_rematerialize_to_disk_upto_emits_a_genuine_prefix_and_confesses(
     verified_lines, broken = await store._verified_lines("seekconfsid")
     assert broken is None
     addressable = _addressable_entries(verified_lines)
-    seek_uuid = addressable[2][1]  # not the latest — a genuine mid-chain seek
+    seek_uuid = addressable[2][1]  # not the latest: a genuine mid-chain seek
 
     dest = tmp_path / "seek.jsonl"
     receipt = await store.rematerialize_to_disk("seekconfsid", dest=str(dest), upto=seek_uuid)
@@ -1162,7 +1160,7 @@ async def test_rematerialize_to_disk_upto_refuses_an_unknown_uuid(
         "badseeksid", dest=str(dest), upto="not-a-real-uuid")
     assert "error" in receipt and "matches no user/assistant entry" in receipt["error"]
     assert not dest.exists()
-# --- backfill (task #51 piece 1, Lane 1 msg 6527/ruling ba329ccb) -----------
+# --- backfill (task #51 piece 1) -----------
 
 async def test_backfill_discovers_and_ingests_every_real_session(
     store: SoulStore, tmp_path: Path,
@@ -1182,7 +1180,7 @@ async def test_backfill_is_a_stat_only_noop_on_a_second_call(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """The spend gate: a source whose mtime hasn't moved since our own last_ingested_at
-    is skipped by stat + row lookup alone, never opened — the same law
+    is skipped by stat + row lookup alone, never opened, the same rule
     transcript_store.py's sibling backfill already runs on this house's other store."""
     projects = tmp_path / "projects"
     _write_transcript(projects / "-home-x-code-widget" / "cccccccc-session.jsonl",
@@ -1190,7 +1188,7 @@ async def test_backfill_is_a_stat_only_noop_on_a_second_call(
     first = await store.backfill(root=projects)
     assert sum(first.values()) == 1
     second = await store.backfill(root=projects)
-    assert sum(second.values()) == 0  # nothing changed — skipped, not re-ingested-to-zero
+    assert sum(second.values()) == 0  # nothing changed: skipped, not re-ingested-to-zero
 
 
 async def test_backfill_resumes_a_session_that_grew_between_ticks(
@@ -1210,7 +1208,7 @@ async def test_backfill_resumes_a_session_that_grew_between_ticks(
 async def test_backfill_survives_one_bad_session_among_several(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """A vanished/unreadable file must not abort the sweep — the next locator still
+    """A vanished/unreadable file must not abort the sweep: the next locator still
     gets ingested (matches TranscriptStore.backfill's own per-session try/except)."""
     projects = tmp_path / "projects"
     good = _write_transcript(
@@ -1226,7 +1224,7 @@ async def test_backfill_survives_one_bad_session_among_several(
 async def test_rematerialize_to_disk_reports_unchanged_when_target_is_its_own_source(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """THE CANON IS ALREADY HERE (operator, 2026-09-03 — Chad's live shape: the office held
+    """THE CANON IS ALREADY HERE (a real shape seen live, 2026-09-03: the office held
     the full canon, the store had just ingested it from there, and the resume caller read
     the write's absence as 'no canon at the spawn cwd' and spawned at a stale partial one
     slug over). A dest that IS the session's own last-ingested source, untouched since,
@@ -1249,9 +1247,9 @@ async def test_rematerialize_to_disk_parks_a_stale_copy_instead_of_overwriting_i
 ) -> None:
     """Constitution 3 on disk: a stale, store-unseen copy at the destination is MOVED into
     `.superseded-stubs/` (two levels below the slug root, invisible to the harness's own
-    listing and to `locate_current_transcript`'s `*/*.jsonl` glob) — never deleted, never
-    silently overwritten. Sekhmet's hand-move for Marquee's shadowing stub (b348e902),
-    made the materializer's standing rule."""
+    listing and to `locate_current_transcript`'s `*/*.jsonl` glob), never deleted, never
+    silently overwritten. A real incident with a shadowing stub, fixed by hand once,
+    made this the materializer's standing rule."""
     lines = _synthetic_lines(3)
     source = _write_transcript(tmp_path / "s" / "5ee7pa7k-session.jsonl", lines)
     await store.ingest_path(str(source), "5ee7pa7k")
@@ -1268,7 +1266,7 @@ async def test_rematerialize_to_disk_parks_a_stale_copy_instead_of_overwriting_i
     parked = list((dest.parent / ".superseded-stubs").glob("5ee7pa7k-session-superseded-*.jsonl"))
     assert len(parked) == 1
     assert parked[0].read_text() == "stale partial\n"   # the old copy survives, parked
-    # `locate_current_transcript` globs `<root>/*/*.jsonl` — from this root, the parked
+    # `locate_current_transcript` globs `<root>/*/*.jsonl`: from this root, the parked
     # copy sits at d/.superseded-stubs/…, one level too deep to ever be picked up again.
     assert sorted(p.name for p in tmp_path.glob("*/*.jsonl")) == [
         "5ee7pa7k-session.jsonl", "5ee7pa7k-session.jsonl"]
@@ -1277,7 +1275,7 @@ async def test_rematerialize_to_disk_parks_a_stale_copy_instead_of_overwriting_i
 async def test_ingest_path_touches_last_ingested_at_on_a_verified_full_sync(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """Chad's live shape, 2026-09-03: the office file's mtime moved (a byte-identical
+    """A real shape seen live, 2026-09-03: the office file's mtime moved (a byte-identical
     re-materialize) with NOTHING new in it, `ingest_path` found zero new lines and never
     touched the row, so the target read as LIVE on every resume forever. A full scan that
     finds the file holds exactly the store's lines is a verified sync: the clock moves,
@@ -1307,10 +1305,10 @@ async def test_ingest_path_touches_last_ingested_at_on_a_verified_full_sync(
     assert again["source_path"] == str(source)
 
 
-# ═══ wave 12 item 2 (thread 78efd46d): the soul store's cold tier ═══════════════════════
-# "memory gets tiers not deletion" (operator ruling via decision 64ec1905) — a session
-# unread for 30 days folds into one compressed soul_lines_cold row; rematerialize/resume/
-# verify_round_trip_sample read through both tiers without knowing which they hit.
+# ═══ the soul store's cold tier ══════════════════════════════════════════════════════════
+# Memory gets tiers, not deletion: a session unread for 30 days folds into one compressed
+# soul_lines_cold row; rematerialize/resume/verify_round_trip_sample read through both
+# tiers without knowing which they hit.
 
 async def _backdate(store: SoulStore, anchor_sid: str, *, days: int) -> None:
     from datetime import timedelta
@@ -1344,9 +1342,9 @@ async def test_fold_to_cold_tier_moves_content_and_shrinks_storage(
 async def test_fold_to_cold_tier_encrypts_the_gzip_blob(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """ENCRYPTION AT REST (Thoth mail 9134): encrypt-AFTER-gzip, one Fernet call per
-    fold — the stored `content_gzip` is Fernet(gzip(plaintext)), never a bare gzip
-    stream a caller could decompress without the key."""
+    """ENCRYPTION AT REST: encrypt-AFTER-gzip, one Fernet call per fold. The stored
+    `content_gzip` is Fernet(gzip(plaintext)), never a bare gzip stream a caller
+    could decompress without the key."""
     import gzip
 
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(10))
@@ -1355,7 +1353,7 @@ async def test_fold_to_cold_tier_encrypts_the_gzip_blob(
 
     stored = await store.pool.fetchval(
         "SELECT content_gzip FROM soul_lines_cold WHERE anchor_sid='c01denc1'")
-    with pytest.raises(Exception):  # noqa: B017,PT011 — not valid gzip without decrypting first
+    with pytest.raises(Exception):  # noqa: B017,PT011 -- not valid gzip without decrypting first
         gzip.decompress(bytes(stored))
     decrypted = get_soul_fernet().decrypt(bytes(stored))
     assert gzip.decompress(decrypted)  # a real gzip stream once decrypted
@@ -1364,9 +1362,9 @@ async def test_fold_to_cold_tier_encrypts_the_gzip_blob(
 async def test_a_wrong_key_reports_as_a_named_chain_break_not_a_raw_traceback(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ENCRYPTION AT REST (Thoth mail 9134): `raw_lines`/`re_materialize`/`verify_chain`
-    all funnel decryption through `_iter_verified_lines` (or its own inline copy in
-    `verify_chain`) — a key that can't open the stored ciphertext is caught and mapped
+    """ENCRYPTION AT REST: `raw_lines`/`re_materialize`/`verify_chain` all funnel
+    decryption through `_iter_verified_lines` (or its own inline copy in
+    `verify_chain`). A key that can't open the stored ciphertext is caught and mapped
     onto each function's own pre-existing "can't verify" contract (None / False), never
     an unhandled `InvalidToken` surfacing three call sites deep."""
     from cryptography.fernet import Fernet
@@ -1388,8 +1386,8 @@ async def test_a_wrong_key_reports_as_a_named_chain_break_not_a_raw_traceback(
 async def test_rotation_a_legacy_key_still_decrypts_old_rows(
     store: SoulStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """ROTATION (Thoth mail 9134): `MultiFernet` lets the NEW primary key take over new
-    writes while OLD ciphertext, written under a retired key, keeps reading — the
+    """ROTATION: `MultiFernet` lets the NEW primary key take over new writes while OLD
+    ciphertext, written under a retired key, keeps reading. This is the
     background-migration window this whole scheme exists to make possible, never a
     stop-the-world re-encrypt."""
     from cryptography.fernet import Fernet
@@ -1412,7 +1410,7 @@ async def test_rotation_a_legacy_key_still_decrypts_old_rows(
     await store.ingest_path(str(p2), "rotate002")
     row = await store.pool.fetchval(
         "SELECT raw_line FROM soul_lines WHERE anchor_sid='rotate002' AND line_idx=0")
-    with pytest.raises(Exception):  # noqa: B017,PT011 — the OLD key alone cannot open this
+    with pytest.raises(Exception):  # noqa: B017,PT011 -- the OLD key alone cannot open this
         Fernet(old_key.encode()).decrypt(bytes(row))
     assert Fernet(new_key.encode()).decrypt(bytes(row))  # the new primary opens it fine
 
@@ -1420,7 +1418,7 @@ async def test_rotation_a_legacy_key_still_decrypts_old_rows(
 @pytest.fixture
 def _no_soul_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Simulates a genuinely fresh box with NO soul-store key configured anywhere
-    (THE FIRST KEY MUST COME FROM THE NORMAL CLI, Thoth mail 13065) — clears the
+    (THE FIRST KEY MUST COME FROM THE NORMAL CLI). Clears the
     conftest-wide `OSIRIS_SOUL_KEY` this whole file otherwise relies on, stubs
     `_installed_user_unit_env_value` (same reasoning test_soul_crypto.py's own
     autouse fixture gives: this box's own REAL installed unit must never leak
@@ -1443,13 +1441,13 @@ async def test_ingest_degrades_to_legacy_plaintext_with_no_key_and_warns_once(
     store: SoulStore, tmp_path: Path, _no_soul_key: None,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): ingest no
-    longer crashes with no key configured — it writes legacy plaintext (`_encrypt_
-    rows`'s own new fallback) and logs ONE warning, not a raw `SoulKeyMissing`
-    propagating out of the ingest call. The rows are still fully readable back
-    (`is_encrypted()` correctly identifies them as plaintext, never attempts to
-    decrypt), and the hash chain still verifies — encryption is a confidentiality
-    layer on top of the chain, never a precondition for the chain itself."""
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI: ingest no longer crashes with no
+    key configured. It writes legacy plaintext (`_encrypt_rows`'s own new fallback)
+    and logs ONE warning, not a raw `SoulKeyMissing` propagating out of the ingest
+    call. The rows are still fully readable back (`is_encrypted()` correctly
+    identifies them as plaintext, never attempts to decrypt), and the hash chain
+    still verifies: encryption is a confidentiality layer on top of the chain, never
+    a precondition for the chain itself."""
     import logging
 
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
@@ -1469,12 +1467,12 @@ async def test_ingest_degrades_to_legacy_plaintext_with_no_key_and_warns_once(
 async def test_resume_diagnostics_reads_legacy_plaintext_with_no_key_configured(
     store: SoulStore, tmp_path: Path, _no_soul_key: None,
 ) -> None:
-    """THE LAZY-FERNET FIX (Thoth mail 13065): a READ path (resume_diagnostics)
-    that only ever needs the fernet CONDITIONALLY (`is_encrypted()` gates every
-    actual `.decrypt()` call) must not raise `SoulKeyMissing` just for being
-    called on all-plaintext content with no key configured — before this fix,
-    the eager `fernet = get_soul_fernet()` at the top of the function raised
-    regardless of whether decryption was ever actually needed."""
+    """THE LAZY-FERNET FIX: a READ path (resume_diagnostics) that only ever needs
+    the fernet CONDITIONALLY (`is_encrypted()` gates every actual `.decrypt()` call)
+    must not raise `SoulKeyMissing` just for being called on all-plaintext content
+    with no key configured. Before this fix, the eager `fernet = get_soul_fernet()`
+    at the top of the function raised regardless of whether decryption was ever
+    actually needed."""
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(4))
     await store.ingest_path(str(p), "nokey003")
     out = await store.resume_diagnostics("nokey003")
@@ -1487,11 +1485,11 @@ async def test_resume_diagnostics_reads_legacy_plaintext_with_no_key_configured(
 async def test_hot_read_falls_back_to_legacy_plaintext(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """LEGACY-PLAINTEXT READ FALLBACK (Thoth DM 9194/9245, wave 17): a row written
-    before encrypt_existing_soul_lines ever ran must still read — the SAME simulate
-    used by test_encrypt_existing_soul_lines_migrates_plaintext_rows (decrypt one real
-    row, write its own plaintext straight back — the hash chain was always computed
-    over plaintext, so this stays chain-valid), but here proving the READ side, not
+    """LEGACY-PLAINTEXT READ FALLBACK: a row written before encrypt_existing_soul_lines
+    ever ran must still read, the SAME simulation used by
+    test_encrypt_existing_soul_lines_migrates_plaintext_rows (decrypt one real row,
+    write its own plaintext straight back: the hash chain was always computed over
+    plaintext, so this stays chain-valid), but here proving the READ side, not
     the migration."""
     fernet = get_soul_fernet()
     lines = _synthetic_lines(5)
@@ -1516,7 +1514,7 @@ async def test_cold_read_falls_back_to_legacy_plaintext(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """THE COLD TIER'S OWN VERSION: a session folded BEFORE encryption ever existed has
-    a `content_gzip` blob that is plain gzip, never Fernet-wrapped — simulated here by
+    a `content_gzip` blob that is plain gzip, never Fernet-wrapped. Simulated here by
     folding normally, then decrypting the blob back to its own pre-encryption bytes and
     writing those straight back (encrypt-after-gzip in reverse)."""
     fernet = get_soul_fernet()
@@ -1539,8 +1537,8 @@ async def test_verify_round_trip_sample_reports_the_legacy_count(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """verify_round_trip_sample reports HOW MANY of its own sample were still legacy
-    plaintext (Thoth DM 9194) — the round trip itself stays clean (fallback-tolerant),
-    so legacy_count is the only signal a caller has that the migration isn't done."""
+    plaintext. The round trip itself stays clean (fallback-tolerant), so legacy_count
+    is the only signal a caller has that the migration isn't done."""
     fernet = get_soul_fernet()
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(3))
     await store.ingest_path(str(p), "legacyrt01")
@@ -1552,7 +1550,7 @@ async def test_verify_round_trip_sample_reports_the_legacy_count(
 
     report = await store.verify_round_trip_sample(n=1)
     assert report.legacy_count == 1
-    assert not report  # still a clean pass — the fallback verified it fine
+    assert not report  # still a clean pass: the fallback verified it fine
 
 
 async def test_fold_to_cold_tier_refuses_a_broken_chain(
@@ -1699,9 +1697,9 @@ async def test_mining_view_reads_through_the_cold_tier(store: SoulStore, tmp_pat
 async def test_raw_lines_re_materialize_and_mining_view_refuse_a_tampered_cold_blob(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """READ-PATH CONSOLIDATION (Thoth mail 9134, operator ruling on thread 773d633a):
-    the deliberate, disclosed widening — before this fold, `_all_raw_lines`'s own cold
-    branch never verified the chain at all, so raw_lines/re_materialize/mining_view
+    """READ-PATH CONSOLIDATION: the deliberate, disclosed widening. Before this fold,
+    `_all_raw_lines`'s own cold branch never verified the chain at all, so
+    raw_lines/re_materialize/mining_view
     would have silently returned a tampered cold blob's content as if it were clean.
     After folding all three readers onto the shared `_iter_verified_lines`, a tampered
     cold row is caught the same way `rematerialize_to_disk` already caught it."""
@@ -1717,9 +1715,9 @@ async def test_raw_lines_re_materialize_and_mining_view_refuse_a_tampered_cold_b
 
 
 async def test_verify_chain_true_after_a_fold(store: SoulStore, tmp_path: Path) -> None:
-    """THE ACCEPTANCE TEST NAMED IN THE DISPATCH: 'the hash chain verifies across the
-    fold' — the same chain that was true before folding must still be true after,
-    recomputed from the cold blob and checked against the hash captured at fold time."""
+    """THE ACCEPTANCE TEST: 'the hash chain verifies across the fold'. The same chain
+    that was true before folding must still be true after, recomputed from the cold
+    blob and checked against the hash captured at fold time."""
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(7))
     await store.ingest_path(str(p), "rtc0chn01")
     assert await store.verify_chain("rtc0chn01") is True
@@ -1730,10 +1728,10 @@ async def test_verify_chain_true_after_a_fold(store: SoulStore, tmp_path: Path) 
 async def test_verify_chain_false_on_a_corrupted_cold_blob(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """ENCRYPTION AT REST (Thoth mail 9134): `content_gzip` is now Fernet-wrapped, so
-    garbage bytes here fail to DECRYPT before they'd ever reach gzip — `verify_chain`
-    catches that `InvalidToken` and returns `False` the same honest way a hash mismatch
-    already does, never a raw traceback (this used to assert a raised exception; a
+    """ENCRYPTION AT REST: `content_gzip` is now Fernet-wrapped, so garbage bytes here
+    fail to DECRYPT before they'd ever reach gzip. `verify_chain` catches that
+    `InvalidToken` and returns `False` the same honest way a hash mismatch already
+    does, never a raw traceback (this used to assert a raised exception; a
     controlled `False` is the better contract, not a regression)."""
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(5))
     await store.ingest_path(str(p), "rtc0crpt0")
@@ -1789,7 +1787,7 @@ async def test_rematerialize_to_disk_upto_seek_reads_through_the_cold_tier(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """`_verified_lines` (the whole-file seek path `upto=` uses) reads through the cold
-    tier too — a seek is a controlled, human-supervised repair operation, but it must
+    tier too. A seek is a controlled, human-supervised repair operation, but it must
     still work on a session old enough to have been folded."""
     lines = _chained_lines(6, seed="coldseek")
     source = _write_transcript(tmp_path / "s.jsonl", lines)
@@ -1821,7 +1819,7 @@ async def test_verify_round_trip_sample_samples_both_tiers_when_both_exist(
     assert cold_hit == 1  # the cold session really was in the sampling pool
 
 
-# --- the daily cron shim (wave 12 item 2, Thoth DM 8378) ═══════════════════════════════════
+# --- the daily cron shim ═════════════════════════════════════════════════════════════
 
 async def test_soul_cold_tier_heartbeat_is_a_no_op_when_the_flag_is_off(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
@@ -1891,7 +1889,7 @@ async def test_soul_cold_tier_heartbeat_is_silent_when_nothing_is_eligible(
 
     store = SoulStore(actions.pool)
     p = _write_transcript(tmp_path / "t.jsonl", _synthetic_lines(2))
-    await store.ingest_path(str(p), "hb1fresh0")  # not backdated — not eligible
+    await store.ingest_path(str(p), "hb1fresh0")  # not backdated: not eligible
 
     calls: list[Any] = []
 
@@ -1902,15 +1900,15 @@ async def test_soul_cold_tier_heartbeat_is_silent_when_nothing_is_eligible(
     monkeypatch.setattr(mailbox, "send_message", _fake_send)
     ctx = {"cascade": SimpleNamespace(actions=actions)}
     assert await soul_cold_tier_heartbeat(ctx) == 0
-    assert calls == []  # nothing to report — no desk noise
+    assert calls == []  # nothing to report: no desk noise
 
 
-# ═══ wave 13 item 2 (thread 78efd46d): crush sessions become canonical ══════════════════
+# ═══ crush sessions become canonical ═══════════════════════════════════════════════════
 # closes the gap soul store piece 1 named on day one ("Crush is SQLite-backed... needs
 # its own verbatim strategy, out of scope here on purpose").
 
 def _make_crush_db(path: Path, *, session_id: str, n: int, start: int = 0) -> Path:
-    """A minimal, real crush.db (schema verified live against a real install) — `n`
+    """A minimal, real crush.db (schema verified live against a real install). `n`
     messages for one session, `start` offsetting `created_at`/message ids so a second
     call against the SAME path can append genuinely NEW rows (incremental-ingest
     tests)."""
@@ -2033,7 +2031,7 @@ async def test_verify_crush_round_trip_sample_catches_a_live_divergence(
 ) -> None:
     db = _make_crush_db(tmp_path / "crush.db", session_id="sess-rt2", n=3)
     await store.ingest_crush_session(str(db), "sess-rt2", "sess-rt2")
-    # mutate the LIVE db after ingest — the store now disagrees with the source
+    # mutate the LIVE db after ingest: the store now disagrees with the source
     conn = sqlite3.connect(str(db))
     conn.execute("UPDATE messages SET parts='[]' WHERE id='msg-0'")
     conn.commit()
@@ -2053,9 +2051,8 @@ async def test_verify_crush_round_trip_sample_skips_a_vanished_db(
 
 
 # --- ingest_dsh_session / backfill_dsh / verify_dsh_round_trip_sample -------------------------
-# (wave 18 item 1, mail 9541 7b8bb398: soul_sessions held zero dsh rows even though
-# harness_turns ingested all six cleanly — this closes the same gap crush's own build
-# above closed, mirroring its shape)
+# (soul_sessions held zero dsh rows even though harness_turns ingested all six cleanly:
+# this closes the same gap crush's own build above closed, mirroring its shape)
 
 _ZSTD_NOT_ON_PATH = pytest.mark.skipif(
     shutil.which("zstd") is None, reason="zstd CLI not on PATH")
@@ -2064,7 +2061,7 @@ _ZSTD_NOT_ON_PATH = pytest.mark.skipif(
 def _make_dsh_session(
     path: Path, *, session_id: str, n: int, start: int = 0,
 ) -> Path:
-    """A minimal, real zstd-compressed DSH session file — a `type: session` header
+    """A minimal, real zstd-compressed DSH session file: a `type: session` header
     line plus `n` user/assistant message events, `start` offsetting each event's own
     index so a second call against the SAME path can append genuinely NEW lines
     (incremental-ingest tests) while the earlier lines stay byte-identical (matching
@@ -2086,7 +2083,7 @@ def _make_dsh_session(
         subprocess.run(["zstd", "-f", "-q", "-o", str(path)], input=raw, check=True)
     else:
         # append the NEW lines to whatever this path already decompresses to, then
-        # recompress the whole thing fresh — the harness's own real rewrite shape,
+        # recompress the whole thing fresh: the harness's own real rewrite shape,
         # never an in-place zstd frame append (zstd has no such operation).
         existing = subprocess.run(
             ["zstd", "-dc", str(path)], capture_output=True, check=True).stdout
@@ -2181,7 +2178,7 @@ async def test_verify_dsh_round_trip_sample_clean_when_file_matches_store(
 
 def _rewrite_dsh_session_mutated(zst: Path) -> None:
     """A sync helper (ASYNC221: no blocking subprocess call inline in an async test
-    body) — rewrites the zstd file's own content in place, same shape `_make_dsh_
+    body). Rewrites the zstd file's own content in place, same shape `_make_dsh_
     session` uses, so a divergence test can mutate the LIVE source after ingest."""
     new_content = ("\n".join([
         json.dumps({"type": "session", "id": "sess-rt2", "cwd": "/tmp/x"}),
@@ -2197,7 +2194,7 @@ async def test_verify_dsh_round_trip_sample_catches_a_live_divergence(
 ) -> None:
     zst = _make_dsh_session(tmp_path / "session.jsonl.zstd", session_id="sess-rt2", n=3)
     await store.ingest_dsh_session(str(zst), "dshrt0002")
-    # rewrite the LIVE zstd file after ingest — the store now disagrees with the source
+    # rewrite the LIVE zstd file after ingest: the store now disagrees with the source
     _rewrite_dsh_session_mutated(zst)
     report = await store.verify_dsh_round_trip_sample(n=5)
     assert any(f["anchor_sid"] == "dshrt0002" for f in report.failures)
@@ -2214,13 +2211,13 @@ async def test_verify_dsh_round_trip_sample_skips_a_vanished_file(
     assert report.failures == []
 
 
-# --- forget_and_reingest: the sanctioned exception to append-only (thread 6e56cf7e item 5) ----
+# --- forget_and_reingest: the sanctioned exception to append-only ----------------------
 
 async def test_forget_and_reingest_reflects_an_in_place_edit(
     store: SoulStore, tmp_path: Path,
 ) -> None:
     """The shape a real cwd heal produces: an already-ingested line's own CONTENT
-    changes on disk, same line_idx — ingest_path alone would skip it (already past its
+    changes on disk, same line_idx. ingest_path alone would skip it (already past its
     own checkpoint) and append nothing, leaving the store silently stale."""
     p = _write_transcript(tmp_path / "healme.jsonl", _synthetic_lines(4))
     await store.ingest_path(str(p), "forget001")
@@ -2279,7 +2276,7 @@ async def test_forget_and_reingest_reports_nothing_to_reconcile_when_never_inges
     assert await store.raw_lines("notyetseen1") is None  # never invented anything
 
 
-# --- encrypt_existing_soul_lines: THE MIGRATION (Thoth mail 9134) ------------------
+# --- encrypt_existing_soul_lines: THE MIGRATION ------------------------------------
 
 
 async def test_encrypt_existing_soul_lines_migrates_plaintext_rows(
@@ -2313,7 +2310,7 @@ async def test_encrypt_existing_soul_lines_migrates_plaintext_rows(
     migrated = await store.pool.fetchval(
         "SELECT raw_line FROM soul_lines WHERE anchor_sid='migrate01' AND line_idx=2")
     assert fernet.decrypt(bytes(migrated)) == plaintext_line  # now real ciphertext
-    # the chain still verifies — the migration never touched line_hash/prev_hash
+    # the chain still verifies: the migration never touched line_hash/prev_hash
     assert await store.verify_chain("migrate01") is True
 
 
@@ -2415,7 +2412,7 @@ async def test_rewrap_soul_lines_key_counts_broken_rows_without_writing_them(
 ) -> None:
     """A row that decrypts under NEITHER key (plaintext that predates encryption
     entirely, corruption, or the wrong old key given) is counted, never silently
-    skipped and never crashes the whole pass — `osiris soul-key rotate --finish`
+    skipped and never crashes the whole pass: `osiris soul-key rotate --finish`
     refuses while this count is nonzero."""
     from cryptography.fernet import Fernet
     from src.ingest.soul_store import rewrap_soul_lines_key

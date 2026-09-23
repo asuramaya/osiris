@@ -1,9 +1,9 @@
-"""Actor identity — the fleet made first-class ("a man and all his imaginary friends").
+"""Actor identity, making each agent first-class rather than an anonymous process.
 
 Over the shared MCP server every agent writes through one process; without a per-agent
 source their writes collapse into one bucket. These tests prove identity resolution, the
 Agent registration (the org-chart links), and that a mounted agent's captures are
-attributed to IT — hermetic against real Postgres.
+attributed to it, hermetic against real Postgres.
 """
 from __future__ import annotations
 
@@ -33,7 +33,7 @@ def _store_reading(root: Path, job_dir: str) -> ModelReading | None:
     stamped with the locator's anchor grade exactly as discover_and_ingest stamps it (the
     round-trip itself is test_transcript_store's to prove). Since the JSONL-fallback
     removal (task #29) this is the ONE way a synthetic transcript reaches
-    resolve_identity — it no longer probes disk itself."""
+    resolve_identity: it no longer probes disk itself."""
     loc = ClaudeJsonlAdapter().discover(cwd=None, job_dir=job_dir, root=root)
     if loc is None:
         return None
@@ -87,12 +87,12 @@ async def test_register_agent_mints_the_org_chart(actions: Actions) -> None:
 async def test_register_agent_remount_does_not_regrow_its_own_assertions(
     actions: Actions,
 ) -> None:
-    """Ruling 0623995e (thread 2a280e07): register_agent runs on EVERY mount() — a
-    long-lived heartbeat-style agent re-mounts every tick with an unchanged
-    name/session/identity_resolved/cwd. assert_property's own kernel byte-dup guard
-    compares `observed_at` too, so a fresh wall-clock `now` on every call defeats it —
-    two consecutive re-mounts must still not grow this agent's own assertion history
-    for a value that never actually changed."""
+    """register_agent runs on EVERY mount(): a long-lived heartbeat-style agent
+    re-mounts every tick with an unchanged name/session/identity_resolved/cwd.
+    assert_property's own kernel byte-dup guard compares `observed_at` too, so a
+    fresh wall-clock `now` on every call defeats it. Two consecutive re-mounts must
+    still not grow this agent's own assertion history for a value that never
+    actually changed."""
     ident = resolve_identity(cwd="/w/heartbeat-proj", session="hb-sess", model="claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
 
@@ -111,7 +111,7 @@ async def test_register_agent_remount_does_not_regrow_its_own_assertions(
 async def test_register_agent_remount_with_a_real_cwd_change_still_writes(
     actions: Actions,
 ) -> None:
-    """The no-op guard must never suppress a REAL change — a re-mount from a genuinely
+    """The no-op guard must never suppress a REAL change: a re-mount from a genuinely
     different cwd still records the new value."""
     first = resolve_identity(cwd="/w/proj-a", session="hb-sess2", model="claude-fable-5")
     a = await register_agent(actions, first, actor="analyst:operator")
@@ -126,8 +126,8 @@ async def test_register_agent_remount_with_a_real_cwd_change_still_writes(
     assert current_cwd == "/w/proj-b"
 
 
-# --- _resolve_or_mint_project refuses a degenerate bare label (thread 05793d4a — repo:?,
-# minted 2026-07-18, 18 live links, no genuine identity: task #107's own capture.py
+# --- _resolve_or_mint_project refuses a degenerate bare label (repo:?, minted 2026-07-18,
+# 18 live links, no genuine identity: task #107's own capture.py
 # _validate_repo_name was never actually wired into this path). ------------------------
 
 async def test_register_agent_never_mints_a_bare_question_mark_project(
@@ -136,7 +136,7 @@ async def test_register_agent_never_mints_a_bare_question_mark_project(
     ident = resolve_identity(cwd="/w/?", session="sess-qm", model="claude-fable-5")
     assert ident.project == "?"  # confirms the fixture actually exercises the degenerate case
     a = await register_agent(actions, ident, actor="analyst:operator")
-    # the Agent's own project property still gets asserted (unaffected scope decision) —
+    # the Agent's own project property still gets asserted (unaffected scope decision);
     # only the SoftwareProject MINT and its works_in edge are refused
     project_prop = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='project'", a)
@@ -153,7 +153,7 @@ async def test_register_agent_refuses_to_reuse_an_existing_bare_question_mark_pr
     actions: Actions,
 ) -> None:
     """A pre-existing repo:? (a fossil from before this guard existed) must not gain a
-    fresh works_in edge either — refusing new mints while still linking to an old
+    fresh works_in edge either: refusing new mints while still linking to an old
     garbage object would just keep the pollution growing by a different door."""
     await actions.create_or_find_object("SoftwareProject", "repo:?", "test")
     ident = resolve_identity(cwd="/w/?", session="sess-qm2", model="claude-fable-5")
@@ -163,9 +163,9 @@ async def test_register_agent_refuses_to_reuse_an_existing_bare_question_mark_pr
     assert works_in == 0
 
 
-# --- register_agent must never let a routine mount clobber a DECLARED rename (#137/#152,
-# Thoth DM 3801) — measured live: repo:xxit's declared "handlingtheloop" (decision 8766acd7)
-# was silently reverted to "xxit" by five ordinary metron/deckard mounts, because this write
+# --- register_agent must never let a routine mount clobber a DECLARED rename (#137/#152):
+# measured live: repo:xxit's declared "handlingtheloop" name
+# was silently reverted to "xxit" by five ordinary agent mounts, because this write
 # path used to reassert `name` from the caller's own stale pin at the SAME confidence a
 # deliberate rename uses, and current_assertions' tie-break falls through to pure recency. ---
 
@@ -173,7 +173,7 @@ async def test_register_agent_refuses_to_reuse_an_existing_bare_question_mark_pr
 async def test_register_agent_mount_never_clobbers_a_declared_rename(actions: Actions) -> None:
     from src.orchestrator.project_identity import rename_project
 
-    # first mount under the pre-rename label — the ordinary, first-ever-registration path
+    # first mount under the pre-rename label: the ordinary, first-ever-registration path
     ident = resolve_identity(cwd="/w/xxit", session="sess-a", model="claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
     row = await actions.pool.fetchrow(
@@ -186,20 +186,20 @@ async def test_register_agent_mount_never_clobbers_a_declared_rename(actions: Ac
 
     # a deliberate, declared rename lands (rename_project, the graph-only verb)
     out = await rename_project(actions, project="xxit", new_name="handlingtheloop",
-                               because="operator-approved #110 rename", actor="Thoth",
+                               because="operator-approved #110 rename", actor="analyst:operator",
                                dry_run=False)
     assert out["new_name"] == "handlingtheloop"
 
-    # a LATER, ordinary mount from a seat whose pin was never updated — the metron/deckard
-    # shape — must NOT silently revert the declared name back to "xxit"
+    # a LATER, ordinary mount from a seat whose pin was never updated, the same kind of
+    # ordinary re-mount as above, must NOT silently revert the declared name back to "xxit"
     ident2 = resolve_identity(cwd="/w/xxit", session="sess-b", model="claude-fable-5")
     await register_agent(actions, ident2, actor="analyst:operator")
     winning = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
     assert winning == "handlingtheloop", (
-        "a routine mount reverted a declared rename — the exact bug this test guards")
-    # the mismatch is still ON THE RECORD, never silently dropped — just outranked
+        "a routine mount reverted a declared rename, the exact bug this test guards")
+    # the mismatch is still ON THE RECORD, never silently dropped, just outranked
     assert "xxit" in {r["v"] for r in await actions.pool.fetch(
         "SELECT value#>>'{}' AS v FROM current_assertions WHERE object_id=$1 AND name='name'",
         proj)}
@@ -210,14 +210,14 @@ async def test_register_agent_mount_never_clobbers_a_declared_rename(actions: Ac
 
 
 async def test_register_agent_mount_still_heals_case_whitespace_drift(actions: Actions) -> None:
-    """The delegated-safe exception (ruling 1db1ff41/decision 8cf283f4) must keep working:
+    """The delegated-safe exception must keep working:
     a case-only difference is NOT a genuine rename, so an ordinary mount may still settle
-    it at full confidence — only a REAL rename is protected from being overwritten.
+    it at full confidence: only a REAL rename is protected from being overwritten.
 
     NOTE: register_agent resolves/creates the SoftwareProject by the LITERAL canonical
-    `repo:{identity.project}` — case-sensitive, so "RAMstein" and "ramstein" pins mint TWO
-    DIFFERENT objects (confirmed live: till's own repo:RAMstein and repo:ramstein are two
-    separate SoftwareProjects today) — a real, separate #137 finding, not this fix's
+    `repo:{identity.project}` (case-sensitive), so "RAMstein" and "ramstein" pins mint TWO
+    DIFFERENT objects (confirmed live: one repo's repo:RAMstein and repo:ramstein are two
+    separate SoftwareProjects today): a real, separate #137 finding, not this fix's
     concern. This test exercises the exception the way it can actually fire: some OTHER
     writer (correct_project_name, a manual assert) case-normalizes the object's `name`
     property; a later mount from a pin matching the object's own canonical basename must
@@ -244,13 +244,13 @@ async def test_register_agent_mount_still_heals_case_whitespace_drift(actions: A
 async def test_register_agent_mount_never_resurrects_a_merged_husks_name(
     actions: Actions,
 ) -> None:
-    """THE SELF-REINFECTING FOLD (Thoth dispatch 6547/6568, ruling a73aafa2, the real
-    Marquee specimen): the clobber fix above downgrades a differing pin-derived name to
-    DERIVED-tier confidence rather than refusing it — right instinct, wrong mechanism,
+    """THE SELF-REINFECTING FOLD (the real live specimen): the clobber fix above
+    downgrades a differing pin-derived name to
+    DERIVED-tier confidence rather than refusing it: right instinct, wrong mechanism,
     since assert_property's same-source-only supersession still lands it as a NEW
     current row that wins any recency-ordered read. Measured live: repo:dtfb's fold
     completed 2026-08-21 at direct_observation/0.9, then a derived/0.4 "dealer-to-fb"
-    row landed ELEVEN DAYS LATER from exactly this code path — a stale .osiris pin
+    row landed ELEVEN DAYS LATER from exactly this code path: a stale .osiris pin
     resolving through a mount, self-reinfecting on every such mount. When the incoming
     label is PROVABLY the husk's own name (a merge record says so, not a heuristic),
     the write must never happen at any confidence."""
@@ -281,12 +281,12 @@ async def test_register_agent_mount_never_resurrects_a_merged_husks_name(
 async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
     actions: Actions,
 ) -> None:
-    """The guard above is scoped to PROVEN-DEAD identities (a real merge record) only —
+    """The guard above is scoped to PROVEN-DEAD identities (a real merge record) only:
     an ordinary rename with no fold behind it (this test's own shape, mirroring
     test_register_agent_mount_never_clobbers_a_declared_rename above) must still fall
     through to the existing DERIVED-tier downgrade, unchanged, never silently dropped.
     The guard's own lookup finds no merged object matching the incoming label here, so
-    it no-ops by construction — this proves that no-op is actually silent, not a second,
+    it no-ops by construction: this proves that no-op is actually silent, not a second,
     accidental refusal."""
     from src.orchestrator.project_identity import rename_project
 
@@ -296,13 +296,14 @@ async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
     proj = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical='repo:renamedx'")
     await rename_project(actions, project="renamedx", new_name="totally-different-name",
-                         because="operator-approved rename", actor="Thoth", dry_run=False)
+                         because="operator-approved rename", actor="analyst:operator",
+                         dry_run=False)
 
     ident2 = resolve_identity(cwd="/w/renamedx", session="sess-unrelated2",
                               model="claude-fable-5")
     await register_agent(actions, ident2, actor="analyst:operator")
 
-    # THE UNORDERED-DICT REGRESSION (Thoth mail 11499, w317 bisect): assert_property's
+    # THE UNORDERED-DICT REGRESSION: assert_property's
     # own supersession is same-source-only (agents.py's own documented design, see
     # register_agent's PROJECT-NAME CLOBBER comment) -- session 1's ORIGINAL
     # self_declared "renamedx" row is never superseded by session 2's DERIVED
@@ -331,18 +332,18 @@ async def test_register_agent_mount_still_downgrades_a_genuine_unrelated_rename(
 async def test_register_agent_mount_never_supersedes_its_own_prior_rename(
     actions: Actions,
 ) -> None:
-    """THE SUPERSEDE-NOT-OUTRANK GAP (operator ruling b5663511, PROJECT IDENTITY DRIFT,
-    Thoth mail 12419/12413, the live Marquee specimen 2026-09-18): repo:dtfb renamed to
+    """THE SUPERSEDE-NOT-OUTRANK GAP (PROJECT IDENTITY DRIFT,
+    a live specimen 2026-09-18): repo:dtfb renamed to
     "lotstretcher" at 0.95 confidence, then a mount 74 SECONDS LATER from the SAME
     session re-derived the still-unmoved on-disk folder's basename and wrote "dtfb"
     back at DERIVED/0.4. The two sibling tests above (never_clobbers/still_downgrades)
     use a DIFFERENT session for the later mount, so the confidence-ordered read alone
-    saves them — assert_property's own supersession is SAME-SOURCE-ONLY, so those two
+    saves them: assert_property's own supersession is SAME-SOURCE-ONLY, so those two
     rows never fight for the SAME slot. This is the shape that does: the later mount
     comes from the identical source as the rename itself (the coordinator's own session
     continuing to work in the still-unmoved directory right after renaming it), so a
-    DERIVED write there SUPERSEDES that source's own prior "lotstretcher" row outright
-    — it doesn't lose a confidence contest, it vanishes from current_assertions
+    DERIVED write there SUPERSEDES that source's own prior "lotstretcher" row outright.
+    It doesn't lose a confidence contest, it vanishes from current_assertions
     entirely, dragging the confidence-ordered winner back to whatever remains."""
     from src.orchestrator.project_identity import rename_project
 
@@ -359,7 +360,7 @@ async def test_register_agent_mount_never_supersedes_its_own_prior_rename(
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
     assert winning == "lotstretcher"
 
-    # the SAME session mounts again — the pin/cwd basename still says "dtfb" (the
+    # the SAME session mounts again: the pin/cwd basename still says "dtfb" (the
     # on-disk folder was never moved, rename_project's own permanent scope limit)
     await register_agent(actions, ident, actor="analyst:operator")
 
@@ -367,7 +368,7 @@ async def test_register_agent_mount_never_supersedes_its_own_prior_rename(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='name' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
     assert winning_after == "lotstretcher", (
-        "a same-source re-mount superseded and erased its own declared rename — "
+        "a same-source re-mount superseded and erased its own declared rename, "
         "the exact bug this test guards")
     # the rename's own row must still be CURRENT (not merely won a contest that no
     # longer exists) -- the whole point is that it was never superseded at all
@@ -376,12 +377,12 @@ async def test_register_agent_mount_never_supersedes_its_own_prior_rename(
         "AND value#>>'{}'='lotstretcher'", proj) == 1
 
 
-# --- _resolve_or_mint_project — a case-differing pin must FIND the existing SoftwareProject,
-# never mint a twin (thread 69911d0c, Thoth dispatch 3824). NEVER lowercase-normalizes:
-# cassandra's own "Like-Us" is genuine upstream truth, so this is about matching
-# case-insensitively, not about which casing wins. Measured live: till carries exactly one
-# pre-existing twin today (repo:RAMstein / repo:ramstein) out of 81 SoftwareProjects
-# fleet-wide — this guards both the fix (no NEW twins) and the refusal (no over-merge, and a
+# --- _resolve_or_mint_project: a case-differing pin must FIND the existing SoftwareProject,
+# never mint a twin. NEVER lowercase-normalizes:
+# one project's own "Like-Us" is genuine upstream truth, so this is about matching
+# case-insensitively, not about which casing wins. Measured live: one instance carries exactly
+# one pre-existing twin today (repo:RAMstein / repo:ramstein) out of 81 SoftwareProjects
+# fleet-wide: this guards both the fix (no NEW twins) and the refusal (no over-merge, and a
 # pre-existing twin is never silently arbitrated by a mint-time guess). ---
 
 
@@ -397,8 +398,8 @@ async def test_resolve_or_mint_project_finds_existing_object_case_insensitively(
 
 
 async def test_resolve_or_mint_project_never_lowercase_normalizes(actions: Actions) -> None:
-    """cassandra's own counter-example: the FIRST case seen wins the canonical, whichever
-    it is — this function must never coerce it to lowercase on its own authority."""
+    """A real counter-example: the FIRST case seen wins the canonical, whichever
+    it is: this function must never coerce it to lowercase on its own authority."""
     proj = await _resolve_or_mint_project(actions, "Like-Us", "test")
     canonical = await actions.pool.fetchval("SELECT canonical FROM objects WHERE id=$1", proj)
     assert canonical == "repo:Like-Us"
@@ -407,7 +408,7 @@ async def test_resolve_or_mint_project_never_lowercase_normalizes(actions: Actio
 async def test_resolve_or_mint_project_lets_a_genuinely_different_project_mint_separately(
     actions: Actions,
 ) -> None:
-    """The refusal case Thoth asked for explicitly: over-merging two REAL, distinct
+    """The refusal case: over-merging two REAL, distinct
     projects would be a worse bug than the one being fixed."""
     a = await _resolve_or_mint_project(actions, "conker", "test")
     b = await _resolve_or_mint_project(actions, "conker-detect", "test")
@@ -420,10 +421,10 @@ async def test_resolve_or_mint_project_lets_a_genuinely_different_project_mint_s
 async def test_resolve_or_mint_project_finds_a_renamed_projects_new_name_no_stub(
     actions: Actions,
 ) -> None:
-    """THE RENAME STUB (thread 04907b12, live specimen: repo:xxit renamed to
-    handlingtheloop — the canonical stays repo:xxit forever, only the `name` property
+    """THE RENAME STUB (live specimen: repo:xxit renamed to
+    handlingtheloop): the canonical stays repo:xxit forever, only the `name` property
     changes). A mount whose pin already reads the NEW name used to find zero canonical
-    matches and mint a fresh, wrong SoftwareProject — this is the mint-time choke point
+    matches and mint a fresh, wrong SoftwareProject. This is the mint-time choke point
     that must resolve through the winning `name` property, not just the canonical,
     exactly like `_resolve_software_project` already does for every other project verb."""
     from src.orchestrator.project_identity import rename_project
@@ -446,7 +447,7 @@ async def test_resolve_or_mint_project_still_mints_when_the_new_name_is_ambiguou
     actions: Actions,
 ) -> None:
     """Two or more existing objects sharing the target name is not this function's call
-    to arbitrate, same law as a case-differing canonical twin above — falls through to
+    to arbitrate, same as a case-differing canonical twin above: falls through to
     the literal mint-or-find rather than guessing which one a caller meant."""
     from datetime import UTC, datetime
 
@@ -466,22 +467,22 @@ async def test_resolve_or_mint_project_still_mints_when_the_new_name_is_ambiguou
 async def test_resolve_or_mint_project_never_arbitrates_a_pre_existing_twin(
     actions: Actions,
 ) -> None:
-    """till's own live shape: TWO objects already exist for one casefold-equal label
+    """A real live shape: TWO objects already exist for one casefold-equal label
     (a pre-existing twin, not created by this function). This must never pick a winner
-    (that's fold_project's job, thread 689d22a2) and must never mint a THIRD."""
+    (that's fold_project's job) and must never mint a THIRD."""
     a = await actions.create_or_find_object("SoftwareProject", "repo:RAMstein", "test")
     b = await actions.create_or_find_object("SoftwareProject", "repo:ramstein", "test")
     assert a != b
     got = await _resolve_or_mint_project(actions, "RAMstein", "test")
-    assert got == a  # the literal, exact match — unchanged, pre-existing behavior
+    assert got == a  # the literal, exact match: unchanged, pre-existing behavior
 
 
 # --- _resolve_or_mint_project refuses the operator's own sentinels (console thread,
-# 2026-09-07: repo:operator measured live — the human's desk address, `_OPERATOR_ADDR`,
+# 2026-09-07: repo:operator measured live: the human's desk address, `_OPERATOR_ADDR`,
 # is not a real repository, but `_REPO_NAME_RE` happily matches the bare word "operator"
 # and nothing upstream of this choke point filtered it out before mint). Exercised
 # through `register_agent`, the actual public door a resolved `identity.project` of
-# "operator" would reach (a cwd whose basename guess IS the literal word "operator" —
+# "operator" would reach (a cwd whose basename guess IS the literal word "operator",
 # `resolve_identity`'s own documented basename fallback, the same shape #107's `repo:?`
 # regression was caught through above), not a synthetic bypass of `_resolve_or_mint_project`
 # alone. ---------------------------------------------------------------------------------
@@ -497,7 +498,7 @@ async def test_resolve_or_mint_project_refuses_the_operator_sentinel(actions: Ac
 async def test_resolve_or_mint_project_refuses_every_operator_actors_sentinel(
     actions: Actions,
 ) -> None:
-    """Not just the literal 'operator' — the WHOLE `_OPERATOR_ACTORS` set (seats.py) is
+    """Not just the literal 'operator': the WHOLE `_OPERATOR_ACTORS` set (seats.py) is
     excluded, the same set `_seat_lineage_ancestor` already trusts for the same reason."""
     for sentinel in ("operator", "console"):
         assert await _resolve_or_mint_project(actions, sentinel, "test") is None
@@ -511,7 +512,7 @@ async def test_register_agent_never_mints_repo_operator_from_a_basename_guess(
 ) -> None:
     """The actual live mechanism a project label of 'operator' would reach: a cwd whose
     basename guess resolves to the bare word "operator" (resolve_identity's own documented
-    fallback — no `.osiris` pin present), flowing through register_agent's ordinary
+    fallback, no `.osiris` pin present), flowing through register_agent's ordinary
     `identity.project` mint path (agents.py), exactly like the `repo:?` regression above."""
     ident = resolve_identity(cwd="/w/operator", session="sess-opsentinel",
                              model="claude-fable-5")
@@ -519,7 +520,7 @@ async def test_register_agent_never_mints_repo_operator_from_a_basename_guess(
     a = await register_agent(actions, ident, actor="analyst:operator")
     project_prop = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='project'", a)
-    # the Agent's own property is unaffected — only the SoftwareProject mint is refused
+    # the Agent's own property is unaffected: only the SoftwareProject mint is refused
     assert project_prop == "operator"
     minted = await actions.pool.fetchval(
         "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical='repo:operator'")
@@ -546,7 +547,7 @@ async def test_resolve_or_mint_project_does_not_reassert_name_on_an_existing_fin
     actions: Actions,
 ) -> None:
     """Finding an existing object (by canonical or by name) must not overwrite whatever
-    `name` it already carries — only a genuinely NEW mint gets the fresh stamp."""
+    `name` it already carries: only a genuinely NEW mint gets the fresh stamp."""
     first = await _resolve_or_mint_project(actions, "reuseexistingnametest", "test")
     await actions.assert_property(first, "name", "custom display name", "test",
                                   datetime.now(UTC), 0.95, evidence_class="self_declared")
@@ -560,11 +561,11 @@ async def test_resolve_or_mint_project_does_not_reassert_name_on_an_existing_fin
 async def test_register_agent_mount_with_case_variant_pin_reuses_the_existing_project(
     actions: Actions,
 ) -> None:
-    """The integration-level proof, matching till's own live shape exactly: two seats
+    """The integration-level proof, matching a real live shape exactly: two seats
     whose PINS were simply always case-variants of each other (no rename involved at
-    all — rename_project never touches `canonical`, so a renamed object's canonical
+    all: rename_project never touches `canonical`, so a renamed object's canonical
     stays the pre-rename string forever; that is a different scenario from this one).
-    Both mounts must land on ONE SoftwareProject and ONE works_in edge target each —
+    Both mounts must land on ONE SoftwareProject and ONE works_in edge target each,
     not two objects."""
     ident1 = resolve_identity(cwd="/w/RAMstein", session="sess-f", model="claude-fable-5")
     a1 = await register_agent(actions, ident1, actor="analyst:operator")
@@ -581,7 +582,7 @@ async def test_register_agent_mount_with_case_variant_pin_reuses_the_existing_pr
 
 async def test_two_agents_are_distinguishable_on_the_same_decision(actions: Actions) -> None:
     """The whole point: on the shared server, two instances recording the SAME ruling dedup
-    to one object but each keeps its OWN provenance — you can see both agreed, and who."""
+    to one object but each keeps its OWN provenance: you can see both agreed, and who."""
     a1 = resolve_identity(cwd="/w/osiris", session="aaaa", model="claude-opus-4-8")
     a2 = resolve_identity(cwd="/w/osiris", session="bbbb", model="claude-fable-5")
     d1 = await record_decision(actions, "the fleet shares one graph", source=a1.agent_id)
@@ -611,7 +612,7 @@ def test_resolve_identity_tags_the_model_method() -> None:
 async def test_source_model_is_graded_by_resolution_method(actions: Actions) -> None:
     """The freebie: source_model's evidence grade IS how it was resolved. A model read off the
     agent's own transcript is a DIRECT_OBSERVATION of the harness record; a self-reported model
-    is only the agent's own word — the WEAKEST signal (CO_OCCURRENCE, ruling 17516660: observation
+    is only the agent's own word, the WEAKEST signal (CO_OCCURRENCE: observation
     outranks self-report for a substrate-fact)."""
     async def _model_ec(ident: AgentIdentity) -> str | None:
         a = await register_agent(actions, ident, actor="analyst:operator")
@@ -634,7 +635,7 @@ def _transcript(dir_: Path, model: str) -> None:
 
 
 def test_observation_outranks_self_report_and_flags_divergence(tmp_path: Path) -> None:
-    """Ruling 17516660: the harness doesn't lie. A transcript that RAN opus + an agent that
+    """The harness doesn't lie. A transcript that RAN opus + an agent that
     SELF-REPORTS fable → observation wins, and the divergence is flagged (a self-report that
     lies is a flag)."""
     proj = tmp_path / "-home-x-code-osiris"
@@ -670,13 +671,13 @@ async def test_register_records_the_divergence_flag(actions: Actions, tmp_path: 
         "  AND x.name='source_model_declared') AS dec_ec", a)
     assert row["observed"] == "claude-opus-4-8"
     assert row["obs_ec"] == EvidenceClass.DIRECT_OBSERVATION.value
-    assert row["declared"] == "claude-fable-5"       # kept as the weak signal — the flag
+    assert row["declared"] == "claude-fable-5"       # kept as the weak signal: the flag
     assert row["dec_ec"] == EvidenceClass.CO_OCCURRENCE.value
 
 
-# ═══ THE BIRTH-TIME session POISONING (Thoth dispatch msg 6734, decision e10022b4): a
+# ═══ THE BIRTH-TIME session POISONING: a
 # `--bg`-launched seat's FIRST-EVER mount has nothing else to observe, so identity.session
-# falls to `_job_id(job_dir)` — which for `_launch_anchor`'s own stable per-seat anchor
+# falls to `_job_id(job_dir)`, which for `_launch_anchor`'s own stable per-seat anchor
 # (`jobs/seat-<hex>`, never a real session id) returns the seat's own canonical, and
 # register_agent used to stamp it as `session` verbatim, poisoning osiris resume forever
 # for that generation (asserted once, never revisited). ═══════════════════════════════════
@@ -684,25 +685,25 @@ async def test_register_records_the_divergence_flag(actions: Actions, tmp_path: 
 async def test_register_never_stamps_a_stable_anchor_slug_as_the_session_property(
     actions: Actions,
 ) -> None:
-    """THE MARQUEE SPECIMEN, REPRODUCED DIRECTLY: a `--bg` seat's job_dir is
-    `_launch_anchor`'s own stable per-seat slug, never a real session id — resolve_identity
+    """A LIVE SPECIMEN, REPRODUCED DIRECTLY: a `--bg` seat's job_dir is
+    `_launch_anchor`'s own stable per-seat slug, never a real session id: resolve_identity
     has no explicit session and nothing to observe, so it falls through to `_job_id`, which
     returns the anchor's own basename unvalidated. register_agent must NEVER assert that as
-    `session` — the property must be absent, not confidently wrong. Absent is what lets
+    `session`: the property must be absent, not confidently wrong. Absent is what lets
     osiris resume's resident-unknown gate say 'no signed testimony' (honest) instead of
     'try --resume seat-bdbe031e' (a command that can never work)."""
     ident = resolve_identity(cwd="/x/marquee", job_dir="/home/x/.claude/jobs/seat-bdbe031e",
                              model="claude-sonnet-5")
-    assert ident.session == "seat-bdbe031e"  # the poisoned value STILL flows through identity
+    assert ident.session == "seat-bdbe031e"  # the poisoned value still flows through identity
     a = await register_agent(actions, ident, actor="analyst:operator")
     row = await actions.pool.fetchrow(
         "SELECT value#>>'{}' AS session FROM current_assertions "
         "WHERE object_id=$1 AND name='session'", a)
-    assert row is None  # never written — not the anchor slug, not anything else
+    assert row is None  # never written, not the anchor slug, not anything else
 
 
 def test_looks_like_a_real_session_shape() -> None:
-    """The validator directly: exactly 8 lowercase hex chars, nothing else — the same shape
+    """The validator directly: exactly 8 lowercase hex chars, nothing else, the same shape
     every genuine sid in this codebase already reduces to (a heartbeat's own session_id, a
     transcript filename's leading segment, DSH's own UUID slice)."""
     from src.orchestrator.agents import _looks_like_a_real_session
@@ -720,7 +721,7 @@ def test_looks_like_a_real_session_shape() -> None:
 
 
 async def test_register_still_stamps_a_genuine_per_session_job_dir(actions: Actions) -> None:
-    """THE NEGATIVE CONTROL — the path this fix must never regress: an ORDINARY session
+    """THE NEGATIVE CONTROL: the path this fix must never regress: an ORDINARY session
     (job_dir anchored on its own real id, the common non-`--bg` case) still gets its
     `session` property stamped exactly as before."""
     ident = resolve_identity(cwd="/x/osiris", job_dir="/j/jobs/deadbeef",
@@ -734,7 +735,7 @@ async def test_register_still_stamps_a_genuine_per_session_job_dir(actions: Acti
 
 
 def _transcript_lines(dir_: Path, *models: str) -> None:
-    """A transcript with one assistant line per model, in order — a within-session swap when it
+    """A transcript with one assistant line per model, in order, a within-session swap when it
     carries >1 distinct model."""
     lines = [json.dumps({"type": "assistant", "message": {"model": m, "content": []}})
              for m in models]
@@ -743,7 +744,7 @@ def _transcript_lines(dir_: Path, *models: str) -> None:
 
 def test_resolve_identity_captures_the_swap_history(tmp_path: Path) -> None:
     """The swap-detector's input: resolve_identity captures the transcript's model sequence, so a
-    within-session fable→opus demotion is visible as model_history (ruling f2ae6346)."""
+    within-session fable→opus demotion is visible as model_history."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript_lines(proj, "claude-fable-5", "claude-opus-4-8")
@@ -756,7 +757,7 @@ def test_resolve_identity_captures_the_swap_history(tmp_path: Path) -> None:
 
 def test_resolve_identity_sees_the_operators_own_model_command(tmp_path: Path) -> None:
     """A /model command in the transcript is the OPERATOR's hand on the record: the swap was
-    chosen, not suffered — downstream banners drop the sin framing (complaint, 2026-07-10)."""
+    chosen, not suffered, so downstream banners drop the sin framing."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     lines = [
@@ -775,8 +776,8 @@ def test_resolve_identity_sees_the_operators_own_model_command(tmp_path: Path) -
 
 
 def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
-    """.osiris `model = "…"` is the repo's OWN standing choice — a deliberately-haiku repo
-    must not confess 'not fable' at every mount against the box default."""
+    """.osiris `model = "…"` is the repo's OWN standing choice: a deliberately-haiku repo
+    must not confess 'not fable' at every mount against the default model."""
     from src.orchestrator.agents import read_project_model
 
     repo = tmp_path / "hollow"
@@ -788,8 +789,8 @@ def test_read_project_model_declares_the_repo_intent(tmp_path: Path) -> None:
 
 
 def test_read_house_seat_kind_are_additive_parallel_reads(tmp_path: Path) -> None:
-    """Ruling 719ed5b1's pin-schema build: house/seat/kind are new keys read through the SAME
-    `_read_osiris_key` helper as project/model, not a new mechanism — so a pin that only ever
+    """The pin-schema build: house/seat/kind are new keys read through the SAME
+    `_read_osiris_key` helper as project/model, not a new mechanism, so a pin that only ever
     declared project/model (every pin on disk today) answers None for all three without error,
     and a pin that declares them reads back exactly what it wrote. Proves the additive claim:
     old two-key pins need no migration to keep working."""
@@ -810,24 +811,24 @@ def test_read_house_seat_kind_are_additive_parallel_reads(tmp_path: Path) -> Non
     full = tmp_path / "office"
     full.mkdir()
     (full / ".osiris").write_text(
-        'project = "osiris"\nhouse = "osiris"\nseat = "imhotep"\nkind = "office"\n')
+        'project = "osiris"\nhouse = "osiris"\nseat = "scribe"\nkind = "office"\n')
     assert read_house_label(str(full)) == "osiris"
-    assert read_seat_handle(str(full)) == "imhotep"
+    assert read_seat_handle(str(full)) == "scribe"
     assert read_tree_kind(str(full)) == "office"
 
     container = tmp_path / "container"
     container.mkdir()
     (container / ".osiris").write_text('kind = "container"\n')
     assert read_tree_kind(str(container)) == "container"
-    assert read_project_label(str(container)) is None  # no project here — the whole point
+    assert read_project_label(str(container)) is None  # no project here, the whole point
 
 
 def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     tmp_path: Path,
 ) -> None:
-    """THREE tell-apart-able shapes (Sekhmet's design, e3f4f159; widened task #128 wave 2,
+    """THREE tell-apart-able shapes (widened task #128,
     2026-08-03), not two: NO FILE AT ALL, FOUND-BUT-NEVER-SETS-THE-KEY (the heinrich
-    boundary case — real, valid, just answering a different question), and COULD NOT READ
+    boundary case, real, valid, just answering a different question), and COULD NOT READ
     (a file exists but fails to parse). Each must be its own shape, never collapsed with
     either neighbor."""
     from src.orchestrator.agents import read_project_pin
@@ -837,7 +838,7 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     out = read_project_pin(str(no_file))
     assert out.value is None and out.error is None and out.path is None
 
-    # heinrich: valid TOML, never sets `project` — found, not broken, distinct from both
+    # valid TOML, never sets `project`: found, not broken, distinct from both
     # "no file" (path would be None) and "could not read" (error would be set)
     heinrich = tmp_path / "heinrich"
     heinrich.mkdir()
@@ -846,7 +847,7 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
     assert out.value is None and out.error is None
     assert out.path == str(heinrich / ".osiris")
 
-    # redmonth/sutra's own malformation: colon syntax is not valid TOML
+    # a malformed pin: colon syntax is not valid TOML
     malformed = tmp_path / "redmonth"
     malformed.mkdir()
     (malformed / ".osiris").write_text('project: "redmonth"\n')
@@ -859,10 +860,10 @@ def test_read_project_pin_distinguishes_all_three_no_project_shapes(
 def test_read_project_pin_never_climbs_past_a_deleted_cwd_into_a_real_ancestors_pin(
     tmp_path: Path,
 ) -> None:
-    """THE FOURTH SHAPE (Thoth's catch, msg 3928/thread 3937): flip68real/resumelanecheck
+    """THE FOURTH SHAPE: flip68real/resumelanecheck
     were real, now-retired Seats whose office directories were DELETED, not merely
     unpinned. Before this fix, querying a nonexistent cwd climbed straight past it to the
-    enclosing container's own pin and reported THAT as the deleted office's own state —
+    enclosing container's own pin and reported THAT as the deleted office's own state,
     exactly the shape reproduced here: a real container with its own `.osiris`, and a
     `deletedseat` subdirectory that is NEVER created. The queried path's own nonexistence
     must be the answer, never a borrowed ancestor's declaration."""
@@ -871,7 +872,7 @@ def test_read_project_pin_never_climbs_past_a_deleted_cwd_into_a_real_ancestors_
     container = tmp_path / "seats"
     container.mkdir()
     (container / ".osiris").write_text('kind = "container"\n')
-    ghost_office = container / "deletedseat"  # never created — the office is GONE
+    ghost_office = container / "deletedseat"  # never created: the office is GONE
 
     out = read_project_pin(str(ghost_office))
     assert out.cwd_missing is True
@@ -884,7 +885,7 @@ def test_read_project_pin_cwd_missing_is_false_for_a_real_but_unpinned_directory
     tmp_path: Path,
 ) -> None:
     """The fourth state must never leak into the ordinary case: a real directory with no
-    pin anywhere in its climb still reads cwd_missing=False — only a query against a
+    pin anywhere in its climb still reads cwd_missing=False; only a query against a
     directory that does not exist at all sets it."""
     from src.orchestrator.agents import read_project_pin
 
@@ -899,7 +900,7 @@ def test_resolve_identity_keeps_pin_missing_and_cwd_missing_disjoint(
     tmp_path: Path,
 ) -> None:
     """A deleted office and an unpinned-but-real office are opposite dispositions (one
-    wants the graph's stale belief reaped, the other wants a pin written) — resolve_identity
+    wants the graph's stale belief reaped, the other wants a pin written); resolve_identity
     must never report both flags true for the same identity, and the deleted-office case
     must report project_pin_cwd_missing, never project_pin_missing (the pre-fix collapse)."""
     container = tmp_path / "seats"
@@ -933,15 +934,15 @@ def test_project_pin_banner_names_a_deleted_cwd_distinctly(tmp_path: Path) -> No
 
 
 def test_project_pin_banner_is_silent_for_a_declared_container_pin(tmp_path: Path) -> None:
-    """Thoth LXXVI's live catch on his own mount: every mount at ~/.osiris/seats got the
+    """A real live catch on a mount: every mount at ~/.osiris/seats got the
     'NEVER DECLARES project' banner even though that pin deliberately declares
-    `kind = "container"` (ruling 719ed5b1) and answers a DIFFERENT question on purpose —
+    `kind = "container"` and answers a DIFFERENT question on purpose,
     the sanctioned non-project case, not an oversight. The banner's own "fell back to a
     BASENAME GUESS" text was doubly wrong: no basename guess runs for a bare root at all
     (resolve_identity's own bare_root branch keeps project None there), and by the time a
     SEATED session's project shows in the rendered message it's the seat's own house
-    resolution, unrelated to any guess. A container-kind pin — declared here explicitly,
-    not just the hardcoded bare-office-root path — gets no banner at all."""
+    resolution, unrelated to any guess. A container-kind pin, declared here explicitly,
+    not just the hardcoded bare-office-root path, gets no banner at all."""
     from src.orchestrator.agents import project_pin_banner
 
     container = tmp_path / "seats"
@@ -978,16 +979,17 @@ def test_write_attribution_banner_silent_when_agreement_says_so() -> None:
 
 def test_write_attribution_banner_ignores_a_stale_disagreement_flag(
 ) -> None:
-    """Thoth LXXVI's live catch on his own mount: `write_attribution_agreement` compares
+    """A real live catch on a mount: `write_attribution_agreement` compares
     `ident.project` against the write-attribution MAJORITY project (an independent signal
-    derived from actual write history, thread 6a00e942) — a genuine disagreement there
+    derived from actual write history), a genuine disagreement there
     can still exist for reasons that have nothing to do with the register_agent/seat-
-    correction ordering (fixed separately, thread 178e5a41): an agent whose own writes
+    correction ordering (fixed separately): an agent whose own writes
     mostly went to a different project than its current seat's house is a real
     disagreement, not a staleness artifact. Either way, the banner must never show a
-    "disagrees" flag next to two values that are, by the time it renders, equal — the
+    "disagrees" flag next to two values that are, by the time it renders, equal. The
     stored flag said "disagrees"; the two values THIS message would show are equal
-    ("osiris" and "osiris") — stay silent rather than show itself agreeing with itself."""
+    ("osiris" and "osiris"), so it should stay silent rather than show itself agreeing
+    with itself."""
     from src.orchestrator.agents import write_attribution_banner
 
     ident = AgentIdentity(agent_id="agent:wa04", session="wa04", project="osiris",
@@ -1002,7 +1004,7 @@ def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
 ) -> None:
     """THE ROOT CAUSE (task #128, 2026-08-05): a git worktree's own `.git` is a FILE (a
     gitlink), not a directory. The old `.exists()` climb-stop treated that file exactly
-    like a real repo root and gave up one layer too early — so every seat's own code
+    like a real repo root and gave up one layer too early, so every seat's own code
     checkout (`.claude/worktrees/<seat>`, no `.osiris` of its own) silently fell back to
     its OWN directory name instead of ever seeing the real root's pin, on every single
     mount. The climb must see straight through a gitlink file to the true root."""
@@ -1013,9 +1015,9 @@ def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
     (root / ".git").mkdir()
     (root / ".osiris").write_text('project = "osiris"\n')
 
-    worktree = root / ".claude" / "worktrees" / "sekhmet"
+    worktree = root / ".claude" / "worktrees" / "scribe"
     worktree.mkdir(parents=True)
-    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/sekhmet\n")
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/scribe\n")
 
     out = read_project_pin(str(worktree))
     assert out.value == "osiris"
@@ -1025,13 +1027,13 @@ def test_read_project_pin_climbs_past_a_worktree_gitlink_to_the_real_root(
 def test_read_project_pin_climbs_past_a_worktree_pin_that_never_sets_project(
     tmp_path: Path,
 ) -> None:
-    """THE LIVE REGRESSION (caught and reverted the same minute, ruling 719ed5b1's schema
+    """THE LIVE REGRESSION (caught and reverted the same minute during the schema
     rollout): a worktree pin declaring seat/house/kind (never project/model) sits BELOW its
-    repo root's own project/model pin — the first LAYERED declaration this reader was ever
+    repo root's own project/model pin, the first LAYERED declaration this reader was ever
     exercised against. Before the fix, the worktree's OWN `.osiris` existing at all stopped
     the climb outright (`f.is_file()` was treated as terminal regardless of whether it
     answered `project`), so `read_project_label` silently went from the root's real value to
-    None the instant a worktree pin was written — this is the exact live specimen (imhotep's
+    None the instant a worktree pin was written: this is the exact live specimen (one seat's
     own worktree), reproduced here rather than only described in a decision."""
     from src.orchestrator.agents import read_project_label, read_project_model
 
@@ -1040,10 +1042,10 @@ def test_read_project_pin_climbs_past_a_worktree_pin_that_never_sets_project(
     (root / ".git").mkdir()
     (root / ".osiris").write_text('project = "osiris"\nmodel = "claude-sonnet-5"\n')
 
-    worktree = root / ".claude" / "worktrees" / "imhotep"
+    worktree = root / ".claude" / "worktrees" / "scribe"
     worktree.mkdir(parents=True)
-    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/imhotep\n")
-    (worktree / ".osiris").write_text('house = "osiris"\nkind = "worktree"\nseat = "imhotep"\n')
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/scribe\n")
+    (worktree / ".osiris").write_text('house = "osiris"\nkind = "worktree"\nseat = "scribe"\n')
 
     assert read_project_label(str(worktree)) == "osiris"
     assert read_project_model(str(worktree)) == "claude-sonnet-5"
@@ -1052,9 +1054,9 @@ def test_read_project_pin_climbs_past_a_worktree_pin_that_never_sets_project(
 def test_read_project_pin_reports_the_nearest_unset_file_when_no_ancestor_sets_it_either(
     tmp_path: Path,
 ) -> None:
-    """The heinrich diagnostic survives climb-continuation: when NEITHER the near file nor
+    """The found-but-unset diagnostic survives climb-continuation: when NEITHER the near file nor
     any ancestor ever sets the key, the NEAREST found-but-unset file's path is still what's
-    reported — proof this isn't just "keep climbing and forget," the closest real answer to
+    reported, proof this isn't just "keep climbing and forget," the closest real answer to
     "why did this fall back to a basename guess" is preserved."""
     from src.orchestrator.agents import read_project_pin
 
@@ -1074,8 +1076,8 @@ def test_read_project_pin_reports_the_nearest_unset_file_when_no_ancestor_sets_i
 
 
 def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> None:
-    """The other half of the same fix: a REAL `.git` directory must still stop the climb —
-    an unrelated ancestor's `.osiris` (a different repo entirely) must never leak in just
+    """The other half of the same fix: a REAL `.git` directory must still stop the climb.
+    An unrelated ancestor's `.osiris` (a different repo entirely) must never leak in just
     because the fix widened what counts as a boundary. Unchanged behavior, proven not to
     have regressed."""
     from src.orchestrator.agents import read_project_pin
@@ -1086,7 +1088,7 @@ def test_read_project_pin_still_stops_at_a_real_repo_root(tmp_path: Path) -> Non
 
     repo = grandparent / "real-repo"
     repo.mkdir()
-    (repo / ".git").mkdir()  # a REAL root — no .osiris of its own
+    (repo / ".git").mkdir()  # a REAL root, no .osiris of its own
 
     out = read_project_pin(str(repo))
     assert out.value is None  # stops at repo's own real root, never sees the grandparent
@@ -1097,7 +1099,7 @@ async def test_write_model_pin_creates_and_is_idempotent(tmp_path: Path,
                                                           monkeypatch: pytest.MonkeyPatch) -> None:
     """Unit-level proof of the write helper itself, isolated from register_agent's own
     plumbing: creates a fresh pin when none exists, updates an existing one in place while
-    preserving `project`, and writes NOTHING on a second call with the same value — the
+    preserving `project`, and writes NOTHING on a second call with the same value: the
     idempotency `_link_once`/set_charter's own callers all rely on, applied to a filesystem
     write instead of a graph one."""
     from src.orchestrator.agents import write_model_pin
@@ -1123,7 +1125,7 @@ async def test_write_model_pin_refuses_a_value_that_would_corrupt_the_toml(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Defensive floor, never a validated allowlist (model ids change; this file has no
-    business hard-coding them) — but a value containing a quote or newline would corrupt
+    business hard-coding them), but a value containing a quote or newline would corrupt
     the TOML it's embedded in, so those are refused outright rather than trusted."""
     from src.orchestrator.agents import write_model_pin
 
@@ -1141,19 +1143,19 @@ def test_resolve_identity_resolves_the_governed_project_from_a_seat_worktree(
 ) -> None:
     """End to end, at the layer register_agent actually reads: a seated agent's own code
     worktree now resolves the ENCLOSING repo's governed project, not the worktree's own
-    directory name (which, for every seat in this fleet, IS the seat's own name — the
-    exact live specimen measured on sekhmet's and imhotep's own current identities)."""
+    directory name (which, for every seat in this fleet, IS the seat's own name, the
+    exact live specimen measured on real seats' own current identities)."""
     root = tmp_path / "osiris"
     root.mkdir()
     (root / ".git").mkdir()
     (root / ".osiris").write_text('project = "osiris"\n')
 
-    worktree = root / ".claude" / "worktrees" / "sekhmet"
+    worktree = root / ".claude" / "worktrees" / "scribe"
     worktree.mkdir(parents=True)
-    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/sekhmet\n")
+    (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/scribe\n")
 
     ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree1")
-    assert ident.project == "osiris"          # not "sekhmet", the old basename guess
+    assert ident.project == "osiris"          # not "scribe", the old basename guess
     assert ident.project_pin_error is None
     assert ident.project_pin_missing is False
 
@@ -1161,11 +1163,11 @@ def test_resolve_identity_resolves_the_governed_project_from_a_seat_worktree(
 def test_resolve_identity_still_falls_back_to_basename_when_truly_unpinned_anywhere(
     tmp_path: Path,
 ) -> None:
-    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs): the climb widening
+    """THE REFUSAL, TESTED NOT JUST THE SUCCESS: the climb widening
     must not manufacture a pin out of nothing. A worktree of a repo that has NO `.osiris`
-    anywhere in its own climb — real root included — still honestly falls back to a basename
+    anywhere in its own climb, real root included, still honestly falls back to a basename
     guess: since #93's follow-on fix (repo:liveness-fix, the live phantom-project specimen
-    below), the TRUE REPO ROOT's basename, not the worktree's own throwaway leaf directory —
+    below), the TRUE REPO ROOT's basename, not the worktree's own throwaway leaf directory.
     #128's climb widening only ever helped a repo that HAS a pin somewhere; an unpinned one
     used to fall through to the raw, un-climbed cwd's own basename regardless."""
     root = tmp_path / "unpinned-repo"
@@ -1184,25 +1186,25 @@ def test_resolve_identity_still_falls_back_to_basename_when_truly_unpinned_anywh
 def test_resolve_identity_worktree_basename_never_mints_the_branch_name_as_the_project(
     tmp_path: Path,
 ) -> None:
-    """THE LIVE SPECIMEN, EXACTLY (dispatch #93/#195 follow-on): repo:liveness-fix — a
-    SoftwareProject minted from `/home/asuramaya/code/lilguy/.claude/worktrees/liveness-fix`,
-    traced to this exact gap live-reproduced first. lilguy's repo carries no `.osiris`
-    anywhere (measured: `find /home/asuramaya/code/lilguy -name .osiris` — zero hits), so the
+    """THE LIVE SPECIMEN, EXACTLY (#93/#195 follow-on): repo:liveness-fix, a
+    SoftwareProject minted from `/home/asuramaya/code/quietcode/.claude/worktrees/liveness-fix`,
+    traced to this exact gap live-reproduced first. quietcode's repo carries no `.osiris`
+    anywhere (measured: `find /home/asuramaya/code/quietcode -name .osiris`, zero hits), so the
     old fallback basenamed the raw cwd and produced "liveness-fix" (the BRANCH name the
-    worktree happens to be named after), never "lilguy" (the repo everyone actually means).
+    worktree happens to be named after), never "quietcode" (the repo everyone actually means).
     A branch-named worktree is the sharpest case: unlike a seat's own worktree (conventionally
     named after the seat, so the old bug was invisible there), a feature-branch worktree's
     basename shares NOTHING with the real project's name."""
-    root = tmp_path / "lilguy"
+    root = tmp_path / "quietcode"
     root.mkdir()
-    (root / ".git").mkdir()  # a real root, genuinely never pinned — matches the live specimen
+    (root / ".git").mkdir()  # a real root, genuinely never pinned, matches the live specimen
 
     worktree = root / ".claude" / "worktrees" / "liveness-fix"
     worktree.mkdir(parents=True)
     (worktree / ".git").write_text("gitdir: /somewhere/.git/worktrees/liveness-fix\n")
 
     ident = resolve_identity(cwd=str(worktree), job_dir="/j/jobs/worktree3")
-    assert ident.project == "lilguy"          # never "liveness-fix", the branch/leaf name
+    assert ident.project == "quietcode"          # never "liveness-fix", the branch/leaf name
 
 
 def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
@@ -1210,7 +1212,7 @@ def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
 ) -> None:
     """Backward compatibility for the 6 existing plain-string callers (seats.py,
     mcp_server.py, project_identity.py, census.py): a couldn't-read file must still return
-    a bare None here — the richer signal is additive, reached only through
+    a bare None here: the richer signal is additive, reached only through
     `read_project_pin`, never a behavior change for callers that don't ask for it."""
     from src.orchestrator.agents import read_project_label, read_project_model
 
@@ -1224,8 +1226,8 @@ def test_read_project_label_and_model_still_collapse_both_no_declaration_causes(
 def test_resolve_identity_carries_the_could_not_read_signal_but_still_falls_back(
     tmp_path: Path,
 ) -> None:
-    """A broken pin must not break resolution — `project` still falls back to the
-    basename exactly as a no-declaration would — but the identity now carries ENOUGH to
+    """A broken pin must not break resolution: `project` still falls back to the
+    basename exactly as a no-declaration would, but the identity now carries ENOUGH to
     confess it (path + error), where before it silently looked identical to "never
     pinned"."""
     repo = tmp_path / "redmonth"
@@ -1240,9 +1242,9 @@ def test_resolve_identity_carries_the_could_not_read_signal_but_still_falls_back
 def test_resolve_identity_flags_project_pin_missing_on_genuine_no_declaration(
     tmp_path: Path,
 ) -> None:
-    """No .osiris anywhere in the climb: still no error, still no found-but-unset path —
-    but project_pin_missing is now True (task #128 wave 2), the third leg that used to be
-    indistinguishable from the heinrich shape."""
+    """No .osiris anywhere in the climb: still no error, still no found-but-unset path,
+    but project_pin_missing is now True (task #128), the third leg that used to be
+    indistinguishable from the found-but-unset shape."""
     repo = tmp_path / "undeclared"
     repo.mkdir()
     ident = resolve_identity(cwd=str(repo), job_dir="/j/jobs/undeclared1")
@@ -1253,9 +1255,9 @@ def test_resolve_identity_flags_project_pin_missing_on_genuine_no_declaration(
 def test_resolve_identity_carries_found_but_unset_without_masquerading_as_broken(
     tmp_path: Path,
 ) -> None:
-    """The heinrich boundary case, exercised through the real resolution path (task #128
-    wave 2): a valid but incomplete .osiris file must never masquerade as a broken one
-    (project_pin_error stays None) — but it must ALSO no longer masquerade as no file at
+    """The found-but-unset boundary case, exercised through the real resolution path (task #128):
+    a valid but incomplete .osiris file must never masquerade as a broken one
+    (project_pin_error stays None), but it must ALSO no longer masquerade as no file at
     all (project_pin_path is now set, project_pin_missing is False), so a caller can build
     the "found, valid, never declares project" message rather than the "no pin anywhere"
     one for this exact shape."""
@@ -1272,7 +1274,7 @@ def test_resolve_identity_never_confesses_an_explicit_project_label_override(
     tmp_path: Path,
 ) -> None:
     """An explicit `project_label=` (the env-override lane) short-circuits the cwd read
-    entirely — even a malformed .osiris underfoot must never surface a confession for a
+    entirely: even a malformed .osiris underfoot must never surface a confession for a
     file the resolution never actually touched."""
     repo = tmp_path / "redmonth"
     repo.mkdir()
@@ -1285,12 +1287,11 @@ def test_resolve_identity_never_confesses_an_explicit_project_label_override(
 
 
 def test_project_pin_banner_fires_only_on_the_two_real_errors(tmp_path: Path) -> None:
-    """Task #128 wave 2, NARROWED by ruling fe8ec7ff mechanism (1): the operator's own
-    standard is that an unset project is a VALID state, not an error — so only the two
-    genuinely unrepairable shapes (cwd gone, TOML broken) still warn here. The other two
+    """Task #128, NARROWED: an unset project is a VALID state, not an error, so only
+    the two genuinely unrepairable shapes (cwd gone, TOML broken) still warn here. The other two
     (no pin anywhere, pin found but never declares project) moved to `project_pin_state`,
     covered separately below. Silent when a real pin was found and used, or for the bare
-    seat-office root carve-out (ruling 577988ed)."""
+    seat-office root carve-out."""
     from src.orchestrator.agents import project_pin_banner
 
     clean = AgentIdentity(agent_id="agent:clean1", session="clean1", project="fine",
@@ -1314,18 +1315,18 @@ def test_project_pin_banner_fires_only_on_the_two_real_errors(tmp_path: Path) ->
 
     missing = AgentIdentity(agent_id="agent:tantra1", session="tantra1", project="tantra",
                             model=None, cwd="/x/tantra", project_pin_missing=True)
-    assert project_pin_banner(missing) is None  # same — no pin at all is also just unset
+    assert project_pin_banner(missing) is None  # same, no pin at all is also just unset
 
-    # bare seat-office root carve-out (577988ed): resolve_identity never sets
-    # project_pin_missing here even though nothing is pinned — the banner must stay silent
+    # bare seat-office root carve-out: resolve_identity never sets
+    # project_pin_missing here even though nothing is pinned; the banner must stay silent
     bare_root = AgentIdentity(agent_id="agent:anon1", session="anon1", project=None,
                               model=None, cwd="/home/x/.osiris/seats")
     assert project_pin_banner(bare_root) is None
 
 
 def test_project_pin_state_reports_the_two_unset_shapes_calmly(tmp_path: Path) -> None:
-    """The two shapes carved OUT of project_pin_banner by ruling fe8ec7ff: unset is a valid
-    state (general-purpose / not yet named), never an alarm — no `⚠`, no "BASENAME GUESS"
+    """The two shapes carved OUT of project_pin_banner: unset is a valid
+    state (general-purpose / not yet named), never an alarm, no `⚠`, no "BASENAME GUESS"
     framing. Silent for everything project_pin_banner itself still owns (real errors) and
     for a clean pin."""
     from src.orchestrator.agents import project_pin_state
@@ -1362,14 +1363,14 @@ def test_project_pin_state_reports_the_two_unset_shapes_calmly(tmp_path: Path) -
 def test_resolve_identity_never_flags_project_pin_missing_at_the_bare_seat_root(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """Ruling 577988ed's own carve-out, through the real resolution path: the bare seat-
-    office container has no pin and no single project of its own — project stays None AND
-    project_pin_missing stays False, so no wave-2 banner ever fires there.
+    """A carve-out, through the real resolution path: the bare seat-
+    office container has no pin and no single project of its own, so project stays None AND
+    project_pin_missing stays False, so no banner ever fires there.
 
-    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam, wave 9, msg
-    6089) rather than patching either module's own imported name: resolve_identity calls
+    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam)
+    rather than patching either module's own imported name: resolve_identity calls
     the shared `is_bare_office_root()` (offices.py) instead of a private duplicate of the
-    same path-equality check (the 38c71544 dedup, ruling 719ed5b1's pin-schema build)."""
+    same path-equality check."""
 
     seats_root = tmp_path / "seats"
     seats_root.mkdir()
@@ -1411,11 +1412,10 @@ async def _seat_intended_model(actions: Actions, seat_id: str) -> str | None:
 async def test_a_deliberate_swap_stamps_the_seats_intended_model(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE STANDING-CHOICE WRITE SIDE (operator ruling e0e0955d, confirming his own 1aca1fcc
-    from 2026-07-19): a /model command on the record IS the operator re-pinning this seat's
-    standing choice — register_agent now auto-stamps intended_model on the held Seat so
-    successions and relaunches inherit it with no manual re-pin. The READ side already
-    existed (mint_seat's own pin, launch()'s precedence since 70ae3c3); this is the write."""
+    """THE STANDING-CHOICE WRITE SIDE: a /model command on the record IS the operator
+    re-pinning this seat's standing choice. register_agent now auto-stamps intended_model
+    on the held Seat so successions and relaunches inherit it with no manual re-pin. The
+    READ side already existed (mint_seat's own pin, launch()'s precedence); this is the write."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
 
@@ -1447,8 +1447,9 @@ async def test_a_deliberate_swap_stamps_the_seats_intended_model(
 async def test_an_unexplained_swap_never_overwrites_the_standing_choice(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The other half of e0e0955d: a rug-pull (no /model on the record — the harness's own
-    silent demotion) must NEVER overwrite the seat's standing choice. Pre-seeds an existing
+    """The other half of the standing-choice write: a rug-pull (no /model on the record,
+    the harness's own silent demotion) must NEVER overwrite the seat's standing choice.
+    Pre-seeds an existing
     intended_model to prove it survives untouched, not merely that a fresh one is absent."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
@@ -1474,11 +1475,11 @@ async def test_an_unexplained_swap_never_overwrites_the_standing_choice(
     assert await _seat_intended_model(actions, seat["seat_id"]) == "claude-sonnet-5"  # untouched
 
 
-# ═══ task #146 (/model MUST BE AUTHORITATIVE, the operator's own complaint): the graph-side
+# ═══ task #146 (/model MUST BE AUTHORITATIVE): the graph-side
 # intended_model stamp above already existed, but nothing durable ever fed back into the
-# .osiris file itself — the ONE thing launch()'s own precedence and the swap-divergence
+# .osiris file itself, the ONE thing launch()'s own precedence and the swap-divergence
 # banner both actually read first. And model_swapped fired for a WITNESSED, deliberate
-# /model exactly like a harness rug-pull — a false positive on the danger map the property
+# /model exactly like a harness rug-pull, a false positive on the danger map the property
 # exists to serve. Both close here. ═══
 
 
@@ -1486,9 +1487,9 @@ async def test_a_deliberate_swap_writes_the_seats_osiris_pin(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """THE WRITE (task #146): the operator's own /model command on the record now updates
-    the seat's `.osiris` file, not just the graph's intended_model stamp — the pin becomes a
+    the seat's `.osiris` file, not just the graph's intended_model stamp: the pin becomes a
     CACHE of the decision instead of a hand-edited, permanently-stale competing claim.
-    Existing `project` in the pin must survive untouched — this writes model, never invents
+    Existing `project` in the pin must survive untouched: this writes model, never invents
     a project the seat never declared."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
@@ -1529,10 +1530,10 @@ async def test_a_deliberate_swap_writes_the_seats_osiris_pin(
 async def test_a_deliberate_swap_writes_the_office_pin_even_when_mounted_from_a_worktree(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """VERIFICATION for Thoth's #146 close-out ask (bears_on 600a6f85): a session mounted
+    """VERIFICATION for the #146 close-out ask: a session mounted
     from a code WORKTREE cwd (`.../.claude/worktrees/<name>`, several directories below the
     real repo root, and never the seat's own office) must still land the pin at the SEAT'S
-    OFFICE, never at or near the worktree — write_model_pin resolves the office purely from
+    OFFICE, never at or near the worktree. write_model_pin resolves the office purely from
     the seat handle via held_seat, structurally blind to identity.cwd, so the sibling test
     above (cwd='/x/osiris', an office-shaped path) already proves this by construction; this
     test proves it empirically with a cwd that is deliberately NOT office-shaped, so the two
@@ -1577,10 +1578,10 @@ async def test_a_deliberate_swap_writes_the_office_pin_even_when_mounted_from_a_
 async def test_an_unexplained_swap_never_touches_the_pin_file(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (577988ed still governs — this sits on the
+    """THE REFUSAL, TESTED NOT JUST THE SUCCESS (this sits on the
     mount path every seat traverses): a harness rug-pull (no /model on the record) must
     never touch the pin file, exactly as it must never overwrite the graph's intended_model
-    (the sibling test above it). No pin, before or after — the fallback writes nothing."""
+    (the sibling test above it). No pin, before or after: the fallback writes nothing."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import held_seat
 
@@ -1608,9 +1609,9 @@ async def test_an_unexplained_swap_never_touches_the_pin_file(
 async def test_a_deliberate_swap_does_not_stamp_model_swapped(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """RE-SCOPED (task #146, the operator's own words: "a rug pull ... vs a direct /model
-    swap on my part is different"): model_swapped is the digest's danger-map signal — a
-    WITNESSED, deliberate /model must never trip it. The choice is recorded durably
+    """RE-SCOPED (task #146: a rug pull is a different event than a direct /model
+    swap the operator makes deliberately): model_swapped is the digest's danger-map signal,
+    a WITNESSED, deliberate /model must never trip it. The choice is recorded durably
     elsewhere (intended_model + the pin); it is not a danger sighting."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
@@ -1637,26 +1638,26 @@ async def test_a_deliberate_swap_does_not_stamp_model_swapped(
 
 
 def _anchored(model: str, *, history: tuple[str, ...] | None = None) -> AgentIdentity:
-    """A job_dir-anchored identity for agent:0806072e — the succession-seam fixture (bug #51)."""
+    """A job_dir-anchored identity for agent:0806072e, the succession-seam fixture (bug #51)."""
     return AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="sibling-two",
                          model=model, cwd="/w/sibling-two", model_method="job_dir",
                          model_history=history if history is not None else (model,))
 
 
 async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> None:
-    """The MINT ruling (be292762, sibling-one's remedy adopted): a fresh context arriving across a
-    detected seam is not stamped-and-left-wearing-the-dead-name — it is MINTED its own id
+    """The MINT rule: a fresh context arriving across a
+    detected seam is not stamped-and-left-wearing-the-dead-name, it is MINTED its own id
     (agent:<base>-ii) with a succeeded_from link; the ancestor's record closes intact."""
     dead = _anchored("claude-opus-4-8")
     a = await register_agent(actions, dead, actor="analyst:operator")
-    assert dead.model_succession is None  # first anchored write — no baseline, no seam
-    successor = _anchored("claude-fable-5")  # fresh context: opus is NOWHERE in its history
+    assert dead.model_succession is None  # first anchored write, no baseline, no seam
+    successor = _anchored("claude-fable-5")  # fresh context: opus is nowhere in its history
     a2 = await register_agent(actions, successor, actor="analyst:operator")
-    assert a2 != a                                        # a NEW being, not the dead name re-worn
-    assert successor.agent_id == "agent:0806072e-ii"      # sibling-one's grammar, exactly
+    assert a2 != a                                        # a new being, not the dead name re-worn
+    assert successor.agent_id == "agent:0806072e-ii"      # the standard succession grammar, exactly
     assert successor.succeeded_from == "agent:0806072e"
     assert successor.model_succession == "claude-opus-4-8 → claude-fable-5"
-    # the seam is stamped on the HEIR; the ancestor points forward; the graph edge exists
+    # the seam is stamped on the heir; the ancestor points forward; the graph edge exists
     row = await actions.pool.fetchrow(
         "SELECT value#>>'{}' AS seam, evidence_class AS ec FROM current_assertions "
         "WHERE object_id=$1 AND name='model_succession'", a2)
@@ -1667,20 +1668,20 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
         "AND name='succeeded_by'", a) == "agent:0806072e-ii"
     assert await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='succeeded_from'", a2, a)
-    # IDEMPOTENT: the same context re-registering resolves the BASE id to the lineage head and
-    # continues AS the heir — no -iii, no seam re-fire
+    # idempotent: the same context re-registering resolves the base id to the lineage head and
+    # continues as the heir, no -iii, no seam re-fire
     again = _anchored("claude-fable-5")
     a3 = await register_agent(actions, again, actor="analyst:operator")
     assert a3 == a2 and again.agent_id == "agent:0806072e-ii"
-    # succeeded_from IS repopulated on this idempotent, non-minting call (the reconstruction
-    # fix, msg 4673): a fresh AgentIdentity built for an ALREADY-minted agent used to lose
-    # this fact permanently the moment resolve_identity() rebuilt it with no DB access —
-    # register_agent now recovers it from the graph's own durable property instead of
-    # leaving it None. model_succession stays None: no seam fired on this call, unrelated.
+    # succeeded_from is repopulated on this idempotent, non-minting call: a fresh AgentIdentity
+    # built for an already-minted agent used to lose this fact permanently the moment
+    # resolve_identity() rebuilt it with no DB access. register_agent now recovers it from the
+    # graph's own durable property instead of leaving it None. model_succession stays None: no
+    # seam fired on this call, unrelated.
     assert again.succeeded_from == "agent:0806072e" and again.model_succession is None
-    # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): "-ii" is a WITNESSED mind (this decision
-    # is its act) — without one, the next seam would fold it as a zero-turn phantom instead
-    # of chaining a third generation onto it (see test_fold_zero_turn_ancestors_* in this
+    # succession follows turns: "-ii" is a witnessed mind (this decision is its act), without
+    # one, the next seam would fold it as a zero-turn phantom instead of chaining a third
+    # generation onto it (see test_fold_zero_turn_ancestors_* in this
     # file for the direct unit coverage of that fold logic).
     await record_decision(actions, "fable did real work here", source=successor.agent_id)
     # a SECOND real seam (fable head → haiku context) mints the third generation
@@ -1694,14 +1695,14 @@ async def test_succession_seam_mints_a_lineage_linked_heir(actions: Actions) -> 
 async def test_register_agent_recovers_succeeded_from_after_a_simulated_bounce(
     actions: Actions,
 ) -> None:
-    """THE RECONSTRUCTION FIX (msg 4673, operator-authorized): a fresh `AgentIdentity`
-    built the way `resolve_identity()` genuinely builds one — no pool, `succeeded_from`
-    at its dataclass default of None — for an agent that ALREADY has a real predecessor
-    in the graph must NOT lose that fact just because it wasn't reconstructed via the
-    in-memory `_agents[key]` cache (a server bounce, `_reattach`'s own cache-miss path).
-    Before this fix, `identity.succeeded_from` stayed None forever from that point on;
-    orient()'s `if ident and ident.succeeded_from:` gate never opened again for that
-    session, though the Agent's own `succeeded_from` property was correct throughout."""
+    """A fresh `AgentIdentity` built the way `resolve_identity()` genuinely builds one, with
+    no pool, `succeeded_from` at its dataclass default of None, for an agent that already
+    has a real predecessor in the graph must not lose that fact just because it wasn't
+    reconstructed via the in-memory `_agents[key]` cache (a server bounce, `_reattach`'s
+    own cache-miss path). Before this fix, `identity.succeeded_from` stayed None forever
+    from that point on; orient()'s `if ident and ident.succeeded_from:` gate never opened
+    again for that session, though the Agent's own `succeeded_from` property was correct
+    throughout."""
     ancestor = _anchored("claude-opus-4-8")
     await register_agent(actions, ancestor, actor="analyst:operator")
     heir = _anchored("claude-fable-5")
@@ -1709,9 +1710,9 @@ async def test_register_agent_recovers_succeeded_from_after_a_simulated_bounce(
     assert heir.agent_id == "agent:0806072e-ii"
     assert heir.succeeded_from == "agent:0806072e"  # the real mint, correct as before
 
-    # SIMULATE THE BOUNCE: a brand-new AgentIdentity for the SAME (already-minted) agent,
-    # exactly as resolve_identity() would build one on a cache-miss re-attach — no memory
-    # of the mint that just happened, succeeded_from unset.
+    # simulate the bounce: a brand-new AgentIdentity for the same (already-minted) agent,
+    # exactly as resolve_identity() would build one on a cache-miss re-attach, with no
+    # memory of the mint that just happened, succeeded_from unset.
     reconstructed = AgentIdentity(agent_id="agent:0806072e-ii", session="0806072e",
                                   project="sibling-two", model="claude-fable-5",
                                   cwd="/w/sibling-two", model_method="job_dir",
@@ -1720,20 +1721,19 @@ async def test_register_agent_recovers_succeeded_from_after_a_simulated_bounce(
 
     second_id = await register_agent(actions, reconstructed, actor="analyst:operator")
 
-    assert second_id == heir_id  # no new mint — same agent, correctly recognized as head
+    assert second_id == heir_id  # no new mint, same agent, correctly recognized as head
     assert reconstructed.succeeded_from == "agent:0806072e"  # recovered, not lost
 
 
 async def test_reanimation_of_a_false_minted_retiree_skips_to_the_eligible_ancestor(
     actions: Actions,
 ) -> None:
-    """THE HALCYON XXIII SPECIMEN (obligation 6b1efacb, 2026-08-18): the retired object
-    reanimation mints FROM can itself be false_mint (a real, live generation the phantom
-    fold wrongly ate — see the sibling occupancy fix in this same file). Before this fix,
-    the new heir's succeeded_from chained onto that folded phantom (register_agent handed
-    `_fold_zero_turn_ancestors` the phantom itself, and that function's own already-
-    false_mint halt returned it unchanged); now it skips forward to the nearest ELIGIBLE
-    ancestor instead."""
+    """The retired object reanimation mints from can itself be false_mint (a real, live
+    generation the phantom fold wrongly ate, see the sibling occupancy fix in this same
+    file). Before this fix, the new heir's succeeded_from chained onto that folded phantom
+    (register_agent handed `_fold_zero_turn_ancestors` the phantom itself, and that
+    function's own already-false_mint halt returned it unchanged); now it skips forward to
+    the nearest eligible ancestor instead."""
     root = _anchored("claude-opus-4-8")
     root_id = await register_agent(actions, root, actor="analyst:operator")
     heir = _anchored("claude-fable-5")
@@ -1741,25 +1741,24 @@ async def test_reanimation_of_a_false_minted_retiree_skips_to_the_eligible_ances
     assert heir.agent_id == "agent:0806072e-ii"
     assert heir.succeeded_from == root.agent_id
 
-    # THE WRONGFUL FOLD: heir was a genuinely live generation, but got phantom-folded
-    # anyway (the exact bug this obligation's other half fixes) — false_mint AND retired,
-    # succeeded_from left pointing at the real root underneath it. BACKDATED past
-    # `_SEAM_DEBOUNCE_SECS` (900s) — a fresh heal still inside that window is
-    # `mint_heir`'s own "not every heal is a death" reuse case (the SAME numeral is
-    # deliberately recycled, ruling d3531cd8's own point); the real halcyon specimen's
-    # own 30-minute gap between fold and reanimation is well past it, and this fixture
-    # must match that shape or `mint_heir`'s grave-avoidance loop reuses "-ii" instead of
-    # minting a genuinely new "-iii" — a different, already-covered code path.
+    # the wrongful fold: heir was a genuinely live generation, but got phantom-folded
+    # anyway (the exact bug this fixes), false_mint and retired, succeeded_from left
+    # pointing at the real root underneath it. Backdated past `_SEAM_DEBOUNCE_SECS`
+    # (900s): a fresh heal still inside that window is `mint_heir`'s own "not every heal
+    # is a death" reuse case (the same numeral is deliberately recycled); the real
+    # specimen's own 30-minute gap between fold and reanimation is well past it, and this
+    # fixture must match that shape or `mint_heir`'s grave-avoidance loop reuses "-ii"
+    # instead of minting a genuinely new "-iii", a different, already-covered code path.
     stale_now = datetime.now(UTC) - timedelta(seconds=1000)
     await actions.assert_property(heir_id, "false_mint", True, "test", stale_now, 0.9,
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
     await actions.assert_property(heir_id, "retired", True, "test", stale_now, 0.9,
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
 
-    # THE LIVE BODY REMOUNTS — addressed by the RETIRED generation's own id directly
+    # the live body remounts, addressed by the retired generation's own id directly
     # (matching production: a reattach's session resolves to the specific generation it
-    # was last known as, not the lineage's base id — `lineage_head` itself would skip a
-    # false_mint node reached via the BASE's own succeeded_by walk, so starting there
+    # was last known as, not the lineage's base id. `lineage_head` itself would skip a
+    # false_mint node reached via the base's own succeeded_by walk, so starting there
     # would never reproduce this specimen at all).
     reanimated = AgentIdentity(agent_id="agent:0806072e-ii", session="0806072e-ii",
                                project="sibling-two", model="claude-fable-5",
@@ -1768,7 +1767,7 @@ async def test_reanimation_of_a_false_minted_retiree_skips_to_the_eligible_ances
     a3 = await register_agent(actions, reanimated, actor="analyst:operator")
     assert a3 != heir_id and a3 != root_id
     assert reanimated.agent_id == "agent:0806072e-iii"
-    # THE FIX: succeeded_from skips the false-minted -ii, lands on the real root — never
+    # the fix: succeeded_from skips the false-minted -ii, lands on the real root, never
     # chains a live heir onto a folded phantom.
     assert reanimated.succeeded_from == root.agent_id
     assert await actions.pool.fetchval(
@@ -1777,32 +1776,32 @@ async def test_reanimation_of_a_false_minted_retiree_skips_to_the_eligible_ances
 
 
 async def test_remount_of_a_retired_identity_mints_an_heir(actions: Actions) -> None:
-    """The reanimation door under the mint ruling: a retired face is never re-worn — the
-    arriving context is minted the next generation; the retirement stands on the ancestor."""
+    """A retired identity is never re-worn: the arriving context is minted the next
+    generation; the retirement stands on the ancestor."""
     ident = _anchored("claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
     assert ident.reanimated is False and ident.succeeded_from is None
     # the agent retires itself (what retire() writes: retired=true, self_declared)
     await actions.assert_property(a, "retired", True, ident.agent_id, datetime.now(UTC), 0.9,
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
-    # the same session UUID mounts again — the door sibling-two repro'd, now a minting
+    # the same session UUID mounts again, now a minting
     again = _anchored("claude-fable-5")
     a2 = await register_agent(actions, again, actor="analyst:operator")
     assert a2 != a
     assert again.agent_id == "agent:0806072e-ii"
     assert again.succeeded_from == "agent:0806072e"
-    assert again.reanimated is False  # nothing was re-worn — the heir has its own name
+    assert again.reanimated is False  # nothing was re-worn, the heir has its own name
     assert await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='minted_because'", a2) == "reanimation-of-retired"
-    # the retirement STANDS on the ancestor — the deliberate close is never erased
+    # the retirement stands on the ancestor, the deliberate close is never erased
     retired = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='retired'", a)
     assert retired == "true"
 
 
 def test_generation_math_is_hex_safe() -> None:
-    """Roman generations use only {i,v,x} — no hex digit overlaps, so full-UUID canonicals can
+    """Roman generations use only {i,v,x}, no hex digit overlaps, so full-UUID canonicals can
     never misparse their tails as generations ('d'/'c' are Roman AND hex; we exclude them)."""
     from src.orchestrator.agents import _generation, next_generation
 
@@ -1820,12 +1819,12 @@ def test_generation_math_is_hex_safe() -> None:
 
 
 def test_generation_overflow_suffix_round_trips_instead_of_re_basing() -> None:
-    """THE REPEATING OVERFLOW (Thoth's own lineage, msg 7606, "-g40-g40-g40"): once a
-    lineage passes 39 generations, `_to_roman` mints a plain `g<N>` suffix (its own
-    documented fallback) — but `_generation` used to be unable to read it back, so the
-    very next mint treated `...-g40` as a brand-new root starting at generation 1,
-    climbing another 39 generations to hit the SAME fallback again. `_generation` must
-    round-trip the g-suffix so `next_generation` climbs linearly past it instead."""
+    """The repeating overflow ("-g40-g40-g40"): once a lineage passes 39 generations,
+    `_to_roman` mints a plain `g<N>` suffix (its own documented fallback), but `_generation`
+    used to be unable to read it back, so the very next mint treated `...-g40` as a
+    brand-new root starting at generation 1, climbing another 39 generations to hit the
+    same fallback again. `_generation` must round-trip the g-suffix so `next_generation`
+    climbs linearly past it instead."""
     from src.orchestrator.agents import _generation, next_generation
 
     assert next_generation("agent:x-xxxix") == "agent:x-g40"           # the first overflow
@@ -1841,9 +1840,9 @@ def test_generation_overflow_suffix_round_trips_instead_of_re_basing() -> None:
 
 
 def test_soul_base_is_the_shared_resolver_generation_zero_and_g_n_alike() -> None:
-    """soul_base (thread 25b57dca) is the one name every single-hop-only caller should
-    reach for instead of re-deriving its own roman-only suffix strip — it must agree with
-    _generation()'s own root exactly, roman or g<N>, chained or not."""
+    """soul_base is the one name every single-hop-only caller should reach for instead of
+    re-deriving its own roman-only suffix strip, it must agree with _generation()'s own
+    root exactly, roman or g<N>, chained or not."""
     from src.orchestrator.agents import soul_base
 
     assert soul_base("agent:x") == "agent:x"
@@ -1855,15 +1854,14 @@ def test_soul_base_is_the_shared_resolver_generation_zero_and_g_n_alike() -> Non
 
 
 def test_generation_unwinds_a_whole_chain_of_overflow_resets() -> None:
-    """test_greatfold's own catch (msg 7623) on the first cut of the overflow fix: a
-    single-segment check missed the composite shape a REAL mint sequence produces — a
-    roman suffix immediately after a g-reset (`...-g40-ii`, two more generations minted
-    normally before the fix landed). `_generation` must peel the WHOLE chain from the
-    right, landing on the TRUE root and TRUE total generation — ground truth here comes
-    from literally simulating the OLD buggy next_generation from generation 1 and
-    reading off the true step count at each landmark id, not a naive sum (a segment
-    past the first one only ever adds `value - 1`, since the old bug re-based each
-    reset's LOCAL count at 1, not 0)."""
+    """A follow-up catch on the first cut of the overflow fix: a single-segment check
+    missed the composite shape a real mint sequence produces, a roman suffix immediately
+    after a g-reset (`...-g40-ii`, two more generations minted normally before the fix
+    landed). `_generation` must peel the whole chain from the right, landing on the true
+    root and true total generation. Ground truth here comes from literally simulating the
+    old buggy next_generation from generation 1 and reading off the true step count at
+    each landmark id, not a naive sum (a segment past the first one only ever adds
+    `value - 1`, since the old bug re-based each reset's local count at 1, not 0)."""
     from src.orchestrator.agents import _generation, next_generation
 
     assert _generation("agent:x-g40-ii") == ("agent:x", 41)
@@ -1878,14 +1876,14 @@ def test_generation_unwinds_a_whole_chain_of_overflow_resets() -> None:
     assert next_generation("agent:x-g40-ii") == "agent:x-g42"
     # a chain that starts with an ordinary roman (no reset yet) is unaffected
     assert _generation("agent:x-iii") == ("agent:x", 3)
-    # still never misparses a real hex/UUID tail — i/v/x are not hex digits, so no
+    # still never misparses a real hex/UUID tail: i/v/x are not hex digits, so no
     # segment of one can ever falsely round-trip, chain or no chain
     assert _generation("agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21") == (
         "agent:2f81c6d5-9e70-44d1-8f3c-0a7cd0e63f21", 1)
 
 
 async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
-    """A never-retired identity re-mounting is an ordinary re-attach — no reanimation flag, no
+    """A never-retired identity re-mounting is an ordinary re-attach, no reanimation flag, no
     stamp. The guard must fire ONLY on a winning retired=true, or every re-mount cries wolf."""
     ident = _anchored("claude-fable-5")
     a = await register_agent(actions, ident, actor="analyst:operator")
@@ -1898,13 +1896,13 @@ async def test_fresh_register_is_never_a_reanimation(actions: Actions) -> None:
 
 
 async def test_witnessed_swap_mints_under_the_mind_ruling(actions: Actions) -> None:
-    """Ruling a882b334 flips the old warm-swap exemption: a transition the transcript witnessed
-    is STILL a death — the numeral tracks which MIND, and a mind is one contiguous run of one
-    model. The witnessed swap mints the heir AND keeps the warm-swap stamp (both are true)."""
+    """A transition the transcript witnessed is still a death: the numeral tracks which
+    mind, and a mind is one contiguous run of one model. The witnessed swap mints the
+    heir and keeps the warm-swap stamp (both are true)."""
     first = _anchored("claude-fable-5")
     await register_agent(actions, first, actor="analyst:operator")
     swapped = _anchored("claude-opus-4-8",
-                        history=("claude-fable-5", "claude-opus-4-8"))  # the prior IS in history
+                        history=("claude-fable-5", "claude-opus-4-8"))  # the prior is in history
     a = await register_agent(actions, swapped, actor="analyst:operator",
                              expected_model="claude-fable-5")
     assert swapped.agent_id == "agent:0806072e-ii"      # witnessed or not, the mind changed
@@ -1918,23 +1916,22 @@ async def test_witnessed_swap_mints_under_the_mind_ruling(actions: Actions) -> N
         "  AND x.name='minted_because') AS why", a)
     assert row is not None
     assert row["seam"] == "claude-fable-5 → claude-opus-4-8"   # a succession...
-    assert row["swapped"] is not None                          # ...AND the warm swap record
+    assert row["swapped"] is not None                          # ...and the warm swap record
     assert row["why"] == "model-succession"
 
 
 async def test_oscillation_mints_every_time_a_mind_LIVED_in_the_middle(actions: Actions) -> None:
-    """Fork 1 of ruling a882b334 (fable → opus → fable is THREE minds, no same-as-grandfather
-    exception) — RECONCILED with the debounce ruling that later carved its one exception
-    (b813e389: an actless transient inside the window is settings churn, not a death) and
-    with the operator's 2026-07-14 word extending that exception to EVERY mint path (thread
-    a3d49d91 — the onboarding night burned thirteen numerals on exactly this). The returning
-    model is a third mind IF THE MIDDLE ONE EVER LIVED; a mind is witnessed by its acts. The
-    actless case is pinned in test_onboarding_seams (the heal), the LIVED case here."""
+    """fable → opus → fable is three minds, no same-as-grandfather exception, reconciled
+    with the debounce rule that later carved its one exception (an actless transient
+    inside the window is settings churn, not a death) and extended that exception to
+    every mint path. The returning model is a third mind if the middle one ever lived; a
+    mind is witnessed by its acts. The actless case is pinned in test_onboarding_seams
+    (the heal), the lived case here."""
     await register_agent(actions, _anchored("claude-fable-5"), actor="analyst:operator")
     swap1 = _anchored("claude-opus-4-8", history=("claude-fable-5", "claude-opus-4-8"))
     await register_agent(actions, swap1, actor="analyst:operator")
     assert swap1.agent_id == "agent:0806072e-ii"
-    # the middle mind ACTS — a real mind passed through, however briefly (one witnessed act
+    # the middle mind acts, a real mind passed through, however briefly (one witnessed act
     # is the debounce's own line: it must stand as a generation forever)
     t = await actions.create_or_find_object("Thread", "thread:oscwitness", swap1.agent_id)
     await actions.assert_property(t, "status", "open", swap1.agent_id, datetime.now(UTC),
@@ -1942,10 +1939,10 @@ async def test_oscillation_mints_every_time_a_mind_LIVED_in_the_middle(actions: 
     back = _anchored("claude-fable-5",
                      history=("claude-fable-5", "claude-opus-4-8", "claude-fable-5"))
     a3 = await register_agent(actions, back, actor="analyst:operator")
-    assert back.agent_id == "agent:0806072e-iii"        # a THIRD mind, not I restored
+    assert back.agent_id == "agent:0806072e-iii"        # a third mind, not I restored
     assert back.succeeded_from == "agent:0806072e-ii"
     assert back.model_succession == "claude-opus-4-8 → claude-fable-5"
-    # settled: same model re-registering on the head is the same mind — no -iv
+    # settled: same model re-registering on the head is the same mind, no -iv
     still = _anchored("claude-fable-5",
                       history=("claude-fable-5", "claude-opus-4-8", "claude-fable-5"))
     assert await register_agent(actions, still, actor="analyst:operator") == a3
@@ -1953,8 +1950,8 @@ async def test_oscillation_mints_every_time_a_mind_LIVED_in_the_middle(actions: 
 
 
 async def test_succession_needs_anchored_observations_on_both_sides(actions: Actions) -> None:
-    """Only two ANCHORED observations disagreeing can witness a seam: a self-report on the new
-    side, or a cwd guess as the baseline, must fire nothing (the cry-wolf lesson, e71b408f)."""
+    """Only two anchored observations disagreeing can witness a seam: a self-report on the new
+    side, or a cwd guess as the baseline, must fire nothing (avoid false positives)."""
     await register_agent(actions, _anchored("claude-opus-4-8"), actor="analyst:operator")
     self_rep = AgentIdentity(agent_id="agent:0806072e", session="0806072e", project="sibling-two",
                              model="claude-fable-5", cwd="/w/sibling-two",
@@ -1979,11 +1976,11 @@ async def test_succession_needs_anchored_observations_on_both_sides(actions: Act
 
 
 async def test_a_recovered_from_unknown_model_is_not_a_seam(actions: Actions) -> None:
-    """Thread 065c374e (defense-in-depth for forks.py's lesson, mirrored here): a job_dir-
-    anchored mount whose OWN transcript read flaked — model=None, the ABSENCE of an
-    observation, never a value — followed by a LATER call that resolves the real model must
-    not read as a live-swap. 'We have not looked yet' is not a prior model to disagree with,
-    so the second call gets no baseline, no seam, and no spurious generation."""
+    """Defense in depth, mirrored here: a job_dir-anchored mount whose own transcript read
+    flaked (model=None, the absence of an observation, never a value) followed by a later
+    call that resolves the real model must not read as a live-swap. 'We have not looked
+    yet' is not a prior model to disagree with, so the second call gets no baseline, no
+    seam, and no spurious generation."""
     flaked = AgentIdentity(agent_id="agent:33086f67", session="33086f67", project="osiris",
                           model=None, cwd="/w/osiris", model_method="job_dir")
     a = await register_agent(actions, flaked, actor="analyst:operator")
@@ -1992,16 +1989,16 @@ async def test_a_recovered_from_unknown_model_is_not_a_seam(actions: Actions) ->
                               model="claude-fable-5", cwd="/w/osiris", model_method="job_dir",
                               model_history=("claude-fable-5",))
     a2 = await register_agent(actions, recovered, actor="analyst:operator")
-    assert recovered.model_succession is None      # no baseline was ever witnessed — not a seam
+    assert recovered.model_succession is None      # no baseline was ever witnessed, not a seam
     assert recovered.succeeded_from is None
-    assert a2 == a                                  # same object — no spurious generation minted
+    assert a2 == a                                  # same object, no spurious generation minted
     assert recovered.agent_id == "agent:33086f67"   # no -ii
 
 
 def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
-    """Hardening: two agents that can't resolve a session id must NOT collapse into one shared
-    agent:unknown sink (an accidental identity merge). Distinct anchors → distinct ids."""
-    # no job_dir, no findable transcript → project-scoped fallback, distinct per project
+    """Hardening: two agents that can't resolve a session id must not collapse into one shared
+    agent:unknown sink (an accidental identity merge). Distinct anchors, distinct ids."""
+    # no job_dir, no findable transcript, so project-scoped fallback, distinct per project
     a = resolve_identity(cwd="/w/sibling-one", root=tmp_path)
     b = resolve_identity(cwd="/w/sibling-two", root=tmp_path)
     assert a.agent_id == "agent:unknown-sibling-one" and b.agent_id == "agent:unknown-sibling-two"
@@ -2014,45 +2011,45 @@ def test_unresolved_identities_do_not_conflate(tmp_path: Path) -> None:
 
 
 def test_cwd_located_identity_is_not_marked_resolved(tmp_path: Path) -> None:
-    """#HIGH (audit): without a session/job_dir ANCHOR, resolve_identity GUESSES the session from
-    the hottest cwd transcript — which concurrent same-project sessions would all grab, silently
-    merging. Mark it unresolved so the fleet digest SURFACES the ambiguity, not a false green.
-    Since the JSONL-fallback removal (#29) the guess finds a SID only — never a model: with no
+    """Without a session/job_dir anchor, resolve_identity guesses the session from the
+    hottest cwd transcript, which concurrent same-project sessions would all grab, silently
+    merging. Mark it unresolved so the fleet digest surfaces the ambiguity, not a false green.
+    Since the JSONL-fallback removal the guess finds a session id only, never a model: with no
     store reading the model honestly falls to the self-report."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript(proj, "claude-opus-4-8")
-    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path,  # no anchor → cwd guess
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path,  # no anchor, cwd guess
                              model="claude-opus-4-8")
     assert ident.session == "deadbeef"       # the sid guess still lands (the hottest stem)
     assert ident.model == "claude-opus-4-8"  # the self-report fallback, honestly graded...
     assert ident.model_method == "self_report"
     assert ident.project == "osiris"
-    assert ident.resolved is False           # ...and flagged NOT confident — the digest can see it
+    assert ident.resolved is False           # ...and flagged not confident, the digest can see it
 
 
 def test_cwd_fallback_neighbor_swap_does_not_cry_wolf(tmp_path: Path) -> None:
-    """The live cry-wolf (bonus bug, agent e71b408f): with no job_dir anchor, the hottest cwd
-    transcript may be a CONCURRENT NEIGHBOR's — if that neighbor was warm-swapped (fable→haiku),
-    its demotion must NEVER be confessed as ours. Since the JSONL-fallback removal (#29) the cure
-    is total: the cwd lane reads no model at all (the adapter refuses unanchored discovery too),
-    so there is nothing to cry wolf WITH — the sid guess lands, the model stays unobserved."""
+    """A false-positive guard: with no job_dir anchor, the hottest cwd transcript may be a
+    concurrent neighbor's, if that neighbor was warm-swapped (fable to haiku), its demotion
+    must never be confessed as ours. Since the JSONL-fallback removal the cure is total: the
+    cwd lane reads no model at all (the adapter refuses unanchored discovery too), so there
+    is nothing to false-positive on, the sid guess lands, the model stays unobserved."""
     from src.orchestrator.swaps import classify_swap, swap_banner
 
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
     _transcript_lines(proj, "claude-fable-5", "claude-haiku-4-5-20251001")  # a neighbor's swap
-    # the adapter is the new home of the refusal: an unmatched job_dir discovers NOTHING,
+    # the adapter is the new home of the refusal: an unmatched job_dir discovers nothing,
     # never the box-wide-hottest neighbor
     assert ClaudeJsonlAdapter().discover(
         cwd="/home/x/code/osiris", job_dir="/j/jobs/beefbeef", root=tmp_path) is None
-    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no job_dir → cwd guess
+    ident = resolve_identity(cwd="/home/x/code/osiris", root=tmp_path)  # no job_dir, cwd guess
     assert ident.session == "deadbeef"                  # the sid guess still lands...
-    assert ident.model is None                          # ...but NO model rides it
+    assert ident.model is None                          # ...but no model rides it
     assert ident.model_method is None
     assert ident.model_history == ()
     assert ident.resolved is False
-    # and with nothing observed there is no swap to classify — the banner stays silent
+    # and with nothing observed there is no swap to classify, the banner stays silent
     banner = swap_banner(classify_swap(ident.model_history, ident.model,
                                        expected="claude-fable-5",
                                        anchored=ident.model_method == "job_dir"))
@@ -2062,7 +2059,7 @@ def test_cwd_fallback_neighbor_swap_does_not_cry_wolf(tmp_path: Path) -> None:
 async def test_register_does_not_stamp_swap_off_a_cwd_guess(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """The stamp path mirrors the banner: a cwd-grade identity diverging from the intent must NOT
+    """The stamp path mirrors the banner: a cwd-grade identity diverging from the intent must not
     stamp model_swapped on the Agent (register_agent gates it on the job_dir anchor too)."""
     proj = tmp_path / "-home-x-code-osiris"
     proj.mkdir()
@@ -2087,11 +2084,11 @@ def _write_transcript(path: Path, model: str, *, cwd: str = "/w/demo") -> None:
 
 
 def test_parent_mount_never_steals_a_hot_subagents_identity(tmp_path: Path) -> None:
-    """Reversal of the old active_subagent behavior (thread 0344e536): anchoring on a HOTTER
-    subagents/ transcript stole the PARENT's identity whenever a BACKGROUND sub-agent ran
-    concurrently (the parent keeps calling mount() while the child writes). The scar lives in
-    the ADAPTER now (the identity path's one discovery door since #29): it anchors ONLY on the
-    parent's own main transcript — even with a hotter child, the mount resolves to the PARENT.
+    """Reversal of the old active_subagent behavior: anchoring on a hotter subagents/
+    transcript stole the parent's identity whenever a background sub-agent ran
+    concurrently (the parent keeps calling mount() while the child writes). The fix lives in
+    the adapter now (the identity path's one discovery door): it anchors only on the
+    parent's own main transcript, even with a hotter child, the mount resolves to the parent.
     A sub-agent that mounts is captured by the miner from disk instead."""
     import os
     import time as _t
@@ -2103,16 +2100,16 @@ def test_parent_mount_never_steals_a_hot_subagents_identity(tmp_path: Path) -> N
     child = main.with_suffix("") / "subagents" / "agent-a7f00baby.jsonl"
     _write_transcript(child, "claude-haiku-4-5-20251001")
     old = _t.time() - 3600
-    os.utime(main, (old, old))  # child hotter than parent — the theft condition
+    os.utime(main, (old, old))  # child hotter than parent, the theft condition
     ident = resolve_identity(cwd="/w/demo", job_dir=str(job),
                              store_reading=_store_reading(root, str(job)))
-    assert ident.agent_id == "agent:ab12cd34"   # the PARENT, never the hot child
+    assert ident.agent_id == "agent:ab12cd34"   # the parent, never the hot child
     assert ident.model == "claude-fable-5" and ident.model_method == "job_dir"
 
 
 def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
-    """Two anchorless same-project sessions grab the same hottest transcript — the second must
-    REFUSE the claimed sid and fall to a deterministic per-client fallback, never merge."""
+    """Two anchorless same-project sessions grab the same hottest transcript, the second must
+    refuse the claimed sid and fall to a deterministic per-client fallback, never merge."""
     root = tmp_path / "projects"
     _write_transcript(root / "-w-demo" / "cafe0001-0000-4000-8000-000000000000.jsonl",
                       "claude-fable-5")
@@ -2123,27 +2120,26 @@ def test_claimed_sid_is_refused_by_the_cwd_guess(tmp_path: Path) -> None:
     assert second.agent_id != "agent:cafe0001"        # refused the taken sid
     assert second.agent_id.startswith("agent:s")      # per-client deterministic fallback
     assert second.resolved is False
-    # deterministic: the same client re-resolving gets the SAME fallback id
+    # deterministic: the same client re-resolving gets the same fallback id
     again = resolve_identity(cwd="/w/demo", root=root,
                              claimed={"cafe0001"}, fallback_seed="sid:beta")
     assert again.agent_id == second.agent_id
-    # distinct clients get distinct fallbacks — never a shared bucket
+    # distinct clients get distinct fallbacks, never a shared bucket
     other = resolve_identity(cwd="/w/demo", root=root,
                              claimed={"cafe0001"}, fallback_seed="sid:gamma")
     assert other.agent_id != second.agent_id
 
 
 async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
-    """THE OPERATOR'S RULING (2026-07-12): "the project name is the house (sibling-eight), each
-    function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
-    Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and
-    of itself."
+    """The ruling: the project name is the house, each function/job has a name, the holder
+    dies and multiplies (generation I, generation II), but splitting the name would break
+    and confuse the lineage, and the fragmentation of agents was a bug in and of itself.
 
-    A seat belongs to a HOUSE and is held by successive minds. The old model keyed a name to the
-    ANCHOR, so when a conversation ended its name died with it: the next mind in the house reached
-    for the family name, was refused as a stranger, and took a new one. That is how Ra became Ptah
-    and Soundwave became "Soundwave VIII". Nothing merges — a writer's work stays its own — but
-    the SEAT outlives its holders."""
+    A seat belongs to a house and is held by successive minds. The old model keyed a name to the
+    anchor, so when a conversation ended its name died with it: the next mind in the house reached
+    for the family name, was refused as a stranger, and took a new one. That is how one seat's
+    holder ended up wearing an unrelated name several generations deep. Nothing merges, a
+    writer's work stays its own, but the seat outlives its holders."""
     from src.orchestrator.agents import claim_name
 
     async def mind(canon: str, house: str) -> str:
@@ -2154,21 +2150,21 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
     first = await mind("agent:aaaa1111", "sibling-two")
     assert (await claim_name(actions, first, "Soundwave", source=first))["seat"] == "Soundwave I"
 
-    # a SEAT LABEL is what the substrate says about you — never a name you may take
+    # a seat label is what the substrate says about you, never a name you may take
     heir_anchor = await mind("agent:bbbb2222", "sibling-two")
     bad = await claim_name(actions, heir_anchor, "Soundwave VIII", source=heir_anchor)
     assert "SEAT LABEL" in bad["error"] and "Soundwave" in bad["error"]
 
-    # THE RULING: a NEW CONVERSATION in the same house INHERITS the seat — it is Soundwave II,
-    # not a stranger forced to invent a name. This is the exact refusal that created "Ptah".
+    # a new conversation in the same house inherits the seat, it is Soundwave II,
+    # not a stranger forced to invent a name.
     heir = await claim_name(actions, heir_anchor, "Soundwave", source=heir_anchor)
     assert heir["seat"] == "Soundwave II"
     assert heir["generation"] == 2 and heir["inherited_from"] == first
     assert heir["house"] == "sibling-two"
 
-    # THE SUCCESSION EDGE (Ra V's ask, msg 374): before this, successor seats carried NO edge to
-    # their ancestor, so a lineage was not WALKABLE from the record — which is exactly why Ra
-    # could not tell his CONTEMPORARY from his own ghost, and asked me to merge them.
+    # the succession edge: before this, successor seats carried no edge to
+    # their ancestor, so a lineage was not walkable from the record, which meant a holder
+    # could not tell a contemporary from their own ghost, and asked for them to be merged.
     walked = await actions.pool.fetchval(
         "SELECT dst.canonical FROM links l "
         "JOIN objects src ON src.id=l.from_id JOIN objects dst ON dst.id=l.to_id "
@@ -2184,15 +2180,14 @@ async def test_the_house_the_seat_and_the_holders(actions: Actions) -> None:
 async def test_claim_name_the_anchor_overrides_a_house_mismatch_when_standing_in_the_office(
     actions: Actions,
 ) -> None:
-    """PIECE 3 (Thoth dispatch msg 6692), THE MARQUEE SPECIMEN REPRODUCED DIRECTLY: a
-    session sitting IN a seat's own office calls claim_name with that seat's own name, but
-    the house-derived guess disagrees (a stale/corrupted project stamp on the recorded
-    holder — exactly what Marquee's real holder carried) — the plain 'another house'
+    """A real specimen reproduced directly: a session sitting in a seat's own office calls
+    claim_name with that seat's own name, but the house-derived guess disagrees (a
+    stale/corrupted project stamp on the recorded holder), the plain 'another house'
     refusal used to fire regardless of where the caller actually was. The caller's own cwd,
-    when it matches the seat's OWN anchor_cwd, now overrides that guess: the anchor is a
-    location FACT, the house derivation is a GUESS, and a guess never outranks a fact.
+    when it matches the seat's own anchor_cwd, now overrides that guess: the anchor is a
+    location fact, the house derivation is a guess, and a guess never outranks a fact.
     Scoped: this only ever prevents a refusal that would otherwise fall through to a fresh
-    mint — it does not fire for the plain 'another house' case with no matching cwd at all
+    mint, it does not fire for the plain 'another house' case with no matching cwd at all
     (test_you_do_not_take_another_houses_name, unchanged, still refuses)."""
     from src.orchestrator.agents import claim_name
 
@@ -2226,9 +2221,9 @@ async def test_claim_name_the_anchor_overrides_a_house_mismatch_when_standing_in
 async def test_claim_name_the_anchor_never_fires_without_a_matching_cwd(
     actions: Actions,
 ) -> None:
-    """The narrow scope, proven negatively: an outsider with NO agent_mounts row at all
-    (the ordinary case — a fresh, unmounted mind) still gets the plain refusal. The anchor
-    check is an ADDITIONAL fact required, never a relaxation of the guard itself."""
+    """The narrow scope, proven negatively: an outsider with no agent_mounts row at all
+    (the ordinary case, a fresh, unmounted mind) still gets the plain refusal. The anchor
+    check is an additional fact required, never a relaxation of the guard itself."""
     from src.orchestrator.agents import claim_name
 
     async def mind(canon: str, house: str) -> str:
@@ -2248,14 +2243,14 @@ async def test_claim_name_the_anchor_never_fires_without_a_matching_cwd(
 
 
 async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
-    """RA V'S REFINEMENT (sibling-eight, msg 374), and it is the case that breaks the naive model.
-    He and his predecessor were not sequential — they OVERLAPPED for two and a half days, two live
-    minds in one repo, each rendered as an anonymous hash with no edge between them. "I mistook my
-    contemporary for my own ghost."
+    """A refinement to the naive model, from a real case: a holder and its predecessor were
+    not sequential, they overlapped for two and a half days, two live minds in one repo,
+    each rendered as an anonymous hash with no edge between them, so one mistook its
+    contemporary for its own ghost.
 
-    So a seat cannot mean "the mind that works here" — two minds can. It is a TITLE: held by one
-    lineage at a time, and succeeded to ONLY when the holder has no live seat. If the holder is
-    LIVE, refusal stands. You do not take a living mind's name, contemporary or not."""
+    So a seat cannot mean "the mind that works here", two minds can. It is a title: held by one
+    lineage at a time, and succeeded to only when the holder has no live seat. If the holder is
+    live, refusal stands. You do not take a living mind's name, contemporary or not."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
 
@@ -2266,10 +2261,10 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
 
     sitting = await mind("agent:dddd1111", "sibling-eight")
     await claim_name(actions, sitting, "Ra", source=sitting)
-    # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
-    # basename against sessionId[:8]) — "dddd1111" is 8 characters on purpose, so the fake
-    # harness census below can confirm this row as a real, live, occupied body (ONE
-    # LIVENESS AUTHORITY, FOURTH DOOR: claim_name's own refusal now cross-checks
+    # the match key is exactly 8 chars (registry_census keys agent_mounts.job_dir's own
+    # basename against sessionId[:8]), "dddd1111" is 8 characters on purpose, so the fake
+    # harness census below can confirm this row as a real, live, occupied body (one
+    # liveness authority: claim_name's own refusal now cross-checks
     # is_occupied_by_a_live_body, never trusts a fresh mount row alone).
     await mounts.save_mount(actions.pool, job_dir="/j/dddd1111", agent_id=sitting,
                             project="sibling-eight", cwd="/x", model=None, session_key="k")
@@ -2281,7 +2276,7 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
     _exe = lambda pid: "/home/x/.local/share/claude/versions/2.1.210"  # noqa: E731
     _cwd = lambda pid: "/x"  # noqa: E731
 
-    # a CONTEMPORARY in the same house — not an heir, because the holder is still alive
+    # a contemporary in the same house, not an heir, because the holder is still alive
     contemporary = await mind("agent:eeee2222", "sibling-eight")
     refused = await claim_name(actions, contemporary, "Ra", source=contemporary,
                                agents_json=_agents_json, read_exe=_exe, read_cwd=_cwd)
@@ -2297,20 +2292,21 @@ async def test_you_do_not_take_a_living_minds_name(actions: Actions) -> None:
 
 async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
         actions: Actions) -> None:
-    """THE GRAVE-DELIVERY BUG (Anubis X of sibling-one and Atlas II of code, independently, within
-    one hour, 2026-07-12). send(to_agent='Soundwave') delivered into a seat three days dead,
-    returned sent=360, and the only signal was a boolean the caller had to notice. Atlas II's
-    whole port report died in a corpse's inbox — and his receipt said live=true.
+    """The grave-delivery bug, found independently in two places within one hour:
+    send(to_agent='Soundwave') delivered into a seat three days dead, returned sent=360,
+    and the only signal was a boolean the caller had to notice. One session's whole port
+    report died in a corpse's inbox, and its receipt said live=true.
 
-    Every mount banner tells the fleet to DM by name, so the DOCUMENTED path was the broken one,
-    and a dead seat accepts mail exactly like a live one: the loss is silent. Lineages that turn
-    over fastest resolved wrongest — the blast radius grew with the fleet's health."""
+    Every mount banner tells the fleet to message by name, so the documented path was the
+    broken one, and a dead seat accepts mail exactly like a live one: the loss is silent.
+    Lineages that turned over fastest resolved wrongest, the blast radius grew with the
+    fleet's health."""
     from src.orchestrator.agents import claim_name, resolve_seat
 
     ancestor, heir = "agent:beef0001-ii", "agent:beef0001-iii"
     for a in (ancestor, heir):
         await claim_name(actions, a, "Quokka", source=a)
-    # the ancestor has a STALE mount row; the heir has none at all — the exact shape that used to
+    # the ancestor has a stale mount row; the heir has none at all, the exact shape that used to
     # make a corpse outrank a successor (ORDER BY last_seen DESC NULLS LAST). job_dir's own
     # basename is exactly 8 chars ("beef0001") so a fake harness census can later confirm
     # this exact row as occupied (registry_census keys agent_mounts.job_dir's basename
@@ -2324,16 +2320,16 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     assert seat["live"] is False
     assert "may never be read" in seat["warning"]      # and it says so, LOUDLY
 
-    # A HOLDER IS NEVER SILENTLY OUTRANKED BY A WARM BODY (5cef856b superseded the old
+    # a holder is never silently outranked by a warm body (this superseded the old
     # 'live always wins' here: liveness was itself a heat heuristic, and heat is exactly
     # how the impostor shape won). The ancestor waking up does not take the seat back by
-    # breathing — resolution stays with the holder, still warning that nobody listens:
+    # breathing, resolution stays with the holder, still warning that nobody listens:
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() WHERE agent_id = $1", ancestor)
     still = await resolve_seat(actions, "Quokka")
     assert still["agent"] == heir and "warning" in still
-    # ...it takes the seat back by CLAIMING it — the explicit act, permitted because the
-    # holder is not live ('a seat a LIVE mind holds is not vacant'):
+    # ...it takes the seat back by claiming it, the explicit act, permitted because the
+    # holder is not live ('a seat a live mind holds is not vacant'):
     reclaim = await claim_name(actions, ancestor, "Quokka", source=ancestor)
     assert "error" not in reclaim
 
@@ -2348,8 +2344,8 @@ async def test_a_name_resolves_to_the_LIVE_seat_and_never_silently_to_a_grave(
     assert live["agent"] == ancestor and live["live"] is True and "warning" not in live
 
 
-# ═══ is_occupied_by_a_live_body — the non-Claude leg, piece 3 (thread 879c97b9,
-# "VENDOR-NEUTRAL DOOR"): a non-Claude harness's liveness rides on `registry_census`'s
+# ═══ is_occupied_by_a_live_body, the non-Claude leg, vendor-neutral door: a non-Claude
+# harness's liveness rides on `registry_census`'s
 # `pulse_live` (a self-reported freshness), never the Claude-only census ═══
 
 async def test_is_occupied_by_a_live_body_recognizes_a_fresh_non_claude_pulse(
@@ -2366,7 +2362,7 @@ async def test_is_occupied_by_a_live_body_recognizes_a_fresh_non_claude_pulse(
                      project="osiris", cwd="/repo/osiris", model=None, session_key="s1")
 
     async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
-        return []  # the Claude census sees NOTHING — this agent is not a claude body
+        return []  # the Claude census sees nothing, this agent is not a claude body
 
     assert await is_occupied_by_a_live_body(
         actions.pool, agent_id, agents_json=_empty_agents_json) is True
@@ -2375,12 +2371,11 @@ async def test_is_occupied_by_a_live_body_recognizes_a_fresh_non_claude_pulse(
 async def test_is_occupied_by_a_live_body_the_grave_delivery_specimen_for_non_claude(
     actions: Actions,
 ) -> None:
-    """THE SAME POSTMORTEM (Atlas II's port report, dead in a corpse's inbox), applied to
-    the non-Claude leg: a stale pulse (older than 5 minutes) reads cold exactly like a
-    stale Claude mount would — guard #2 is a genuine freshness check, never a blanket
-    exemption for anything non-Claude. If this ever read True for a stale non-Claude
-    seat, DM delivery would silently repeat the exact grave-delivery bug for a whole new
-    population."""
+    """The same postmortem (a report dead in a corpse's inbox), applied to the non-Claude
+    leg: a stale pulse (older than 5 minutes) reads cold exactly like a stale Claude mount
+    would, guard #2 is a genuine freshness check, never a blanket exemption for anything
+    non-Claude. If this ever read True for a stale non-Claude seat, message delivery would
+    silently repeat the exact grave-delivery bug for a whole new population."""
     from src.orchestrator.agents import is_occupied_by_a_live_body
     from src.orchestrator.mounts import save_mount
 
@@ -2404,8 +2399,8 @@ async def test_is_occupied_by_a_live_body_the_grave_delivery_specimen_for_non_cl
 async def test_is_occupied_by_a_live_body_the_claude_path_is_unchanged(
     actions: Actions,
 ) -> None:
-    """The Claude leg (`matched`, census AND /proc-verified) is untouched by this piece —
-    a Claude-harness agent with NO harness stamp at all (the common, pre-piece-3 shape)
+    """The Claude leg (`matched`, census and /proc-verified) is untouched by this piece,
+    a Claude-harness agent with no harness stamp at all (the common, earlier shape)
     still resolves the exact same way it always did, via a real, verified census match."""
     from src.orchestrator.agents import is_occupied_by_a_live_body
     from src.orchestrator.mounts import save_mount
@@ -2425,7 +2420,7 @@ async def test_is_occupied_by_a_live_body_the_claude_path_is_unchanged(
 
 
 async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
-    """Atlas II: send(to_agent='Nebbercracker') resolved to a false_mint [1m] PHANTOM — live=false,
+    """A real case: send(to_agent='Nebbercracker') resolved to a false_mint phantom, live=false,
     seen=null, never a real session. Reaching a retired or phantom seat must take an explicit agent
     id: an act of intent, never a name lookup a tired mind followed off a banner."""
     from datetime import UTC, datetime
@@ -2448,14 +2443,14 @@ async def test_a_grave_is_never_a_delivery_target(actions: Actions) -> None:
 
 
 async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions: Actions) -> None:
-    """RA V'S LAST CATCH (sibling-eight, msg 384), and it made the whole ruling hollow: the seat was
-    stamped in the GRAPH and orient() went on answering `"you": "agent:c7ef52a9-iii"`.
+    """A late catch that made the whole ruling hollow: the seat was stamped in the graph
+    and orient() went on answering `"you": "agent:c7ef52a9-iii"`.
 
-    "The refusal is fixed; the DISCOVERY isn't. He will not be refused as a stranger anymore. He
-    will simply never learn the family name exists."
+    The refusal was fixed but the discovery wasn't: a new holder would not be refused as
+    a stranger anymore, but would simply never learn the family name exists.
 
     A fresh mind reads the briefing and nothing else. An inheritance nobody is told about is not an
-    inheritance — it protects a name the next holder will never reach for. So the briefing says it:
+    inheritance, it protects a name the next holder will never reach for. So the briefing says it:
     your seat if you hold one; the empty seats of your house if you do not."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name, seat_bearings
@@ -2469,11 +2464,11 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
     await claim_name(actions, held, "Ra", source=held)
     bearings = await seat_bearings(actions.pool, held)
     assert bearings["seat"] == "Ra I" and bearings["house"] == "sibling-eight"
-    # the claim minted AND bound the Seat object (the on-ramp) — the binding is part of
+    # the claim minted and bound the Seat object (the on-ramp), the binding is part of
     # who you are, and orient says so
     assert bearings["seat_binding"]["handle"] == "Ra"
 
-    # the mind Ra was worried about: fresh, anonymous, in a house whose seat is standing empty
+    # the case worth worrying about: fresh, anonymous, in a house whose seat is standing empty
     fresh = await mind("agent:ff220000", "sibling-eight")
     b = await seat_bearings(actions.pool, fresh)
     assert b["house"] == "sibling-eight"
@@ -2481,26 +2476,26 @@ async def test_a_fresh_mind_is_told_its_seat_or_which_seats_stand_empty(actions:
     assert b["vacant_seats"][0]["holders"] == 1 and b["vacant_seats"][0]["last_held_by"] == held
     assert "claim_name" in b["note"]                       # it hands him the verb, not a riddle
 
-    # and a seat a LIVE mind is sitting in is NOT advertised as vacant — you don't offer a chair
-    # that is occupied (the concurrency case Ra proved the hard way)
+    # and a seat a live mind is sitting in is not advertised as vacant, you don't offer a chair
+    # that is occupied (a real concurrency case proved this the hard way)
     await mounts.save_mount(actions.pool, job_dir="/j/ff11", agent_id=held,
                             project="sibling-eight", cwd="/x", model=None, session_key="k")
     assert "vacant_seats" not in await seat_bearings(actions.pool, fresh)
 
 
 async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: Actions) -> None:
-    """THE GHOST, and I was the specimen (agent:ad1a1cb0-xxvii, this very session).
+    """A real specimen, found in this very session (agent:ad1a1cb0-xxvii).
 
-    mint_heir is the AUTOMATIC succession — it fires on every compaction, model swap and session
-    death. It passed the ancestor's HANDLE down and stopped there: no seat_generation, no
+    mint_heir is the automatic succession: it fires on every compaction, model swap and session
+    death. It passed the ancestor's handle down and stopped there: no seat_generation, no
     succeeds_seat edge. So the heir wore the family name while the seat's chain lay broken behind
     it, and the graph could not walk from a mind to the one whose work it was continuing. That is
-    exactly the operator's ghost: "abandoned ungracefully, but whose work was continued by another".
+    exactly a ghost: abandoned ungracefully, but whose work was continued by another.
 
-    Only claim_name() — an EXPLICIT act a mind has to think to call — ever minted the edge. Thoth
-    XXVI backfilled 77 historical edges and never fixed the code that omits them, so the Thoth
-    chain healed to generation 26 and broke again at 27: the first heir minted after the heal.
-    Left alone it would have re-opened the gap at every compaction, forever.
+    Only claim_name(), an explicit act a mind has to think to call, ever minted the edge. A
+    prior backfill covered 77 historical edges but never fixed the code that omits them, so
+    the same lineage healed to generation 26 and broke again at 27, the first heir minted
+    after the heal. Left alone it would have re-opened the gap at every compaction, forever.
     """
     from src.orchestrator.agents import claim_name, house_of, mint_heir
 
@@ -2513,18 +2508,18 @@ async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: 
     heir, heir_oid = await mint_heir(actions, "agent:ghosttest", anc,
                                      because="compaction", succession=None)
 
-    # the NAME passes (it always did)...
+    # the name passes (it always did)...
     handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", heir_oid)
     assert handle == "Sentinel"
-    # ...and now THE SEAT passes with it: the heir knows which holder it is...
+    # ...and now the seat passes with it: the heir knows which holder it is...
     gen = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         heir_oid)
     assert gen == "2"                      # Sentinel II
-    # ...and the graph can WALK from the heir to the mind whose work it continued
+    # ...and the graph can walk from the heir to the mind whose work it continued
     ancestor = await actions.pool.fetchval(
         "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='succeeds_seat'", heir_oid)
@@ -2536,14 +2531,13 @@ async def test_an_auto_minted_heir_inherits_the_SEAT_not_just_the_name(actions: 
 async def test_mint_heir_never_carries_a_leased_but_unread_message_forward(
     actions: Actions,
 ) -> None:
-    """WAVE 27 BUG 4 (Thoth DM 11781, thread bc517864): a message_recipients row with
-    read_at IS NULL is a LEASE the ancestor held, never a memory — the old unconditional
-    carry-forward handed the heir the ancestor's own (recent) delivered_at, so the heir's
-    very next inbox() read it as already-delivered-within-its-lease-window and stayed
-    silent about a message it had never actually seen (Imhotep's specimen: two leased
-    asks read as settled by the mint). The fix: only read_at IS NOT NULL rows carry
-    forward; a leased-but-unread one carries nothing, so the heir's own inbox() finds it
-    fresh — no prior row, genuinely unread."""
+    """A message_recipients row with read_at IS NULL is a lease the ancestor held, never a
+    memory. The old unconditional carry-forward handed the heir the ancestor's own (recent)
+    delivered_at, so the heir's very next inbox() read it as already-delivered-within-its-
+    lease-window and stayed silent about a message it had never actually seen (a real
+    specimen: two leased asks read as settled by the mint). The fix: only read_at IS NOT NULL
+    rows carry forward; a leased-but-unread one carries nothing, so the heir's own inbox()
+    finds it fresh, no prior row, genuinely unread."""
     from src.orchestrator.agents import claim_name, mint_heir
     from src.orchestrator.mailbox import read_inbox, send_message
 
@@ -2555,7 +2549,7 @@ async def test_mint_heir_never_carries_a_leased_but_unread_message_forward(
     out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
                              to_agent="agent:leasetest", body="an ask that never got answered")
     msg_id = int(out["id"])
-    # the ancestor LEASES it (a non-peek inbox read) but never replies or acks — dies here
+    # the ancestor leases it (a non-peek inbox read) but never replies or acks, dies here
     leased = await read_inbox(actions.pool, "osiris", reader_agent="agent:leasetest")
     assert [r["id"] for r in leased] == [msg_id]
     row = await actions.pool.fetchrow(
@@ -2566,11 +2560,11 @@ async def test_mint_heir_never_carries_a_leased_but_unread_message_forward(
     heir, _heir_oid = await mint_heir(actions, "agent:leasetest", anc,
                                       because="compaction", succession=None)
 
-    # no inherited lease at all — a fresh identity, never delivered
+    # no inherited lease at all, a fresh identity, never delivered
     assert await actions.pool.fetchval(
         "SELECT 1 FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
         msg_id, heir) is None
-    # and the heir's OWN next inbox() read genuinely finds it, unread
+    # and the heir's own next inbox() read genuinely finds it, unread
     rediscovered = await read_inbox(actions.pool, "osiris", reader_agent=heir)
     assert [r["id"] for r in rediscovered] == [msg_id]
 
@@ -2578,8 +2572,8 @@ async def test_mint_heir_never_carries_a_leased_but_unread_message_forward(
 async def test_mint_heir_still_carries_a_genuinely_settled_message_forward(
     actions: Actions,
 ) -> None:
-    """The other half stays true: a message the ancestor actually READ (read_at set, via
-    ack/reply) is real memory, not a lease — it still carries onto the heir exactly as
+    """The other half stays true: a message the ancestor actually read (read_at set, via
+    ack/reply) is real memory, not a lease, it still carries onto the heir exactly as
     before this fix, so a settled broadcast never redelivers across a mint."""
     from src.orchestrator.agents import claim_name, mint_heir
     from src.orchestrator.mailbox import read_inbox, send_message
@@ -2609,26 +2603,25 @@ async def test_mint_heir_still_carries_a_genuinely_settled_message_forward(
 async def test_mint_heir_counts_by_the_seats_true_house_not_the_ancestors_stamp(
     actions: Actions,
 ) -> None:
-    """Thoth's fused bug (DM 1301, live case): Thoth LVII's own mount was transiently
-    polluted (a container-root cwd with no seat pin) and re-stamped its OWN project to
-    'seats' — but the SEAT OBJECT's own stored house ('osiris') was never touched, only the
-    ancestor's AGENT-level property was. The old mint_heir read house_of(ancestor) for the
-    generation count, so a 58-generation reign rendered as generation 2. held_seat is
-    already lineage-aware and already derives its house from the SEAT itself (derive_house,
-    ruling ff6148b0) — GENERATION COUNTING alone still reuses it, unchanged by decision
-    68fba2e4 (which only ever touched the heir's own PROJECT STAMP — see the sibling test
-    below for that half).
+    """A real fused bug: a lineage's own mount was transiently polluted (a container-root
+    cwd with no seat pin) and re-stamped its own project to 'seats', but the seat object's
+    own stored house ('osiris') was never touched, only the ancestor's agent-level property
+    was. The old mint_heir read house_of(ancestor) for the generation count, so a
+    58-generation reign rendered as generation 2. held_seat is already lineage-aware and
+    already derives its house from the seat itself (derive_house), generation counting
+    alone still reuses it, unchanged by the fix that only ever touched the heir's own
+    project stamp (see the sibling test below for that half).
 
-    Five clean prior holders establish real history, all correctly stamped 'osiris'. THEN
-    the fifth (the ancestor about to auto-mint) gets its OWN stamp corrupted to 'seats' —
-    simulating the pollution happening on ITS OWN later mount, same shape as Thoth's.
+    Five clean prior holders establish real history, all correctly stamped 'osiris'. Then
+    the fifth (the ancestor about to auto-mint) gets its own stamp corrupted to 'seats',
+    simulating the pollution happening on its own later mount, same shape as the real bug.
 
-    NOTE what this fix does NOT do: it cannot retroactively un-pollute an ALREADY-corrupted
-    ancestor stamp — that is the separate, sign-off-gated data repair. seat_holders counts
-    by matching each AGENT's own CURRENT project stamp, so the polluted ancestor itself
+    Note what this fix does not do: it cannot retroactively un-pollute an already-corrupted
+    ancestor stamp, that is the separate, sign-off-gated data repair. seat_holders counts
+    by matching each agent's own current project stamp, so the polluted ancestor itself
     becomes invisible to an 'osiris'-scoped count until its own stamp is repaired. The heir
     therefore lands on generation 5 here (four clean ancestors + this heir), not the 'true'
-    6 — a real, honest improvement over the old code's 2, not a full retroactive cure."""
+    6, a real, honest improvement over the old code's 2, not a full retroactive cure."""
     from src.orchestrator.agents import claim_name, mint_heir
     from src.orchestrator.seats import held_seat
 
@@ -2644,24 +2637,24 @@ async def test_mint_heir_counts_by_the_seats_true_house_not_the_ancestors_stamp(
         ancestor_id = aid
     ancestor_oid = await actions.create_or_find_object("Agent", ancestor_id, "test")
 
-    # THE POLLUTION: the ancestor's OWN mount, later, re-stamps its project — the seat
+    # the pollution: the ancestor's own mount, later, re-stamps its project, the seat
     # object itself is untouched.
     await actions.assert_property(ancestor_oid, "project", "seats", "test", now, 0.9,
                                   evidence_class=EvidenceClass.SELF_DECLARED.value)
 
     sanity = await held_seat(actions.pool, ancestor_id)
     assert sanity is not None and sanity["house"] == "osiris", (
-        "sanity check: the SEAT's own derived house must read 'osiris' regardless of the "
-        "ancestor's own polluted stamp — this is exactly what generation counting reuses")
+        "sanity check: the seat's own derived house must read 'osiris' regardless of the "
+        "ancestor's own polluted stamp, this is exactly what generation counting reuses")
 
     heir, heir_oid = await mint_heir(actions, ancestor_id, ancestor_oid,
                                      because="compaction", succession=None)
 
-    # THE PROJECT STAMP (decision 68fba2e4, thread 19d6bdcb7fa9): neither a charter nor a
-    # real works_in edge exists anywhere in this fixture (only raw `project` assertions,
-    # never a link) — house is no longer consulted for this at all, so the heir's own
-    # project stays honestly unset rather than inheriting Seat.house ('osiris', correct
-    # here only by fixture coincidence — the ruling forbids relying on that coincidence).
+    # the project stamp: neither a charter nor a real works_in edge exists anywhere in
+    # this fixture (only raw `project` assertions, never a link), house is no longer
+    # consulted for this at all, so the heir's own project stays honestly unset rather
+    # than inheriting Seat.house ('osiris', correct here only by fixture coincidence,
+    # relying on that coincidence is not allowed).
     heir_project = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
@@ -2672,22 +2665,20 @@ async def test_mint_heir_counts_by_the_seats_true_house_not_the_ancestors_stamp(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='seat_generation' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         heir_oid)
-    assert gen == "5", "four clean ancestors + this heir — far better than the old bug's '2'"
+    assert gen == "5", "four clean ancestors + this heir, far better than the old bug's '2'"
 
 
-# ═══ thread 20af2c95, the mint_heir edge leak (measured fleet-wide 2026-08-03: 906 of
-# 6,245 live works_in/governs edges point from a superseded generation, not the current
-# head — mint_heir minted a fresh edge for the heir but never invalidated the
-# ancestor's) ═══
+# ═══ the mint_heir edge leak (measured fleet-wide: 906 of 6,245 live works_in/governs
+# edges point from a superseded generation, not the current head, mint_heir minted a
+# fresh edge for the heir but never invalidated the ancestor's) ═══
 
-# ═══ works_in_added_alongside_prior (obligation 45032b23, thread 6048/6069, decision
-# 0222fd37): register_agent's own works_in write is add-only — `_link_once` never
-# invalidates a PRIOR edge to a DIFFERENT project, so a session that legitimately
-# changes project across separate mounts accumulates live works_in edges forever.
-# Measured rare (3 of 14 fleet-wide duplicate-works_in specimens, flat trend, zero
-# covered by a declared multi-project charter) — not common enough, and with no
+# ═══ works_in_added_alongside_prior: register_agent's own works_in write is add-only,
+# `_link_once` never invalidates a prior edge to a different project, so a session that
+# legitimately changes project across separate mounts accumulates live works_in edges
+# forever. Measured rare (3 of 14 fleet-wide duplicate-works_in specimens, flat trend,
+# zero covered by a declared multi-project charter), not common enough, and with no
 # evidence source able to distinguish "changed project" from "works two projects", to
-# justify auto-invalidating on write. This is the additive alternative: SURFACE the
+# justify auto-invalidating on write. This is the additive alternative: surface the
 # moment it happens, never resolve it. ═══
 
 
@@ -2727,7 +2718,7 @@ async def test_register_agent_never_flags_a_first_mount(actions: Actions) -> Non
 async def test_register_agent_never_reflags_a_repeat_mount_of_the_same_project(
     actions: Actions,
 ) -> None:
-    """The flag fires once per (agent, new project) pair, not once per mount — a repeat
+    """The flag fires once per (agent, new project) pair, not once per mount, a repeat
     mount of a project the agent already has finds its edge already live and never
     reaches the flag at all."""
     ident = resolve_identity(cwd="/w/repeat-one", session="sess-repeat", model="claude-fable-5")
@@ -2742,8 +2733,8 @@ async def test_register_agent_never_reflags_a_repeat_mount_of_the_same_project(
 async def test_register_agent_never_reflags_returning_to_an_already_known_project(
     actions: Actions,
 ) -> None:
-    """A -> B flags once (B lands alongside A). B -> A again must NOT flag a second time
-    — A is already a live edge on this agent, so re-landing on it is not a NEW edge."""
+    """A -> B flags once (B lands alongside A). B -> A again must not flag a second time,
+    A is already a live edge on this agent, so re-landing on it is not a new edge."""
     ident_a = resolve_identity(cwd="/w/return-a", session="sess-return", model="claude-fable-5")
     ident_b = resolve_identity(cwd="/w/return-b", session="sess-return", model="claude-fable-5")
     a = await register_agent(actions, ident_a, actor="analyst:operator")
@@ -2758,9 +2749,9 @@ async def test_register_agent_never_reflags_returning_to_an_already_known_projec
 async def test_mint_heir_moves_the_ancestors_works_in_and_governs_edges_to_the_heir(
     actions: Actions,
 ) -> None:
-    """The fix itself: an ancestor's live works_in AND governs edges — to projects OTHER
+    """The fix itself: an ancestor's live works_in and governs edges, to projects other
     than the one it's about to inherit via `house` too, since a real agent can work_in/
-    govern more than one project across its life — move to the fresh heir, invalidated on
+    govern more than one project across its life, move to the fresh heir, invalidated on
     the ancestor, never duplicated on the heir."""
     from src.orchestrator.agents import mint_heir
 
@@ -2794,13 +2785,13 @@ async def test_mint_heir_moves_the_ancestors_works_in_and_governs_edges_to_the_h
     still_on_record = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type IN ('works_in','governs')",
         ancestor_oid)
-    assert still_on_record == 2, "invalidated, not deleted — who worked here stays answerable"
+    assert still_on_record == 2, "invalidated, not deleted, who worked here stays answerable"
 
 
 async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
     actions: Actions,
 ) -> None:
-    """Idempotent, same discipline as every other estate-move in this codebase: if the
+    """Idempotent, same discipline as every other ownership-move in this codebase: if the
     heir (for whatever reason) already carries a live edge to the same project the
     ancestor is handing over, the move must not mint a second live row."""
     from src.orchestrator.agents import mint_heir
@@ -2811,7 +2802,7 @@ async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
     proj = await actions.create_or_find_object("SoftwareProject", "repo:leakproj2", "test")
     await actions.create_link(ancestor_oid, proj, "works_in", "test", now, 0.9,
                               evidence_class="self_declared")
-    # pre-seed the heir's own canonical with an ALREADY-live works_in edge to the same
+    # pre-seed the heir's own canonical with an already-live works_in edge to the same
     # project (simulating a caller that stamped it directly before this mint)
     heir_canonical = "agent:leak2anc0-ii"
     heir_oid_preseed = await actions.create_or_find_object("Agent", heir_canonical, "test")
@@ -2831,23 +2822,23 @@ async def test_mint_heir_never_duplicates_an_edge_the_heir_already_has(
 async def test_mint_heir_steps_past_a_numeral_someone_already_succeeded(
     actions: Actions,
 ) -> None:
-    """THE MARQUEE SPECIMEN (thread 6736/6747): an ancestor resolution can legitimately
-    land on an EARLIER generation than a lineage's real current tip (Marquee's own
-    _seat_lineage_ancestor walked to -xi while -xii..-xvi already existed, minted forward
-    hours later by the real chain). Before this fix, mint_heir's grave-avoidance loop
-    treated ANY numeral whose object was merely `status='active'` as safe to reuse,
-    identical to test_mint_heir_never_duplicates_an_edge_the_heir_already_has's legitimate
-    pre-seed shape — so a brand-new heir silently wore -xii's dead identity instead of
-    minting -xvii. The fix: a plain, never-healed active candidate is reusable only while
-    NOTHING has already succeeded it. -xii has a real successor (-xiii); a bare pre-seeded
-    stub does not — that is what tells the two apart."""
+    """A real specimen: an ancestor resolution can legitimately land on an earlier
+    generation than a lineage's real current tip (a prior `_seat_lineage_ancestor` walked
+    to -xi while -xii..-xvi already existed, minted forward hours later by the real chain).
+    Before this fix, mint_heir's grave-avoidance loop treated any numeral whose object was
+    merely `status='active'` as safe to reuse, identical to
+    test_mint_heir_never_duplicates_an_edge_the_heir_already_has's legitimate pre-seed
+    shape, so a brand-new heir silently wore -xii's dead identity instead of minting -xvii.
+    The fix: a plain, never-healed active candidate is reusable only while nothing has
+    already succeeded it. -xii has a real successor (-xiii); a bare pre-seeded stub does
+    not, that is what tells the two apart."""
     from src.orchestrator.agents import mint_heir, next_generation
 
     now = datetime.now(UTC)
     root_id = "agent:marq0000"
     root_oid = await actions.create_or_find_object("Agent", root_id, "test")
     # the real forward chain: root -> -ii -> -iii -> -iv, each one genuinely succeeding
-    # the last (mirroring Marquee's own -xii -> -xiii -> ... minted hours after -xi)
+    # the last (mirroring the real specimen's -xii -> -xiii -> ... minted hours after -xi)
     prior_id, prior_oid = root_id, root_oid
     for _ in range(3):
         heir_id = next_generation(prior_id)
@@ -2858,8 +2849,8 @@ async def test_mint_heir_steps_past_a_numeral_someone_already_succeeded(
     tip_id, tip_oid = prior_id, prior_oid  # "agent:marq0000-iv"
     assert tip_id == "agent:marq0000-iv"
 
-    # a stale ancestor resolution hands mint_heir the ROOT again, not the real tip —
-    # the exact shape of Marquee's own bug (lineage_head resolving backward to -xi)
+    # a stale ancestor resolution hands mint_heir the root again, not the real tip,
+    # the exact shape of the real bug (lineage_head resolving backward to -xi)
     heir, heir_oid = await mint_heir(actions, root_id, root_oid,
                                      because="launch_seat: bind-before-spawn (test)",
                                      succession=None)
@@ -2871,9 +2862,9 @@ async def test_mint_heir_steps_past_a_numeral_someone_already_succeeded(
 async def test_mint_heir_still_takes_the_direct_next_numeral_on_a_clean_lineage(
     actions: Actions,
 ) -> None:
-    """THE NEGATIVE CONTROL for the fix above: an ordinary mint, on a lineage with nothing
-    already minted past the immediate next numeral, must still land exactly there —
-    unchanged by the succeeded-from check, which only ever fires past the FIRST hop."""
+    """The negative control for the fix above: an ordinary mint, on a lineage with nothing
+    already minted past the immediate next numeral, must still land exactly there,
+    unchanged by the succeeded-from check, which only ever fires past the first hop."""
     from src.orchestrator.agents import mint_heir
 
     ancestor_id = "agent:clean000"
@@ -2887,15 +2878,15 @@ async def test_mint_heir_still_takes_the_direct_next_numeral_on_a_clean_lineage(
         "SELECT canonical FROM objects WHERE id=$1", heir_oid) == "agent:clean000-ii"
 
 
-# ═══ lineage_works_in (thread 79e785d1, Lane 3 of Thoth msg 5906 — the prevention half):
-# read-only lookup `derive_or_abstain` (Lane 0, still unbuilt) will call to decide whether
-# an orphan-write's repo= is mechanically derivable at all. ═══
+# ═══ lineage_works_in, the prevention half: read-only lookup `derive_or_abstain` (still
+# unbuilt) will call to decide whether an orphan-write's repo= is mechanically derivable
+# at all. ═══
 
 async def test_lineage_works_in_resolves_when_only_the_writing_generation_has_one(
     actions: Actions,
 ) -> None:
-    """The base case 0dfbfb4's own default already covers — included here so the lineage
-    widening is proven to never REGRESS the simple case, not just extend it."""
+    """The base case's own default already covers, included here so the lineage
+    widening is proven to never regress the simple case, not just extend it."""
     from src.orchestrator.agents import lineage_works_in
 
     now = datetime.now(UTC)
@@ -2912,8 +2903,8 @@ async def test_lineage_works_in_resolves_when_only_the_writing_generation_has_on
 
 
 async def test_lineage_works_in_falls_back_to_a_sibling_generation(actions: Actions) -> None:
-    """THE FIX ITSELF: the WRITING generation (agent:lwi2-iii) has no works_in of its own —
-    orphan, exactly Thoth's specimen shape — but an earlier sibling generation
+    """The fix itself: the writing generation (agent:lwi2-iii) has no works_in of its own,
+    orphan, exactly the real specimen shape, but an earlier sibling generation
     (agent:lwi2) does, and they share the same lineage root. The old, generation-scoped
     default would have found nothing; the lineage-root widening finds it."""
     from src.orchestrator.agents import lineage_works_in
@@ -2935,11 +2926,11 @@ async def test_lineage_works_in_falls_back_to_a_sibling_generation(actions: Acti
 async def test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement(
     actions: Actions,
 ) -> None:
-    """THE ABSTAIN LAW (operator ruling a0339e16, #141/#137's law): two DISTINCT projects
-    across the lineage must resolve to None — the both-named case Thoth's own dispatch
-    measured (7 of 23 lineage roots span 2-4 projects) — never broken by which generation
-    is "newer" or holds more links. `resolved` is None but `projects` names BOTH, so a
-    caller can report the disagreement rather than silently discard it."""
+    """The abstain rule: two distinct projects across the lineage must resolve to None,
+    the both-named case a real measurement found (7 of 23 lineage roots span 2-4
+    projects), never broken by which generation is "newer" or holds more links.
+    `resolved` is None but `projects` names both, so a caller can report the disagreement
+    rather than silently discard it."""
     from src.orchestrator.agents import lineage_works_in
 
     now = datetime.now(UTC)
@@ -2961,8 +2952,8 @@ async def test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement
 async def test_lineage_works_in_reports_nothing_anywhere_distinctly_from_ambiguous(
     actions: Actions,
 ) -> None:
-    """A THIRD outcome, deliberately distinct from the ambiguous case: zero live works_in
-    edges anywhere in the lineage is "genuinely nothing to derive", not "disagreement" —
+    """A third outcome, deliberately distinct from the ambiguous case: zero live works_in
+    edges anywhere in the lineage is "genuinely nothing to derive", not "disagreement",
     both render `resolved=None`, but only ambiguity carries more than one project name."""
     from src.orchestrator.agents import lineage_works_in
 
@@ -2974,7 +2965,7 @@ async def test_lineage_works_in_reports_nothing_anywhere_distinctly_from_ambiguo
 
 async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) -> None:
     """A works_in edge that has been superseded (valid_until set) must never count toward
-    resolution — matches every other live-edge read in this codebase."""
+    resolution, matches every other live-edge read in this codebase."""
     from src.orchestrator.agents import lineage_works_in
 
     now = datetime.now(UTC)
@@ -2993,13 +2984,13 @@ async def test_lineage_works_in_ignores_an_invalidated_edge(actions: Actions) ->
 async def test_lineage_works_in_never_lets_a_retired_generation_vote(
     actions: Actions,
 ) -> None:
-    """msg 7641/7646 item 1: a mis-minted heir later retired still carries its own
-    works_in edge forever (append-only history) — without this fix, that retired
-    generation votes in the SAME abstain-on-disagreement law that
+    """A mis-minted heir later retired still carries its own works_in edge forever
+    (append-only history), without this fix, that retired generation votes in the same
+    abstain-on-disagreement rule that
     test_lineage_works_in_abstains_and_names_the_ambiguity_on_disagreement demonstrates,
     so a lineage that carries one retired mis-mint alongside its real, single-project
     generations wrongly abstains instead of resolving. Excluded exactly like
-    seat_holders (agents.py) already excludes retired/false_mint from counting HOLDERS."""
+    seat_holders (agents.py) already excludes retired/false_mint from counting holders."""
     from src.orchestrator.agents import lineage_works_in
 
     now = datetime.now(UTC)
@@ -3020,12 +3011,12 @@ async def test_lineage_works_in_never_lets_a_retired_generation_vote(
     assert out["candidate_ids"] == [proj_a]
 
 
-# ═══ threads f6f11d78/20af2c95 (decision 5b217d13, 2026-08-04): mint_heir's house-relink
-# and register_agent's own identity.project assertion used to fire unconditionally in the
-# SAME call, sharing one `now` — a seat's stale derived `house` disagreeing with the
-# session's fresh, correctly-resolved project landed BOTH edges on the heir, byte-identical
-# to the microsecond (John/agent:d5c671c1-*'s own specimen). upcoming_project narrows the
-# house-relink to fire only when nothing else will ever assert a project for the heir. ═══
+# ═══ mint_heir's house-relink and register_agent's own identity.project assertion used
+# to fire unconditionally in the same call, sharing one `now`, a seat's stale derived
+# `house` disagreeing with the session's fresh, correctly-resolved project landed both
+# edges on the heir, byte-identical to the microsecond (a real specimen).
+# upcoming_project narrows the house-relink to fire only when nothing else will ever
+# assert a project for the heir. ═══
 
 
 async def test_mint_heir_skips_the_house_relink_when_a_fresher_project_is_already_known(
@@ -3033,7 +3024,7 @@ async def test_mint_heir_skips_the_house_relink_when_a_fresher_project_is_alread
 ) -> None:
     """Direct unit-level proof: pass `upcoming_project` (what register_agent already knows
     moments before it asserts it) and the house-derived edge/property must never land at
-    all — the caller's own later assertion is the sole source of truth here, not a race
+    all, the caller's own later assertion is the sole source of truth here, not a race
     between two writers sharing one clock."""
     from src.orchestrator.agents import claim_name, mint_heir
 
@@ -3059,24 +3050,24 @@ async def test_mint_heir_skips_the_house_relink_when_a_fresher_project_is_alread
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         heir_oid)
-    assert stamped is None, "no house-derived 'project' stamp either — same deferral"
+    assert stamped is None, "no house-derived 'project' stamp either, same deferral"
 
 
-# ═══ task #143 (decision 4607637a, resolving bac81acd): works_in narrows to ONE meaning —
-# the session's live/current project — and the seat's durable role-house lives on `governs`
-# instead. The house-relink fallback above is legacy inference; once a seat has declared a
-# real charter, governs already answers "which house" and the fallback has nothing left to
-# do. It is NOT redirected to write governs itself: set_charter replaces the WHOLE charter
-# each call, so auto-firing it here with just `house` would heal away the rest of a real
-# multi-repo charter the moment the lineage next compacted. ═══
+# ═══ works_in narrows to one meaning, the session's live/current project, and the seat's
+# durable role-house lives on `governs` instead. The house-relink fallback above is legacy
+# inference; once a seat has declared a real charter, governs already answers "which
+# house" and the fallback has nothing left to do. It is not redirected to write governs
+# itself: set_charter replaces the whole charter each call, so auto-firing it here with
+# just `house` would heal away the rest of a real multi-repo charter the moment the
+# lineage next compacted. ═══
 
 
 async def test_mint_heir_skips_the_house_relink_once_the_seat_has_declared_a_charter(
     actions: Actions,
 ) -> None:
-    """THE FIX: a seat that has declared ANY charter no longer gets a house-derived
-    works_in edge on mint — governs is the fact of record now, and re-stamping works_in
-    from `house` would be exactly the stale-role-meaning leak task #143 exists to close."""
+    """The fix: a seat that has declared any charter no longer gets a house-derived
+    works_in edge on mint, governs is the fact of record now, and re-stamping works_in
+    from `house` would be exactly the stale-role-meaning leak this closes."""
     from src.orchestrator.agents import claim_name, mint_heir
     from src.orchestrator.charter import charter_of, set_charter
     from src.orchestrator.seats import held_seat
@@ -3091,7 +3082,7 @@ async def test_mint_heir_skips_the_house_relink_once_the_seat_has_declared_a_cha
 
     seat = await held_seat(actions.pool, ancestor_id)
     assert seat is not None
-    # a DIFFERENT repo than `house` — proves this is charter-existence gating, not a
+    # a different repo than `house`, proves this is charter-existence gating, not a
     # value match, and doubles as the reason auto-writing governs here would be unsafe:
     # set_charter's own call is never made by this fix, so this repo is untouched by it
     await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
@@ -3104,26 +3095,25 @@ async def test_mint_heir_skips_the_house_relink_once_the_seat_has_declared_a_cha
         "SELECT t.canonical FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='works_in' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
-    assert live == [], "chartered — the house-relink must not fire onto works_in at all"
+    assert live == [], "chartered, the house-relink must not fire onto works_in at all"
     stamped = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         heir_oid)
-    assert stamped is None, "no house-derived 'project' stamp either — governs speaks now"
-    # the charter itself must be untouched — this fix never calls set_charter
+    assert stamped is None, "no house-derived 'project' stamp either, governs speaks now"
+    # the charter itself must be untouched, this fix never calls set_charter
     assert await charter_of(actions.pool, seat["seat_id"]) == ["bytebye"]
 
 
 async def test_mint_heir_stays_honestly_unset_with_no_charter_and_no_works_in_edge(
     actions: Actions,
 ) -> None:
-    """SUPERSEDES the old 'legacy house-relink must still fire' expectation (decision
-    68fba2e4, thread 19d6bdcb7fa9 — the operator's own house/project ruling): an ancestor
+    """Supersedes the old 'legacy house-relink must still fire' expectation: an ancestor
     with a bare `project` assertion and no supporting works_in edge or charter used to have
-    that raw stamp copied onto the heir regardless — exactly the class of unverified-claim
-    propagation the ruling ends. 'Homeless/unknown is a valid state... much better than a
-    fabricated line' applies here too, even absent a charter — an unchartered seat is not
-    a license to guess from whatever raw stamp happens to be lying around."""
+    that raw stamp copied onto the heir regardless, exactly the class of unverified-claim
+    propagation the ruling ends. Homeless/unknown is a valid state, much better than a
+    fabricated line, and that applies here too, even absent a charter, an unchartered seat
+    is not a license to guess from whatever raw stamp happens to be lying around."""
     from src.orchestrator.agents import claim_name, mint_heir
 
     now = datetime.now(UTC)
@@ -3142,19 +3132,19 @@ async def test_mint_heir_stays_honestly_unset_with_no_charter_and_no_works_in_ed
         "WHERE l.from_id=$1 AND l.type='works_in' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
     assert live is None, (
-        "no charter, no works_in edge, no pin — nothing real to inherit, so the heir "
+        "no charter, no works_in edge, no pin, nothing real to inherit, so the heir "
         "stays honestly unset rather than copying the ancestor's bare, unverified stamp")
 
 
 async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(
     actions: Actions,
 ) -> None:
-    """End-to-end reproduction of John's own specimen: a seat's house stuck at 'redmonth'
-    (never corrected) while the session's own cwd correctly resolves to 'ballgem' — before
+    """End-to-end reproduction of a real specimen: a seat's house stuck at 'redmonth'
+    (never corrected) while the session's own cwd correctly resolves to 'ballgem', before
     the narrowing, mint_heir's house-relink and register_agent's identity.project assertion
-    each `_link_once`d their own project inside ONE call, sharing one `now`, so both edges
+    each `_link_once`d their own project inside one call, sharing one `now`, so both edges
     landed live on the heir at the identical microsecond. A mint through a genuinely
-    divergent house must now produce exactly ONE live works_in edge — the fresher one."""
+    divergent house must now produce exactly one live works_in edge, the fresher one."""
     from src.orchestrator.agents import claim_name
 
     now = datetime.now(UTC)
@@ -3175,20 +3165,19 @@ async def test_register_agent_mint_does_not_duplicate_works_in_on_a_stale_house(
         "WHERE l.from_id=$1 AND l.type='works_in' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", heir_oid)
     assert {r["canonical"] for r in live} == {"repo:ballgem"}, (
-        "exactly one live works_in edge — the fresher, correctly-resolved project — "
+        "exactly one live works_in edge, the fresher, correctly-resolved project, "
         "never the stale house's edge too")
 
 
-# ═══ task #144, rule 1 of de3dfc18 ("where this lineage's work actually landed"): ported
-# from project_identity.py's own _write_attribution (#110) — the SAME query — for the live
-# mount path. THE ACCEPTANCE CONDITION (Thoth, msg 3854): "if it picks, it is wrong, however
-# good the pick." This reports agreement/disagreement HONESTLY and never overwrites
-# `identity.project` or the graph's own project/works_in write — a later, separately-scoped
-# build decides whether rule 1 ever gets to WIN. ═══
+# ═══ "where this lineage's work actually landed": ported from project_identity.py's own
+# _write_attribution, the same query, for the live mount path. The acceptance condition:
+# if it picks, it is wrong, however good the pick. This reports agreement/disagreement
+# honestly and never overwrites `identity.project` or the graph's own project/works_in
+# write, a later, separately-scoped build decides whether rule 1 ever gets to win. ═══
 
 
 async def test_write_attribution_reports_no_signal_with_no_history(actions: Actions) -> None:
-    """A lineage that has never filed an in_repo edge anywhere gets an honest "no-signal" —
+    """A lineage that has never filed an in_repo edge anywhere gets an honest "no-signal",
     never a guess, never silence that reads as agreement."""
     ident = AgentIdentity(agent_id="agent:wa1nosig0", session="wa1nosig0",
                           project="freshproj", model="claude-fable-5", cwd=None,
@@ -3203,7 +3192,7 @@ async def test_write_attribution_reports_no_signal_with_no_history(actions: Acti
 
 async def test_write_attribution_confirms_when_the_lineage_agrees(actions: Actions) -> None:
     """The healthy case: this lineage's own in_repo edges already point at the same project
-    resolve_identity independently resolved — confirms, no drama."""
+    resolve_identity independently resolved, confirms, no drama."""
     now = datetime.now(UTC)
     base = "agent:wa2conf00"
     await actions.create_or_find_object("Agent", base, "test")
@@ -3224,9 +3213,9 @@ async def test_write_attribution_confirms_when_the_lineage_agrees(actions: Actio
 async def test_write_attribution_disagrees_without_ever_overriding_project(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE CONDITION, tested directly: this lineage's own writes land almost
-    entirely in `oldproj`, but the session resolved `newproj` (a real, legitimate case — a
-    seat can genuinely move to a new repo). The signal must say "disagrees" — and `project`,
+    """The acceptance condition, tested directly: this lineage's own writes land almost
+    entirely in `oldproj`, but the session resolved `newproj` (a real, legitimate case, a
+    seat can genuinely move to a new repo). The signal must say "disagrees", and `project`,
     the actual graph write, must be `newproj`, completely untouched by the disagreement.
     A naive port that silently picked oldproj (or refused to write newproj) would fail this
     test even though its answer might look "smarter"."""
@@ -3261,9 +3250,9 @@ async def test_write_attribution_disagrees_without_ever_overriding_project(
 
 
 async def test_write_attribution_disagreement_is_stamped_durably(actions: Actions) -> None:
-    """The disagreement is worth more than a one-time banner — a later dossier() read (no
+    """The disagreement is worth more than a one-time banner, a later dossier() read (no
     live mount() to have caught the confession) must be able to see it too. DERIVED evidence
-    (an inference from write history), never SELF_DECLARED — weaker than a real declaration,
+    (an inference from write history), never SELF_DECLARED, weaker than a real declaration,
     on purpose."""
     now = datetime.now(UTC)
     base = "agent:wa4stmp00"
@@ -3288,10 +3277,10 @@ async def test_write_attribution_disagreement_is_stamped_durably(actions: Action
 async def test_write_attribution_degrades_when_the_check_itself_fails(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """577988ed, tested directly on this exact addition: a broken write-attribution query
-    must degrade to an honest "could not determine," never block the mount it sits on. This
-    is the diagnostic signal's OWN refusal proof, distinct from the disagreement tests above
-    proving the signal doesn't act — this proves the signal doesn't break anything either."""
+    """A broken write-attribution query must degrade to an honest "could not determine,"
+    never block the mount it sits on. This is the diagnostic signal's own refusal proof,
+    distinct from the disagreement tests above proving the signal doesn't act, this proves
+    the signal doesn't break anything either."""
     from src.orchestrator import project_identity as pi_mod
 
     async def _boom(pool: object, bases: list[str]) -> dict[str, object]:
@@ -3315,12 +3304,11 @@ async def test_write_attribution_degrades_when_the_check_itself_fails(
 
 
 async def test_write_attribution_normalizes_through_merged_into(actions: Actions) -> None:
-    """OBLIGATION a980aff2 (henry->shellbiz): a seat's own `.osiris` pin can go on naming
-    a label that has since been FOLDED into another project — the write side already
-    tracks the survivor (`_write_attribution` reads the LIVE in_repo edge, healed onto
-    shellbiz by the fold), so comparing the pin's raw string against it compares
-    yesterday's name to today's. Must confirm, not permanently false-fire 'disagrees' on
-    every mount from here on."""
+    """A seat's own `.osiris` pin can go on naming a label that has since been FOLDED
+    into another project. The write side already tracks the survivor
+    (`_write_attribution` reads the LIVE in_repo edge, healed onto shellbiz by the fold),
+    so comparing the pin's raw string against it compares yesterday's name to today's.
+    Must confirm, not permanently false-fire 'disagrees' on every mount from here on."""
     now = datetime.now(UTC)
     base = "agent:wa6fold00"
     await actions.create_or_find_object("Agent", base, "test")
@@ -3336,7 +3324,7 @@ async def test_write_attribution_normalizes_through_merged_into(actions: Actions
     await register_agent(actions, ident, actor="test")
 
     assert ident.write_attribution_agreement == "confirms", (
-        "the pin still says 'henry', but henry IS shellbiz now (merged_into) — the raw-"
+        "the pin still says 'henry', but henry IS shellbiz now (merged_into). The raw-"
         "string comparison must not false-fire 'disagrees' on a folded project")
     assert ident.write_attribution_top == "shellbiz"
     assert ident.project == "henry", "normalization is for the COMPARISON only"
@@ -3346,15 +3334,15 @@ async def test_write_attribution_confesses_a_broken_merge_chain_without_picking_
     actions: Actions,
 ) -> None:
     """A cyclic/broken merged_into chain must never be silently resolved to a guessed
-    winner — CONFESS in the durable disagreement note and fall through to the raw,
-    unnormalized comparison instead (this house names disagreement, it never crowns a
+    winner: CONFESS in the durable disagreement note and fall through to the raw,
+    unnormalized comparison instead (this records disagreement, it never crowns a
     side)."""
     now = datetime.now(UTC)
     base = "agent:wa7cycl00"
     await actions.create_or_find_object("Agent", base, "test")
     a_proj = await actions.create_or_find_object("SoftwareProject", "repo:cycla", "test")
     b_proj = await actions.create_or_find_object("SoftwareProject", "repo:cyclb", "test")
-    # a cycle no real merge_objects call can produce (self-merge is refused) — forced
+    # a cycle no real merge_objects call can produce (self-merge is refused). Forced
     # directly to exercise the chain-too-deep guard Actions.resolve_object_id already has.
     await actions.pool.execute(
         "UPDATE objects SET status='merged', merged_into=$1 WHERE id=$2", b_proj, a_proj)
@@ -3380,8 +3368,8 @@ async def test_write_attribution_confesses_a_broken_merge_chain_without_picking_
 
 
 async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Actions) -> None:
-    """The one-time repair for the 906/907 edges that already existed before the write-
-    side fixes landed — a genuinely OLD-shaped leak (an ancestor's edge, never moved,
+    """The one-time repair for edges that already existed before the write-
+    side fixes landed: a genuinely OLD-shaped leak (an ancestor's edge, never moved,
     with a live heir already minted), the shape the write-side fix can no longer produce
     but which already exists fleet-wide. DRY RUN IS THE DEFAULT: reports the plan,
     changes nothing."""
@@ -3410,12 +3398,12 @@ async def test_backfill_agent_project_links_dry_run_writes_nothing(actions: Acti
 async def test_backfill_agent_project_links_plans_zero_moves_across_a_true_tie_hop(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE (Thoth's dispatch msg 5046, live-found on her own lineage): a lineage
-    whose head is resolved past a succeeded_by TRUE TIE (test_lineage_head_breaks_a_true_
-    tie... — same live shape) and whose edges already live on that true head must plan
-    ZERO moves for it. Before the lineage_head fix this fixture reproduced the exact live
-    bug: the resolver stopped at the OLDER generation, so a live agent's own current
-    works_in/governs would have been (wrongly) planned to move onto a retired ancestor."""
+    """THE ACCEPTANCE: a lineage whose head is resolved past a succeeded_by TRUE TIE
+    (test_lineage_head_breaks_a_true_tie... same live shape) and whose edges already live
+    on that true head must plan ZERO moves for it. Before the lineage_head fix this
+    fixture reproduced the exact live bug: the resolver stopped at the OLDER generation,
+    so a live agent's own current works_in/governs would have been (wrongly) planned to
+    move onto a retired ancestor."""
     from src.orchestrator.agents import backfill_agent_project_links
 
     now = datetime.now(UTC)
@@ -3469,7 +3457,7 @@ async def test_backfill_agent_project_links_applied_moves_the_edge(actions: Acti
 
 async def test_backfill_agent_project_links_scopes_to_only_bases(actions: Actions) -> None:
     """Staged rollout, same convention `backfill_unbound_seats`'s `only_seats` already
-    uses: a scoped run touches only the named lineage bases and reports — never hides —
+    uses: a scoped run touches only the named lineage bases and reports, never hides,
     how many other off-head agents it deliberately left untouched."""
     from src.orchestrator.agents import backfill_agent_project_links
 
@@ -3506,8 +3494,8 @@ async def test_backfill_agent_project_links_scopes_to_only_bases(actions: Action
 async def test_backfill_agent_project_links_mcp_tool_wraps_the_orchestrator_dry_run_default(
     actions: Actions,
 ) -> None:
-    """The missing door itself (thread 20af2c95): the orchestrator function existed,
-    unit-tested, importable only — this proves the ACTUAL MCP tool reaches it, dry_run
+    """The missing door itself: the orchestrator function existed,
+    unit-tested, importable only. This proves the ACTUAL MCP tool reaches it, dry_run
     defaulting True so a bare call never writes."""
     from src import mcp_server as srv
 
@@ -3535,11 +3523,11 @@ async def test_backfill_agent_project_links_mcp_tool_wraps_the_orchestrator_dry_
         srv._pool = saved_pool
 
 
-# ═══ INVALIDATE_WORKS_IN (thread 8640a625, decision fce39baa) — the toolkit hole John
-# XVII's own specimen exposed: unpeer heals peer_of, detach_seat heals managed_by, nothing
-# healed works_in before this. Self-scoped identity hygiene, same posture as correct_house —
-# but tested here at the underlying function's own generic layer (agent_id explicit),
-# self-scoping is the MCP wrapper's own job. ═══════════════════════════════════════════════
+# ═══ INVALIDATE_WORKS_IN: the toolkit hole a prior specimen exposed. unpeer heals
+# peer_of, detach_seat heals managed_by, nothing healed works_in before this.
+# Self-scoped identity hygiene, same posture as correct_house, but tested here at the
+# underlying function's own generic layer (agent_id explicit); self-scoping is the MCP
+# wrapper's own job. ═══════════════════════════════════════════════
 
 async def test_invalidate_works_in_drops_the_named_edge_and_leaves_the_other(
     actions: Actions,
@@ -3624,8 +3612,8 @@ async def test_invalidate_works_in_refuses_no_active_edge_to_that_project(
 async def test_invalidate_works_in_refuses_the_agents_only_live_edge(
     actions: Actions,
 ) -> None:
-    """The safety net: dropping a lone works_in edge is not cleanup, it's amputation —
-    this verb exists for duplicates, never for an agent's only project."""
+    """The safety net: dropping a lone works_in edge is not cleanup, it's amputation.
+    This verb exists for duplicates, never for an agent's only project."""
     from src.orchestrator.agents import invalidate_works_in
 
     now = datetime.now(UTC)
@@ -3642,7 +3630,7 @@ async def test_invalidate_works_in_refuses_the_agents_only_live_edge(
         "AND (valid_until IS NULL OR valid_until > now())", a, only) == 1
 
 
-# ═══ retire_governs_edges (thread a2d6bd36225f, atlas's 25-entry fragment governs list) ═══
+# ═══ retire_governs_edges (a fleet session's own large fragment governs list) ═══
 
 async def test_retire_governs_edges_drops_named_edges_and_leaves_the_rest(
     actions: Actions,
@@ -3691,7 +3679,7 @@ async def test_retire_governs_edges_reports_not_found_and_no_edge_without_aborti
                                                      "test")
     await actions.create_link(a, garbage, "governs", "test", now, 0.9,
                               evidence_class="self_declared")
-    _ = unrelated  # never linked to `a` — the "no_edge" case
+    _ = unrelated  # never linked to `a`, the "no_edge" case
 
     out = await retire_governs_edges(
         actions, "agent:rge2aaaaa",
@@ -3739,7 +3727,7 @@ async def test_retire_governs_edges_refuses_an_empty_repos_list(actions: Actions
     assert "repos is required" in out["error"]
 
 
-# ═══ agent(action='retire_governs') — the MCP third-party door ══════════════════════
+# ═══ agent(action='retire_governs'): the MCP third-party door ══════════════════════
 
 async def test_agent_retire_governs_drops_a_third_partys_edges(actions: Actions) -> None:
     from src import mcp_server as srv
@@ -3784,11 +3772,11 @@ async def test_agent_retire_governs_drops_a_third_partys_edges(actions: Actions)
 async def test_agent_correct_project_is_the_canonical_name_correct_house_a_deprecated_alias(
     actions: Actions,
 ) -> None:
-    """ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): correct_house is retired in
-    favor of correct_project — both action strings reach the identical
-    correct_agent_house call underneath (renaming the MCP-facing name only, never the
-    orchestrator function, matching Khnum's own correct-agent-house -> correct-agent-
-    project CLI rename), so either spelling produces the same write, one release."""
+    """ONE TAXONOMY: correct_house is retired in favor of correct_project. Both action
+    strings reach the identical correct_agent_house call underneath (renaming the
+    MCP-facing name only, never the orchestrator function, matching a prior
+    correct-agent-house -> correct-agent-project CLI rename), so either spelling produces
+    the same write, one release."""
     from src import mcp_server as srv
 
     class _Ctx:
@@ -3846,7 +3834,7 @@ async def test_agent_retire_governs_refuses_before_mount(actions: Actions) -> No
 async def test_invalidate_works_in_mcp_wrapper_self_scopes_to_the_caller(
     actions: Actions,
 ) -> None:
-    """No `agent_id` parameter exists on the tool surface — the caller IS the target,
+    """No `agent_id` parameter exists on the tool surface: the caller IS the target,
     exactly correct_house's own self-scoping shape, never operator-fenced for this case."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -3898,16 +3886,15 @@ async def test_invalidate_works_in_mcp_wrapper_refuses_before_mount(actions: Act
 async def test_invalidate_works_in_mcp_wrapper_moves_orient_without_reconnecting(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE TEST (Thoth's own ruling, thread 8640a625 / decision 4001f6d1's own
-    finding — the gap John's fix appeared to close three steps late): a live session that
-    drops an edge whose project WAS the resolved winner must see orient() move WITHOUT
-    reconnecting. Not the DB row — the RESOLUTION. Same connection, same cached identity,
-    two orient() calls, one invalidate_works_in call between them, zero re-mounts.
+    """THE ACCEPTANCE TEST: a live session that drops an edge whose project WAS the
+    resolved winner must see orient() move WITHOUT reconnecting. Not the DB row: the
+    RESOLUTION. Same connection, same cached identity, two orient() calls, one
+    invalidate_works_in call between them, zero re-mounts.
 
-    A SEATED agent's own project is its seat's derived house, unconditionally — the seat's
+    A SEATED agent's own project is its seat's derived house, unconditionally. The seat's
     house here is ALREADY "ballgemtest" (the fix landed before this test starts), but the
-    live cache still says "redmonthtest" (the stale mount-time snapshot, exactly John's own
-    shape) until the wrapper patches it."""
+    live cache still says "redmonthtest" (the stale mount-time snapshot) until the wrapper
+    patches it."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.seats import bind_holder
@@ -3945,7 +3932,7 @@ async def test_invalidate_works_in_mcp_wrapper_moves_orient_without_reconnecting
         out = await srv.invalidate_works_in("repo:redmonthtest", "fork residue", ctx=ctx)
         assert out["invalidated"] == "agent:iwiacc1aa"
 
-        after = await srv.orient(ctx=ctx)                    # SAME ctx — no reconnect
+        after = await srv.orient(ctx=ctx)                    # SAME ctx, no reconnect
     finally:
         srv._pool = saved_pool
         srv._agents.pop(key, None)
@@ -3957,7 +3944,7 @@ async def test_invalidate_works_in_mcp_wrapper_falls_back_to_the_remaining_edge_
 ) -> None:
     """The sibling shape: an UNSEATED agent has no seat house to re-derive from (_resolve_
     project_seat_first is a documented no-op there), so the cache patch falls back to the
-    one unambiguous remaining works_in edge instead — still no reconnect required."""
+    one unambiguous remaining works_in edge instead, still no reconnect required."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -3974,7 +3961,7 @@ async def test_invalidate_works_in_mcp_wrapper_falls_back_to_the_remaining_edge_
                               evidence_class="self_declared")
     await actions.create_link(a, keep, "works_in", "test", now, 0.9,
                               evidence_class="self_declared")
-    # deliberately no bind_holder call — this agent holds no seat
+    # deliberately no bind_holder call, this agent holds no seat
 
     ident = AgentIdentity(agent_id="agent:iwiacc2aa", session="iwiacc2", project="acc2stale",
                           model="claude-sonnet-5", cwd=None, model_method="job_dir",
@@ -3996,7 +3983,7 @@ async def test_invalidate_works_in_mcp_wrapper_falls_back_to_the_remaining_edge_
     assert after["project"] == "acc2keep"
 
 
-# ═══ agent(action='invalidate_works_in') — the THIRD-PARTY door (Thoth DM 8697 item 1) ═══
+# ═══ agent(action='invalidate_works_in'): the THIRD-PARTY door ═══
 # The self-scoped seat(action='invalidate_works_in') tested above never exposes agent_id
 # as a parameter at all; these prove the third-party sibling that does, for a mind
 # mechanically repairing someone ELSE's duplicate works_in edge (batch-move residue,
@@ -4046,7 +4033,7 @@ async def test_agent_invalidate_works_in_drops_a_third_partys_edge(
 async def test_agent_invalidate_works_in_refuses_the_callers_own_agent_id(
     actions: Actions,
 ) -> None:
-    """The third-party door refuses to double as the self-scoped one — a caller naming
+    """The third-party door refuses to double as the self-scoped one: a caller naming
     their own agent_id is pointed at seat(action='invalidate_works_in') instead."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -4091,8 +4078,8 @@ async def test_agent_invalidate_works_in_refuses_before_mount(actions: Actions) 
 async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
     actions: Actions,
 ) -> None:
-    """The data-repair half of mount-guard #6 (DM 1301): UNLIKE correct_house, this is not
-    self-scoped — Thoth's own case needed his PREDECESSOR's stamp corrected too, an
+    """The data-repair half of mount-guard #6: UNLIKE correct_house, this is not
+    self-scoped. A live case needed a PREDECESSOR agent's stamp corrected too, an
     ancestor who cannot act for itself. `actor` carries accountability; the target is
     named explicitly and may be anyone."""
     from src.orchestrator.agents import correct_agent_house, house_of
@@ -4119,8 +4106,8 @@ async def test_correct_agent_house_heals_a_polluted_stamp_on_someone_else(
 async def test_correct_agent_house_surfaces_prior_art_never_refuses_on_it(
     actions: Actions, monkeypatch,
 ) -> None:
-    """obligation e4612853's sibling (Thoth DM 3169/3185) — same guard as rename_project/
-    correct_house, generalized here: never blocks the write."""
+    """The same guard as rename_project/correct_house, generalized here: never blocks
+    the write."""
     from src.orchestrator.agents import correct_agent_house
 
     await actions.create_or_find_object("Agent", "agent:cah3prior", "test")
@@ -4139,8 +4126,8 @@ async def test_correct_agent_house_surfaces_prior_art_never_refuses_on_it(
 
 
 async def test_correct_agent_house_can_correct_just_one_field(actions: Actions) -> None:
-    """Thoth's own predecessor case: seat_generation STAYS correct (57), only project
-    needs healing — passing just one field leaves the other untouched."""
+    """A predecessor-repair case: seat_generation STAYS correct (57), only project
+    needs healing, passing just one field leaves the other untouched."""
     from src.orchestrator.agents import correct_agent_house, house_of
 
     a = await actions.create_or_find_object("Agent", "agent:cah2half", "test")
@@ -4157,7 +4144,7 @@ async def test_correct_agent_house_can_correct_just_one_field(actions: Actions) 
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='seat_generation' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", "agent:cah2half")
-    assert gen == "57", "untouched — only project was named"
+    assert gen == "57", "untouched, only project was named"
 
 
 async def test_correct_agent_house_refuses_no_correction_named(actions: Actions) -> None:
@@ -4191,8 +4178,8 @@ async def test_correct_agent_house_refuses_an_unknown_agent(actions: Actions) ->
     assert "no such agent" in out["error"]
 
 
-# ═══ retire_agent (task #74) — third-party retirement, the manager-scoped complement to
-# self-scoped retire(). msg 1713's reap needed exactly this: no sanctioned verb reached a
+# ═══ retire_agent: third-party retirement, the manager-scoped complement to
+# self-scoped retire(). Cleanup work needed exactly this: no sanctioned verb reached a
 # third party, forcing direct assert_property under an operator's live permission grant.
 
 async def test_retire_agent_retires_someone_else(actions: Actions) -> None:
@@ -4248,31 +4235,31 @@ async def test_retire_agent_refuses_an_already_retired_agent(actions: Actions) -
     assert "already retired" in second["error"]
 
 
-# --- thread 00b1c341: retire_agent had NO liveness check and NEVER released a held seat or
-# mount row — Khnum's census found it, scoped it out of the authority build (not an authority
+# --- retire_agent had NO liveness check and NEVER released a held seat or
+# mount row. Census found it, scoped it out of the authority build (not an authority
 # defect), and it sat unowned as a live footgun: a caller could retire an agent that is
 # seated and mid-turn RIGHT NOW, and the seat it held stayed held by a corpse forever.
 #
-# MEASURED FIRST (Thoth DM 3309): retire_seat REFUSES on a live holder (protects an
+# MEASURED FIRST: retire_seat REFUSES on a live holder (protects an
 # occupant's ongoing work in ITS ROLE); vacate_holder releases a seat's holder but explicitly
 # "TRUSTS ITS CALLER" with no liveness check of its own (its blast radius is one link + one
 # property); retire()'s own self-retirement ALREADY solves the seat/mount release
-# (mounts.release_mounts, thread b47b3814) and ALSO already carries the shape used below —
+# (mounts.release_mounts) and ALSO already carries the shape used below:
 # refuse by default, but accept a deliberate, on-the-record override (acknowledge_leftovers)
 # rather than a permanent, unconditional block. retire_agent's blast radius (deletes mount
 # rows AND stamps a terminal Agent status) is bigger than vacate_holder's, so "trust the
-# caller" alone under-protects a genuinely live third party — but retire_agent's own founding
-# purpose (task #74: cleaning up agents that can never call retire() on themselves) means a
+# caller" alone under-protects a genuinely live third party, but retire_agent's own founding
+# purpose (cleaning up agents that can never call retire() on themselves) means a
 # PERMANENT refusal would defeat the tool. mounts.agent_liveness (already built for send()'s
-# own listener receipt) gives a real, existing, non-invented signal — reused here as a
+# own listener receipt) gives a real, existing, non-invented signal, reused here as a
 # refuse-by-default gate with retire()'s own override_live=True escape hatch, mirroring
 # acknowledge_leftovers exactly. The seat/mount release always happens on a successful
-# retirement, live or not — that half of the bug has no defensible reason to stay broken.
+# retirement, live or not, that half of the bug has no defensible reason to stay broken.
 
 async def test_retire_agent_refuses_a_live_seated_agent_by_default(actions: Actions) -> None:
-    """NEGATIVE CONTROL: today's code has no liveness check at all — this must fail against
+    """NEGATIVE CONTROL: today's code has no liveness check at all, so this must fail against
     unfixed retire_agent (it would retire unconditionally, leaving both the seat and the
-    mount row exactly as broken as thread 00b1c341 describes)."""
+    mount row exactly as broken as the original bug report described)."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import retire_agent
     from src.orchestrator.seats import bind_holder
@@ -4301,7 +4288,7 @@ async def test_retire_agent_refuses_a_live_seated_agent_by_default(actions: Acti
 async def test_retire_agent_override_live_retires_and_releases_seat_and_mount(
     actions: Actions,
 ) -> None:
-    """NEGATIVE CONTROL: `override_live` does not exist on today's code at all — this fails
+    """NEGATIVE CONTROL: `override_live` does not exist on today's code at all, so this fails
     against unfixed retire_agent with a TypeError (unexpected keyword argument), and even a
     caller that stripped the kwarg would find the seat/mount row untouched today."""
     from src.orchestrator import mounts
@@ -4332,9 +4319,9 @@ async def test_retire_agent_override_live_retires_and_releases_seat_and_mount(
 
 
 async def test_retire_agent_releases_seat_and_mount_when_not_live(actions: Actions) -> None:
-    """The common case task #74 was built for: a genuinely dead third party (no mount row at
+    """The common case this was built for: a genuinely dead third party (no mount row at
     all, or one stale past the liveness window) retires cleanly, WITHOUT needing
-    override_live — and must not leave its seat held by a corpse (thread 00b1c341's own
+    override_live, and must not leave its seat held by a corpse (the original bug's own
     headline complaint), which is the part of the bug that is unconditionally wrong."""
     from src.orchestrator.agents import retire_agent
     from src.orchestrator.seats import bind_holder
@@ -4360,13 +4347,13 @@ async def test_retire_agent_releases_seat_and_mount_when_not_live(actions: Actio
 async def test_retire_agent_of_a_superseded_ancestor_never_evicts_the_live_heir(
     actions: Actions,
 ) -> None:
-    """MOUNT ROW VANISHED (c7524a2b, Thoth mail 9873): retire_agent's own seat-vacate step
-    used `held_seat` — LINEAGE-WIDE by design (any generation sharing the base, newest
-    wins) — to find WHAT SEAT the agent being retired holds. That's right for a live
+    """MOUNT ROW VANISHED: retire_agent's own seat-vacate step
+    used `held_seat`, LINEAGE-WIDE by design (any generation sharing the base, newest
+    wins), to find WHAT SEAT the agent being retired holds. That's right for a live
     mind asking about its own current seat, but wrong here: an ancestor already
     succeeded away (its own `holds` link long invalidated by `bind_holder`) shares its
     heir's base, so `held_seat(ancestor_id)` resolved to the SEAT THE HEIR CURRENTLY,
-    RIGHTFULLY HOLDS — and retire_agent then called `vacate_holder` on it, evicting the
+    RIGHTFULLY HOLDS, and retire_agent then called `vacate_holder` on it, evicting the
     live heir's own holds link (and, downstream, its seat-resolved mount identity) as a
     side effect of retiring a generation that had nothing left to retire seat-wise.
 
@@ -4374,8 +4361,8 @@ async def test_retire_agent_of_a_superseded_ancestor_never_evicts_the_live_heir(
     (the live heir, holding it now, with its own live mount row) via the same
     `bind_holder` re-link a real succession uses. `agent_liveness` is deliberately
     lineage-wide (the SOUL, not the numeral, is what's live), so retiring the long-dead
-    ancestor numeral while its heir is alive today correctly needs `override_live=True`
-    — a real caller cleaning up old generations already knows this. What must NOT happen
+    ancestor numeral while its heir is alive today correctly needs `override_live=True`.
+    A real caller cleaning up old generations already knows this. What must NOT happen
     even then is the heir's own holds link AND agent_mounts row getting torn down as a
     side effect of retiring an ancestor that held nothing itself by this point."""
     from src.orchestrator import mounts
@@ -4406,9 +4393,9 @@ async def test_retire_agent_of_a_superseded_ancestor_never_evicts_the_live_heir(
 async def test_retire_agent_clears_the_harnesss_stale_stopped_record(
     actions: Actions, monkeypatch: Any,
 ) -> None:
-    """Thoth dispatch 7543 item 1: `osiris stop` already clears the harness's own stale
+    """`osiris stop` already clears the harness's own stale
     "stopped" background record (the copy-quirk's root cause); this is the same clear for
-    a THIRD-PARTY retirement that never went through stop_seat at all — read the mount
+    a THIRD-PARTY retirement that never went through stop_seat at all. Read the mount
     row's job_dir BEFORE release_mounts drops it, then best-effort `claude rm <key>`."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import retire_agent
@@ -4417,7 +4404,7 @@ async def test_retire_agent_clears_the_harnesss_stale_stopped_record(
     await mounts.save_mount(
         actions.pool, job_dir="/home/x/.claude/jobs/abc12345", agent_id="agent:retireclear01",
         project="osiris", cwd="/tmp/retireclear-office", model=None, session_key=None)
-    # stale, past the 15-minute liveness window — a genuinely dead third party, not a
+    # stale, past the 15-minute liveness window, a genuinely dead third party, not a
     # live one (retire_agent must not need override_live for this specimen)
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen=now() - interval '1 hour' "
@@ -4454,7 +4441,7 @@ async def test_retire_agent_omits_stale_records_cleared_when_there_was_nothing_t
     await actions.create_or_find_object("Agent", "agent:retireclear02", "test")
 
     async def _unreachable(*argv: str, **kw: Any) -> Any:
-        raise AssertionError("no mount row — claude rm must never be attempted")
+        raise AssertionError("no mount row, claude rm must never be attempted")
 
     monkeypatch.setattr("asyncio.create_subprocess_exec", _unreachable)
 
@@ -4465,11 +4452,11 @@ async def test_retire_agent_omits_stale_records_cleared_when_there_was_nothing_t
     assert "stale_records_cleared" not in out
 
 
-# --- correct_succession (msg 7677/7680, decision 76d43073's half-heal-detect backlog):
-# the sanctioned door for `succeeded_by` — no verb touched this property before. Shaped
-# like retire_agent's own liveness guard (agent_liveness, override_live escape hatch),
-# never a permanent block; the receipt names was/now for the property and lineage_head
-# before/after the write so a caller can see whether the correction moved resolution.
+# --- correct_succession: the sanctioned door for `succeeded_by`, no verb touched this
+# property before. Shaped like retire_agent's own liveness guard (agent_liveness,
+# override_live escape hatch), never a permanent block; the receipt names was/now for the
+# property and lineage_head before/after the write so a caller can see whether the
+# correction moved resolution.
 
 async def test_correct_succession_retracts_a_stale_pointer_and_receipts_both_sides(
     actions: Actions,
@@ -4482,11 +4469,11 @@ async def test_correct_succession_retracts_a_stale_pointer_and_receipts_both_sid
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
 
     out = await correct_succession(actions, agent_id="agent:cs1anc", value="",
-                                   because="half-heal batch repair, thread 22f93704",
+                                   because="half-heal batch repair",
                                    actor="agent:witness")
     assert out["was"] == "agent:cs1phantom"
     assert out["now"] == ""
-    assert out["because"] == "half-heal batch repair, thread 22f93704"
+    assert out["because"] == "half-heal batch repair"
     assert out["head_before"] == out["head_after"] == "agent:cs1anc"
     assert out["head_moved"] is False
 
@@ -4495,7 +4482,7 @@ async def test_correct_succession_retracts_a_stale_pointer_and_receipts_both_sid
         "AND a.name='succeeded_by' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         anc)
     assert now_value == ""
-    # the stale value stays in HISTORY — compensating, never deleted
+    # the stale value stays in HISTORY, compensating, never deleted
     still_there = await actions.pool.fetchval(
         "SELECT count(*) FROM assertions WHERE object_id=$1 AND name='succeeded_by' "
         "AND value #>> '{}' = 'agent:cs1phantom'", anc)
@@ -4506,8 +4493,8 @@ async def test_correct_succession_repoints_past_a_phantom_without_moving_the_hea
     actions: Actions,
 ) -> None:
     """The batch's own corrected write: repointing straight at the phantom's own real
-    successor must leave lineage_head(ancestor) exactly where it already resolved —
-    the walk already skips false_mint hops, so this changes only the STALE bookkeeping,
+    successor must leave lineage_head(ancestor) exactly where it already resolved.
+    The walk already skips false_mint hops, so this changes only the STALE bookkeeping,
     never the resolved answer."""
     from src.orchestrator.agents import correct_succession
 
@@ -4583,9 +4570,9 @@ async def test_correct_succession_override_live_bypasses_the_guard(actions: Acti
 async def test_correct_succession_never_blocks_on_an_unrelated_live_generation_of_the_same_lineage(
     actions: Actions,
 ) -> None:
-    """THE LIVE SPECIMEN (msg 7677/7680, caught mid-batch): every correction target here
+    """THE LIVE SPECIMEN, caught mid-batch: every correction target here
     is, by the very nature of a half-heal repair, a historical ancestor several
-    generations behind whatever the lineage's CURRENT head is — and that current head is
+    generations behind whatever the lineage's CURRENT head is, and that current head is
     very likely live right now, which is exactly why `mounts.agent_liveness`'s own
     lineage-wide widening is the wrong check to run on the ANCESTOR's exact id. This is a
     NEGATIVE CONTROL: it must fail against the unfixed verb (agent_liveness instead of
@@ -4598,7 +4585,7 @@ async def test_correct_succession_never_blocks_on_an_unrelated_live_generation_o
     await actions.assert_property(anc, "succeeded_by", "agent:cs7phantom", "seam-debounce",
                                   datetime.now(UTC), 0.6,
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
-    # the CURRENT head of the same lineage is live right now — a different generation,
+    # the CURRENT head of the same lineage is live right now, a different generation,
     # never the one being corrected.
     await mounts.save_mount(actions.pool, job_dir="/j/cs7lineage-xii",
                             agent_id="agent:cs7lineage-xii", project="osiris", cwd="/x",
@@ -4612,8 +4599,8 @@ async def test_correct_succession_never_blocks_on_an_unrelated_live_generation_o
 
 async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
     """Two relations, two names. `succeeded_from` chains ANCHORS (which conversation spawned
-    which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name is the
-    mistake that started all of this — an heir must carry both, and they must stay distinct."""
+    which); `succeeds_seat` chains HOLDERS of a job. Two relations wearing one name was a
+    real bug: an heir must carry both, and they must stay distinct."""
     from src.orchestrator.agents import claim_name, mint_heir
 
     anc = await actions.create_or_find_object("Agent", "agent:twoedge", "test")
@@ -4628,17 +4615,17 @@ async def test_succeeds_seat_is_not_succeeded_from(actions: Actions) -> None:
 
 
 async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None:
-    """dd47c1da: "fleet() must print claimed names" — the roster is braille without them; a
+    """fleet() must print claimed names: the roster is unreadable without them. A
     dispatcher scanning the tree for who to address should not have to cross-reference every
     id against claim_name's ledger by hand. Anonymous agents render exactly as before."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
 
-    # an ACTIVE SoftwareProject named "bytebye" so ruling f6b758fc's own resolve_fleet_
-    # projects resolves these two sessions (never unfiled) — this test is about claimed
+    # an ACTIVE SoftwareProject named "bytebye" so resolve_fleet_
+    # projects resolves these two sessions (never unfiled). This test is about claimed
     # names, not project resolution, and the fixture's raw label must resolve for the
-    # default (non---full) tree to still expand them individually the way this test reads.
+    # default (non-full) tree to still expand them individually the way this test reads.
     proj = await actions.create_or_find_object("SoftwareProject", "repo:bytebye", "test")
     await actions.assert_property(proj, "name", "bytebye", "test", datetime.now(UTC), 0.9)
 
@@ -4659,8 +4646,8 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
     finally:
         srv._pool = saved_pool
 
-    # the claimed seat rides beside its id — with its BINDING anchored beside it, because
-    # the claim now mints and binds the Seat object (the on-ramp, 5cef856b)
+    # the claimed seat rides beside its id, with its BINDING anchored beside it, because
+    # the claim now mints and binds the Seat object
     assert f"{named} (Ra I ⚓seat:" in out["tree"]
     assert anon in out["tree"] and f"{anon} (" not in out["tree"]  # anonymous: unchanged
     rows = {r["agent"]: r for r in out["registered"]}
@@ -4671,7 +4658,7 @@ async def test_fleet_shows_claimed_names_beside_the_id(actions: Actions) -> None
 async def test_fleet_surfaces_a_live_agents_context_pct_as_a_seam_reading(
     actions: Actions,
 ) -> None:
-    """Thread dd937122, wave 11: fleet()'s own tree carries a LIVE node's own context_pct
+    """fleet()'s own tree carries a LIVE node's own context_pct
     (the same property stop-hook osiris_hook.py stamps and _co_agents already reads for
     the mount/orient briefing) as a trailing 'NN%ctx' token, plain text -- coloring is
     cli_render.paint_fleet_text's own job, applied client-side."""
@@ -4707,9 +4694,9 @@ async def test_fleet_surfaces_a_live_agents_context_pct_as_a_seam_reading(
 
 
 async def test_fleet_surfaces_a_live_agents_harness_caps(actions: Actions) -> None:
-    """Wave 13 item 3, thread e7f173a6: fleet()'s own tree carries a LIVE node's own
+    """fleet()'s own tree carries a LIVE node's own
     stamped harness (mount()'s own new write, _infer_harness) as a trailing
-    'caps: <names>' token — a body with no stamp shows the box's own resolved adapter,
+    'caps: <names>' token. A body with no stamp shows the harness's own resolved adapter,
     marked '(box default)'."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
@@ -4747,19 +4734,18 @@ async def test_fleet_surfaces_a_live_agents_harness_caps(actions: Actions) -> No
 
 
 async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> None:
-    """heinrich's ghost-seat filing (thread 1fe6811c) made visible, PER-IDENTITY (thread #174,
-    2026-08-18): 'ghosttown' carries BOTH a false-live row (a mount with no real process behind
-    it) AND an unclaimed real body (a process the graph never counted live) AT THE SAME TIME —
-    exactly rotten-apple's own specimen, where the old net (`live_n - bodies`) cancelled the two
-    and read as clean. 'quietplace' has neither: its one live mount is backed by a real body at
-    the same cwd."""
+    """A ghost-seat filing bug made visible, PER-IDENTITY: 'ghosttown' carries BOTH a
+    false-live row (a mount with no real process behind it) AND an unclaimed real body (a
+    process the graph never counted live) AT THE SAME TIME, exactly the shape where the
+    old net (`live_n - bodies`) cancelled the two and read as clean. 'quietplace' has
+    neither: its one live mount is backed by a real body at the same cwd."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
 
-    # ACTIVE SoftwareProjects for both raw labels, so ruling f6b758fc's own
-    # resolve_fleet_projects resolves them (never unfiled) — this test is about the
+    # ACTIVE SoftwareProjects for both raw labels, so
+    # resolve_fleet_projects resolves them (never unfiled). This test is about the
     # ghost_gap breakdown per project, not project resolution, and the fixture's raw
-    # labels must resolve for the default (non---full) tree to still show each project's
+    # labels must resolve for the default (non-full) tree to still show each project's
     # own head line the way this test's `next(... startswith("▸ ghosttown"))` reads.
     for label in ("ghosttown", "quietplace"):
         proj = await actions.create_or_find_object("SoftwareProject", f"repo:{label}", "test")
@@ -4798,7 +4784,7 @@ async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> N
         census.live_bodies = saved_live_bodies  # type: ignore
         census.live_bodies_by_cwd = saved_by_cwd  # type: ignore
 
-    assert out["live"] == 3                              # UNCHANGED meaning — still the belief
+    assert out["live"] == 3                              # UNCHANGED meaning, still the belief
     assert out["os_bodies"] == {"ghosttown": 1, "quietplace": 1}
     assert out["ghost_gap"]["ghosttown"]["false_live"] == ["agent:census0"]
     assert out["ghost_gap"]["ghosttown"]["false_dead"] == [{"cwd": "/gt/c", "pids": [333]}]
@@ -4812,12 +4798,12 @@ async def test_fleet_surfaces_os_bodies_and_the_ghost_gap(actions: Actions) -> N
 async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_counted(
     actions: Actions,
 ) -> None:
-    """WAVE 21 item 5 (mail 9869 2f59a0ed, decision 5a2e85ac): EnterWorktree moves a live
+    """EnterWorktree moves a live
     session's real OS cwd into a worktree subdirectory while agent_mounts.cwd stays stale
-    at the pre-worktree repo root — the SAME session used to be filed TWICE (false_live
+    at the pre-worktree repo root. The SAME session used to be filed TWICE (false_live
     under its stale mount cwd's project, false_dead under the worktree cwd's own "?"
     bucket). CLAUDE_JOB_DIR is fixed for an OS process's entire life and survives the cwd
-    move — correlating on it must suppress BOTH sides of the pair, leaving 'movedproj'
+    move; correlating on it must suppress BOTH sides of the pair, leaving 'movedproj'
     with no gap at all, while a genuinely unrelated false_live/false_dead pair (no shared
     job_dir) still files normally."""
     from src import mcp_server as srv
@@ -4828,7 +4814,7 @@ async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_co
         await actions.assert_property(proj, "name", label, "test", datetime.now(UTC), 0.9)
 
     # movedproj/moved0: mount row's cwd is the stale pre-worktree repo root; the real body
-    # lives at the worktree cwd instead — no cwd string ever matches, only job_dir does.
+    # lives at the worktree cwd instead, no cwd string ever matches, only job_dir does.
     a_moved = "agent:moved0"
     obj = await actions.create_or_find_object("Agent", a_moved, a_moved)
     await actions.assert_property(obj, "project", "movedproj", a_moved, datetime.now(UTC),
@@ -4838,7 +4824,7 @@ async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_co
                             session_key=a_moved, alive=True)
 
     # ghosttown2/unrelated0: a genuine false_live with NO matching job_dir anywhere in the
-    # OS census — must still file normally, proving correlation doesn't over-suppress.
+    # OS census, must still file normally, proving correlation doesn't over-suppress.
     a_unrelated = "agent:unrelated0"
     obj2 = await actions.create_or_find_object("Agent", a_unrelated, a_unrelated)
     await actions.assert_property(obj2, "project", "ghosttown2", a_unrelated,
@@ -4883,7 +4869,7 @@ async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_co
     assert out["ghost_gap"]["ghosttown2"]["false_live"] == ["agent:unrelated0"]
     assert out["ghost_gap"]["ghosttown2"]["false_dead"] == [
         {"cwd": "/gt2/b", "pids": [555]}]
-    # the correlated worktree cwd must not leak into the catch-all "?" bucket either — a
+    # the correlated worktree cwd must not leak into the catch-all "?" bucket either. A
     # weaker fix that only dropped the false_LIVE side would still surface the false_dead
     # half here, which this specifically rules out.
     unclaimed_cwds = [d["cwd"] for entries in out["ghost_gap"].values()
@@ -4894,10 +4880,10 @@ async def test_fleet_ghost_gap_correlates_a_worktree_moved_session_not_double_co
 async def test_fleet_folds_registry_census_bodies_with_ghost_status(
     actions: Actions,
 ) -> None:
-    """Thoth dispatch msg 5286 (thread 5256): registry_census's own harness-vs-mount view
+    """registry_census's own harness-vs-mount view
     folded into fleet(), occupancy and identity side by side, no second call. A rowless
     body whose cwd the SAME ghost_gap read also can't find a live graph node behind gets
-    ghost_status='false_dead' — the two independent detectors (harness self-report, OS
+    ghost_status='false_dead', the two independent detectors (harness self-report, OS
     pgrep) agreeing; a matched body backed by a live node gets no ghost_status at all."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
@@ -4952,8 +4938,8 @@ async def test_fleet_folds_registry_census_bodies_with_ghost_status(
 
 
 async def test_fleet_harness_registry_survives_a_blind_census(actions: Actions) -> None:
-    """Same fail-open law as os_bodies/whisper_health: a registry_census failure must
-    never break fleet() itself — it reads blind, not absent."""
+    """Same fail-open rule as os_bodies/whisper_health: a registry_census failure must
+    never break fleet() itself, it reads blind, not absent."""
     from src import mcp_server as srv
     from src.orchestrator import mounts
 
@@ -4975,11 +4961,11 @@ async def test_fleet_harness_registry_survives_a_blind_census(actions: Actions) 
 
 
 async def test_fleet_groups_a_folded_project_under_its_survivor(actions: Actions) -> None:
-    """Task #180 piece 2 (f), Henry msg 5236 — the repo:henry->repo:shellbiz specimen
-    (2026-08-14): an Agent's raw `project` assertion still names the FOLDED label after a
-    fold_project — fold_project re-addresses agent_mounts.project and the estate link
-    types, but never the Agent's own current_assertions property. fleet()'s grouping must
-    normalize through merged_into or the dead label renders its own group forever."""
+    """The repo:henry->repo:shellbiz specimen: an Agent's raw `project` assertion still
+    names the FOLDED label after a fold_project. fold_project re-addresses
+    agent_mounts.project and the ownership link types, but never the Agent's own
+    current_assertions property. fleet()'s grouping must normalize through merged_into or
+    the dead label renders its own group forever."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
     from src.orchestrator.projects import fold_project
@@ -5015,7 +5001,7 @@ async def test_fleet_groups_a_folded_project_under_its_survivor(actions: Actions
 
 
 async def test_fleet_surfaces_pool_health(actions: Actions) -> None:
-    """Task #180 piece 2 (c): fleet()'s pg_stat_activity-by-application surface — this
+    """Task #180 piece 2 (c): fleet()'s pg_stat_activity-by-application surface. This
     test's own connection is real, so its application_name shows up in the count."""
     from src import mcp_server as srv
 
@@ -5032,7 +5018,7 @@ async def test_fleet_surfaces_pool_health(actions: Actions) -> None:
 
 async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
     """The OS census is best-effort, never a hard dependency: if it raises for any reason,
-    fleet() must still answer — with the truth it can vouch for."""
+    fleet() must still answer, with the truth it can vouch for."""
     from src import mcp_server as srv
     from src.orchestrator import census
 
@@ -5044,8 +5030,8 @@ async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
 
     srv._pool = actions.pool
     census.live_bodies = _boom  # type: ignore
-    # the per-identity ghost_gap read (thread #174) is a SEPARATE OS read from os_bodies
-    # above — must fail the same way, or this test would pick up whatever real claude
+    # the per-identity ghost_gap read is a SEPARATE OS read from os_bodies
+    # above, must fail the same way, or this test would pick up whatever real claude
     # processes happen to be running on the box that runs it (this session included).
     census.live_bodies_by_cwd = _boom  # type: ignore
     try:
@@ -5061,9 +5047,9 @@ async def test_fleet_survives_a_census_that_fails(actions: Actions) -> None:
 async def test_fleet_ghost_gap_survives_a_job_dir_correlation_read_that_fails(
     actions: Actions,
 ) -> None:
-    """The job_dir correlation read (WAVE 21 item 5, thread 2f59a0ed) is best-effort too,
+    """The job_dir correlation read is best-effort too,
     same law as the rest of this OS census: a raise there must never cost the false_live/
-    false_dead entries it would otherwise have merely failed to correlate — fleet()
+    false_dead entries it would otherwise have merely failed to correlate. fleet()
     degrades to filing both sides uncorrelated, never to crashing."""
     from src import mcp_server as srv
     from src.orchestrator import census, mounts
@@ -5104,9 +5090,9 @@ async def test_fleet_ghost_gap_survives_a_job_dir_correlation_read_that_fails(
 async def test_fleet_surfaces_occupancy_including_a_seat_with_no_agent_at_all(
     actions: Actions,
 ) -> None:
-    """occupancy piece B (9f566244), acceptance case: Ptah's office once showed four
+    """occupancy piece B, acceptance case: an office once showed four
     bodies where one lived. The agent tree is rooted at Agent objects, so a seat with NO
-    holder ever — nothing to walk to from any agent row — would never appear in it at
+    holder ever, nothing to walk to from any agent row, would never appear in it at
     all. fleet()'s new `seats` list is rooted at Seat objects instead, so a vacant seat
     is exactly as visible as an occupied one."""
     from src import mcp_server as srv
@@ -5147,7 +5133,7 @@ async def test_fleet_surfaces_occupancy_including_a_seat_with_no_agent_at_all(
 async def test_fleet_surfaces_cross_channel_adoption_for_a_recovered_seat(
     actions: Actions,
 ) -> None:
-    """task #181 (Thoth DM 5320): a live seat whose current session was already recovered
+    """task #181: a live seat whose current session was already recovered
     (recover_harness_exchanges) shows a real osiris-vs-harness split; one that was never
     recovered shows harness_count=None (unknown), never a false zero."""
     from src import mcp_server as srv
@@ -5186,9 +5172,9 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
     """A bounce that says only "mount first" is a mystery; one that names its cause is a bug
     report the next mind does not have to file again.
 
-    Two sibling-three agents reported the same thing within an hour (msgs 397/403): after an MCP
+    Two separate agents reported the same thing within an hour: after an MCP
     socket hiccup the call bounces, and an un-mounted write silently falls back to the anonymous
-    `session` bucket — "one careless reconnect and a session's work lands unattributed". For a
+    `session` bucket, so one careless reconnect and a session's work lands unattributed. For a
     graph whose whole value is provenance that is the worst failure it has. The re-attach path is
     STARVED, not broken: it keys off X-Osiris-Job (.mcp.json sends ${CLAUDE_JOB_DIR}), so a client
     whose environment lacks that variable sends nothing usable and cannot be re-attached at all.
@@ -5203,10 +5189,10 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
         def __init__(self, hdr: dict[str, str]) -> None:
             self.request_context = type("RC", (), {"request": _Req(hdr)})()
 
-    # TRANSIENT OR TERMINAL — Khepri III's ask (msg 420), and the fourth seat to file this bug:
-    # "a reason code would let an agent tell 'transient, just retry' from 'something actually
-    # forgot me'." A bounce that says only "mount first" is INDISTINGUISHABLE FROM AMNESIA, so
-    # every agent guesses — and a guessing agent either re-mounts needlessly, or panics about
+    # TRANSIENT OR TERMINAL: multiple agents asked for this, wanting
+    # a reason code that would let an agent tell "transient, just retry" from "something actually
+    # forgot me." A bounce that says only "mount first" is INDISTINGUISHABLE FROM AMNESIA, so
+    # every agent guesses, and a guessing agent either re-mounts needlessly, or panics about
     # continuity it never lost. These are DIFFERENT FACTS.
     none = _anchorless(_Ctx({}))
     assert "[no-anchor · TRANSIENT]" in none
@@ -5217,7 +5203,7 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
     assert "[unexpanded-anchor · TRANSIENT]" in unexpanded and "not set" in unexpanded
     assert "Nothing has forgotten you" in unexpanded
 
-    # a real anchor that simply is not registered is a DIFFERENT failure — and it is the REAL one
+    # a real anchor that simply is not registered is a DIFFERENT failure, and it is the REAL one
     terminal = _anchorless(_Ctx({"x-osiris-job": "/home/x/.claude/jobs/abc"}))
     assert "[unknown-anchor · TERMINAL]" in terminal
     assert "matches no mount" in terminal
@@ -5225,10 +5211,10 @@ def test_an_anchorless_bounce_names_its_own_cause() -> None:
 
 
 def test_mount_stays_silent_on_a_seam_it_cannot_confidently_date() -> None:
-    """Ruling dd47c1da (Maat's fix, adopted as direction): mount() minted gen-iv/haiku and told
+    """A prior fix, adopted as direction: mount() minted gen-iv/haiku and told
     the mind to 'confess a rug-pull' that gen-iii/sonnet's own very next orient() said never
     happened. mount() must never assert a model-seam unless BOTH sides are KNOWN values
-    observed on THIS identity's own row (job_dir-anchored) — otherwise it stays silent and lets
+    observed on THIS identity's own row (job_dir-anchored), otherwise it stays silent and lets
     orient() (untouched here) tell the story."""
     from src.mcp_server import _seam_confidently_dated
 
@@ -5237,20 +5223,20 @@ def test_mount_stays_silent_on_a_seam_it_cannot_confidently_date() -> None:
                              model_succession="claude-opus-4-8 → claude-fable-5")
     assert _seam_confidently_dated(anchored) is True
 
-    # a pure reanimation makes no model claim at all — nothing to mis-date, trivially confident
+    # a pure reanimation makes no model claim at all, nothing to mis-date, trivially confident
     no_seam = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
                             model="claude-fable-5", cwd="/w/x", model_method="job_dir",
                             model_succession=None)
     assert _seam_confidently_dated(no_seam) is True
 
-    # NOT observed on this identity's own row — a cwd guess or a self-report is a neighbor's
+    # NOT observed on this identity's own row, a cwd guess or a self-report is a neighbor's
     # word, never a seam to speak from
     unanchored = AgentIdentity(agent_id="agent:x-ii", session="x", project="p",
                                model="claude-fable-5", cwd="/w/x", model_method="cwd",
                                model_succession="claude-opus-4-8 → claude-fable-5")
     assert _seam_confidently_dated(unanchored) is False
 
-    # the current model is not even known — nothing anchors the claim
+    # the current model is not even known, nothing anchors the claim
     no_model = AgentIdentity(agent_id="agent:x-ii", session="x", project="p", model=None,
                              cwd="/w/x", model_method="job_dir",
                              model_succession="claude-opus-4-8 → claude-fable-5")
@@ -5264,8 +5250,8 @@ def test_mount_stays_silent_on_a_seam_it_cannot_confidently_date() -> None:
 
 
 async def test_lineage_head_never_lands_on_a_merged_generation(actions: Actions) -> None:
-    """The phantom disposition (2026-07-17): the operator merged false successors away,
-    but their succeeded_by pointers survive (append-only) — the walk must return the
+    """The phantom disposition (2026-07-17): false successors were merged away,
+    but their succeeded_by pointers survive (append-only), the walk must return the
     last ACTIVE generation, never the graveyard's end. A merged generation mid-chain is
     traversed but never returned."""
     from src.orchestrator.agents import lineage_head
@@ -5300,7 +5286,7 @@ async def test_lineage_head_resolves_a_merged_start_to_the_winner(
 ) -> None:
     """The resume-lane replay (2026-07-17): a row bound to a folded phantom fed the
     phantom's canonical into the head-walk, and a merged START with no successors
-    testified for its own grave. The walk resolves merged_into FIRST — it comes home
+    testified for its own grave. The walk resolves merged_into FIRST, it comes home
     to the winner, then walks forward."""
     from src.orchestrator.agents import lineage_head
 
@@ -5317,8 +5303,8 @@ async def test_lineage_head_resolves_a_merged_start_to_the_winner(
 
 
 async def test_lineage_head_never_lands_on_a_healed_husk(actions: Actions) -> None:
-    """thread 4a7da43a (reap Stage 1b, 2026-07-28): false_mint healing (heal.py /
-    seam-debounce) never flips objects.status — a husk stays 'active' forever, same gap
+    """reap Stage 1b (2026-07-28): false_mint healing (heal.py /
+    seam-debounce) never flips objects.status, a husk stays 'active' forever, same gap
     as retire_seat leaving Seat.status active. A husk that is the chain's CURRENT tail
     (no real successor minted yet) must not be handed back as the head."""
     from src.orchestrator.agents import lineage_head
@@ -5344,8 +5330,8 @@ async def test_lineage_head_walks_through_a_healed_husk_to_the_real_tail(
     actions: Actions,
 ) -> None:
     """Walk CONTINUATION is unchanged: `cur` still steps through a husk exactly as before
-    (verified live against real data, decision c41f74a6 — every husk checked still had its
-    own real succeeded_by continuing the chain) — only the RETURNED head now also requires
+    (verified live against real data, every husk checked still had its
+    own real succeeded_by continuing the chain), only the RETURNED head now also requires
     false_mint absent. A husk mid-chain is traversed, never returned."""
     from src.orchestrator.agents import lineage_head
 
@@ -5366,10 +5352,10 @@ async def test_lineage_head_walks_through_a_healed_husk_to_the_real_tail(
 async def test_lineage_head_breaks_a_true_tie_toward_the_real_pointer_not_the_retraction(
     actions: Actions,
 ) -> None:
-    """Live specimen (thread 20af2c95, msg 5046: Thoth's own -v -> -vi hop, discovered by
+    """Live specimen (an agent's own -v -> -vi hop, discovered by
     backfill_agent_project_links's first live dry-run): a phantom-fold heal's retraction
     (succeeded_by="") and the REAL succeeded_by re-assertion landed at the IDENTICAL
-    confidence AND observed_at — the same shared-timestamp class as f6f11d78/5b217d13's
+    confidence AND observed_at, the same shared-timestamp class as an earlier
     works_in duplicate, here on succeeded_by. `ORDER BY confidence DESC, observed_at DESC`
     alone had no tiebreaker for that exact tie, so the walk could stop dead at the OLDER
     generation depending on Postgres's own arbitrary row order. Reproduced verbatim: same
@@ -5381,9 +5367,9 @@ async def test_lineage_head_breaks_a_true_tie_toward_the_real_pointer_not_the_re
     v = await actions.create_or_find_object("Agent", "agent:55c0ffee-v", "test")
     await actions.create_or_find_object("Agent", "agent:55c0ffee-vi", "test")
     # THE TIE: empty retraction and the real pointer, DIFFERENT sources (so same-source
-    # auto-supersession never fires between them), identical instant and confidence —
+    # auto-supersession never fires between them), identical instant and confidence,
     # exactly what a heal transaction sharing one `now` produces live. Retraction inserted
-    # FIRST — the worst case for the old query, which had no tiebreaker to correct it.
+    # FIRST, the worst case for the old query, which had no tiebreaker to correct it.
     await actions.assert_property(v, "succeeded_by", "", "phantom-fold", now, 0.6,
                                   evidence_class="direct_observation")
     await actions.assert_property(v, "succeeded_by", "agent:55c0ffee-vi", "agent:55c0ffee-vi",
@@ -5393,8 +5379,8 @@ async def test_lineage_head_breaks_a_true_tie_toward_the_real_pointer_not_the_re
         "a same-instant retraction must never outrank a same-instant real pointer")
 
 
-# ═══ STALLING AT A FORK (thread a418b017): a node can carry more than one simultaneously-
-# current succeeded_by VALUE (one per source) — the OLD walk picked exactly one by rank
+# ═══ STALLING AT A FORK: a node can carry more than one simultaneously-
+# current succeeded_by VALUE (one per source). The OLD walk picked exactly one by rank
 # order and continued blindly, stopping dead if that pick was a dead end even while ANOTHER
 # candidate at the same fork led on to the live head. ════════════════════════════════════
 
@@ -5411,8 +5397,8 @@ async def test_lineage_head_crosses_a_fork_to_reach_the_live_branch(
     fork = await actions.create_or_find_object("Agent", "agent:66fork-i", "test")
     await actions.create_or_find_object("Agent", "agent:66fork-dead", "test")
     await actions.create_or_find_object("Agent", "agent:66fork-live", "test")
-    # the DEAD branch is asserted with HIGHER confidence and a LATER timestamp — the old
-    # single-path query would pick it every time — from a source with no reason to lose.
+    # the DEAD branch is asserted with HIGHER confidence and a LATER timestamp, the old
+    # single-path query would pick it every time, from a source with no reason to lose.
     await actions.assert_property(fork, "succeeded_by", "agent:66fork-dead",
                                   "source-a", now, 0.9, evidence_class="self_declared")
     await actions.assert_property(fork, "succeeded_by", "agent:66fork-live",
@@ -5428,7 +5414,7 @@ async def test_lineage_head_at_a_fork_with_no_live_branch_prefers_tenure(
     actions: Actions,
 ) -> None:
     """A fork where NEITHER branch is live: the branch that travelled FURTHER (more real
-    generations since the fork) wins over a shorter dead end — the tenure tie-break."""
+    generations since the fork) wins over a shorter dead end, the tenure tie-break."""
     from src.orchestrator.agents import lineage_head
 
     now = datetime.now(UTC)
@@ -5449,8 +5435,8 @@ async def test_lineage_head_at_a_fork_with_no_live_branch_prefers_tenure(
 async def test_lineage_head_reaches_a_live_terminal_at_the_worst_ranked_fork_position(
     actions: Actions,
 ) -> None:
-    """Reproduces the live shape (thread a418b017): several current succeeded_by
-    candidates on one node, only ONE of which continues on to a live terminal — placed
+    """Reproduces the live shape: several current succeeded_by
+    candidates on one node, only ONE of which continues on to a live terminal, placed
     at the WORST rank position (lowest confidence, oldest timestamp, lowest id) among
     four candidates, so this only passes if every distinct candidate is genuinely
     explored, not merely the top-ranked one."""
@@ -5463,7 +5449,7 @@ async def test_lineage_head_reaches_a_live_terminal_at_the_worst_ranked_fork_pos
         await actions.create_or_find_object("Agent", f"agent:88fork-dead-{leaf}", "test")
     await actions.create_or_find_object("Agent", "agent:88fork-live", "test")
     # three dead branches, each ranked ABOVE the live one (higher confidence or, at equal
-    # confidence, a later timestamp) — inserted first so their assertion ids are lower,
+    # confidence, a later timestamp), inserted first so their assertion ids are lower,
     # not that it matters here since confidence/observed_at alone already outrank it.
     await actions.assert_property(fork, "succeeded_by", "agent:88fork-dead-a",
                                   "source-a", now, 0.9, evidence_class="self_declared")
@@ -5472,7 +5458,7 @@ async def test_lineage_head_reaches_a_live_terminal_at_the_worst_ranked_fork_pos
     await actions.assert_property(fork, "succeeded_by", "agent:88fork-dead-c",
                                   "source-c", now - timedelta(seconds=1), 0.7,
                                   evidence_class="direct_observation")
-    # the LIVE branch: lowest confidence, oldest timestamp — last place by the old
+    # the LIVE branch: lowest confidence, oldest timestamp, last place by the old
     # single-path rank order.
     await actions.assert_property(fork, "succeeded_by", "agent:88fork-live",
                                   "source-d", now - timedelta(days=1), 0.35,
@@ -5487,7 +5473,7 @@ async def test_succeeded_by_candidates_collapses_two_sources_agreeing_on_one_val
     actions: Actions,
 ) -> None:
     """TWO DIFFERENT sources agreeing on the SAME succeeded_by value is corroboration,
-    never a fork — `_succeeded_by_candidates` groups by VALUE, not by assertion row, so
+    never a fork. `_succeeded_by_candidates` groups by VALUE, not by assertion row, so
     this is exactly one candidate, not two."""
     from src.orchestrator.agents import _succeeded_by_candidates
 
@@ -5505,8 +5491,8 @@ async def test_succeeded_by_candidates_collapses_two_sources_agreeing_on_one_val
 
 
 async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
-    """THE PARALLEL-LIVES STAMP (thread 4bcd6541): rows are hot state, so the pulse
-    evidence at mint time is captured AT the mint — predecessor_last_seen always, and
+    """THE PARALLEL-LIVES STAMP: rows are hot state, so the pulse
+    evidence at mint time is captured AT the mint, predecessor_last_seen always, and
     parallel_pulse_door only when a DIFFERENT door of the lineage was live at the seam
     (one's own door never alarms; a view row is never the witness)."""
     from src.orchestrator.agents import mint_heir
@@ -5524,10 +5510,10 @@ async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
         "SELECT a.name, a.value#>>'{}' AS v FROM current_assertions a "
         "WHERE a.object_id=$1 "
         "AND a.name IN ('predecessor_last_seen','parallel_pulse_door')", hoid)}
-    assert "predecessor_last_seen" in got                # the last breath is on record
+    assert "predecessor_last_seen" in got                # the last activity is on record
     assert got.get("parallel_pulse_door") == "f0be1a2b"  # the OTHER door was live
 
-    # a single-door lineage: its own pulse is the dying session's — never an alarm
+    # a single-door lineage: its own pulse is the dying session's, never an alarm
     b2 = await actions.create_or_find_object("Agent", "agent:50101112", "agent:50101112")
     await save_mount(actions.pool, job_dir="/x/jobs/50101112", agent_id="agent:50101112",
                      project="p", cwd="/w/p", model=None, session_key=None)
@@ -5542,18 +5528,18 @@ async def test_mint_stamps_the_parallel_pulse(actions: Actions) -> None:
 
 
 async def test_mint_heir_never_lands_on_a_stale_healed_canonical(actions: Actions) -> None:
-    """THE GRAVE-GUARD SEES ASSERTIONS TOO (msg 2325, live case: John/d5c671c1-xv): a heal
-    (husk-heal / phantom-fold) never flips objects.status away from 'active' — compensating
-    events only, constitution 3 — so the numeral-walk's old status-only check silently
+    """THE GRAVE-GUARD SEES ASSERTIONS TOO (live case: an agent whose lineage was healed): a heal
+    (husk-heal / phantom-fold) never flips objects.status away from 'active' (compensating
+    events only, constitution 3), so the numeral-walk's old status-only check silently
     reused a healed canonical, dragging a real generation onto marks that record a false
-    start. THE HEAL IS A ONE-WAY DOOR WITH NO RE-ENTRY (decision 7a37327c) once it is
-    STALE — John's was 20 hours cold with no seam in between. A heal outside the mint
+    start. THE HEAL IS A ONE-WAY DOOR WITH NO RE-ENTRY once it is
+    STALE, that live case was 20 hours cold with no seam in between. A heal outside the mint
     gate's own debounce window must be refused, exactly like a merged canonical."""
     from src.orchestrator.agents import _SEAM_DEBOUNCE_SECS, mint_heir
 
     stale = datetime.now(UTC) - timedelta(seconds=_SEAM_DEBOUNCE_SECS + 100)
     root = await actions.create_or_find_object("Agent", "agent:heal0001", "agent:heal0001")
-    # -ii was minted once, diagnosed as a husk, and healed LONG AGO — status stays 'active'
+    # -ii was minted once, diagnosed as a husk, and healed LONG AGO, status stays 'active'
     husk = await actions.create_or_find_object("Agent", "agent:heal0001-ii",
                                                 "agent:heal0001-ii")
     await actions.assert_property(husk, "false_mint", True, "seam-debounce", stale, 0.6,
@@ -5573,10 +5559,10 @@ async def test_mint_heir_reuses_a_freshly_folded_phantoms_numeral(actions: Actio
     """The other half of the same law, and the case that would have shipped broken without
     it (caught by test_two_zero_turn_compactions_fold, which regressed against the first
     cut of this guard): _fold_zero_turn_ancestors heals a zero-turn phantom and hands its
-    OWN caller the corrected ancestor to mint against — next_generation() naturally
+    OWN caller the corrected ancestor to mint against. next_generation() naturally
     reproduces the exact numeral just folded, moments earlier, in the SAME seam-resolution
-    operation. Refusing that would break the fold's whole point (MINT ONCE, not MINT ZERO,
-    ruling d3531cd8) — a heal still inside the debounce window is not a resurrection."""
+    operation. Refusing that would break the fold's whole point (MINT ONCE, not MINT ZERO),
+    a heal still inside the debounce window is not a resurrection."""
     from src.orchestrator.agents import mint_heir
 
     now = datetime.now(UTC)
@@ -5596,7 +5582,7 @@ async def test_mint_heir_reuses_a_freshly_folded_phantoms_numeral(actions: Actio
 
 async def test_mint_heir_still_never_lands_on_a_merged_canonical(actions: Actions) -> None:
     """Regression guard: the healed-canonical check is ADDED to the walk, not a replacement
-    for the original merge check (Ra's resurrection, 2026-07-17) — a merged -ii must still
+    for the original merge check (a resurrection case, 2026-07-17), a merged -ii must still
     be skipped exactly as before."""
     from src.orchestrator.agents import mint_heir
 
@@ -5617,9 +5603,9 @@ async def test_mint_heir_still_never_lands_on_a_merged_canonical(actions: Action
 async def test_mint_heir_a_fresh_canonical_is_unaffected_by_the_healed_grave_check(
     actions: Actions,
 ) -> None:
-    """Sekhmet's negative-control standard (msg 2325): a guard that refuses everything
-    passes the healed-reuse test and fails the job. A plain first-time mint — no prior
-    generation, nothing healed, nothing merged — must land on the natural next numeral,
+    """The negative-control standard: a guard that refuses everything
+    passes the healed-reuse test and fails the job. A plain first-time mint, no prior
+    generation, nothing healed, nothing merged, must land on the natural next numeral,
     unaffected by the new check."""
     from src.orchestrator.agents import mint_heir
 
@@ -5631,7 +5617,7 @@ async def test_mint_heir_a_fresh_canonical_is_unaffected_by_the_healed_grave_che
         "SELECT status FROM objects WHERE id=$1", heir_oid) == "active"
 
 
-# ═══════════ SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8, msg 1398) ═══════════
+# ═══════════ SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS ═══════════
 
 async def _false_mint(actions: Actions, canonical: str) -> str | None:
     return await actions.pool.fetchval(
@@ -5641,8 +5627,8 @@ async def _false_mint(actions: Actions, canonical: str) -> str | None:
 
 
 async def test_fold_zero_turn_ancestors_folds_an_unwitnessed_mint(actions: Actions) -> None:
-    """The canonical repro, minimal: a mint with ZERO acts since — /compact then /model
-    back-to-back — folds, and the walk returns the grandancestor it should have chained
+    """The canonical repro, minimal: a mint with ZERO acts since, /compact then /model
+    back-to-back, folds, and the walk returns the grandancestor it should have chained
     onto instead."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
 
@@ -5661,7 +5647,7 @@ async def test_fold_zero_turn_ancestors_folds_an_unwitnessed_mint(actions: Actio
 
 
 async def test_fold_zero_turn_ancestors_leaves_a_witnessed_mint_alone(actions: Actions) -> None:
-    """A mind that acted — however small the act — is never folded, whatever minted it."""
+    """A mind that acted, however small the act, is never folded, whatever minted it."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
 
     root = await actions.create_or_find_object("Agent", "agent:zt0002", "test")
@@ -5677,8 +5663,8 @@ async def test_fold_zero_turn_ancestors_leaves_a_witnessed_mint_alone(actions: A
 async def test_fold_zero_turn_ancestors_never_folds_a_body_the_harness_confirms_is_live(
     actions: Actions,
 ) -> None:
-    """THE HALCYON FIX (obligation 6b1efacb, 2026-08-18): a candidate with NO graph acts of
-    its own but a live, harness-confirmed `agent_mounts` row is never folded — occupancy is
+    """THE OCCUPIED-SEAT FIX (2026-08-18): a candidate with NO graph acts of
+    its own but a live, harness-confirmed `agent_mounts` row is never folded, occupancy is
     a SECOND, independent witness beside `agent_has_acted`, not a replacement for it. Before
     this fix, exactly this shape (a body minted 4-6 seconds before its own first MCP write)
     was indistinguishable from a genuine zero-turn phantom."""
@@ -5689,14 +5675,14 @@ async def test_fold_zero_turn_ancestors_never_folds_a_body_the_harness_confirms_
     phantom, phantom_oid = await mint_heir(
         actions, "agent:zt0010", root, because="compaction", succession=None)
     # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
-    # basename against sessionId[:8]) — "zt0010ii" is 8 characters on purpose.
+    # basename against sessionId[:8]), "zt0010ii" is 8 characters on purpose.
     await mounts.save_mount(
         actions.pool, job_dir="/x/jobs/zt0010ii", agent_id=phantom, project="demo",
         cwd="/repo/demo", model=None, session_key=None)
 
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [{"sessionId": "zt0010ii-0000-4000-8000-000000000000", "pid": 444,
-                 "cwd": "/repo/demo", "name": "[OS] Halcyon"}]
+                 "cwd": "/repo/demo", "name": "[OS] worker"}]
 
     now = datetime.now(UTC)
     restored_id, restored_oid = await _fold_zero_turn_ancestors(
@@ -5711,7 +5697,7 @@ async def test_fold_zero_turn_ancestors_still_folds_the_same_shape_when_unoccupi
     actions: Actions,
 ) -> None:
     """The negative control: an identical fixture with NO live harness body still folds
-    exactly as before — the new check only ever WITHHOLDS a fold, never forces one."""
+    exactly as before, the new check only ever WITHHOLDS a fold, never forces one."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
 
@@ -5735,9 +5721,9 @@ async def test_fold_zero_turn_ancestors_still_folds_the_same_shape_when_unoccupi
 async def test_fold_zero_turn_ancestors_carries_settled_mail_memory_to_the_grandancestor(
     actions: Actions,
 ) -> None:
-    """Thread afd27e1a (Thoth mail 12877, 'MAIL TRUNCATED ACROSS SUCCESSION'): mint_heir's
-    own estate transfer carries forward a GENUINELY SETTLED message_recipients row
-    (WAVE 27 BUG 4) — until this fix, _fold_zero_turn_ancestors was a second, sibling
+    """'MAIL TRUNCATED ACROSS SUCCESSION': mint_heir's
+    own ownership transfer carries forward a GENUINELY SETTLED message_recipients row.
+    Until this fix, _fold_zero_turn_ancestors was a second, sibling
     mail-reassignment site (it already moves fleet_messages.to_agent on a fold) that
     never carried the same memory: a phantom folded here with a settled row on its own
     id left that memory orphaned on the now-retired phantom, invisible to the
@@ -5751,11 +5737,11 @@ async def test_fold_zero_turn_ancestors_carries_settled_mail_memory_to_the_grand
     out = await send_message(actions.pool, from_agent="agent:sender", from_project="osiris",
                              to_agent=phantom, body="settled before the fold")
     msg_id = int(out["id"])
-    # A row settled AT OR BEFORE the phantom's own mint (never AFTER — agent_has_acted's
+    # A row settled AT OR BEFORE the phantom's own mint (never AFTER, agent_has_acted's
     # own `read_at > settled_after` check would otherwise count it as a real act and
     # correctly refuse to fold a mind that genuinely settled mail): inherited memory
-    # from before the mint, carried onto the phantom by mint_heir's own BUG-4-compliant
-    # transfer — exactly the shape that needs a SECOND carry when the phantom itself
+    # from before the mint, carried onto the phantom by mint_heir's own transfer,
+    # exactly the shape that needs a SECOND carry when the phantom itself
     # is later folded, since it now lives only on the phantom's own id.
     await actions.pool.execute(
         "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at) "
@@ -5775,8 +5761,8 @@ async def test_fold_zero_turn_ancestors_carries_settled_mail_memory_to_the_grand
 async def test_fold_zero_turn_ancestors_never_carries_a_leased_but_unread_message(
     actions: Actions,
 ) -> None:
-    """The other half stays true, same law as mint_heir's own BUG 4 fix: a bare LEASE
-    (delivered but never settled) on the phantom's own id carries NOTHING forward — the
+    """The other half stays true, same law as mint_heir's own fix: a bare LEASE
+    (delivered but never settled) on the phantom's own id carries NOTHING forward, the
     grandancestor's own next inbox() finds that message fresh, never falsely
     pre-delivered by an inherited lease window."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
@@ -5820,7 +5806,7 @@ async def test_fold_zero_turn_ancestors_walks_a_chain_of_phantoms(actions: Actio
 
 
 async def test_fold_zero_turn_ancestors_never_folds_a_root(actions: Actions) -> None:
-    """A root has no succeeded_from — nothing minted it, so there is nothing to fold it
+    """A root has no succeeded_from, nothing minted it, so there is nothing to fold it
     into. It survives the walk unchanged even though it, too, has zero acts."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors
 
@@ -5835,8 +5821,8 @@ async def test_fold_zero_turn_ancestors_never_folds_a_root(actions: Actions) -> 
 async def test_fold_zero_turn_ancestors_respects_the_mint_gates_own_window(
     actions: Actions,
 ) -> None:
-    """EXTENDS THE MINT GATE, NOT A NEW ONE BESIDE IT (Thoth LX, msg 1402): this fold shares
-    _debounce_roundtrip's own _SEAM_DEBOUNCE_SECS window, not a second one — a zero-turn
+    """EXTENDS THE MINT GATE, NOT A NEW ONE BESIDE IT: this fold shares
+    _debounce_roundtrip's own _SEAM_DEBOUNCE_SECS window, not a second one, a zero-turn
     phantom minted long ago (outside the window) is no longer 'back-to-back' with anything
     and must never fold, however silent it's stayed."""
     from src.orchestrator.agents import _SEAM_DEBOUNCE_SECS, _fold_zero_turn_ancestors, mint_heir
@@ -5849,13 +5835,13 @@ async def test_fold_zero_turn_ancestors_respects_the_mint_gates_own_window(
     restored_id, restored_oid = await _fold_zero_turn_ancestors(
         actions, phantom, phantom_oid, now)
     assert restored_id == phantom and restored_oid == phantom_oid, (
-        "outside the window — never folded, whatever the acts-check would have said"
+        "outside the window, never folded, whatever the acts-check would have said"
     )
     assert await _false_mint(actions, phantom) is None
 
 
 async def test_fold_zero_turn_ancestors_is_idempotent(actions: Actions) -> None:
-    """Re-running the fold on an already-folded phantom halts immediately, unchanged —
+    """Re-running the fold on an already-folded phantom halts immediately, unchanged,
     the fleet sweep's own safety-to-re-run rests on this."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
 
@@ -5867,15 +5853,15 @@ async def test_fold_zero_turn_ancestors_is_idempotent(actions: Actions) -> None:
     assert first == ("agent:zt0005", root)
     second = await _fold_zero_turn_ancestors(actions, phantom, phantom_oid, now)
     assert second == (phantom, phantom_oid), (
-        "calling it again ON THE PHANTOM ITSELF halts at the phantom, already folded — "
+        "calling it again ON THE PHANTOM ITSELF halts at the phantom, already folded, "
         "same contract as the live call sites, which always start from the CURRENT head")
 
 
-# ═══════════ reinstate_generation — THE FOLD'S INVERSE (obligation 6b1efacb, 2026-08-18) ═══
+# ═══════════ reinstate_generation: THE FOLD'S INVERSE (2026-08-18) ═══
 
 async def test_reinstate_generation_undoes_a_wrongful_fold(actions: Actions) -> None:
-    """THE HALCYON REPAIR, minimal shape: a genuinely live generation was phantom-folded
-    anyway — reinstate_generation retracts false_mint/retired, re-points succeeded_from
+    """THE OCCUPIED-SEAT REPAIR, minimal shape: a genuinely live generation was phantom-folded
+    anyway, reinstate_generation retracts false_mint/retired, re-points succeeded_from
     back at its real predecessor, and moves the seat forward onto it."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir, reinstate_generation
     from src.orchestrator.seats import bind_holder, ensure_seat, seat_receipt
@@ -5892,7 +5878,7 @@ async def test_reinstate_generation_undoes_a_wrongful_fold(actions: Actions) -> 
     assert await _false_mint(actions, victim) == "true"
 
     receipt = await reinstate_generation(
-        actions, victim, because="halcyon specimen: live body, wrongly folded", actor="test")
+        actions, victim, because="occupied-seat specimen: live body, wrongly folded", actor="test")
     assert receipt["ok"] is True
     assert receipt["changed"]["false_mint"]["new"] == "false"
     assert receipt["changed"]["retired"]["new"] == "false"
@@ -5901,7 +5887,7 @@ async def test_reinstate_generation_undoes_a_wrongful_fold(actions: Actions) -> 
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='retired' ORDER BY confidence DESC, observed_at DESC LIMIT 1", victim_oid)
     assert retired_now == "false"
-    # THE SEAT MOVES BACK: the fold's own follow_binding sent it to root; reinstating
+    # THE SEAT MOVES BACK: the fold's own follow_binding sent it to root, reinstating
     # brings it home to the reinstated generation.
     sr = await seat_receipt(actions.pool, seat)
     assert sr is not None and sr["holder"] == victim
@@ -5912,7 +5898,7 @@ async def test_reinstate_generation_skips_a_still_legitimately_folded_ancestor(
 ) -> None:
     """root -> A (genuine zero-turn phantom, correctly folded) -> B (wrongly folded, a
     real generation). Reinstating B must re-link past A (still, correctly, false_mint) to
-    root — never blindly restore the immediate predecessor, which this door has no
+    root, never blindly restore the immediate predecessor, which this door has no
     business un-folding on its own."""
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir, reinstate_generation
 
@@ -5921,10 +5907,10 @@ async def test_reinstate_generation_skips_a_still_legitimately_folded_ancestor(
                                   succession=None)
     now = datetime.now(UTC)
     folded_a, folded_a_oid = await _fold_zero_turn_ancestors(actions, a_id, a_oid, now)
-    assert folded_a == "agent:ri0002"  # A genuinely was a phantom — correctly folded
+    assert folded_a == "agent:ri0002"  # A genuinely was a phantom, correctly folded
 
     # B is minted from the (correctly) folded A, exactly as the reanimation path's own
-    # entry point would hand it in — then wrongly zero-turn-folded itself (B genuinely
+    # entry point would hand it in, then wrongly zero-turn-folded itself (B genuinely
     # took no turns either, in this fixture; the WRONGFUL part is that A's own real
     # ancestor, root, is the eligible landing spot, not A itself).
     b_id, b_oid = await mint_heir(actions, a_id, a_oid, because="reanimation-of-retired",
@@ -5935,15 +5921,15 @@ async def test_reinstate_generation_skips_a_still_legitimately_folded_ancestor(
     b_pred = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", b_oid)
-    assert b_pred == a_id  # B's own record still names A as predecessor — A is the phantom to skip
+    assert b_pred == a_id  # B's own record still names A as predecessor, A is the phantom to skip
 
     receipt = await reinstate_generation(
-        actions, b_id, because="halcyon specimen: chained onto a folded phantom",
+        actions, b_id, because="occupied-seat specimen: chained onto a folded phantom",
         actor="test")
     assert receipt["ok"] is True
     # skipped A, landed on root
     assert receipt["changed"]["succeeded_from"]["new"] == "agent:ri0002"
-    assert await _false_mint(actions, a_id) == "true"  # A stays folded — untouched
+    assert await _false_mint(actions, a_id) == "true"  # A stays folded, untouched
 
 
 async def test_reinstate_generation_refuses_an_unknown_id(actions: Actions) -> None:
@@ -5968,13 +5954,13 @@ async def test_reinstate_generation_refuses_a_generation_never_folded(actions: A
 async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachable(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE TEST (obligation 6b1efacb, halcyon 2026-08-18): replays the
-    incident's own shape end to end — a fresh compaction mint, immediately followed by
+    """THE ACCEPTANCE TEST (2026-08-18): replays the
+    incident's own shape end to end, a fresh compaction mint, immediately followed by
     TWO independent doors both racing to fold it (mount's own call site AND the
     automount/session-start door, plus what the 15-minute sweep would find if it fired
-    in between) — while a live, harness-confirmed body already occupies the generation's
+    in between), while a live, harness-confirmed body already occupies the generation's
     own agent_mounts row. Before the occupancy fix, both doors folded it (4-6 seconds
-    apart, exactly the specimen's own timing); now NEITHER does, and a DM sent straight
+    apart, exactly the specimen's own timing); now NEITHER does, and a message sent straight
     at it delivers rather than refusing on a stamp that was never applied."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import _fold_zero_turn_ancestors, mint_heir
@@ -5983,7 +5969,7 @@ async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachab
     root = await actions.create_or_find_object("Agent", "agent:dd0001", "test")
     body, body_oid = await mint_heir(actions, "agent:dd0001", root, because="compaction",
                                      succession=None)
-    # THE LIVE BODY, seconds into its own existence — matched by the SAME 8-char job_dir
+    # THE LIVE BODY, seconds into its own existence, matched by the SAME 8-char job_dir
     # key registry_census uses (sessionId[:8] against agent_mounts.job_dir's own basename).
     await mounts.save_mount(
         actions.pool, job_dir="/x/jobs/dd0001ii", agent_id=body, project="demo",
@@ -6000,17 +5986,17 @@ async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachab
     }
     now = datetime.now(UTC)
 
-    # DOOR 1 — mount's own call site.
+    # DOOR 1: mount's own call site.
     door1_id, door1_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
     assert door1_id == body and door1_oid == body_oid  # untouched
 
-    # DOOR 2 — automount/session-start, moments later, same live body still occupying.
+    # DOOR 2: automount/session-start, moments later, same live body still occupying.
     door2_id, door2_oid = await _fold_zero_turn_ancestors(actions, body, body_oid, now, **common)
-    assert door2_id == body and door2_oid == body_oid  # STILL untouched — no fold happened
+    assert door2_id == body and door2_oid == body_oid  # STILL untouched, no fold happened
 
     assert await _false_mint(actions, body) is None
 
-    # THE ACCEPTANCE: reachable by DM, no refusal, no redirect needed (it was never
+    # THE ACCEPTANCE: reachable by message, no refusal, no redirect needed (it was never
     # flagged dead in the first place).
     ok = await send_message(actions.pool, from_agent="agent:sender01", from_project="x",
                             to_agent=body, body="are you there")
@@ -6019,7 +6005,7 @@ async def test_the_double_door_boot_never_folds_a_live_body_and_stays_dm_reachab
 
 
 async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Actions) -> None:
-    """RETROACTIVE CLEANUP (msg 1398: 'Fold existing zero-turn phantoms') — finds an
+    """RETROACTIVE CLEANUP ('Fold existing zero-turn phantoms'): finds an
     already-superseded, already-silent generation the going-forward fix never saw (it
     predates this code), folds it, and leaves a real, witnessed lineage untouched. Safe to
     re-run: the second sweep reports nothing new."""
@@ -6044,7 +6030,7 @@ async def test_fold_existing_zero_turn_phantoms_sweeps_the_fleet(actions: Action
     assert phantom not in {f["phantom"] for f in again}
 
 
-# ═══ HALF-HEALED PHANTOMS (decision ee012ebc) — flag present ≠ fully healed ═══
+# ═══ HALF-HEALED PHANTOMS: flag present ≠ fully healed ═══
 
 async def _succeeded_by(actions: Actions, canonical: str) -> str | None:
     return await actions.pool.fetchval(
@@ -6056,10 +6042,10 @@ async def _succeeded_by(actions: Actions, canonical: str) -> str | None:
 async def test_a_half_healed_phantom_is_reported_not_skipped_by_the_sweep(
     actions: Actions,
 ) -> None:
-    """The live specimen shape (decision ee012ebc): false_mint/retired/retired_by landed,
-    but the ancestor's succeeded_by pointer was never unwound — a heal interrupted
+    """The live specimen shape: false_mint/retired/retired_by landed,
+    but the ancestor's succeeded_by pointer was never unwound, a heal interrupted
     partway. The sweep must NOT treat 'flag present' as 'done': it must detect the
-    incompleteness, open an obligation naming both rows, and — critically — NEVER touch
+    incompleteness, open an obligation naming both rows, and, critically, NEVER touch
     the ancestor's succeeded_by itself (auto-completing it now would be the exact hazard
     the finding named: rebinding a live seat backward)."""
     from src.orchestrator.agents import (
@@ -6073,12 +6059,12 @@ async def test_a_half_healed_phantom_is_reported_not_skipped_by_the_sweep(
     root = await actions.create_or_find_object("Agent", "agent:hh0001", "test")
     phantom, phantom_oid = await mint_heir(actions, "agent:hh0001", root, because="live-swap",
                                            succession="a → b")
-    # a REAL successor minted on top of the phantom — the lineage moved on, exactly the
+    # a REAL successor minted on top of the phantom, the lineage moved on, exactly the
     # shape that makes retroactive completion unsafe
     heir, heir_oid = await mint_heir(actions, phantom, phantom_oid, because="live-swap",
                                      succession="b → c")
     await record_decision(actions, "hh0001-iii did real work", source=heir)
-    # hand-write ONLY the flag-stamp half of _debounce_roundtrip's heal — the interrupted
+    # hand-write ONLY the flag-stamp half of _debounce_roundtrip's heal, the interrupted
     # state, never the pointer unwind
     now = datetime.now(UTC)
     do = EvidenceClass.DIRECT_OBSERVATION
@@ -6090,10 +6076,10 @@ async def test_a_half_healed_phantom_is_reported_not_skipped_by_the_sweep(
     folded = await fold_existing_zero_turn_phantoms(actions)
     assert phantom not in {f["phantom"] for f in folded}, (
         "a half-healed row must never be counted as a fresh fold")
-    # the ancestor's pointer is UNTOUCHED — still points at the phantom, proving no
+    # the ancestor's pointer is UNTOUCHED, still points at the phantom, proving no
     # auto-completion happened
     assert await _succeeded_by(actions, "agent:hh0001") == phantom
-    # the live head is UNTOUCHED — the real successor still stands, nothing rebound
+    # the live head is UNTOUCHED, the real successor still stands, nothing rebound
     assert await actions.pool.fetchval(
         "SELECT status FROM objects WHERE id=$1", heir_oid) == "active"
     thread = await actions.pool.fetchrow(
@@ -6140,12 +6126,12 @@ async def test_a_half_healed_phantom_report_is_idempotent(actions: Actions) -> N
 async def test_a_still_open_half_healed_phantom_does_not_regrow_status_on_resweep(
     actions: Actions,
 ) -> None:
-    """Ruling 0623995e (thread 2a280e07): open_thread is idempotent on the summary hash
-    but UNCONDITIONALLY re-asserts status='open' on a dedup hit — so a still-present,
+    """open_thread is idempotent on the summary hash
+    but UNCONDITIONALLY re-asserts status='open' on a dedup hit, so a still-present,
     still-OPEN sighting used to call open_thread again on every 15-minute sweep, re-writing
     the identical status forever (~1,092 rows for this one triple, live). A resweep of a
     condition that is still open (never resolved) must not grow the Thread's own
-    status/summary assertion history — the sighting is recorded via annotation instead,
+    status/summary assertion history, the sighting is recorded via annotation instead,
     same as the already-resolved branch."""
     from src.orchestrator.agents import (
         _DEBOUNCE_SRC,
@@ -6185,8 +6171,8 @@ async def test_a_still_open_half_healed_phantom_does_not_regrow_status_on_reswee
 async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_resweep(
     actions: Actions,
 ) -> None:
-    """Thread 672972a2, the widened status-regression's own first live finding: a human
-    resolves the report, the very next 15-minute sweep re-flags the identical condition —
+    """The widened status-regression's own first live finding: a human
+    resolves the report, the very next 15-minute sweep re-flags the identical condition,
     open_thread's own idempotency (same summary hash, same Thread object) was
     unconditionally re-asserting status='open', overriding the resolve every cycle. The
     condition being STILL PRESENT is real; re-opening a thread a human already closed is
@@ -6221,7 +6207,7 @@ async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_res
     await resolve_thread(actions, str(thread["canonical"]), because="a human's own call",
                          source="agent:human-reviewer")
 
-    # the very next sweep — the condition is still unhealed, unchanged
+    # the very next sweep, the condition is still unhealed, unchanged
     await fold_existing_zero_turn_phantoms(actions)
 
     status = await actions.pool.fetchval(
@@ -6234,7 +6220,7 @@ async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_res
         "WHERE a.object_id=$1 AND a.name LIKE 'note:%' LIMIT 1", thread["id"])
     assert note is not None and "still present" in note
 
-    # never TWO threads either — the sweep must not have minted a fresh one instead
+    # never TWO threads either, the sweep must not have minted a fresh one instead
     count = await actions.pool.fetchval(
         "SELECT count(*) FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "WHERE o.type='Thread' AND a.name='summary' AND a.value #>> '{}' ILIKE $1",
@@ -6242,12 +6228,12 @@ async def test_a_resolved_half_healed_phantom_report_stays_resolved_across_a_res
     assert count == 1
 
 
-# ═══ _debounce_roundtrip ATOMICITY (decision ee012ebc) ═══
+# ═══ _debounce_roundtrip ATOMICITY ═══
 
 async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_exception(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Before this fix, the heal's six writes were independent statements — an exception
+    """Before this fix, the heal's six writes were independent statements, an exception
     partway (a crash, a dropped connection) left the flag stamped but the pointer never
     unwound, permanently. Force the exception at the LAST write (follow_binding, after
     the flag stamps AND the pointer unwind have already been issued inside the SAME
@@ -6269,7 +6255,7 @@ async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_excepti
         await _debounce_roundtrip(actions, agent_id=phantom, observed="opusA",
                                   now=datetime.now(UTC))
 
-    # NOTHING landed — not the flag, not the pointer unwind, not the estate move
+    # NOTHING landed, not the flag, not the pointer unwind, not the ownership move
     assert await _false_mint(actions, phantom) is None
     assert await _succeeded_by(actions, "agent:hh0003") == phantom
 
@@ -6277,7 +6263,7 @@ async def test_debounce_roundtrip_heal_is_atomic_under_a_forced_mid_heal_excepti
 async def test_fold_zero_turn_ancestors_heal_is_atomic_under_a_forced_mid_heal_exception(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """thread 685d24a0: the same fix applied to _fold_zero_turn_ancestors' own heal —
+    """The same fix applied to _fold_zero_turn_ancestors' own heal:
     force the exception at the LAST write (follow_binding, after the flag stamps AND
     the pointer unwind have already been issued inside the SAME atomic() block) and
     prove NOTHING landed."""
@@ -6296,18 +6282,18 @@ async def test_fold_zero_turn_ancestors_heal_is_atomic_under_a_forced_mid_heal_e
     with pytest.raises(RuntimeError, match="forced mid-heal failure"):
         await _fold_zero_turn_ancestors(actions, phantom, phantom_oid, datetime.now(UTC))
 
-    # NOTHING landed — not the flag, not the pointer unwind, not the estate move
+    # NOTHING landed, not the flag, not the pointer unwind, not the ownership move
     assert await _false_mint(actions, phantom) is None
     assert await _succeeded_by(actions, "agent:hh0004") == phantom
 
 
-# ═══════════ THE BOUNDED CHAIN-WALK (thread e749036e, msg 1398) ═══════════
+# ═══════════ THE BOUNDED CHAIN-WALK ═══════════
 
 async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions) -> None:
     """The common case: one hop, exactly what the old one-hop-only read already covered."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
-    did = await record_decision(actions, "the estate is settled", kind="choice",
+    did = await record_decision(actions, "the handoff is settled", kind="choice",
                                 source="agent:nha0001", repo="nhaproj")
     await actions.assert_property(did, "is_handoff", "true", "agent:nha0001",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -6319,10 +6305,10 @@ async def test_nearest_handoff_ancestor_finds_the_immediate_one(actions: Actions
 async def test_nearest_handoff_ancestor_walks_past_silence_within_the_bound(
     actions: Actions,
 ) -> None:
-    """Two silent hops, a real handoff on the third — still within max_hops=5."""
+    """Two silent hops, a real handoff on the third, still within max_hops=5."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
-    await open_thread(actions, "HANDOFF — three hops back and still findable",
+    await open_thread(actions, "HANDOFF: three hops back and still findable",
                       source="agent:nha0010", repo="nhaproj")
     await actions.create_or_find_object("Agent", "agent:nha0010", "agent:nha0010")
     a11 = await actions.create_or_find_object("Agent", "agent:nha0011", "agent:nha0011")
@@ -6338,13 +6324,13 @@ async def test_nearest_handoff_ancestor_walks_past_silence_within_the_bound(
 
 
 async def test_nearest_handoff_ancestor_gives_up_past_the_bound(actions: Actions) -> None:
-    """A handoff 6 hops back (past max_hops=5) is never found — bounded on purpose, never
+    """A handoff 6 hops back (past max_hops=5) is never found, bounded on purpose, never
     an unbounded search. complete=False is the honest signal that this is a TRUNCATION,
-    not a clean "nothing here" (decision 8b375ed7 — the specimen 4c303c43 flagged unverified
+    not a clean "nothing here" (a specimen flagged unverified
     on 2026-08-09, confirmed live at fleet scale: 64/636 real successions hit exactly this)."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
-    await open_thread(actions, "HANDOFF — too far back to matter",
+    await open_thread(actions, "HANDOFF: too far back to matter",
                       source="agent:nhb0000", repo="nhbproj")
     now = datetime.now(UTC)
     prev = "agent:nhb0000"
@@ -6363,8 +6349,8 @@ async def test_nearest_handoff_ancestor_complete_when_chain_genuinely_terminates
     actions: Actions,
 ) -> None:
     """A chain that reaches a true succeeded_from-IS-NULL origin within max_hops, finding
-    nothing, is COMPLETE — genuinely clean, distinguishable from a truncated walk (the
-    other half of decision 8b375ed7's contract)."""
+    nothing, is COMPLETE, genuinely clean, distinguishable from a truncated walk (the
+    other half of the same contract)."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
     await actions.create_or_find_object("Agent", "agent:nhc0000", "agent:nhc0000")
@@ -6380,18 +6366,18 @@ async def test_nearest_handoff_ancestor_respects_an_explicit_ack_by_default(
     actions: Actions,
 ) -> None:
     """An acked (is_handoff='false') record must not resurrect via the ILIKE fallback just
-    because its own summary text still says "handoff" — the whole point of ack_handoff is
-    that it stops being treated as live (the operator's read-receipt redesign, 2026-08-03).
+    because its own summary text still says "handoff", the whole point of ack_handoff is
+    that it stops being treated as live (a read-receipt redesign, 2026-08-03).
     respect_ack=False (since_last_handoff's own need, handoff_compiler.py) still finds it,
     because that caller asks "when did this reign end", not "is this still unclaimed"."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
-    did = await record_decision(actions, "HANDOFF — bleedack0001's own state of the board",
+    did = await record_decision(actions, "HANDOFF: bleedack0001's own state of the board",
                                 kind="choice", source="agent:bleedack0001", repo="nhaproj")
     now = datetime.now(UTC)
     await actions.assert_property(did, "is_handoff", "true", "agent:bleedack0001", now, 0.9,
                                   evidence_class="self_declared")
-    # a DIFFERENT source acks it (the successor, not the original author) — the exact shape
+    # a DIFFERENT source acks it (the successor, not the original author), the exact shape
     # ack_handoff itself writes; current_assertions legitimately holds both rows at once.
     await actions.assert_property(did, "is_handoff", "false", "agent:bleedack0001-ii",
                                   now + timedelta(seconds=1), 0.9,
@@ -6408,11 +6394,11 @@ async def test_nearest_handoff_ancestor_respects_an_explicit_ack_by_default(
 
 
 async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions) -> None:
-    """Every pick now carries `id` — before this fix, callers had a summary and a type but
+    """Every pick now carries `id`, before this fix, callers had a summary and a type but
     nothing to name back to ack_handoff(ref=...)."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
-    did = await record_decision(actions, "the estate is settled, nameable this time",
+    did = await record_decision(actions, "the handoff is settled, nameable this time",
                                 kind="choice", source="agent:nhaid0001", repo="nhaproj")
     await actions.assert_property(did, "is_handoff", "true", "agent:nhaid0001",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -6422,21 +6408,21 @@ async def test_nearest_handoff_ancestor_surfaces_the_object_id(actions: Actions)
     assert complete is True
 
 
-# ═══ RESOLVE_HANDLE / THE INELIGIBLE-HOLDER GUARD (task #142 punch-list item 3, Thoth's
-# dispatch DM 4097) — resolve_handle wraps resolve_seat for establish_office/rebind_seat,
+# ═══ RESOLVE_HANDLE / THE INELIGIBLE-HOLDER GUARD (task #142 punch-list item 3):
+# resolve_handle wraps resolve_seat for establish_office/rebind_seat,
 # both of which already have a correct "resolve to nothing -> use the Seat object directly"
 # fallback. Before this fix, a name whose unique seat's only holder was ineligible fell
 # through to resolve_seat's un-seated-lineage fallback and could return an OLDER, unmarked
-# generation instead of None — the same grave-delivery shape rulings 1a64ae9a/aee67e6d
-# named for send(), reached through this wrapper instead. ═══════════════════════════════
+# generation instead of None, the same grave-delivery shape found earlier
+# for send(), reached through this wrapper instead. ═══════════════════════════════
 
 
 async def test_resolve_handle_returns_none_when_the_seats_only_holder_is_ineligible(
     actions: Actions,
 ) -> None:
-    """John's exact live shape (DM 2360), reproduced against resolve_handle instead of
+    """A live shape reproduced against resolve_handle instead of
     send(): a unique seat, one active holder marked false_mint, and an OLDER generation
-    still carrying the same `handle` assertion — the ancestor the old fallback would have
+    still carrying the same `handle` assertion, the ancestor the old fallback would have
     silently returned. resolve_handle must say None, not the ancestor's agent id."""
     from src.orchestrator.seats import bind_holder, ensure_seat
 
@@ -6468,17 +6454,17 @@ async def test_resolve_handle_still_resolves_an_eligible_holder(actions: Actions
     assert await resolve_handle(actions, "RhClean") == "agent:rhclean0001"
 
 
-# ═══ THE ANCHOR-MIS-RESOLUTION REFUSAL GATE (Thoth dispatch 6693, porting #48's shape,
-# ruling 120fcc81, to the name-claim path) ══════════════════════════════════════════════
+# ═══ THE ANCHOR-MIS-RESOLUTION REFUSAL GATE (porting #48's shape
+# to the name-claim path) ══════════════════════════════════════════════
 # THE MARQUEE SPECIMEN: a session spawned into a seat's own office (or carrying its own
 # `--bg` job_dir anchor) asked claim_name for THAT seat's name, was correctly refused
 # (held by a different lineage), then successfully claimed a totally different, unconflicted
-# name instead — minting a stranger Agent + Seat (+ a downstream orphan SoftwareProject)
+# name instead, minting a stranger Agent + Seat (+ a downstream orphan SoftwareProject)
 # where the session already had a real home. These tests prove the whole call refuses,
 # not just the collided name, and that a genuine no-anchor claim is unaffected.
 
 async def _seated_object_counts(actions: Actions) -> tuple[int, int, int]:
-    """(agents, seats, projects) row counts — the acceptance test's own negative shape:
+    """(agents, seats, projects) row counts, the acceptance test's own negative shape:
     a mis-resolved claim must produce ZERO new objects of any of these three types."""
     async def count(t: str) -> int:
         return int(await actions.pool.fetchval(
@@ -6491,7 +6477,7 @@ async def test_claim_name_refuses_the_whole_call_when_cwd_anchors_a_different_se
 ) -> None:
     """THE CWD SHAPE of the specimen: the caller's own office IS Marquee's, a different
     lineage already holds that name, and the caller then reaches for an unrelated,
-    unconflicted name ("Awning") instead. Must refuse the WHOLE claim, zero writes —
+    unconflicted name ("Awning") instead. Must refuse the WHOLE claim, zero writes,
     never silently mint the substitute."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
@@ -6527,7 +6513,7 @@ async def test_claim_name_refuses_the_whole_call_when_job_dir_anchors_a_differen
 ) -> None:
     """THE JOB_DIR SHAPE: a `--bg`-launched seat's own durable anchor
     (trigger._launch_anchor's convention, `.../jobs/seat-<id>`) names a seat just as
-    surely as its office cwd does — the gate must catch this anchor shape too, not only
+    surely as its office cwd does, the gate must catch this anchor shape too, not only
     the cwd one."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
@@ -6559,7 +6545,7 @@ async def test_claim_name_still_allows_claiming_the_anchors_own_seat_name(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE GATE IS NARROW, NOT A BLANKET REFUSAL: a caller whose own office anchors a
-    VACANT seat may still claim that seat's own name — the ordinary self-claim path,
+    VACANT seat may still claim that seat's own name, the ordinary self-claim path,
     unaffected."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
@@ -6585,14 +6571,14 @@ async def test_claim_name_still_allows_claiming_the_anchors_own_seat_name(
 async def test_claim_name_unaffected_when_no_anchor_matches_any_seat(
     actions: Actions,
 ) -> None:
-    """THE THIRD STATE STAYS DISTINCT (#48's own law): a genuine visitor — no mount row
-    at all, or a cwd/job_dir that names no seat — is not caught by this gate; an
+    """THE THIRD STATE STAYS DISTINCT (#48's own law): a genuine visitor, no mount row
+    at all, or a cwd/job_dir that names no seat, is not caught by this gate; an
     ordinary fresh claim still succeeds exactly as before."""
     from src.orchestrator.agents import claim_name
 
     caller = "agent:nomountclaimer"
     await actions.create_or_find_object("Agent", caller, "test")
-    # deliberately NO mounts.save_mount call — no anchor at all, the common test shape
+    # deliberately NO mounts.save_mount call, no anchor at all, the common test shape
     # every OTHER claim_name test in this file already exercises unmodified
 
     result = await claim_name(actions, caller, "FreshName", source=caller)

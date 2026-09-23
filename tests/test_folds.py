@@ -1,5 +1,5 @@
-"""AGENT FOLDS — the reconciliation primitive (thread b975851b, operator directive
-2026-07-16: append-only merging so the fleet census deflates without one DELETE).
+"""AGENT FOLDS: the reconciliation primitive. Append-only merging, decided 2026-07-16,
+lets the fleet census deflate without any DELETE.
 
 The kernel merge (Actions.merge_objects) is already covered by the entity tests; these
 witness the AGENT half: the estate follows the fold, provenance survives, the census
@@ -52,7 +52,7 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
                                     "with the living session at the same cwd",
                            actor="operator")
 
-    assert out["living_head"] == "agent:0c11ec7a-ii"       # estate lands on the HEAD
+    assert out["living_head"] == "agent:0c11ec7a-ii"       # moved data lands on the head
     assert out["mail_readdressed"] == 1
     assert out["mount_rows_repointed"] == 1
     assert out["threads_reowned"] == 1
@@ -74,12 +74,12 @@ async def test_fold_moves_the_estate_and_deflates_the_census(actions: Actions) -
 async def test_fold_agent_copies_read_markers_so_a_fold_cant_resurrect_settled_mail(
     actions: Actions,
 ) -> None:
-    """THE DUAL READ-MARKER GAP (thread 25b57dca item 6, live specimen: messages 7578-7585
-    — dupe's recipient rows read by an old generation, fleet_messages.read_at NULL).
+    """THE DUAL READ-MARKER GAP, found from a live specimen: dupe's recipient rows read by
+    an old generation, fleet_messages.read_at NULL.
     `_move_agent_estate` re-addresses fleet_messages.to_agent from dupe to head, but used
-    to leave message_recipients rows keyed to dupe — so mail dupe had ALREADY READ came
+    to leave message_recipients rows keyed to dupe, so mail dupe had ALREADY READ came
     back deliverable to head the moment the fold landed. mint_heir closed this exact gap
-    for ordinary succession years ago; fold_agent's own estate-move never got the mirror."""
+    for ordinary succession years ago; fold_agent's own data-move never got the mirror."""
     p = actions.pool
     await _mk_agent(actions, "agent:rmk1dupe0")
     await _mk_agent(actions, "agent:rmk1into0")
@@ -103,7 +103,7 @@ async def test_fold_agent_copies_read_markers_so_a_fold_cant_resurrect_settled_m
         "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
         msg["id"], "agent:rmk1into0")
     assert row is not None and row["read_at"] is not None
-    # dupe's own row survives untouched — a copy, never a destructive move
+    # dupe's own row survives untouched: a copy, never a destructive move
     dupe_row = await p.fetchrow(
         "SELECT read_at FROM message_recipients WHERE message_id=$1 AND agent_id=$2",
         msg["id"], "agent:rmk1dupe0")
@@ -113,9 +113,9 @@ async def test_fold_agent_copies_read_markers_so_a_fold_cant_resurrect_settled_m
 async def test_fold_agent_moves_the_dupes_works_in_and_governs_edges_too(
     actions: Actions,
 ) -> None:
-    """fold_agent's OWN gap (thread 20af2c95, distinct from mint_heir's — this estate-move
-    never covered works_in/governs at all, not even a stale pointer, a plain omission
-    found sweeping 443 of the fleet-wide leak's 906 edges). Fixed via the SAME shared
+    """fold_agent's OWN gap, distinct from mint_heir's: this data-move never covered
+    works_in/governs at all, not even a stale pointer, a plain omission found sweeping
+    443 of the fleet-wide leak's 906 edges. Fixed via the SAME shared
     `move_agent_project_links` mint_heir now uses, wired through `_move_agent_estate`."""
     p = actions.pool
     await _mk_agent(actions, "agent:wgd1dupe0")
@@ -145,9 +145,9 @@ async def test_reconcile_agent_fold_repairs_a_stranded_works_in_edge(
     actions: Actions,
 ) -> None:
     """The measured live shape (443 of 906 leaked edges, from a MERGED agent): an
-    OLD-style merge (a raw merge_objects call with no estate-move at all) leaves a
-    works_in edge stranded on the now-merged dupe. reconcile_agent_fold repairs it —
-    calling the same fixed `_move_agent_estate` fold_agent itself now uses — without
+    OLD-style merge (a raw merge_objects call with no data-move at all) leaves a
+    works_in edge stranded on the now-merged dupe. reconcile_agent_fold repairs it,
+    calling the same fixed `_move_agent_estate` fold_agent itself now uses, without
     re-performing the merge."""
     from src.orchestrator.folds import reconcile_agent_fold
 
@@ -174,13 +174,14 @@ async def test_reconcile_agent_fold_repairs_a_stranded_works_in_edge(
 
 
 async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Actions) -> None:
-    """Task #59's own precondition fix: the estate now moves BEFORE Actions.merge_objects,
-    so a process death in that window leaves dupe.status=='active' — a retry re-enters
-    fold_agent and simply CONTINUES rather than hitting the "already folded — nothing to
-    do" refusal with the estate stranded forever (the old order's failure, the exact #127
-    class of bug). Simulated by performing the estate move by hand (mirroring fold_agent's
-    own first half) and then calling the real verb — proving both that it does not refuse
-    and that re-moving already-moved estate is a true no-op, not a duplicate."""
+    """An earlier precondition fix: the agent's data now moves BEFORE
+    Actions.merge_objects, so a process death in that window leaves
+    dupe.status=='active': a retry re-enters fold_agent and simply CONTINUES rather than
+    hitting the "already folded, nothing to do" refusal with the data stranded forever
+    (the old order's failure). Simulated by performing the data move by hand (mirroring
+    fold_agent's own first half) and then calling the real verb, proving both that it
+    does not refuse and that re-moving already-moved data is a true no-op, not a
+    duplicate."""
     p = actions.pool
     await _mk_agent(actions, "agent:crash001")
     await _mk_agent(actions, "agent:crash002")
@@ -193,8 +194,8 @@ async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Acti
     await actions.assert_property(tid, "owner", "agent:crash001", "agent:crash001",
                                   now, 0.9, evidence_class="self_declared")
 
-    # THE SIMULATED CRASH: exactly fold_agent's own estate-move half, run by hand, with
-    # merge_objects never called — the state a real crash in that window would leave.
+    # THE SIMULATED CRASH: exactly fold_agent's own data-move half, run by hand, with
+    # merge_objects never called: the state a real crash in that window would leave.
     await p.execute("UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 "
                     "AND read_at IS NULL", "agent:crash002", "agent:crash001")
     await p.execute("UPDATE agent_mounts SET agent_id=$1 WHERE agent_id=$2",
@@ -210,7 +211,7 @@ async def test_fold_survives_a_crash_between_estate_move_and_merge(actions: Acti
                            actor="operator")
 
     assert "error" not in out                 # the retry completed, it did not refuse
-    assert out["mail_readdressed"] == 0        # already moved by the "crash" — a true no-op
+    assert out["mail_readdressed"] == 0        # already moved by the "crash": a true no-op
     assert out["mount_rows_repointed"] == 0
     assert out["threads_reowned"] == 0
     assert await canonical_agent(p, "agent:crash001") == "agent:crash002"
@@ -253,9 +254,9 @@ async def test_fold_refusals_are_loud_and_write_nothing(actions: Actions) -> Non
 
 
 async def test_fold_agent_refuses_a_non_operator_actor(actions: Actions) -> None:
-    """NEGATIVE CONTROL for the operator-actor gate (census a5e53ed8/3f97f9c7, fixed
-    2026-08-02): this docstring claimed "operator's word or an approved merge_candidate"
-    for weeks while ANY mounted caller could fold any two agents — confirmed against
+    """NEGATIVE CONTROL for the operator-actor gate, fixed 2026-08-02: this docstring
+    used to claim only operator approval or an approved merge_candidate could fold,
+    for weeks while ANY mounted caller could fold any two agents, confirmed against
     pre-fix code (any non-empty evidence + valid, unheld, unmerged labels used to
     succeed for actor="agent:some-mind"). Now it refuses, names the actor, and writes
     nothing."""
@@ -274,7 +275,7 @@ async def test_fold_agent_refuses_a_non_operator_actor(actions: Actions) -> None
 
 
 async def test_fold_agent_allows_the_sanctioned_cron_actor(actions: Actions) -> None:
-    """The scheduled reaper's own name is trusted — it is ALREADY gated separately by
+    """The scheduled reaper's own name is trusted: it is ALREADY gated separately by
     osiris_fleet_reconcile_enabled, a distinct operator signature (see
     test_fleet_reconcile.py's own positive control for the end-to-end path)."""
     from src.orchestrator.folds import _SANCTIONED_AUTO_FOLD_ACTOR
@@ -293,9 +294,9 @@ async def test_fold_agent_allows_the_sanctioned_cron_actor(actions: Actions) -> 
 async def test_resolve_fold_candidate_merged_inherits_the_gate_rejected_does_not(
     actions: Actions, tmp_path,
 ) -> None:
-    """Per-branch honesty (Thoth's decision rule, msg 3273): 'merged' carries fold_agent's
-    own blast radius and its gate; 'rejected' judges two things are NOT the same mind,
-    never merges an identity, and stays open to any mounted caller."""
+    """Per-branch honesty, by design: 'merged' carries fold_agent's own blast radius and
+    its gate; 'rejected' judges two things are NOT the same mind, never merges an
+    identity, and stays open to any mounted caller."""
     from src.orchestrator.folds import find_agent_fold_candidates, resolve_fold_candidate
 
     p = actions.pool
@@ -316,7 +317,7 @@ async def test_resolve_fold_candidate_merged_inherits_the_gate_rejected_does_not
     mine = [c for c in out["pending"] if c["dupe"] == "agent:a11agate"]
     assert mine
 
-    # a mounted agent judging its OWN proposal, unauthorized — the exact self-approval
+    # a mounted agent judging its OWN proposal, unauthorized: the exact self-approval
     # the constitution forbids, refused rather than silently permitted
     verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
                                            decision="merged", actor="agent:self-approver")
@@ -324,7 +325,7 @@ async def test_resolve_fold_candidate_merged_inherits_the_gate_rejected_does_not
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11agate'")
     assert st == "active"  # refused, nothing written, candidate stays unresolved
 
-    # the SAME non-operator actor may still reject it — no gate, no blast radius
+    # the SAME non-operator actor may still reject it: no gate, no blast radius
     verdict2 = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
                                             decision="rejected", actor="agent:self-approver")
     assert verdict2["resolved"] == "rejected"
@@ -376,7 +377,7 @@ async def test_living_head_reads_the_registry(actions: Actions) -> None:
 
 async def test_archaeologist_proposes_a_view_alias(actions: Actions, tmp_path) -> None:
     """The finder pairs a bodiless anonymous mount (no transcript, no daemon receipt)
-    with the co-resident session that HAS a body — proposal only, score .9."""
+    with the co-resident session that HAS a body: proposal only, score .9."""
     from src.orchestrator.folds import find_agent_fold_candidates, resolve_fold_candidate
 
     p = actions.pool
@@ -399,7 +400,7 @@ async def test_archaeologist_proposes_a_view_alias(actions: Actions, tmp_path) -
     assert out["proposed"]["view-alias"] == 1
     mine = [c for c in out["pending"] if c["dupe"] == "agent:a11a5000"]
     assert mine and mine[0]["into_label"] == "agent:rea1baaa"
-    # judging it MERGED executes the estate-carrying fold and stamps the row — inherits
+    # judging it MERGED executes the data-carrying fold and stamps the row: it inherits
     # fold_agent's own operator-actor gate, so the judge must be the operator too
     verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
                                            decision="merged", actor="operator")
@@ -432,7 +433,7 @@ async def test_archaeologist_rejection_is_remembered(actions: Actions, tmp_path)
     mine = [c for c in out["pending"] if c["dupe"] == "agent:0eadbea7"]
     assert mine
 
-    # 'rejected' is open to any mounted caller, deliberately (census a5e53ed8) — a
+    # 'rejected' is open to any mounted caller, deliberately: a
     # rejection judges two things are NOT the same mind, never merges an identity
     verdict = await resolve_fold_candidate(actions, candidate_id=mine[0]["id"],
                                            decision="rejected", actor="agent:any-mind")
@@ -445,7 +446,7 @@ async def test_archaeologist_rejection_is_remembered(actions: Actions, tmp_path)
 
 async def test_archaeologist_flags_a_restart_mint(actions: Actions, tmp_path) -> None:
     """An anonymous agent WITH a body, mounted in a NAMED lineage's own home, is the
-    restart-mint class — proposed at the lower score, behind the aliases in the tray."""
+    restart-mint class: proposed at the lower score, behind the aliases in the tray."""
     from datetime import UTC, datetime
 
     from src.orchestrator.folds import find_agent_fold_candidates
@@ -478,11 +479,11 @@ async def test_archaeologist_flags_a_restart_mint(actions: Actions, tmp_path) ->
 async def test_archaeologist_charter_match_finds_a_migrated_seat(
     actions: Actions, tmp_path,
 ) -> None:
-    """THE ARCHAEOLOGIST'S BLIND SPOT, cured (thread 3430c32b): the office migrations
-    moved every seat's mount row home to ~/.osiris/seats/<handle>, so an anon stranded
-    in the seat's OLD project room matches nothing by cwd. The room's seat is a GRAPH
-    fact — a live works_in edge to repo:<project> — and the charter does not move
-    house. Single seat on the charter → the single-seat presumption holds at .75."""
+    """THE ARCHAEOLOGIST'S BLIND SPOT, cured: the office migrations moved every seat's
+    mount row home to ~/.osiris/seats/<handle>, so an anon stranded in the seat's OLD
+    project room matches nothing by cwd. The room's seat is a GRAPH fact, a live
+    works_in edge to repo:<project>, and the charter does not move house. Single seat
+    on the charter, so the single-seat presumption holds at .75."""
     from src.orchestrator.folds import find_agent_fold_candidates
 
     p = actions.pool
@@ -500,7 +501,7 @@ async def test_archaeologist_charter_match_finds_a_migrated_seat(
                                                "repo:charterhouse")
     await actions.create_link(seat, room, "works_in", "agent:c4a97e01",
                               datetime.now(UTC), 0.9)
-    # the seat holds NO mount row anywhere — the ceremony-migrated case, rows died
+    # the seat holds NO mount row anywhere: the migrated case, rows died
     await save_mount(p, job_dir=str(jobs / "a10ne111"), agent_id="agent:a10ne111",
                      project="charterhouse", cwd="/w/charter-repo", model=None,
                      session_key="whisper:a10ne111")
@@ -516,7 +517,7 @@ async def test_archaeologist_charter_match_finds_a_migrated_seat(
 async def test_archaeologist_leaves_a_seatless_room_alone(
     actions: Actions, tmp_path,
 ) -> None:
-    """A room whose charter names NO seat proposes nothing — its anons are the visitor
+    """A room whose charter names NO seat proposes nothing: its anons are the visitor
     class (demotion candidates for the visitor gate), and folding them anywhere would
     be a guess. The archaeologist counts them in `seatless` instead."""
     from src.orchestrator.folds import find_agent_fold_candidates
@@ -542,13 +543,11 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
     actions: Actions, tmp_path,
 ) -> None:
     """When a room's charter names SEVERAL souls (a resident works_in beside a
-    supervising governs — the coldspot shape: Aegis lives there, Alfred governs it),
-    the anon is presumed the GOVERNOR's (ruling 1db1ff41: declared beats derived — this
-    REVERSES the prior resident-wins tie-break), at the multi-seat score: nuanced,
-    verify by hand, both names in the signal. The governor's edge is SEAT-origin
-    (Thoth ruling, thread e0712df8): a re-keyed charter is what "declared" means now —
-    see the specimen below for what an un-re-keyed Agent-origin governs edge does
-    instead (nothing)."""
+    supervising governs), the anon is presumed the GOVERNOR's (declared beats derived,
+    which reverses the prior resident-wins tie-break), at the multi-seat score: nuanced,
+    verify by hand, both names in the signal. The governor's edge is SEAT-origin: a
+    re-keyed charter is what "declared" means now, see the specimen below for what an
+    un-re-keyed Agent-origin governs edge does instead (nothing)."""
     from src.orchestrator.folds import find_agent_fold_candidates
     from src.orchestrator.seats import bind_holder
 
@@ -586,20 +585,20 @@ async def test_archaeologist_charter_match_prefers_the_declared_governor(
 
     mine = [c for c in out["pending"] if c["dupe"] == "agent:e5a12111"]
     assert mine and mine[0]["into_label"] == "agent:b055a1f4"  # the declared governor wins
-    assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls — hand-verify
+    assert abs(float(mine[0]["score"]) - 0.55) < 1e-6  # several souls, hand-verify
     assert "agent:4e51den7" in str(mine[0]["signals"])  # the resident is named
 
 
 async def test_archaeologist_ignores_a_legacy_agent_origin_governs_edge(
     actions: Actions, tmp_path,
 ) -> None:
-    """THE ATLAS SPECIMEN (thread e0712df8, Thoth ruling msg 7666): Atlas's Seat charter
-    is clean, but his old Agent generations still carry 29 garbled Agent-origin governs
-    edges (bulk-seeded 2026-07-18, never migrated) that charter_for/set_charter can't
-    see or heal — this tie-break was the one place still reading them, letting known
-    garbage outrank a room's real resident in ~7-8 rooms. An Agent-origin governs edge
-    is now pre-rekey HISTORY, not a live declaration: it must not appear in the
-    candidate set at all — the resident wins outright, not merely at a lower score."""
+    """A live specimen where a Seat's charter is clean, but its old Agent generations
+    still carry 29 garbled Agent-origin governs edges (bulk-seeded 2026-07-18, never
+    migrated) that charter_for/set_charter can't see or heal: this tie-break was the one
+    place still reading them, letting known garbage outrank a room's real resident in
+    ~7-8 rooms. An Agent-origin governs edge is now pre-rekey HISTORY, not a live
+    declaration: it must not appear in the candidate set at all, and the resident wins
+    outright, not merely at a lower score."""
     from src.orchestrator.folds import find_agent_fold_candidates
 
     p = actions.pool
@@ -617,7 +616,7 @@ async def test_archaeologist_ignores_a_legacy_agent_origin_governs_edge(
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
     await actions.create_link(resident, room, "works_in", "agent:4e51den9",
                               datetime.now(UTC), 0.9)
-    # a garbled legacy governor — an old Agent generation, never re-keyed onto a Seat
+    # a garbled legacy governor: an old Agent generation, never re-keyed onto a Seat
     stale_governor = await actions.create_or_find_object("Agent", "agent:57a1e9c0",
                                                           "agent:57a1e9c0")
     await actions.assert_property(stale_governor, "handle", "StaleGov", "agent:57a1e9c0",
@@ -631,7 +630,7 @@ async def test_archaeologist_ignores_a_legacy_agent_origin_governs_edge(
     out = await find_agent_fold_candidates(p, projects_root=root, jobs_home=jobs)
 
     mine = [c for c in out["pending"] if c["dupe"] == "agent:1e6ac1a9"]
-    # the legacy governor never enters the count at all — a single soul (the resident),
+    # the legacy governor never enters the count at all: a single soul (the resident),
     # not "several souls, governor wins" (that would still cite the stale generation)
     assert mine and mine[0]["into_label"] == "agent:4e51den9"
     assert float(mine[0]["score"]) == 0.75  # the room's only (real) soul
@@ -641,12 +640,12 @@ async def test_archaeologist_ignores_a_legacy_agent_origin_governs_edge(
 async def test_archaeologist_charter_match_reads_a_seat_keyed_governs_edge(
     actions: Actions, tmp_path,
 ) -> None:
-    """RULING 3 (decision 1db1ff41) re-keys governs onto the Seat, not any one Agent
-    generation (Imhotep, DM 2415/2416 — caught before it shipped): a governs join
-    hard-coded to fo.type='Agent' would silently stop matching every governs link the
-    instant that re-key lands, degrading this whole reversal back to works_in-only with
-    no crash and no failing test unless something exercises this exact shape. A
-    Seat-origin governs edge must resolve through its CURRENT holder and still win."""
+    """A prior decision re-keys governs onto the Seat, not any one Agent generation
+    (a regression caught before it shipped): a governs join hard-coded to fo.type='Agent'
+    would silently stop matching every governs link the instant that re-key lands,
+    degrading this whole reversal back to works_in-only with no crash and no failing
+    test unless something exercises this exact shape. A Seat-origin governs edge must
+    resolve through its CURRENT holder and still win."""
     from src.orchestrator.folds import find_agent_fold_candidates
     from src.orchestrator.seats import bind_holder
 
@@ -694,7 +693,7 @@ async def test_unfold_reverses_a_fold_dry_run_writes_nothing(actions: Actions) -
                      evidence="census: co-timed sessions, same cwd", actor="operator")
 
     out = await unfold_agent(actions, dupe="agent:un1dead0",
-                             because="wrongful fold — a real second mind",
+                             because="wrongful fold, a real second mind",
                              actor="agent:judge")
 
     assert out["execute"] is False
@@ -774,13 +773,13 @@ async def test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_wo
 async def test_fold_justification_and_parity_check_the_one_shared_resolver(
     actions: Actions,
 ) -> None:
-    """DM 9438: the operator-parity heuristic was byte-for-byte duplicated across
-    unfold_agent/unfold_project/unfold_seat — this is the ONE test against the ONE
+    """The operator-parity heuristic was byte-for-byte duplicated across
+    unfold_agent/unfold_project/unfold_seat: this is the ONE test against the ONE
     extracted resolver, directly, rather than three copies of the same assertion
     exercised only indirectly through each caller. The three callers' own existing
     tests (e.g. test_unfold_refuses_an_operator_blessed_fold_without_fresh_operator_word
     above, plus test_projects.py/test_seats.py's own) are unchanged and still prove each
-    call site's own behavior end-to-end — this test proves the shared logic itself,
+    call site's own behavior end-to-end: this test proves the shared logic itself,
     including the (ev, original_evidence) reuse the three sites all depend on."""
     p = actions.pool
     await _mk_agent(actions, "agent:parity0dead")
@@ -840,7 +839,7 @@ async def test_unfold_clears_a_cross_lineage_succeeded_by_stitch(actions: Action
         "SELECT value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='agent:un6dead0' AND a.name='succeeded_by' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
-    assert sb == ""  # the stitch is cleared — dupe reads as its own lineage's tail again
+    assert sb == ""  # the stitch is cleared: dupe reads as its own lineage's tail again
 
 
 async def test_unfold_never_touches_a_real_same_lineage_successor(actions: Actions) -> None:
@@ -873,7 +872,7 @@ async def test_unfold_reports_unreturnable_mail_and_restores_reversible_threads(
     p = actions.pool
     await _mk_agent(actions, "agent:un8dead0")
     await _mk_agent(actions, "agent:un8live0")
-    # mail sent BEFORE the fold, still unread — lands on the winner at fold time
+    # mail sent BEFORE the fold, still unread, lands on the winner at fold time
     await send_message(p, from_agent="agent:sender", from_project="osiris",
                        to_agent="agent:un8dead0", body="a question for the dupe")
     tid = await actions.create_or_find_object("Thread", "thread:un8t0001", "agent:un8dead0")
@@ -900,9 +899,9 @@ async def test_unfold_reports_unreturnable_mail_and_restores_reversible_threads(
     assert owner == "agent:un8dead0"
 
 
-# ═══ reconcile_agent_fold (#127, the repair path fold_agent never had — mirrors
+# ═══ reconcile_agent_fold, the repair path fold_agent never had. Mirrors
 # reconcile_project_fold's exact design, sharing the SAME _move_agent_estate fold_agent
-# itself calls) ═══
+# itself calls. ═══
 
 
 async def test_reconcile_agent_fold_repairs_an_orphaned_edge_from_a_partial_fold(
@@ -919,7 +918,7 @@ async def test_reconcile_agent_fold_repairs_an_orphaned_edge_from_a_partial_fold
         "SELECT id FROM objects WHERE canonical='agent:ra1dead0'")
     into_id = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical='agent:ra1live0'")
-    # simulate the OLD, estate-blind merge path directly — no fold_agent involved
+    # simulate the OLD, data-blind merge path directly: no fold_agent involved
     await actions.merge_objects(into_id, dupe_id, justification="old-style merge",
                                 actor="operator")
     events_before = await actions.pool.fetchval(
@@ -937,7 +936,7 @@ async def test_reconcile_agent_fold_repairs_an_orphaned_edge_from_a_partial_fold
         "SELECT count(*) FROM object_events WHERE event_type='merge'")
     assert events_after == events_before
     status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe_id)
-    assert status == "merged"  # unchanged — still exactly one merge, ever
+    assert status == "merged"  # unchanged: still exactly one merge, ever
 
 
 async def test_reconcile_agent_fold_is_a_true_noop_on_a_healthy_fold(
@@ -962,7 +961,7 @@ async def test_reconcile_agent_fold_is_a_true_noop_on_a_healthy_fold(
 
 
 async def test_reconcile_agent_fold_refuses_a_still_active_dupe(actions: Actions) -> None:
-    """REFUSAL CONTROL: reconcile must never become a side door into performing a fold —
+    """REFUSAL CONTROL: reconcile must never become another way to perform a fold:
     an active (never-folded) dupe is fold_agent's job, not this one's."""
     await _mk_agent(actions, "agent:ra3active0")
     await _mk_agent(actions, "agent:ra3into000")
@@ -977,7 +976,7 @@ async def test_reconcile_agent_fold_refuses_a_still_active_dupe(actions: Actions
 
 
 async def test_reconcile_agent_fold_refuses_to_redirect_a_merge(actions: Actions) -> None:
-    """A dupe already merged into A is not this pair's business if the caller names B —
+    """A dupe already merged into A is not this pair's business if the caller names B:
     reconcile never guesses or redirects which merge a repair applies to."""
     await _mk_agent(actions, "agent:ra4dupe00")
     await _mk_agent(actions, "agent:ra4real00")
@@ -1007,8 +1006,8 @@ async def test_reconcile_agent_fold_refuses_unknown_refs(actions: Actions) -> No
 
 
 async def test_reconcile_agent_fold_refuses_a_non_operator_actor(actions: Actions) -> None:
-    """SAME GATE AS fold_agent (finding 962579a6): repairing a merge needs the same
-    authority as making one."""
+    """SAME GATE AS fold_agent: repairing a merge needs the same authority as making
+    one."""
     await _mk_agent(actions, "agent:ra6dupe00")
     await _mk_agent(actions, "agent:ra6into00")
     await fold_agent(actions, dupe="agent:ra6dupe00", into="agent:ra6into00",
@@ -1021,10 +1020,10 @@ async def test_reconcile_agent_fold_refuses_a_non_operator_actor(actions: Action
 
 
 async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> None:
-    """THE AUTO-HEAL (operator, 2026-07-17: 'the folds have to auto heal'): a tray row
-    citing a DEAD generation of a rebased lineage still lands its estate on the one who
-    answers to the name today — the graph walk crosses id bases wherever a succession
-    was recorded (Ra XV -> XVI), and the registry can never regress the answer."""
+    """THE AUTO-HEAL: folds must heal themselves automatically. A tray row citing a DEAD
+    generation of a rebased lineage still lands its data on the one who answers to the
+    name today: the graph walk crosses id bases wherever a succession was recorded
+    (generation XV to XVI), and the registry can never regress the answer."""
     from datetime import UTC, datetime
 
     from src.orchestrator.mounts import save_mount
@@ -1055,16 +1054,16 @@ async def test_living_head_follows_a_cross_base_succession(actions: Actions) -> 
 async def test_living_head_never_regresses_past_a_broken_mid_chain_link(
     actions: Actions,
 ) -> None:
-    """Live specimen (thread 20af2c95, msg 5052: Imhotep XX -> XXXI). A REAL succeeded_by
-    chain (i -> ii -> ... -> xx) advances many hops, then a LATER (not tied — a genuine
+    """Live specimen: a lineage advancing from generation XX to XXXI. A REAL succeeded_by
+    chain (i -> ii -> ... -> xx) advances many hops, then a LATER (not tied, a genuine
     "seam-debounce" retraction at a later timestamp than the real pointer it invalidates)
     retraction breaks the link at xx, so `lineage_head` correctly-per-its-own-rules stops
-    there. But xxxi is REAL and LIVE right now — a distinct generation further along the
+    there. But xxxi is REAL and LIVE right now: a distinct generation further along the
     SAME family, reachable only through the broken hop. The old `living_head` only ever
     consulted the live-mount registry when the walk advanced ZERO hops (`head == canon`);
     a walk that advanced past nineteen real hops before breaking looked identical to a
     correctly-resolved head and skipped the safety net entirely. Fixed: the comparison is
-    now unconditional — living_head always takes whichever of {the walk's own answer, the
+    now unconditional; living_head always takes whichever of {the walk's own answer, the
     freshest live-mounted generation in the family} names the newer generation."""
     from datetime import UTC, datetime, timedelta
 
@@ -1075,19 +1074,19 @@ async def test_living_head_never_regresses_past_a_broken_mid_chain_link(
     twenty = await actions.create_or_find_object("Agent", "agent:77c0ffee-xx", "test")
     await actions.create_or_find_object("Agent", "agent:77c0ffee-xxi", "test")
     # a real, single-hop chain i -> xx (one hop suffices to prove "walk advanced, then
-    # broke" — the live specimen's own 19 hops aren't needed to exercise the same gap)
+    # broke"; the live specimen's own 19 hops aren't needed to exercise the same gap)
     await actions.assert_property(base, "succeeded_by", "agent:77c0ffee-xx", "test", now,
                                   0.9, evidence_class="self_declared")
     # the real pointer onward, EARLIER...
     await actions.assert_property(twenty, "succeeded_by", "agent:77c0ffee-xxi",
                                   "agent:77c0ffee-xxi", now, 0.6,
                                   evidence_class="direct_observation")
-    # ...then a LATER retraction breaks it — not a tie, genuinely more recent, so it
+    # ...then a LATER retraction breaks it: not a tie, genuinely more recent, so it
     # legitimately wins under lineage_head's own newest-wins rule and the walk stops at xx
     later = now + timedelta(minutes=9)
     await actions.assert_property(twenty, "succeeded_by", "", "seam-debounce", later, 0.6,
                                   evidence_class="direct_observation")
-    # xxxi is real, and its own mount is the freshest thing in this family right now —
+    # xxxi is real, and its own mount is the freshest thing in this family right now;
     # the chain to it is broken (never asserted from xx or xxi), only liveness proves it
     await actions.create_or_find_object("Agent", "agent:77c0ffee-xxxi", "test")
     await save_mount(actions.pool, job_dir="/jobs/77c0ffee31", agent_id="agent:77c0ffee-xxxi",
@@ -1097,27 +1096,27 @@ async def test_living_head_never_regresses_past_a_broken_mid_chain_link(
         "head resolution must never name a generation older than one with a live mount")
 
 
-# --- wakeable_identity (thread 28842543): wake's own question, distinct from delivery ---
+# --- wakeable_identity: wake's own question, distinct from delivery ---
 
 async def test_wakeable_identity_finds_the_live_body_past_a_phantom_successor(
     actions: Actions,
 ) -> None:
-    """Reproduces thread 28842543 at the resolver level: a declared successor that never
-    mounted must not hide the live body behind it. living_head is right to trust the
-    declared succession for DELIVERY (ruling 1db1ff41: declared beats derived) —
-    wakeable_identity answers a DIFFERENT question ('which OS session can be resumed') and
-    must disagree here, on purpose."""
+    """Reproduces the wake-resolver gap: a declared successor that never mounted must
+    not hide the live body behind it. living_head is right to trust the declared
+    succession for DELIVERY (declared beats derived), but wakeable_identity answers a
+    DIFFERENT question ('which OS session can be resumed') and must disagree here, on
+    purpose."""
     await save_mount(actions.pool, job_dir="/jobs/e08c3850", agent_id="agent:e08c3850",
-                     project="imhotep", cwd="/w/imhotep", model=None, session_key=None)
+                     project="relayhouse", cwd="/w/relayhouse", model=None, session_key=None)
     base = await actions.create_or_find_object("Agent", "agent:e08c3850", "agent:e08c3850")
-    # the successor is MINTED (a real Agent object, exactly what mint_heir does) — just
+    # the successor is MINTED (a real Agent object, exactly what mint_heir does), just
     # never mounted an OS session; lineage_head only advances past a succeeded_by pointer
     # that resolves to a real, active Agent object, so this is the shape that matters
     await actions.create_or_find_object("Agent", "agent:e08c3850-xi", "agent:e08c3850")
     await actions.assert_property(base, "succeeded_by", "agent:e08c3850-xi",
                                   "agent:test", datetime.now(UTC), 0.95,
                                   evidence_class="direct_observation")
-    # living_head trusts the declaration (correct for delivery) — the successor never mounted
+    # living_head trusts the declaration (correct for delivery); the successor never mounted
     assert await living_head(actions.pool, "agent:e08c3850") == "agent:e08c3850-xi"
     # wakeable_identity answers wake's own question and finds the body that actually can
     assert await wakeable_identity(actions.pool, "agent:e08c3850") == "agent:e08c3850"
@@ -1126,7 +1125,7 @@ async def test_wakeable_identity_finds_the_live_body_past_a_phantom_successor(
 
 async def test_wakeable_identity_follows_a_real_completed_succession(actions: Actions) -> None:
     """Negative control: when the declared successor has ALSO mounted, more recently than
-    the original, wakeable_identity follows it exactly like living_head does — a healthy
+    the original, wakeable_identity follows it exactly like living_head does: a healthy
     succession is unaffected by this fix, only a phantom one is."""
     await save_mount(actions.pool, job_dir="/jobs/aaaa0000", agent_id="agent:aaaa0000",
                      project="p", cwd="/w/p", model=None, session_key=None)
