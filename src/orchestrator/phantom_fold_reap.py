@@ -1,63 +1,65 @@
-"""PHANTOM/FOLD BACKLOG REAP — dispatch #185 item (e), ruling 696d302c ("this should not
-be babysat by thoth or workers, it should manage itself by the system osiris or each
-worker"), Thoth DM 5464. THE PATTERN THIS MIRRORS: fleet_reconcile.py (task #59, the
-reaper's own precedent) — propose-then-separately-gated-act, dry_run/execute two-phase,
-a DARK/BLIND/OVER_CAP/ACTS state machine, ZERO FALSE DROPS as the bar.
+"""Scheduled sweep over the phantom/fold backlog. This mirrors the pattern already used
+by the fleet reconciliation sweep (fleet_reconcile.py, the precedent for this module):
+propose then separately-gated act, a dry_run/execute two-phase split, a
+DARK/BLIND/OVER_CAP/ACTS state machine, and ZERO FALSE DROPS as the bar.
 
-THREE POPULATIONS graph_lint already surfaces as TESTIMONY ONLY, never before swept on a
-schedule, never before actionable:
+Four populations graph_lint already surfaces as read-only findings, never before swept
+on a schedule, never before actionable:
 
-  false-mint-live      — a generation carrying false_mint=true with a live mount (the
-                          halcyon shape, obligation 6b1efacb). reinstate_generation is
-                          the repair door built for exactly this, at 3014910.
-  duplicate-works-in    — a live agent carrying >1 simultaneously-live works_in edges.
-                          invalidate_works_in is the repair, but compositions.py's own
-                          docstring is explicit: "it never judges which edge is the
-                          stale one" — a mind, or an unambiguous rule, must name it.
-  parallel-lives        — a generation minted while a predecessor's own door held a
-                          live pulse. compositions.py's own docstring: "the seam may
-                          still have been real (verify), never auto-fold."
+  false-mint-live      - a generation carrying false_mint=true with a live mount.
+                          reinstate_generation is the repair built for exactly this
+                          shape.
+  duplicate-works-in    - a live agent carrying more than one simultaneously-live
+                          works_in edge. invalidate_works_in is the repair, but
+                          compositions.py's own docstring is explicit that it never
+                          judges which edge is the stale one - an agent, or an
+                          unambiguous rule, must name it.
+  parallel-lives        - a generation minted while a predecessor still held a live
+                          heartbeat. compositions.py's own docstring: the overlap may
+                          still have been legitimate (verify by hand), never auto-fold.
 
-PLUS a fourth, DISCOVERY-ONLY population this sweep makes visible on a schedule for the
+Plus a fourth, discovery-only population this sweep makes visible on a schedule for the
 first time: half-healed phantom threads (agents.py's own `_report_half_healed_phantom`,
-source=`_HALF_HEAL_SRC`) — obligation Threads that already self-file at mint time but had
-no counted, scheduled surface. The code's own standing law is explicit and NOT relitigated
-here ("NEVER auto-complete... a human must judge"): this sweep only counts and surfaces
-them, never acts.
+source=`_HALF_HEAL_SRC`) - obligation Threads that already self-file at mint time but had
+no counted, scheduled surface before this. The code's own existing rule is explicit and
+not relitigated here (never auto-complete; a human must judge): this sweep only counts
+and surfaces them, never acts.
 
-TWO AUTO-ACT BUCKETS, both narrow, both reusing an already-built repair verb — never a
+Two auto-act buckets, both narrow, both reusing an already-built repair action, never a
 third notion of "safe":
 
-  reinstate_false_mint_live            — false-mint-live AND registry_census (the SAME
-                                          harness+/proc-confirmed occupancy authority
+  reinstate_false_mint_live            - false-mint-live AND registry_census (the same
+                                          harness/proc-confirmed occupancy authority
                                           is_occupied_by_a_live_body wraps) independently
-                                          confirms it. HIGH CONFIDENCE: two signals, one
+                                          confirms it. High confidence: two signals, one
                                           coarse (agent_mounts freshness) and one hard
                                           (OS-verified), must agree before this sweep
-                                          treats a graph-live claim as proof — the exact
-                                          "graph-live alone is not proof" discipline
-                                          fleet_reconcile's own ghost_gap check already
-                                          established the hard way.
-  drop_dead_project_duplicate_works_in — a duplicate-works-in agent where EXACTLY ONE of
-                                          its live targets has SoftwareProject status NOT
-                                          IN ('active', 'merged') — fleet_reconcile's own
-                                          corrected rule (a MERGE is not a death; the
-                                          label moved, the project didn't; d1775472).
-                                          Unambiguous: the other target(s) are still
-                                          alive, this one demonstrably isn't. Zero or more
-                                          than one such target never auto-acts — that is
-                                          exactly the ambiguity invalidate_works_in itself
-                                          refuses to guess at.
+                                          treats a graph-live claim as proof, the same
+                                          "graph-live alone is not proof" discipline the
+                                          fleet reconciliation sweep's own ghost_gap
+                                          check already established.
+  drop_dead_project_duplicate_works_in - a duplicate-works-in agent where exactly one of
+                                          its live targets has SoftwareProject status
+                                          NOT IN ('active', 'merged'). This is the fleet
+                                          reconciliation sweep's own corrected rule: a
+                                          merge is not a death, the label moved, the
+                                          project didn't. Unambiguous: the other
+                                          target(s) are still alive, this one
+                                          demonstrably isn't. Zero or more than one such
+                                          target never auto-acts, that is exactly the
+                                          ambiguity invalidate_works_in itself refuses to
+                                          guess at.
 
-Everything else — parallel-lives (always), half-healed-phantom-threads (always,
+Everything else, parallel-lives (always), half-healed-phantom-threads (always,
 report-only), and any duplicate-works-in/false-mint-live row that does not clear its own
-bucket's bar — lands in `leave_for_human`, the same terminal bucket fleet_reconcile uses
-for a row it could not resolve mechanically.
+bucket's bar, lands in `leave_for_human`, the same terminal bucket the fleet
+reconciliation sweep uses for a row it could not resolve mechanically.
 
-SCHEDULED LEG stays DARK by default (`osiris_phantom_fold_reap_enabled=False`) — flipping
-it is a second signature a human gives separately from approving this diff, the same law
-every other scheduled writer in this house already follows (fleet_reconcile,
-closure_miner, phantom_heal, tree_ingest_alarm)."""
+The scheduled leg stays off by default (`osiris_phantom_fold_reap_enabled=False`).
+Flipping it is a second signature a human gives separately from approving this change,
+the same rule every other scheduled writer in this codebase already follows (the fleet
+reconciliation sweep, the closure miner, the phantom-heal sweep, the tree-ingest
+alarm)."""
 from __future__ import annotations
 
 from typing import Any
@@ -67,14 +69,15 @@ import asyncpg
 from src.actions.core import Actions
 from src.config.settings import Settings, get_settings
 
-# the SAME liveness window every liveness read in the fleet uses (mounts.py's own
-# _DOOR_WINDOW_SECS, fleet()'s "live" cutoff, fleet_reconcile.py's own _LIVE_WINDOW_SECS)
+# The same liveness window used by every liveness check in the fleet (mounts.py's own
+# _DOOR_WINDOW_SECS, fleet()'s "live" cutoff, fleet_reconcile.py's own _LIVE_WINDOW_SECS).
 _LIVE_WINDOW_SECS = 900
 
-# task #108's own batch-cap discipline, reused rather than re-measured: these two auto-act
-# populations are narrower and rarer than fleet_reconcile's own (a false_mint-live
-# mis-fire or a dead-project works_in straggler is not a steady drip either), so the same
-# order-of-magnitude cap applies until a real tick history says otherwise.
+# The same batch-cap discipline used elsewhere in this codebase, reused rather than
+# re-measured: these two auto-act populations are narrower and rarer than fleet
+# reconciliation's own (a false_mint-live mis-fire or a dead-project works_in straggler
+# is not a steady drip either), so the same order-of-magnitude cap applies until a real
+# tick history says otherwise.
 _ACTIONABLE_BUCKETS = ("reinstate_false_mint_live", "drop_dead_project_duplicate_works_in")
 _BATCH_CAP = 5
 
@@ -84,9 +87,9 @@ _SANCTIONED_REAP_ACTOR = "cron:phantom_fold_reap_heartbeat"
 def _held(
     buckets: dict[str, list[dict[str, Any]]], row: dict[str, Any], rule: str,
 ) -> None:
-    """A row that WOULD auto-act, held back for the stated reason instead — same
-    mechanism fleet_reconcile.py's own `_held` uses, reused verbatim rather than
-    reinvented: ONE hold implementation, several reasons, never a second copy to drift."""
+    """A row that would auto-act, held back for the stated reason instead. This reuses
+    the same mechanism fleet_reconcile.py's own `_held` uses, verbatim rather than
+    reinvented: one hold implementation, several reasons, never a second copy to drift."""
     row["bucket"] = "leave_for_human"
     row["rule"] = rule
     buckets["leave_for_human"].append(row)
@@ -96,15 +99,15 @@ async def _false_mint_live_candidates(
     pool: asyncpg.Pool, *, agents_json: Any = None, read_exe: Any = None,
     read_cwd: Any = None, live_secs: int = _LIVE_WINDOW_SECS,
 ) -> tuple[list[dict[str, Any]], bool]:
-    """graph_lint's own `false-mint-live` query (compositions.py), reused verbatim —
+    """graph_lint's own `false-mint-live` query (compositions.py), reused verbatim:
     false_mint=true with an agent_mounts row fresh within `live_secs`. Cross-checked
-    against registry_census (the SAME harness+/proc-confirmed authority
-    is_occupied_by_a_live_body wraps) — never trusted alone, exactly graph_lint's own
-    docstring warning: "a real false positive here is still worth a human's glance, never
-    worth silently trusting agent_mounts alone for a repair decision." Returns
-    (rows, blind) — `blind=True` means the OS census itself could not run; the caller owns
-    refusing to auto-act on anything while blind, never silently reading it as 'none
-    confirmed'."""
+    against registry_census (the same harness/proc-confirmed authority
+    is_occupied_by_a_live_body wraps), never trusted alone, matching graph_lint's own
+    docstring warning that a real false positive here is still worth a human's glance,
+    and that agent_mounts alone is never enough to base a repair decision on. Returns
+    (rows, blind); `blind=True` means the OS census itself could not run, and the caller
+    owns refusing to auto-act on anything while blind rather than silently reading that
+    as "none confirmed"."""
     from src.orchestrator.mounts import registry_census
 
     rows = await pool.fetch(
@@ -119,8 +122,8 @@ async def _false_mint_live_candidates(
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if census.get("blind"):
-        # STILL RETURN THE ROWS — a blind census means "cannot corroborate", not "no
-        # candidates exist"; the caller (phantom_fold_dry_run) must be able to HOLD each
+        # Still return the rows: a blind census means "cannot corroborate", not "no
+        # candidates exist". The caller (phantom_fold_dry_run) must be able to hold each
         # one in leave_for_human by name, never silently drop it from every bucket.
         return [{"agent_id": r["agent"], "harness_confirmed": False,
                  "bucket_eligible": False} for r in rows], True
@@ -135,13 +138,13 @@ async def _false_mint_live_candidates(
 async def _duplicate_works_in_candidates(
     pool: asyncpg.Pool, *, live_secs: int = _LIVE_WINDOW_SECS,
 ) -> list[dict[str, Any]]:
-    """graph_lint's own `duplicate-works-in` query (compositions.py), reused verbatim —
-    scoped to currently-LIVE agents (the SAME liveness window every check here uses), plus
-    each live target's OWN SoftwareProject status so a candidate whose live targets are
-    unambiguous (exactly one non-active/non-merged) can be auto-cleaned. `status NOT IN
-    ('active', 'merged')`, DELIBERATELY not just `<> 'active'` — fleet_reconcile.py's own
-    corrected rule, found live against a real false drop (Werner/repo:bytebye): a project
-    RENAMED via merge is not a death, the label moved, the project didn't."""
+    """graph_lint's own `duplicate-works-in` query (compositions.py), reused verbatim:
+    scoped to currently-live agents (the same liveness window every check here uses),
+    plus each live target's own SoftwareProject status, so a candidate whose live
+    targets are unambiguous (exactly one non-active/non-merged) can be auto-cleaned.
+    `status NOT IN ('active', 'merged')`, deliberately not just `<> 'active'`, is
+    fleet_reconcile.py's own corrected rule, found live against a real false drop: a
+    project renamed via merge is not a death, the label moved, the project didn't."""
     rows = await pool.fetch(
         "WITH live_agents AS (SELECT DISTINCT agent_id FROM agent_mounts "
         "  WHERE last_seen > now() - make_interval(secs => $1)) "
@@ -171,11 +174,11 @@ async def _duplicate_works_in_candidates(
 
 
 async def _parallel_lives_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
-    """graph_lint's own `parallel-lives` query (compositions.py), reused verbatim. NEVER
-    auto-acted on, by that check's own docstring ("the seam may still have been real
-    (verify), never auto-fold") — this sweep's contribution here is COUNTING and
-    SURFACING on a schedule, nothing more; there is no repair verb this bucket could ever
-    hand a rule to."""
+    """graph_lint's own `parallel-lives` query (compositions.py), reused verbatim. Never
+    auto-acted on, per that check's own docstring (the overlap may still have been
+    legitimate; verify by hand, never auto-fold). This sweep's contribution is counting
+    and surfacing it on a schedule, nothing more; there is no repair action this bucket
+    could ever hand a rule to."""
     rows = await pool.fetch(
         "SELECT o.canonical AS heir, "
         "  max(p.value #>> '{}') FILTER (WHERE p.name='parallel_pulse_door') AS door, "
@@ -198,10 +201,10 @@ async def _parallel_lives_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
 
 async def _half_healed_phantom_threads(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     """Obligation Threads `_report_half_healed_phantom` (agents.py) opens at
-    `source='half-heal-detect'` — already self-filed at mint time, but with no counted,
-    scheduled surface before this sweep. NEVER acted on: that function's own docstring is
-    the standing law this sweep does not relitigate ("Do not auto-complete: a real
-    successor may already be live past {phantom}. A human must judge.")."""
+    `source='half-heal-detect'`, already self-filed at mint time, but with no counted,
+    scheduled surface before this sweep. Never acted on: that function's own docstring
+    states the rule this sweep does not relitigate, that a real successor may already be
+    live past the phantom and a human must judge."""
     from src.orchestrator.agents import _HALF_HEAL_SRC
 
     rows = await pool.fetch(
@@ -228,21 +231,21 @@ async def phantom_fold_dry_run(
     pool: asyncpg.Pool, *, agents_json: Any = None, read_exe: Any = None,
     read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """THE REPORT — buckets every row across all four populations and names the rule that
-    placed it, exactly mirroring fleet_reconcile.reconcile_dry_run's own shape. Writes
-    NOTHING. `agents_json`/`read_exe`/`read_cwd` are registry_census's own injection seam,
-    passed straight through — tests drive this with fakes, production defaults to the
-    real OS census.
+    """Builds the report: buckets every row across all four populations and names the
+    rule that placed it, mirroring fleet_reconcile.reconcile_dry_run's own shape. Writes
+    nothing. `agents_json`/`read_exe`/`read_cwd` are registry_census's own injection
+    point, passed straight through; tests drive this with fakes, production defaults to
+    the real OS census.
 
-    A BLIND CENSUS REFUSES TO BUCKET ANYTHING INTO reinstate_false_mint_live (the ONE
-    auto-act bucket that depends on it) — held in `leave_for_human` instead, named as
-    blind-held, `census_blind: true` at the top level. `drop_dead_project_duplicate_
-    works_in` does not depend on the OS census at all (it is a pure graph read on project
-    status) and is unaffected by blindness.
+    A blind census refuses to bucket anything into reinstate_false_mint_live (the one
+    auto-act bucket that depends on it); those rows are held in `leave_for_human`
+    instead, named as blind-held, with `census_blind: true` at the top level.
+    `drop_dead_project_duplicate_works_in` does not depend on the OS census at all (it is
+    a pure graph read on project status) and is unaffected by blindness.
 
-    AN OVER-CAP TICK holds BOTH auto-act buckets to `leave_for_human` (task #108's own
-    discipline) — an anomalous batch is the signature of a bug upstream, not a thing to
-    bulk-act on unwitnessed. `over_cap: true` names it."""
+    An over-cap tick holds both auto-act buckets to `leave_for_human` (the same batch-cap
+    discipline used elsewhere in this codebase): an anomalous batch is the signature of a
+    bug upstream, not a thing to bulk-act on unwitnessed. `over_cap: true` names it."""
     fm_rows, blind = await _false_mint_live_candidates(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     dup_rows = await _duplicate_works_in_candidates(pool)
@@ -321,31 +324,31 @@ async def phantom_fold_execute(
     actions: Actions, *, actor: str, execute: bool = False, agents_json: Any = None,
     read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """THE ACTING HALF. DRY RUN IS THE DEFAULT (`execute=False`) — returns the exact plan
-    without writing anything. Re-reads the tray itself via `phantom_fold_dry_run` (never
-    trusts a caller-supplied stale report) — the plan and the act must see the same
+    """The acting half. Dry run is the default (`execute=False`): returns the exact plan
+    without writing anything. Re-reads the backlog itself via `phantom_fold_dry_run`
+    (never trusts a caller-supplied stale report), so the plan and the act see the same
     instant.
 
-    reinstate_false_mint_live: `reinstate_generation` per agent — the exact repair door
-    built for this shape, obligation 6b1efacb.
+    reinstate_false_mint_live: `reinstate_generation` per agent, the repair built for
+    this shape.
     drop_dead_project_duplicate_works_in: `invalidate_works_in` per agent, targeting the
-    ONE unambiguous stale project the dry run already named.
-    parallel_lives / half_healed_phantom / leave_for_human: NEVER acted on, by
-    construction — absent from every write this function performs.
+    one unambiguous stale project the dry run already named.
+    parallel_lives / half_healed_phantom / leave_for_human: never acted on, by
+    construction, absent from every write this function performs.
 
     A single row's reinstate/invalidate failing (a race, an already-healthy row) is
-    caught and reported inline rather than aborting the batch — ZERO FALSE DROPS means
-    every row that WAS acted on must be a true positive, not that one failure may
+    caught and reported inline rather than aborting the batch. Zero false drops means
+    every row that was acted on must be a true positive, not that one failure may
     silently swallow the rest of a correct plan.
 
-    POST-ACT VERIFICATION (`execute=True` only): re-reads the tray a second time after
-    acting and reports before/after counts.
+    Post-act verification (`execute=True` only): re-reads the backlog a second time
+    after acting and reports before/after counts.
 
-    THE DESK RECEIPT, same shape as fleet_reconcile's own: a real execute (reinstated or
+    The desk brief, same shape as fleet_reconcile's own: a real execute (reinstated or
     invalidated nonzero) fires a durable operator-desk `fyi` brief with exact counts and
-    row ids. An OVER-CAP tick fires its own `decision` brief instead — that genuinely
-    needs a human call. Both try/excepted — a mail hiccup must never unwind a landed
-    action."""
+    row ids. An over-cap tick fires its own `decision` brief instead, since that
+    genuinely needs a human call. Both are try/excepted: a mail hiccup must never unwind
+    a landed action."""
     from src.orchestrator.agents import invalidate_works_in, reinstate_generation
     from src.orchestrator.mailbox import send_message
 
@@ -377,7 +380,7 @@ async def phantom_fold_execute(
             sent = await send_message(actions.pool, from_agent=actor, from_project="osiris",
                                       to_project="operator", body=body, desk_kind="decision")
             plan["desk_brief_id"] = sent.get("id")
-        except Exception:  # noqa: BLE001 — a mail hiccup must not mask the hold that landed
+        except Exception:  # noqa: BLE001 - a mail hiccup must not mask the hold that landed
             plan["desk_brief_id"] = None
         plan.update({
             "reinstated": [], "invalidated": [],
@@ -431,15 +434,16 @@ async def phantom_fold_execute(
             sent = await send_message(actions.pool, from_agent=actor, from_project="osiris",
                                       to_project="operator", body=body, desk_kind="fyi")
             plan["desk_brief_id"] = sent.get("id")
-        except Exception:  # noqa: BLE001 — an acted row must not unwind on a mail hiccup
+        except Exception:  # noqa: BLE001 - an acted row must not unwind on a mail hiccup
             plan["desk_brief_id"] = None
     return plan
 
 
-# task #108's consecutive-blind alarm, mirrored: NO COUNTER, NO STATE ROW — open_thread's
-# own idempotency-on-summary-text does the dedup, the thread's own age IS the darkness
-# duration. Text must stay byte-for-byte stable across calls (the canonical hash derives
-# from it) or every tick would mint a new thread instead of finding the one already open.
+# Mirrors the consecutive-blind alarm pattern used elsewhere in this codebase: no
+# counter, no state row. open_thread's own idempotency on summary text does the dedup,
+# and the thread's own age is the darkness duration. This text must stay byte-for-byte
+# stable across calls (the canonical hash derives from it), or every tick would mint a
+# new thread instead of finding the one already open.
 _BLIND_ALARM_SUMMARY = (
     "PHANTOM-FOLD-REAP'S SCHEDULED TICK WENT CENSUS-BLIND — the OS census failed this "
     "tick, every reinstate_false_mint_live row was held in leave_for_human instead of "
@@ -453,25 +457,26 @@ async def phantom_fold_scheduled_tick(
     actions: Actions, *, settings: Settings | None = None, agents_json: Any = None,
     read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """THE SCHEDULED LEG's own tick — `arq_worker.phantom_fold_reap_heartbeat` calls this
-    unconditionally, the same thin-shim shape every other scheduled writer in this house
-    uses (real logic and the flag gate live in the orchestrator tick, not the cron
-    wrapper).
+    """The scheduled leg's own tick. `arq_worker.phantom_fold_reap_heartbeat` calls this
+    unconditionally, the same thin-shim shape every other scheduled writer in this
+    codebase uses (real logic and the flag gate live in the orchestrator tick, not the
+    cron wrapper).
 
-    OFF unless `osiris_phantom_fold_reap_enabled` — the kill switch: the code ships
-    inert, and flipping this flag is a SECOND signature a human gives separately from
-    approving the diff, never a side effect of deploying it. When on, composes
-    `phantom_fold_execute(execute=True)` — the exact same acting verb reachable by hand,
-    so the schedule and a human's own manual call are provably the same path.
+    Off unless `osiris_phantom_fold_reap_enabled` is set. This is the kill switch: the
+    code ships inert, and flipping this flag is a second signature a human gives
+    separately from approving the change, never a side effect of deploying it. When on,
+    it composes `phantom_fold_execute(execute=True)`, the exact same acting function
+    reachable by hand, so the schedule and a human's own manual call are provably the
+    same path.
 
     `state`: DARK (flag off) -> BLIND (OS census failed, reinstate_false_mint_live held)
     -> OVER_CAP (batch too large, both auto-act buckets held) -> ACTS (neither hold
     fired; reinstated/invalidated may be nonzero, or genuinely empty).
 
-    THE CONSECUTIVE-BLIND ALARM: a BLIND tick opens `_BLIND_ALARM_SUMMARY` as a
-    `severity='alarm'` obligation Thread — idempotent on the summary text. The next
-    NON-blind tick resolves it. Both try/excepted — a graph hiccup must never fail the
-    tick's own verdict."""
+    The consecutive-blind alarm: a BLIND tick opens `_BLIND_ALARM_SUMMARY` as a
+    `severity='alarm'` obligation Thread, idempotent on the summary text. The next
+    non-blind tick resolves it. Both are try/excepted: a graph hiccup must never fail
+    the tick's own verdict."""
     st = settings or get_settings()
     if not st.osiris_phantom_fold_reap_enabled:
         return {"enabled": False, "state": "DARK", "reinstated": [], "invalidated": [],
@@ -488,7 +493,7 @@ async def phantom_fold_scheduled_tick(
         try:
             await open_thread(actions, summary=_BLIND_ALARM_SUMMARY, kind="obligation",
                               severity="alarm", source="cron:phantom_fold_reap_heartbeat")
-        except Exception:  # noqa: BLE001 — a mint hiccup must not fail the tick's verdict
+        except Exception:  # noqa: BLE001 - a mint hiccup must not fail the tick's verdict
             pass
     else:
         state = "OVER_CAP" if out.get("over_cap") else "ACTS"
@@ -497,6 +502,6 @@ async def phantom_fold_scheduled_tick(
                 actions, _BLIND_ALARM_SUMMARY,
                 because="census recovered — this tick's OS body check succeeded again",
                 source="cron:phantom_fold_reap_heartbeat")
-        except Exception:  # noqa: BLE001 — same discipline: never fail the tick over this
+        except Exception:  # noqa: BLE001 - same discipline: never fail the tick over this
             pass
     return {"enabled": True, "state": state, **out}
