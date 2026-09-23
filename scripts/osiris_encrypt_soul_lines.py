@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""Migrate existing plaintext soul_lines/soul_lines_cold rows to encrypted-at-rest
-(Thoth mail 9134, operator ruling on thread 773d633a). A thin CLI over
-src.ingest.soul_store.encrypt_existing_soul_lines — every write from now on already
-encrypts itself; this is the one-time backward pass over what was already in the table
-before this build landed.
+"""Migrate existing plaintext soul_lines/soul_lines_cold rows to encrypted-at-rest.
+A thin CLI over src.ingest.soul_store.encrypt_existing_soul_lines: every write from now
+on already encrypts itself; this is the one-time backward pass over what was already in
+the table before this build landed.
 
 Dry-run by default, writes nothing. Idempotent: a second run (or a run interrupted
 mid-way) finds only what genuinely still needs migrating — each row is decrypted first

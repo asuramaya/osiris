@@ -1,49 +1,48 @@
 #!/usr/bin/env python3
-"""THE RETENTION LADDER (the vault lane, operator ruling 39384a87/c53a5fc0, item 2): a
-classic GFS (grandfather-father-son) thinning schedule over the DB dump population in
-BOTH `backups/` and the vault, AND over `<vault>/basebackups/` (item 3's own weekly
-pg_basebackup, osiris_base_backup.sh -- a base backup is, like a DB dump, complete and
-independently restorable on its own, so the identical ladder applies unmodified) --
-every survivor inside the last 48h stays whole (nothing thinned there at all); 48h-30d
-thins to one-per-CALENDAR-DAY; 30d-1y thins to one-per-CALENDAR-WEEK; beyond 1y thins to
-one-per-CALENDAR-MONTH, forever. Within any bucket the NEWEST survives (the operator's
-own reasoning: "the graph is append-only so a newer full contains every older one" --
-every survivor here IS a full snapshot by construction, no special-casing needed).
+"""The retention ladder for the DB dump population in both `backups/` and the vault, and
+for `<vault>/basebackups/` (the weekly pg_basebackup taken by osiris_base_backup.sh). A
+base backup is, like a DB dump, complete and independently restorable on its own, so the
+same ladder applies unmodified. It is a classic GFS (grandfather-father-son) thinning
+schedule: every survivor inside the last 48h stays whole (nothing thinned there at all);
+48h-30d thins to one per calendar day; 30d-1y thins to one per calendar week; beyond 1y
+thins to one per calendar month, forever. Within any bucket the newest survives: the
+graph is append-only, so a newer full snapshot contains every older one, and every
+survivor here is a full snapshot by construction, so no special-casing is needed.
 
-SCOPED TO DB DUMPS ONLY for `plan_prune`/`--apply`'s main pass (osiris-*.dump / the
-pre-.dump-switch osiris-*.sql still on disk during the transition) -- an individual
+`plan_prune`/`--apply`'s main pass is scoped to DB dumps only (osiris-*.dump, or the
+pre-.dump-switch osiris-*.sql still on disk during the transition). An individual
 transcript tarball is never a candidate here, since pruning one out of the middle of its
 own incremental chain breaks every later day's restorability. `plan_prune_transcript_chains`
-is the SEPARATE, chain-aware sibling (Thoth msg 8211, off the same ruling): osiris_backup.sh
-now keys the snapshot file and each day's tarball by ISO WEEK, so restorability only ever
-needs to span one week's own chain -- this prunes whole weekly chains at a time (every
-tarball plus the snapshot file sharing one week-key, together, never a partial chain),
-keeping the last 4 weekly chains plus one chain per calendar month beyond that.
+is the separate, chain-aware sibling for that: osiris_backup.sh keys the snapshot file
+and each day's tarball by ISO week, so restorability only ever needs to span one week's
+own chain. This prunes whole weekly chains at a time (every tarball plus the snapshot
+file sharing one week-key, together, never a partial chain), keeping the last 4 weekly
+chains plus one chain per calendar month beyond that.
 
-DRY-RUN IS THE DEFAULT MODE (operator's own word, relayed by Thoth: "do not delete
-anything until I relay the operator's word on that list"). `--apply` exists so a human
-can actually execute the ladder directly, by hand, any time -- this script itself never
-calls `--apply` on its own. `--manifest`/`--apply-if-clear` ARE wired into a weekly
-timer pair (thread 9fac4e0d part 1, deploy-managed per Thoth mail 8437) but stay gated
-the same way: `--apply-if-clear` refuses outright unless the prior day's `--manifest`
-brief is at least 20h old and was never dimmed (find_clear_manifest) -- the operator's
-own word, given in advance by not dimming, not an unconditioned cron.
+Dry-run is the default mode: nothing is deleted until a human reviews the printed list.
+`--apply` exists so a human can actually execute the ladder directly, by hand, any time;
+this script itself never calls `--apply` on its own. `--manifest`/`--apply-if-clear` are
+wired into a weekly timer pair but stay gated the same way: `--apply-if-clear` refuses
+outright unless the prior day's `--manifest` brief is at least 20h old and was never
+dimmed (find_clear_manifest). Leaving the brief undimmed is the explicit go-ahead; this
+is not an unconditioned cron.
 
-ALSO COVERS (Thoth mail 8441, both wired into the SAME manifest/apply-if-clear gate as
-everything above): the 35 legacy pre-week-key transcript tarballs (`plan_prune_
-legacy_tarballs`/`_scan_legacy_tarballs`) and the transcript-cache-prune session
-population (`_collect_session_prune_plan`, delegating to
+Also covers, wired into the same manifest/apply-if-clear gate as everything above: the
+35 legacy pre-week-key transcript tarballs (`plan_prune_legacy_tarballs`/
+`_scan_legacy_tarballs`) and the transcript-cache-prune session population
+(`_collect_session_prune_plan`, delegating to
 osiris_transcript_cache_prune.find_prunable_sessions unchanged).
 
-DORMANT SEAT TRANSCRIPTS (Thoth mail 13353 item 2, the chowder specimen: a re-minted
-seat can carry a 57 MB resumable transcript under its own office, 8 compactions, last
-touched days ago, that nothing currently ever revisits once the seat succeeds and its
-lineage moves on): `attribute_sessions_to_seats` groups the SAME already-safety-checked
-`_collect_session_prune_plan` population (dead AND fully captured — never a raw mtime
-guess) by which seat's OWN office directory produced it, purely for the manifest's own
-reading — "chowder: 3 file(s), 57.2 MB" instead of an unattributed flat path list. This
-changes nothing about what gets deleted, when, or how safely; it rides the identical
-manifest-then-dim gate and the identical `_apply` call every other population here does.
+Dormant seat transcripts: a re-minted seat can carry a large resumable transcript (one
+observed case: 57 MB, 8 compactions, last touched days ago) under its own office
+directory that nothing currently ever revisits once the seat succeeds and its lineage
+moves on. `attribute_sessions_to_seats` groups the same already-safety-checked
+`_collect_session_prune_plan` population (dead and fully captured, never a raw mtime
+guess) by which seat's own office directory produced it, purely for the manifest's own
+reading, for example "chowder: 3 file(s), 57.2 MB" instead of an unattributed flat path
+list. This changes nothing about what gets deleted, when, or how safely; it rides the
+identical manifest-then-dim gate and the identical `_apply` call every other population
+here does.
 
 Pure logic (`plan_prune`) is tested directly; the CLI is a thin scan-report-optionally-
 delete shell around it."""
@@ -126,28 +125,28 @@ _DUMP_LIKE_SUFFIXES = (".dump", ".sql", ".tar.gz")
 
 
 def _scan(directory: Path, *, glob: str = "osiris-*") -> list[DumpFile]:
-    """Every file matching `glob` in `directory` (non-recursive — `backups/`, the vault,
-    and `<vault>/basebackups/` are each flat). Timestamp parsed from the filename itself
-    (the identity osiris_backup.sh/osiris_base_backup.sh already stamp into it — either
+    """Every file matching `glob` in `directory` (non-recursive: `backups/`, the vault,
+    and `<vault>/basebackups/` are each flat). Timestamp is parsed from the filename
+    itself (osiris_backup.sh/osiris_base_backup.sh already stamp it in, either
     `_NAME_RE` for a DB dump or `_BASEBACKUP_RE` for a base backup, tried in that order),
     falling back to the file's own mtime for a name that carries one of the dump-shaped
-    extensions (`_DUMP_LIKE_SUFFIXES`) but not the exact naming pattern — never silently
-    skipped, so a stray REAL dump/base-backup still gets a real answer instead of
-    vanishing from the ladder's view. A base backup is, like a DB dump, a complete and
-    independently-restorable unit on its own (`pg_basebackup`'s whole point) — the SAME
+    extensions (`_DUMP_LIKE_SUFFIXES`) but not the exact naming pattern. It is never
+    silently skipped, so a stray real dump/base-backup still gets a real answer instead
+    of vanishing from the ladder's view. A base backup is, like a DB dump, a complete and
+    independently restorable unit on its own (`pg_basebackup`'s whole point), so the same
     `plan_prune` ladder applies to both, unlike the transcript tarballs' own chain-scoped
     sibling.
 
-    ANYTHING ELSE matching `glob` but NOT one of those extensions is skipped outright,
-    never given a mtime fallback — the broad `osiris-*` glob this function's own callers
+    Anything else matching `glob` but not one of those extensions is skipped outright,
+    never given a mtime fallback. The broad `osiris-*` glob this function's own callers
     default to also matches `osiris-repo.bundle` (osiris_backup.sh's own git-bundle
-    refresh, rewritten every 6-hourly run), and that file's mtime is ALWAYS the most
+    refresh, rewritten every 6-hourly run), and that file's mtime is always the most
     recent thing in the vault. Before this guard, the mtime fallback let it win
     `max(dumps, key=lambda f: f.when)` in osiris_disk_guard.py's own `main()` every
-    single time, silently replacing a ~2.7GB real dump with a ~10MB bundle as "the last
-    dump" — the disk guard's own margin check (item 5, the exact safety net this vault
+    single time, silently replacing a roughly 2.7GB real dump with a roughly 10MB bundle
+    as the last dump. The disk guard's own margin check (the exact safety net this vault
     lane was built to add) was checking against the wrong file's size on every run,
-    found while investigating the 2026-09-09 WAL-pull gap (Thoth mail 8525 item 2)."""
+    found while investigating a WAL-pull gap."""
     out: list[DumpFile] = []
     if not directory.is_dir():
         return out
@@ -179,13 +178,13 @@ class TranscriptChain:
 def plan_prune_transcript_chains(
     chains: list[TranscriptChain], *, keep_recent: int = 4,
 ) -> dict[str, list[TranscriptChain]]:
-    """Chain-aware, unlike `plan_prune`: the unit thinned is a WHOLE weekly chain (every
+    """Chain-aware, unlike `plan_prune`: the unit thinned is a whole weekly chain (every
     tarball sharing one week-key, plus that week's snapshot file), never a single tarball
-    out of the middle of one — removing a chain removes exactly the week it belongs to,
+    out of the middle of one. Removing a chain removes exactly the week it belongs to,
     always in full, so a survivor's own restorability never depends on a chain this
     function didn't keep. The most recent `keep_recent` chains (by week, not by age
-    against `now` — "the last four weekly chains", not a fixed cutoff) survive whole;
-    older chains thin to one per calendar month, newest-in-month wins."""
+    against `now`; the last four weekly chains, not a fixed cutoff) survive whole; older
+    chains thin to one per calendar month, newest-in-month wins."""
     chains_sorted = sorted(chains, key=lambda c: c.week_start, reverse=True)
     keep_keys = {c.week_key for c in chains_sorted[:keep_recent]}
     buckets: dict[str, TranscriptChain] = {}
@@ -203,22 +202,22 @@ def plan_prune_transcript_chains(
 @dataclass(frozen=True)
 class WalSegment:
     path: str
-    when: datetime  # the segment's own file mtime in the vault — see _scan_wal
+    when: datetime  # the segment's own file mtime in the vault, see _scan_wal
     size_bytes: int = 0
 
 
 def plan_prune_wal(
     segments: list[WalSegment], *, oldest_kept_backup_when: datetime | None,
 ) -> dict[str, list[WalSegment]]:
-    """WAL RETENTION (thread 9fac4e0d part 2): keep archived segments only back to
-    the OLDEST STILL-KEPT base backup — a segment archived before that backup was
-    even taken can never be replayed into any base backup this ladder still keeps
-    (PITR always starts from a base and replays forward), so it is dead weight the
-    instant the backup it could have served is itself pruned.
+    """WAL retention: keep archived segments only back to the oldest still-kept base
+    backup. A segment archived before that backup was even taken can never be replayed
+    into any base backup this ladder still keeps (PITR always starts from a base and
+    replays forward), so it is dead weight the instant the backup it could have served
+    is itself pruned.
 
-    `oldest_kept_backup_when=None` (no base backup survives the ladder at all, e.g.
-    a fresh install with none taken yet) means keep EVERYTHING — refusing to guess
-    at a retention point with nothing to anchor it to is safer than deleting WAL
+    `oldest_kept_backup_when=None` (no base backup survives the ladder at all, for
+    example a fresh install with none taken yet) means keep everything. Refusing to
+    guess at a retention point with nothing to anchor it to is safer than deleting WAL
     that might still be needed for the very next backup taken."""
     if oldest_kept_backup_when is None:
         return {"keep": list(segments), "remove": []}
@@ -228,8 +227,8 @@ def plan_prune_wal(
 
 
 def _scan_wal(directory: Path) -> list[WalSegment]:
-    """Every archived WAL segment in `directory` (`<vault>/wal_archive`) — a 24-hex-
-    char name carries no embedded timestamp of its own, unlike a dump or base backup
+    """Every archived WAL segment in `directory` (`<vault>/wal_archive`). A 24-hex-char
+    name carries no embedded timestamp of its own, unlike a dump or base backup
     filename, so `when` is the file's own mtime: postgres archives strictly in
     ascending LSN order and osiris_backup.sh's own WAL pull processes `ls -1`'s
     lexicographic order (which sorts correctly for these zero-padded hex names), so
@@ -249,8 +248,8 @@ def _scan_wal(directory: Path) -> list[WalSegment]:
 
 def _scan_transcript_chains(directory: Path) -> list[TranscriptChain]:
     """Every `claude-transcripts-<week>-<day>.tar.gz` in `directory`, grouped by its own
-    week-key into a `TranscriptChain` — the corresponding `.transcript-archive-<week>.snar`
-    snapshot file, if still present, rides along as part of the SAME chain (it's only ever
+    week-key into a `TranscriptChain`. The corresponding `.transcript-archive-<week>.snar`
+    snapshot file, if still present, rides along as part of the same chain (it's only ever
     needed to produce that week's own next incremental, never to extract an existing one,
     but it belongs to the chain's identity all the same)."""
     if not directory.is_dir():
@@ -274,25 +273,25 @@ def _scan_transcript_chains(directory: Path) -> list[TranscriptChain]:
 
 
 def plan_prune_legacy_tarballs(files: list[DumpFile]) -> dict[str, list[DumpFile]]:
-    """The pre-week-key transcript tarballs (thread 78efd46d item 3's own retirement,
-    Thoth mail 8441 item 2): `claude-transcripts-*` files that never reached the
-    finished, week-keyed shape `_scan_transcript_chains`/`_WEEK_RE` recognizes — 32
-    abandoned `.tar.gz.new` staging leftovers (the old archive block wrote to `.new`
-    then renamed on success; these never got that rename) plus 3 finished pre-week-key
-    `.tar.gz` files, 35 total on this box the day this was written. UNLIKE
-    `plan_prune_transcript_chains`'s own keep-4-plus-monthly ladder, this population is
-    REMOVED IN FULL, no ladder, no survivors: the transcript-tarball archive line is
-    retired (soul_lines now carries every byte, proven by the round-trip sweep against
-    the full population) and no restorability concern favors keeping any one of these
-    over another — they are just the last of a superseded scheme, invisible to every
-    prior manifest because nothing before this ever scanned for this shape at all."""
+    """The pre-week-key transcript tarballs, now retired: `claude-transcripts-*` files
+    that never reached the finished, week-keyed shape `_scan_transcript_chains`/
+    `_WEEK_RE` recognizes. That is 32 abandoned `.tar.gz.new` staging leftovers (the old
+    archive block wrote to `.new` then renamed on success; these never got that rename)
+    plus 3 finished pre-week-key `.tar.gz` files, 35 total on this box the day this was
+    written. Unlike `plan_prune_transcript_chains`'s own keep-4-plus-monthly ladder,
+    this population is removed in full, no ladder, no survivors: the transcript-tarball
+    archive line is retired (soul_lines now carries every byte, proven by the round-trip
+    sweep against the full population), and no restorability concern favors keeping any
+    one of these over another. They are just the last of a superseded scheme, invisible
+    to every prior manifest because nothing before this ever scanned for this shape at
+    all."""
     return {"keep": [], "remove": list(files)}
 
 
 def _scan_legacy_tarballs(vault: Path) -> list[DumpFile]:
     """Every `claude-transcripts-*` file in the vault that `_scan_transcript_chains`
-    does NOT already own (i.e. does not match `_WEEK_RE`) — the complement, computed
-    against the SAME regex that function uses, so the two scans can never double-count
+    does not already own (i.e. does not match `_WEEK_RE`): the complement, computed
+    against the same regex that function uses, so the two scans can never double-count
     a single file between them. Matches both extensions on disk: finished `.tar.gz`
     and abandoned `.tar.gz.new`."""
     if not vault.is_dir():
@@ -353,10 +352,10 @@ def _report_wal(plan: dict[str, list[WalSegment]]) -> None:
 
 
 def _report_sessions_text(plan: list[SessionRow]) -> str:
-    """The transcript-cache-prune population (Thoth mail 8441 item 1) — unlike the
-    file-scan populations above, `plan` is already the finished list of prunable
-    sessions (osiris_transcript_cache_prune.find_prunable_sessions has already applied
-    the dead/fully-captured test); there is no separate "keep" side to report here,
+    """The transcript-cache-prune population: unlike the file-scan populations above,
+    `plan` is already the finished list of prunable sessions
+    (osiris_transcript_cache_prune.find_prunable_sessions has already applied the
+    dead/fully-captured test), so there is no separate "keep" side to report here,
     same as that script's own dry-run print."""
     lines = [f"\ntranscript cache (dead subagent session file(s)): {len(plan)} "
              "would be removed"]
@@ -372,9 +371,9 @@ def _report_sessions(plan: list[SessionRow]) -> None:
 
 
 def _seat_handles(office_root: Path) -> list[str]:
-    """Every seat with a real office directory on disk right now — one subdir per handle
+    """Every seat with a real office directory on disk right now: one subdir per handle
     (offices.py's own `_default_office_root`/`seat_office_target` convention: `<office_root>/
-    <handle>`, lowercased). Purely a disk scan, no DB — same "stays usable offline" shape
+    <handle>`, lowercased). Purely a disk scan, no DB, the same offline-usable shape
     every other `_scan_*` helper in this file already has. Missing `office_root` (a fresh
     box, or a synthetic tmp_path in a test) is a normal empty case, never an error."""
     if not office_root.is_dir():
@@ -383,7 +382,7 @@ def _seat_handles(office_root: Path) -> list[str]:
 
 
 def _seat_transcript_dir(handle: str, *, office_root: Path, projects_root: Path) -> Path:
-    """The harness transcript directory a seat's OWN office cwd writes to — the SAME
+    """The harness transcript directory a seat's own office cwd writes to: the same
     `_harness_slug` the harness itself keys `~/.claude/projects/` on (mounts.py), so this
     always agrees with wherever a real seat's session files actually landed, never a
     separately-maintained guess that could drift from the harness's own convention."""
@@ -396,15 +395,15 @@ def _seat_transcript_dir(handle: str, *, office_root: Path, projects_root: Path)
 def attribute_sessions_to_seats(
     sessions: list[SessionRow], *, office_root: Path, projects_root: Path,
 ) -> dict[str, list[SessionRow]]:
-    """DORMANT SEAT TRANSCRIPTS (Thoth mail 13353 item 2) — groups an ALREADY-COMPUTED
-    prune-eligible `sessions` list (`find_prunable_sessions`'s own output: dead AND fully
-    captured, the identical safety test every other session-cache prune already uses) by
-    which SEAT's office directory produced it. Nothing here changes what gets deleted or
-    when — same session rows, same `_apply` call, same manifest-then-dim gate; this only
-    adds a per-seat rollup for the operator's own reading, "chowder: 3 file(s), 57.2 MB"
+    """Groups an already-computed prune-eligible `sessions` list
+    (`find_prunable_sessions`'s own output: dead and fully captured, the identical
+    safety test every other session-cache prune already uses) by which seat's office
+    directory produced it. Nothing here changes what gets deleted or when: same session
+    rows, same `_apply` call, same manifest-then-dim gate. This only adds a per-seat
+    rollup for the manifest's own reading, for example "chowder: 3 file(s), 57.2 MB"
     rather than a flat, unattributed path list. A session whose directory matches no
     known seat's own transcript directory (an ordinary, non-office project) is left out
-    of the grouping entirely — it still appears in the existing flat session report,
+    of the grouping entirely; it still appears in the existing flat session report,
     untouched."""
     handles = _seat_handles(office_root)
     dir_to_handle = {
@@ -421,11 +420,11 @@ def attribute_sessions_to_seats(
 
 
 def _report_seat_transcripts_text(groups: dict[str, list[SessionRow]]) -> str:
-    """Sizes are computed HERE, at report time — `SessionRow` itself carries no size
-    field (unlike `DumpFile`/`WalSegment`, `soul_sessions` never stores one) — a plain
-    `Path.stat()` per file, tolerant of a file that's already gone (0 bytes counted,
-    never a crash: the same file a concurrent `--apply-if-clear` run might have already
-    removed moments earlier)."""
+    """Sizes are computed here, at report time. `SessionRow` itself carries no size
+    field (unlike `DumpFile`/`WalSegment`, `soul_sessions` never stores one), so this
+    does a plain `Path.stat()` per file, tolerant of a file that's already gone (0 bytes
+    counted, never a crash: the same file a concurrent `--apply-if-clear` run might have
+    already removed moments earlier)."""
     if not groups:
         return "\ndormant seat transcripts: none"
     lines = [f"\ndormant seat transcripts, {len(groups)} seat(s):"]
@@ -453,13 +452,12 @@ def build_manifest_body(
     session_plan: list[SessionRow] | None = None,
     seat_transcript_groups: dict[str, list[SessionRow]] | None = None,
 ) -> str:
-    """Pure: the exact text mailed to the operator's desk (thread 9fac4e0d part 1) —
-    the SAME wording the dry-run CLI prints, so a human reading the mail sees exactly
-    what a human running the command by hand would have seen. `wal_plan`, `legacy_plan`
-    (thread 9fac4e0d part 2 and Thoth mail 8441 item 2), `session_plan` (mail 8441
-    item 1) and `seat_transcript_groups` (mail 13353 item 2 — a rollup OF `session_plan`,
-    never a separate deletion) are all optional — omitted callers/tests that predate each
-    addition still get a valid manifest, just without that section."""
+    """Pure: the exact text mailed to the operator's desk, the same wording the dry-run
+    CLI prints, so a human reading the mail sees exactly what a human running the
+    command by hand would have seen. `wal_plan`, `legacy_plan`, `session_plan`, and
+    `seat_transcript_groups` (a rollup of `session_plan`, never a separate deletion) are
+    all optional, so omitted callers/tests that predate each addition still get a valid
+    manifest, just without that section."""
     total_remove = sum(len(p["remove"]) for p in plans.values())
     total_chains_remove = len(chain_plan["remove"])
     total_wal_remove = len(wal_plan["remove"]) if wal_plan else 0
@@ -489,9 +487,9 @@ def build_manifest_body(
 def _oldest_kept_backup_when(
     basebackup_plan: dict[str, list[DumpFile]],
 ) -> datetime | None:
-    """The anchor WAL retention (part 2) prunes against — the oldest base backup this
-    ladder run still KEEPS (not the oldest one that exists on disk, which may itself
-    be about to be pruned). None when no base backup survives at all."""
+    """The anchor WAL retention prunes against: the oldest base backup this ladder run
+    still keeps (not the oldest one that exists on disk, which may itself be about to
+    be pruned). None when no base backup survives at all."""
     kept = basebackup_plan["keep"]
     return min((f.when for f in kept), default=None)
 
@@ -501,12 +499,12 @@ def _compute_plans(
 ) -> tuple[dict[str, dict[str, list[DumpFile]]], dict[str, list[TranscriptChain]],
            dict[str, list[WalSegment]], dict[str, list[DumpFile]]]:
     """The scan-and-plan step, shared by the dry-run CLI, --apply, --manifest, and
-    --apply-if-clear — one computation, never four copies to drift apart. Everything
-    here is a pure file scan (no DB, no network) — the session-cache-prune population
-    (thread 9fac4e0d follow-up, Thoth mail 8441 item 1) is deliberately NOT part of
-    this function since it needs a real DB query; it is gathered separately, only by
-    the --manifest/--apply-if-clear branches, so the plain dry-run/--apply CLI stays
-    usable with no DB at all, exactly as every existing test here already assumes."""
+    --apply-if-clear: one computation, never four copies to drift apart. Everything
+    here is a pure file scan (no DB, no network). The session-cache-prune population
+    is deliberately not part of this function since it needs a real DB query; it is
+    gathered separately, only by the --manifest/--apply-if-clear branches, so the plain
+    dry-run/--apply CLI stays usable with no DB at all, exactly as every existing test
+    here already assumes."""
     now = datetime.now(UTC)
     plans = {
         "backups/": plan_prune(_scan(backups), now=now),
@@ -527,10 +525,10 @@ MANIFEST_MIN_AGE = timedelta(hours=20)
 
 
 async def _collect_session_prune_plan(*, dead_after_days: int = 30) -> list[SessionRow]:
-    """The transcript-cache-prune population, gathered fresh (Thoth mail 8441 item 1):
-    reuses osiris_transcript_cache_prune's own `_collect_sessions`/`find_prunable_
-    sessions` unchanged — a real DB query, which is exactly why this stays its own
-    async step rather than folding into `_compute_plans`'s pure file scans."""
+    """The transcript-cache-prune population, gathered fresh: reuses
+    osiris_transcript_cache_prune's own `_collect_sessions`/`find_prunable_sessions`
+    unchanged. This is a real DB query, which is exactly why this stays its own async
+    step rather than folding into `_compute_plans`'s pure file scans."""
     from scripts.osiris_transcript_cache_prune import _collect_sessions, find_prunable_sessions
 
     sessions = await _collect_sessions()
@@ -546,11 +544,10 @@ async def mail_manifest(
     session_plan: list[SessionRow] | None = None,
     seat_transcript_groups: dict[str, list[SessionRow]] | None = None,
 ) -> int:
-    """Send the dry-run plan to the operator's desk as a decision-band brief (thread
-    9fac4e0d part 1) — uses src.db.pool.create_pool, NOT bare asyncpg.create_pool
-    (thread 8542ee89's own lesson: the jsonb codec it registers is what makes
-    send_message's own graph-edge write actually land). Returns the sent message id,
-    the SAME id --apply-if-clear looks up the next day."""
+    """Send the dry-run plan to the operator's desk as a decision-band brief. Uses
+    src.db.pool.create_pool, not bare asyncpg.create_pool: the jsonb codec it registers
+    is what makes send_message's own graph-edge write actually land. Returns the sent
+    message id, the same id --apply-if-clear looks up the next day."""
     from src.db.pool import create_pool
     from src.orchestrator.mailbox import send_message
 
@@ -571,15 +568,15 @@ async def mail_manifest(
 async def find_clear_manifest(
     *, min_age: timedelta = MANIFEST_MIN_AGE,
 ) -> tuple[int | None, str]:
-    """The apply-side gate (thread 9fac4e0d part 1: "apply next day unless dimmed").
-    Looks up the NEWEST manifest this script itself sent to the operator's desk and
-    returns (message_id, reason) — message_id is None whenever applying would be
-    wrong: no manifest was ever sent, the newest one is younger than `min_age` (today
-    is not genuinely "the day after" yet), or it was DIMMED (`fleet_messages.moot_at`
-    set — `dim_brief`'s own mechanism, mailbox.py: an agent annotating a brief moot,
-    NEVER the operator's own settle, which stays a human act; a dim here means
-    something judged the plan no longer current). A found, non-dimmed, old-enough
-    manifest returns its id and a `reason` describing why applying is clear."""
+    """The apply-side gate: apply the next day unless the brief was dimmed. Looks up
+    the newest manifest this script itself sent to the operator's desk and returns
+    (message_id, reason). message_id is None whenever applying would be wrong: no
+    manifest was ever sent, the newest one is younger than `min_age` (today is not
+    genuinely "the day after" yet), or it was dimmed (`fleet_messages.moot_at` set,
+    `dim_brief`'s own mechanism in mailbox.py: an agent annotating a brief moot, never
+    the operator's own settle, which stays a human act; a dim here means something
+    judged the plan no longer current). A found, non-dimmed, old-enough manifest
+    returns its id and a `reason` describing why applying is clear."""
     import asyncpg
 
     pool = await asyncpg.create_pool(DSN, min_size=1, max_size=1)
@@ -698,8 +695,8 @@ def main(argv: list[str] | None = None) -> int:
     plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
     for label, plan in plans.items():
         _report(label, plan)
-    # transcript CHAINS live only in the vault (osiris_backup.sh never writes them to
-    # backups/) — a distinct population, reported and pruned as whole chains
+    # transcript chains live only in the vault (osiris_backup.sh never writes them to
+    # backups/): a distinct population, reported and pruned as whole chains
     _report_chains("vault", chain_plan)
     _report_wal(wal_plan)
     _report("vault/legacy-transcripts", legacy_plan)

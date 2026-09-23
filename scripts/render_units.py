@@ -1,30 +1,29 @@
-"""render_units — generalizes render_backup_timers.py's own pattern (Wave 21, thread
-f04cce36 piece 3) past the 5 backup-lane timers to every unit-backed setting WAVE 22
-(ruling 7be61879, thread 40d6eef3) registers: MemoryMax for the four persistent dev-box
-daemons, osiris-pulse's own --watch interval, the console's --host/--port, and
-osiris-pg-autotune.timer's own schedule (osiris-preflight.timer was already covered —
-it's one of BACKUP_TIMER_UNITS from piece 3).
+"""render_units: generalizes render_backup_timers.py's own pattern past the 5
+backup-lane timers to every unit-backed setting: MemoryMax for the four persistent
+dev-box daemons, osiris-pulse's own --watch interval, the console's --host/--port, and
+osiris-pg-autotune.timer's own schedule (osiris-preflight.timer was already covered,
+since it's one of BACKUP_TIMER_UNITS).
 
 SAME FAILS-OPEN DISCIPLINE render_backup_timers.py established: a settings-read hiccup
 degrades every unit to its shipped default, printed to stderr, never raised. A key with
-no configured override (its stored value equal to its own spec default) renders BYTE-
-IDENTICAL to the shipped file — every substitution function below is written to be a true
-no-op when handed the value already baked into the file it touches, so "unset" falls out
-of matching defaults rather than a sentinel each caller has to special-case.
+no configured override (its stored value equal to its own spec default) renders
+byte-identical to the shipped file. Every substitution function below is written to be a
+true no-op when handed the value already baked into the file it touches, so "unset"
+falls out of matching defaults rather than a sentinel each caller has to special-case.
 
-ONE SUBSTITUTION FUNCTION PER SHAPE, not a generic templating engine — same "each file
+ONE SUBSTITUTION FUNCTION PER SHAPE, not a generic templating engine: same "each file
 passes through render, never re-templated wholesale" discipline the backup lane already
-used: `_sub_oncalendar` (the timer lane, reused verbatim), `_sub_memory_max` (in-place
+used. `_sub_oncalendar` (the timer lane, reused verbatim), `_sub_memory_max` (in-place
 replace when a MemoryMax= line exists, insert one before [Install] when adding a
 genuinely new cap, drop the line when the value is empty), and two CLI-arg regex
 substitutions for `deploy/user/osiris-{pulse,console}.service`'s own ExecStart= line.
 
-THE REBOOT-SURVIVAL GUARD (Thoth's ruling, mail 10247/10261): a rendered daemon
-`.service` is only installed when it still has a real `[Unit]` `Description=` and a
-non-empty `ExecStart=` (`_looks_like_a_real_unit`) — a stub or a substitution gone wrong
-must never install a unit that starts nothing (or the wrong thing). A unit that fails the
-check falls back to the shipped file untouched, logged to stderr, same fails-open
-discipline as a settings-read hiccup."""
+THE REBOOT-SURVIVAL GUARD: a rendered daemon `.service` is only installed when it
+still has a real `[Unit]` `Description=` and a non-empty `ExecStart=`
+(`_looks_like_a_real_unit`). A stub or a substitution gone wrong must never install a
+unit that starts nothing (or the wrong thing). A unit that fails the check falls back
+to the shipped file untouched, logged to stderr, same fails-open discipline as a
+settings-read hiccup."""
 from __future__ import annotations
 
 import argparse
@@ -58,7 +57,7 @@ def _sub_memory_max(text: str, value: Any) -> str:
             replaced = True
             if value:
                 out.append(f"MemoryMax={value}")
-            # else: drop the line entirely — an explicit "no cap".
+            # else: drop the line entirely, an explicit "no cap".
         else:
             out.append(line)
     if value and not replaced:
@@ -86,11 +85,11 @@ def _sub_console_port(text: str, value: Any) -> str:
 
 
 def _sub_console_graceful_timeout(text: str, value: Any) -> str:
-    """THE CONSOLE GRACEFUL SHUTDOWN (thread 0be2f790's own deploy-reliability
-    follow-up, Thoth DM 10653) — same shape as `_sub_console_host`/`_sub_console_port`
-    above: a plain regex replace against the flag's own literal on `ExecStart=`,
-    never an insert-if-missing branch, because the shipped unit already carries
-    `--timeout-graceful-shutdown 10` (this substitution's own registered default)."""
+    """THE CONSOLE GRACEFUL SHUTDOWN: same shape as `_sub_console_host`/
+    `_sub_console_port` above. A plain regex replace against the flag's own literal on
+    `ExecStart=`, never an insert-if-missing branch, because the shipped unit already
+    carries `--timeout-graceful-shutdown 10` (this substitution's own registered
+    default)."""
     if value is None:
         return text
     return re.sub(r"--timeout-graceful-shutdown \d+",
@@ -98,13 +97,13 @@ def _sub_console_graceful_timeout(text: str, value: Any) -> str:
 
 
 def _sub_env_var(name: str) -> Callable[[str, Any], str]:
-    """`Environment=<name>=<value>` substitution, generic (thread e332177f: the first
-    caller is `ingest.transcripts_root` -> `OSIRIS_TRANSCRIPTS`, but the shape is the
-    same for any single-line env override). REPLACE in place when the line already
-    exists (the common case — every unit this touches ships a real default line);
-    otherwise INSERT one right before `[Install]`, mirroring `_sub_memory_max`'s own
-    "insert a genuinely new line" branch. An empty/None `value` means "no configured
-    override" — the shipped line is left untouched either way."""
+    """`Environment=<name>=<value>` substitution, generic: the first caller is
+    `ingest.transcripts_root` -> `OSIRIS_TRANSCRIPTS`, but the shape is the same for
+    any single-line env override. Replace in place when the line already exists (the
+    common case, since every unit this touches ships a real default line), otherwise
+    insert one right before `[Install]`, mirroring `_sub_memory_max`'s own "insert a
+    genuinely new line" branch. An empty/None `value` means "no configured override":
+    the shipped line is left untouched either way."""
     prefix = f"Environment={name}="
 
     def _sub(text: str, value: Any) -> str:
@@ -129,13 +128,12 @@ def _sub_env_var(name: str) -> Callable[[str, Any], str]:
 
 
 def _looks_like_a_real_unit(text: str) -> bool:
-    """The reboot-survival guard (Thoth's ruling, mail 10247/10261): a rendered unit
-    is never installed unless it still has a real `[Unit]` `Description=` line and a
-    non-empty `ExecStart=` — the two lines every substitution function above could, in
-    principle, mangle (a bad regex match, an unexpected value shape) into a unit that
-    starts the wrong process or none at all. Cheap line-scan, not a full systemd-unit
-    parser — this only needs to catch "the substitution broke the file," not validate
-    every field."""
+    """The reboot-survival guard: a rendered unit is never installed unless it still
+    has a real `[Unit]` `Description=` line and a non-empty `ExecStart=`. These are the
+    two lines every substitution function above could, in principle, mangle (a bad
+    regex match, an unexpected value shape) into a unit that starts the wrong process
+    or none at all. Cheap line-scan, not a full systemd-unit parser: this only needs to
+    catch "the substitution broke the file," not validate every field."""
     has_description = any(
         line.startswith("Description=") and line.removeprefix("Description=").strip()
         for line in text.splitlines()
@@ -198,7 +196,7 @@ async def _configured_values() -> dict[str, Any]:
 
 
 def render(deploy_dir: Path, out_dir: Path, values: dict[str, Any]) -> int:
-    """Pure — no DB, no network. `values` is every registered setting's own current value
+    """Pure: no DB, no network. `values` is every registered setting's own current value
     (its spec default when unset, `settings_service.list_settings`'s own shape). Returns
     how many rendered files differ from their own shipped source."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -250,7 +248,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         values = asyncio.run(_configured_values())
-    except Exception as exc:  # noqa: BLE001 — see module docstring: fails open
+    except Exception as exc:  # noqa: BLE001, see module docstring: fails open
         print(f"render_units: settings unavailable ({exc}) — using shipped defaults "
               "for every unit", file=sys.stderr)
         values = {}

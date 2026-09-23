@@ -8,8 +8,9 @@
 # IDEMPOTENT: re-running this when the hook is already installed and current is a silent
 # no-op (exit 0, one confirming line) -- never rewrites a byte that's already correct, and
 # never fails just because it's been run before. push_guard.hook_status() is the read-only
-# twin of this check, wired into `osiris deploy`'s own report so a MISSING or STALE hook is
-# as visible as a failing gate, not something that quietly rots after one box gets it.
+# counterpart of this check, wired into `osiris deploy`'s own report so a MISSING or STALE
+# hook is as visible as a failing gate, not something that quietly rots after one box gets
+# it.
 set -eu
 
 COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"

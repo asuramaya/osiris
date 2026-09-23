@@ -1,22 +1,22 @@
-"""Smoke — the deploy-time liveness check that static gates cannot substitute for (ruling
-2ee43411, task #63, threads bb763977 and 1849d800). ruff/mypy/1600 unit tests all passed the
-day `_boot_check` warmed the wrong pool (fixed in 1da1bf2) — the bug only broke at a real
-server boot, an event-loop-lifecycle class of failure no static check reaches. Run this right
-after a deploy restart (`systemctl --user restart osiris-mcp osiris-console && .venv/bin/python
+"""Smoke: the deploy-time liveness check that static gates cannot substitute for (task
+#63). ruff/mypy/1600 unit tests all passed the day `_boot_check` warmed the wrong pool
+(fixed shortly after), since the bug only broke at a real server boot, an event-loop-
+lifecycle class of failure no static check reaches. Run this right after a deploy restart
+(`systemctl --user restart osiris-mcp osiris-console && .venv/bin/python
 scripts/osiris_smoke.py`), not just once at boot.
 
 Two independent probes, composed honestly (neither silences the other): the SAME logic
 `src.orchestrator.smoke` runs walks every chrome route directly (this script's own httpx
 client, no MCP in the loop) AND round-trips through osiris-mcp itself by calling its `smoke`
-tool over the real MCP protocol — the ONE real DB-backed MCP call thread 1849d800 asked for,
-proving the pool the FLEET actually gets (not a throwaway one) survived the restart. If MCP
-itself is unreachable, that's reported as its own failure, not a silent gap in the report —
+tool over the real MCP protocol, the one real DB-backed MCP call this check needs, proving
+the pool the fleet actually gets (not a throwaway one) survived the restart. If MCP
+itself is unreachable, that's reported as its own failure, not a silent gap in the report:
 chrome's own status still lands.
 
     .venv/bin/python scripts/osiris_smoke.py
 
 Silent-ish when green (one line); on any regression prints the failing surfaces AND puts a
-brief on the operator's desk through the normal mailbox — the membrane, not a log nobody reads.
+brief on the operator's desk through the normal mailbox rather than a log nobody reads.
 """
 from __future__ import annotations
 
@@ -25,9 +25,9 @@ import sys
 from pathlib import Path
 from typing import Any
 
-# `from src...` (deferred, below) needs the repo root importable regardless of PYTHONPATH —
-# osiris_fleet_glance.py's own precedent, not every script in scripts/ follows it (flagged
-# separately: scripts/osiris_preflight.py's deferred `from src...` imports and
+# `from src...` (deferred, below) needs the repo root importable regardless of PYTHONPATH,
+# following osiris_fleet_glance.py's own precedent (not every script in scripts/ follows it:
+# scripts/osiris_preflight.py's deferred `from src...` imports and
 # scripts/backfill_thread_arc.py's top-level ones both fail on the exact bare invocation
 # their own docstrings document, unless PYTHONPATH=. happens to already be set).
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -37,7 +37,7 @@ MCP_URL = "http://127.0.0.1:8790/mcp"
 
 
 async def local_chrome_walk() -> dict[str, str]:
-    """Chrome walked DIRECTLY (no MCP in the loop) — so an MCP-only outage still leaves an
+    """Chrome walked DIRECTLY (no MCP in the loop), so an MCP-only outage still leaves an
     honest chrome verdict, not a blank."""
     import httpx
     from src.config.settings import get_settings
@@ -53,7 +53,7 @@ async def brief_operator(fails: list[str]) -> None:
     """Regression → a brief on the desk through the normal mailbox (dedup makes re-runs safe),
     same pattern as scripts/osiris_preflight.py's own brief_operator.
 
-    Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool` (thread 8542ee89) — see
+    Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool`. See
     osiris_preflight.py's own brief_operator for the full explanation: without the jsonb
     codec that module registers, the graph-edge half of every send_message call fails
     (ensure_type's own kind="object" property assertion, the first jsonb write, hits

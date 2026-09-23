@@ -1,11 +1,10 @@
 """Is ~/.claude/commands actually installed from this repo's own commands/*.md, and is it
-CURRENT? — task #204's structural fix (Thoth ruling msg 6918, decision 012b36fb, superseding
-a34a9850): commands/*.md is now the tracked SOURCE OF TRUTH; scripts/install_commands.sh
-copies it to the machine. This is that install's READ-ONLY verification twin, wired into
-`osiris deploy`'s report the same way gate_hook.hook_status/push_guard.hook_status already
-are — a MISSING or STALE machine copy should be exactly as visible as a missing gate hook,
-never something that quietly rots. NEVER raises; any read failure is its own honest status
-string, same fail-open discipline as its two siblings.
+CURRENT? commands/*.md is now the tracked SOURCE OF TRUTH; scripts/install_commands.sh
+copies it to the machine. This is that install's READ-ONLY verification counterpart, wired
+into `osiris deploy`'s report the same way gate_hook.hook_status/push_guard.hook_status
+already are: a MISSING or STALE machine copy should be exactly as visible as a missing gate
+hook, never something that quietly rots. NEVER raises; any read failure is its own honest
+status string, same fail-open discipline as its two counterparts.
 """
 
 from __future__ import annotations

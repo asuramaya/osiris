@@ -1,6 +1,6 @@
 """A desk alarm callable from anywhere, including a bash script that has no MCP or asyncpg of
 its own (osiris_backup.sh's disk guard, item 5 of the vault lane). Same mailbox path as
-osiris_preflight.py's/osiris_smoke.py's own `brief_operator` — this is that same act, factored
+osiris_preflight.py's/osiris_smoke.py's own `brief_operator`: this is that same act, factored
 out so a non-Python caller can raise one too:
 
     .venv/bin/python scripts/osiris_alarm.py "message text"
@@ -17,10 +17,10 @@ DSN = "postgresql://osiris:osiris@127.0.0.1:5601/osiris"
 
 
 async def send_alarm(body: str, *, from_agent: str) -> None:
-    """Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool` (thread 8542ee89):
+    """Uses `src.db.pool.create_pool`, NOT bare `asyncpg.create_pool`:
     the former registers the jsonb codec every graph write through
     `Actions.assert_property` depends on, which send_message's own graph-edge half
-    needs — a bare pool silently degrades every alarm this function sends to
+    needs: a bare pool silently degrades every alarm this function sends to
     'relational row committed, graph edge write failed', found live via
     osiris_preflight.py's own --drill run."""
     from src.db.pool import create_pool
@@ -50,7 +50,7 @@ def main(argv: list[str] | None = None) -> int:
         asyncio.run(send_alarm(body, from_agent=from_agent))
         print("(alarm placed on the operator's desk)")
         return 0
-    except Exception as e:  # noqa: BLE001 — the desk being down is itself printed, never swallowed
+    except Exception as e:  # noqa: BLE001, the desk being down is itself printed, never swallowed
         print(f"(could not raise alarm: {e})", file=sys.stderr)
         return 1
 

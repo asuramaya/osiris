@@ -1,13 +1,13 @@
-"""Inference providers — the GPU-as-an-API-key abstraction.
+"""Inference providers: the GPU-as-an-API-key abstraction.
 
 The engine NEVER runs a GPU. Document extraction needs two model capabilities:
-  * a text **LLM** — entities/relationships out of text;
-  * a **vision** model — OCR a scanned notice / PDF page into text first (county
+  * a text **LLM**: entities/relationships out of text;
+  * a **vision** model: OCR a scanned notice / PDF page into text first (county
     foreclosure notices are images, not clean text).
 
 Both sit behind an injected seam (`LLMClient`, `VisionClient`). Config picks the
 backend: a hosted API (an API key, no ops) for the managed broker deployment, or a
-local model for a self-hoster with their own GPU — same code. "Whose GPU / which
+local model for a self-hoster with their own GPU, same code. "Whose GPU / which
 model" becomes a deployment switch, not a rewrite. Live providers use httpx directly
 (no SDK dependency); tests inject fakes.
 """
@@ -31,11 +31,11 @@ from src.config.settings import Settings, get_settings
 _ANTHROPIC = "https://api.anthropic.com"
 _VERSION = "2023-06-01"
 
-# THE HANDS. The constitution says Osiris has NO HANDS — and that stopped being true the day
+# THE HANDS. The constitution says Osiris has NO HANDS, and that stopped being true the day
 # someone gave it a subprocess. A `claude -p` is a real process, ~290MB, spending real money,
 # and until now Osiris could not RETRACT one: `await proc.communicate()` had no timeout and no
 # kill-on-cancel, so an arq timeout ABANDONED a live extractor that kept running and kept
-# billing. Ten of them wedged the worker against its 2G cap and starved every other cron —
+# billing. Ten of them wedged the worker against its 2G cap and starved every other cron,
 # including the health telemetry that would have said so.
 #
 # Two guards, both load-bearing:
@@ -185,22 +185,22 @@ def _cli_result(stdout: bytes) -> str:
 class ClaudeCliClient:
     """Local text LLM via the installed `claude` CLI (Claude Code) in headless -p/--print mode.
 
-    Uses the box's OWN Claude Code auth (subscription / OAuth) — NO API key embedded. This is
-    the right backend for the CORE box where Claude Code is installed: the always-on worker
-    borrows the local Claude instance for per-document extraction, and API keys are reserved
-    for SATELLITES / remote deployments that have no CLI. `--system-prompt` replaces the heavy
+    Uses the machine's own Claude Code auth (subscription / OAuth), no API key embedded. This
+    is the right backend for the primary machine where Claude Code is installed: the always-on
+    worker borrows the local Claude instance for per-document extraction, and API keys are
+    reserved for remote deployments that have no CLI. `--system-prompt` replaces the heavy
     default Code prompt, so each extraction call stays lean.
 
-    `max_tokens` IS CONFESSED, NOT ENFORCED, ON THIS BACKEND (Thoth's own cost-levers audit,
-    thread ccee2304, mail 9873): accepted only for `LLMClient` Protocol conformance with
-    `AnthropicClient` (which genuinely passes it as the API's own `max_tokens` field) — it
-    never reaches this subprocess's argv. Checked directly against a live `claude -p --help`
-    (2026-09): there is no output-token-cap flag at all — `--max-budget-usd <amount>` caps a
-    DOLLAR total (a different lever, unwired here, out of this ruling's scope), `--autocompact
-    <auto|tokens>` caps the CONTEXT WINDOW before auto-compaction (an input-side knob, not an
-    output cap), and `--json-schema <schema>` constrains SHAPE, not length. So an extract's
-    output today runs exactly as long as the model chooses — the 2-3K-token figure the cost-
-    levers audit measured is real and, on this backend, not currently capped by any flag.
+    `max_tokens` IS CONFESSED, NOT ENFORCED, ON THIS BACKEND: accepted only for `LLMClient`
+    Protocol conformance with `AnthropicClient` (which genuinely passes it as the API's own
+    `max_tokens` field); it never reaches this subprocess's argv. Checked directly against a
+    live `claude -p --help` (2026-09): there is no output-token-cap flag at all.
+    `--max-budget-usd <amount>` caps a DOLLAR total (a different lever, unwired here, and out
+    of scope here), `--autocompact <auto|tokens>` caps the CONTEXT WINDOW before
+    auto-compaction (an input-side knob, not an output cap), and `--json-schema <schema>`
+    constrains SHAPE, not length. So an extract's output today runs exactly as long as the
+    model chooses: the 2-3K-token figure measured for cost is real and, on this backend, not
+    currently capped by any flag.
     """
 
     binary: str = "claude"
@@ -211,24 +211,24 @@ class ClaudeCliClient:
         usage_out: list[Usage] | None = None,
     ) -> str:
         # Context isolation: without it, a `claude -p` run inside a repo inherits the
-        # project's CLAUDE.md + settings — ~52k tokens of the project's own opinions
+        # project's CLAUDE.md + settings: ~52k tokens of the project's own opinions
         # pre-loaded into what is supposed to be a NEUTRAL extraction call (measured live:
         # --setting-sources "" cuts cache-creation 51,900 → 7,362 tokens). The neutral cwd
         # is belt-and-braces for the same leak. An extractor must read its input with
         # nothing but its instructions.
         # The cwd is a DEDICATED dir, not bare /tmp: each -p call writes its own session
         # transcript under ~/.claude/projects/<cwd-slug>/, and the session-miner senses
-        # that tree — a recognizable slug lets it exclude the extractor's own transcripts
+        # that tree: a recognizable slug lets it exclude the extractor's own transcripts
         # (an instrument reading itself is the loop-pathology class).
         workdir = os.path.join(tempfile.gettempdir(), "osiris-extract")
         os.makedirs(workdir, exist_ok=True)
         async with _CLI_GATE:  # one hand out at a time, worker-wide
-            # THE PROMPT RIDES STDIN, NEVER ARGV (the adversary's first field summons,
-            # 2026-07-19): a whole-arc prompt from a large dying transcript blows Linux's
-            # ~2MB argument-list ceiling ([Errno 7] Argument list too long) — a limit the
-            # small-chunk crawl never met and the whole-arc reader hit on its very first
-            # real session. `claude -p` with no inline prompt reads it from stdin; argv
-            # keeps only the flags, which are bounded.
+            # THE PROMPT RIDES STDIN, NEVER ARGV (observed 2026-07-19): a whole-arc prompt
+            # from a large dying transcript blows Linux's ~2MB argument-list ceiling
+            # ([Errno 7] Argument list too long), a limit the small-chunk crawl never met
+            # and the whole-arc reader hit on its very first real session. `claude -p` with
+            # no inline prompt reads it from stdin; argv keeps only the flags, which are
+            # bounded.
             proc = await asyncio.create_subprocess_exec(
                 self.binary, "-p", "--model", model, "--system-prompt", system,
                 "--output-format", "json", "--setting-sources", "",
@@ -247,7 +247,7 @@ class ClaudeCliClient:
                 raise
         if proc.returncode != 0:
             # The CLI reports API failures (overload, rate limit, auth) as JSON on STDOUT and
-            # leaves stderr EMPTY — so reporting only stderr turned every one of them into the
+            # leaves stderr EMPTY, so reporting only stderr turned every one of them into the
             # same content-free "claude CLI exit 1: ", which is a mystery, not a message. Say
             # whichever stream actually spoke.
             detail = (err.decode() or out.decode() or "no output on either stream").strip()
@@ -265,7 +265,8 @@ def llm_provider(settings: Settings | None = None) -> LLMClient | None:
     explicitly-injected client, or is skipped). Keeps a keyless run from crashing.
 
     `auto` (default) = prefer the local Claude CLI if installed, else an API key; `claude-cli`
-    = force the local install (no key, core box); `anthropic` = force a key (satellites/remote)."""
+    = force the local install (no key, primary machine); `anthropic` = force a key
+    (satellite/remote deployments)."""
     s = settings or get_settings()
     p = s.osiris_extract_provider
     if p in ("claude-cli", "auto") and shutil.which(s.osiris_claude_binary):
@@ -276,28 +277,28 @@ def llm_provider(settings: Settings | None = None) -> LLMClient | None:
 
 
 def spend_is_metered(settings: Settings | None = None) -> bool:
-    """True iff Osiris's inference is BILLED PER CALL — the keyed API backend.
+    """True iff Osiris's inference is BILLED PER CALL: the keyed API backend.
 
     The daily ceiling (orchestrator.ceiling) only means something when a dollar is actually
     charged. The local Claude CLI runs on the operator's SUBSCRIPTION: the envelope's
-    `total_cost_usd` is a NOTIONAL number the vendor prints, not a debit against a card — and the
-    triggered sessions don't even report a reliable token count (the spawner bins the receipt). So
-    `total_cost_usd` on that path is not a small or fuzzy price, it is not a measurement at all;
-    summing it and gating on it stops real work on imaginary money (the '$12/$10' false stop,
-    Thoth LIII 2026-07-21).
+    `total_cost_usd` is a NOTIONAL number the vendor prints, not a debit against a card, and the
+    triggered sessions don't even report a reliable token count (the spawner bins the receipt).
+    So `total_cost_usd` on that path is not a small or fuzzy price, it is not a measurement at
+    all; summing it and gating on it stops real work on imaginary money (observed as a false
+    '$12/$10' stop, 2026-07-21).
 
-    Hence the ceiling is LIVE only when the RESOLVED text backend is the API client — real
+    Hence the ceiling is LIVE only when the RESOLVED text backend is the API client: real
     per-token billing. That is exactly the decision llm_provider() already makes from config, so
     we ask it rather than re-guess: 'auto' with the CLI installed resolves to the subscription
     (metered False) even if a key is also set, because the CLI is what actually runs. (Note: the
     API client currently records cost_usd=None, so metered mode is honest-but-toothless until the
-    keyed path is costed — tracked separately; it never FALSE-stops, which is the point here.)"""
+    keyed path is costed, tracked separately; it never FALSE-stops, which is the point here.)"""
     return isinstance(llm_provider(settings), AnthropicClient)
 
 
 def vision_provider(settings: Settings | None = None) -> VisionClient | None:
-    """The configured vision/OCR backend, or None. OCR (scanned pages) is the keyed path —
-    the local CLI doesn't do image input here — so 'auto'/'anthropic' both need a key."""
+    """The configured vision/OCR backend, or None. OCR (scanned pages) is the keyed path:
+    the local CLI doesn't do image input here, so 'auto'/'anthropic' both need a key."""
     s = settings or get_settings()
     if s.osiris_extract_provider in ("anthropic", "auto") and s.anthropic_api_key:
         return AnthropicVisionClient(s.anthropic_api_key)
@@ -316,7 +317,7 @@ async def document_to_text(
 ) -> str:
     """Normalize a fetched document to text for the extractor. Plain text passes
     through; a scanned page (image/*, application/pdf) is OCR'd via the vision provider.
-    The OCR seam is the same key-as-GPU abstraction — no local inference."""
+    The OCR seam is the same key-as-GPU abstraction: no local inference."""
     if isinstance(content, str):
         return content
     if any(media_type.startswith(t) for t in _TEXTUAL):

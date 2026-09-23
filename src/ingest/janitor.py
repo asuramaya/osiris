@@ -1,44 +1,44 @@
-"""THE MINER CLEANS UP AFTER ITSELF — on the same pass it emits.
+"""The miner cleans up after itself, on the same pass it emits.
 
-The operator, 2026-07-12: "the miner should not only shit out slop, it should also clean up and
-check and balance itself on the same pass so we don't end up with a noisy garbage graph."
+The miner should not only produce output, it should also check and balance itself on the same
+pass so the graph does not accumulate noise.
 
-He is right, and the fault is architectural. THE MINER WAS WRITE-ONLY. It emitted and never once
-retracted, so every bug in it deposited permanent sediment, and a memory that only accretes is not
-a memory — it is a landfill. 81% of the graph became machine inference; 959 of 1059 open threads
-were untouched guesses nobody had ever read.
+The underlying fault was architectural: the miner was write-only. It emitted and never once
+retracted, so every bug in it deposited permanent sediment, and a memory that only accretes is
+not a memory, it is a landfill. 81% of the graph became machine inference; 959 of 1059 open
+threads were untouched guesses nobody had ever read.
 
-WHAT THE JANITOR MAY TOUCH — and the boundaries are the whole design:
+What the janitor may touch, and the boundaries are the whole design:
 
-  1. ONLY ITS OWN OUTPUT. Evidence class DERIVED, minted by the mining path. The miner may retract
+  1. Only its own output. Evidence class DERIVED, minted by the mining path. The miner may retract
      what the miner wrote. It may never touch a mind's declaration, another source's objects, or
      anything a human signed. (Rule 5: a miner never touches another source's objects.)
 
-  2. ONLY WHAT NO MIND HAS TOUCHED. The instant an agent triages, adopts, resolves, or so much as
-     comments on a mined thread, IT IS THEIRS. A mind's attention is testimony, and testimony
+  2. Only what no mind has touched. The instant an agent triages, adopts, resolves, or so much as
+     comments on a mined thread, it is theirs. A mind's attention is testimony, and testimony
      outranks the machine that produced the row. This guard is absolute and it is checked first.
 
-  3. ONLY WHAT IS PROVABLY GARBAGE — never what is merely suspected. Two classes qualify, and both
-     exist ONLY because of bugs, which is exactly why they are decidable:
+  3. Only what is provably garbage, never what is merely suspected. Two classes qualify, and both
+     exist only because of bugs, which is exactly why they are decidable:
 
-       (a) MINED FROM OSIRIS'S OWN ALARM CLOCK. The origin session's first words are the wake
+       (a) Mined from Osiris's own wake trigger. The origin session's first words are the wake
            prompt: Osiris spawned it, Osiris talked to it, and then Osiris filed the echo as
-           something the fleet had LEARNED. That was never knowledge, it was feedback.
+           something the fleet had learned. That was never knowledge, it was feedback.
 
-       (b) PLAGIARISED FROM A DILIGENT AUTHOR. The origin session is self-documenting — it records
+       (b) Plagiarised from a diligent author. The origin session is self-documenting: it records
            its own decisions deliberately. The ownership boundary was supposed to leave those
-           alone ("backfill the SILENT, never second-guess the diligent") and it NEVER FIRED,
+           alone (backfill what's silent, never second-guess the diligent) and it never fired,
            because it compared a session's transcript-derived id against the seat it actually
            writes under. So the miner spent its life re-minting reworded copies of the very
            decisions its best authors had already written by hand.
 
-     Notice what is NOT on this list: "it looks stale", "nobody has read it", "it seems
-     duplicative". LEXICAL SIMILARITY MAY ASK, BUT MUST NEVER ASSERT (ruling e27f7c3). A janitor
-     that throws away what it merely suspects is worse than the mess it was cleaning.
+     Notice what is not on this list: "it looks stale", "nobody has read it", "it seems
+     duplicative". Lexical similarity may ask, but must never assert. A janitor that throws away
+     what it merely suspects is worse than the mess it was cleaning.
 
-  4. NEVER DELETE. Invariant 3: heal with compensating events. A retraction is an ASSERTION —
-     `retracted` + `retracted_because` — so the row stays readable, auditable, and reversible
-     forever. The lens stops hauling it; the record never forgets it happened.
+  4. Never delete. Invariant 3: heal with compensating events. A retraction is an assertion,
+     `retracted` plus `retracted_because`, so the row stays readable, auditable, and reversible
+     forever. The lens stops surfacing it; the record never forgets it happened.
 
 Run on every miner tick (bounded), and retroactively over the sediment already laid down.
 """
@@ -88,7 +88,7 @@ def _first_user_turn(path: Path) -> str:
 
 
 def wake_origins(root: Path) -> set[str]:
-    """Every session id whose transcript OPENS with the wake prompt — Osiris's own spawns.
+    """Every session id whose transcript OPENS with the wake prompt: Osiris's own spawns.
 
     The fingerprint is the FIRST TURN, never a mention: a session that merely discusses the wake
     prompt (this one has, at length) is a real conversation and its work is real."""
@@ -106,8 +106,8 @@ async def janitor_pass(
 ) -> dict[str, Any]:
     """Retract the miner's provable garbage. Returns what it did (or would do).
 
-    `limit` bounds a tick's work — the sediment took months to lay down and does not have to be
-    cleared in one pass. `dry_run` reports without writing, and IT IS THE DEFAULT: a janitor that
+    `limit` bounds a tick's work: the sediment took months to lay down and does not have to be
+    cleared in one pass. `dry_run` reports without writing, and it is the default: a janitor that
     cannot be rehearsed is a shredder.
     """
     pool = actions.pool
@@ -154,7 +154,7 @@ async def janitor_pass(
     now = datetime.now(UTC)
     for oid, otype, why in hits:
         # a compensating EVENT, never a delete: the row stays readable and this is reversible by
-        # re-asserting retracted='' — the record never forgets that we swept it
+        # re-asserting retracted='', the record never forgets that we swept it
         await actions.assert_property(oid, "retracted", True, _SOURCE, now, _CONF,
                                       evidence_class=_EC.value)
         await actions.assert_property(oid, "retracted_because", why, _SOURCE, now, _CONF,

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Prints the exact current tool-contract char total (task #129's ratchet) — the one
+"""Prints the exact current tool-contract char total (task #129's ratchet): the one
 correct source for TOOL_CONTRACT_CEILING_CHARS in tests/test_tool_contract_diet.py.
 Never guess a raise (never take the larger of two conflicting branch values, never do
 arithmetic by hand): run this against the tree you're about to commit and paste its
 output. Reused by scripts/reconcile_tool_contract_ceiling.py's own default
---measure-cmd (dispatch 26686b77, Thoth msg 3658) — one measurement, two callers,
-never two implementations that could silently diverge.
+--measure-cmd: one measurement, two callers, never two implementations that could
+silently diverge.
 """
 from __future__ import annotations
 

@@ -1,4 +1,4 @@
-"""Ingest the SEC EDGAR company list — a second open base, a different format.
+"""Ingest the SEC EDGAR company list, a second open base in a different format.
 
 `company_tickers.json` is one keyless SEC file listing every EDGAR-registered
 company (CIK, ticker, name). It proves the bulk-ingest pattern generalizes beyond

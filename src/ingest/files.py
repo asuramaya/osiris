@@ -1,10 +1,10 @@
-"""File substrate — the current SHAPE of a repo, so analogous files compare across the family.
+"""File substrate: the current SHAPE of a repo, so analogous files compare across the family.
 
 `gitlog` ingests the COMMITS (the history); this ingests the TREE (what files exist now). A
-`File` node is METADATA ONLY — path, extension, and a normalized `role` (license / readme / ci /
+`File` node is METADATA ONLY: path, extension, and a normalized `role` (license / readme / ci /
 manifest / …). The content stays in git, read on demand (the diff-viewer pattern), so the graph
 never bloats with file bodies. The `role` is the blocking key for the cross-repo family audit:
-compare every repo's `license`, every repo's `ci`, within a role — never all-files-all-pairs.
+compare every repo's `license`, every repo's `ci`, within a role, never all-files-all-pairs.
 """
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ _EC = EvidenceClass.AUTHORITATIVE_API.value      # the tracked file list is grou
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
 
 # normalized role -> the basenames (lowercased) that play it. The role makes two files across
-# repos COMPARABLE — it is what the family audit blocks on. Tight + high-signal on purpose.
+# repos COMPARABLE, and it is what the family audit blocks on. Tight and high-signal on purpose.
 _ROLE_NAMES: dict[str, frozenset[str]] = {
     "readme": frozenset({"readme", "readme.md", "readme.rst", "readme.txt"}),
     "license": frozenset({"license", "license.md", "license.txt", "licence", "copying"}),
@@ -63,7 +63,7 @@ def _ext(path: str) -> str:
     return base.rsplit(".", 1)[-1].lower() if "." in base else ""
 
 
-# License classification by signature phrase — ordered most-specific first (BSD's
+# License classification by signature phrase, ordered most-specific first (BSD's
 # "redistribution and use" is generic, so the named licenses are matched before it).
 _LICENSE_SIGNS: tuple[tuple[str, tuple[str, ...]], ...] = (
     ("MIT", ("permission is hereby granted, free of charge",)),
@@ -81,7 +81,7 @@ _LICENSE_SIGNS: tuple[tuple[str, tuple[str, ...]], ...] = (
 
 
 def classify_license(text: str) -> str:
-    """The SPDX-ish license family from a LICENSE file's text — so a family using MIT in one
+    """The SPDX-ish license family from a LICENSE file's text, so a family using MIT in one
     repo and Apache in another is a real, flaggable inconsistency (not just 'both have one')."""
     t = text.lower()
     for name, needles in _LICENSE_SIGNS:
@@ -105,7 +105,7 @@ def _git(path: str, *args: str) -> str:
 
 
 def list_tracked_files(path: str) -> list[str]:
-    """The repo's tracked files at HEAD (git ls-files — ignores build artifacts/untracked)."""
+    """The repo's tracked files at HEAD (git ls-files, ignores build artifacts/untracked)."""
     return [ln for ln in _git(path, "ls-files").splitlines() if ln.strip()]
 
 
@@ -115,25 +115,24 @@ async def ingest_files(
 ) -> dict[str, Any]:
     """Ingest a repo's tracked-file tree as `File` nodes (metadata only) linked `in_repo` the
     SoftwareProject, each carrying its `role`/`ext`. Idempotent: objects dedup on canonical,
-    and the in_repo link is deduped (the gitlog lesson — re-ingest must not inflate edges).
+    and the in_repo link is deduped (the gitlog lesson: re-ingest must not inflate edges).
 
     `name` is a git-derived directory basename (never caller text), but still runs through
-    task #107's choke point (capture.py's `_validate_repo_name`) before minting — same law
-    as every other SoftwareProject mint site, belt-and-suspenders against a genuinely
-    degenerate basename (an empty toplevel, a stray punctuation-only directory) rather than
-    trusting derivation alone. Returns `{"error": ...}` instead of raising: this runs from
-    the pulse daemon's own unattended tick (pulse.py), where an uncaught exception would
-    take down monitoring for every OTHER repo in the same pass, not just this one.
+    task #107's validation gate (capture.py's `_validate_repo_name`) before minting, the
+    same check used at every other SoftwareProject mint site, as a second safeguard against
+    a genuinely degenerate basename (an empty toplevel, a stray punctuation-only directory)
+    rather than trusting derivation alone. Returns `{"error": ...}` instead of raising: this
+    runs from the pulse daemon's own unattended tick (pulse.py), where an uncaught exception
+    would take down monitoring for every OTHER repo in the same pass, not just this one.
 
-    RESOLVES BY NAME BEFORE MINTING (operator ruling b5663511, PROJECT IDENTITY DRIFT):
-    the git toplevel's own basename is stable canonical-forming ONLY while the on-disk
-    folder itself is never renamed — the moment it is (the exact live specimen: a repo
-    still `repo:xxit` in the graph after being renamed to `handlingtheloop` both on
-    disk and via `rename_project`), a fresh ingest here derives the NEW basename and
-    would mint a stub twin under it rather than finding the real, already-`repo:xxit`
-    object. `_resolve_repo` (capture.py, the same choke point `create_project`/
-    `_mint_or_find_repo` already trust) is tried first; only a genuine zero-match
-    mints."""
+    RESOLVES BY NAME BEFORE MINTING (fixing a project-identity-drift bug): the git
+    toplevel's own basename only works as a stable canonical-forming key while the on-disk
+    folder itself is never renamed. The moment it is renamed (the case that surfaced this: a
+    repo still `repo:xxit` in the graph after being renamed to `handlingtheloop` both on
+    disk and via `rename_project`), a fresh ingest here would derive the NEW basename and
+    mint a stub twin under it rather than finding the real, already-`repo:xxit` object.
+    `_resolve_repo` (capture.py, the same lookup `create_project`/`_mint_or_find_repo`
+    already use) is tried first; only a genuine zero-match mints."""
     top = _git(path, "rev-parse", "--show-toplevel").strip()
     name = Path(top).name
     from src.orchestrator.capture import _resolve_repo, _validate_repo_name
@@ -161,7 +160,7 @@ async def ingest_files(
             await actions.assert_property(fo, "role", role, source_id, now, _CONF,
                                           case_id=case_id, evidence_class=_EC)
             roles += 1
-            # content facts for the drift audit — a hash (identity drift) and, for a license,
+            # content facts for the drift audit: a hash (identity drift) and, for a license,
             # its classified TYPE. The body is never stored; we keep only what we audit on.
             content = _read(top, f)
             if content is not None:

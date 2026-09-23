@@ -1,7 +1,7 @@
-"""One-shot project ingest — the atomic "ingest this repo" flow.
+"""One-shot project ingest, the atomic "ingest this repo" flow.
 
 Dogfood finding (2026-07-02): `gitlog`, `files`, and `decisions` were three separate CLI
-steps, and it was easy to run one and forget the rest — osiris had 161 commits but 0 files
+steps, and it was easy to run one and forget the rest, so osiris had 161 commits but 0 files
 because only gitlog had run. A repo isn't really "ingested" until its history, its file
 tree, AND its decisions are all in the graph. This composes the three idempotent passes into
 one call so a repo goes in whole.
@@ -25,7 +25,7 @@ from src.ingest.gitlog import ingest_repo
 async def ingest_project(actions: Actions, path: str = ".", *, mine: bool = True) -> dict[str, Any]:
     """Ingest a repo WHOLE: git history → file tree → mined decisions, in order. Idempotent.
 
-    `mine=False` skips the decision pass — for a BATCH ingest, run mine_decisions ONCE at the
+    `mine=False` skips the decision pass: for a BATCH ingest, run mine_decisions ONCE at the
     end instead of per-repo (it scans every Commit globally each time, so it's wasteful in a
     loop). A single-repo ingest mines by default so the repo is complete on its own.
     """

@@ -1,19 +1,19 @@
-"""Ingest OrgBook BC — British Columbia's open corporate registry (keyless).
+"""Ingest OrgBook BC, British Columbia's open corporate registry (keyless).
 
 US-only entity verification (EDGAR) is a real gap for a follow-the-money tool: Canada
 is a major jurisdiction, and Vancouver in particular is a hub for pooled private-capital
 vehicles. OrgBook BC (orgbook.gov.bc.ca) is the BC government's open, keyless API over
-the provincial corporate registry — every registered company, partnership, and society
+the provincial corporate registry: every registered company, partnership, and society
 with its registration number, CRA business number, type, status, and home jurisdiction.
 
 This mints an Organization per registration (canonical = the BC registration number,
 the registry's stable key), all AUTHORITATIVE_API. Because the resulting nodes are
-Organizations, the existing cross-base resolver buckets them by normalized name — so a
+Organizations, the existing cross-base resolver buckets them by normalized name, so a
 BC-registered entity and its EDGAR counterpart fuse on the shared name where both exist.
 
 What OrgBook does NOT carry: directors/officers and beneficial owners (those live behind
 the paid BC Registry corporate search and the non-public transparency register). So this
-verifies *registration and legal existence*, not control — the honest keyless ceiling.
+verifies *registration and legal existence*, not control: the honest keyless ceiling.
 
     uv run python -m src.ingest.orgbook "<entity or family name>" [case_id]
 """

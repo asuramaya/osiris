@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Backfill the `arc` taxonomy onto existing osiris open threads (thread 8df8e611 / roadmap
-v2, Thoth's locked 7-value list, DM 1299 -> 1307 -> 1311). The taxonomy is a human judgment
-call, already made -- Thoth's one-pass review (msg 1311) on the table I proposed (msg 1307,
-queried live off all 51 real open osiris threads). This script only APPLIES the reviewed
-mapping mechanically; it does not re-derive or second-guess any of it.
+"""Backfill the `arc` taxonomy onto existing osiris open threads, using a locked 7-value
+list. The taxonomy is a human judgment call, already made, from a review pass over a
+proposed table queried live off all 51 real open osiris threads. This script only APPLIES
+the reviewed mapping mechanically; it does not re-derive or second-guess any of it.
 
-Three kinds of action, matching msg 1311 exactly:
+Three kinds of action:
   1. ARC_MAP -- tag `arc` on an existing, otherwise-untouched thread.
   2. RESOLVE_MAP -- don't tag; the thread's work is already delivered, so resolve it outright
-     (currently just d6ed2f17, shipped by recall()).
-  3. NEW_THREADS -- two findings Thoth's review asked opened, not tags on existing threads
+     (currently just the one entry below, shipped by recall()).
+  3. NEW_THREADS -- two findings the review asked opened, not tags on existing threads
      (the stale-handoff-letter closure pass; the cross-project-leakage flag).
 
 Everything else from the proposed table (the cross-project leakage cluster itself, and the
@@ -31,9 +30,9 @@ import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
-# repo root importable regardless of PYTHONPATH (thread 3e96c10e: these top-level `from
+# Make the repo root importable regardless of PYTHONPATH: these top-level `from
 # src...` imports failed ModuleNotFoundError on the exact bare invocation this script's own
-# docstring documents, since sys.path[0] is the script's own directory, never CWD).
+# docstring documents, since sys.path[0] is the script's own directory, never CWD.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src.actions.core import Actions  # noqa: E402
@@ -51,7 +50,7 @@ from src.orchestrator.capture import (  # noqa: E402
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 SOURCE = "agent:c38f8f3b-v"
 
-# Reviewed mapping (Thoth, msg 1311, on the table proposed msg 1307) -- short id -> arc.
+# Reviewed mapping (final pass on the proposed table) -- short id -> arc.
 ARC_MAP = {
     # Identity-Succession
     "dda0072f": "Identity-Succession",
@@ -73,17 +72,17 @@ ARC_MAP = {
     "09da2fb6": "Compaction-Resilience",
     "b30519ce": "Compaction-Resilience",
     "215e5405": "Compaction-Resilience",
-    "5177057a": "Compaction-Resilience",  # Thoth's call: Khnum's finding A is the PreCompact
+    "5177057a": "Compaction-Resilience",  # reviewed: this finding is the PreCompact
                                           # offload fallback, not generic hygiene
     # Model-Identity
-    "0a4ec5e7": "Model-Identity",  # resolved this session; tagged per my own proposal,
-                                    # unchallenged in Thoth's review
-    "9a22d0a2": "Model-Identity",  # the hook-feasibility follow-on, opened this session
-                                    # (DM 1310) -- live open_thread tool predates `arc`
+    "0a4ec5e7": "Model-Identity",  # resolved this session; tagged per the original proposal,
+                                    # unchallenged in review
+    "9a22d0a2": "Model-Identity",  # the hook-feasibility follow-on, opened this session;
+                                    # live open_thread tool predates `arc`
     # Token-Cost
     "24c3cc74": "Token-Cost",
     "ccee2304": "Token-Cost",
-    "f34c572c": "Token-Cost",  # Thoth's call: orient verbosity IS the token lever, not
+    "f34c572c": "Token-Cost",  # reviewed: orient verbosity IS the token lever, not
                                 # generic hygiene
     # Surfaces-Roadmap-Docs
     "d56e7073": "Surfaces-Roadmap-Docs",
@@ -104,7 +103,7 @@ ARC_MAP = {
     "31cfe91b": "Fleet-Hygiene",
 }
 
-# Thoth's call (msg 1311): don't tag -- the work is already delivered, resolve outright.
+# Reviewed: don't tag -- the work is already delivered, resolve outright.
 RESOLVE_MAP = {
     "d6ed2f17": dict(
         because="delivered by recall(ref) -- read-one-by-id verb, commit 84fc6f6.",
@@ -119,7 +118,7 @@ SKIPPED_CROSS_PROJECT_LEAKAGE = [
 ]
 LEFT_UNSORTED = ["cf6003af", "2ce21921", "a9cad7f7", "0666ebc5", "a4954f99", "00f6a18d"]
 
-# Two findings Thoth's review asked opened -- new threads, not arc-tags on existing ones.
+# Two findings the review asked opened -- new threads, not arc-tags on existing ones.
 NEW_THREADS = [
     dict(
         summary=(
@@ -147,8 +146,8 @@ NEW_THREADS = [
 
 
 async def run(apply: bool) -> None:
-    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
-    # instance exists on this box — refuse a silent one-off run against it.
+    # This DSN's own fallback IS the live fleet graph; no isolated dev instance exists
+    # on this box, so refuse a silent one-off run against it.
     refusal = refuse_silent_live_db("backfill_thread_arc")
     if refusal is not None:
         print(refusal, file=sys.stderr)

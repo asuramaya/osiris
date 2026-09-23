@@ -5,14 +5,14 @@
 # every other repo on this box too, each lacking the venv/database gate_hook.py reaches for).
 # push_guard already solved the identical problem for pre-push by copying the tracked shim
 # straight into the shared .git/hooks directory instead of touching hooksPath at all -- this
-# script is that SAME mechanism, reused verbatim for pre-commit (ruling 754482bf, #133).
+# script is that SAME mechanism, reused verbatim for pre-commit (#133).
 #
 # IDEMPOTENT: re-running this when the hook is already installed and current is a silent
 # no-op (exit 0, one confirming line) -- never rewrites a byte that's already correct, and
 # never fails just because it's been run before. scripts/gate_hook.py's own hook_status() is
-# the read-only twin of this check, wired into `osiris deploy`'s own report so a MISSING or
-# STALE hook is as visible as a failing gate, not something that quietly rots after one box
-# gets it.
+# the read-only counterpart of this check, wired into `osiris deploy`'s own report so a
+# MISSING or STALE hook is as visible as a failing gate, not something that quietly rots
+# after one box gets it.
 set -eu
 
 COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"

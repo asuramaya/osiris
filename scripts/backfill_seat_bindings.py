@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Backfill the orphan seats (thread 749bf530 / occupancy piece C, 9f566244).
+"""Backfill the orphan seats.
 
 mint_heir's automatic succession only ever MOVES an existing `holds` link (follow_binding,
 lineage-wide) -- it never CREATES one from nothing. A seat whose original claim predates the
-Seat-object binding (5cef856b) has therefore sat unbound through every generation since,
+Seat-object binding has therefore sat unbound through every generation since,
 however many times it has changed hands -- its current holder calling claim_name again would
 fix it in one act, but nothing prompts that call. This is the batch cure, a thin CLI over
 src.orchestrator.seats.backfill_unbound_seats: it finds every active Seat with no active
@@ -14,8 +14,8 @@ Dry-run by default, writes nothing. Idempotent: a second run (or a seat someone 
 in between) finds nothing left to do.
 
 Usage: uv run python scripts/backfill_seat_bindings.py [--apply] [--seat seat:<id> ...]
-       (default: dry-run report, every unbound seat; repeat --seat to scope to specific ones —
-       the operator's own staged rollout, e.g. Thoth-first, fleet-wide only once that's clean)
+       (default: dry-run report, every unbound seat; repeat --seat to scope to specific ones,
+       following a staged rollout: one seat first, fleet-wide only once that's clean)
 """
 from __future__ import annotations
 
@@ -33,8 +33,8 @@ DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/
 
 
 async def run(apply: bool, seats: list[str]) -> None:
-    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
-    # instance exists on this box — refuse a silent one-off run against it.
+    # This DSN's own fallback IS the live fleet graph; no isolated dev instance exists
+    # on this box, so refuse a silent one-off run against it.
     refusal = refuse_silent_live_db("backfill_seat_bindings")
     if refusal is not None:
         print(refusal, file=sys.stderr)

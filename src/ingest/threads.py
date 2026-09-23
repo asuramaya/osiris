@@ -1,10 +1,10 @@
-"""Thread mining — the project's OPEN questions, derived from its own commit rationale.
+"""Thread mining: the project's OPEN questions, derived from its own commit rationale.
 
-The self-referential desk's sharpest read: "what am I blocked on / what's next?" The
-durable record already holds it — every commit body states its walls and next-steps. This
+The sharpest self-referential read: "what am I blocked on / what's next?" The
+durable record already holds it: every commit body states its walls and next-steps. This
 mines those sentences into `Thread` objects so the answer is a QUERY, not a re-read of 130
 commit messages. Mined => graded DERIVED (an inference over prose, not authoritative); the
-operator/Claude curates (close a thread, or let a later commit supersede it).
+user or Claude curates (close a thread, or let a later commit supersede it).
 """
 
 from __future__ import annotations
@@ -29,15 +29,15 @@ _CONF = confidence_for(EvidenceClass.DERIVED)
 # High-signal markers an author uses to flag a WALL or a next-step in a commit body. Tuned
 # from a live run: broad words ("pending", "deferred", "blocked") caught features and old
 # resolutions, so we keep only the explicit, author-intended flags. Mining prose is rough by
-# nature — this is why the AI extractor exists; deterministic stays tight to stay trustworthy.
+# nature, which is why the AI extractor exists; deterministic stays tight to stay trustworthy.
 _OPEN = re.compile(
     r"(\bNEXT:|\bTHE WALL\b|\bREMAINING\b|gated on|not yet live|"
     r"needs a (?:real )?(?:free )?(?:key|token|vantage|portal|cred|GITHUB_TOKEN|ANTHROPIC))"
 )
-# a sentence that's really CLOSED ("DONE", "PROVEN") even if it brushes a marker — skip
+# a sentence that's really CLOSED ("DONE", "PROVEN") even if it brushes a marker: skip
 _CLOSED = re.compile(r"\b(DONE|PROVEN|FIXED|resolved|shipped)\b", re.IGNORECASE)
 # META noise: a sentence DESCRIBING the markers/walls (a commit about the thread-miner itself,
-# or a CAPS section-heading like "INSPECTOR WALL:" that introduces a fix) — not a real thread.
+# or a CAPS section-heading like "INSPECTOR WALL:" that introduces a fix), not a real thread.
 # Dropped `\bWALL:` above (it caught any "X WALL:" heading); only the exact phrase "THE WALL"
 # counts. Plus skip a sentence that talks ABOUT markers, or enumerates several at once.
 _META = re.compile(r"\bmarkers?\b", re.IGNORECASE)
@@ -48,10 +48,10 @@ def extract_threads(body: str) -> list[str]:
 
     Three precision guards (from the 2026-07 live audit, where fragments like
     ``anchor), app start gated on …`` landed on the briefing):
-    * `well_bounded` — unbalanced parens/quotes betray a capture that starts or ends
+    * `well_bounded`: unbalanced parens/quotes betray a capture that starts or ends
       mid-sentence; those are split artifacts, never threads. (No lowercase-start guard
       here: real threads like "live compose needs a key" begin lowercase.)
-    * markers only count OUTSIDE quotes/backticks — ``the exact phrase "THE WALL"`` is
+    * markers only count OUTSIDE quotes/backticks: ``the exact phrase "THE WALL"`` is
       someone talking ABOUT the marker.
     * a sentence firing 3+ distinct markers is ENUMERATING them (a commit documenting
       the miner), not raising three walls at once.
@@ -81,10 +81,10 @@ async def mine_threads(
     RECONCILES: mined Threads the fresh pass no longer produces are archived (event-sourced,
     reversible). Returns counts.
 
-    THE `in_repo` LINK IS NOT DECORATION — IT IS WHAT MAKES THE ROW DISPOSABLE.
+    THE `in_repo` LINK IS NOT DECORATION. IT IS WHAT MAKES THE ROW DISPOSABLE.
 
     This miner filed NOTHING for its whole life: 25 of its 26 threads had no repo, which made them
-    ORPHANS — rows that belong to no project, that therefore no SEAT has standing over, and that
+    ORPHANS, rows that belong to no project, that therefore no SEAT has standing over, and that
     the entire per-seat disposal ritual (every project judges its own machine's guesses at its
     death rite) can never reach. Not "hard to reach". CANNOT. They would have sat there forever,
     on nobody's wall, in nobody's queue, being nobody's problem, which is the definition of the
@@ -98,9 +98,9 @@ async def mine_threads(
 
     THE LATENT HAZARD WE ARE LEAVING ALONE, DELIBERATELY: `canon` is the hash of the TEXT and
     NOTHING ELSE, so one sentence appearing in two repos would collapse into ONE thread object
-    noted_in both — an accidental cross-repo identity merge. I measured before touching it: it has
+    noted_in both, an accidental cross-repo identity merge. Measured before touching it: it has
     happened ZERO times (commit prose is distinctive). Re-keying the canonical would change the
-    identity of every existing thread, including the one a mind has actually TOUCHED — trading a
+    identity of every existing thread, including the one a mind has actually TOUCHED, trading a
     hazard that has never fired for a merge that certainly would. So the canonical stands, a thread
     may honestly carry two `in_repo` links if it ever truly spans two repos, and the collision is
     now VISIBLE rather than silent.
@@ -114,13 +114,13 @@ async def mine_threads(
         " (SELECT value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='authored_date' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date, "
-        # the OWNER, carried from the commit that raised the thread — the seat that will one day
+        # the OWNER, carried from the commit that raised the thread: the seat that will one day
         # have to judge this guess. It was always one join away.
         " (SELECT l.to_id FROM links l WHERE l.from_id=o.id AND l.type='in_repo' "
         "   AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1) AS repo "
         "FROM objects o WHERE o.type='Commit'"
     )
-    # create_link is a plain append — dedup the noted_in edge so a re-mine never inflates
+    # create_link is a plain append: dedup the noted_in edge so a re-mine never inflates
     existing = {(r["from_id"], r["to_id"]) for r in
                 await pool.fetch("SELECT from_id, to_id FROM links WHERE type='noted_in'")}
     filed = {(r["from_id"], r["to_id"]) for r in
@@ -162,19 +162,19 @@ async def resolve_threads(
 ) -> dict[str, Any]:
     """Self-heal the briefing: close an open Thread when a LATER commit addressed it.
 
-    The trust problem with mined memory is staleness — `NEXT: the renderer` lingers as a
+    The trust problem with mined memory is staleness: `NEXT: the renderer` lingers as a
     wall long after the renderer shipped, and a prosthesis you rely on instead of memory is
     only as good as it is current. A commit resolves a thread when (a) it is strictly later
     than the commit that raised the thread, and (b) it shares >=2 DISTINCTIVE tokens with the
-    thread's text (the project's own nouns — generic engineering words don't count). The
+    thread's text (the project's own nouns; generic engineering words don't count). The
     EARLIEST such commit wins (when it was actually closed). Conservative by design: a false
     'resolved' hides a real wall, so we'd rather leave a stale thread open than close a live
-    one — and every close is provenanced (`resolved_in` / `resolved_because` / `resolved_by`)
+    one, and every close is provenanced (`resolved_in` / `resolved_because` / `resolved_by`)
     so a human can audit and reverse it.
     """
     pool = actions.pool
     # ONLY threads the miner itself authored (summary asserted by its own source). A
-    # session-captured thread is the session's to close, not the miner's — self-healing one
+    # session-captured thread is the session's to close, not the miner's: self-healing one
     # by a loose token match would let a pulse re-mine silently evaporate a write-back (it
     # did: a `session` thread got a `git-memory` 'resolved' off two generic shared tokens,
     # which then made reconcile_mined treat it as mined and archive it). The miner's reach
@@ -182,7 +182,7 @@ async def resolve_threads(
     #
     # "Open" is the WINNING status (winning_props, migration 0015: grade DESC, then recency),
     # not a bare EXISTS(status='open'). A thread another source already RESOLVED at a higher
-    # grade, still carrying this miner's stale DERIVED 'open', must read as resolved — the
+    # grade, still carrying this miner's stale DERIVED 'open', must read as resolved: the
     # existence test would re-process it and re-attribute a spurious resolved_in.
     open_threads = await pool.fetch(
         "SELECT o.id, "

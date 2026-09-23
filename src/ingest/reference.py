@@ -1,12 +1,12 @@
-"""Reference ingest — the design canon as project memory.
+"""Reference ingest: the design canon as project memory.
 
-Notion + Palantir's models (and Osiris's own docs) become `Reference` objects in the graph,
+Notion and Palantir's models (and Osiris's own docs) become `Reference` objects in the graph,
 so the design knowledge that shapes the front end is itself queryable, sourced project memory.
-This closes the self-referential loop the operator asked for: build the front FROM the canon,
-with the canon living in the substrate next to the commits and threads that implement it.
+This closes the self-referential loop: the front end is built FROM the canon, with the canon
+living in the substrate next to the commits and threads that implement it.
 
 A vendor doc is graded AUTHORITATIVE_API (a published canonical model); our own docs are
-SELF_DECLARED. `python -m src.ingest.reference` ingests docs/reference/ + the own docs and
+SELF_DECLARED. `python -m src.ingest.reference` ingests docs/reference/ plus the own docs and
 wires the `cites` edges COMPOSER.md already declares.
 """
 from __future__ import annotations
@@ -35,10 +35,10 @@ def _slug(name: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
 
 
-# file I/O stays in sync helpers — the async functions do DB work only (ASYNC240)
+# file I/O stays in sync helpers; the async functions do DB work only (ASYNC240)
 def _read(path: str) -> str:
-    # redact BEFORE the md text becomes graph assertions (ruling f8f22e14): a project's
-    # CLAUDE.md / DESIGN.md / essays can carry printed key material just like a transcript.
+    # redact BEFORE the md text becomes graph assertions: a project's CLAUDE.md / DESIGN.md /
+    # essays can carry printed key material just like a transcript.
     return redact(Path(path).read_text())
 
 
@@ -56,7 +56,7 @@ _FRONTMATTER = re.compile(r"\A---\s*\n.*?\n---\s*\n", re.S)
 def parse_doc(text: str) -> dict[str, str]:
     """Pull the leading `<!-- source: … | vendor: … | topic: … -->` header (if any) + the
     title (first H1) + the body. Pure; tolerant of docs with no header (our own). YAML
-    frontmatter (the memory-essay format) is stripped — metadata about a file is not the
+    frontmatter (the memory-essay format) is stripped: metadata about a file is not the
     knowledge in it."""
     meta: dict[str, str] = {}
     fm = _FRONTMATTER.match(text.lstrip())
@@ -82,11 +82,12 @@ def parse_doc(text: str) -> dict[str, str]:
 # --- log chunking: a dated build log becomes PER-ENTRY nodes, never one dump -----------
 
 _DATE = re.compile(r"\b(20\d\d-\d\d(?:-\d\d)?)\b")
-# DOTALL: a long bold header wraps across lines in the arc-log format — without it the
-# wrapped entries fail to split and get swallowed into the previous entry's chunk
-# (live: 'liveness' retrieved THE COMPOSER's node because THE LIVENESS NIGHT never split).
+# DOTALL: a long bold header can wrap across lines in the arc-log format; without it the
+# wrapped entries fail to split and get swallowed into the previous entry's chunk (observed
+# live: a query for a specific entry title matched the wrong, much larger chunk because that
+# entry never split out on its own).
 _BOLD_BULLET = re.compile(r"^- \*\*(.+?)\*\*", re.M | re.S)
-# a bullet must be substantial to earn its own node — small ones stay with their section
+# a bullet must be substantial to earn its own node: small ones stay with their section
 _MIN_ENTRY = 400
 
 
@@ -95,8 +96,8 @@ def parse_log(text: str) -> list[dict[str, str]]:
 
     Two levels: every `## ` section is a chunk, and within a section, each top-level
     `- **Header…**` bullet of ≥400 chars splits out as its own dated entry (the arc-log
-    format CLAUDE.md grew). This is the load-bearing move of the md-kill: 'what was the
-    liveness night?' must return THAT entry, not the whole log — a dump behind an API is
+    format CLAUDE.md grew). This is the key move for retrieval quality: a query for a
+    specific entry must return THAT entry, not the whole log, since a dump behind an API is
     still a dump. Each chunk carries title / body / date (first ISO date in the title or
     first line, empty if none)."""
     out: list[dict[str, str]] = []
@@ -153,28 +154,27 @@ async def ingest_log(
     `ref:<topic>-[<date>-]<title-slug>`), SELF_DECLARED (our own record of our own work).
     Idempotent: canonical find-or-create + the byte-dup assertion skip absorb re-runs.
 
-    `source` defaults to the synthetic "ref:osiris" (the bare-CLI, no-caller case) but a
-    real caller's identity should be threaded through when there is one — see
-    bootstrap_project's own fix (2026-08-03, Thoth's Tier 1 dispatch off the
-    silent-authority census, decision 497a066a): every entry used to be stamped
-    "ref:osiris" regardless of who actually ran the ingest, so a bad entry could not be
-    traced back to a caller even after the fact.
+    `source` defaults to the synthetic "ref:osiris" (the bare-CLI, no-caller case), but a
+    real caller's identity should be threaded through when there is one. See
+    bootstrap_project's own fix (2026-08-03): every entry used to be stamped "ref:osiris"
+    regardless of who actually ran the ingest, so a bad entry could not be traced back to a
+    caller even after the fact.
 
-    `repo` links every entry `in_repo` to its project (operator ruling, 2026-08-27: a doc
-    only gets split because someone was working a project and the doc mattered to it —
-    that context exists at call time and must not be thrown away). `bootstrap_project`
-    already resolves the project it's onboarding before calling this; it now passes it
-    through instead of dropping it.
+    `repo` links every entry `in_repo` to its project (2026-08-27: a doc only gets split
+    because someone was working a project and the doc mattered to it, and that context
+    exists at call time and must not be thrown away). `bootstrap_project` already resolves
+    the project it's onboarding before calling this; it now passes it through instead of
+    dropping it.
 
-    THE DECLARE-OR-REFUSE GATE WIDENS HERE (Thoth mail 8960 item 2, msg 9071): `repo` used
-    to be silently optional — the exact gap `resolve_reference_orphans` (capture.py)
-    already found and named: every one of its 56 real orphans carried a bare `topic` with
-    no project signal in its own data at all, because this door let them through with
-    neither a link nor a confession. Now REQUIRES `repo=` or `unlinked_because=` before a
-    SINGLE entry is minted — checked once, call-scoped rather than per-entry (one call
-    names one project, or one gap, for every entry it produces; refusing up front avoids
-    a partial-ingest orphan the same way `_enforce_required_links`'s own atomic-block
-    refusal does for its callers, without needing a per-entry transaction here)."""
+    THE DECLARE-OR-REFUSE GATE WIDENS HERE: `repo` used to be silently optional. This was
+    the exact gap `resolve_reference_orphans` (capture.py) already found and named: every
+    one of its 56 real orphans carried a bare `topic` with no project signal in its own
+    data at all, because this door let them through with neither a link nor a confession.
+    Now REQUIRES `repo=` or `unlinked_because=` before a SINGLE entry is minted, checked
+    once, call-scoped rather than per-entry (one call names one project, or one gap, for
+    every entry it produces; refusing up front avoids a partial-ingest orphan the same way
+    `_enforce_required_links`'s own atomic-block refusal does for its callers, without
+    needing a per-entry transaction here)."""
     if not repo and not (unlinked_because or "").strip():
         raise ValueError(
             "Reference refused: no repo= given and no unlinked_because= hatch either — "
@@ -219,14 +219,13 @@ async def ingest_reference_doc(
     """Ingest one markdown doc as a `Reference` object (canonical `ref:<stem-slug>`),
     idempotent on the canonical. Vendor → AUTHORITATIVE_API, own → SELF_DECLARED.
 
-    `repo` links the doc `in_repo` to its project when the caller has one (operator
-    ruling, 2026-08-27 — same reasoning as `ingest_log`'s own `repo`: an essay only gets
-    ingested because someone was working a project, and that context must not be thrown
-    away at the door).
+    `repo` links the doc `in_repo` to its project when the caller has one (2026-08-27, same
+    reasoning as `ingest_log`'s own `repo`: an essay only gets ingested because someone was
+    working a project, and that context must not be thrown away at the door).
 
-    THE DECLARE-OR-REFUSE GATE WIDENS HERE too (Thoth mail 8960 item 2, msg 9071), same
-    shape and same reason as `ingest_log`'s own widening just above: REQUIRES `repo=` or
-    `unlinked_because=` before minting, never a silent omission."""
+    THE DECLARE-OR-REFUSE GATE WIDENS HERE too, same shape and same reason as `ingest_log`'s
+    own widening just above: REQUIRES `repo=` or `unlinked_because=` before minting, never a
+    silent omission."""
     if not repo and not (unlinked_because or "").strip():
         raise ValueError(
             "Reference refused: no repo= given and no unlinked_because= hatch either — "
@@ -268,7 +267,7 @@ async def ingest_reference_dir(
 ) -> list[dict[str, Any]]:
     """Ingest every markdown doc in a directory (sorted, deterministic). `repo`/
     `unlinked_because`/`unlinked_because_kind` pass straight through to
-    `ingest_reference_doc`'s own declare-or-refuse gate for every doc in the directory —
+    `ingest_reference_doc`'s own declare-or-refuse gate for every doc in the directory:
     ONE project or ONE gap named for the whole directory, matching `ingest_log`'s own
     call-scoped (not per-file) gate check."""
     out = []
@@ -282,21 +281,21 @@ async def ingest_reference_dir(
 async def ingest_canon(
     actions: Actions, *, project: str = "osiris", case_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """Ingest the vendor canon (docs/reference/) + our own docs, then wire the `cites` edges
-    COMPOSER.md declares (it descends its op vocabulary from the Palantir/Notion refs).
+    """Ingest the vendor canon (docs/reference/) plus our own docs, then wire the `cites`
+    edges COMPOSER.md declares (it descends its op vocabulary from the Palantir/Notion refs).
 
-    `project` defaults to "osiris" — the only real caller (`src/init.py`'s own docstring:
-    "run it from the repo root", ALWAYS this repo's own docs) — but is a real parameter,
-    not a hardcode with no door out, so a future non-osiris canon ingest is not
+    `project` defaults to "osiris", the only real caller (`src/init.py`'s own docstring says
+    to run it from the repo root, always against this repo's own docs), but is a real
+    parameter, not a hardcode with no door out, so a future non-osiris canon ingest is not
     structurally blocked. See `_wire_informs`.
 
-    `repo=project` now threads through both ingest calls below (Thoth mail 8960 item 2,
-    msg 9071 — `ingest_reference_doc`/`ingest_reference_dir` widened their own
-    declare-or-refuse gate to require it): `project` was already resolved right here,
-    at this call's own top — the identical "the project was right here" fix bootstrap_
-    project already applied to `ingest_log`, just never threaded through THIS caller."""
+    `repo=project` now threads through both ingest calls below (`ingest_reference_doc`/
+    `ingest_reference_dir` widened their own declare-or-refuse gate to require it):
+    `project` was already resolved right here, at this call's own top, the same fix
+    `bootstrap_project` already applied to `ingest_log`, just never threaded through this
+    caller."""
     vendor_refs = await ingest_reference_dir(actions, case_id=case_id, repo=project)
-    # ALL of docs/*.md (non-recursive — docs/reference/ is the vendor canon, ingested above)
+    # ALL of docs/*.md (non-recursive: docs/reference/ is the vendor canon, ingested above)
     # plus the handful of root-level docs that are still "own" canon.
     own_paths = [*_OWN_DOCS_ROOT, *_md_files("docs")]
     own = [await ingest_reference_doc(actions, p, case_id=case_id, repo=project)
@@ -306,7 +305,7 @@ async def ingest_canon(
     cites = 0
     if composer is not None:
         now = datetime.now(UTC)
-        # create_link is a plain append — dedup against existing cites so a re-run is idempotent
+        # create_link is a plain append; dedup against existing cites so a re-run is idempotent
         existing = {(r["from_id"], r["to_id"]) for r in await actions.pool.fetch(
             "SELECT from_id, to_id FROM links WHERE type='cites'")}
         for v in vendor_refs:
@@ -333,20 +332,19 @@ async def _wire_informs(
     actions: Actions, refs: list[dict[str, Any]], *, project: str = "osiris",
     case_id: uuid.UUID | None = None,
 ) -> int:
-    """Link each reference to the ONE project it grounds — `Reference --informs-->
+    """Link each reference to the ONE project it grounds: `Reference --informs-->
     SoftwareProject` (the self-referential loop). Coarse on purpose: the *precise* module
     is in the ref's `grounds` property; this edge just attaches the design canon to the
     repo so "what grounds this project?" is a one-hop traversal.
 
-    SCOPED TO A SINGLE PROJECT (thread 5156, root cause of the repo:? specimen — decision
-    ca091c4b): this used to fetch EVERY active SoftwareProject fleet-wide and cross-join
-    every ref onto every one of them, no scoping parameter existed at all. Measured live
-    before this fix: 1054 total informs edges, of which only 17 (one per Reference)
-    actually named repo:osiris — the other 1037 were pure fan-out noise across 62
+    SCOPED TO A SINGLE PROJECT: this used to fetch EVERY active SoftwareProject fleet-wide
+    and cross-join every ref onto every one of them, with no scoping parameter at all.
+    Measured live before this fix: 1054 total informs edges, of which only 17 (one per
+    Reference) actually named repo:osiris; the other 1037 were pure fan-out noise across 62
     distinct projects, poisoning every unrelated project's own informs view (and are
     exactly why repo:?, a garbage stub with zero real evidence, carried 17 informs edges
-    identical to every genuine project's own count). `project` defaults to "osiris" —
-    `ingest_canon`'s only real caller always runs against this repo's own docs — but is a
+    identical to every genuine project's own count). `project` defaults to "osiris"
+    (`ingest_canon`'s only real caller always runs against this repo's own docs), but is a
     real parameter now, not a hardcoded cross-join. Skipped (0) if the named project
     doesn't resolve yet; idempotent. See `unwire_informs_fanout` for the repair over the
     already-written noise."""
@@ -376,14 +374,14 @@ async def unwire_informs_fanout(
     actions: Actions, *, project: str = "osiris", actor: str, dry_run: bool = True,
     because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the pre-fix `_wire_informs` cross-join (thread 5156): every live
-    `informs` edge stamped `source_id=ref:osiris` (the fan-out's own signature — never
-    touches an informs edge asserted by anything else) whose target is NOT the one real
-    `project` is noise from the old unscoped wiring, not a genuine grounding claim.
+    """Repair verb for the pre-fix `_wire_informs` cross-join: every live `informs` edge
+    stamped `source_id=ref:osiris` (the fan-out's own signature, never touches an informs
+    edge asserted by anything else) whose target is NOT the one real `project` is noise
+    from the old unscoped wiring, not a genuine grounding claim.
 
     DRY RUN IS THE DEFAULT: returns the plan (from/to pairs it would invalidate) without
-    writing. `dry_run=False` refuses a blank `because` — invalidating ~1000 edges is a
-    deliberate act on the record, never silent. Idempotent: an edge already invalidated
+    writing. `dry_run=False` refuses a blank `because`, since invalidating ~1000 edges is
+    a deliberate act on the record, never silent. Idempotent: an edge already invalidated
     is not live, so a second pass finds nothing left."""
     project = (project or "").strip()
     if not project:
@@ -417,7 +415,7 @@ async def unwire_informs_fanout(
     for item in plan:
         from_id, to_id = uuid.UUID(item["from_id"]), uuid.UUID(item["to_id"])
         # invalidate_link deactivates EVERY live row on this (from, to, type) triple, not
-        # just the fan-out's own — the fan-out's own dedup never let it double up with a
+        # just the fan-out's own; the fan-out's own dedup never let it double up with a
         # genuine third-party edge on the SAME triple in the first place (measured live:
         # zero such collisions), but this checks rather than trusts that, so a future
         # caller of _wire_informs with looser dedup can never lose a co-existing edge here.
@@ -441,36 +439,34 @@ async def unwire_informs_fanout(
 async def backfill_bootstrap_orphan_references(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the bootstrap_project door-gap (decision 49231693, obligation
-    adde094b, operator ruling 2026-08-27 — verbatim: "if a doc splitter or a doc import
-    is acting its because at the time it was related to a project and it was relevant to
-    the graph, so something definitely went wrong here"). `ingest_log`/`ingest_reference_
-    doc` now take `repo=` and `bootstrap_project` now threads it through (this fix landed
-    first) — this verb is ONLY for the ~105 References already on the floor from before
-    that fix shipped.
+    """Repair verb for the bootstrap_project door-gap (2026-08-27): a doc splitter or doc
+    import running in the context of a project means the resulting document was relevant
+    to that project, and losing that link at ingest time was a bug worth fixing.
+    `ingest_log`/`ingest_reference_doc` now take `repo=` and `bootstrap_project` now
+    threads it through (this fix landed first); this verb is ONLY for the ~105 References
+    already on the floor from before that fix shipped.
 
-    MECHANICAL AND CONSERVATIVE ON PURPOSE, per the operator's own other half of the same
-    ruling: "a derived link that is wrong is worse than an orphan that is honest." Touches
-    only a Reference that (a) carries ZERO live links, (b) was written with
-    `source_id='ref:osiris'` (the bootstrap-script's own signature, never a real caller
-    identity — the exact fingerprint of the bug this repairs), and (c) whose canonical
-    starts with `ref:<name>-` for an EXISTING active SoftwareProject `<name>` — recovering
-    a fact the canonical itself still encodes (`bootstrap_project`'s own
+    MECHANICAL AND CONSERVATIVE ON PURPOSE: a derived link that is wrong is worse than an
+    orphan that is honest. Touches only a Reference that (a) carries ZERO live links, (b)
+    was written with `source_id='ref:osiris'` (the bootstrap-script's own signature, never
+    a real caller identity: the exact fingerprint of the bug this repairs), and (c) whose
+    canonical starts with `ref:<name>-` for an EXISTING active SoftwareProject `<name>`,
+    recovering a fact the canonical itself still encodes (`bootstrap_project`'s own
     `topic=f"{project}-{topic}"` naming), never inventing one. Longest project name wins
     on a prefix collision, so e.g. a project "monster" can never steal a "monsterhouse-"
     canonical.
 
-    DELIBERATELY EXCLUDED, not silently skipped — reported in `unmatched` instead: any
+    DELIBERATELY EXCLUDED, not silently skipped, reported in `unmatched` instead: any
     orphan Reference whose canonical carries NO clean project-name prefix (osiris's own
-    early bare-topic dump — `ref:design-*`, `ref:history-*` — and a handful of essay
+    early bare-topic dump: `ref:design-*`, `ref:history-*`, and a handful of essay
     slugs with no project prefix at all, since `ingest_reference_doc` never namespaces
     its canonical by project). Those need a human/agent's thematic read, which this
     mechanical rule cannot honestly claim to do; they stay orphaned here on purpose.
 
-    DRY RUN IS THE DEFAULT, same law as `unwire_informs_fanout`: returns the plan (ref id
-    + canonical -> target project) without writing. `dry_run=False` refuses a blank
-    `because`. Links land as evidence_class DERIVED, never self_declared — this is an
-    inference from the canonical's own naming convention, not a fresh first-hand
+    DRY RUN IS THE DEFAULT, same approach as `unwire_informs_fanout`: returns the plan
+    (ref id plus canonical -> target project) without writing. `dry_run=False` refuses a
+    blank `because`. Links land as evidence_class DERIVED, never self_declared: this is
+    an inference from the canonical's own naming convention, not a fresh first-hand
     observation. Idempotent: a Reference that already carries a live link of any kind no
     longer matches the WHERE clause on a re-run."""
     if not dry_run and not (because or "").strip():
@@ -525,9 +521,9 @@ async def mine_mentions(
     actions: Actions, *, min_name_len: int = 6, source_id: str = "mentions",
     case_id: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """Layer 3 — join the docs to the entity graph, KEYLESS. Scan each document's body for the
+    """Layer 3: join the docs to the entity graph, KEYLESS. Scan each document's body for the
     names of real entities (Person/Organization/… with a distinctive name, length >= min) and
-    mint a `mentions` edge doc->entity. Graded CO_OCCURRENCE — a name match is an inference,
+    mint a `mentions` edge doc->entity. Graded CO_OCCURRENCE: a name match is an inference,
     so the mentioned node stays a speculative LEAF in the frontier until corroborated; never
     auto-expands. Idempotent. (The AI extractor is the smarter, keyed version of this.)"""
     pool = actions.pool
@@ -548,7 +544,7 @@ async def mine_mentions(
         "FROM objects o WHERE o.status='active' AND EXISTS (SELECT 1 FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='body')")
     named = [(e["id"], e["name"]) for e in ents if e["name"]]
-    # create_link is a plain append — dedup against existing mentions so a re-run is idempotent
+    # create_link is a plain append; dedup against existing mentions so a re-run is idempotent
     existing = {(r["from_id"], r["to_id"]) for r in
                 await pool.fetch("SELECT from_id, to_id FROM links WHERE type='mentions'")}
     mentions = 0
@@ -568,9 +564,9 @@ async def mine_mentions(
 
 
 def main() -> None:  # pragma: no cover - CLI
-    """`python -m src.ingest.reference` — the design canon (vendor + own docs).
-    `... log <path> <topic>` — chunk-ingest a dated build log (per-entry nodes).
-    `... doc <path>` — one markdown file (frontmatter-stripped) as a single node."""
+    """`python -m src.ingest.reference`: the design canon (vendor + own docs).
+    `... log <path> <topic>`: chunk-ingest a dated build log (per-entry nodes).
+    `... doc <path>`: one markdown file (frontmatter-stripped) as a single node."""
     import asyncio
     import sys
 

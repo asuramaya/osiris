@@ -1,8 +1,8 @@
-"""LLM usage telemetry — what the inference seam actually spent, per call.
+"""LLM usage telemetry: what the inference seam actually spent, per call.
 
 Until this, the auto-ingest's cost was an ESTIMATE (per-call size x the 10-minute rate cap).
-Each completion now records its real tokens — and, on the CLI backend, the real cost_usd from
-the envelope — so `usage_summary` answers "what did sensing burn?" from data, not arithmetic.
+Each completion now records its real tokens, and, on the CLI backend, the real cost_usd from
+the envelope, so `usage_summary` answers "what did sensing burn?" from data, not arithmetic.
 Operational telemetry, a plain append-only table, never the event-sourced graph.
 """
 from __future__ import annotations
@@ -20,11 +20,11 @@ async def record_usage(
 ) -> None:
     """Append one completion's usage. `purpose` names the call-site ('session-extract').
 
-    `ran_at` IS THE MOMENT THE MONEY WAS SPENT, not the moment we got around to looking — and
+    `ran_at` IS THE MOMENT THE MONEY WAS SPENT, not the moment we got around to looking, and
     the difference is not cosmetic once a DAILY CEILING reads this table. The wake meter is a
     BACKFILL: it read 257 historical wakes off disk in one pass, and defaulting to now() filed a
     WEEK OF SPENDING UNDER A SINGLE DAY. A ceiling reading that would have refused to spend a
-    cent on a day that had cost nothing — a producer starved by an accountant's clerical error.
+    cent on a day that had cost nothing, a producer starved by an accountant's clerical error.
 
     A LEDGER MUST BE DATED BY THE EVENT, NEVER BY THE BOOKKEEPING. Live callers pass nothing and
     get now(), which is correct because for them the two are the same instant.
@@ -41,7 +41,7 @@ async def record_usage(
 
 async def usage_summary(pool: asyncpg.Pool, *, hours: int = 24) -> dict[str, Any]:
     """Totals over the last `hours`, grouped by purpose+model, plus a grand total. Reads
-    telemetry, not the graph — the answer to 'what did the auto-ingest burn?', from record."""
+    telemetry, not the graph, the answer to 'what did the auto-ingest burn?', from record."""
     rows = await pool.fetch(
         "SELECT purpose, model, count(*) AS calls, "
         " coalesce(sum(input_tokens),0) AS input_tokens, "

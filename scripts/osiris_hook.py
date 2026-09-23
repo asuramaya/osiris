@@ -1,28 +1,28 @@
 #!/usr/bin/env python3
-"""Unified Osiris lifecycle hook — one script, one subprocess, zero cold connections.
+"""Unified Osiris lifecycle hook, one script, one subprocess, zero cold connections.
 
 Replaces 13 separate scripts (osiris_statusline, osiris_stophook, osiris_whisper,
 osiris_sessionend, osiris_precompact, osiris_spawn, osiris_mount_anchor, ...) that
 each forked a fresh python process importing asyncpg + the full stack. This is
-stdlib-only — reads stdin, POSTs to the MCP server's custom routes, exits.
+stdlib-only: it reads stdin, POSTs to the MCP server's custom routes, and exits.
 
 USAGE:  osiris_hook.py <subcommand> < hook_event.json
 
 Subcommands:
   statusline     Render Osiris status bar (reads harness chrome JSON)
-  stop           Stop hook — mail drain + offload ritual
+  stop           Stop hook: mail drain and offload ritual
   whisper        SessionStart auto-mount
-  session-end    SessionEnd — release mount row immediately
-  precompact     PreCompact death rite — ring sweep doorbell
+  session-end    SessionEnd: release mount row immediately
+  precompact     PreCompact cleanup: ring sweep doorbell
   spawn          SubagentStart/SubagentStop
-  anchor         PreToolUse stdin filter — inject session_anchor + subagent_id
-  read           UserPromptSubmit — the zero-token read hook: a matched bare slash read
+  anchor         PreToolUse stdin filter: inject session_anchor + subagent_id
+  read           UserPromptSubmit, the zero-token read hook: a matched bare slash read
                  renders straight to the screen (block+reason), never reaches the model
-  settle-gate    PreToolUse — THE MECHANICAL SETTLE: refuses non-osiris tool calls past
-                 context 65% until a complete settle lands; precompact also mints a
+  settle-gate    PreToolUse, the mechanical settle gate: refuses non-osiris tool calls
+                 past context 65% until a complete settle lands; precompact also mints a
                  machine handoff marker as a last resort when one never did
 
-FAIL-OPEN: any error exits 0 silently — a session is never blocked by a hook glitch.
+FAIL-OPEN: any error exits 0 silently, so a session is never blocked by a hook glitch.
 """
 from __future__ import annotations
 
@@ -37,13 +37,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-# ONE AUTHORITY on the two-tier compaction ladder (src/orchestrator/context_lens.py's own
-# ALARM_PCT/HARD_ALARM_PCT), never a second, independently-drifting pair of literals here.
-# context_lens.py is itself stdlib-only (json/Path/typing, no asyncpg) so this import stays
-# true to this file's own "zero cold connections" law; the repo-root insert mirrors
-# osiris_stophook.py's own established technique for a hook invoked from an arbitrary cwd.
-# Fails open to the historically-correct values on any import trouble (a moved repo, a
-# stripped-down deploy) rather than ever crashing the hook over a constant.
+# Single source of truth for the two-tier compaction thresholds
+# (src/orchestrator/context_lens.py's own ALARM_PCT/HARD_ALARM_PCT), never a second,
+# independently-drifting pair of literals here. context_lens.py is itself stdlib-only
+# (json/Path/typing, no asyncpg) so this import stays true to this file's own
+# "zero cold connections" rule; the repo-root insert mirrors osiris_stophook.py's own
+# established technique for a hook invoked from an arbitrary cwd. Fails open to the
+# historically-correct values on any import trouble (a moved repo, a stripped-down
+# deploy) rather than ever crashing the hook over a constant.
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 _cl_last_usage: Any = None
 _cl_occupancy: Any = None
@@ -53,7 +54,7 @@ try:
     from src.orchestrator.context_lens import last_usage as _cl_last_usage
     from src.orchestrator.context_lens import occupancy as _cl_occupancy
     from src.orchestrator.context_lens import window_for as _cl_window_for
-except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
+except Exception:  # noqa: BLE001, fail-open: a hook must never crash the harness
     ALARM_PCT, HARD_ALARM_PCT = 60, 85
 
 _URLS = {
@@ -66,14 +67,13 @@ _URLS = {
     "succession": os.environ.get("OSIRIS_SUCCESSION_URL", "http://127.0.0.1:8790/succession"),
 }
 
-# THE CHROME'S OWN RENDERING (ported verbatim from osiris_statusline.py's own `main()`,
-# dispatch 5441/5492 parity fix — found live, the same day as the flip: `/heartbeat`
-# (src/mcp_server.py) has only ever returned raw COUNTS (HeartbeatResult._asdict()), never
-# a pre-rendered "status_line" string — the actual two-line rendering (colors, the mail/DM/
-# fleet/wakes segments, the budget strip, the model-swap check) has ALWAYS lived in the
-# script's own client-side `main()`, and had no equivalent anywhere in this file until now.
-# Without this, the flipped live settings.json would have rendered a BLANK status bar on
-# every session — a real, currently-live regression, not a hypothetical one.
+# The status bar's own rendering (ported verbatim from osiris_statusline.py's own `main()`):
+# `/heartbeat` (src/mcp_server.py) has only ever returned raw counts (HeartbeatResult.
+# _asdict()), never a pre-rendered "status_line" string. The actual two-line rendering
+# (colors, the mail/DM/fleet/wakes segments, the budget strip, the model-swap check) has
+# always lived in the script's own client-side `main()`, and had no equivalent anywhere in
+# this file until now. Without this, a settings.json pointed at the new hook without this
+# logic would render a blank status bar on every session.
 _CONSOLE = os.environ.get("OSIRIS_CONSOLE_URL", "http://127.0.0.1:8011")
 _LINKS = os.environ.get("OSIRIS_STATUSLINE_LINKS", "1") != "0"
 _DIM, _RED, _GREEN, _AMBER, _RESET = "\033[2m", "\033[31m", "\033[32m", "\033[33m", "\033[0m"
@@ -84,7 +84,7 @@ def _short(model_id: str) -> str:
 
 
 def _link(text: str, anchor: str) -> str:
-    """OSC 8 hyperlink into the /membrane lens — terminals without OSC 8 support render the
+    """OSC 8 hyperlink into the /membrane lens. Terminals without OSC 8 support render the
     plain text; the escapes are invisible either way."""
     if not _LINKS:
         return text
@@ -92,8 +92,8 @@ def _link(text: str, anchor: str) -> str:
 
 
 def _operator_swap(transcript_path: str, session_id: str, model_id: str) -> bool:
-    """Was this divergence the OPERATOR's own /model? Pure/local — no DB, matching
-    `_swap_confession`'s own shape: a durable marker under the session's job dir, and a
+    """Was this divergence the user's own /model? Pure/local, no DB: matches
+    `_swap_confession`'s own shape, a durable marker under the session's job dir, and a
     transcript-tail scan for the harness's own verbatim `/model` command record."""
     sid = (session_id or "")[:8]
     marker = (Path.home() / ".claude" / "jobs" / sid / ".osiris_model_op") if len(sid) == 8 \
@@ -135,15 +135,15 @@ _TIMEOUTS: dict[str, int] = {
     "settle_gate": 3,
 }
 
-# THE STATUSLINE MUST SELF-HEAL ACROSS A RESTART (operator, 2026-09-01: "everything has to
-# be self-healing over restarts and such"). It was `1` — one second, ONE shot, no cache —
-# and `osiris deploy` restarts osiris-mcp on every merge, so every deploy painted every
-# live agent's bar with a false alarm that blamed the wrong subsystem. Measured before
-# changing it: /heartbeat answers in 70-100ms across 12 consecutive probes under a live
-# 15-agent fleet, so 3s is ~30x the observed cost, not a guess. The budget was never the
-# problem; the ABSENCE OF A SECOND CHANCE was.
+# The statusline needs to self-heal across a restart: everything here should keep working
+# through a server restart without manual intervention. It was `1` second, one shot, no
+# cache, and `osiris deploy` restarts osiris-mcp on every merge, so every deploy painted
+# every live agent's bar with a false alarm that blamed the wrong subsystem. Measured
+# before changing it: /heartbeat answers in 70-100ms across 12 consecutive probes under a
+# live 15-agent fleet, so 3s is about 30x the observed cost, not a guess. The budget was
+# never the problem; the absence of a second chance was.
 _STATUSLINE_RETRIES = 1          # one retry: a restart window is ~seconds, not minutes
-_STATUSLINE_CACHE_MAX_AGE = 600  # 10 min — past this, say so rather than render fiction
+_STATUSLINE_CACHE_MAX_AGE = 600  # 10 min, past this, say so rather than render fiction
 
 
 def _statusline_cache_path(project: str) -> Path:
@@ -154,8 +154,8 @@ def _statusline_cache_path(project: str) -> Path:
 def _statusline_cache_read(project: str) -> tuple[dict[str, Any] | None, int]:
     """Last good /heartbeat payload for this project, plus its age in seconds.
 
-    Returns (None, 0) when there is no readable cache — a caller must NEVER treat a
-    missing cache as zeroed counts (that would render a confident, wrong 'owe 0')."""
+    Returns (None, 0) when there is no readable cache. A caller must never treat a
+    missing cache as zeroed counts, since that would render a confident, wrong 'owe 0'."""
     try:
         raw = json.loads(_statusline_cache_path(project).read_text())
         payload, ts = raw.get("payload"), float(raw.get("ts") or 0)
@@ -169,7 +169,7 @@ def _statusline_cache_read(project: str) -> tuple[dict[str, Any] | None, int]:
 
 def _statusline_cache_write(project: str, payload: dict[str, Any]) -> None:
     """Atomic (tmp + replace): 15 agents write this every 10s, and a torn read would put
-    a half-written line in front of the operator."""
+    a half-written line in front of the user."""
     path = _statusline_cache_path(project)
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -177,27 +177,26 @@ def _statusline_cache_write(project: str, payload: dict[str, Any]) -> None:
         tmp.write_text(json.dumps({"ts": time.time(), "payload": payload}))
         os.replace(tmp, path)
     except OSError:
-        pass  # the chrome never breaks on a cache write
+        pass  # the status bar never breaks on a cache write
 
 
-# REBOOT SURVIVAL, the fleet half (thread bc6a5d455da2, operator ruling 2026-09-13):
-# the 17:26 CDT reboot left the chrome reading a bare "graph: no answer" with no
-# statement of WHICH unit was actually down — pg up, mcp dead is indistinguishable from
-# every unit dead, and the #169 shape (a remedy that cannot tell two states apart)
-# repeats every time this line renders with zero diagnosis value. Dependency order: pg
-# first (everything else depends on it), then mcp (the statusline's own real target),
-# then console — the FIRST one that refuses a bare TCP connect is named; all three
-# answering means genuinely "no answer for some other reason" (a slow query, a
-# transient blip), which stays the honest bare message.
+# Reboot survival: a past reboot left the chrome reading a bare "graph: no answer" with
+# no statement of which unit was actually down. Postgres up, MCP dead is indistinguishable
+# from every unit dead, and a remedy that cannot tell two states apart repeats every time
+# this line renders with zero diagnosis value. Dependency order: Postgres first (everything
+# else depends on it), then the MCP server (the statusline's own real target), then the
+# console. The first one that refuses a bare TCP connect is named; all three answering
+# means genuinely "no answer for some other reason" (a slow query, a transient blip),
+# which stays the honest bare message.
 _PORT_PROBES: tuple[tuple[str, int], ...] = (("pg", 5601), ("mcp", 8790), ("console", 8011))
 
 
 def _first_dead_unit(*, timeout: float = 0.3) -> str | None:
-    """A bare TCP connect to each of pg/mcp/console in turn — never more than a socket
+    """A bare TCP connect to each of pg/mcp/console in turn: never more than a socket
     open+close, no protocol spoken, so this never itself becomes a source of hangs on a
     chrome render. Returns the first unreachable `name:port`, or None when all three
-    accept a connection (the failure is something else — a slow query, a transient
-    blip — never fabricated as a dead unit that answered fine)."""
+    accept a connection (the failure is something else, a slow query, a transient
+    blip, never fabricated as a dead unit that answered fine)."""
     for name, port in _PORT_PROBES:
         try:
             with socket.create_connection(("127.0.0.1", port), timeout=timeout):
@@ -223,14 +222,14 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
     resolve project/model intent locally (pure filesystem pin-climb, no DB), POST the
     resolved fields to /heartbeat for the shared counts, then render exactly as the old
     script did. /heartbeat returns raw counts only (HeartbeatResult._asdict()), never a
-    pre-rendered line \u2014 the rendering has always been, and remains, this caller's job."""
+    pre-rendered line: the rendering has always been, and remains, this caller's job."""
     ws = hook.get("workspace") or {}
     cwd = str(ws.get("current_dir") or ws.get("project_dir") or hook.get("cwd") or "")
     try:
         from src.orchestrator.agents import read_project_label, read_project_model
         project_hint = read_project_label(cwd)
         intent_hint = read_project_model(cwd)
-    except Exception:  # noqa: BLE001 \u2014 the chrome never breaks on a resolver import/read
+    except Exception:  # noqa: BLE001, the chrome never breaks on a resolver import/read
         project_hint = intent_hint = None
     model_raw = str((hook.get("model") or {}).get("id") or "")
     model_id = model_raw.split("[", 1)[0].strip()
@@ -259,44 +258,45 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         if attempt < _STATUSLINE_RETRIES:
             time.sleep(0.2)  # a restarting server is usually back within one tick
 
-    # THREE STATES, NEVER COLLAPSED (the old osiris_statusline.py had this and the hook
-    # migration dropped it; the comment below used to record the loss as if it were a
-    # design choice). LIVE: fresh counts. STALE: the probe missed but we have a recent
-    # good answer \u2014 render it, marked, because last-known-good beats a false alarm.
-    # SILENT: no answer AND no usable cache \u2014 say only what is actually known, which is
-    # that the PROBE got nothing. It is NOT evidence the graph is down: Postgres was up
-    # the whole 27 hours the operator saw this, and pointing him at `docker ps` sent him
-    # after a container that never moved (the #169 shape \u2014 a remedy that cannot tell two
-    # states apart and confidently prescribes one).
+    # Three states, never collapsed (the old osiris_statusline.py had this and the hook
+    # migration dropped it for a while). LIVE: fresh counts. STALE: the probe missed but
+    # there is a recent good answer, so render it, marked, because last-known-good beats
+    # a false alarm.
+    # SILENT: no answer and no usable cache, so say only what is actually known, which is
+    # that the probe got nothing. It is not evidence the graph is down: Postgres stayed
+    # up through a past outage where this line still pointed the user at `docker ps`,
+    # sending them after a container that never moved, a remedy that cannot tell two
+    # states apart and confidently prescribes one.
     stale_age, from_cache = 0, False
-    # NO PIN, BUT A SESSION: key the cache on THIS session (never the shared "_" bucket).
+    # No pin, but a session: key the cache on THIS session, never the shared "_" bucket.
     # A session-scoped file has exactly one writer and one reader, so nothing can leak
-    # across sessions — and it is what lets a seat-office-root tab (its container pin is
+    # across sessions, and it is what lets a seat-office-root tab (its container pin is
     # deliberately `kind = "container"`, never a project) survive a deploy restart with
-    # `thoth·osiris ⋯7s ago` instead of `? graph: no answer` (operator, 2026-09-06).
+    # `handle·osiris ⋯7s ago` instead of `? graph: no answer`.
     session_scoped = project_hint is None and bool(session_id)
     cache_key = project_hint or (f"session-{session_id}" if session_scoped else None)
     r: dict[str, Any] | None = None
     if resp is not None and not resp.get("error"):
         r = resp.get("result") or resp
-        # A BUCKET KEYED ON IGNORANCE HAS NO SHARED IDENTITY TO HOLD (Thoth's own framing,
-        # msg 6655, live specimen: his bar rendered "Lilguy"). `cache_key is None` means
-        # `project_hint` never resolved locally (any bare seat-office container, any
-        # unpinned repo) — every such session collapsed into the SAME "_" file, so an
-        # unrelated session's counts (not just its label) leaked in on the next fallback
-        # read. Never write, and below, never read, that bucket at all: an unresolved
-        # session stays live-only, same as a genuinely offline `/heartbeat`.
+        # A bucket keyed on ignorance has no shared identity to hold, and a live specimen
+        # showed exactly that: a bar that rendered a stale agent's name it had no business
+        # wearing. `cache_key is None` means `project_hint` never resolved locally (any
+        # bare seat-office container, any unpinned repo), so every such session collapsed
+        # into the same "_" file, meaning an unrelated session's counts (not just its
+        # label) leaked in on the next fallback read. Never write, and below, never read,
+        # that bucket at all: an unresolved session stays live-only, same as a genuinely
+        # offline `/heartbeat`.
         if isinstance(r, dict) and cache_key is not None:
-            # A session-scoped file is the caller's OWN: its resolved identity is safe to
+            # A session-scoped file is the caller's own: its resolved identity is safe to
             # keep (and is exactly what the fallback bar needs instead of a bare `?`).
-            # CACHE ONLY THE PROJECT-SCOPED COUNTS in the shared, project-keyed file.
+            # Cache only the project-scoped counts in the shared, project-keyed file.
             # resolved_seat_handle / resolved_intent
-            # are the CALLER's, not the project's, and this file is shared by every agent
-            # working the project — caching them let one seat's bar wear another's name
-            # (caught live in test: a probe from the osiris tree rendered `imhotep·osiris`
-            # off Imhotep's cached row). Dropping them is not a loss: the seat tag is a
-            # nicety, and wearing someone else's identity is the exact class of error the
-            # rest of tonight was spent undoing.
+            # are the caller's, not the project's, and this file is shared by every agent
+            # working the project, so caching them let one seat's bar wear another's name
+            # (caught live in test: a probe from the osiris tree rendered one agent's
+            # handle off another's cached row). Dropping them is not a loss: the seat tag
+            # is a nicety, and wearing someone else's identity is the exact class of error
+            # this fix undoes.
             _statusline_cache_write(cache_key, r if session_scoped else
                                     {k: v for k, v in r.items()
                                      if k not in ("resolved_seat_handle",
@@ -320,27 +320,26 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
         resolved_intent = r.get("resolved_intent")
         resolved_seat_handle = r.get("resolved_seat_handle")
         seat_tag = f"{resolved_seat_handle}\u00b7" if resolved_seat_handle else ""
-        # owe = YOUR open obligations (operator 2026-09-06): red only when one is past its
-        # stale window, dim otherwise, absent at zero. briefs left the bar entirely — the
-        # operator stacked 29 and never read one; a count nobody reads is noise.
+        # owe = the viewer's own open obligations: red only when one is past its stale
+        # window, dim otherwise, absent at zero. Brief counts were dropped from the bar
+        # entirely: a queue that grows unread is noise, not signal, so it isn't shown.
         owed_mine, stale_mine = int(r.get("owed_mine", 0)), int(r.get("stale_mine", 0))
-        # THE THIRD OWNER CATEGORY (thread 3a9d9a5d89fa, Ra XL's measured report,
-        # 2026-09-14): obligations in a project you GOVERN whose owner is the bare
-        # project name or empty — invisible to owe's own individual-spelling match
-        # until now. Shown as a trailing "(+M project)", dim, never red (no per-owner
-        # stale window applies to a project-owned row the same way) — and critically,
-        # shown even when owed_mine is itself 0: the whole point is that a governing
-        # seat with zero PERSONAL debt can still be sitting on real project pressure
-        # nobody's individual `owe` count would ever surface.
+        # The third owner category: obligations in a project a seat governs whose owner
+        # is the bare project name or empty, invisible to owe's own individual-spelling
+        # match until this was added. Shown as a trailing "(+M project)", dim, never red
+        # (no per-owner stale window applies to a project-owned row the same way), and
+        # critically, shown even when owed_mine is itself 0: the whole point is that a
+        # governing seat with zero personal debt can still be sitting on real project
+        # pressure nobody's individual `owe` count would ever surface.
         owed_mine_project = int(r.get("owed_mine_project", 0))
         suffix = f" (+{owed_mine_project} project)" if owed_mine_project else ""
         owe_s = (f"{_RED}owe {owed_mine}{suffix}{_RESET}" if stale_mine
                  else (f"{_DIM}owe {owed_mine}{suffix}{_RESET}"
                        if owed_mine or owed_mine_project else ""))
-        # ONE CELL, YOUR PREMISES ONLY (operator 2026-09-06: "just ✉ 3 is enough ... we're
-        # trying to keep it compact"). The count is what is unread and addressed to YOU —
-        # direct mail plus room broadcasts you have not read; in-flight traffic on other
-        # agents' desks is fleet telemetry and lives in fleet(), never in your bar.
+        # One cell, the viewer's own mail only, kept deliberately compact. The count is
+        # what is unread and addressed to the viewer: direct mail plus room broadcasts
+        # not yet read; in-flight traffic on other agents' desks is fleet telemetry and
+        # lives in fleet(), never in this bar.
         yours = int(r.get("needs", int(mail or 0) + int(dm or 0)))
         mail_s = (f"{_RED}\u2709\ufe0e {yours}{_RESET}" if yours
                   else f"{_DIM}\u2709\ufe0e 0{_RESET}")
@@ -354,27 +353,24 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
                 elif cap > 0 and spent >= 0.6 * cap:
                     c = _RED if spent >= 0.85 * cap else _AMBER
                     spend_s = f"{c}${spent:.2f}/${cap:.0f}{_RESET}"
-        except Exception:  # noqa: BLE001 \u2014 the price strip is a nicety, never a crash
+        except Exception:  # noqa: BLE001, the price strip is a nicety, never a crash
             pass
         parts = [
             _link(f"\u25c8 {seat_tag}{resolved_project}", "desk"),
             *([_link(owe_s, "desk")] if owe_s else []),
             _link(mail_s, "conversations"),
-            # A MANAGER SEES ITS OWN TEAM; everyone else sees no fleet cell, and wakes/h
-            # left the bar entirely (operator 2026-09-06: global for no reason here).
+            # A manager sees its own team; everyone else sees no fleet cell, and a global
+            # wakes count was dropped from the bar since it had no reason to be there.
             *([_link(f"team {team}/{team_of}", "fleet")] if team_of else []),
-            # THE STALE MARKER, restoring the old script's answered-just-late distinction
-            # (this comment used to say that state "doesn't exist here" — it does again).
-            # Dim, last of the STANDARD cells, and never silent: an operator reading
-            # counts is entitled to know they are a moment old, but a 12-second-old
-            # `owe 14` is worth incomparably more than a red bar that names the wrong
-            # subsystem. The alarms (sick_s/spend_s) trail it, at the far right of the
-            # line, so a warning appearing/disappearing never displaces a standard cell
-            # (operator's word: "move the warning to the right end of the chrome so the
-            # standard lines are not displaced").
-            # GATED ON `from_cache`, NOT ON THE AGE. A cache written under a second ago
+            # The stale marker, restoring the old script's answered-just-late distinction.
+            # Dim, last of the standard cells, and never silent: a reader of these counts
+            # is entitled to know they are a moment old, but a 12-second-old `owe 14` is
+            # worth incomparably more than a red bar that names the wrong subsystem. The
+            # alarms (sick_s/spend_s) trail it, at the far right of the line, so a warning
+            # appearing or disappearing never displaces a standard cell.
+            # Gated on `from_cache`, not on the age. A cache written under a second ago
             # has stale_age == 0, and gating on the number made a cached bar render
-            # IDENTICAL to a live one — collapsing the two states this whole change
+            # identical to a live one, collapsing the two states this whole change
             # exists to keep apart, in the very line meant to keep them apart.
             *([f"{_DIM}⋯{stale_age}s ago{_RESET}"] if from_cache else []),
             *([_link(sick_s, "fleet")] if sick_s else []),
@@ -418,13 +414,13 @@ def _cmd_statusline(hook: dict[str, Any]) -> int:
 
 
 def _swap_confession(hook: dict[str, Any]) -> str | None:
-    """THE RUG-PULL CONFESSION (operator, 2026-07-17: 'atlas got rug pulled mid
-    conversation from fable to opus, and it will have no idea until i explicitly tell
-    it'). Ported verbatim from osiris_stophook.py's own `_swap_confession` (dispatch 5441
-    LEG 1 parity fix) — pure/local, no DB round trip: reads the transcript tail directly,
-    writes a local marker under the durable anchor dir. Detects the latest mid-session
-    model change and confesses it ONCE per change. Variant suffixes ([1m]) are the same
-    weights — never a swap. Fail-open."""
+    """The rug-pull confession: an agent whose underlying model is silently swapped
+    mid-conversation has no way to know unless it's told explicitly, so this detects that
+    and surfaces it. Ported verbatim from osiris_stophook.py's own `_swap_confession`:
+    pure/local, no DB round trip. Reads the transcript tail directly, writes a local
+    marker under the durable anchor dir. Detects the latest mid-session model change and
+    confesses it once per change. Variant suffixes ([1m]) are the same weights, never a
+    swap. Fail-open."""
     transcript = str(hook.get("transcript_path") or "")
     sid = str(hook.get("session_id") or "")[:8]
     if not transcript or len(sid) < 8:
@@ -475,14 +471,14 @@ def _swap_confession(hook: dict[str, Any]) -> str | None:
 
 
 def _fire_stage_a(hook: dict[str, Any], session_id: str, cwd: str, *, pct: int | None) -> None:
-    """Best-effort, fire-and-forget courtesy ping (osiris_stophook.py's own `_stage_a`,
-    dispatch 5441 LEG 1 parity fix): self-restore mount, the leased-assignment stall
-    confession, the parked-question / practice-violation nudges, and the context_pct
-    stamp — all server-side now (`/stop`'s `stage_a` phase, `stophook_logic.
-    compute_stop_stage_a`). Called only from ALLOW paths, same law as the original:
-    confessing "stopping" on a path that ends up BLOCKED would be a lie. A failure here
-    costs a missed courtesy note, never a broken stop — this call's own result is never
-    inspected, and the route alarms on its own internal failure independently."""
+    """Best-effort, fire-and-forget courtesy ping (osiris_stophook.py's own `_stage_a`):
+    self-restore mount, the leased-assignment stall confession, the parked-question and
+    practice-violation nudges, and the context_pct stamp, all server-side now (`/stop`'s
+    `stage_a` phase, `stophook_logic.compute_stop_stage_a`). Called only from ALLOW paths,
+    same rule as the original: confessing "stopping" on a path that ends up blocked would
+    be a lie. A failure here costs a missed courtesy note, never a broken stop: this
+    call's own result is never inspected, and the route alarms on its own internal
+    failure independently."""
     _post(_URLS["stop"], {"phase": "stage_a", "cwd": cwd, "session_id": session_id,
                           "pct": pct, "payload": hook},
           timeout=_TIMEOUTS["stop_stage_a"])
@@ -490,8 +486,8 @@ def _fire_stage_a(hook: dict[str, Any], session_id: str, cwd: str, *, pct: int |
 
 def _cmd_stop(hook: dict[str, Any]) -> int:
     """Two-phase stop hook: deliverable check + offload ritual, plus the swap confession
-    and Stage A/B/C courtesy pings (dispatch 5441 LEG 1 parity fix — ported from
-    osiris_stophook.py's own `main()`, same ordering).
+    and Stage A/B/C courtesy pings (ported from osiris_stophook.py's own `main()`, same
+    ordering).
     Block markers stored as files under ~/.claude/jobs/<sid>/."""
     session_id = str(hook.get("session_id") or "")
     cwd = str(hook.get("cwd") or "")
@@ -499,12 +495,12 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         return 0
 
     if hook.get("stop_hook_active"):
-        # We already forced a continuation once this turn — never loop on unsettleable
+        # We already forced a continuation once this turn: never loop on unsettleable
         # mail (a message the agent cannot settle must never trap it a second time).
         _fire_stage_a(hook, session_id, cwd, pct=None)
         return 0
 
-    # IDENTITY OUTRANKS MAIL: a mind that changed models must know before anything else.
+    # Identity outranks mail: a mind that changed models must know before anything else.
     confession = _swap_confession(hook)
     if confession:
         print(json.dumps({"decision": "block", "reason": confession}))
@@ -519,24 +515,24 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     n = result.get("n", 0)
     window_hint = result.get("window")
 
-    # If BLOCKING mail waits, block. THE JSON DECISION PROTOCOL, NOT EXIT CODE 1 (found in
-    # the retirement's own parity proof, dispatch 5599): Claude Code's Stop/SubagentStop
-    # hooks ONLY block on exit code 2 — exit 1 is a non-blocking error, the stop proceeds
-    # anyway, silently. The proven, live osiris_stophook.py never used exit codes for this
-    # at all; it prints {"decision": "block", "reason": ...} to stdout and exits 0. The stub
-    # this replaces would never have blocked a single stop in production. Message text and
-    # the bands/senders/project shape are ported verbatim from that script's own `main()`.
+    # If blocking mail waits, block. This uses the JSON decision protocol, not exit
+    # code 1: Claude Code's Stop/SubagentStop hooks only block on exit code 2, exit 1 is
+    # a non-blocking error and the stop proceeds anyway, silently. The proven, live
+    # osiris_stophook.py never used exit codes for this at all; it prints
+    # {"decision": "block", "reason": ...} to stdout and exits 0. The stub this replaces
+    # would never have blocked a single stop in production. Message text and the
+    # bands/senders/project shape are ported verbatim from that script's own `main()`.
     #
-    # THE STOP-BLOCK IS RESERVED FOR grade='ask' (+ UNGRADED) (obligation 6ad2f400, msg
-    # 6029, Thoth LXXXVIII): dispatch #151's own grammar already says "an fyi never wakes
-    # anyone, it settles at each reader's own next turn" — the send half honours that, but
-    # this gate used to fold ask/fyi/ungraded into one undifferentiated `n > 0`, so an fyi
-    # that explicitly promises not to interrupt still blocked Stop anyway (Soundwave XV's
-    # complaint, msg 5996: a context switch out of a live measurement, four times in a day).
-    # `blocking` subtracts ONLY the counted fyi band — ungraded mail is never guessed as fyi
-    # and keeps blocking (#151's own law: ungraded mail is never assumed). fyi mail is not
-    # consumed here — it stays unread and still surfaces via inbox()/orient() at the reader's
-    # own next turn; this gate only decides whether Stop itself is interrupted.
+    # The stop-block is reserved for grade='ask' (plus ungraded): an fyi message never
+    # wakes anyone, it settles at each reader's own next turn, and the send side already
+    # honours that, but this gate used to fold ask/fyi/ungraded into one undifferentiated
+    # `n > 0`, so an fyi that explicitly promises not to interrupt still blocked Stop
+    # anyway (interrupting a live measurement mid-task, repeatedly, in a single day).
+    # `blocking` subtracts only the counted fyi band: ungraded mail is never guessed as
+    # fyi and keeps blocking (ungraded mail is never assumed to be low priority). fyi
+    # mail is not consumed here: it stays unread and still surfaces via inbox()/orient()
+    # at the reader's own next turn; this gate only decides whether Stop itself is
+    # interrupted.
     bands = result.get("bands") or {}
     blocking = n - int(bands.get("fyi", 0))
     if blocking > 0:
@@ -562,13 +558,13 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         }))
         return 0
 
-    # NO-REGROW HYGIENE ITEM 2 (practice 393be453, operator ruling 2026-09-06): every open
-    # kind='obligation' Thread THIS session's own identity owns, past its stale_after window
-    # (default 14 days from open), blocks Stop as a NAMED ask — the same severity an unread
-    # ask message carries, never a bare count (that's exactly what this replaces: a pile
-    # that regrows silently because nobody's own stop ever names it to them). Checked only
-    # once the mail gate above is clear — an owner already blocked on mail sees that first,
-    # never two competing blocks in the same turn.
+    # No-regrow hygiene: every open kind='obligation' Thread this session's own identity
+    # owns, past its stale_after window (default 14 days from open), blocks Stop as a
+    # named ask, the same severity an unread ask message carries, never a bare count
+    # (that's exactly what this replaces: a pile that regrows silently because nobody's
+    # own stop ever names it to them). Checked only once the mail gate above is clear: an
+    # owner already blocked on mail sees that first, never two competing blocks in the
+    # same turn.
     stale = result.get("stale_obligations") or []
     if stale:
         named = "; ".join(f"{o['id']} ({o['stale_days']}d overdue): {o['summary']!r}"
@@ -583,18 +579,18 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         }))
         return 0
 
-    # Context occupancy — via THE authority (context_lens.last_usage/occupancy/window_for),
-    # never a second, independently-drifting tail-parse. Found in the retirement's own
-    # parity proof (dispatch 5599): a hand-rolled reimplementation here had no concept of
-    # an ASSUMED window at all — osiris_stophook.py's own `_offload_pct` NEVER alarms on an
-    # unknown or assumed window (the Anubis VII false-eulogy law), and a reimplementation
-    # that silently guesses "200000 or 1000000" instead of tracking the guess can alarm
-    # exactly where the live script's own safety law forbids it.
+    # Context occupancy via the single authority (context_lens.last_usage/occupancy/
+    # window_for), never a second, independently-drifting tail-parse. A hand-rolled
+    # reimplementation here previously had no concept of an assumed window at all:
+    # osiris_stophook.py's own `_offload_pct` never alarms on an unknown or assumed
+    # window, and a reimplementation that silently guesses "200000 or 1000000" instead of
+    # tracking the guess can alarm exactly where the live script's own safety rule
+    # forbids it.
     pct, window_assumed = _offload_pct(hook, window_hint)
     good_pct = pct if (pct is not None and not window_assumed) else None
     if pct is None or window_assumed or pct < ALARM_PCT:
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
-        return 0  # never alarms on an unknown/assumed window or below the line
+        return 0  # never alarms on an unknown or assumed window, or below the line
 
     # Block marker state (Claude-specific paths)
     sid8 = session_id[:8]
@@ -605,11 +601,11 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
     soft_exists = _marker_live(soft, transcript_for_life)
     hard_exists = _marker_live(hard, transcript_for_life)
 
-    # SELF-COMPACTION COMES BEFORE THE NUDGE SHORT-CIRCUITS (ruling a3fb7c11; caught live on
-    # the first acceptance run, 2026-09-06: the body settled after the soft nudge, ended its
-    # turn, and the hook returned at "soft already fired" without re-checking the boxes, so
-    # the seam never came). Once every box is complete the ritual is DONE — the markers
-    # below only govern how often to nag a body that has NOT settled.
+    # Self-compaction comes before the nudge short-circuits: caught live on the first
+    # acceptance run, where the body settled after the soft nudge, ended its turn, and the
+    # hook returned at "soft already fired" without re-checking the boxes, so the
+    # compaction never came. Once every box is complete the ritual is done; the markers
+    # below only govern how often to nag a body that has not settled.
     if _self_compact_ready(session_id, cwd, marker_dir, pct, transcript=transcript_for_life):
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
         return 0
@@ -619,7 +615,7 @@ def _cmd_stop(hook: dict[str, Any]) -> int:
         return 0  # soft already fired, below hard line
     if soft_exists and hard_exists:
         _fire_stage_a(hook, session_id, cwd, pct=good_pct)
-        return 0  # both already fired — never loop
+        return 0  # both already fired, never loop
 
     # Phase 2: offload box check
     resp2 = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd,
@@ -667,7 +663,7 @@ def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct:
     complete (the caller stops nagging), False otherwise (the caller keeps its ritual)."""
     try:
         from src.orchestrator.context_lens import SELF_COMPACT_PCT
-    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+    except Exception:  # noqa: BLE001, the hook never breaks on an import
         return False
     if pct < SELF_COMPACT_PCT:
         return False
@@ -687,14 +683,14 @@ def _self_compact_ready(session_id: str, cwd: str, marker_dir: Path | None, pct:
 
 def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int,
                        *, transcript: str = "") -> None:
-    """SELF-COMPACTION (operator ruling a3fb7c11, 2026-09-06): reached ONLY from the branch
-    where every offload box is complete — settle first, then the seam. Asks the server's
-    self_compact phase, which injects /compact into THIS session's own daemon job, at most
-    once per session (marker file), and only at or past SELF_COMPACT_PCT. Never blocks the
-    stop: the compaction is the daemon's next turn, not this hook's decision."""
+    """Self-compaction: reached only from the branch where every offload box is complete,
+    settle first, then compact. Asks the server's self_compact phase, which injects
+    /compact into this session's own daemon job, at most once per session (marker file),
+    and only at or past SELF_COMPACT_PCT. Never blocks the stop: the compaction is the
+    daemon's next turn, not this hook's decision."""
     try:
         from src.orchestrator.context_lens import SELF_COMPACT_PCT
-    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+    except Exception:  # noqa: BLE001, the hook never breaks on an import
         return
     if pct < SELF_COMPACT_PCT:
         return
@@ -714,7 +710,7 @@ def _self_compact_once(session_id: str, marker_dir: Path | None, pct: int,
 
 def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
     """Context occupancy from the last assistant usage block in a JSONL transcript.
-    Stdlib-only tail read — no asyncio, no asyncpg."""
+    Stdlib-only tail read, no asyncio, no asyncpg."""
     if not transcript_path:
         return None
     try:
@@ -750,14 +746,16 @@ def _context_pct(transcript_path: str, window_hint: int | None) -> int | None:
 
 
 def _offload_pct(hook: dict[str, Any], window_hint: int | None) -> tuple[int | None, bool]:
-    """Occupancy %% for the offload gate specifically — ported verbatim from
-    osiris_stophook.py's own `_offload_pct`, off THE authority's own primitives
+    """Occupancy %% for the offload gate specifically, ported verbatim from
+    osiris_stophook.py's own `_offload_pct`, off the single authority's own primitives
     (context_lens.last_usage/occupancy/window_for), never `_context_pct`'s hand-rolled
-    tail-parse above (that one is statusline's ambient display, low-stakes if slightly
-    off; this one gates a real block and must track whether the window was ASSUMED —
-    `_cmd_stop` never alarms on an assumed window, the same law the original names).
-    (pct, window_assumed); (None, True) — "nothing to read, never alarm" — on any import
-    or read failure, exactly the fail-open floor the rest of this file holds to."""
+    tail-parse above (that one is the statusline's ambient display, low-stakes if
+    slightly off; this one gates a real block and must track whether the window was
+    assumed, since `_cmd_stop` never alarms on an assumed window, the same rule the
+    original follows).
+    Returns (pct, window_assumed); (None, True) means "nothing to read, never alarm" on
+    any import or read failure, exactly the fail-open floor the rest of this file holds
+    to."""
     if _cl_last_usage is None or _cl_occupancy is None or _cl_window_for is None:
         return None, True
     transcript = str(hook.get("transcript_path") or "")
@@ -776,31 +774,29 @@ def _offload_pct(hook: dict[str, Any], window_hint: int | None) -> tuple[int | N
 
 
 def _missing_boxes(boxes: dict[str, Any]) -> list[str]:
-    """ONE AUTHORITY (found in the retirement's own parity proof, dispatch 5599): this used
-    to be a hand-rolled reimplementation with its own friendlier name_map, drifting from
-    `src.orchestrator.settle.missing_boxes` — the SAME pure function both /settle's own
-    confirm step and osiris_stophook.py's own offload verdict already share. Delegates
-    instead of re-deriving; fails open to the empty list (never blocks) if settle.py can't
-    be imported at all."""
+    """A single authority: this used to be a hand-rolled reimplementation with its own
+    friendlier name_map, drifting from `src.orchestrator.settle.missing_boxes`, the same
+    pure function both /settle's own confirm step and osiris_stophook.py's own offload
+    verdict already share. Delegates instead of re-deriving; fails open to the empty list
+    (never blocks) if settle.py can't be imported at all."""
     try:
         from src.orchestrator.settle import missing_boxes
-    except Exception:  # noqa: BLE001 — fail-open: a hook must never crash the harness
+    except Exception:  # noqa: BLE001, fail-open: a hook must never crash the harness
         return []
     return missing_boxes(boxes)
 
 
 def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
     """Turn automount()'s JSON payload into the one paragraph printed to stdout. Ported
-    verbatim from osiris_whisper.py (dispatch 5441/5492 parity fix — found live, the same
-    day as the flip, alongside the statusline gap: `/automount` has only ever returned
-    automount()'s own raw structured output, never a rendered "intro"/"message" string;
-    this rendering has always been, and remains, the caller's job). Pure — no I/O, no
-    clock, no env reads beyond the two args.
+    verbatim from osiris_whisper.py: `/automount` has only ever returned automount()'s own
+    raw structured output, never a rendered "intro"/"message" string; this rendering has
+    always been, and remains, the caller's job. Pure, no I/O, no clock, no env reads
+    beyond the two args.
 
-    MECHANICAL SEAT MOUNT (thread dae06a32) is the ONE short-circuit: a body dropped into
-    a project tree that declared its own seat gets told exactly one sentence, never the
-    normal glance (mail/pulse/obligations) a deliberately passive body has no business
-    reading — "do nothing until spoken to" is the whole point."""
+    The mechanical seat mount is the one short-circuit: a body dropped into a project
+    tree that declared its own seat gets told exactly one sentence, never the normal
+    glance (mail/pulse/obligations) a deliberately passive body has no business reading.
+    "Do nothing until spoken to" is the whole point."""
     msm = out.get("mechanical_seat_mount")
     if msm:
         return (f"◈ OSIRIS — you are {msm['handle']}, mounted in {out.get('project') or '?'}, "
@@ -923,19 +919,19 @@ def render_whisper(out: dict[str, Any], *, cwd: str, env_job: str) -> str:
 
 
 def _is_bg_spare_process() -> bool:
-    """Is THIS hook invocation running under a `claude bg-spare` pre-warmed body? (task
-    #204/msg 6997, Thoth's own live trace: pid 2979241, cmdline `claude bg-spare --bg-
-    spare .../claim.sock`, cwd the bare container root, zero turns ever, its own
-    heartbeat refreshing agent_mounts every few minutes — a harness pre-fork with no
-    conversation, no identity to mint, that whisper minted anyway.) A hook subprocess is
-    a DIRECT CHILD of the harness process that spawned it (confirmed live: the spare's
+    """Is THIS hook invocation running under a `claude bg-spare` pre-warmed body? Found
+    live in a trace: cmdline `claude bg-spare --bg-spare .../claim.sock`, cwd the bare
+    container root, zero turns ever, its own heartbeat refreshing agent_mounts every few
+    minutes, a harness pre-fork with no conversation and no identity to mint, that the
+    SessionStart auto-mount message was minting an identity for anyway. A hook subprocess
+    is a direct child of the harness process that spawned it (confirmed live: the spare's
     own MCP-server child sits at the identical process-tree depth a hook subprocess
-    would) — `os.getppid()`'s own cmdline is that harness process's real argv, the same
+    would); `os.getppid()`'s own cmdline is that harness process's real argv, the same
     fact `ps` reads, no JSON payload marker needed (SessionStart's stdin schema carries
-    none). FAIL-OPEN, same discipline as every other check in this file: `/proc` absent
-    (non-Linux) or unreadable (permissions, a already-reaped parent) reads as "not a
-    spare" — a hook that cannot tell must never itself become the reason a real session's
-    whisper goes missing."""
+    none). Fail-open, same discipline as every other check in this file: `/proc` absent
+    (non-Linux) or unreadable (permissions, an already-reaped parent) reads as "not a
+    spare": a hook that cannot tell must never itself become the reason a real session's
+    auto-mount message goes missing."""
     try:
         cmdline = Path(f"/proc/{os.getppid()}/cmdline").read_bytes()
     except OSError:
@@ -944,21 +940,21 @@ def _is_bg_spare_process() -> bool:
 
 
 def _cmd_whisper(hook: dict[str, Any]) -> int:
-    """Ported from osiris_whisper.py's own `main()` (dispatch 5441/5492 parity fix): the
-    old script built its /automount POST body from several OS ENVIRONMENT variables the
-    harness's stdin JSON never carries at all — the attach ceremony (a spawned session's
-    seat binding at birth), the wake-orphan cure (declared parentage), and the background-
-    job bridge's own continuity id. Posting the raw stdin `hook` dict alone (the shape this
-    function used to have) silently dropped all three for every session since the flip —
-    a structural continuity gap, not merely a missing banner.
+    """Ported from osiris_whisper.py's own `main()`: the old script built its /automount
+    POST body from several OS environment variables the harness's stdin JSON never
+    carries at all: the seat-attach step at spawn (a spawned session's seat binding at
+    birth), the wake-orphan cure (declared parentage), and the background-job bridge's
+    own continuity id. Posting the raw stdin `hook` dict alone (the shape this function
+    used to have) silently dropped all three for every session that used it, a structural
+    continuity gap, not merely a missing banner.
 
     A `claude bg-spare` pre-warmed body's own SessionStart fires exactly like a real
-    session's — the harness cannot tell them apart at that layer either — but it has NO
-    conversation, ever, until claimed (task #204, Thoth msg 6997): `_is_bg_spare_process`
-    refuses to mint or mount it at all, matching handshake.py's own "a heartbeat must be
-    earned by an act, never granted by a greeting" law one layer earlier than that law
-    could otherwise apply (a spare's own automount call was reaching the server and
-    minting a real, false_mint-flagged generation before this check existed)."""
+    session's (the harness cannot tell them apart at that layer either), but it has no
+    conversation, ever, until claimed: `_is_bg_spare_process` refuses to mint or mount it
+    at all, matching handshake.py's own rule that a heartbeat must be earned by an act,
+    never granted by a greeting, one layer earlier than that rule could otherwise apply
+    (a spare's own automount call was reaching the server and minting a real,
+    false_mint-flagged generation before this check existed)."""
     if _is_bg_spare_process():
         return 0
     session_id = str(hook.get("session_id") or "")
@@ -999,11 +995,12 @@ def _cmd_whisper(hook: dict[str, Any]) -> int:
 
 def _log_post(label: str, url: str, resp: Any | None) -> None:
     """Restores the retired per-purpose scripts' own stderr diagnostic (osiris_sessionend.py/
-    osiris_precompact.py/osiris_spawn.py each logged "posted {url} — connected/failed" on
-    every attempt) — found genuinely lost in the parity proof (dispatch 5599): `_post`'s
-    shared helper swallows the outcome silently, and unlike whisper (which prints a
-    user-visible fallback on failure), these three had no replacement at all. Not a network
-    round trip of its own — just the diagnostic line the old scripts always emitted."""
+    osiris_precompact.py/osiris_spawn.py each logged a "posted {url}: connected/failed"
+    line on every attempt); this was genuinely lost when they were merged into one file:
+    `_post`'s shared helper swallows the outcome silently, and unlike the auto-mount hook
+    (which prints a user-visible fallback on failure), these three had no replacement at
+    all. Not a network round trip of its own, just the diagnostic line the old scripts
+    always emitted."""
     print(f"{label}: posted {url} — {'connected' if resp is not None else 'failed'}",
           file=sys.stderr)
 
@@ -1022,11 +1019,11 @@ _LIFE_MARKERS = (".osiris_offload_blocked", ".osiris_offload_blocked_hard",
 
 
 def _last_compaction_epoch(transcript: str, *, tail_bytes: int = 8_000_000) -> float | None:
-    """Epoch seconds of the transcript's LAST compact_boundary, or None when the tail holds
+    """Epoch seconds of the transcript's last compact_boundary, or None when the tail holds
     none. A background session keeps one session id, and so one job dir, across every
-    compaction (Seshat 8407756e: a soft-nudge marker dated 2026-08-23 muted every nudge of
-    the body living there on 2026-09-07). A marker is a fact about ONE life; anything older
-    than the last boundary belongs to a dead one."""
+    compaction: a live case showed a soft-nudge marker written weeks earlier muting every
+    nudge for the body then living there. A marker is a fact about one life; anything
+    older than the last boundary belongs to a dead one."""
     if not transcript:
         return None
     try:
@@ -1085,14 +1082,14 @@ def _clear_life_markers(marker_dir: Path | None) -> None:
             pass
 
 
-# --- settle-gate (PreToolUse) + the PreCompact fallback — THE MECHANICAL SETTLE (#93,
-# operator ruling 2026-09-17, narrows a3fb7c11: "settle always runs before the compact
-# injection, not as an art or a discipline, but a mechanical mandate"). Once context is at
-# or past MECHANICAL_SETTLE_PCT and no complete settle exists since, every tool call is
-# refused except the handful that can actually CLOSE that gap — never left to a body's own
-# discipline under pressure. If compaction still arrives unsettled anyway (the gate missed
-# it, or fired too late), PreCompact mints a MACHINE handoff marker as a last resort: a
-# pointer for the successor, never a substitute for the board a real settle() would leave.
+# --- settle-gate (PreToolUse) + the PreCompact fallback: the mechanical settle. Settle
+# must always run before the compact injection, enforced mechanically rather than left to
+# discipline. Once context is at or past MECHANICAL_SETTLE_PCT and no complete settle
+# exists since, every tool call is refused except the handful that can actually close
+# that gap, never left to a body's own discipline under pressure. If compaction still
+# arrives unsettled anyway (the gate missed it, or fired too late), PreCompact mints a
+# machine handoff marker as a last resort: a pointer for the successor, never a
+# substitute for the board a real settle() would leave.
 
 _SETTLE_GATE_ALLOWLIST = frozenset({
     "mcp__osiris__settle", "mcp__osiris__record_decision", "mcp__osiris__open_thread",
@@ -1108,8 +1105,8 @@ def _call_log_path(session_id: str) -> Path | None:
 
 
 def _append_call_log(session_id: str, tool_name: str) -> None:
-    """Every PreToolUse fire, allow or refuse, gate crossed or not — the PreCompact
-    fallback below needs the session's REAL recent activity, not just what happened
+    """Every PreToolUse fire, allow or refuse, gate crossed or not: the PreCompact
+    fallback below needs the session's real recent activity, not just what happened
     after the line was crossed. Best-effort: never blocks a tool call over a log write."""
     path = _call_log_path(session_id)
     if path is None:
@@ -1134,11 +1131,11 @@ def _read_call_log(session_id: str) -> list[str]:
 
 
 def _settle_boxes_now(cwd: str, session_id: str) -> dict[str, Any] | None:
-    """The SAME `/stop` `phase='offload'` round trip `_self_compact_ready` already POSTs
-    (settle_boxes under the hood) — no new server route, no persisted flag: a settle is
+    """The same `/stop` `phase='offload'` round trip `_self_compact_ready` already POSTs
+    (settle_boxes under the hood): no new server route, no persisted flag. A settle is
     "complete" exactly when its own boxes read empty right now, the live definition
     settle() itself uses, never a second, independently-drifting notion of "settled".
-    None on any probe trouble — the caller decides how to fail, never guessed here."""
+    None on any probe trouble; the caller decides how to fail, never guessed here."""
     resp = _post(_URLS["stop"], {"phase": "offload", "cwd": cwd, "session_id": session_id},
                  timeout=_TIMEOUTS["settle_gate"])
     if resp is None or resp.get("error"):
@@ -1149,10 +1146,10 @@ def _settle_boxes_now(cwd: str, session_id: str) -> dict[str, Any] | None:
 
 def _gate_context_pct(hook: dict[str, Any]) -> int | None:
     """Prefer the harness's own figure when PreToolUse carries one (unconfirmed whether
-    it always does — this is the fallback-first, not fallback-only, so either way is
-    covered); else derive the same way `_cmd_stop`'s own alarm gate does — via context_
-    lens's own primitives, NEVER alarming on an assumed window (a guessed window is not
-    a real measurement to hard-block a whole session over)."""
+    it always does, so this tries that first rather than relying on it exclusively,
+    covering either case); else derive the same way `_cmd_stop`'s own alarm gate does, via
+    context_lens's own primitives, never alarming on an assumed window (a guessed window
+    is not a real measurement to hard-block a whole session over)."""
     cw = hook.get("context_window")
     if isinstance(cw, dict):
         raw = cw.get("used_percentage")
@@ -1164,8 +1161,8 @@ def _gate_context_pct(hook: dict[str, Any]) -> int | None:
 
 def _cmd_settle_gate(hook: dict[str, Any]) -> int:
     """PreToolUse filter. Logs every call, allow or refuse; refuses non-allowlisted tools
-    once past MECHANICAL_SETTLE_PCT with no complete settle since. Fails OPEN on every
-    kind of trouble (no tool name, no import, a probe failure, an unmeasurable context) —
+    once past MECHANICAL_SETTLE_PCT with no complete settle since. Fails open on every
+    kind of trouble (no tool name, no import, a probe failure, an unmeasurable context):
     a missed refusal costs nothing new; a wrong one would freeze a session on a hook
     glitch, exactly the failure this whole file's own module docstring forbids."""
     tool_name = str(hook.get("tool_name") or "")
@@ -1180,14 +1177,14 @@ def _cmd_settle_gate(hook: dict[str, Any]) -> int:
             return 0
     try:
         from src.orchestrator.context_lens import MECHANICAL_SETTLE_PCT
-    except Exception:  # noqa: BLE001 — the hook never breaks on an import
+    except Exception:  # noqa: BLE001, the hook never breaks on an import
         return 0
     pct = _gate_context_pct(hook)
     if pct is None or pct < MECHANICAL_SETTLE_PCT:
         return 0
     boxes = _settle_boxes_now(str(hook.get("cwd") or ""), session_id)
     if boxes is None or not _missing_boxes(boxes):
-        return 0  # settled, or unmeasurable — same fail-open floor `_missing_boxes` holds
+        return 0  # settled, or unmeasurable, same fail-open floor `_missing_boxes` holds
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": "deny",
@@ -1199,10 +1196,10 @@ def _cmd_settle_gate(hook: dict[str, Any]) -> int:
 
 
 def _git_status_porcelain(repo_dir: str, *, timeout_s: float = 2.0) -> str:
-    """Same subprocess shape as `src.orchestrator.settle.uncommitted_git_work` — a
+    """Same subprocess shape as `src.orchestrator.settle.uncommitted_git_work`, a
     direct call here rather than importing that DB-flavored module into a stdlib-only
     script for one subprocess line. Empty string on any trouble (not a git repo, no
-    such path, a timeout) — the fallback marker still mints without it."""
+    such path, a timeout); the fallback marker still mints without it."""
     if not repo_dir:
         return ""
     try:
@@ -1215,15 +1212,14 @@ def _git_status_porcelain(repo_dir: str, *, timeout_s: float = 2.0) -> str:
 
 
 def _mint_machine_handoff(hook: dict[str, Any], boxes: dict[str, Any]) -> None:
-    """THE LAST RESORT (#93 item 2): compaction is about to destroy this session's own
-    context and no complete settle happened first — mint a pointer for the successor
-    anyway, tagged plainly as machine-assembled so nobody mistakes it for a mind's own
-    judgment. Built from what a stdlib-only script CAN actually see without a DB/MCP
-    client: which boxes are still missing, `git status --porcelain` of the governed
-    repo, and the session's own last 10 tool calls (`_append_call_log`'s own log) — never
-    a re-listing of this session's decisions/threads verbatim, which would need the graph
-    itself. Best-effort throughout: a failure here costs a missing pointer, never a
-    crashed hook."""
+    """The last resort: compaction is about to destroy this session's own context and no
+    complete settle happened first, so mint a pointer for the successor anyway, tagged
+    plainly as machine-assembled so nobody mistakes it for a mind's own judgment. Built
+    from what a stdlib-only script can actually see without a DB/MCP client: which boxes
+    are still missing, `git status --porcelain` of the governed repo, and the session's
+    own last 10 tool calls (`_append_call_log`'s own log), never a re-listing of this
+    session's decisions/threads verbatim, which would need the graph itself. Best-effort
+    throughout: a failure here costs a missing pointer, never a crashed hook."""
     session_id = str(hook.get("session_id") or "")
     cwd = str(hook.get("cwd") or "")
     missing = _missing_boxes(boxes)
@@ -1261,11 +1257,12 @@ def _cmd_precompact(hook: dict[str, Any]) -> int:
                            "trigger": str(hook.get("trigger") or "")},
                      timeout=_TIMEOUTS["precompact"])
         _log_post("osiris_hook.precompact", url, resp)
-    # #93 item 2, THE FALLBACK: if a complete settle never happened this session, mint the
-    # machine handoff before the compaction that's about to destroy this context. A probe
-    # failure (boxes is None) is treated as "cannot confirm settled" — mint anyway, since
-    # staying silent on an unmeasurable state is exactly the gap this fallback exists to
-    # close, and a redundant handoff costs nothing a real one wouldn't have superseded.
+    # The fallback: if a complete settle never happened this session, mint the machine
+    # handoff before the compaction that's about to destroy this context. A probe
+    # failure (boxes is None) is treated as "cannot confirm settled", so mint anyway,
+    # since staying silent on an unmeasurable state is exactly the gap this fallback
+    # exists to close, and a redundant handoff costs nothing a real one wouldn't have
+    # superseded.
     boxes = _settle_boxes_now(str(hook.get("cwd") or ""), str(hook.get("session_id") or ""))
     if boxes is None or _missing_boxes(boxes):
         _mint_machine_handoff(hook, boxes or {})
@@ -1289,11 +1286,11 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     url = _URLS["spawn"]
     resp = _post(url, body, timeout=_TIMEOUTS["spawn"])
     _log_post("osiris_hook.spawn", url, resp)
-    # TELL THE FORK, AT SPAWN (obligation 706c27dc's second half, msg 6034): SubagentStart is
-    # NOT in Claude Code's plain-stdout-as-context exception list (that's SessionStart/
-    # UserPromptSubmit/UserPromptExpansion/PostModelSwitch only) — a fork only ever sees this
-    # if it's shaped as the documented hookSpecificOutput.additionalContext JSON, so this is
-    # the one place in the whole client that emits that shape rather than plain text.
+    # Tell the fork at spawn: SubagentStart is not in Claude Code's plain-stdout-as-context
+    # exception list (that's SessionStart/UserPromptSubmit/UserPromptExpansion/
+    # PostModelSwitch only), so a fork only ever sees this if it's shaped as the
+    # documented hookSpecificOutput.additionalContext JSON. This is the one place in the
+    # whole client that emits that shape rather than plain text.
     if is_start and resp is not None:
         out = resp.get("result") if isinstance(resp.get("result"), dict) else resp
         ctx = out.get("fork_orientation") if isinstance(out, dict) else None
@@ -1303,10 +1300,10 @@ def _cmd_spawn(hook: dict[str, Any]) -> int:
     return 0
 
 
-# tools whose server signature accepts the spawn stamp — keep in lockstep with mcp_server.
-# Ported verbatim from osiris_mount_anchor.py (dispatch 5441/5492 parity fix, the anchor
-# CHANNEL check): the retired script's own tests/test_anchor.py AST-scan guard (obligation
-# 570dd7e8) still enforces this set against mcp_server.py's real `_actor_for` call sites.
+# tools whose server signature accepts the spawn stamp, kept in lockstep with mcp_server.
+# Ported verbatim from osiris_mount_anchor.py (the anchor channel check): the retired
+# script's own tests/test_anchor.py AST-scan guard still enforces this set against
+# mcp_server.py's real `_actor_for` call sites.
 _SPAWN_AWARE = {
     "mcp__osiris__mount", "mcp__osiris__orient", "mcp__osiris__record_decision",
     "mcp__osiris__open_thread", "mcp__osiris__resolve_thread", "mcp__osiris__hold_tension",
@@ -1319,7 +1316,7 @@ _SPAWN_AWARE = {
     "mcp__osiris__correct_thread_summary", "mcp__osiris__stop",
 }
 
-# tools whose server signature accepts `session_anchor` — ported verbatim, same source.
+# tools whose server signature accepts `session_anchor`, ported verbatim, same source.
 _ANCHOR_AWARE = {
     "mcp__osiris__orient", "mcp__osiris__inbox", "mcp__osiris__send",
     "mcp__osiris__record_decision", "mcp__osiris__open_thread", "mcp__osiris__resolve_thread",
@@ -1328,19 +1325,19 @@ _ANCHOR_AWARE = {
 
 
 def _cmd_anchor(hook: dict[str, Any]) -> int:
-    """PreToolUse stdin filter — inject session_anchor and spawn stamps.
-    This is a FILTER: reads stdin, modifies tool_input, writes to stdout.
+    """PreToolUse stdin filter: inject session_anchor and spawn stamps.
+    This is a filter: reads stdin, modifies tool_input, writes to stdout.
 
-    Ported verbatim from osiris_mount_anchor.py (the anchor CHANNEL check, dispatch 5441/
-    5492): the original stub here only stamped a raw session_id onto every osiris call,
-    unconditionally and ungated — missing the job_dir DERIVATION (the actual fix for "the
-    most-reported bug in the fleet"), the ANCHOR_AWARE/SPAWN_AWARE gating (an ungated stamp
-    onto a tool whose schema doesn't accept the field fails validation LOUDER than the bug
-    it fixes), the MAIN-session strip (nobody masquerades DOWN as a spawn), the tab-view/
-    bridge doors (transcript_path, CLAUDE_CODE_BRIDGE_SESSION_ID — a live env read the old
-    stub dropped entirely, the same CHANNEL-class gap already found in whisper/statusline),
-    and the foreign-anchor respect (session_anchor, not job_dir clobber, when the agent
-    already supplied its own valid job_dir).
+    Ported verbatim from osiris_mount_anchor.py (the anchor channel check): the original
+    stub here only stamped a raw session_id onto every osiris call, unconditionally and
+    ungated. It was missing the job_dir derivation (the actual fix for the most commonly
+    reported bug across the fleet), the ANCHOR_AWARE/SPAWN_AWARE gating (an ungated stamp
+    onto a tool whose schema doesn't accept the field fails validation louder than the bug
+    it fixes), the main-session strip (nobody masquerades down as a spawn), the tab-view
+    and bridge inputs (transcript_path, CLAUDE_CODE_BRIDGE_SESSION_ID, a live env read the
+    old stub dropped entirely, the same class of gap already found in the auto-mount and
+    statusline hooks), and the foreign-anchor respect (session_anchor, not job_dir clobber,
+    when the agent already supplied its own valid job_dir).
     """
     tool = str(hook.get("tool_name") or "")
     if not tool.startswith("mcp__osiris__"):
@@ -1404,32 +1401,32 @@ def _cmd_anchor(hook: dict[str, Any]) -> int:
     return 0
 
 
-# --- read (UserPromptSubmit) — THE ZERO-TOKEN READ HOOK (operator: "some of the slash
-# commands should not go through the agent, when they can just be rendered into the
-# screen", Thoth mail 11780 item B). A bare slash command that only ever READS gets
-# rendered here, server-rendered text, and never reaches the model at all — `decision:
-# block` (the same JSON protocol `_cmd_stop` already uses) with the rendered text as the
-# `reason` shows it on screen and costs zero tokens. Anything else (an argument that
-# implies an act, an unmatched verb, a CLI door that doesn't exist yet on this machine,
-# any subprocess trouble) falls through silently — return 0 with no output, exactly the
-# same as no hook fired at all, so the model handles it the ordinary way.
+# --- read (UserPromptSubmit): the zero-token read hook. Some slash commands are pure
+# reads and don't need to go through the model at all when they can just be rendered
+# straight to the screen. A bare slash command that only ever reads gets rendered here,
+# server-rendered text, and never reaches the model at all: `decision: block` (the same
+# JSON protocol `_cmd_stop` already uses) with the rendered text as the `reason` shows it
+# on screen and costs zero tokens. Anything else (an argument that implies an act, an
+# unmatched verb, a CLI door that doesn't exist yet on this machine, any subprocess
+# trouble) falls through silently, returning 0 with no output, exactly the same as no
+# hook fired at all, so the model handles it the ordinary way.
 #
-# SHELLS OUT to the already-installed `osiris` console script rather than importing the
+# Shells out to the already-installed `osiris` console script rather than importing the
 # MCP client here: this file is deliberately stdlib-only (module docstring, "zero cold
-# connections") and `call_mcp_tool` needs the `mcp` package + an event loop, the exact
+# connections") and `call_mcp_tool` needs the `mcp` package plus an event loop, the exact
 # weight the whole hook-unification effort exists to avoid paying on every keystroke.
-# `osiris <verb> --text` is a SEPARATE, already-venv'd process (same "statusline needs
-# the venv" shape `_hook_command(..., venv=True)` already uses elsewhere) -- cheap
-# relative to a model turn, not free, which is why the matcher below refuses anything
-# that isn't a bare, unambiguous read before ever spawning it.
+# `osiris <verb> --text` is a separate, already-venv'd process (the same pattern the
+# statusline hook uses elsewhere), cheap relative to a model turn, not free, which is why
+# the matcher below refuses anything that isn't a bare, unambiguous read before ever
+# spawning it.
 
 _OSIRIS_BIN = os.environ.get("OSIRIS_CLI_BIN", "osiris")
 
 # verb -> (cli subcommand, needs_project). needs_project verbs read `OSIRIS_HOOK_PROJECT`
 # from the environment (baked into the wired hook command at onboarding time, `merge_
-# settings(..., reads=True, project=<name>)` — a per-repo settings.json is tied to one
-# project by definition, so this is resolved once, not guessed per-invocation) and fall
-# through when it's unset, rather than ever guessing a project from cwd.
+# settings(..., reads=True, project=<name>)`, since a per-repo settings.json is tied to
+# one project by definition, so this is resolved once, not guessed per-invocation) and
+# fall through when it's unset, rather than ever guessing a project from cwd.
 _READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
     "status": ("status", False),
     "backlog": ("backlog", False),
@@ -1438,25 +1435,24 @@ _READ_HOOK_VERBS: dict[str, tuple[str, bool]] = {
     "team": ("team", False),
     "search": ("search", False),
     "recall": ("show", False),
-    # `osiris inspect` (Khnum's own fan-out aggregator, WAVE 27 PARITY GAPS 2/5/6) landed
-    # on main in fc2eea19 — served off the real aggregator now (dossier + whatever
-    # --events/--chain/--candidates flags the caller's own args ask for would need, but
-    # this hook is bare-ref-only like every other ref-taking door below, so it always
-    # serves the dossier-only form; a flagged inspect falls through to the model same as
-    # any other unrecognized arg, per the bare-only discipline in `_cmd_read`).
+    # `osiris inspect` is served off the real fan-out aggregator now (dossier plus
+    # whatever --events/--chain/--candidates flags the caller's own args ask for would
+    # need, but this hook is bare-ref-only like every other ref-taking door below, so it
+    # always serves the dossier-only form; a flagged inspect falls through to the model
+    # same as any other unrecognized arg, per the bare-only discipline in `_cmd_read`).
     "inspect": ("inspect", False),
     "digest": ("digest", False),
     "mail": ("inbox", True),
     "desk": ("desk", False),
-    # `osiris practices` (Khnum's own CLI door, same branch/commit as `inspect` above) is
-    # also not yet on main -- served here anyway, on purpose: a subprocess call to an
-    # unrecognized subcommand exits nonzero, which `_cmd_read` already treats as a clean
-    # fall-through (see below), so this starts working the instant that branch merges,
-    # with no further change needed here.
+    # `osiris practices` is served here on the same basis as `inspect` above: a
+    # subprocess call to an unrecognized subcommand exits nonzero, which `_cmd_read`
+    # already treats as a clean fall-through (see below), so this keeps working whether
+    # or not the CLI subcommand exists yet on a given machine, with no further change
+    # needed here.
     "practices": ("practices", False),
 }
 
-# arguments that imply an ACT rather than a read — never served by the hook, always falls
+# arguments that imply an act rather than a read, never served by the hook, always falls
 # through to the model. Deliberately generous (a false positive here just costs one
 # ordinary model turn; a false negative would silently hide a real mutation from view).
 _ACT_WORDS = frozenset({
@@ -1560,7 +1556,7 @@ def main() -> int:
         return 0
     try:
         return handler(hook)
-    except Exception:  # noqa: BLE001 — fail-open
+    except Exception:  # noqa: BLE001, fail-open
         return 0
 
 

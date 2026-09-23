@@ -1,24 +1,24 @@
 #!/usr/bin/env python3
-"""Wake GC — the zombie-card culler (wake hygiene, thread fc2071f8, Anubis VI's handoff).
+"""Wake GC: culls stale, unfinished wake-session records left over from routine operation.
 
-FleetView accumulates corpses: wake-minted sessions that finished (or found nothing) and sit
+FleetView accumulates leftovers: wake-minted sessions that finished (or found nothing) and sit
 forever at 'send a prompt to start', helper stubs that never got a first prompt, sessions
-killed by transient API errors. At wakes 10/h the mint rate outruns manual cleanup. This
-lists (default) and culls (--apply) the residue:
+killed by transient API errors. Wakes happen frequently enough that this accumulation outruns
+manual cleanup. This lists (default) and culls (--apply) the residue:
 
-  * session transcripts with ZERO main-loop assistant turns, older than --age hours — a card
-    that never became a mind;
-  * synthesized wake job dirs (/tmp/osiris-wakes/jobs/wake-*) older than --age hours — always
-    ephemeral, no cleanup was ever owed;
+  * session transcripts with ZERO main-loop assistant turns, older than --age hours: a session
+    record that never became an active session;
+  * synthesized wake job dirs (/tmp/osiris-wakes/jobs/wake-*) older than --age hours: always
+    temporary, no cleanup was ever owed;
   * the extractor's OWN transcripts (project slug ending -osiris-extract) older than --age
-    hours — every miner tick's `claude -p` call leaves one (~145/day); the miner already
+    hours: every miner tick's `claude -p` call leaves one (~145/day); the miner already
     refuses to mine them (the loop-pathology exclusion in _list_transcripts), so they are
     disk litter with no reader.
 
-CULLING IS SAFE under at-least-once mail: a killed card holds no state the graph doesn't —
-any mail it leased un-leases at expiry and redelivers on the next wake; anything it settled
-is settled forever. (Operator note: API-error corpses can be killed freely for the same
-reason.) The graph is NEVER touched — this trims harness litter, not memory.
+CULLING IS SAFE under at-least-once mail: a killed record holds no state the graph doesn't have.
+Any mail it leased un-leases at expiry and redelivers on the next wake; anything it settled
+is settled forever. API-error leftovers can be killed freely for the same reason. The graph
+is NEVER touched: this trims harness litter, not memory.
 
 STDLIB ONLY. Usage: python scripts/osiris_wake_gc.py [--age 24] [--apply]
 """
@@ -38,8 +38,8 @@ EXTRACT_SUFFIX = "-osiris-extract"  # providers.ClaudeCliClient's dedicated cwd 
 
 
 def _has_assistant_turn(path: Path) -> bool:
-    """True if the transcript contains at least one main-loop assistant message — a mind
-    actually spoke here. Reads incrementally; bails at the first hit."""
+    """True if the transcript contains at least one main-loop assistant message: real
+    activity actually happened here. Reads incrementally; bails at the first hit."""
     try:
         with path.open() as fh:
             for line in fh:
@@ -52,12 +52,12 @@ def _has_assistant_turn(path: Path) -> bool:
                 if e.get("type") == "assistant" and not e.get("isSidechain"):
                     return True
     except OSError:
-        return True  # unreadable → assume alive; never cull blind
+        return True  # unreadable -> assume alive; never cull blind
     return False
 
 
 def find_victims(projects: Path, cutoff: float) -> tuple[list[Path], list[Path]]:
-    """(zero-turn sessions, extractor transcripts) older than cutoff — pure, testable."""
+    """(zero-turn sessions, extractor transcripts) older than cutoff: pure, testable."""
     zero_turn: list[Path] = []
     extract: list[Path] = []
     for t in sorted(projects.glob("*/*.jsonl")):
@@ -69,7 +69,7 @@ def find_victims(projects: Path, cutoff: float) -> tuple[list[Path], list[Path]]
         if "subagents" in t.parts:
             continue
         if t.parent.name.endswith(EXTRACT_SUFFIX):
-            extract.append(t)  # the extractor spoke, but nothing will ever read it
+            extract.append(t)  # the extractor ran, but nothing will ever read it
             continue
         if not _has_assistant_turn(t):
             zero_turn.append(t)

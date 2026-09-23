@@ -2,11 +2,11 @@
 
 When we ingest OpenSanctions (FollowTheMoney), relationship endpoints whose real
 entity lives outside the slice are left as **typed stubs** keyed by their Wikidata
-id (``Q...``) — an ownership/family/director edge that points at a node with no
+id (``Q...``): an ownership/family/director edge that points at a node with no
 name. Wikidata is keyed by those exact ids, so this module *enriches the stubs in
 place*: it reads the ids already in the graph, fetches their labels/descriptions/
 literal facts (and, optionally, their relationship claims) from ``wbgetentities``,
-and writes them back as AUTHORITATIVE_API assertions on the existing object id —
+and writes them back as AUTHORITATIVE_API assertions on the existing object id,
 the same find-or-create-or-stub pattern as the FtM loader, so it composes in layers
 (each pass names the current frontier of stubs and reveals the next ring of edges).
 
@@ -67,7 +67,7 @@ _REL_PROPS: dict[str, tuple[str, str]] = {
 }
 # Wikidata social-media-account claim -> platform. The value is a handle/id; we mint
 # an Account the entity has_account. These are the official accounts a curated record
-# carries that a (minimal/antibot) homepage crawl can't surface — the Neuralink case.
+# carries that a (minimal/antibot) homepage crawl can't surface, e.g. the Neuralink case.
 _SOCIAL: dict[str, str] = {
     "P2002": "twitter",    # X/Twitter username
     "P2003": "instagram",  # Instagram username
@@ -83,7 +83,7 @@ _SOCIAL: dict[str, str] = {
 
 def _label(ent: dict[str, Any]) -> str | None:
     labels = ent.get("labels") or {}
-    # prefer en, then 'mul' (Wikidata's language-agnostic label — many transliterated
+    # prefer en, then 'mul' (Wikidata's language-agnostic label: many transliterated
     # PEP names live ONLY here), then any returned language.
     for key in ("en", "mul"):
         v = labels.get(key)
@@ -127,7 +127,7 @@ def _entity_id(mainsnak: dict[str, Any]) -> str | None:
 def _entity_type(ent: dict[str, Any]) -> str:
     """Infer Osiris object type from P31 (instance of). Human -> Person; anything
     else with a P31 -> Organization; default Person (only used when creating a NEW
-    object — enrichment respects the existing stub's type)."""
+    object, enrichment respects the existing stub's type)."""
     qids = {
         _entity_id(s.get("mainsnak", {}))
         for s in (ent.get("claims") or {}).get("P31", [])
@@ -181,7 +181,7 @@ async def ingest_entities(
         cache[qid] = oid
         return oid
 
-    # pass 1: properties (the headline — bare stubs get a name)
+    # pass 1: properties (the headline: bare stubs get a name)
     for qid, ent in entities.items():
         oid = await resolve(qid, _entity_type(ent))
         wrote = False
@@ -320,7 +320,7 @@ async def aim(actions: Actions, name: str, *, case_id: uuid.UUID | None = None) 
 
 
 async def select_stub_qids(pool: Any, *, limit: int | None = None) -> list[str]:
-    """Q-ids already in the graph with no name — the un-enriched stubs."""
+    """Q-ids already in the graph with no name: the un-enriched stubs."""
     q = (
         "SELECT o.canonical FROM objects o "
         "WHERE o.canonical ~ '^Q[0-9]+$' "

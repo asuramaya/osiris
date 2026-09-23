@@ -1,14 +1,14 @@
-"""THE CACHE PRUNE (item 4 of the soul-store lane, thread 78efd46d): "transcript files
-of dead sessions past a window are pruned from ~/.claude/projects after (2) covers them,
-and rematerialized on demand by resume or a read." The on-demand half already exists and
-is battle-tested — trigger.py's own resume-materialization inversion (ruling d161a156/
-d63b2ca6) already emits a session's file back via SoulStore.rematerialize_to_disk on
-every resume hop, and both the MCP `rematerialize` tool and `osiris rematerialize` CLI
-command already expose it directly. This is the other half: actually removing a dead
-session's file from disk once the store has safely captured it.
+"""THE CACHE PRUNE: transcript files of dead sessions past a window are pruned from
+~/.claude/projects once the store has safely captured them, and rematerialized on
+demand by resume or a read. The on-demand half already exists and is battle-tested:
+trigger.py's own resume-materialization inversion already emits a session's file back
+via SoulStore.rematerialize_to_disk on every resume hop, and both the MCP
+`rematerialize` tool and `osiris rematerialize` CLI command already expose it directly.
+This is the other half: actually removing a dead session's file from disk once the
+store has safely captured it.
 
-A session is PRUNABLE only when BOTH hold: (1) DEAD — its file's own mtime is older than
-`dead_after` (default 30 days, no recent activity at all); (2) FULLY CAPTURED — the
+A session is PRUNABLE only when BOTH hold: (1) DEAD, its file's own mtime is older
+than `dead_after` (default 30 days, no recent activity at all); (2) FULLY CAPTURED, the
 file's mtime is NOT newer than the store's own last_ingested_at, the SAME guard
 `rematerialize_to_disk` already uses to refuse overwriting a live transcript, applied
 here in the opposite direction: never delete a file whose latest bytes the store hasn't
@@ -16,13 +16,13 @@ seen yet. A session failing either test is left alone, never pruned on a guess.
 
 DRY-RUN IS THE DEFAULT MODE, same discipline as osiris_prune_ladder.py: `--apply`
 exists so a human can execute the plan directly. This script itself never calls
-`--apply` on its own — but `find_prunable_sessions` is now ALSO called by
-osiris_prune_ladder.py's own `_collect_session_prune_plan` (Thoth mail 8441 item 1),
-which wires this population into the weekly prune-manifest/apply-if-clear timer pair
-under the SAME manifest-then-dim gate as every other population there; running this
-script's own CLI by hand remains a second, independent way to reach the identical
-plan and apply it directly, same gate either way — the operator's own word (relayed
-via a manifest or by hand), never an unconditioned timer.
+`--apply` on its own, but `find_prunable_sessions` is now ALSO called by
+osiris_prune_ladder.py's own `_collect_session_prune_plan`, which wires this population
+into the weekly prune-manifest/apply-if-clear timer pair under the SAME
+manifest-then-dim gate as every other population there. Running this script's own CLI
+by hand remains a second, independent way to reach the identical plan and apply it
+directly, same gate either way: an explicit human decision (relayed via a manifest or
+by hand), never an unconditioned timer.
 """
 from __future__ import annotations
 
@@ -56,9 +56,9 @@ def find_prunable_sessions(
     out = []
     for s in sessions:
         if s.file_mtime is None:
-            continue  # already gone — nothing to prune
+            continue  # already gone, nothing to prune
         if s.file_mtime > s.last_ingested_at:
-            continue  # the store hasn't seen this file's latest bytes yet — never delete
+            continue  # the store hasn't seen this file's latest bytes yet, never delete
         if now - s.file_mtime < dead_after:
             continue  # not dead yet
         out.append(s)

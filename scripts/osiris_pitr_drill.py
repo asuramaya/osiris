@@ -1,23 +1,23 @@
-"""THE PITR DRILL (the vault lane, operator ruling 39384a87/c53a5fc0, item 3's own last
-piece): "a backup that's never been restored is a hope, not a backup" — the SAME law
-scripts/osiris_preflight.py's own `drill()` already holds for plain pg_dumps, extended here
-to the base-backup-plus-WAL pair. Restores the newest base backup into a scratch container,
-replays archived WAL up to a chosen point in time via ordinary Postgres archive recovery
-(a `recovery.signal` file plus `restore_command`, recovery_target_time, and
-recovery_target_action='promote' so the drill container finishes recovery and becomes an
-ordinary queryable server instead of sitting paused), and proves a row written AFTER the
-base backup completed is present in the restored copy — the one thing a base backup alone,
-with no WAL replayed on top of it, could never show.
+"""THE PITR DRILL (the backup-verification lane): a backup that has never been restored is
+only a hope, not a proven backup, the same principle scripts/osiris_preflight.py's own
+`drill()` already holds for plain pg_dumps, extended here to the base-backup-plus-WAL pair.
+Restores the newest base backup into a scratch container, replays archived WAL up to a
+chosen point in time via ordinary Postgres archive recovery (a `recovery.signal` file plus
+`restore_command`, recovery_target_time, and recovery_target_action='promote' so the drill
+container finishes recovery and becomes an ordinary queryable server instead of sitting
+paused), and proves a row written AFTER the base backup completed is present in the
+restored copy: the one thing a base backup alone, with no WAL replayed on top of it, could
+never show.
 
 WAL SOURCE, GATHERED READ-ONLY (`_gather_wal_segments`): archived segments live in two
-possible places at drill time — already pulled into the vault by osiris_backup.sh's own WAL
+possible places at drill time, already pulled into the vault by osiris_backup.sh's own WAL
 section, or still staged inside the live container waiting for that timer's next run. This
-copies (never deletes, never touches the live container's own staging) whatever is available
-from both into one scratch directory the drill container's `restore_command` reads from — a
-plain `cp`, the standard textbook shape, no docker-in-docker needed inside the drill
-container itself.
+copies (never deletes, never touches the live container's own staging) whatever is
+available from both into one scratch directory the drill container's `restore_command`
+reads from, a plain `cp`, the standard textbook shape, no docker-in-docker needed inside
+the drill container itself.
 
-Orchestration (`run_drill`) is proven by a real run against real data, not mocked — the same
+Orchestration (`run_drill`) is proven by a real run against real data, not mocked, the same
 discipline osiris_archive_wal.sh's own WAL-writing half was verified with, directly inside
 the live container. The config-text builder (`postgresql_auto_conf_pitr`) is pure and
 tested directly.
@@ -44,15 +44,15 @@ def postgresql_auto_conf_pitr(
 ) -> str:
     """The lines a restored PGDATA needs appended to its own postgresql.auto.conf to
     perform archive recovery. `target_time=None` (the default drill mode) sets NO
-    recovery target at all — Postgres then just replays every WAL segment
+    recovery target at all: Postgres then just replays every WAL segment
     `restore_command` can still find and promotes the moment `restore_command` first
-    fails to produce the next one, i.e. "recover to the latest point the archive can
-    actually prove", which is what "a row written after the base backup is present"
-    needs. A caller-supplied `target_time` asks for an EXACT point instead — and can
-    legitimately fail if that point turns out to be past what's archived (a real
+    fails to produce the next one, i.e. it recovers to the latest point the archive can
+    actually prove, which is what confirming "a row written after the base backup is
+    present" needs. A caller-supplied `target_time` asks for an EXACT point instead, and
+    can legitimately fail if that point turns out to be past what's archived (a real
     finding, not a bug in the drill): Postgres refuses to promote past a target it
     cannot reach. `target_action='promote'` (not the default 'pause') either way, so
-    the drill container finishes on its own and becomes an ordinary queryable server —
+    the drill container finishes on its own and becomes an ordinary queryable server;
     a caller then just polls pg_isready, exactly like osiris_preflight.py's own
     plain-dump `drill()`."""
     conf = f"restore_command = '{restore_command}'\n"
@@ -63,8 +63,8 @@ def postgresql_auto_conf_pitr(
 
 
 def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: Path) -> int:
-    """Copy every currently-available archived WAL segment — already-pulled ones in the
-    vault, plus anything still staged inside the live container — into `scratch_wal_dir`.
+    """Copy every currently-available archived WAL segment, already-pulled ones in the
+    vault, plus anything still staged inside the live container, into `scratch_wal_dir`.
     Read-only against both sources. Returns how many segments landed there."""
     scratch_wal_dir.mkdir(parents=True, exist_ok=True)
     if vault_wal_dir.is_dir():
@@ -87,28 +87,27 @@ def _gather_wal_segments(container: str, vault_wal_dir: Path, scratch_wal_dir: P
 
 
 def _soul_round_trip_check(container: str) -> str | None:
-    """PROVE DECRYPTION, NOT PRESENCE (Thoth mail 9134, operator ruling on thread
-    773d633a): the marker-object check above only proves the restored copy has ROWS —
-    it says nothing about whether the CURRENT key on this box can actually open the
-    soul store's own encrypted content, which is the one thing a restore drill exists
-    to prove that a plain "the data restored" check cannot. Shared by this module's
-    own `run_drill` and scripts/osiris_preflight.py's plain-dump `drill()` (imported
-    from here, never duplicated — this module has no import FROM osiris_preflight, so
-    this is the direction that avoids a cycle). Picks ONE real `soul_lines` row from
-    the restored scratch container (`docker exec psql`, the SAME query shape every
-    other check in either drill already makes — no new port, no new connectivity into
-    the scratch container needed) and decrypts it on THIS box with the currently-
-    configured `get_soul_fernet()`. None (pass) when the restored copy has no
-    soul_lines rows at all — a soul-store-empty snapshot (a fresh install, or a dump
-    taken before the first transcript was ever ingested) is not a failure of THIS
-    specific check, the same "not activated here is not a failure" law this module's
-    own `drill_pitr` caller already holds for a missing base backup."""
+    """PROVE DECRYPTION, NOT PRESENCE: the marker-object check above only proves the
+    restored copy has ROWS. It says nothing about whether the CURRENT key on this box can
+    actually open the soul store's own encrypted content, which is the one thing a restore
+    drill exists to prove that a plain "the data restored" check cannot. Shared by this
+    module's own `run_drill` and scripts/osiris_preflight.py's plain-dump `drill()`
+    (imported from here, never duplicated: this module has no import FROM
+    osiris_preflight, so this is the direction that avoids a cycle). Picks ONE real
+    `soul_lines` row from the restored scratch container (`docker exec psql`, the SAME
+    query shape every other check in either drill already makes, so no new port, no new
+    connectivity into the scratch container needed) and decrypts it on THIS box with the
+    currently-configured `get_soul_fernet()`. None (pass) when the restored copy has no
+    soul_lines rows at all: a soul-store-empty snapshot (a fresh install, or a dump taken
+    before the first transcript was ever ingested) is not a failure of THIS specific
+    check, the same "not activated here is not a failure" principle this module's own
+    `drill_pitr` caller already holds for a missing base backup."""
     from cryptography.fernet import InvalidToken
     from src.ingest.soul_crypto import get_soul_fernet, is_encrypted
 
-    # SAMPLE SEVERAL, SKIP LEGACY PLAINTEXT (Thoth DM 9194): a single random row can land
-    # on a not-yet-migrated row (encrypt_existing_soul_lines's own backward pass, run
-    # separately) — decrypting THAT would fail for a reason that has nothing to do with
+    # SAMPLE SEVERAL, SKIP LEGACY PLAINTEXT: a single random row can land on a
+    # not-yet-migrated row (encrypt_existing_soul_lines's own backward pass, run
+    # separately); decrypting THAT would fail for a reason that has nothing to do with
     # whether the currently-configured key actually opens real ciphertext, a false
     # "round-trip FAILED" this check exists to never report. Widens the sample instead
     # of narrowing the proof: the first ENCRYPTED row found is the one this checks.
@@ -119,7 +118,7 @@ def _soul_round_trip_check(container: str) -> str | None:
     raws = [base64.b64decode(line) for line in out.stdout.splitlines() if line.strip()]
     encrypted = next((r for r in raws if is_encrypted(r)), None)
     if encrypted is None:
-        return None  # empty restore, or every sampled row still legacy plaintext — not
+        return None  # empty restore, or every sampled row still legacy plaintext: not
                      # this check's own failure to report (encrypt_existing_soul_lines's)
     try:
         get_soul_fernet().decrypt(encrypted)
@@ -139,15 +138,14 @@ def run_drill(
     its scratch dirs in every case (`finally`), same discipline as
     osiris_preflight.py's own `drill()`.
 
-    NEVER THE LIVE CLUSTER (thread 9fac4e0d part 4, codified after the exact live
-    incident that named this obligation: an operator/agent's own manual pg_basebackup
-    restore into a DIFFERENTLY-NAMED database ("osiris_drill") on the SAME live
-    cluster still generated real WAL against production, backlogging the archiver —
-    a drill's own point is to generate ZERO WAL against the thing being drilled).
-    `drill_name` defaults to a name that is never `container`, but a caller COULD
-    override it to collide — this refuses outright rather than trusting the default
-    stays unbroken forever: `docker rm -f -v` on the live container name would be
-    catastrophic, not just a WAL-backlog nuisance."""
+    NEVER THE LIVE CLUSTER, codified after the exact live incident that named this
+    obligation: a manual pg_basebackup restore into a DIFFERENTLY-NAMED database
+    ("osiris_drill") on the SAME live cluster still generated real WAL against
+    production, backlogging the archiver. A drill's own point is to generate ZERO WAL
+    against the thing being drilled. `drill_name` defaults to a name that is never
+    `container`, but a caller COULD override it to collide; this refuses outright rather
+    than trusting the default stays unbroken forever: `docker rm -f -v` on the live
+    container name would be catastrophic, not just a WAL-backlog nuisance."""
     if drill_name == container:
         return (f"REFUSING: drill_name {drill_name!r} equals the source container "
                 f"{container!r} — a drill must restore into its own separate scratch "
@@ -158,7 +156,7 @@ def run_drill(
     try:
         pgdata.mkdir(parents=True, exist_ok=True)
         with tarfile.open(base_backup, "r:gz") as tf:
-            tf.extractall(pgdata, filter="data")  # noqa: S202 — our own trusted backup
+            tf.extractall(pgdata, filter="data")  # noqa: S202, our own trusted backup
 
         n_wal = _gather_wal_segments(
             container, Path.home() / "osiris-vault" / "wal_archive", wal_dir)
@@ -205,12 +203,12 @@ def run_drill(
     finally:
         subprocess.run(["docker", "rm", "-f", "-v", drill_name], capture_output=True, timeout=30)
         # `pgdata` was written by the postgres container as ITS OWN uid (999 inside the
-        # container, an unmapped/colliding uid on the host) — the host user that ran this
+        # container, an unmapped/colliding uid on the host). The host user that ran this
         # script cannot even read it, let alone rmtree it, and ignore_errors=True on that
         # call would silently leak the whole scratch tree every single drill (caught by
         # running this drill for real: three runs, three leaked multi-GB directories
         # before this fix). A throwaway root container CAN delete it (root bypasses host
-        # DAC on a bind mount) — reclaim it first, then rmtree the rest normally.
+        # DAC on a bind mount); reclaim it first, then rmtree the rest normally.
         subprocess.run(["docker", "run", "--rm", "-v", f"{scratch}:/scratch", "postgres:16",
                         "rm", "-rf", "/scratch/pgdata"], capture_output=True, timeout=60)
         shutil.rmtree(scratch, ignore_errors=True)
@@ -218,13 +216,14 @@ def run_drill(
 
 def pick_and_ensure_marker(container: str = CONTAINER) -> str | None:
     """The unattended-drill marker: the live DB's own most-recently-created object,
-    read-only, no operator-authored Decision needed each run — the fleet writes
+    read-only, no manually-authored record needed each run, since the system writes
     constantly, so there is always a fresh one. `pg_switch_wal()` is an administrative
-    WAL-control call, not a graph mutation (house law on raw SQL is about writes into
-    the graph's own rows, never about calling Postgres's own control functions) — it
-    forces the segment holding that object's write to archive immediately rather than
-    waiting for it to fill naturally, so the drill doesn't have to wait either. Returns
-    None on an empty database (nothing to prove yet, not a failure)."""
+    WAL-control call, not a graph mutation (the convention against raw SQL is about
+    writes into the graph's own rows, never about calling Postgres's own control
+    functions); it forces the segment holding that object's write to archive
+    immediately rather than waiting for it to fill naturally, so the drill doesn't have
+    to wait either. Returns None on an empty database (nothing to prove yet, not a
+    failure)."""
     out = subprocess.run(
         ["docker", "exec", container, "psql", "-U", "osiris", "-d", "osiris", "-tAc",
          "SELECT canonical FROM objects ORDER BY created_at DESC LIMIT 1"],

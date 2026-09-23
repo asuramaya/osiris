@@ -1,9 +1,9 @@
-"""Crush transcript adapter — SQLite at <data_dir>/crush.db.
+"""Crush transcript adapter: SQLite at <data_dir>/crush.db.
 
 Crush (charmbracelet's CLI) stores sessions in SQLite, not JSONL. The per-project data
 dir is resolved from ~/.local/share/crush/projects.json (maps cwd → data_dir), falling
 back to <cwd>/.crush/crush.db. model + provider are first-class columns on the messages
-table — richer than Claude's embedded-in-envelope field, and the reason the store exists.
+table, richer than Claude's embedded-in-envelope field, and the reason the store exists.
 
 Token accounting is session-level in Crush (sessions.prompt_tokens / completion_tokens /
 cost), not per-turn. The adapter records what's available; the store's per-turn token
@@ -24,9 +24,9 @@ _PROJECTS_JSON = Path.home() / ".local" / "share" / "crush" / "projects.json"
 
 
 def _project_entries() -> list[dict[str, object]]:
-    """projects.json's entries, normalized. Crush has shipped BOTH shapes: a
-    {cwd: {data_dir}} mapping and (current on this box, field-verified 2026-07-19) a
-    LIST of {path, data_dir} records. Normalize either to [{path, data_dir}, ...] so
+    """projects.json's entries, normalized. Crush has shipped both shapes: a
+    {cwd: {data_dir}} mapping and (current as of 2026-07-19, field-verified) a
+    list of {path, data_dir} records. Normalize either to [{path, data_dir}, ...] so
     the two consumers below never care again."""
     try:
         data = json.loads(_PROJECTS_JSON.read_text()) if _PROJECTS_JSON.is_file() else {}
@@ -56,12 +56,12 @@ def _resolve_data_dir(cwd: str | None) -> str | None:
 
 
 def _to_dt(epoch_s: int | None) -> datetime | None:
-    """Crush's own `created_at`/`finished_at`/`updated_at` columns are epoch-SECONDS,
-    not milliseconds (Thoth dispatch 6528/6535 — found by reading a real crush.db, not
-    inferred: sessions.created_at=1785360810 is 2026-07-29, a sane date; treated as
-    epoch-ms it read back as 1970-01-21, silently, on every Crush turn this adapter had
-    ever produced. This adapter's own docstring already confessed 'no test of its own'
-    before this fix — that missing coverage is exactly why nobody caught it live."""
+    """Crush's own `created_at`/`finished_at`/`updated_at` columns are epoch-seconds,
+    not milliseconds. Found by reading a real crush.db, not inferred: sessions.created_at
+    =1785360810 is 2026-07-29, a sane date; treated as epoch-ms it read back as
+    1970-01-21, silently, on every Crush turn this adapter had ever produced. This
+    adapter's own docstring already confessed 'no test of its own' before this fix; that
+    missing coverage is exactly why nobody caught it live."""
     if epoch_s is None:
         return None
     try:
@@ -101,7 +101,7 @@ class CrushSqliteAdapter:
                 sid = row[0] if row else None
             anchored = sid is not None
             if sid is None:
-                # the newest-session guess — a co-tenant's session may be hotter; the
+                # the newest-session guess: a co-tenant's session may be hotter, so the
                 # locator confesses it so identity never grades this as an anchored read
                 row = conn.execute(
                     "SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1"
@@ -121,20 +121,20 @@ class CrushSqliteAdapter:
             conn.close()
 
     def enumerate(self, *, root: Path | None = None) -> Iterator[SessionLocator]:
-        """Every Crush session across every known project — the miner's backfill sweep.
+        """Every Crush session across every known project, for the miner's backfill sweep.
 
         Walks projects.json for known cwds, plus ~/.osiris/seats/*/.crush/ (seat offices).
         Each crush.db holds many sessions; yield one locator per session.
 
-        COMPLETENESS (HarnessAdapter's own contract): NOT complete against every crush.db
-        that may exist on disk — only those reachable via projects.json's own registry
+        COMPLETENESS (HarnessAdapter's own contract): not complete against every crush.db
+        that may exist on disk, only those reachable via projects.json's own registry
         plus the fixed seat-office path. A crush.db for a workspace never registered
         there (or registered somewhere this walk doesn't look) is invisible to this
-        enumerate(), silently — the same class of gap DSH's own walk had, here structural
+        enumerate(), silently: the same class of gap DSH's own walk had, here structural
         rather than a bug to fix, since there is no other on-disk index to walk instead.
-        This adapter also carries no test of its own (2026-08-24) — worth knowing before
-        leaning on either its discovery or its completeness."""
-        # 1. projects.json-registered cwds (either shape — see _project_entries)
+        This adapter also carries no test of its own (as of 2026-08-24), worth knowing
+        before leaning on either its discovery or its completeness."""
+        # 1. projects.json-registered cwds (either shape, see _project_entries)
         seen_dbs: set[str] = set()
         for entry in _project_entries():
             cwd, dd = entry.get("path"), entry.get("data_dir")
@@ -146,7 +146,7 @@ class CrushSqliteAdapter:
             seen_dbs.add(str(db))
             cwd_s = cwd if isinstance(cwd, str) else None
             yield from _sessions_in_db(db, cwd_s, Path(cwd_s).name if cwd_s else None)
-        # 2. seat offices (~/.osiris/seats/<seat>/.crush/crush.db) — the per-seat Crush data
+        # 2. seat offices (~/.osiris/seats/<seat>/.crush/crush.db): the per-seat Crush data
         seats_root = Path.home() / ".osiris" / "seats"
         if seats_root.is_dir():
             for seat_dir in seats_root.iterdir():
@@ -183,7 +183,7 @@ class CrushSqliteAdapter:
             dur_ms: int | None = None
             if finished is not None and created is not None:
                 # SAME epoch-seconds fact as _to_dt above: created/finished are seconds,
-                # so the raw difference is a SECONDS duration — multiplied here to match
+                # so the raw difference is a seconds duration, multiplied here to match
                 # duration_ms's own documented unit (TurnRow, milliseconds).
                 dur_ms = int((finished - created) * 1000) if finished > created else None
             yield TurnRow(

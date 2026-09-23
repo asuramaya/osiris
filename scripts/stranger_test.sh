@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# The stranger's test (task #97): one command, re-run after every fix to docs/INSTALL.md
+# A fresh-install verification test: one command, re-run after every fix to docs/INSTALL.md
 # or the install path it describes.
 #
 #   ./scripts/stranger_test.sh                                # mirrors local `main`
@@ -11,29 +11,29 @@
 #     of this host's home directory or venv is bind-mounted in.
 #   - No collision with, or silent reuse of, this host's own docker state: Postgres/Redis
 #     run inside a nested dockerd private to the test container (Docker-in-Docker), not
-#     via this host's docker socket. That matters concretely — this box already has
+#     via this host's docker socket. That matters concretely: this box already has
 #     containers literally named osiris-pg/osiris-redis from unrelated dev work; a
 #     host-socket harness would collide with them or quietly inherit their already-pulled
 #     image layers.
-#   - The default source is a LOCAL bare mirror of `main`, not the real GitHub URL — because
+#   - The default source is a LOCAL bare mirror of `main`, not the real GitHub URL, because
 #     as of this run, https://github.com/asuramaya/osiris answers with an empty ref
 #     advertisement (verified: `git ls-remote origin` returns nothing, and a raw
 #     info/refs?service=git-upload-pack request 200s with the null-OID "empty repo" reply).
-#     Nothing has been pushed there since the PII rewrite. Pass the real URL as $1 once the
-#     operator publishes, to test the actual clone path instead of this stand-in.
+#     Nothing has been pushed there since the PII rewrite. Pass the real URL as $1 once
+#     it is published, to test the actual clone path instead of this stand-in.
 #
 # WHAT THIS DOES NOT ISOLATE (named, not silently assumed away):
 #   - Base OS: one Debian bookworm-slim image. "Linux" in INSTALL.md's prerequisites covers
 #     far more than that; this is one representative point, not the space.
 #   - Python 3.12 is provided by uv's own managed toolchain (uv sync honors
-#     `requires-python`), not a system python3.12 package — a legitimate reading of the
-#     prerequisite, but not evidence a system-python stranger sees identical behavior.
+#     `requires-python`), not a system python3.12 package: a legitimate reading of the
+#     prerequisite, but not evidence a system-python install sees identical behavior.
 #   - Network: assumes unrestricted outbound HTTPS (PyPI, astral's python builds, the
-#     container registry, GitHub). A stranger behind a corporate proxy or an offline box is
+#     container registry, GitHub). A user behind a corporate proxy or an offline box is
 #     not represented here.
 #   - Docker image cache: this container's nested dockerd starts cold every run (postgres:16
-#     / redis:7 are pulled fresh each time) — slower than a repeat stranger run, but a truer
-#     first-run measurement than a warm host cache would give.
+#     / redis:7 are pulled fresh each time): slower than a repeat run against a warm cache,
+#     but a truer first-run measurement than a warm host cache would give.
 #   - Timing/hardware: this host's CPU/disk speed, not a lower-end machine's.
 #   - INSTALL.md's own steps 5 (systemd --user units) and 6 (wiring into Claude Code) are
 #     NOT replayed: step 5 needs a real logind session (fragile/meaningless in a throwaway

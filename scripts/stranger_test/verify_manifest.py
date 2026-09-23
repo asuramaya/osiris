@@ -1,23 +1,23 @@
 #!/usr/bin/env python3
-"""Stranger-test proof A, manifest assertion: proves `osiris rename-project ... --apply`'s own
-printed receipt actually named our chartered seat as cascaded — not merely that the CLI exited
+"""Verification proof, manifest assertion: proves `osiris rename-project ... --apply`'s own
+printed receipt actually named our chartered seat as cascaded, not merely that the CLI exited
 0. `cmd_rename_project` (src/cli.py) prints the full `rename_project` receipt dict verbatim, one
-`  key: value` line per top-level key (`print(f"  {k}: {v}")`, no json.dumps) — this reads that
+`  key: value` line per top-level key (`print(f"  {k}: {v}")`, no json.dumps). This reads that
 captured stdout back and greps it with a targeted regex rather than `ast.literal_eval`-ing the
 whole thing: the manifest's per-tier `detail` fields can carry non-literal reprs (nested receipt
-dicts from `set_charter`/`correct_pin_value_third_party`/etc. — not guaranteed to be pure
+dicts from `set_charter`/`correct_pin_value_third_party`/etc., not guaranteed to be pure
 literals all the way down), so a full-dict parse is the fragile path here, not the robust one.
 
 The manifest shape (see `_cascade_governing_seats`, src/orchestrator/project_identity.py
 ~line 526): {"seats": {seat_canonical: {"pin": {...}, "house": {...}, "charter": {"status":
 ...}, "office": {...}, "tree": {...}}, ...}, "could_not_reach": {...}}. `could_not_reach` is a
 FIXED, always-present pair of generic notes (the project's own on-disk folder; the repo root's
-own .osiris file) — never a per-seat failure signal, so this checks the per-seat CHARTER tier
+own .osiris file), never a per-seat failure signal, so this checks the per-seat CHARTER tier
 instead: the one tier a seat that charters the renamed project must show either "touched" (the
 charter list itself got rewritten) or "already-correct", never "could-not". The regex anchors on
 the seat's own canonical key first, then takes the FIRST 'charter': {'status': ...} that follows
 it in the dict repr's own printed key order (pin, house, charter, office, tree per
-`_cascade_governing_seats`'s own source order) — the first such match after the seat's own key is
+`_cascade_governing_seats`'s own source order). The first such match after the seat's own key is
 guaranteed to be this seat's own charter tier, not some other seat's, because no other seat's
 blob can intervene before this seat's own "charter" key appears.
 

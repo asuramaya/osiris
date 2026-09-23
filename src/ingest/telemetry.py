@@ -1,17 +1,17 @@
-"""The telemetry reader — neo's second instrument, ported onto the store (task #35).
+"""The telemetry reader, a forensics instrument ported onto the store.
 
 Claude Code retains failed-to-send telemetry on disk under ~/.claude/telemetry/ as
-1p_failed_events.*.json (JSONL: one ClaudeCodeInternalEvent per line — event name,
+1p_failed_events.*.json (JSONL: one ClaudeCodeInternalEvent per line, event name,
 session id, device id, model, platform, CLI version, betas). Nothing reads it, nothing
-prunes it; it just accumulates. The ancestor's forensics lens answered "what's retained
-on your disk"; this is that lens in the house's grain.
+prunes it; it just accumulates. An earlier forensics pass answered "what's retained
+on your disk"; this is that same check applied to this system's own store.
 
-THE MEASURE-DON'T-AMPLIFY LAW: only normalized columns land in the store — the raw
+THE MEASURE-DON'T-AMPLIFY LAW: only normalized columns land in the store; the raw
 payload is deliberately never copied (duplicating retained telemetry into the graph
-would double the very retention the lens exists to expose). source_ref (file:line)
+would double the very retention the check exists to expose). source_ref (file:line)
 points back to the authoritative row on disk, the same doctrine as harness_turns.
 
-Fed on the OBSERVER's switch (OSIRIS_TRANSCRIPTS) beside the transcript backfill —
+Fed on the same switch (OSIRIS_TRANSCRIPTS) beside the transcript backfill,
 a free, deterministic sweep with the same spend gate: an unchanged file costs one stat
 and one row lookup, never a read.
 """

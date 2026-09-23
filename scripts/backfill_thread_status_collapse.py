@@ -1,62 +1,62 @@
 #!/usr/bin/env python3
-"""Lane 1 — THE BACKFILL (Thoth msg 6435, operator dispatch 2026-09-02).
+"""First collapse lane: THE BACKFILL.
 
 `status` on a `Thread` is meant to be single-valued per object, but `assert_property`'s
 same-source-only supersession lets a DIFFERENT source's later `status='resolved'` sit
-alongside an unrelated earlier `status='open'` forever — both simultaneously `is_current`
-(ruling 1335332e). Measured 2026-09-02: 1,309 active Threads carry a current `open` AND a
+alongside an unrelated earlier `status='open'` forever, both simultaneously `is_current`.
+Measured 2026-09-02: 1,309 active Threads carry a current `open` AND a
 current `resolved` at once; 1,255 of those are the plain two-witness case, 52 carry a third
 current status row and 2 carry a fourth.
 
-THE TRAP TESTED (Thoth's own instruction): does any thread's current `open` postdate its
-current `resolved` — a genuine reopen, where collapsing to `resolved` would destroy real
-work? Measured: 0 of 1,309. Every specimen's newest current row is `resolved`. The code
-below does not trust that as a constant — it re-derives per thread and EXCLUDES (never
-collapses) any thread where `open` is newest, reporting the population size whether zero
-or not.
+THE TRAP TESTED: does any thread's current `open` postdate its current `resolved`, a genuine
+reopen, where collapsing to `resolved` would destroy real work? Measured: 0 of 1,309. Every
+specimen's newest current row is `resolved`. The code below does not trust that as a
+constant: it re-derives per thread and EXCLUDES (never collapses) any thread where `open` is
+newest, reporting the population size whether zero or not.
 
-RULING ON THE 4 `retracted` SPECIMENS (Wave 2, msg 6482 item 2 — my judgment, not an
-instruction): 4 threads carry a THIRD current value, `status='retracted'`
+RULING ON THE 4 `retracted` SPECIMENS (a judgment call, not a dictated instruction): 4
+threads carry a THIRD current value, `status='retracted'`
 (`session-janitor`'s own miner-garbage cleanup, `src/ingest/janitor.py`). Read the janitor's
-own design law before ruling: it may only retract a thread NO MIND HAS EVER TOUCHED (its own
-guard 2, checked as `NOT EXISTS ... evidence_class='self_declared'`) — "a mind's attention is
-testimony, and testimony outranks the machine." For all 4 specimens the `open` witness is
-`evidence_class='derived'` (mined, machine-authored) and the LATER `resolved` witness carries
-real `self_declared` prose (a shipped commit, an ear-approval, a bug report handed to the
-operator) — i.e. exactly the case the janitor's own guard is built to defer to, just arriving
-AFTER the retraction instead of before it. RULED: when the newest current row is uniquely
-`resolved`, a `retracted` row in between is treated the SAME as a plain `open` loser and
-collapsed away — the mind's later resolve wins. This is NOT generalized to any third value,
-and NOT generalized to a case where `retracted` or `open` is newest with `resolved` present —
-those remain `unexpected` and still refuse the whole run; only the one shape actually measured
-and read (open → retracted → resolved, resolved newest) is allowed through.
+own design rule before ruling: it may only retract a thread NO MIND HAS EVER TOUCHED (its own
+guard 2, checked as `NOT EXISTS ... evidence_class='self_declared'`), on the principle that a
+mind's attention is testimony, and testimony outranks the machine. For all 4 specimens the
+`open` witness is `evidence_class='derived'` (mined, machine-authored) and the LATER
+`resolved` witness carries real `self_declared` prose (a shipped commit, an approval, a bug
+report), which is exactly the case the janitor's own guard is built to defer to, just
+arriving AFTER the retraction instead of before it. RULED: when the newest current row is
+uniquely `resolved`, a `retracted` row in between is treated the SAME as a plain `open` loser
+and collapsed away: the mind's later resolve wins. This is NOT generalized to any third
+value, and NOT generalized to a case where `retracted` or `open` is newest with `resolved`
+present: those remain `unexpected` and still refuse the whole run; only the one shape
+actually measured and read (open, then retracted, then resolved, resolved newest) is allowed
+through.
 
-OUT OF SCOPE, NOT TOUCHED, MEASURED ONLY (msg 6482 item 4): a disjoint, larger population —
-557 active Threads (2026-09-02) carry a current `open` AND a current `retracted` with NO
-`resolved` at all. Unlike the resolved case, this one does NOT mirror it: `retracted` is
-always the newest row (0 reopened), but 304 of the 557 (55%) carry SOME `self_declared`
-assertion somewhere in their history — the janitor's own "no mind ever touched it" precondition
-does not hold fleet-wide for this population the way it held for all 4 of the specimens above.
-Whether that self-declared touch ever engaged the thread's own obligation nature (vs. some
-unrelated property) is not yet measured. NOT collapsed here, on purpose — a different, harder
-question with its own dry-run needed before any ruling, let alone a build.
+OUT OF SCOPE, NOT TOUCHED, MEASURED ONLY: a disjoint, larger population, 557 active Threads
+(2026-09-02) carry a current `open` AND a current `retracted` with NO `resolved` at all.
+Unlike the resolved case, this one does NOT mirror it: `retracted` is always the newest row
+(0 reopened), but 304 of the 557 (55%) carry SOME `self_declared` assertion somewhere in
+their history: the janitor's own "no mind ever touched it" precondition does not hold
+fleet-wide for this population the way it held for all 4 of the specimens above. Whether that
+self-declared touch ever engaged the thread's own obligation nature (vs. some unrelated
+property) is not yet measured. NOT collapsed here, on purpose: a different, harder question
+with its own dry-run needed before any ruling, let alone a build.
 
-MECHANISM: `Actions.assert_singular_property` (src/actions/core.py, merged 41d2fc9,
-ruling 1335332e) — cross-source collapse, takes an advisory lock, never deletes. This
-script calls it exactly once per collapsed thread, re-asserting the WINNING row's own
-existing (value, source_id, observed_at, confidence, evidence_class) — an idempotent
-"this is what already stands" — which is precisely what makes every OTHER current status
-row on that object non-current. No direct `UPDATE assertions` anywhere in this file.
+MECHANISM: `Actions.assert_singular_property` (src/actions/core.py) does the cross-source
+collapse, takes an advisory lock, never deletes. This script calls it exactly once per
+collapsed thread, re-asserting the WINNING row's own existing (value, source_id, observed_at,
+confidence, evidence_class), an idempotent "this is what already stands" that is precisely
+what makes every OTHER current status row on that object non-current. No direct `UPDATE
+assertions` anywhere in this file.
 
 REFUSAL, same posture as `_retire_handoff_backlog` (mcp_server.py): if ANY thread in the
 open+resolved population carries a status shape this script did not rule on above (a value
 outside {open, resolved, retracted}, a `retracted`/`open` newest alongside a `resolved`, or a
-tie in the newest-row's `observed_at`), the WHOLE RUN refuses —
+tie in the newest-row's `observed_at`), the WHOLE RUN refuses:
 `{"ok": False, "reason": ..., "unexpected": [...]}`, nothing touched.
 
-`dry_run=True` is the hard default (no flag flips it silently) — pass `--apply` to write,
-and even then this script is not authorized to run tonight; it exists so the operator can
-run it once the dry-run evidence below has been reviewed.
+`dry_run=True` is the hard default (no flag flips it silently); pass `--apply` to write, and
+even then this script is not authorized to run yet; it exists so the dry-run evidence below
+can be reviewed before anyone runs it for real.
 
 Usage: uv run python scripts/backfill_thread_status_collapse.py [--apply] [--limit N]
 """
@@ -103,11 +103,11 @@ async def candidates(pool: asyncpg.Pool) -> dict[str, list[asyncpg.Record]]:
 
 
 def _classify(rows: list[asyncpg.Record]) -> str:
-    """One of: 'collapse' (newest current row is uniquely 'resolved' — a plain open+resolved
+    """One of: 'collapse' (newest current row is uniquely 'resolved', a plain open+resolved
     pair, OR the ruled-on open+retracted+resolved shape, module docstring's "RULING" section),
-    'reopen' (the value set is exactly {open, resolved} and 'open' is uniquely newest —
+    'reopen' (the value set is exactly {open, resolved} and 'open' is uniquely newest,
     exclude, never collapse), 'unexpected' (any value outside {open, resolved, retracted}, a
-    tie at the newest observed_at, or 'retracted'/'open' newest alongside a 'resolved' — that
+    tie at the newest observed_at, or 'retracted'/'open' newest alongside a 'resolved': that
     shape was never read closely enough to rule on, so it refuses rather than guesses)."""
     values = {r["v"] for r in rows}
     if values - _KNOWN_VALUES:

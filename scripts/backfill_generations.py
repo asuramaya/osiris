@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Backfill true generations from transcript history (ruling a882b334: backfill is NECESSARY).
+"""Backfill true generations from transcript history.
 
-The mind ruling made the roman numeral mean WHICH MIND — one contiguous run of one model on
-one unbroken context — but every lineage alive today was numbered under the old tenure
-semantics: live swaps and compactions never minted, so the numerals understate the dead. This
-one-shot walks each live lineage's own transcript (the harness's authoritative record),
+The generation rule makes the roman numeral mean WHICH MIND: one contiguous run of one model
+on one unbroken context. But every lineage alive today was numbered under the old tenure
+semantics, where live swaps and compactions never minted, so the numerals understate the dead.
+This one-shot walks each live lineage's own transcript (the harness's authoritative record),
 counts the seams the old rules ignored (main-loop model changes + compact boundaries, a
 change AT a boundary merged into one death), and mints the deficit of heirs with the seam's
 own timestamp and succession string, then moves the durable mount row to the true head.
@@ -117,8 +117,8 @@ async def head_of(actions: Actions, root: str) -> tuple[str, int]:
 
 
 async def run(apply: bool) -> None:
-    # thread 86d562e0: this DSN's own fallback IS the live fleet graph, no isolated dev
-    # instance exists on this box — refuse a silent one-off run against it.
+    # This DSN's own fallback IS the live fleet graph; no isolated dev instance exists
+    # on this box, so refuse a silent one-off run against it.
     refusal = refuse_silent_live_db("backfill_generations")
     if refusal is not None:
         print(refusal, file=sys.stderr)

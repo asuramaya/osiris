@@ -1,30 +1,31 @@
 """The fleet glance — the statusline for harnesses that have no statusline (task #28).
 
-Crush has no statusLine config, no SessionStart hook, no TUI plugin surface — so the
-Atlas seat ran blind: no ambient mail count, no fleet pulse, no model-vs-intent check.
+Crush has no statusLine config, no SessionStart hook, no TUI plugin surface, so a seat
+running there ran blind: no ambient mail count, no fleet pulse, no model-vs-intent check.
 This prints the SAME vitals osiris_hook.py's `statusline` subcommand renders (the
-per-purpose osiris_statusline.py it once named was retired at the hook migration,
-dispatch 5441/5599), as plain text on demand (the honest trade: no refresh interval, the
-mind or the operator invokes it by hand).
+per-purpose osiris_statusline.py it once named was retired at the hook migration),
+as plain text on demand (the honest trade: no refresh interval, the mind or the
+operator invokes it by hand).
 
-NOT wrapped by /fleet (checked directly, 2026-09-02, Thoth msg 6336: .claude/commands/fleet.md
-calls the `fleet`/`fleet_digest` MCP tools, never this script — an earlier version of this
-docstring claimed otherwise and was wrong). DEAD AS A PROGRAM, LIVE AS A PRECEDENT: no systemd
-unit or CLI subcommand runs it today, but osiris_retention_reaper/osiris_pg_autotune/
-osiris_smoke/osiris_preflight and pool_health.py all cite it BY NAME for its deferred-import
-pattern and the `job:%` sick-job convention — deleting it orphans those citations. It stays for
-#97's stranger's test: the vendor-neutral arrival with no statusline and no MCP surface still
-needs a plain-text door, idle until the day it isn't.
+NOT wrapped by /fleet: `.claude/commands/fleet.md` calls the `fleet`/`fleet_digest` MCP
+tools, never this script (an earlier version of this docstring claimed otherwise and was
+wrong; verified directly against the command file). DEAD AS A PROGRAM, LIVE AS A
+PRECEDENT: no systemd unit or CLI subcommand runs it today, but
+osiris_retention_reaper/osiris_pg_autotune/osiris_smoke/osiris_preflight and
+pool_health.py all cite it BY NAME for its deferred-import pattern and the `job:%`
+sick-job convention, so deleting it orphans those citations. It stays for the case
+(task #97) where a vendor-neutral arrival with no statusline and no MCP surface still
+needs a plain-text entry point, idle until the day it isn't.
 
-ONE AUTHORITY PER FACT (operator ruling 2026-07-19): every count comes from the shared
-formulas in src/orchestrator/{mailbox,vitals} and src/orchestrator/ceiling — the same
-functions orient, the pulse, the chrome, and the Claude statusline call. This script
-owns no count SQL of its own.
+ONE AUTHORITY PER FACT: every count comes from the shared formulas in
+src/orchestrator/{mailbox,vitals} and src/orchestrator/ceiling, the same functions
+orient, the pulse, the chrome, and the Claude statusline call. This script owns no
+count SQL of its own.
 
-Identity is the OFFICE, not a session: the newest mount row at this cwd is the resident
-(after mount() that is the caller); the .osiris pin is the seat's declared intent. When
-the row's model diverges from the pin, the glance says so plainly — including the case
-where the graph has never met the caller at all (the knock: mount first).
+Identity is the working directory, not a session: the newest mount row at this cwd is
+the resident (after mount() that is the caller); the .osiris pin is the seat's declared
+intent. When the row's model diverges from the pin, the glance says so plainly,
+including the case where the graph has never met the caller at all (mount first).
 """
 from __future__ import annotations
 
@@ -37,12 +38,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 EXPECTED = os.environ.get("OSIRIS_EXPECTED_MODEL", "claude-fable-5")
-LEASE_SECS = 900  # mirror osiris_mail_lease_secs — deliverable = unsettled + no live lease
+LEASE_SECS = 900  # mirror osiris_mail_lease_secs: deliverable = unsettled + no live lease
 
 
 def _pin(cwd: Path) -> tuple[str, str]:
-    """(project, model intent) from the office's .osiris pin, walking up; the dir name
-    and the box default as fallbacks."""
+    """(project, model intent) from the working directory's .osiris pin, walking up; the
+    dir name and the box default as fallbacks."""
     try:
         import tomllib
         for d in (cwd, *cwd.parents):
@@ -53,7 +54,7 @@ def _pin(cwd: Path) -> tuple[str, str]:
                         str(t.get("model") or EXPECTED).strip())
             if (d / ".git").exists():
                 break
-    except Exception:  # noqa: BLE001 — a glance never breaks on a config file
+    except Exception:  # noqa: BLE001, a glance never breaks on a config file
         pass
     return cwd.name, EXPECTED
 
@@ -83,8 +84,8 @@ async def _glance(cwd: Path) -> list[str]:
         souls = await vitals.live_souls(conn)
         wakes = await vitals.wakes_hour(conn)
         ceil = await ceiling(conn, cap=get_settings().osiris_daily_usd)
-        # was a fourth hand-copy of the sick predicate (Thoth msg 6327) — this module's own
-        # docstring already claims "no count SQL of its own"; this line makes that true here too.
+        # was a fourth hand-copy of the sick predicate; this module's own docstring already
+        # claims "no count SQL of its own", so this line makes that true here too.
         sick = await surface._sensing(conn)
 
         lines = [f"◈ {project} — osiris fleet glance"]
@@ -125,11 +126,11 @@ def main() -> None:
     cwd = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path.cwd()
     try:
         lines = asyncio.run(_glance(cwd))
-    except Exception:  # noqa: BLE001 — the graph being down is information, not an error
+    except Exception:  # noqa: BLE001, the graph being down is information, not an error
         # NAME WHAT FAILED, NOT WHAT YOU GUESS CAUSED IT. This used to lead with "is
-        # osiris-pg up? (docker ps…)" — which, on 2026-09-01, sent the operator after a
+        # osiris-pg up? (docker ps...)", which on 2026-09-01 sent the operator after a
         # container that had been up 27 hours while the real cause was an osiris-mcp
-        # restart invalidating his statusline's probe. A remedy that cannot distinguish
+        # restart invalidating the statusline's probe. A remedy that cannot distinguish
         # two states and confidently prescribes one is worse than no remedy (#169).
         # Order the checks nearest-first: the reader hits the likely one before the
         # unlikely one, instead of starting at the bottom of the stack.

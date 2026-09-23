@@ -1,10 +1,10 @@
-"""Ingest CourtListener — federal/state court dockets & opinions (keyless v4 API).
+"""Ingest CourtListener, federal/state court dockets & opinions (keyless v4 API).
 
 'Has this entity been sued or charged?' is the first question a follow-the-money
 investigator asks. CourtListener (Free Law Project) is the keyless answer: RECAP
 dockets (PACER mirror) and case-law opinions, searchable by party name. Each case
 becomes a CourtCase node carrying the court, dates, docket number, judge, parties,
-attorneys and firms — and is linked to the subject (DIRECT_OBSERVATION when the
+attorneys and firms, and is linked to the subject (DIRECT_OBSERVATION when the
 subject is a named party, CO_OCCURRENCE when merely mentioned).
 
     uv run python -m src.ingest.courtlistener <entity name> [opinions|dockets]

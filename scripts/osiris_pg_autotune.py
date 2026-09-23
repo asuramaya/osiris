@@ -1,21 +1,21 @@
 #!/usr/bin/env python
-"""Postgres autotune — the scheduled/on-deploy runner for src.orchestrator.pg_autotune
-(ruling 45b251ed: "this should be mechanical and not depend on me, autotune
-dynamically?"). Computes GUCs from THIS host's live RAM/CPU + the measured daemon
-envelope, applies every reloadable one immediately (no interruption to a live backend),
-persists any restart-required one via `ALTER SYSTEM` (free, takes effect at the next
-restart from any cause), and CONFESSES the before/after into a `job:pg-autotune`
-watermark — `pool_health`/`osiris_fleet_glance.py`'s own `job:%` sick-job convention —
-so a successor or the fleet glance reads what the machine decided, not just that it ran.
+"""Postgres autotune: the scheduled/on-deploy runner for src.orchestrator.pg_autotune,
+which makes GUC tuning mechanical rather than a manual judgment call each time. Computes
+GUCs from THIS host's live RAM/CPU plus the measured daemon envelope, applies every
+reloadable one immediately (no interruption to a live backend), persists any
+restart-required one via `ALTER SYSTEM` (free, takes effect at the next restart from
+any cause), and RECORDS the before/after into a `job:pg-autotune` watermark
+(`pool_health`/`osiris_fleet_glance.py`'s own `job:%` sick-job convention), so a
+successor or the fleet glance reads what the machine decided, not just that it ran.
 
-NEVER RESTARTS POSTGRES ITSELF — that stays the operator's/Thoth's own hand (CLAUDE.md's
-own law: a worker never restarts services). A restart-required change always prints as
-DEFERRED, loudly, never silently dropped.
+NEVER RESTARTS POSTGRES ITSELF: that stays a human hand (the standing rule: a worker
+never restarts services). A restart-required change always prints as DEFERRED, loudly,
+never silently dropped.
 
     .venv/bin/python scripts/osiris_pg_autotune.py [--headroom N]
 
 Runs via deploy/osiris-pg-autotune.timer (scheduled) and from `osiris deploy` itself (on
-deploy) — see src/cli.py's cmd_deploy.
+deploy), see src/cli.py's cmd_deploy.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 DSN = os.environ.get("DATABASE_URL", "postgresql://osiris:osiris@127.0.0.1:5601/osiris")
 _CURSOR_KEY = "job:pg-autotune"
-_EVERY_SECS = 86400  # daily — matches deploy/osiris-pg-autotune.timer's own cadence
+_EVERY_SECS = 86400  # daily, matches deploy/osiris-pg-autotune.timer's own cadence
 
 
 async def run(*, headroom_target: int = 40) -> dict:

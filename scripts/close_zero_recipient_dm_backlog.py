@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""ZERO-RECIPIENT DM BACKLOG CLOSURE (thread 9d1d41c8's own audit, wave 13 item 1,
-operator's word 2026-09-09). graph_lint(check='zero-recipient-dm') found 67 historical DMs
+"""ZERO-RECIPIENT DM BACKLOG CLOSURE.
+graph_lint(check='zero-recipient-dm') found 67 historical DMs
 with no message_recipients row at all -- mostly the pre-fix tree-ingest-alarm's own daily
-mail to seat:478130b0 (2026-08-19 through 09-02, fixed going forward by thread 358ac1ae)
-plus a handful from the DM-loss class 24f52959 already fixed. This closes the BACKLOG
+mail to one seat (2026-08-19 through 09-02, since fixed going forward)
+plus a handful from an already-fixed DM-loss class. This closes the BACKLOG
 mechanically: NEVER a delete (fleet_messages stays the full historical record, constitution
 #3) -- a compensating message_recipients row per orphaned DM, so the check reads zero live
 and stays a live-only forward signal instead of re-reporting the same dead rows forever.

@@ -1,72 +1,71 @@
-"""Task #142 (Thoth, msg 4012, 2026-08-11): mechanical AST sweep for ruling 60bc15db's
-own shape -- "A FUNCTION THAT CANNOT DISTINGUISH 'NO' FROM 'I DON'T KNOW', AND REPORTS
-'NO'." Fifteen-plus specimens were collected ad hoc, one at a time, across three reigns,
-by accident, while doing something else. This is the first systematic sweep for the
-sixteenth through Nth.
+"""Mechanical AST sweep for a specific false-negative shape identified in an earlier
+review: a function that cannot distinguish "no" from "I don't know", and reports "no".
+Fifteen-plus specimens were collected ad hoc, one at a time, across multiple work
+cycles, by accident, while doing something else. This is the first systematic sweep
+for the sixteenth through Nth.
 
 Read-only, no repairs. Same four rules as both sibling instruments
-(scripts/reachability_sweep.py, task #160; scripts/batch_inject_sweep.py, task from msg
-3985), stated here in Thoth's own words because they are the ruling's own test, not house
-style:
+(scripts/reachability_sweep.py, scripts/batch_inject_sweep.py), stated here in full
+because they are the review's own test, not house style:
   1. RANK BY BLAST RADIUS, not count. A private helper with one caller is noise. A
      function every mount reads is the finding.
   2. NAME WHAT THE INSTRUMENT CANNOT SEE. This cannot mechanically detect "this None
-     means two different things" in general -- it detects two narrow, precise SHAPES of
+     means two different things" in general, it detects two narrow, precise SHAPES of
      that mistake. Everything outside those shapes is a blind spot, said so explicitly.
   3. A COLLAPSED STATE IS NOT AUTOMATICALLY A DEFECT. If both states take the SAME
      REPAIR, collapsing them is correct and clarifying (this is what let the climb-
      continuation fix and the earlier batch/inject sweep both close clean). This script
-     reports SHAPES, not verdicts -- the same-repair test is applied by a human reader,
+     reports SHAPES, not verdicts: the same-repair test is applied by a human reader,
      per candidate, same as both priors.
   4. READ-ONLY. Report the list. Fix nothing. Some of these will be deliberate.
 
-TWO PATTERNS, one instrument, one report -- scoped to src/ (mirroring batch_inject_
+TWO PATTERNS, one instrument, one report, scoped to src/ (mirroring batch_inject_
 sweep's own scope decision; scripts/, shell, and CI/systemd code are named blind spots,
-not covered here, since ruling 60bc15db's own protocol paragraph names shell-specific
-shapes -- `test -z`, exit code through a pipe -- this instrument does not sweep for).
+not covered here, since the earlier review's own protocol paragraph names shell-specific
+shapes, `test -z`, exit code through a pipe, that this instrument does not sweep for).
 
-PATTERN A -- SENTINEL COLLISION. A function containing two or more `return` statements
+PATTERN A: SENTINEL COLLISION. A function containing two or more `return` statements
 that produce the IDENTICAL sentinel-shaped literal (None / False / "" / 0 / [] / {} /
 ()/ set()) from DIFFERENT causes, where at least one is guarded by something that could
 not determine the answer (a broad `except:`/`except Exception:` handler, or an early-
-return guard whose test asserts the SUBJECT DOES NOT EXIST -- `x is None`, `not x`,
+return guard whose test asserts the SUBJECT DOES NOT EXIST, `x is None`, `not x`,
 `len(x) == 0`, `x == []`/`{}`/`""`) and at least one other represents an ordinary,
-unguarded return elsewhere in the same function -- presumed a genuine, determined
-answer. This is ruling 60bc15db's own falsification test, mechanized: force the
+unguarded return elsewhere in the same function, presumed a genuine, determined
+answer. This is the earlier review's own falsification test, mechanized: force the
 determination to fail and check whether the two returns are byte-identical to a caller.
 It generalizes shapes 2 ("returning None/False/[] for both 'no' and 'I don't know'"),
 3 ("a bare except or fail-closed default"), and 5 ("a check whose subject does not
 exist, reported as a negative about that subject") from the dispatch into one shape,
 since all three collapse to the same falsification test.
 
-PATTERN B -- TRUTHY-OMIT KEY IN A RETURNED DICT (shape 1, generalizing specimen 14 --
-Sekhmet's orient()-charter finding -- to every OTHER site with the same idiom). Two
+PATTERN B: TRUTHY-OMIT KEY IN A RETURNED DICT (shape 1, generalizing an earlier
+orient()-charter finding to every OTHER site with the same idiom). Two
 sub-shapes of "a key is present in an output payload iff some condition is truthy, with
 no distinct signal for absence":
   (b1) `if <test>: D[<const key>] = <expr>` with NO else/elif, D is the function's own
-       bare return value (`return D`), AND -- the narrowing that makes this tractable,
-       same lesson as batch_inject_sweep's own Pattern B rebuild -- the SAME function
+       bare return value (`return D`), AND, the narrowing that makes this tractable,
+       same lesson as batch_inject_sweep's own Pattern B rebuild, the SAME function
        ALSO assigns at least one OTHER key into D UNCONDITIONALLY (a sibling `D[key2] =
        ...` outside every if/guard). A first, unnarrowed pass (any no-else conditional
-       key assign, D returned) found 184 sites in one run -- almost all of them the
+       key assign, D returned) found 184 sites in one run, almost all of them the
        ordinary, correct "optional field" idiom (a conditionally-included auth header,
        an optional report line). The sibling-unconditional-key requirement is an
        internal-consistency signal, not a shape-in-isolation one: it flags a function
        that ALREADY reports its other fields unconditionally, proving it knows how to
-       report state plainly, but treats THIS ONE key differently -- exactly orient()'s
+       report state plainly, but treats THIS ONE key differently, exactly orient()'s
        own shape (every other payload key present every time; charter alone omitted).
   (b2) `**(<dict-or-expr> if <test> else {})` inside a Dict literal that is part of a
-       `return` -- the unpack-ternary idiom itself (orient()'s exact shape). No further
+       `return`, the unpack-ternary idiom itself (orient()'s exact shape). No further
        narrowing needed; the shape itself is precise enough to be reviewable as found.
 This instrument CANNOT judge polarity (rule 2/3): omitting a key when falsy is correct
 for some subjects (an absent seat correctly omitting seat_bearings) and wrong for
 others (an absent charter declaration silently reading as "chartered, fine"). It
-reports the SHAPE only; a human applies the ruling's own test per candidate: "TRUTHY-
-MEANS-FINE IS A PROPERTY OF THE SUBJECT, NOT OF THE IDIOM."
+reports the SHAPE only; a human applies the earlier review's own test per candidate:
+TRUTHY-MEANS-FINE IS A PROPERTY OF THE SUBJECT, NOT OF THE IDIOM.
 
-EXCLUDED, per Thoth's explicit instruction (msg 4012) -- already fixed and deployed,
-not to be re-touched or re-reported as new: _read_osiris_key (agents.py, commit
-92487ef) and orient()'s own charter key (mcp_server.py, decision b1193cb7/a29fb6e95f65).
+EXCLUDED, per explicit prior instruction, already fixed and deployed, not to be
+re-touched or re-reported as new: _read_osiris_key (agents.py) and orient()'s own
+charter key (mcp_server.py).
 """
 from __future__ import annotations
 
@@ -79,7 +78,7 @@ from typing import Any
 ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else ".")
 SRC = ROOT / "src"
 
-# already-fixed specimens (msg 4012) -- not this sweep's to re-report
+# already-fixed specimens, not this sweep's to re-report
 EXCLUDED_FUNCS = {"_read_osiris_key"}
 EXCLUDED_FILE_KEY_HINT = ("src/mcp_server.py", "charter")
 
@@ -105,7 +104,7 @@ def _decorator_names(dec_list: list[ast.expr]) -> list[str]:
 
 
 def _body_has_io_hint(node: ast.AST) -> bool:
-    """Same coarse proxy as batch_inject_sweep's own -- an AST sweep cannot measure
+    """Same coarse proxy as batch_inject_sweep's own: an AST sweep cannot measure
     wall-clock, so this stands in for rule 1's estimable-cost signal."""
     for n in ast.walk(node):
         if isinstance(n, ast.Await):
@@ -123,7 +122,7 @@ def _is_root_surface(decorators: list[str]) -> bool:
 
 
 def _own_scope_nodes(fn_node: ast.AST) -> list[ast.AST]:
-    """Every descendant of fn_node's OWN scope -- stops at a nested def/lambda/class, so
+    """Every descendant of fn_node's OWN scope. Stops at a nested def/lambda/class, so
     a Return/Try/If belonging to a closure defined inside this function is never
     mistaken for this function's own control flow (same discipline as both sibling
     sweeps' own scope-respecting walks)."""
@@ -143,7 +142,7 @@ def _own_scope_nodes(fn_node: ast.AST) -> list[ast.AST]:
 
 def _sentinel_shape(expr: ast.expr | None) -> str | None:
     """Normalizes a return VALUE to a comparable sentinel key, or None if the value
-    isn't one of the narrow literal shapes this pattern checks -- a computed expression
+    isn't one of the narrow literal shapes this pattern checks. A computed expression
     (the ordinary, non-sentinel case) is deliberately NOT matched here."""
     if expr is None:
         return "None"  # bare `return`
@@ -190,7 +189,7 @@ def _is_zero_or_empty_const(node: ast.expr) -> bool:
 
 
 def _is_existence_guard_test(test: ast.expr) -> bool:
-    """A test that asserts THE SUBJECT DOES NOT EXIST -- `x is None`, `len(x) == 0`,
+    """A test that asserts THE SUBJECT DOES NOT EXIST: `x is None`, `len(x) == 0`,
     `x == []`/`{}`/`""`, or the broad `not x` (a NAMED imprecision: `not enabled`-style
     booleans unrelated to existence match this too; see named_blind_spots)."""
     if isinstance(test, ast.Compare) and len(test.ops) == 1:
@@ -284,7 +283,7 @@ def find_pattern_b(fn_node: ast.AST, fn_name: str, file: str) -> list[dict[str, 
         return file == EXCLUDED_FILE_KEY_HINT[0] and EXCLUDED_FILE_KEY_HINT[1] in text.lower()
 
     # (b1) `if <test>: D[key] = expr`, no else, D returned bare, AND D has an
-    # unconditional sibling key elsewhere in the function -- the internal-consistency
+    # unconditional sibling key elsewhere in the function: the internal-consistency
     # narrowing (see module docstring); an unnarrowed pass found 184 sites, nearly all
     # the ordinary optional-field idiom.
     for i in if_nodes:

@@ -1,22 +1,20 @@
-"""The Claude harness daemon's control socket — the VISIBLE push lane (thread 4261a0d8).
+"""The Claude harness daemon's control socket: the visible push lane for injected turns.
 
-The operator's front renders the DAEMON'S job stream, not transcript files: a turn a
-foreign `claude -p --resume` appends is real in the record and invisible in the chrome
-(the ghost problem, named and confirmed solved by the operator 2026-07-20). The daemon
-holds every backgrounded session as a JOB and its `reply` op injects text as that job's
-next turn, DAEMON-OWNED — the tile updates, the conversation shows the hop, the addressee
-answers in its own window. Probe evidence and the recovered op vocabulary live in decision
-5722a21a / thread 4261a0d8.
+The UI renders the daemon's job stream, not transcript files. A turn a foreign
+`claude -p --resume` appends is real in the record but invisible in that stream (a gap
+that was confirmed fixed on 2026-07-20). The daemon holds every backgrounded session as
+a job, and its `reply` op injects text as that job's next turn, daemon-owned: the tile
+updates, the conversation shows the hop, and the addressee answers in its own window.
 
 THESE ARE UNDOCUMENTED HARNESS INTERNALS, version-fragile BY NATURE. Everything here
 fails OPEN (None/False, never raises) so the resume lane stays the permanent fallback:
-an EPROTO after a harness update, a missing key, a dead socket — the dispatch simply
+an EPROTO after a harness update, a missing key, a dead socket, the dispatch simply
 falls through to `claude -p --resume` exactly as before this module existed.
 
 Protocol: newline-delimited JSON over the unix socket at
 /tmp/cc-daemon-<uid>/<daemon-id>/control.sock; every request carries {proto: 1} and
 privileged ops carry auth = the contents of ~/.claude/daemon/control.key (0600,
-operator-owned; the worker runs as the same user).
+owned by the user; the worker runs as the same user).
 """
 from __future__ import annotations
 
@@ -70,7 +68,7 @@ async def _call(sock: Path, payload: dict[str, Any], wait_secs: float = _TIMEOUT
 
 
 async def list_jobs() -> list[dict[str, Any]]:
-    """Every job every reachable daemon holds — the agents-view tiles, as data. Each row
+    """Every job every reachable daemon holds, as data for the agents-view tiles. Each row
     carries its origin socket under `_sock` so a later `reply` reaches the same daemon."""
     out: list[dict[str, Any]] = []
     for sock in _sock_paths():
@@ -81,7 +79,7 @@ async def list_jobs() -> list[dict[str, Any]]:
 
 
 async def job_for(ids: set[str]) -> dict[str, Any] | None:
-    """The daemon job holding one of these identities — matched on the job SHORT (the
+    """The daemon job holding one of these identities. Matched on the job SHORT (the
     CLAUDE_JOB_DIR basename) or the sessionId (full or 8-char prefix), because a session
     resumed across jobs wears a short that differs from its session id."""
     if not ids:
@@ -94,21 +92,22 @@ async def job_for(ids: set[str]) -> dict[str, Any] | None:
 
 
 async def reply(job: dict[str, Any], text: str) -> bool:
-    """Inject `text` as the job's next turn — daemon-owned, chrome-visible. True only on
-    the daemon's own {ok:true}; every failure is False and the caller falls through.
+    """Inject `text` as the job's next turn, daemon-owned and visible in the UI. True only
+    on the daemon's own {ok:true}; every failure is False and the caller falls through.
 
-    SANCTIONED, NOT ILLEGAL (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f).
-    This rides the Claude-harness daemon's op='reply' control-socket channel. The house read
-    it as an RCE and disclosed it; Anthropic reviewed and deemed the behavior INTENDED DESIGN,
-    so the old prohibition ("do NOT build new machinery on it") is WITHDRAWN — build freely.
+    SANCTIONED, NOT ILLEGAL. This rides the Claude-harness daemon's op='reply'
+    control-socket channel. It was initially reported as an RCE and disclosed; Anthropic
+    reviewed it and deemed the behavior intended design, so the earlier prohibition on
+    building new machinery on it is withdrawn.
     TWO THINGS THAT DID NOT CHANGE, and a reader who skips them will misuse this: (1) an
-    injected turn is stamped origin.kind='human' by the harness no matter who wrote it, so any
-    caller must carry its OWN provenance marker rather than let that label stand (wake() does
-    exactly this) — attribution honesty is ours to keep, not the harness's to give; (2) this
-    is an UNDOCUMENTED INTERNAL of someone else's product, sanctioned to use but free to break
-    without notice, so the injectable `nudge` parameter in trigger.trigger_mail_tick stays as
-    the swap seam — operational insurance now rather than legal cover. (`job_for` above is a
-    READ of daemon job state — the authoritative liveness Ra's reachability read consults.)"""
+    injected turn is stamped origin.kind='human' by the harness no matter who wrote it, so
+    any caller must carry its own provenance marker rather than let that label stand
+    (wake() does exactly this). Attribution honesty is ours to keep, not the harness's to
+    give. (2) this is an undocumented internal of someone else's product, sanctioned to
+    use but free to break without notice, so the injectable `nudge` parameter in
+    trigger.trigger_mail_tick stays as the swap seam, kept as operational insurance rather
+    than legal cover. (`job_for` above is a read of daemon job state, the same liveness
+    read that reachability checks consult.)"""
     key = _control_key()
     raw = str(job.get("_sock") or "")
     short = str(job.get("short") or "")

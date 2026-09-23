@@ -5,13 +5,13 @@ trust: mid-sentence fragments (`anchor), app start gated on…`), commits that D
 miner's own markers surfacing as threads, and stale rows from older miner versions living
 forever because a re-mine only ever ADDED. Three shared defenses live here:
 
-* `well_bounded` — a capture that starts or ends mid-sentence betrays itself with
+* `well_bounded`: a capture that starts or ends mid-sentence betrays itself with
   unbalanced delimiters (a `)` with no opener, an odd number of quotes). Cheap, and it
   rejects the fragments a lowercase-only guard can't (`Leon" vs "Daniel Leon") render…`
   starts uppercase).
-* `unquoted` — a marker inside quotes/backticks is someone *talking about* the marker,
+* `unquoted`: a marker inside quotes/backticks is someone *talking about* the marker,
   not using it. Markers must match the text with quoted spans removed.
-* `reconcile_mined` — re-mining must HEAL, not just add: mined objects the fresh mine no
+* `reconcile_mined`: re-mining must HEAL, not just add. Mined objects the fresh mine no
   longer produces are archived via the event-sourced `Actions.set_status` (reversible),
   and objects the miner itself archived are resurrected if the text comes back. A human
   archive is never overridden (the last archive event's actor must be the miner).
@@ -34,11 +34,11 @@ def well_bounded(s: str) -> bool:
     """True when the fragment starts/ends at a plausible sentence boundary.
 
     A split artifact carries scars: a closing paren before any opener (``anchor), app
-    start…``), unequal paren counts in either direction (``…phrase "THE WALL" (a real`` —
+    start…``), unequal paren counts in either direction (``…phrase "THE WALL" (a real``,
     cut off mid-parenthetical), or an odd number of double quotes (``Leon" vs "Daniel
-    Leon")`` — the opener lives in the sentence the split ate. Deliberately strict: a
-    bare list token ("2) the satellite") also reads as unbalanced and is rejected —
-    tight stays trustworthy.
+    Leon")``, where the opener lives in the sentence the split ate. Deliberately strict: a
+    bare list token ("2) the satellite") also reads as unbalanced and is rejected,
+    so tight stays trustworthy.
     """
     if not s or s[0] in ")]}":
         return False
@@ -53,7 +53,7 @@ def well_bounded(s: str) -> bool:
 
 
 def unquoted(s: str) -> str:
-    """The fragment with quoted/backticked spans removed — the text actually ASSERTED.
+    """The fragment with quoted/backticked spans removed: the text actually ASSERTED.
 
     A marker that only occurs inside quotes ("only the exact phrase \"THE WALL\"…") is
     documentation about the miner, and must not count as a marker hit.
@@ -74,7 +74,7 @@ async def reconcile_mined(
 
     Scope is strictly the miner's own output: the canonical prefix (``decision:`` /
     ``thread:``) AND at least one assertion from the miner's source. Archival is the
-    event-sourced ``set_status`` (an `archive` object_event — reversible, auditable).
+    event-sourced ``set_status`` (an `archive` object_event, reversible, auditable).
     Resurrection only fires when the LAST archive event was the miner's own actor, so a
     human's deliberate archive is never undone by a cron re-mine.
     """
@@ -82,7 +82,7 @@ async def reconcile_mined(
     # Ownership = the miner authored the DEFINING assertion (`summary`), not merely touched
     # the object with some later assertion. Otherwise a stray miner write onto a session
     # object (e.g. a false auto-resolve) would make it look mined and get it archived as
-    # "stale" — silently deleting a session's write-back. Scope stays inside the source.
+    # "stale", silently deleting a session's write-back. Scope stays inside the source.
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, o.status FROM objects o "
         "WHERE o.type=$1 AND o.canonical LIKE $2 || '%' "
@@ -113,14 +113,14 @@ async def reconcile_mined(
         elif r["status"] == "active":
             await actions.set_status(
                 oid, "archived",
-                "stale mined object — a re-mine of the commit record no longer produces it",
+                "stale mined object: a re-mine of the commit record no longer produces it",
                 source_id, case_id,
             )
             archived += 1
     return {"archived": archived, "resurrected": resurrected}
 
 
-# Generic engineering vocabulary — present in half the commits, so a SHARED generic word is
+# Generic engineering vocabulary: present in half the commits, so a SHARED generic word is
 # no evidence two memories are the same. Near-dup detection keys on shared DISTINCTIVE tokens
 # (the project's own nouns: renderer, satellite, composer, briefing), never these.
 _GENERIC = frozenset({
@@ -144,21 +144,22 @@ async def consolidate_memory(
     min_shared: int = 5, min_containment: float = 0.6,
 ) -> dict[str, int]:
     """Collapse near-duplicate memory objects (Thread / Decision) the miners mint in
-    differently-worded copies — the noise a session watches accrete when the session-miner
+    differently-worded copies: the noise a session watches accrete when the session-miner
     re-senses work it already captured (distinct summaries hash to distinct objects, so the
     per-object grade read can't fold them; this is entity-level dedup).
 
     ONE anchored DIRECTION. The only auto-merge is a DERIVED echo folding into a DELIBERATE
-    (SELF_DECLARED) capture — every merge is anchored by a human's deliberate memory, into
+    (SELF_DECLARED) capture: every merge is anchored by a human's deliberate memory, into
     which the echo folds (reversibly, event-sourced). The two ambiguous cases are surfaced
-    for review, NEVER silently merged (the membrane, constitution #6): two deliberate captures
-    (genuine divergence — a human's call to make), and two DERIVED echoes (near-dups with no
-    deliberate anchor — a job for a judge that can tell "do X to M5" from "do Y to M5", which
-    bag-of-tokens cannot). A dry run on the live graph is what drew this line: token overlap
-    alone fused a blocker with the thing it blocks; the deliberate anchor is the guard.
+    for review, NEVER silently merged (governed by the never-silent-merge invariant): two
+    deliberate captures (genuine divergence, a human's call to make), and two DERIVED echoes
+    (near-dups with no deliberate anchor, a job for a judge that can tell "do X to M5" from
+    "do Y to M5", which bag-of-tokens cannot). A dry run on the live graph is what drew this
+    line: token overlap alone fused a blocker with the thing it blocks; the deliberate anchor
+    is the guard.
 
     Match = >=`min_shared` shared distinctive tokens AND those cover >=`min_containment` of
-    the smaller summary (containment, not Jaccard — tolerant of one summary rewording the
+    the smaller summary (containment, not Jaccard: tolerant of one summary rewording the
     other at a different length). Conservative by design: a missed merge is cheap noise; a
     wrong merge is bounded to a DERIVED loser and reversible."""
     pool = actions.pool
@@ -194,7 +195,7 @@ async def consolidate_memory(
                 continue
             if not (w_delib and not l_delib):
                 # merge ONLY a DERIVED echo into a deliberate capture. Two deliberate (genuine
-                # divergence) and two DERIVED (no anchor — a judge's job) are surfaced, not
+                # divergence) and two DERIVED (no anchor, a judge's job) are surfaced, not
                 # merged: the loop closes, but never silently on an uncertain call.
                 review += 1
                 continue
@@ -205,6 +206,6 @@ async def consolidate_memory(
                     "consolidate-memory")
                 gone.add(l_id)
                 merged += 1
-            except ActionError:  # already merged in a prior step of a chain — skip
+            except ActionError:  # already merged in a prior step of a chain, skip
                 pass
     return {f"{object_type.lower()}s_merged": merged, f"{object_type.lower()}s_for_review": review}

@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Runs INSIDE the "stranger machine" container (see ../Dockerfile). Replays
+# Runs INSIDE the fresh-install test container (see ../Dockerfile). Replays
 # docs/INSTALL.md verbatim, in the order the doc presents it, and records PASS/WALL per
-# step to $OUT_DIR/log.txt + walls.txt. It does not fix anything it finds broken — a wall
-# hit here is this pass's product, not a bug for this script to paper over (task #97,
-# mail thread 3715). See scripts/stranger_test.sh for what this container does and does
-# not isolate from the host.
-set +e  # one wall must not hide the next — continue past failures
+# step to $OUT_DIR/log.txt + walls.txt. It does not fix anything it finds broken: a wall
+# hit here is this pass's product, not a bug for this script to paper over. See
+# scripts/stranger_test.sh for what this container does and does not isolate from the
+# host.
+set +e  # one wall must not hide the next, continue past failures
 
 STRANGER_SOURCE="${STRANGER_SOURCE:-file:///mirror/osiris.git}"
 OUT_DIR="${OUT_DIR:-/out}"
@@ -18,7 +18,7 @@ WALLS="$OUT_DIR/walls.txt"
 say() { printf '%s\n' "$*" | tee -a "$LOG"; }
 
 # step NAME -- CMD    runs CMD via bash -c, streams+logs output, records PASS/WALL.
-# Each call is its own subshell (cd/export don't persist across steps) — anything a later
+# Each call is its own subshell (cd/export don't persist across steps), so anything a later
 # step needs (DATABASE_URL, REDIS_URL) is exported in run.sh's own top-level scope instead,
 # matching where INSTALL.md itself puts those export lines.
 step() {
@@ -41,7 +41,7 @@ say "source: $STRANGER_SOURCE"
 
 # Harness plumbing, not a doc step: the local-mirror substitution (see stranger_test.sh's
 # header) bind-mounts a host-owned bare repo in; git >=2.35.2 refuses to touch a repo it
-# doesn't own unless told to trust it. A real `https://` clone never hits this — it is an
+# doesn't own unless told to trust it. A real `https://` clone never hits this: it is an
 # artifact of the substitution, not a product finding, so it is fixed here rather than left
 # to cascade into every later step (which is exactly what it did the first time this ran).
 git config --global --add safe.directory /mirror/osiris.git 2>/dev/null || true
@@ -83,7 +83,7 @@ step "3. schema + seed" \
   "cd /work/osiris && uv run alembic upgrade head && uv run python -m src.init"
 
 # The doc's own claim (docs/INSTALL.md's verify line, README/CONTRIBUTING's aren't this
-# specific) is that a bare GET here correctly returns 406, not that it returns 2xx — so
+# specific) is that a bare GET here correctly returns 406, not that it returns 2xx, so
 # the check below asserts exactly 406, it does not use curl -f (which would treat 406 as
 # a failure, i.e. would flunk the documented-correct behavior).
 step "4. three surfaces + doc's own health verify" \
@@ -100,11 +100,11 @@ say "--- surface logs (tails) ---"
 for f in /tmp/console.log /tmp/worker.log /tmp/mcp.log; do
   say "-- $f --"; tail -20 "$f" 2>/dev/null | tee -a "$LOG"
 done
-# NOTE: the three surfaces started above are KEPT ALIVE through the two operator-requested
-# proofs below (dispatch 2c63770d, wave 6) — both need the live MCP server on :8790 (Proof
-# A's rename cascade goes through the same orchestrator code the MCP `project(action=
-# 'rename')` tool wraps; Proof B's whisper hook posts to :8790/automount). Teardown (the
-# pkill trio) moves to just before step 7a, past both proofs — see there.
+# NOTE: the three surfaces started above are KEPT ALIVE through the two proofs below,
+# both of which need the live MCP server on :8790 (Proof A's rename cascade goes through
+# the same orchestrator code the MCP `project(action='rename')` tool wraps; Proof B's
+# session-start hook posts to :8790/automount). Teardown (the pkill trio) moves to just
+# before step 7a, past both proofs; see there.
 
 say ""
 say "=== PROOF A (dispatch 2c63770d): mint a project + two seats, rename with the cascade, ==="
@@ -120,13 +120,13 @@ step "5a. mint a coordinator seat + strangerproj's PIN (osiris new)" \
    test -s /tmp/coord_seat.txt && \
    echo \"captured coordinator seat: \$(cat /tmp/coord_seat.txt)\""
 
-# osiris new/mint-seat's own --project only writes the SEAT's pin — it does not itself mint
+# osiris new/mint-seat's own --project only writes the SEAT's pin, it does not itself mint
 # a graph SoftwareProject (found live here: charter-for and rename-project both refused
 # 'strangerproj' with 'not a known repo'/'no such SoftwareProject' until this step ran; a
-# harness-scripting gap, not a cascade bug — every one of osiris new/mint-seat/charter-for/
-# rename-project's own docstrings independently says so, this just hadn't wired the doors in
-# the right order the first time). osiris create-project is the SAME create_project the MCP
-# tool wraps (wave 3, thread 5bf6447c) — the actual mint.
+# harness-scripting gap, not a cascade bug: every one of osiris new/mint-seat/charter-for/
+# rename-project's own docstrings independently says so, this just hadn't wired the calls
+# in the right order the first time). osiris create-project is the SAME create_project the
+# MCP tool wraps: the actual mint.
 step "5b. actually MINT the strangerproj SoftwareProject (osiris create-project)" \
   "cd /work/osiris && \
    uv run osiris create-project strangerproj \
@@ -140,9 +140,9 @@ step "5c. mint a second, managed seat under the coordinator (osiris mint-seat) �
      | tee /tmp/mint_worker.out"
 
 # charter-for's own receipt never puts a per-repo refusal under 'error' (the whole-call key
-# cmd_charter_for checks for its own exit code) — a rejected repo lands under 'rejected' with
-# the call still exiting 0 ('one bad item never sinks the whole batch', charter_for's own
-# docstring) — so this step's own grep -v on 'rejected:' is the thing that actually catches a
+# cmd_charter_for checks for its own exit code): a rejected repo lands under 'rejected' with
+# the call still exiting 0 (one bad item never sinks the whole batch, per charter_for's own
+# docstring), so this step's own grep -v on 'rejected:' is the thing that actually catches a
 # silently-ungoverned seat, not the CLI's exit code alone.
 step "5d. charter the coordinator seat to GOVERN strangerproj (osiris charter-for)" \
   "cd /work/osiris && \
@@ -209,12 +209,12 @@ PINEOF
    cat /work/strangerseat-tree/.osiris"
 
 # python3 note: this container has no SYSTEM python3 at all (only uv's own managed toolchain
-# under ~/.local/share/uv/python/, no PATH symlink) — a bare 'python3' wall-hit here on first
-# run is a harness-scripting gap, not a doc finding (docs/INSTALL.md's own real-world target
-# is a Claude Code harness invoking this SAME hook script with ITS OWN system python3, which
-# a real operator's box has); 'uv run python3' resolves the SAME osiris_hook.py against the
-# project's own managed interpreter instead, matching how every other step already invokes
-# python in this harness.
+# under ~/.local/share/uv/python/, no PATH symlink), so a bare 'python3' wall-hit here on
+# first run is a harness-scripting gap, not a doc finding (docs/INSTALL.md's own real-world
+# target is a Claude Code harness invoking this SAME hook script with ITS OWN system
+# python3, which a real user's machine has); 'uv run python3' resolves the SAME
+# osiris_hook.py against the project's own managed interpreter instead, matching how every
+# other step already invokes python in this harness.
 step "6e. simulate a SessionStart whisper (no prior mount) — assert the mechanical sentence" \
   "cd /work/osiris && \
    echo '{\"session_id\": \"strangertest-session-1\", \"cwd\": \"/work/strangerseat-tree\", \"source\": \"startup\"}' \
@@ -232,16 +232,15 @@ step "7a. pytest (all three docs agree on this one)" "cd /work/osiris && uv run 
 
 # The rest of step 7 USED TO extract the gate lines from the checked-out docs at run
 # time, on the theory that grepping the live files means a future doc edit gets
-# re-tested automatically. It went stale anyway (thread 2edf2878, decision fb8e723c):
-# README.md and docs/INSTALL.md were consolidated to point at CONTRIBUTING.md rather
-# than each repeating the commands, so the grep came back empty for both and steps
-# 7b-7d silently never ran — the exact "walls hidden by staleness" failure this
-# extraction was supposed to prevent, just from the opposite direction (a doc that
-# stopped saying something, not one that started saying something different). Fixed
-# by running the two real gate commands directly, hardcoded — they can no longer
-# silently skip on a doc-structure change, at the cost of needing a manual edit here
-# if the commands themselves ever change (the same trade CONTRIBUTING.md itself makes
-# by being the one place that states them).
+# re-tested automatically. It went stale anyway: README.md and docs/INSTALL.md were
+# consolidated to point at CONTRIBUTING.md rather than each repeating the commands, so
+# the grep came back empty for both and steps 7b-7d silently never ran, the exact
+# "walls hidden by staleness" failure this extraction was supposed to prevent, just
+# from the opposite direction (a doc that stopped saying something, not one that
+# started saying something different). Fixed by running the two real gate commands
+# directly, hardcoded: they can no longer silently skip on a doc-structure change, at
+# the cost of needing a manual edit here if the commands themselves ever change (the
+# same trade CONTRIBUTING.md itself makes by being the one place that states them).
 step "7b. ruff" "cd /work/osiris && uv run ruff check src tests"
 step "7c. mypy" "cd /work/osiris && uv run mypy --strict src"
 

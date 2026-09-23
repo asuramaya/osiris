@@ -1,21 +1,21 @@
-"""AI-extraction driver — the universal parser (cron Phase 4).
+"""AI-extraction driver: the universal parser (cron Phase 4).
 
 Most sources need a bespoke parser. This one doesn't: it hands a messy document to
 an LLM and gets back graded entities and relationships, emitted through the SAME
-Actions narrow waist as every other driver. It collapses the per-source parser tax —
+Actions narrow waist as every other driver. It collapses the per-source parser tax:
 any text (a filing, a press release, a court PDF's text) becomes graph nodes.
 
 Two deliberate design choices:
 
   * **Graded DERIVED.** An LLM's reading of a document is an inference, not an
-    authoritative fact — so everything it extracts is `DERIVED` (0.4). The evidence
+    authoritative fact, so everything it extracts is `DERIVED` (0.4). The evidence
     taxonomy already encodes AI uncertainty: a DERIVED node is a SPECULATIVE LEAF in
     the frontier, so an AI guess never spawns crawls until a second, independent
     source corroborates it. The model's confidence is a lead to verify, not a fact.
   * **The LLM is an injected seam.** `LLMClient` is a Protocol; tests use a fake that
     returns canned JSON (hermetic, no network, no cost). `AnthropicClient` is the live
     impl over httpx (no SDK dep). A document→entities task is flash-tier, so the model
-    defaults to Haiku — Opus would be wasteful per-document at cron scale.
+    defaults to Haiku: Opus would be wasteful per-document at cron scale.
 """
 
 from __future__ import annotations
@@ -96,7 +96,7 @@ def _canonical(type_: str, name: str) -> str:
 def parse_extraction(raw: str) -> ExtractionResult:
     """Pure: LLM JSON text -> a validated ExtractionResult. Tolerant of fences and
     of missing fields; classifies entity type conservatively (the model's hint is
-    cross-checked against the Person/Org classifier). Never raises on a bad shape —
+    cross-checked against the Person/Org classifier). Never raises on a bad shape:
     returns what it can salvage, because an extractor must not crash a cron."""
     try:
         data = json.loads(_strip_fences(raw))
@@ -114,7 +114,7 @@ def parse_extraction(raw: str) -> ExtractionResult:
         if not name:
             continue
         hinted = e.get("type")
-        # The classifier is conservative — it calls something an Organization only on a
+        # The classifier is conservative: it calls something an Organization only on a
         # strong signal (a legal-form token like LLC/Corp). That precision overrides a
         # bad model hint ("Acme Holdings LLC" labelled Person); otherwise trust a valid
         # hint, and fall back to the classifier (which defaults a plain name to Person).
@@ -159,12 +159,13 @@ async def extract_document(
     to the configured provider (the deployment wires the model by key, not by passing a
     client); tests inject a fake. Returns counts + each canonical. Idempotent.
 
-    RECORDS ITS OWN SPEND (auto-ingest cost levers, thread ccee2304, mail 9873): before
-    this, only session-extract called `record_usage` — `usage_summary`'s own totals were
-    the auto-ingest's cost, not all LLM spend, silently missing every document-extract
-    call. Same shape session-extract already uses: `usage_out` collects the completion's
-    real tokens/cost, `purpose='document-extract'` keeps it a distinct line in the
-    per-purpose telemetry rather than merging into session-extract's own count."""
+    RECORDS ITS OWN SPEND (auto-ingest cost levers): before this change, only
+    session-extract called `record_usage`, so `usage_summary`'s own totals reflected
+    only the auto-ingest's cost, not all LLM spend, silently missing every
+    document-extract call. This uses the same shape session-extract already uses:
+    `usage_out` collects the completion's real tokens/cost, and
+    `purpose='document-extract'` keeps it a distinct line in the per-purpose
+    telemetry rather than merging into session-extract's own count."""
     llm = llm or llm_provider()
     if llm is None:
         raise RuntimeError("no LLM provider — set ANTHROPIC_API_KEY (the extraction seam)")
@@ -196,7 +197,7 @@ async def extract_document(
         if f is None or t is None:
             continue
         # Link types are a CONTROLLED vocabulary (ontology/schema.py). An LLM emits
-        # free-form phrases ("officer_of", "acquired_by", …) — a known one passes
+        # free-form phrases ("officer_of", "acquired_by", …), and a known one passes
         # through; anything else is demoted to a generic `related_to` link with the
         # raw phrase kept in `relation`. Nuance survives as data; the catalog stays clean.
         if await is_known_link_type(actions.pool, rel.type):
