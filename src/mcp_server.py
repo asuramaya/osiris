@@ -3613,7 +3613,7 @@ async def _seat_impl(
         assert handle is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — minting a worker is a seat's own act",
+            return {"error": "mount first: minting a worker is a seat's own act",
                              "why": _anchorless(ctx)}
         from src.orchestrator.seats import held_seat
         pool = await _pool_get()
@@ -3679,7 +3679,7 @@ async def _seat_impl(
         assert target is not None and handle is not None  # already validated
         ident = await _ident_for(ctx, session_anchor)
         if ident is None:
-            return {"error": "mount first — promoting another identity is a mind's act, "
+            return {"error": "mount first: promoting another identity is a deliberate act, "
                              "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.walkin import promote_visitor as _promote_visitor
         return await _promote_visitor(
@@ -3689,7 +3689,7 @@ async def _seat_impl(
     if action == "pause":
         ident = await _ident_for(ctx, session_anchor)
         if ident is None:
-            return {"error": "mount first — a pause must say whose hand pulled the lever",
+            return {"error": "mount first: a pause must say whose hand pulled the lever",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         a = Actions(pool)
@@ -3702,7 +3702,7 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — vacating a seat's holder is a deliberate act "
+            return {"error": "mount first: vacating a seat's holder is a deliberate act "
                              "on the record", "why": _anchorless(ctx)}
         from src.orchestrator.trigger import vacate_dead_seat
         return await vacate_dead_seat(Actions(await _pool_get()), seat_id=target,
@@ -3717,7 +3717,7 @@ async def _seat_impl(
         assert target is not None and new_cwd is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a rebind is a mind's act, and the graph "
+            return {"error": "mount first: a rebind is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.mounts import rebind_seat as _rebind
         result = await _rebind(Actions(await _pool_get()), seat_or_agent=target,
@@ -3735,7 +3735,7 @@ async def _seat_impl(
         assert target is not None and tree_cwd is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a tree binding is a mind's act, and the "
+            return {"error": "mount first: a tree binding is a deliberate act, and the "
                              "graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.seats import bind_seat_tree as _bind_seat_tree
         return await _bind_seat_tree(Actions(await _pool_get()), seat_id=target,
@@ -3748,7 +3748,7 @@ async def _seat_impl(
     if action == "refresh_project":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — nothing to refresh", "why": _anchorless(ctx)}
+            return {"error": "mount first: nothing to refresh", "why": _anchorless(ctx)}
         pool = await _pool_get()
         before = ident.project
         await _resolve_project_seat_first(pool, ident)
@@ -3757,7 +3757,7 @@ async def _seat_impl(
     if action == "charter":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a charter names WHOSE seat rules which repos",
+            return {"error": "mount first: a charter names WHOSE seat rules which repos",
                     "why": _anchorless(ctx)}
         from src.orchestrator.charter import charter_of, set_charter
         from src.orchestrator.seats import held_seat
@@ -3794,8 +3794,8 @@ async def _seat_impl(
         assert target is not None and repos is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a charter declared for another seat is a "
-                             "mind's act, and the graph must know whose",
+            return {"error": "mount first: a charter declared for another seat is a "
+                             "deliberate act, and the graph must know whose",
                     "why": _anchorless(ctx)}
         from src.orchestrator.charter import charter_for as _charter_for
         pool = await _pool_get()
@@ -3816,7 +3816,7 @@ async def _seat_impl(
         assert target is not None and source_paths is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a transcript heal is a deliberate act on "
+            return {"error": "mount first: a transcript heal is a deliberate act on "
                              "the record", "why": _anchorless(ctx)}
         from src.orchestrator.transcript_splice import heal_seat_transcript as _heal
         return await _heal(await _pool_get(), target, source_paths, dry_run=dry_run,
@@ -3825,7 +3825,7 @@ async def _seat_impl(
     if action == "transition_project":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a project transition is a seat's own act",
+            return {"error": "mount first: a project transition is a seat's own act",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.transition import transition_seat_project as _transition
@@ -3849,7 +3849,7 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a correction is a mind's act, and the graph "
+            return {"error": "mount first: a correction is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.seats import resync_seat_house_third_party
         resolved_house = None if new_house is _UNSET else new_house
@@ -3860,7 +3860,7 @@ async def _seat_impl(
     if action == "sweep_disk":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a disk sweep is a deliberate act on the "
+            return {"error": "mount first: a disk sweep is a deliberate act on the "
                              "record", "why": _anchorless(ctx)}
         handle_ = (target or "").strip()
         if not handle_:
@@ -3879,7 +3879,7 @@ async def _seat_impl(
         assert target is not None and new_handle is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a rename is a mind's act, and the graph "
+            return {"error": "mount first: a rename is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.seats import rename_seat as _rename_seat
         return await _rename_seat(Actions(await _pool_get()), seat_id=target,
@@ -3889,7 +3889,7 @@ async def _seat_impl(
         assert target is not None and attended is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a seat's attendance signal is a mind's act, "
+            return {"error": "mount first: a seat's attendance signal is a deliberate act, "
                              "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.seats import set_seat_attended as _set_seat_attended
         return await _set_seat_attended(Actions(await _pool_get()), seat_id=target,
@@ -3899,7 +3899,7 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a reissue is a mind's act, and the graph "
+            return {"error": "mount first: a reissue is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.boot_compiler import reissue_office as _reissue_office
         return await _reissue_office(Actions(await _pool_get()), seat_id=target,
@@ -3909,7 +3909,7 @@ async def _seat_impl(
         assert target is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a seat-directory ceremony is a mind's act, "
+            return {"error": "mount first: a seat-directory setup step is a deliberate act, "
                              "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.offices import establish_office as _establish
         return await _establish(Actions(await _pool_get()), seat_or_agent=target,
@@ -3919,7 +3919,7 @@ async def _seat_impl(
         assert stale_project is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — invalidating a works_in edge is a deliberate "
+            return {"error": "mount first: invalidating a works_in edge is a deliberate "
                              "act on the record", "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
@@ -3945,7 +3945,7 @@ async def _seat_impl(
         assert target is not None and agent_id is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a third-party rehold is a deliberate act on "
+            return {"error": "mount first: a third-party rehold is a deliberate act on "
                              "the record", "why": _anchorless(ctx)}
         from src.orchestrator.seats import rehold_seat as _rehold_seat
         return await _rehold_seat(
@@ -3956,7 +3956,7 @@ async def _seat_impl(
         assert new_house is not None and new_house is not _UNSET  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — house-correct is a seat's own act",
+            return {"error": "mount first: house-correct is a seat's own act",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.seats import correct_house as _correct_house
@@ -3973,7 +3973,7 @@ async def _seat_impl(
         assert key is not None  # pre-dispatch validation already required it
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a pin correction is a seat's own act",
+            return {"error": "mount first: a pin correction is a seat's own act",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.offices import correct_own_pin_value as _correct_own_pin_value
@@ -3985,7 +3985,7 @@ async def _seat_impl(
         assert target is not None and key is not None  # already validated
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a correction is a mind's act, and the graph "
+            return {"error": "mount first: a correction is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.offices import correct_pin_value_third_party
@@ -3997,7 +3997,7 @@ async def _seat_impl(
     if action == "revert_pin":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — reverting a pin is a seat's own act",
+            return {"error": "mount first: reverting a pin is a seat's own act",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.offices import revert_own_pin_write as _revert_own_pin_write
@@ -4055,7 +4055,7 @@ async def _seat_impl(
         assert target is not None and workers is not None  # already validated
         ident = await _ident_for(ctx, session_anchor)
         if ident is None:
-            return {"error": "mount first — a promotion must say whose hand called it",
+            return {"error": "mount first: a promotion must say whose hand called it",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.seats import promote_seat as _promote_seat
@@ -5918,20 +5918,20 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     mail nobody will read; it also refuses when `body` opens with a real seat's name
     (e.g. 'name - ...') or @handle whose holder sits in a different project than `to`,
     so you name the right `to_agent` instead of silently delivering to the wrong room.
-    `addressee_resolved` in the receipt names what it found, agreeing or not.
+    `addressee_resolved` in the result names what it found, agreeing or not.
     `reply_to=<id>` answers a message (routes by channel, joins the thread) and settles it.
     At-least-once, deduped. For durable knowledge use record_decision/open_thread instead.
 
     `desk` triages an operator brief: 'decision' | 'hands' | 'fyi'. `grade` triages
     project mail: 'ask' (named in the recipient's unread count) | 'fyi' (an ack settles
-    it); ungraded is never guessed. `dispatch` in the receipt names what happened on
+    it); ungraded is never guessed. `dispatch` in the result names what happened on
     delivery: queued/poked/resumed/woke, or a brake mode naming why nobody was reached.
-    A direct message's receipt echoes `dm_to`/`seat`/`lineage_head`; compare against a
+    A direct message's result echoes `dm_to`/`seat`/`lineage_head`; compare against a
     stale address before trusting "sent". `require_seat=True` refuses on an unclaimed
     target. `threads` transfers ownership of existing thread(s) to a direct message's
     addressee in the same act (exact ref only, never inferred from `body`);
     `threads_stamped` names what moved. A direct message or graded 'ask' runs the same
-    prior-art search record_decision does, surfaced on both your receipt and the
+    prior-art search record_decision does, surfaced on both your result and the
     delivered message.
 
     `want_prior_art`/`want_listener` return the full prior_art list and listener block;
@@ -6211,7 +6211,7 @@ async def resume(target: str, message: str = "", model: str | None = None,
     `status`: launched (mode: resumed) | refused-nothing-to-resume | refused-resume-
     unknown (a resumable-looking session with no verified record; the exact
     `claude -p --resume <sid>` a human can run by hand is in `detail`) |
-    refused-not-your-worker. `resume_check` on every receipt names the decision (which
+    refused-not-your-worker. `resume_check` on every result names the decision (which
     generation, how many hops back)."""
     ident = await _ident_for(ctx, session_anchor)
     if ident is None:
@@ -6747,7 +6747,7 @@ async def _dispatch_backfill(
 
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — a backfill is a mind's act, and the graph must "
+        return {"error": "mount first: a backfill is a deliberate act, and the graph must "
                          "know whose", "why": _anchorless(ctx)}
     pool = await _pool_get()
     return await run_backfill(
@@ -6940,7 +6940,7 @@ async def _reconcile_seat_identity_impl(
     prior ruling forbids, not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — reconcile_seat_identity is a seat's own act",
+        return {"error": "mount first: reconcile_seat_identity is a seat's own act",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
     if seat_id is None:
@@ -6999,7 +6999,7 @@ async def _heal_seat_anchor_impl(
     not a fix)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — heal_seat_anchor is a seat's own act",
+        return {"error": "mount first: heal_seat_anchor is a seat's own act",
                 "why": _anchorless(ctx)}
     if seat_id is None:
         from src.orchestrator.seats import held_seat
@@ -7169,7 +7169,7 @@ async def _project_impl(
         assert name is not None and because is not None  # pre-dispatch validation
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — creating a project is a deliberate act on "
+            return {"error": "mount first: creating a project is a deliberate act on "
                              "the record", "why": _anchorless(ctx)}
         from src.orchestrator.project_identity import create_project as _create_project
         return await _create_project(Actions(await _pool_get()), name=name, because=because,
@@ -7180,7 +7180,7 @@ async def _project_impl(
         assert project is not None and new_name is not None and because is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a rename is a deliberate act on the record",
+            return {"error": "mount first: a rename is a deliberate act on the record",
                     "why": _anchorless(ctx)}
         pool = await _pool_get()
         from src.orchestrator.project_identity import (
@@ -7270,7 +7270,7 @@ async def _project_impl(
         assert seat_id is not None  # pre-dispatch validation guaranteed this
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — reading identity evidence needs a resolvable "
+            return {"error": "mount first: reading identity evidence needs a resolvable "
                              "caller", "why": _anchorless(ctx)}
         from src.orchestrator.project_identity import (
             project_identity_evidence as _project_identity_evidence,
@@ -7281,7 +7281,7 @@ async def _project_impl(
         assert project is not None and name is not None and value is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — asserting a project property is a deliberate "
+            return {"error": "mount first: asserting a project property is a deliberate "
                              "act on the record", "why": _anchorless(ctx)}
         from src.orchestrator.projects import (
             assert_project_property as _assert_project_property,
@@ -7297,7 +7297,7 @@ async def _project_impl(
         assert project is not None and tag is not None and because is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — declaring a window tag is a deliberate act "
+            return {"error": "mount first: declaring a window tag is a deliberate act "
                              "on the record", "why": _anchorless(ctx)}
         from src.orchestrator.projects import (
             set_project_window_tag as _set_project_window_tag,
@@ -7364,7 +7364,7 @@ async def _ingest_project_impl(
     this only removes the second MCP-layer copy of that check."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": "mount first — ingest_project is a seat's own act",
+        return {"error": "mount first: ingest_project is a seat's own act",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
     because = (because or "").strip()
@@ -7473,7 +7473,7 @@ async def _retire_object_impl(
     stay out."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": f"mount first — retiring {'a' if kind != 'agent' else 'an'} "
+        return {"error": f"mount first: retiring {'a' if kind != 'agent' else 'an'} "
                          f"{kind} is a deliberate act on the record", "why": _anchorless(ctx)}
     if kind == "seat":
         from src.orchestrator.seats import retire_seat as _retire_seat
@@ -7625,7 +7625,7 @@ async def _fork_project_impl(
     verb = "a fork" if direction == "fork" else "an unfork"
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": f"mount first — {verb} is a deliberate act on the record",
+        return {"error": f"mount first: {verb} is a deliberate act on the record",
                 "why": _anchorless(ctx)}
     pool = await _pool_get()
     if direction == "fork":
@@ -7808,7 +7808,7 @@ async def _seat_edge_impl(
     the same mount-cache heal generalization used elsewhere in this file)."""
     ident = await _ident_for(ctx)
     if ident is None:
-        return {"error": f"mount first — {action}ing a seat's manager is a deliberate "
+        return {"error": f"mount first: {action}ing a seat's manager is a deliberate "
                          "act on the record", "why": _anchorless(ctx)}
     pool = await _pool_get()
     if action == "detach":
@@ -8058,7 +8058,7 @@ async def _agent_impl(
         assert agent_id is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a correction is a mind's act, and the graph "
+            return {"error": "mount first: a correction is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.agents import correct_agent_house as _correct_agent_house
         return await _correct_agent_house(
@@ -8077,7 +8077,7 @@ async def _agent_impl(
                              "succession pointer to unset, never omit it to mean that"}
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — a correction is a mind's act, and the graph "
+            return {"error": "mount first: a correction is a deliberate act, and the graph "
                              "must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.agents import correct_succession as _correct_succession
         return await _correct_succession(
@@ -8105,16 +8105,16 @@ async def _agent_impl(
         assert subagent_id is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — filing a hand is a mind's act, and the graph "
-                             "must know whose", "why": _anchorless(ctx)}
+            return {"error": "mount first: filing a subagent record is a deliberate act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.lineage import file_subagent as _file_subagent
         return await _file_subagent(Actions(await _pool_get()), subagent_id=subagent_id,
                                     actor=ident.agent_id)
     if action == "file_subagents":
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — filing hands is a mind's act, and the graph "
-                             "must know whose", "why": _anchorless(ctx)}
+            return {"error": "mount first: filing subagent records is a deliberate act, "
+                             "and the graph must know whose", "why": _anchorless(ctx)}
         from src.orchestrator.lineage import file_subagents as _file_subagents
         return await _file_subagents(Actions(await _pool_get()), project=project,
                                      dry_run=dry_run, actor=ident.agent_id)
@@ -8122,7 +8122,7 @@ async def _agent_impl(
         assert agent_id is not None and repos is not None and because is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — retiring a governs edge is a deliberate act "
+            return {"error": "mount first: retiring a governs edge is a deliberate act "
                              "on the record", "why": _anchorless(ctx)}
         from src.orchestrator.agents import retire_governs_edges as _retire_governs_edges
         return await _retire_governs_edges(Actions(await _pool_get()), agent_id, repos,
@@ -8131,7 +8131,7 @@ async def _agent_impl(
         assert agent_id is not None and project is not None and because is not None
         ident = await _ident_for(ctx)
         if ident is None:
-            return {"error": "mount first — invalidating a works_in edge is a deliberate "
+            return {"error": "mount first: invalidating a works_in edge is a deliberate "
                              "act on the record", "why": _anchorless(ctx)}
         if agent_id == ident.agent_id:
             return {"error": "agent_id names your own mounted identity — use "
@@ -8371,8 +8371,8 @@ async def _current_flags_impl(
         if not dry_run:
             ident = await _ident_for(ctx)
             if ident is None:
-                return {"error": "mount first — a write to the kernel's own materialization "
-                                 "is a mind's act, and the graph must know whose",
+                return {"error": "mount first: a write to the kernel's own materialization "
+                                 "is a deliberate act, and the graph must know whose",
                         "why": _anchorless(ctx)}
             actor = ident.agent_id
         else:
@@ -8626,7 +8626,7 @@ async def fold_review(
 
     `action='list'`: sweep the registry and disk for anonymous agents that evidence says
     were never distinct identities (view-aliases: a mount row with no transcript and no
-    daemon receipt, co-resident with a session that has a live body; restart-mints: an
+    daemon record, co-resident with a session that has a live body; restart-mints: an
     anonymous mount in a named lineage's own home) and queue them as review-gated merge
     candidates. Proposals only; nothing merges here. Returns the pending tray (score-
     ranked, each with its cited signals); judge each with `action='resolve'`. Rejected
@@ -8967,7 +8967,7 @@ _SEAT_MANUAL: dict[str, str] = {
         "harness metadata, the `.osiris` pin). Composes the `rebind_seat` MCP tool. "
         "The anchor invariant: `anchor_cwd` is identity, always `<office_root>/"
         "<handle>`. `rebind_seat` no longer writes it for a `new_cwd` outside the "
-        "office root (the receipt says `anchor_cwd_skipped` and names why). So "
+        "office root (the result says `anchor_cwd_skipped` and names why). So "
         "`move` genuinely relocates identity only when `new_cwd` is under the office "
         "root (a real office migration, rare); anywhere else it's a footprint or "
         "tree move and the seat's `anchor_cwd` stays exactly where it was. Say so "
@@ -9055,7 +9055,7 @@ _SEAT_MANUAL: dict[str, str] = {
         "workspace cleanup under one call with its own containment, ambiguity, and "
         "live-body guards. `sweep_seat_disk` itself requires the seat to already be "
         "retired (or have no Seat row at all) before it will touch disk. Always "
-        "dry-run `sweep_seat_disk` first and show both halves' receipts "
+        "dry-run `sweep_seat_disk` first and show both halves' results "
         "(`office`/`workspace`) separately before asking whether to pass "
         "`dry_run=False`; they can legitimately disagree, so never collapse them "
         "into one verdict. `--reason` maps to both `retire_seat`'s `reason` and "
@@ -9081,7 +9081,7 @@ _SEAT_MANUAL: dict[str, str] = {
 
 def _slim_prior_art(prior: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """One-line id+short-summary, not the full {id,type,summary,grade,via} shape: part
-    of the write-verb receipt diet above. The caller acting THIS turn needs enough to
+    of the write-verb result-trimming above. The caller acting THIS turn needs enough to
     recognize the hit and go read it, not the ranking metadata that shaped the search."""
     return [{"id": p["id"], "type": p.get("type"), "summary": p.get("summary", "")}
             for p in prior]
@@ -9137,7 +9137,7 @@ async def record_decision(
     Any error on this call, including a dropped connection or a timeout with no
     response, is safe to retry with the same `summary`. It is idempotent: an exact
     rewrite, or with `repo` given a near-duplicate reword, reuses the same decision
-    (`reused_existing_decision` in the receipt names when that happened). Retrying
+    (`reused_existing_decision` in the result names when that happened). Retrying
     never creates a duplicate."""
     pool = await _pool_get()
     gids: list[uuid.UUID] = []
