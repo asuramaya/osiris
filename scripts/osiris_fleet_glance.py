@@ -1,4 +1,4 @@
-"""The fleet glance — the statusline for harnesses that have no statusline (task #28).
+"""The fleet glance: a statusline for harnesses that have no statusline (task #28).
 
 Crush has no statusLine config, no SessionStart hook, no TUI plugin surface, so a seat
 running there ran blind: no ambient mail count, no fleet pulse, no model-vs-intent check.
@@ -88,15 +88,15 @@ async def _glance(cwd: Path) -> list[str]:
         # claims "no count SQL of its own", so this line makes that true here too.
         sick = await surface._sensing(conn)
 
-        lines = [f"◈ {project} — osiris fleet glance"]
+        lines = [f"◈ {project}: osiris fleet glance"]
         if sick:
-            lines.append(f"⚠ NOT SENSING: {', '.join(sick[:3])} — the graph has "
+            lines.append(f"⚠ NOT SENSING: {', '.join(sick[:3])}: the graph has "
                          "quietly stopped forming memory; tell the operator")
         mail_bits = [f"mail {split['mail']}"]
         if split.get("dm"):
             mail_bits.append(f"✉{split['dm']} DM(s) addressed to you")
         lines.append(" · ".join(mail_bits)
-                     + (" — inbox() to read; reply or ack to settle"
+                     + (": inbox() to read; reply or ack to settle"
                         if (split["mail"] or split.get("dm")) else ""))
         lines.append(f"owe here {debts['owed_here']} · fleet-wide owed {debts['owed']}")
         if desk:
@@ -106,15 +106,15 @@ async def _glance(cwd: Path) -> list[str]:
         lines.append(f"fleet {souls['souls']} live · wakes {wakes}/h · {spend} day{blind}")
 
         if row is None:
-            lines.append(f"⚠ the graph has no mount at this office — you are invisible "
+            lines.append(f"⚠ the graph has no mount at this office. You are invisible "
                          f"to the fleet. Knock first: mount(cwd='{cwd}'), then orient().")
         else:
             model = (row["model"] or "?").strip()
             if model == intent:
-                lines.append(f"model {model} — matches the seat's pin")
+                lines.append(f"model {model}: matches the seat's pin")
             else:
                 lines.append(
-                    f"⚠ newest mount here wears {model}, the pin declares {intent} — "
+                    f"⚠ newest mount here wears {model}, the pin declares {intent}: "
                     "if that mount is not you, mount(cwd=...) so the graph meets you; "
                     "if it is you, confess the divergence to the operator")
         return lines
@@ -134,7 +134,7 @@ def main() -> None:
         # two states and confidently prescribes one is worse than no remedy (#169).
         # Order the checks nearest-first: the reader hits the likely one before the
         # unlikely one, instead of starting at the bottom of the stack.
-        lines = [f"◈ {cwd.name}", "this read got no answer — the graph itself may be fine. "
+        lines = [f"◈ {cwd.name}", "this read got no answer: the graph itself may be fine. "
                  "Check in order: systemctl --user status osiris-mcp (a deploy restarts "
                  "it), then docker ps for osiris-pg."]
     print("\n".join(lines))

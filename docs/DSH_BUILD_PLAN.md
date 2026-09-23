@@ -23,7 +23,7 @@
   - `broadcast_to` (Message → SoftwareProject)
   - `replies_to` (Message → Message)
   - `in_thread` (Message → Thread)
-  - `mentions` (Message → Agent/Decision/Thread) — the killer feature
+  - `mentions` (Message → Agent/Decision/Thread): the highest-value link type
 - `send_message` + `read_inbox` write/read graph edges alongside the relational table.
 - `graph_search` now surfaces messages with their connected context.
 
@@ -31,22 +31,22 @@
 
 - Collapse 13 `osiris_*.py` into ONE `osiris_hook.py` with subcommands.
 - Each hook becomes a ~5-line stdlib-only shim: urllib POST + exit.
-- Kill cold `asyncpg.connect()` fallbacks — HTTP-first only; degraded line on failure.
+- Kill cold `asyncpg.connect()` fallbacks: HTTP-first only; degraded line on failure.
 - Server-side custom routes (`/heartbeat`, `/stop`, `/automount`, etc.) become the ONLY
   implementation; the hooks are now pure transport.
 
-## Part 3: osiris-bridge (in-process lifecycle plugin) — SHIPPED
+## Part 3: osiris-bridge (in-process lifecycle plugin), SHIPPED
 
 Delivered as `@deepseek-ai/dsh-experimental-osiris-bridge`, NOT as the
 `dsh-osiris-lifecycle` this plan named. Source of truth: `dsh-plugin/osiris-bridge/`;
 install with `dsh-plugin/install.sh` (task #194).
 
 - Cordis plugin on `agent/session-start` and `agent/disposed`.
-- Reaches Osiris over the HTTP doors (`/automount`, `/session-end`) and binds the
+- Reaches Osiris over the HTTP endpoints (`/automount`, `/session-end`) and binds the
   shared MCP connection by executing `mcp__osiris__mount` once through `ctx.tools`.
   The plan's `ctx.mcp` service was a guess; it does not exist as assumed.
 - Injects the server-rendered whisper as a plugin-sourced snapshot message.
-- Every leg fails OPEN — a cold server costs a note, never a session.
+- Every leg fails OPEN: a cold server costs a note, never a session.
 - NOT delivered: compaction-succession (a DSH compacted session gets a new id) and
   a `settle()` leg on `agent/turn-stopping`. Both still open.
 

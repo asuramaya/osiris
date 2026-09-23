@@ -93,7 +93,7 @@ async def _disputed(pool: asyncpg.Pool, object_id: Any) -> bool:
 
 def _classify(rows: list[asyncpg.Record]) -> str:
     """'collapse' (exactly {open, retracted}, retracted uniquely newest), 'unexpected'
-    otherwise (a third value, >2 rows, a tie, or open newest — none observed, all refused)."""
+    otherwise (a third value, >2 rows, a tie, or open newest: none observed, all refused)."""
     values = {r["v"] for r in rows}
     if values != {"open", "retracted"} or len(rows) != 2:
         return "unexpected"

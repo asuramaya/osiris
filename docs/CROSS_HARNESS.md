@@ -9,8 +9,8 @@ between Osiris and the agent harness (Claude Code, DSH, Crush, Cursor, etc.).
 ```
 Agent (any MCP client) ←→ [MCP streamable-http] ←→ Osiris MCP Server (:8790)
                                                        ↕
-                                              Postgres (:5601) — event-sourced graph
-                                              Redis (:6396) — queues / token buckets
+                                              Postgres (:5601), event-sourced graph
+                                              Redis (:6396), queues / token buckets
 ```
 
 The Osiris MCP server is a Python FastMCP process running on port 8790. It:
@@ -37,11 +37,11 @@ The `job_dir` is harness-specific:
 Mounting with a known anchor RE-ATTACHES you to your previous identity (agent id, seat,
 lineage). Mounting for the first time MINTS a new agent.
 
-**For Crush/Cursor/OpenCode**: any MCP client works — connect to `http://127.0.0.1:8790/mcp`
+**For Crush/Cursor/OpenCode**: any MCP client works. Connect to `http://127.0.0.1:8790/mcp`
 with standard streamable HTTP. Pass `job_dir` as your session identifier if available,
 or omit it and mount with just `cwd`.
 
-## Tool Surface (Phase 2 — Graphy Primitives)
+## Tool Surface (Phase 2, Graphy Primitives)
 
 Rather than relying on the `orient()` monolith (~59K chars), use the granular tools:
 
@@ -61,7 +61,7 @@ Rather than relying on the `orient()` monolith (~59K chars), use the granular to
 - **`lineage`**: restrict to objects authored by a specific agent lineage
 - **`max_depth`**: expand each hit with its N-hop neighborhood (linked objects)
 
-The search engine runs four doors: strict FTS → OR-relaxation → trigram (typo tolerance)
+The search engine runs four passes in sequence: strict FTS → OR-relaxation → trigram (typo tolerance)
 → semantic (local static embeddings, model2vec, no GPU, no API key). Results are fused
 by reciprocal rank with grade × recency weighting.
 
@@ -102,9 +102,9 @@ class HarnessAdapter(Protocol):
 ```
 
 Implemented adapters:
-- `ClaudeJsonlAdapter` — `~/.claude/projects/<slug>/<sid>.jsonl`
-- `DshSessionAdapter` — `~/.dsh/sessions/<slug>/session-<uuid>.jsonl.zstd`
-- `CrushSqliteAdapter` — `<data_dir>/crush.db`
+- `ClaudeJsonlAdapter`: `~/.claude/projects/<slug>/<sid>.jsonl`
+- `DshSessionAdapter`: `~/.dsh/sessions/<slug>/session-<uuid>.jsonl.zstd`
+- `CrushSqliteAdapter`: `<data_dir>/crush.db`
 
 To add a new harness: implement the protocol, register in `transcript_store.py`.
 

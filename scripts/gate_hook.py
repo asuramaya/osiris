@@ -596,7 +596,7 @@ def shadow_before_use_violations(repo_root: Path, changed_files: list[str]) -> d
                 if _reads_name_before(func, name, lineno):
                     findings.append(
                         f"{func.name} shadows {name!r} with a local import at line "
-                        f"{lineno} — {name!r} is read earlier in the same function "
+                        f"{lineno}: {name!r} is read earlier in the same function "
                         f"(module level already imports it; delete the local import)")
         if findings:
             out[f] = findings
@@ -667,7 +667,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         # now resolves at least those); kept as the honest fallback message for the one
         # way it could still fire: that constant emptied out from under this function.
         results["pytest"] = (
-            True, f"SKIPPED — nothing ran; omitted {omitted}" if omitted
+            True, f"SKIPPED: nothing ran; omitted {omitted}" if omitted
             else "no resolvable test files touched")
     else:
         import os
@@ -735,11 +735,11 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 env=pytest_env, timeout=pytest_timeout,
             )
 
-        # TOLERANCE, NOT BLINDNESS (f1f8ad62, ruling f61cad1b: the ambient-load limb LEANS
-        # true -- #197's own root causes reproduce under ordinary host contention with no
-        # concurrent gate run required -- so a single hang is not proof of a real problem;
-        # witness 3's own specimen, commit 40dfcca, was CORRECT and did not reproduce on
-        # retry). retried ONE extra attempt only, on TIMEOUT alone -- never on a genuine
+        # TOLERANCE, NOT BLINDNESS: the ambient-load theory holds -- #197's own root causes
+        # reproduce under ordinary host contention with no concurrent gate run required, so a
+        # single hang is not proof of a real problem; one specimen, commit 40dfcca, was
+        # CORRECT and did not reproduce on retry. Retried ONE extra attempt only, on TIMEOUT
+        # alone -- never on a genuine
         # assertion failure, which still refuses on the first attempt with no second chance.
         # The retry's own outcome is never silently folded into a plain "ok": passing only
         # on the second attempt gets its OWN status word (PASSED-ON-RETRY, `_status_word`
@@ -776,27 +776,27 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (
                     True,
-                    f"NO TESTS — pytest collected zero tests from the "
+                    f"NO TESTS: pytest collected zero tests from the "
                     f"{len(test_files)} selected file(s) [{' '.join(test_files)}]{tail}. "
                     f"NOT a pass and NOT a failure: nothing ran, because these files "
                     f"declare no test functions (a conftest, a fixtures module). Coverage "
-                    f"for this change comes from ruff/mypy only — if that is not enough for "
+                    f"for this change comes from ruff/mypy only; if that is not enough for "
                     f"what you changed, run the affected tests yourself before merging.\n"
                     f"{out}")
             elif ok and retried:
                 tail = f" (also omitted {omitted})" if omitted else ""
                 results["pytest"] = (
                     True,
-                    f"PASSED ON RETRY — timed out after {pytest_timeout}s{load_note} on the "
+                    f"PASSED ON RETRY: timed out after {pytest_timeout}s{load_note} on the "
                     f"first attempt, then passed clean on an immediate second attempt "
-                    f"[{' '.join(test_files)}]{tail}. NOT a plain pass — the first "
-                    f"attempt's hang is real signal (f1f8ad62); a PATTERN of retries "
+                    f"[{' '.join(test_files)}]{tail}. NOT a plain pass: the first "
+                    f"attempt's hang is real signal; a PATTERN of retries "
                     f"across commits, not just one, is what would prove the ambient-load "
                     f"limb rather than merely lean toward it.\n{out}")
             elif ok and omitted:
                 # ran clean, but NOT the whole relevant set -- must not read as a plain "ok"
                 results["pytest"] = (
-                    True, f"SKIPPED (partial) — ran {len(test_files)} clean, omitted "
+                    True, f"SKIPPED (partial): ran {len(test_files)} clean, omitted "
                           f"{omitted}\n{out}")
             elif (not ok and _pytest_sole_failure_is_ratchet_ceiling(out)
                     and _is_merge_context(repo_root)):
@@ -806,11 +806,11 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
                 # refused, but never a plain "ok" either, so the debt cannot go unnoticed.
                 results["pytest"] = (
                     True,
-                    "RATCHET-DEBT — merge commit exceeds the tool-contract ceiling before "
-                    "its own follow-up \"ratchet:\" commit lands (thread 1a0f91bb's named "
-                    "pattern; this house's practice raises the ceiling as a deliberate "
+                    "RATCHET-DEBT: merge commit exceeds the tool-contract ceiling before "
+                    "its own follow-up \"ratchet:\" commit lands (a known pattern; this "
+                    "house's practice raises the ceiling as a deliberate "
                     "later commit, never atomically with the growth-causing merge). NOT "
-                    "refused — but the VERY NEXT commit must raise TOOL_CONTRACT_CEILING_"
+                    "refused, but the VERY NEXT commit must raise TOOL_CONTRACT_CEILING_"
                     f"CHARS, or this stops being tolerated.\n{out}")
             else:
                 tail = f" (also omitted {omitted})" if omitted else ""
@@ -827,8 +827,8 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
             tail = f" (also omitted {omitted})" if omitted else ""
             results["pytest"] = (
                 False,
-                f"TIMED OUT TWICE — {pytest_timeout}s{load_note} on the first attempt AND an "
-                f"immediate retry (tolerance exhausted, f1f8ad62) under real ambient fleet "
+                f"TIMED OUT TWICE: {pytest_timeout}s{load_note} on the first attempt AND an "
+                f"immediate retry (tolerance exhausted) under real ambient fleet "
                 f"load (not a proven code failure -- see the DB-contention negative "
                 f"control) [{' '.join(test_files)}]{tail}")
     # THE gate_hook CORRELATION GAP: disclosed on
@@ -841,7 +841,7 @@ def run_gates(repo_root: Path, changed_files: list[str]) -> dict[str, tuple[bool
         results["pytest"] = (
             ok_prev,
             f"{msg_prev}\n[always-included static scanner(s), never correlated by "
-            f"changed_files, thread 01c08600: {' '.join(always_included)}]")
+            f"changed_files: {' '.join(always_included)}]")
     return results
 
 
@@ -934,7 +934,7 @@ def _is_receipt_shaped(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
 
 
 DERIVATION_TRACE_QUESTION = (
-    "DERIVATION TRACE (#117 piece b, decision d0ab1b0b) — a reviewer question, never a gate; "
+    "DERIVATION TRACE: a reviewer question, never a gate; "
     "does not affect this commit's PASS/FAIL. For every field the function(s) below return: "
     "is it templated from a locally-computed variable that was actually forced through the "
     "real branch/exception/return path? Or could it be a string literal that isn't, or a raw "
@@ -1016,12 +1016,12 @@ def _report(label: str, results: dict[str, tuple[bool, str]]) -> bool:
     if not all_ok:
         verdict = "FAIL"
     elif "SKIPPED" in statuses.values():
-        verdict = "PASS (UNVERIFIED — see SKIPPED below, not the same as a real pass)"
+        verdict = "PASS (UNVERIFIED: see SKIPPED below, not the same as a real pass)"
     elif "RATCHET-DEBT" in statuses.values():
-        verdict = "PASS (RATCHET DEBT — see below, the next commit must raise the ceiling)"
+        verdict = "PASS (RATCHET DEBT: see below, the next commit must raise the ceiling)"
     elif "PASSED-ON-RETRY" in statuses.values():
-        verdict = "PASS (PASSED ON RETRY — see below, timed out once under transient host " \
-                  "contention then passed clean; f1f8ad62)"
+        verdict = "PASS (PASSED ON RETRY: see below, timed out once under transient host " \
+                  "contention then passed clean)"
     else:
         verdict = "PASS"
     print(f"gate_hook[{label}]: {verdict}")
@@ -1062,14 +1062,14 @@ def cmd_precommit(*, enforce: bool | None = None) -> int:
         detail = (f"file set changed: {', '.join(moved)}" if moved
                   else "same files, staged content changed")
         print(
-            "gate_hook[staged]: RACE — the staged tree changed WHILE the gates above "
-            "were running (a concurrent git add landed mid-run — Practice 81cab2f4's "
-            "TOCTOU hazard, proven live: git does not hold the index lock across a "
+            "gate_hook[staged]: RACE: the staged tree changed WHILE the gates above "
+            "were running (a concurrent git add landing mid-run is a known TOCTOU "
+            "hazard, proven live: git does not hold the index lock across a "
             "pre-commit hook's own execution). The results above describe a tree that "
             f"no longer exists and are not evidence about what is about to be "
             f"committed. {detail}")
         if not enforce:
-            print("gate_hook: NOT ENFORCED (osiris_gate_hook_enforce=False) — would "
+            print("gate_hook: NOT ENFORCED (osiris_gate_hook_enforce=False): would "
                   "have refused this commit for a stage race, letting it through")
             return 0
         print("gate_hook: REFUSED — staged content raced with the gate run and "
@@ -1078,10 +1078,10 @@ def cmd_precommit(*, enforce: bool | None = None) -> int:
     if all_ok:
         return 0
     if not enforce:
-        print("gate_hook: NOT ENFORCED (osiris_gate_hook_enforce=False) — would have "
+        print("gate_hook: NOT ENFORCED (osiris_gate_hook_enforce=False): would have "
               "refused this commit, letting it through")
         return 0
-    print("gate_hook: REFUSED — a gate failed and enforcement is armed")
+    print("gate_hook: REFUSED: a gate failed and enforcement is armed")
     return 1
 
 
@@ -1113,7 +1113,7 @@ def cmd_audit(rev_range: str) -> int:
             wok, wout = _run(["git", "worktree", "add", "--detach", "-q", str(wt), sha],
                               REPO_ROOT)
             if not wok:
-                print(f"[{i}/{len(shas)}] {short}: worktree add FAILED — {wout}")
+                print(f"[{i}/{len(shas)}] {short}: worktree add FAILED: {wout}")
                 fails.append(short)
                 continue
             changed = changed_files_for_commit(REPO_ROOT, sha)
@@ -1160,25 +1160,25 @@ def cmd_audit(rev_range: str) -> int:
                - len(retried))
     print(f"gate_hook audit: {settled}/{len(shas)} would have passed cleanly and VERIFIED")
     if skipped:
-        print(f"UNVERIFIED (passed, but at least one gate was skipped — not proof of "
+        print(f"UNVERIFIED (passed, but at least one gate was skipped: not proof of "
               f"correctness, only absence of a caught problem): {', '.join(skipped)}")
     if ratchet_debt:
         print(f"RATCHET DEBT (merge landed over the tool-contract ceiling before its own "
-              f"follow-up ratchet-raise commit — thread 1a0f91bb, not refused but not a "
+              f"follow-up ratchet-raise commit, a known pattern, not refused but not a "
               f"plain pass): {', '.join(ratchet_debt)}")
     if retried:
         print(f"PASSED ONLY ON RETRY (timed out once under transient host contention then "
-              f"passed clean — f1f8ad62, not refused but not a plain first-try pass "
+              f"passed clean, not refused but not a plain first-try pass "
               f"either; a PATTERN here across an audit range is the real signal): "
               f"{', '.join(retried)}")
     if fails:
         print(f"WOULD HAVE BEEN REFUSED (real gate failure): {', '.join(fails)}")
     if timeouts:
         print(f"TIMED OUT TWICE IN A ROW, NOT PROVEN A REAL FAILURE (ruff/mypy clean, "
-              f"pytest hung on both the first attempt and an immediate retry — "
+              f"pytest hung on both the first attempt and an immediate retry: "
               f"see the DB-contention negative control): {', '.join(timeouts)}")
     if not fails and not timeouts:
-        print("NONE would have been refused — no false positives against real, "
+        print("NONE would have been refused: no false positives against real, "
               "genuinely-gated history")
     return 1 if fails or timeouts else 0
 
@@ -1195,23 +1195,23 @@ def hook_status(repo_root: Path = REPO_ROOT) -> str:
     string, same fail-open discipline as `push_guard.hook_status`."""
     common_dir = git_common_dir(repo_root)
     if common_dir is None:
-        return "gate_hook hook: not a git checkout — nothing to verify"
+        return "gate_hook hook: not a git checkout: nothing to verify"
     tracked = repo_root / ".githooks" / "pre-commit"
     installed = common_dir / "hooks" / "pre-commit"
     if not tracked.is_file():
         return "gate_hook hook: SOURCE MISSING (.githooks/pre-commit not found in this tree)"
     if not installed.is_file():
-        return ("gate_hook hook: NOT INSTALLED — run "
+        return ("gate_hook hook: NOT INSTALLED: run "
                 "scripts/install_gate_hook.sh (commits from any worktree are UNGATED at the "
                 "hook layer until this is fixed; osiris_gate_hook_enforce still governs "
                 "whether an installed hook actually refuses)")
     try:
         current = tracked.read_bytes() == installed.read_bytes()
     except OSError as exc:
-        return f"gate_hook hook: could not compare installed vs. tracked ({exc}) — UNKNOWN"
+        return f"gate_hook hook: could not compare installed vs. tracked ({exc}): UNKNOWN"
     if current:
         return "gate_hook hook: installed and current"
-    return ("gate_hook hook: STALE — installed copy differs from the tracked source, "
+    return ("gate_hook hook: STALE: installed copy differs from the tracked source, "
             "re-run scripts/install_gate_hook.sh")
 
 
@@ -1231,7 +1231,7 @@ def main(argv: list[str] | None = None) -> int:
         # by cmd_precommit/cmd_audit themselves and never reaches this branch: only an
         # unhandled internal exception (a bug in gate_hook.py itself) does, and it fails
         # OPEN, loudly, rather than wedging the shared tree.
-        print(f"gate_hook: INTERNAL ERROR ({type(exc).__name__}: {exc}) — failing OPEN, "
+        print(f"gate_hook: INTERNAL ERROR ({type(exc).__name__}: {exc}): failing OPEN, "
               f"never blocking a commit for a bug in the diagnostic itself", file=sys.stderr)
         return 0
 

@@ -51,7 +51,7 @@ def find_prunable_sessions(
     dead_after: timedelta = timedelta(days=30),
 ) -> list[SessionRow]:
     """Pure: which sessions' FILES are safe to delete right now. Never touches
-    soul_lines/soul_sessions — those are infinite-retention by design (soul_store.py's
+    soul_lines/soul_sessions: those are infinite-retention by design (soul_store.py's
     own module docstring); only the on-disk CACHE copy is ever a candidate here."""
     out = []
     for s in sessions:

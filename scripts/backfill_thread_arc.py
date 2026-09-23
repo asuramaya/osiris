@@ -122,7 +122,7 @@ LEFT_UNSORTED = ["cf6003af", "2ce21921", "a9cad7f7", "0666ebc5", "a4954f99", "00
 NEW_THREADS = [
     dict(
         summary=(
-            "CLOSURE PASS OWED (Thoth's word, DM 1311, arc-backfill review): the stale "
+            "CLOSURE PASS OWED (flagged during arc-backfill review): the stale "
             "handoff-letter cluster (8f140535, 8f005905, 2bbb35bd, edfaa6e0) is "
             "succession-hygiene debt, not just a tagging exercise -- each is a prior "
             "generation's handoff letter, long since superseded by the seat's own actual "
@@ -136,7 +136,7 @@ NEW_THREADS = [
             "7 open threads (c5a14e8a, f9981fec, c287e84f, 2e8a1554, 3417f13d, 88ab35ae, "
             "1964ea32 -- hyper-home/dom0/Harris-portal content) read as non-osiris "
             "fleet-infrastructure entirely; flagged during the arc-taxonomy backfill "
-            "(msg 1307/1311) rather than force-tagged. Likely a miner cross-project "
+            "rather than force-tagged. Likely a miner cross-project "
             "filing bug (wrong project attribution), not a taxonomy gap -- verify project "
             "filing, re-file or reap if confirmed leaked from a different sub-project."
         ),

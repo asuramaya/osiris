@@ -80,7 +80,7 @@ _KNOWN_VALUES = {"open", "resolved", "retracted"}
 
 async def candidates(pool: asyncpg.Pool) -> dict[str, list[asyncpg.Record]]:
     """Every active Thread with a current 'open' AND a current 'resolved' status row,
-    mapped to ALL of its current status rows (not just those two values — a thread also
+    mapped to ALL of its current status rows (not just those two values: a thread also
     carrying a third current value is included here so the refusal check below can see
     it; it is never silently dropped)."""
     rows = await pool.fetch(

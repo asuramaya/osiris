@@ -39,7 +39,7 @@ directory that nothing currently ever revisits once the seat succeeds and its li
 moves on. `attribute_sessions_to_seats` groups the same already-safety-checked
 `_collect_session_prune_plan` population (dead and fully captured, never a raw mtime
 guess) by which seat's own office directory produced it, purely for the manifest's own
-reading, for example "chowder: 3 file(s), 57.2 MB" instead of an unattributed flat path
+reading, for example "worker-a: 3 file(s), 57.2 MB" instead of an unattributed flat path
 list. This changes nothing about what gets deleted, when, or how safely; it rides the
 identical manifest-then-dim gate and the identical `_apply` call every other population
 here does.
@@ -400,7 +400,7 @@ def attribute_sessions_to_seats(
     safety test every other session-cache prune already uses) by which seat's office
     directory produced it. Nothing here changes what gets deleted or when: same session
     rows, same `_apply` call, same manifest-then-dim gate. This only adds a per-seat
-    rollup for the manifest's own reading, for example "chowder: 3 file(s), 57.2 MB"
+    rollup for the manifest's own reading, for example "worker-a: 3 file(s), 57.2 MB"
     rather than a flat, unattributed path list. A session whose directory matches no
     known seat's own transcript directory (an ordinary, non-office project) is left out
     of the grouping entirely; it still appears in the existing flat session report,
@@ -463,7 +463,7 @@ def build_manifest_body(
     total_wal_remove = len(wal_plan["remove"]) if wal_plan else 0
     total_legacy_remove = len(legacy_plan["remove"]) if legacy_plan else 0
     total_session_remove = len(session_plan) if session_plan else 0
-    parts = [f"PRUNE LADDER MANIFEST — {total_remove} dump file(s), "
+    parts = [f"PRUNE LADDER MANIFEST: {total_remove} dump file(s), "
              f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
              f"segment(s), {total_legacy_remove} legacy transcript tarball(s), and "
              f"{total_session_remove} transcript cache file(s) are planned for removal "
@@ -588,15 +588,15 @@ async def find_clear_manifest(
     finally:
         await pool.close()
     if row is None:
-        return None, "no manifest has ever been sent — run --manifest first"
+        return None, "no manifest has ever been sent: run --manifest first"
     if row["moot_at"] is not None:
         return None, (f"manifest {row['id']} was dimmed at "
-                      f"{row['moot_at'].isoformat()} — not applying")
+                      f"{row['moot_at'].isoformat()}, not applying")
     age = datetime.now(UTC) - row["created_at"]
     if age < min_age:
         return None, (f"manifest {row['id']} is only {age} old (need "
-                      f"{min_age}) — today is not yet 'the day after'")
-    return int(row["id"]), f"manifest {row['id']}, sent {age} ago, not dimmed — clear"
+                      f"{min_age}), not yet old enough to apply")
+    return int(row["id"]), f"manifest {row['id']}, sent {age} ago, not dimmed, clear"
 
 
 def _apply(
@@ -631,16 +631,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vault", type=Path,
                         default=Path.home() / "osiris-vault")
     parser.add_argument("--apply", action="store_true",
-                        help="ACTUALLY DELETE the files the dry-run lists — never run "
-                             "this without the operator's own word on the printed list "
-                             "first (ruling 39384a87/c53a5fc0).")
+                        help="ACTUALLY DELETE the files the dry-run lists; never run "
+                             "this without explicit approval on the printed list "
+                             "first.")
     parser.add_argument("--manifest", action="store_true",
-                        help="Mail the dry-run plan to the operator's desk as a "
-                             "decision brief (thread 9fac4e0d part 1) instead of "
+                        help="Mail the dry-run plan to the operator as a "
+                             "decision brief instead of "
                              "printing it. Deletes nothing.")
     parser.add_argument("--apply-if-clear", action="store_true",
                         help="Apply ONLY if the newest --manifest brief this script "
-                             "sent is at least 20h old and has not been dimmed — "
+                             "sent is at least 20h old and has not been dimmed; "
                              "refuses with a named reason otherwise. Deletes nothing "
                              "when refusing.")
     parser.add_argument("--seat-root", type=Path, default=None,
@@ -670,13 +670,13 @@ def main(argv: list[str] | None = None) -> int:
             session_plan, office_root=_office_root(), projects_root=_projects_root())
         mid = asyncio.run(mail_manifest(
             plans, chain_plan, wal_plan, legacy_plan, session_plan, seat_groups))
-        print(f"manifest mailed to the operator's desk — message {mid}")
+        print(f"manifest mailed to the operator: message {mid}")
         return 0
 
     if args.apply_if_clear:
         existing_mid, reason = asyncio.run(find_clear_manifest())
         if existing_mid is None:
-            print(f"REFUSING — {reason}", file=sys.stderr)
+            print(f"REFUSING: {reason}", file=sys.stderr)
             return 1
         plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
         session_plan = asyncio.run(_collect_session_prune_plan())
@@ -685,7 +685,7 @@ def main(argv: list[str] | None = None) -> int:
         total_wal_remove = len(wal_plan["remove"])
         total_legacy_remove = len(legacy_plan["remove"])
         total_session_remove = len(session_plan)
-        print(f"{reason} — applying {total_remove} dump file(s), "
+        print(f"{reason}, applying {total_remove} dump file(s), "
               f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
               f"segment(s), {total_legacy_remove} legacy transcript tarball(s), and "
               f"{total_session_remove} transcript cache file(s) now.")
@@ -706,13 +706,13 @@ def main(argv: list[str] | None = None) -> int:
     total_wal_remove = len(wal_plan["remove"])
     total_legacy_remove = len(legacy_plan["remove"])
     if not args.apply:
-        print(f"\nDRY RUN ONLY — {total_remove} dump file(s), {total_chains_remove} "
+        print(f"\nDRY RUN ONLY: {total_remove} dump file(s), {total_chains_remove} "
               f"transcript chain(s), {total_wal_remove} WAL segment(s), and "
               f"{total_legacy_remove} legacy transcript tarball(s) would be removed, "
               "none deleted. Re-run with --apply once the operator has ruled on this "
               "list.")
         return 0
-    print(f"\n--apply given — deleting {total_remove} dump file(s), "
+    print(f"\n--apply given: deleting {total_remove} dump file(s), "
           f"{total_chains_remove} transcript chain(s), {total_wal_remove} WAL "
           f"segment(s), and {total_legacy_remove} legacy transcript tarball(s) now.")
     _apply(plans, chain_plan, wal_plan, legacy_plan)
