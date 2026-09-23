@@ -3303,8 +3303,7 @@ async def _run_casefold_automerge(pool: asyncpg.Pool) -> list[str]:
 
     execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
     result = await casefold_auto_merge_candidates(
-        Actions(pool), evidence="osiris deploy: automatic casefold merge "
-        "(#108 piece 2, operator ruling 22d47acb/d02f2cdd)",
+        Actions(pool), evidence="osiris deploy: automatic casefold merge (#108 piece 2)",
         actor="osiris-deploy", execute=execute)
     notes = [f"casefold auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
              f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
@@ -3369,7 +3368,7 @@ async def _run_remote_url_automerge(pool: asyncpg.Pool) -> list[str]:
     execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
     result = await remote_url_duplicate_candidates(
         Actions(pool), evidence="osiris deploy: automatic remote_url-matched merge "
-        "(#108 piece 3, decision 2ee34a9d)",
+        "(#108 piece 3)",
         actor="osiris-deploy", execute=execute)
     notes = [f"remote_url auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
              f"{len(result['candidates'])} candidate(s), {len(result['skipped'])} skipped"]
@@ -3399,7 +3398,7 @@ async def _run_name_alias_automerge(pool: asyncpg.Pool) -> list[str]:
     execute = os.environ.get("OSIRIS_CASEFOLD_AUTOMERGE") != "0"
     result = await name_alias_duplicate_candidates(
         Actions(pool), evidence="osiris deploy: automatic name-alias-matched merge "
-        "(#108 piece 4, decision 118a98da/31e5bae1) — the survivor's own graph already "
+        "(#108 piece 4): the survivor's own graph already "
         "asserted this rename as a current name alias before this fold ran",
         actor="osiris-deploy", execute=execute)
     notes = [f"name-alias auto-merge: {'EXECUTED' if execute else 'dry-run'}: "
@@ -6450,7 +6449,7 @@ async def cmd_new(
     from src.orchestrator.mintseat import found_seat as _found_seat
 
     # THE CONFESSION, BEFORE ANYTHING IS WRITTEN: a real incident showed `mkdir cdking &&
-    # cd cdking && osiris new Chad` silently creating ~/code/chad instead, leaving cdking
+    # cd cdking && osiris new Rook` silently creating ~/code/rook instead, leaving cdking
     # an orphan directory. Never silently switches the default
     # to cwd (deriving-by-convention is the exact trap an earlier anchor_cwd bug came
     # from), only names both paths and the exact remedy, so the operator decides.
@@ -8295,7 +8294,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # DEPRECATED: fold_project no longer exists as a top-level tool; see
     # cmd_fold_project's own docstring. Kept working, hidden from the front entry-point listing
-    # (no help= means argparse's own choice listing never mentions it either) — never
+    # (no help= means argparse's own choice listing never mentions it either): never
     # break a human's muscle memory silently, but never advertise the old name again.
     p_fold_project = sub.add_parser(
         "fold-project",
@@ -9306,7 +9305,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     if args.command is None:
         # dispatch 3678/3681: bare `osiris` used to be argparse's own terse usage error.
-        # Thoth's own measurement says the EXIT CODE (2, a real usage condition — no
+        # Measured: the EXIT CODE (2, a real usage condition: no
         # command was given) was already correct and must stay; only the TEXT was the
         # dump. print_help() shows the full front entry-point description above; the code stays 2.
         parser.print_help()
@@ -9549,7 +9548,7 @@ def main(argv: list[str] | None = None) -> int:
             limit=args.limit, newest_first=args.newest_first,
             actor=args.actor, as_json=args.as_json))
     if args.command == "graph-migrate":
-        # this CLI's own event loop, not a subprocess call — the ratchet's
+        # this CLI's own event loop, not a subprocess call: the ratchet's
         # has_subprocess gate coarsely sweeps in every .run(/.communicate( call
         # anywhere in a file that imports subprocess at all, same as every other
         # asyncio.run(cmd_*) dispatch line in this file.

@@ -342,11 +342,11 @@ _tool_stats_window_start: datetime | None = None
 # before, not newly countable.
 _TOOL_STATS_BLIND_SPOTS = (
     "osiris-console (:8011, a separate uvicorn process): not counted; "
-    "task #164's own console slowdown lived entirely here. Confirmed live (#203, Seshat, "
+    "task #164's own console slowdown lived entirely here. Confirmed live (#203, "
     "2026-09-03): src/api/app.py imports and calls orchestrator.console.get_console "
     "directly, bypassing this MCP tool entirely: its own zero-MCP-traffic reading "
-    "already misled one retirement pass into hiding it as dead (decision b49a844f) "
-    "before that seat's own live-test run caught it, and it contradicts this daemon's "
+    "already misled one retirement pass into hiding it as dead "
+    "before a live-test run caught it, and it contradicts this daemon's "
     "own service file (deploy/user/osiris-console.service: 'never a write path')",
     "osiris-worker (arq cron: drain_cascade/evaluate_watch/sweep_doors/trigger_mail): "
     "not counted, calls orchestrator functions directly",
@@ -358,7 +358,7 @@ _TOOL_STATS_BLIND_SPOTS = (
     "isn't cached yet: in practice, the very first call of a fresh session before mount()/"
     "orient() resolves it: is bucketed under 'unattributed' rather than paying for a "
     "reattach query just to label a telemetry row",
-    "THE CLI ITSELF (#199 lane 2, Seshat, 2026-09-03): several cmd_* functions in "
+    "THE CLI ITSELF (#199 lane 2, 2026-09-03): several cmd_* functions in "
     "src/cli.py call an orchestrator function DIRECTLY, bypassing this MCP tool entirely: "
     "confirmed live for at least bind_seat_tree, bootstrap, establish_office, "
     "heal_seat_anchor_third_party, rematerialize, stop, unmerge. A zero reading on any "
@@ -366,7 +366,7 @@ _TOOL_STATS_BLIND_SPOTS = (
     "reads 0 here while its CLI entry point is real, live traffic: the exact live proof that "
     "cost a consolidation lane its first wrong deletion candidate",
     "FOUR MORE SEAT-DISPATCHER ALIASES, SAME CLI-BYPASS SHAPE (alias-decay second read, "
-    "2026-09-08, decision 23b6dbc1): heal_seat_transcript, reconcile_seat_identity, "
+    "2026-09-08): heal_seat_transcript, reconcile_seat_identity, "
     "rename_seat, set_seat_attended each have their own cmd_* entry point in src/cli.py "
     "(cmd_heal_seat_transcript/cmd_reconcile_seat_identity/cmd_rename_seat/"
     "cmd_set_seat_attended) calling the orchestrator function directly: none of these "
@@ -1785,7 +1785,7 @@ async def verify_bc_entity(name: str) -> dict[str, int]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def ingest_trials(sponsor: str) -> dict[str, int]:
     """ClinicalTrials.gov: a sponsor's registered human trials, including status, sites
@@ -1796,7 +1796,7 @@ async def ingest_trials(sponsor: str) -> dict[str, int]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]:
     """Court records (CourtListener): lawsuits and enforcement actions naming this
@@ -1808,7 +1808,7 @@ async def ingest_litigation(name: str, opinions: bool = False) -> dict[str, int]
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[str, Any]:
     """Traces an EVM crypto address on-chain (Etherscan): its top counterparties, native
@@ -1820,7 +1820,7 @@ async def trace_wallet(address: str, chain_id: int = 1, top: int = 25) -> dict[s
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
     """Screens a traced EVM address against the federated sanctions base: checks whether
@@ -1843,7 +1843,7 @@ async def screen_wallet(address: str, chain_id: int = 1) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def expand_clinical_site(facility: str) -> dict[str, int]:
     """The trials at a clinical site, showing which other sponsors use it."""
@@ -1945,7 +1945,7 @@ async def succession_chain(ref: str, max_hops: int = 10) -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def dossier_report(object_ref: str) -> str:
     """A provenance-annotated Markdown dossier for an entity: identity, financing,
@@ -2146,7 +2146,7 @@ async def composition(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "composition(action='save')",
-    "since": "task #202 composition dispatcher (msg 7073/7095)",
+    "since": "task #202 composition dispatcher",
 })
 async def save_composition(
     name: str, spec: dict[str, Any], kind: str = "lens"
@@ -2162,7 +2162,7 @@ async def save_composition(
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def get_console() -> dict[str, Any]:
     """What the operator is looking at right now: the shared cursor (room / composition /
@@ -2173,7 +2173,7 @@ async def get_console() -> dict[str, Any]:
 @mcp.tool(meta={
     "deprecated": True,
     "reason": "zero MCP traffic in 3-week window, no CLI/daemon/slash bypass found",
-    "since": "task #199 lane 2, retirement wave 1 (msg 6822)",
+    "since": "task #199 lane 2, first retirement pass",
 })
 async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str, Any]:
     """Focus an object (UUID or name) on the operator's live screen: drives the console
@@ -2204,7 +2204,7 @@ async def focus_object(object_ref: str, ctx: Context | None = None) -> dict[str,
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "composition(action='run')",
-    "since": "task #202 composition dispatcher (msg 7073/7095)",
+    "since": "task #202 composition dispatcher",
 })
 async def run_composition(
     name: str, subject: str | None = None,
@@ -2222,7 +2222,7 @@ async def run_composition(
 @mcp.tool(meta={
     "deprecated": True,
     "use_instead": "composition(action='list')",
-    "since": "task #202 composition dispatcher (msg 7073/7095)",
+    "since": "task #202 composition dispatcher",
 })
 async def list_compositions() -> list[dict[str, Any]]:
     """Deprecated: hidden alias, still callable. Forwards to
@@ -6557,9 +6557,9 @@ async def unmerge(dupe: str, because: str, execute: bool = False,
     exact plan (the underlying unmerge, any type-specific dependent records that can
     cleanly return, and the ones that can't) without writing anything; review it, then
     call again with `execute=True`. Refuses: `dupe` not currently merged, a blank
-    `because`, or a merge whose original justification cites the operator's word when
-    `because` doesn't carry a fresh one (reversing an operator-approved merge needs the
-    operator's word too, for every type)."""
+    `because`, or a merge whose original justification cites operator sign-off when
+    `because` doesn't carry a fresh one (reversing an operator-approved merge needs
+    operator sign-off too, for every type)."""
     ident = await _ident_for(ctx)
     if ident is None:
         return {"error": "mount first: an unmerge must say who is performing it",
@@ -7011,7 +7011,7 @@ async def _heal_seat_anchor_impl(
         because = (because or "").strip()
         if not because:
             return {"error": "a correction with no reason is exactly the silent overwrite "
-                             "719ed5b1 rules against: refusing"}
+                             "the pin-schema rules against: refusing"}
     from src.orchestrator.identity_heal import heal_seat_anchor as _heal
     return await _heal(Actions(await _pool_get()), seat_id=seat_id, because=because,
                        actor=ident.agent_id, dry_run=dry_run)
@@ -10622,7 +10622,7 @@ async def _thread_action_impl(
         # nothing is mounted.
         if kind == "obligation" and actor == "session":
             return {"error": "an unmounted caller cannot declare kind='obligation': a "
-                             "duty is a mind's own testimony (thread b5ae6773); mount "
+                             "duty is an agent's own testimony; mount "
                              "first, or use kind='question'/'task' instead"}
         if owner:
             from src.orchestrator.owner_normalization import resolve_owner_seat
@@ -10630,7 +10630,7 @@ async def _thread_action_impl(
             resolved_owner = await resolve_owner_seat(pool, owner)
             if resolved_owner is None:
                 return {"error": f"owner {owner!r} does not resolve to any active seat, "
-                                 "agent, or 'operator' (thread b5ae6773's owner law): "
+                                 "agent, or 'operator': "
                                  "pass a seat id, a seat's own handle, an agent id whose "
                                  "lineage currently holds a seat, or 'operator'"}
             owner = resolved_owner
@@ -11163,7 +11163,7 @@ async def _retire_stale_handoffs(
         raise ValueError(
             f"cannot determine {actor!r}'s own lineage root: the succeeded_from walk did "
             "not reach a true origin within the hop bound. Refusing the whole disposition "
-            "rather than risk under-retiring on an unverified root (decision 1cb389be).")
+            "rather than risk under-retiring on an unverified root.")
     rows = await pool.fetch(
         "SELECT o.id AS object_id, "
         "(SELECT a.source_id FROM current_assertions a WHERE a.object_id=o.id "
@@ -11318,7 +11318,7 @@ async def _resolve_acked_handoff_threads(
     for r in rows:
         tid = await capture.resolve_thread(
             actions, str(r["id"]), because="already-acked handoff, backfilled after "
-            "ack_handoff's own status-resolution fix (msg 4673)", source=actor)
+            "ack_handoff's own status-resolution fix", source=actor)
         if tid is not None:
             resolved.append(str(tid)[:8])
     return resolved
