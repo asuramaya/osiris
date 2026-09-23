@@ -111,7 +111,7 @@ Ctrl-C, or the remote process exiting, both end the session cleanly. The raw PTY
 stream, not this CLI, owns your terminal for the duration, the same as any other
 interactive attach.
 
-## `osiris smoke`
+## `osiris smoke [--chaos] [--reboot] [--json]`
 
 The deploy-time liveness probe used by the deploy process: two independent probes,
 neither silencing the other. Every named chrome route (`/desk`, `/fleet`, `/roadmap`,
@@ -124,6 +124,15 @@ everything is green; on any regression, it prints the failing surfaces by name.
 Run this any time you want to know whether the system is actually up, and always
 right after a restart: static checks (ruff, mypy, pytest) can't catch an
 event-loop-lifecycle bug; only a real post-boot probe can.
+
+**`--chaos`**: a crash-replay test. Kills the mcp/worker processes hard, fires a burst
+of concurrent session-end activity, restarts, then checks that the system's invariants
+still hold after a real crash, not just a graceful restart.
+
+**`--reboot`**: restarts every daemon unit in dependency order (boot-heal first) and
+checks that Postgres, the MCP server, and the console all answer, and that the
+worker's own heartbeat is fresh within budget. This restarts real daemons, so only run
+it by hand, deliberately.
 
 ## `osiris seed [--compositions-only]`
 
@@ -216,7 +225,7 @@ carried another agent's uncommitted work-in-progress, and the three services imp
 straight from the working tree; only a manually run `git status`, done at exactly the
 right moment, caught it before a restart would have shipped a half-written edit.
 
-Five steps, always in this order:
+Six steps, always in this order:
 
 1. **The dirty-tree guard.** Any tracked file under `src/` with an uncommitted change
    (staged or not, everything but a brand-new untracked file, which nothing imports
@@ -273,7 +282,7 @@ than implying a hold protects everything:
   surface in question would be pointless. For these, review has to happen before the
   commit, not after.
 
-## `osiris merge <dupe> <into> --evidence <text> [--actor <who>]`
+## `osiris merge <dupe> <into> --evidence <text> [--actor <who>] [--force --because <text>]`
 
 The command-line equivalent of `orchestrator.merge.merge`, the same underlying
 function the `merge` MCP tool wraps, with no softened checks. Type is read off
@@ -285,6 +294,11 @@ merge event and `same_as` link (the same receipt surfaces the MCP wrapper prints
 SoftwareProject merges only, matching the MCP tool's own conditional) are queried and
 printed here too, so both entry points onto this function return the same receipt,
 never a weaker one.
+
+`--force` overrides the liveness guard on a SoftwareProject fold only, for the one
+case that guard exists to catch: folding a project a *different* lineage's live
+session currently has mounted. It's never needed when folding your own project, and
+requires `--because` alongside it, naming why the guard is being overridden.
 
 **Renamed from `fold-project`.** `fold_project` was retired as an MCP tool in favor of
 `merge`/`unmerge` for findability, and the CLI had kept the old name: two parts of the
@@ -315,13 +329,15 @@ Refuses onto a seat whose current holder is live and on a different lineage than
 default**, matching the MCP tool's own convention: without `--apply` this only prints
 the preview (nothing written); review it, then re-run with `--apply`.
 
-## `osiris charter-for <seat> --repos a,b,c --because <text> [--actor <who>]`
+## `osiris charter-for <seat> --repos a,b,c --because <text> [--actor <who>] [--ruling <decision id>]`
 
 The command-line equivalent of `charter.charter_for`, with the same guard as the MCP
 tool, fully enforced (the `managed_by`/operator-actor check is the whole point of this
 command, never softened here). `--repos` is the whole charter, not an increment;
 `--actor` must be the seat's own manager or an operator actor (defaults to `console`,
-already an operator actor), or it refuses by name.
+already an operator actor), or it refuses by name. `--ruling` names a standing
+operator ruling's decision id instead, letting a non-manager act under that ruling's
+own authority; refused unless the ruling actually names `charter_for`.
 
 ## `osiris amend-practice <ref> <amendment> [--actor <who>]`
 
@@ -393,15 +409,19 @@ database, exactly what this CLI is built to prevent.
 
 ## `osiris backfill <target> [--apply] [--because R] [--only-bases ID,...] [--limit N] [--newest-first]`
 
-The command-line equivalent of one of seven repair targets (identity/provenance
+The command-line equivalent of one of eight repair targets (identity/provenance
 backfills), calling the same `orchestrator.backfill.run_backfill` that the `backfill`
 MCP tool and the UI's Repairs panel call. Dry run is the default for every target;
 `--apply` writes and requires `--because`.
 
-## `osiris composition <list|run|run-spec|save> [name] [--spec JSON] [--json]`
+## `osiris composition <list|run|run-spec|save> [name] [--spec JSON] [--kind K] [--subject S] [--fields F ...] [--take N] [--depth N] [--offset N] [--actor <who>] [--json]`
 
 Mirrors the `composition` MCP tool for `list`/`run`/`save`; `run-spec` is a CLI-only
 fourth mode straight onto `compositions.run_spec` for an ephemeral, never-saved spec.
+`--spec` is a JSON object, required for `save`/`run-spec`. `--kind` (`lens` or
+`watch`, default `lens`), `--subject`, `--fields`, `--take`, `--depth`, and
+`--offset` mirror the composition's own run-time parameters for `save`/`run`.
+`--actor` is `run-spec`-only, the caller identity used for its access-control checks.
 
 ## `osiris backup-settings <get|write> [--vault-path P] [--timer UNIT=ONCALENDAR]... [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL --offload-schedule ONCALENDAR [--offload-mountpoint P] [--offload-disabled]] [--offload-remove NAME] [--timer-schedules JSON] [--offbox-repositories JSON] [--because R] [--ruling REF]`
 
