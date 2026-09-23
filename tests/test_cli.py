@@ -1,7 +1,7 @@
-"""osiris — the console-script (task #69, ruling 45b074bf). The pure decision layer
+"""osiris, the console-script. The pure decision layer
 (`match_session`, `resolve_model`) is fully covered with no IO at all; the async
 commands are tested with a REAL pool (this repo's own "never mock the DB" rule) but a FAKE
-`manager` callable — the manager daemon itself is test_manager.py's territory, and actually
+`manager` callable, the manager daemon itself is test_manager.py's territory, and actually
 spawning a claude process is exactly what these tests must never risk doing by accident.
 """
 from __future__ import annotations
@@ -107,47 +107,47 @@ from src.orchestrator.seats import bind_holder, ensure_seat
 # --- match_session: pure ----------------------------------------------------------------------
 
 def test_match_session_exact_match() -> None:
-    sessions = [{"name": "[OS] imhotep", "alive": True}, {"name": "[OS] thoth", "alive": True}]
-    name, candidates = match_session(sessions, "imhotep")
-    assert name == "[OS] imhotep"
+    sessions = [{"name": "[OS] workero", "alive": True}, {"name": "[OS] workerah", "alive": True}]
+    name, candidates = match_session(sessions, "workero")
+    assert name == "[OS] workero"
     assert candidates == []
 
 
 def test_match_session_is_case_insensitive() -> None:
-    sessions = [{"name": "[OS] Imhotep", "alive": True}]
-    name, _ = match_session(sessions, "IMHOTEP")
-    assert name == "[OS] Imhotep"
+    sessions = [{"name": "[OS] Workero", "alive": True}]
+    name, _ = match_session(sessions, "WORKERO")
+    assert name == "[OS] Workero"
 
 
 def test_match_session_no_match_lists_live_candidates_as_empty() -> None:
-    sessions = [{"name": "[OS] thoth", "alive": True}]
+    sessions = [{"name": "[OS] workerah", "alive": True}]
     name, candidates = match_session(sessions, "nobody")
     assert name is None
     assert candidates == []
 
 
 def test_match_session_loose_substring_match_when_unambiguous() -> None:
-    sessions = [{"name": "[OS] imhotep", "alive": True}]
-    name, _ = match_session(sessions, "imho")
-    assert name == "[OS] imhotep"
+    sessions = [{"name": "[OS] workero", "alive": True}]
+    name, _ = match_session(sessions, "orke")
+    assert name == "[OS] workero"
 
 
 def test_match_session_ambiguous_returns_no_name_but_names_candidates() -> None:
-    sessions = [{"name": "[OS] imhotep", "alive": True}, {"name": "[AL] imhotep", "alive": True}]
-    name, candidates = match_session(sessions, "imhotep")
+    sessions = [{"name": "[OS] workero", "alive": True}, {"name": "[AL] workero", "alive": True}]
+    name, candidates = match_session(sessions, "workero")
     assert name is None
-    assert set(candidates) == {"[OS] imhotep", "[AL] imhotep"}
+    assert set(candidates) == {"[OS] workero", "[AL] workero"}
 
 
 def test_match_session_ignores_malformed_rows() -> None:
     sessions: list[dict[str, Any]] = [{"alive": True}, "not-a-dict", {"name": 5}]  # type: ignore[list-item]
-    name, candidates = match_session(sessions, "imhotep")
+    name, candidates = match_session(sessions, "workero")
     assert name is None
     assert candidates == []
 
 
 def test_match_session_blank_handle_matches_nothing() -> None:
-    sessions = [{"name": "[OS] imhotep", "alive": True}]
+    sessions = [{"name": "[OS] workero", "alive": True}]
     assert match_session(sessions, "  ") == (None, [])
 
 
@@ -190,7 +190,7 @@ def test_collapse_resume_log_collapses_a_run_sharing_one_session() -> None:
 
 
 def test_collapse_resume_log_ranks_distinct_entries_above_collapsed_repeats() -> None:
-    """The Thoth msg 3802 shape: two sessions each repeated across generations, then the
+    """The shape: two sessions each repeated across generations, then the
     one line that actually matters (a crossed-registry refusal). The refusal must lead,
     not sit lost after a wall of repeats."""
     log = [
@@ -225,19 +225,19 @@ async def test_cmd_attach_reports_a_dark_daemon_honestly() -> None:
     async def _dark(req: dict[str, Any]) -> dict[str, Any]:
         raise OSError("no such file or directory")
 
-    assert await cmd_attach("imhotep", manager=_dark) == 1
+    assert await cmd_attach("workero", manager=_dark) == 1
 
 
 async def test_cmd_attach_reports_no_match_honestly() -> None:
     async def _roster(req: dict[str, Any]) -> dict[str, Any]:
-        return {"sessions": [{"name": "[OS] thoth", "alive": True}]}
+        return {"sessions": [{"name": "[OS] workerah", "alive": True}]}
 
     assert await cmd_attach("nobody-here", manager=_roster) == 1
 
 
 async def test_cmd_attach_dispatches_to_the_resolved_name(monkeypatch: Any) -> None:
     async def _roster(req: dict[str, Any]) -> dict[str, Any]:
-        return {"sessions": [{"name": "[OS] imhotep", "alive": True}]}
+        return {"sessions": [{"name": "[OS] workero", "alive": True}]}
 
     calls: list[list[str]] = []
 
@@ -246,11 +246,11 @@ async def test_cmd_attach_dispatches_to_the_resolved_name(monkeypatch: Any) -> N
         return 0
 
     monkeypatch.setattr("src.manager.attach.main", _fake_main)
-    assert await cmd_attach("imhotep", manager=_roster) == 0
-    assert calls == [["[OS] imhotep"]]
+    assert await cmd_attach("workero", manager=_roster) == 0
+    assert calls == [["[OS] workero"]]
 
 
-# --- cmd_desk / cmd_show (thread 00913be9): thin doors onto inbox/recall — the MCP round
+# --- cmd_desk / cmd_show : thin doors onto inbox/recall, the MCP round
 # trip is mocked, same shape as cmd_attach's own fake `manager` above. -----------------
 
 async def test_cmd_desk_calls_inbox_pinned_to_the_operator_project(monkeypatch: Any) -> None:
@@ -282,8 +282,8 @@ async def test_cmd_desk_json_mode_never_asks_for_render_text(monkeypatch: Any) -
 async def test_cmd_desk_text_mode_prints_the_servers_text_verbatim(
     monkeypatch: Any, capsys: Any,
 ) -> None:
-    """#92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `--text` prints the raw
-    server string, no box, no title — what the hook feeds into its block `reason`."""
+    """#92, THE ZERO-TOKEN READ HOOK ( item B): `--text` prints the raw
+    server string, no box, no title, what the hook feeds into its block `reason`."""
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"text": "operator desk: 2 owed"}
 
@@ -318,15 +318,15 @@ async def test_cmd_show_calls_recall_with_the_ref(monkeypatch: Any) -> None:
 
 async def test_cmd_show_exits_nonzero_when_recall_refuses(monkeypatch: Any) -> None:
     async def _no_match(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"error": "no thread/decision matches 'nope' — recall never guesses"}
+        return {"error": "no thread/decision matches 'nope', recall never guesses"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _no_match)
     assert await cmd_show("nope") == 1
 
 
-# --- cmd_fleet (ruling f6b758fc, SPLIT after a live regression, Thoth msg 8159): --json
+# --- cmd_fleet (ruling f6b758fc, SPLIT after a live regression): --json
 # keeps the OLD wire contract (the caller's own `full`); human mode passes the SAME `full`
-# through and prints the SERVER's own `tree` (always computed over the complete node set —
+# through and prints the SERVER's own `tree` (always computed over the complete node set, 
 # never re-derived client-side from `registered`, the receipt diet's own capped sample,
 # which is exactly the bug that shipped once: 3 sections client-side where the server's
 # own full-data tree carried 36), recolored as a pure text pass.
@@ -351,7 +351,7 @@ async def test_cmd_fleet_json_mode_sends_the_callers_own_full_unchanged(
 async def test_cmd_fleet_human_mode_forwards_the_callers_own_full(
     monkeypatch: Any,
 ) -> None:
-    """No more hardcoded full=True — the server's own `tree` is already correctly folded/
+    """No more hardcoded full=True, the server's own `tree` is already correctly folded/
     expanded for whatever `full` the caller asked for; the CLI has nothing left to
     recompute, so it just forwards the flag."""
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -369,7 +369,7 @@ async def test_cmd_fleet_human_mode_prints_the_servers_own_tree_never_registered
     monkeypatch: Any, capsys: Any,
 ) -> None:
     """The regression this test guards: the CLI must print exactly the server's own `tree`
-    (computed over the full node set) — never rebuild anything from `registered`, whose
+    (computed over the full node set), never rebuild anything from `registered`, whose
     'osiris'-labeled row here must NOT leak into the output at all."""
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {
@@ -392,14 +392,14 @@ async def test_cmd_fleet_human_mode_prints_the_servers_own_tree_never_registered
 async def test_cmd_fleet_section_count_matches_the_tree_when_registered_is_capped(
     monkeypatch: Any, capsys: Any,
 ) -> None:
-    """The live specimen (Thoth msg 8159): fleet()'s own receipt diet caps `registered` far
-    below the real fleet size — a server tree with 3 project sections but a `registered`
+    """The live specimen (fleet()'s own receipt diet caps `registered` far
+    below the real fleet size, a server tree with 3 project sections but a `registered`
     sample of only 1 row must still print all 3 sections, proving the CLI never counts
     sections off `registered`'s own length."""
     server_tree = "\n".join([
-        "▸ atlas — 1 live · 1 sessions",
+        "▸ workerd, 1 live · 1 sessions",
         "  ● agent:one  fable-5",
-        "▸ rotten-apple — 0 live · 2 sessions",
+        "▸ rotten-apple, 0 live · 2 sessions",
         "  ○ 2 past sessions",
         "▸ unfiled: 4 sessions in 3 dirs",
     ])
@@ -407,7 +407,7 @@ async def test_cmd_fleet_section_count_matches_the_tree_when_registered_is_cappe
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         return {"tree": server_tree,
                 "registered": [{"agent": "agent:one", "model": "claude-fable-5",
-                                "project": "atlas", "depth": 0, "parent": None,
+                                "project": "workerd", "depth": 0, "parent": None,
                                 "live": True, "retired": False,
                                 "last_seen": "2026-07-07T13:00:00+00:00"}]}
 
@@ -443,15 +443,15 @@ async def test_cmd_seed_compositions_only_seeds_a_real_pool(actions: Actions) ->
 def _redirect_credstore_dir_for_soul_key_tests(
     request: pytest.FixtureRequest, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): every test
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (every test
     below sets `OSIRIS_SOUL_KEY_FILE` (the LOGICAL path) but none pass an explicit
     `--path`, so the credential blob's own DEFAULT location is now the real
-    per-user credstore (`~/.config/credstore.encrypted/`) — a real, SHARED,
+    per-user credstore (`~/.config/credstore.encrypted/`), a real, SHARED,
     machine-wide location that WOULD collide across these tests (and with this
     developer's own real credential) under xdist parallelism without this
     redirect. Scoped to just this file's own soul-key/restic-key tests
     (`autouse=True` at module scope would be too broad for a file this large)
-    via `request.node`'s own test name — same shape test_api.py's own identical
+    via `request.node`'s own test name, same shape test_api.py's own identical
     fixture uses."""
     if request.node.name.startswith(("test_cmd_soul_key_", "test_cmd_restic_key_")):
         monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
@@ -460,7 +460,7 @@ def _redirect_credstore_dir_for_soul_key_tests(
 async def test_cmd_soul_key_init_writes_and_reports_the_path(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No dedicated service account is assumed (Thoth DM 9435) — the test process's own
+    """No dedicated service account is assumed (the test process's own
     real, non-root uid is already a valid caller, no getuid/getuser mock needed.
     `backend="file"` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the default systemd-creds
     backend gets its OWN dedicated CLI test below; this one is about the CLI plumbing."""
@@ -484,9 +484,9 @@ async def test_cmd_soul_key_init_default_backend_is_systemd_creds(
     key_file = tmp_path / "soul.key"
     monkeypatch.setenv("OSIRIS_SOUL_KEY_FILE", str(key_file))
     assert await cmd_soul_key("init") == 0
-    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): the DEFAULT
+    # THE FIRST KEY MUST COME FROM THE NORMAL CLI (the DEFAULT
     # (no --path) credential blob lands in the per-user credstore, NOT sibling to
-    # the logical OSIRIS_SOUL_KEY_FILE path — the autouse fixture above redirects
+    # the logical OSIRIS_SOUL_KEY_FILE path, the autouse fixture above redirects
     # XDG_CONFIG_HOME so this is tmp_path-scoped, never the real credstore.
     assert (systemd_credential.user_credstore_encrypted_dir() / "soul.key").is_file()
 
@@ -494,8 +494,8 @@ async def test_cmd_soul_key_init_default_backend_is_systemd_creds(
 async def test_cmd_soul_key_init_without_restart_names_the_command_never_runs_it(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065): without
-    `--restart`, init must never actually touch systemd — proved by monkeypatching
+    """THE FIRST KEY MUST COME FROM THE NORMAL CLI (without
+    `--restart`, init must never actually touch systemd, proved by monkeypatching
     `_real_restart_services` to raise if called at all, not just by asserting the
     hint text."""
     from src import cli
@@ -516,8 +516,8 @@ async def test_cmd_soul_key_init_without_restart_names_the_command_never_runs_it
 async def test_cmd_soul_key_init_with_restart_calls_the_shared_restart_primitive(
     tmp_path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """`--restart` reuses `_real_restart_services` — the SAME primitive `osiris
-    deploy` already uses, never a second restart implementation — proved by
+    """`--restart` reuses `_real_restart_services`, the SAME primitive `osiris
+    deploy` already uses, never a second restart implementation, proved by
     monkeypatching it and checking it was actually called with the right units,
     never shelling out to a real `systemctl` in this test."""
     from src import cli
@@ -576,10 +576,10 @@ async def test_cmd_soul_key_status_absent(
 async def test_cmd_soul_key_status_present_reports_legacy_row_census(
     tmp_path, actions: Actions,
 ) -> None:
-    """THE KEY DOOR's status action composes `soul_crypto.soul_key_status` (filesystem
+    """THE KEY PATH's status action composes `soul_crypto.soul_key_status` (filesystem
     facts) with `soul_store.encrypt_existing_soul_lines(dry_run=True)` (the live
     census) built against the EXPLICIT `--path` key, not whatever the process's own
-    default resolves to — the exact fix this action's own build surfaced."""
+    default resolves to, the exact fix this action's own build surfaced."""
     from cryptography.fernet import Fernet
 
     key_file = tmp_path / "soul.key"
@@ -591,7 +591,7 @@ async def test_cmd_soul_key_status_present_reports_legacy_row_census(
 async def test_cmd_soul_key_rotate_and_finish_round_trip(
     tmp_path, actions: Actions, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """No soul_lines rows at all — the census legs of rotate/finish still run
+    """No soul_lines rows at all, the census legs of rotate/finish still run
     (0 rewrapped, 0 broken), proving the plumbing without needing a real ingest."""
     from cryptography.fernet import Fernet
 
@@ -645,7 +645,7 @@ async def test_cmd_soul_key_restore_drill_calls_run_drill_per_url(
 
 async def test_cmd_launch_unknown_handle_is_honest(actions: Actions) -> None:
     async def _unreachable(req: dict[str, Any]) -> dict[str, Any]:
-        raise AssertionError("should never be called — the seat lookup fails first")
+        raise AssertionError("should never be called, the seat lookup fails first")
 
     out = await cmd_launch("no-such-handle-at-all", model=None, pool=actions.pool,
                            manager=_unreachable, debug=True)
@@ -653,11 +653,11 @@ async def test_cmd_launch_unknown_handle_is_honest(actions: Actions) -> None:
 
 
 async def test_cmd_launch_ambiguous_handle_is_honest(actions: Actions) -> None:
-    await ensure_seat(actions, house="alfred", handle="twin", source="test")
+    await ensure_seat(actions, house="workerb", handle="twin", source="test")
     await ensure_seat(actions, house="osiris", handle="twin", source="test")
 
     async def _unreachable(req: dict[str, Any]) -> dict[str, Any]:
-        raise AssertionError("should never be called — the ambiguity check fails first")
+        raise AssertionError("should never be called, the ambiguity check fails first")
 
     assert await cmd_launch("twin", model=None, pool=actions.pool, manager=_unreachable,
                            debug=True) == 1
@@ -667,13 +667,13 @@ async def test_cmd_launch_no_anchor_cwd_is_honest(actions: Actions) -> None:
     await ensure_seat(actions, house="osiris", handle="roomless", source="test")
 
     async def _unreachable(req: dict[str, Any]) -> dict[str, Any]:
-        raise AssertionError("should never be called — the office check fails first")
+        raise AssertionError("should never be called, the office check fails first")
 
     assert await cmd_launch("roomless", model=None, pool=actions.pool,
                             manager=_unreachable, debug=True) == 1
 
 
-# --- cmd_team --seat: the read triangle's own named gap fix (thread 68f1bafa/642c4754) —
+# --- cmd_team --seat: the read triangle's own named gap fix , 
 # a real pool, direct-DB resolve-by-handle, no MCP wire involved -----------------------------
 
 async def test_cmd_team_seat_resolves_the_manager_by_handle_and_lists_its_seats(
@@ -713,7 +713,7 @@ async def test_cmd_team_seat_is_honest_when_the_manager_manages_nobody(
     assert await cmd_team(seat="Cliteamlone", pool=actions.pool) == 1
 
 
-# --- backlog/threads/roster/team paint parity (thread bad45d61, wave 10): human mode asks
+# --- backlog/threads/roster/team paint parity (thread bad45d61, ): human mode asks
 # the server for render='text' and paints that VERBATIM; --json keeps the old wire contract
 # unchanged. Proven here by asserting the ARGUMENTS each mode sends, never by asserting on
 # color codes (that's cli_render's own test file's job). ------------------------------------
@@ -725,7 +725,7 @@ async def test_cmd_backlog_human_mode_asks_the_server_for_render_text(
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"text": "osiris: 3 open — oldest: Thoth"}
+        return {"text": "osiris: 3 open, oldest: Workerah"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_backlog(all_projects=False, as_json=False) == 0
@@ -750,7 +750,7 @@ async def test_cmd_backlog_fleet_flag_passes_through(monkeypatch: Any, capsys: A
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"text": "fleet total: 3 open\n  Thoth: 2 open — oldest: abc12345"}
+        return {"text": "fleet total: 3 open\n  Workerah: 2 open, oldest: abc12345"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_backlog(all_projects=False, fleet=True, as_json=False) == 0
@@ -780,12 +780,12 @@ async def test_cmd_roster_human_mode_paints_the_servers_text(
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"text": "osiris:\n  ● Thoth"}
+        return {"text": "osiris:\n  ● Workerah"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_roster(repo=None, as_json=False) == 0
     assert calls == [("roster", {"repo": None, "want_caveats": False, "render": "text"})]
-    assert "Thoth" in capsys.readouterr().out
+    assert "Workerah" in capsys.readouterr().out
 
 
 async def test_cmd_status_human_mode_asks_the_server_for_render_text(
@@ -822,12 +822,12 @@ async def test_cmd_inbox_human_mode_asks_the_server_for_render_text(
 
     async def _fake_call(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
         calls.append((name, arguments))
-        return {"text": "5 unread\nThoth: dispatch wave 11"}
+        return {"text": "5 unread\nThoth: dispatch "}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _fake_call)
     assert await cmd_inbox(project="osiris", as_json=False) == 0
     assert calls == [("inbox", {"project": "osiris", "peek": True, "render": "text"})]
-    assert "dispatch wave 11" in capsys.readouterr().out
+    assert "dispatch " in capsys.readouterr().out
 
 
 async def test_cmd_inbox_json_mode_never_asks_for_render_text(monkeypatch: Any) -> None:
@@ -860,7 +860,7 @@ async def test_cmd_team_no_seat_human_mode_paints_the_servers_text(
 async def test_cmd_team_seat_human_mode_paints_render_team_text_not_generic_render(
     actions: Actions, capsys: Any,
 ) -> None:
-    """The --seat direct-DB lane has no MCP round trip to ask render='text' of — it reuses
+    """The --seat direct-DB lane has no MCP round trip to ask render='text' of, it reuses
     render_team_text (the SAME function mcp_server.py's own team() calls) directly, never
     the generic render() reconstruction, for the same paint parity."""
     from datetime import UTC as _UTC
@@ -896,14 +896,14 @@ async def test_cmd_launch_returns_the_existing_window_instead_of_twinning(
     out = await cmd_launch("already-live", model=None, pool=actions.pool, manager=_fake,
                            debug=True)
     assert out == 0
-    # only the roster was ever asked for — pty_spawn was never reached
+    # only the roster was ever asked for, pty_spawn was never reached
     assert [c["op"] for c in calls] == ["pty_list"]
 
 
 async def test_cmd_launch_pty_refuses_an_over_budget_mint(
     actions: Actions, monkeypatch: Any,
 ) -> None:
-    """Same gate, the debug/PTY fallback door — see the harness-lane test's own docstring
+    """Same gate, the debug/PTY fallback door, see the harness-lane test's own docstring
     for the full rationale; this is launch_seat's two-lanes-two-spawn-sites shape again,
     one level up at the CLI's own independent PTY implementation."""
     from src.config.settings import Settings
@@ -924,7 +924,7 @@ async def test_cmd_launch_pty_refuses_an_over_budget_mint(
     async def _fake(req: dict[str, Any]) -> dict[str, Any]:
         if req["op"] == "pty_list":
             return {"sessions": []}
-        raise AssertionError("pty_spawn must never be reached — the budget refused first")
+        raise AssertionError("pty_spawn must never be reached, the budget refused first")
 
     import io
     from contextlib import redirect_stderr
@@ -949,7 +949,7 @@ async def test_cmd_launch_reports_a_dark_manager_after_facts_resolve(actions: Ac
 
 
 async def test_cmd_launch_spawns_and_confirms_an_honest_mount(actions: Actions) -> None:
-    """The full honest path: pty_list (empty), pty_spawn (accepted), then poll — a matching
+    """The full honest path: pty_list (empty), pty_spawn (accepted), then poll, a matching
     agent_mounts row inserted BEFORE the call gives the confirmation an immediate hit, so the
     test needs no real sleep-bound wait to prove the receipt names what actually mounted."""
     seat = await ensure_seat(actions, house="osiris", handle="freshbody",
@@ -1009,10 +1009,10 @@ async def test_cmd_launch_names_a_model_mismatch_honestly(actions: Actions) -> N
     assert "claude-fable-5" in buf.getvalue()
 
 
-# --- THE BEHAVIOUR-LEVEL PARITY TEST (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH"):
+# --- THE BEHAVIOUR-LEVEL PARITY TEST ( item 3,  a793b01b, "UNIFY LAUNCH"):
 # thread a793b01b's own finding was that the CLI/MCP parity census only ever checked that
-# `launch` EXISTS as a name on both surfaces, never that the CLI door actually calls
-# trigger.launch_seat rather than reimplementing it — a name-only check a full,
+# `launch` EXISTS as a name on both surfaces, never that the CLI path actually calls
+# trigger.launch_seat rather than reimplementing it, a name-only check a full,
 # independently-drifting reimplementation still passes. This proves DELEGATION directly: a
 # spy on launch_seat itself, not on any of its own internal primitives, so a future
 # regression back to a second implementation fails here, not by drift discovered later. ---
@@ -1035,7 +1035,7 @@ async def test_cmd_launch_harness_lane_delegates_to_launch_seat_not_a_reimplemen
     monkeypatch.setattr("src.orchestrator.trigger.launch_seat", _fake_launch_seat)
 
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — launch_seat is a fake here")
+        raise AssertionError("should never be called, launch_seat is a fake here")
 
     out = await cmd_launch("delegates-to-launch-seat", model=None, pool=actions.pool,
                            spawn=_unreachable, agents_json=_unreachable)
@@ -1043,19 +1043,19 @@ async def test_cmd_launch_harness_lane_delegates_to_launch_seat_not_a_reimplemen
     assert len(calls) == 1
     kw = calls[0]
     # THE ONE FLAG ONLY THIS DOOR MAY SET (launch_seat's own docstring): a local-execution
-    # trust boundary no MCP-invoked caller can reach — proven here by name, not assumed.
+    # trust boundary no MCP-invoked caller can reach, proven here by name, not assumed.
     assert kw["operator_authorized"] is True
     assert kw["caller"] == "operator"
     assert kw["target"] == "delegates-to-launch-seat"
     assert kw["substrate"] == "harness"
 
 
-# --- cmd_launch harness-native default lane (task #72) — same "never risk a real spawn" law,
+# --- cmd_launch harness-native default lane (task #72), same "never risk a real spawn" law,
 # a fake spawn/agents_json instead of a fake manager ---------------------------------------------
 
 async def test_cmd_launch_harness_unknown_handle_is_honest(actions: Actions) -> None:
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — the seat lookup fails first")
+        raise AssertionError("should never be called, the seat lookup fails first")
 
     out = await cmd_launch("no-such-handle-at-all", model=None, pool=actions.pool,
                            spawn=_unreachable, agents_json=_unreachable)
@@ -1071,7 +1071,7 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
                       anchor_cwd=str(office), source="test")
 
     async def _spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("should never be called — a live body already holds this seat")
+        raise AssertionError("should never be called, a live body already holds this seat")
 
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return [{"name": "[OS] already-live-bg", "cwd": cwd, "sessionId": "sess-1"}]
@@ -1084,9 +1084,9 @@ async def test_cmd_launch_harness_returns_the_existing_body_instead_of_twinning(
 async def test_cmd_resume_refuses_an_already_live_seat_same_occupancy_gate_as_launch(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A VERB SPLIT MUST NOT BECOME A GUARD HOLE (operator ruling 60c78788, Thoth's own
+    """A VERB SPLIT MUST NOT BECOME A GUARD HOLE (operator ruling 60c78788, own
     explicit instruction): `osiris resume` shares launch's exact twin/occupancy check
-    via `_resolve_and_guard_launch` — a seat already holding a live body refuses resume
+    via `_resolve_and_guard_launch`, a seat already holding a live body refuses resume
     too, same success-shaped exit 0, never a spawn attempt."""
     office = tmp_path / "already-live-resume"
     office.mkdir()
@@ -1094,7 +1094,7 @@ async def test_cmd_resume_refuses_an_already_live_seat_same_occupancy_gate_as_la
                       anchor_cwd=str(office), source="test")
 
     async def _boom_resume(*a: Any, **k: Any) -> None:
-        raise AssertionError("should never be called — a live body already holds this seat")
+        raise AssertionError("should never be called, a live body already holds this seat")
 
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return [{"name": "[OS] already-live-resume", "cwd": cwd, "sessionId": "sess-1"}]
@@ -1111,7 +1111,7 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
     agents --json` is invisible to a resumed (`-p --resume`) body by construction, so an
     EMPTY harness roster used to mean "safe to mint" even with a genuinely live resumed
     session at this exact cwd, reachable only via agent_mounts. Shares launch_seat's own
-    _launch_twin_check now (ruling 983ec87a, two doors one receipt) — never a second,
+    _launch_twin_check now (ruling 983ec87a, two doors one receipt), never a second,
     differently-shaped guard on the same class."""
     from src.orchestrator.mounts import save_mount
 
@@ -1124,11 +1124,11 @@ async def test_cmd_launch_harness_catches_a_resumed_body_the_harness_roster_cann
                      cwd=str(office), model=None, session_key=None)
 
     async def _spawn(*a: Any, **k: Any) -> None:
-        raise AssertionError("should never be called — a resumed body already holds this "
+        raise AssertionError("should never be called, a resumed body already holds this "
                              "seat, invisible to the harness roster alone")
 
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
-        return []  # the harness roster sees NOTHING here — that used to mean "mint fresh"
+        return []  # the harness roster sees NOTHING here, that used to mean "mint fresh"
 
     out = await cmd_launch("resumed-cli", model=None, pool=actions.pool,
                            spawn=_spawn, agents_json=_agents_json)
@@ -1139,7 +1139,7 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The full honest path: no live body yet, `claude --bg` fires with the mount+claim_name
-    boot prompt, then a bounded poll confirms the body shows up in `claude agents --json` —
+    boot prompt, then a bounded poll confirms the body shows up in `claude agents --json`, 
     the fake resolves on the FIRST poll iteration, so this needs no real sleep-bound wait."""
     office = tmp_path / "freshbg"
     office.mkdir()
@@ -1170,17 +1170,17 @@ async def test_cmd_launch_harness_spawns_and_confirms(
     assert len(spawn_calls) == 1
     assert spawn_calls[0]["repo"] == str(office)
     assert spawn_calls[0]["model"] == "claude-sonnet-5"
-    # BOUND BEFORE SPAWN (Thoth dispatch 6713, closing the hole above Khnum's own
+    # BOUND BEFORE SPAWN (closing the hole above Workert's own
     # claim_name backstop, 2c65c6d): identity is written server-side before the process
-    # exists — the boot prompt is a STATEMENT ("you are already bound"), never an
-    # instruction to claim_name yourself (the Marquee specimen: a refused claim_name
+    # exists, the boot prompt is a STATEMENT ("you are already bound"), never an
+    # instruction to claim_name yourself (the Workerx specimen: a refused claim_name
     # converted into a phantom mint by the session's own autonomy clause).
     assert f'mount(cwd="{office}"' in spawn_calls[0]["prompt"]
     assert "freshbg" in spawn_calls[0]["prompt"].lower()
     assert "already bound" in spawn_calls[0]["prompt"]
     assert "claim_name" not in spawn_calls[0]["prompt"]
-    # CONTRACT CHANGED BY THE VERB SPLIT (operator ruling 60c78788). This used to assert
-    # "not resumed" — the line that explained why launch fell THROUGH its resume branch to
+    # CONTRACT CHANGED BY THE VERB SPLIT. This used to assert
+    # "not resumed", the line that explained why launch fell THROUGH its resume branch to
     # a fresh spawn. There is no such branch any more: `osiris launch` always spawns fresh,
     # so reporting a resume decision it never made would be noise about a road not taken.
     # What must still hold is the same thing the old assertion was protecting: launch says
@@ -1194,13 +1194,13 @@ async def test_cmd_launch_harness_spawns_and_confirms(
 async def test_cmd_launch_harness_refuses_an_over_budget_mint(
     actions: Actions, monkeypatch: Any, tmp_path: Path,
 ) -> None:
-    """THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): this
+    """THE SPEND GAP (lane B design's own finding on 9d2aaf4d): this
     door is a SEPARATE implementation from trigger.launch_seat (own docstring), never
-    covered by that verb's own may_spend gate — a new body is a real turn, same dollar
+    covered by that verb's own may_spend gate, a new body is a real turn, same dollar
     wall dispatch_dm/wake_worker already stand behind. `_cmd_launch_harness` reads
     get_settings() directly (not injectable), so the billed-backend + $12-over-$10 ledger
     is set up the same way test_the_DAILY_CEILING_stops_the_wake does, then get_settings
-    itself is monkeypatched to the fixture the CLI door will actually read."""
+    itself is monkeypatched to the fixture the CLI path will actually read."""
     from src.config.settings import Settings
     from src.ingest.providers import Usage
     from src.ingest.usage import record_usage
@@ -1239,16 +1239,16 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
     actions: Actions, monkeypatch: Any, tmp_path: Path,
 ) -> None:
     """Thread fc69b9b4: a substantial transcript already sitting at the target office is
-    named — not silently spawned into — before `claude --bg` fires. Disclosure only: the
+    named, not silently spawned into, before `claude --bg` fires. Disclosure only: the
     spawn still happens."""
     import io
     from contextlib import redirect_stderr
 
     from src.cli import _cmd_launch_harness
 
-    office = tmp_path / "ooblek-cli"
+    office = tmp_path / "workeraa-cli"
     office.mkdir()
-    await ensure_seat(actions, house="osiris", handle="ooblek-cli",
+    await ensure_seat(actions, house="osiris", handle="workeraa-cli",
                       anchor_cwd=str(office), source="test")
 
     fake_info = {"path": "/whatever/b5f04f84.jsonl", "size_bytes": 20_300_000,
@@ -1268,11 +1268,11 @@ async def test_cmd_launch_harness_confesses_dormant_history_to_stderr(
         poll_count += 1
         if poll_count < 2:  # call 1 = the pre-spawn already-live check: nothing there yet
             return []
-        return [{"name": "[OS] ooblek-cli", "cwd": cwd, "sessionId": "sess-ooblek"}]
+        return [{"name": "[OS] workeraa-cli", "cwd": cwd, "sessionId": "sess-workeraa"}]
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await _cmd_launch_harness("ooblek-cli", model=None, pool=actions.pool,
+        out = await _cmd_launch_harness("workeraa-cli", model=None, pool=actions.pool,
                                         wake_default=None, spawn=_spawn,
                                         agents_json=_agents_json)
     assert out == 0
@@ -1285,7 +1285,7 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
 ) -> None:
     """The bounded-poll honesty law (same discipline as `_await_launch_confirmation` and
     `_wait_for_smoke`): a body that never shows up in `claude agents --json` gets a plain
-    confession, never a false 'launched: true', and the poll itself is bounded — never an
+    confession, never a false 'launched: true', and the poll itself is bounded, never an
     indefinite wait."""
     from src.cli import _cmd_launch_harness
 
@@ -1319,14 +1319,14 @@ async def test_cmd_launch_harness_gives_up_honestly_when_never_visible(
 
 
 # ═══ cmd_resume's own RESUME lane (task #136, 2026-08-05, decision 536de12f; split into
-# its own verb by operator ruling 60c78788, 2026-09-01; PERSISTENT since Thoth dispatch
-# 6484/6515): mirrors launch_seat's own already-proven resume branch exactly —
+# its own verb by operator ruling 60c78788, 2026-09-01; PERSISTENT since dispatch
+# 6484/6515): mirrors launch_seat's own already-proven resume branch exactly, 
 # _lineage_resume_candidate/_resume_guard/resume_spawn, reused verbatim, never
 # reimplemented (test_trigger.py's own identically-shaped fixtures already exhaust the
-# underlying gate logic — the guard, the compaction/ceiling math, the lineage walk — so
+# underlying gate logic, the guard, the compaction/ceiling math, the lineage walk, so
 # these tests only prove _cmd_resume_harness WIRES it correctly, not re-derive it).
 #
-# VISIBILITY NOW RIDES `claude agents --json` TOO — decision 536de12f/a829a15d's "a
+# VISIBILITY NOW RIDES `claude agents --json` TOO, decision 536de12f/a829a15d's "a
 # resumed body cannot appear there" was true of the old one-shot `-p --resume` lane and
 # is false of `--bg --resume` (verified live against harness 2.1.258, see
 # `_spawn_claude_bg`'s own docstring). ═══
@@ -1339,7 +1339,7 @@ async def _resumable_seat(
     anchor_cwd: str, compacted: bool = False, transcript_bytes: int = 16,
 ) -> Path:
     """A seat whose holder left a resumable session as a graph `session` property
-    (succession_chain's own shape — the ONLY record `_lineage_resume_candidate` trusts)
+    (succession_chain's own shape, the ONLY record `_lineage_resume_candidate` trusts)
     plus a real transcript on disk anchored to that session id. Returns the sense root to
     pass as osiris_sense_sessions."""
     import os
@@ -1358,7 +1358,7 @@ async def _resumable_seat(
     os.utime(t, (old, old))
 
     # THE ONE-SIDED GUARD FAMILY fix (decision 27259e4d, thread bc11a2d3): osiris launch
-    # now requires a seat's own anchor_cwd to exist on disk — this helper already has real
+    # now requires a seat's own anchor_cwd to exist on disk, this helper already has real
     # filesystem access (the transcript above), so it makes the real thing.
     Path(anchor_cwd).mkdir(parents=True, exist_ok=True)
     seat = await ensure_seat(actions, house="osiris", handle=handle, anchor_cwd=anchor_cwd,
@@ -1383,9 +1383,9 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE PAYOFF, now cmd_resume's own (operator ruling 60c78788's verb split, made
-    persistent by Thoth dispatch 6484/6515): a seat whose holder left a resumable
+    persistent by ): a seat whose holder left a resumable
     session is CONTINUED via resume_spawn's own `--bg --resume` lane. `agents_json` is
-    consulted ONCE, for the shared pre-resume already-live twin check both verbs use —
+    consulted ONCE, for the shared pre-resume already-live twin check both verbs use, 
     the resumed body's own post-resume visibility is `claude agents`'s job now, not
     something this function polls for."""
     from src.cli import _cmd_resume_harness
@@ -1394,9 +1394,9 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     sense = await _resumable_seat(
         actions, tmp_path, handle="cliresume", agent_id="agent:cliresume01",
         anchor_cwd="/tmp/cliresume-office")
-    # the ACTUAL spawn cwd, post-inversion (ruling d161a156/d63b2ca6): the materializer
+    # the ACTUAL spawn cwd, post-inversion : the materializer
     # emits to the seat's own DERIVED office (offices.seat_office_target), never the
-    # (possibly stale) anchor_cwd this fixture set — that's the anchor invariant's own
+    # (possibly stale) anchor_cwd this fixture set, that's the anchor invariant's own
     # self-healing working as designed, not a bug this test should paper over.
     real_office = str(_default_office_root() / "cliresume")
 
@@ -1431,9 +1431,9 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
     assert "private" in call["prompt"] and "seat" in call["prompt"]  # _DM_RESUME_PROMPT itself
     out_text = buf.getvalue()
     assert "resumed session" in out_text and _RESUME_SID[:8] in out_text
-    # THE HONEST MESSAGE, updated for the persistent lane (Thoth dispatch 6484/6515):
+    # THE HONEST MESSAGE, updated for the persistent lane ():
     # no defensive "a harness fact, not a bug" framing, and no longer claims the
-    # resumed body is invisible to `claude agents` — it isn't, anymore.
+    # resumed body is invisible to `claude agents`, it isn't, anymore.
     assert "a harness fact, not a bug" not in out_text
     assert "idles after this turn rather than exiting" in out_text
     assert "send it mail, it wakes on the next dispatch" in out_text
@@ -1443,7 +1443,7 @@ async def test_cmd_resume_harness_resumes_a_stale_but_resumable_holder(
 async def test_cmd_resume_harness_clears_a_stale_stopped_record_before_spawning(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The copy-quirk's own pre-emption (Thoth dispatch 7543 item 1), CLI lane: mirrors
+    """The copy-quirk's own pre-emption (), CLI lane: mirrors
     resume_seat's identical fix in trigger.py. clear_stale_record runs BEFORE resume_spawn,
     and a genuine clear is reported in the printed NOTE."""
     from src.cli import _cmd_resume_harness
@@ -1483,7 +1483,7 @@ async def test_cmd_resume_harness_resumes_a_zero_hop_candidate_with_no_signed_te
     actions: Actions, tmp_path: Path,
 ) -> None:
     """#173a's own door, mirrored through this CLI-facing lane (ruling 983ec87a, two doors
-    one receipt — launch_seat's own sibling fix): the seat's CURRENT holder (0 hops back)
+    one receipt, launch_seat's own sibling fix): the seat's CURRENT holder (0 hops back)
     has a real, anchored, resumable transcript that never wrote a single signed osiris
     act. The testimony arm alone would refuse this resident-unknown; the zero-hop graph
     door corroborates it via the graph's own session pointer + the seat's own launch
@@ -1525,7 +1525,7 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
 ) -> None:
     """NEVER FALLS THROUGH TO FRESH ANYMORE (operator ruling 60c78788's verb split, the
     whole point of it): a holder whose transcript compacted past the gate used to fall
-    through to `claude --bg`; `osiris resume` now REFUSES cleanly instead — nothing
+    through to `claude --bg`; `osiris resume` now REFUSES cleanly instead, nothing
     spawned, the refusal reason still NAMED, never silent. Minting fresh on a failed
     resume is `osiris launch`'s own separate act now, never this verb's."""
     from src.cli import _cmd_resume_harness
@@ -1550,7 +1550,7 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
             agents_json=_agents_json, resume_spawn=_boom_resume,
             settings=_resume_settings(sense, min_tail_bytes=1000))
 
-    assert out == 1  # refused — never spawns anything, fresh or otherwise
+    assert out == 1  # refused, never spawns anything, fresh or otherwise
     out_text = buf.getvalue()
     assert "nothing resumable" in out_text
     assert "seam itself" in out_text
@@ -1560,9 +1560,9 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
 async def _resumable_seat_no_signed_testimony(
     actions: Actions, tmp_path: Path, *, handle: str, agent_id: str, anchor_cwd: str,
 ) -> Path:
-    """Same graph shape as `_resumable_seat` — a real, uncompacted transcript the seat's own
-    `session` property points at — but with NO signed testimony anywhere in it: thread
-    ef88e2bb's own specimen (ferryman's real, sizeable transcript, 0 hops back, nothing
+    """Same graph shape as `_resumable_seat`, a real, uncompacted transcript the seat's own
+    `session` property points at, but with NO signed testimony anywhere in it: thread
+    ef88e2bb's own specimen (workerk's real, sizeable transcript, 0 hops back, nothing
     that scans as signed), the `resident-unknown` class."""
     import os
     import time as _time
@@ -1593,14 +1593,14 @@ async def _resumable_seat_no_signed_testimony(
 async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_testimony(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX FOR ef88e2bb (operator, 2026-08-17), through the CLI-facing door: a
+    """THE FIX FOR ef88e2bb (operator, 2026-08-17), through the CLI-facing path: a
     resumable session with NO signed testimony, ONE HOP BACK (the predecessor's own
-    session, not the seat's current holder) — not eligible for #173a's zero-hop graph
+    session, not the seat's current holder), not eligible for #173a's zero-hop graph
     door (see the sibling zero-hop test above, and test_trigger.py's own
     `test_zero_hop_graph_door_never_fires_one_hop_back` for the launch_seat side of this
-    same contract) — must refuse the WHOLE launch. Before ef88e2bb this fell through to
+    same contract), must refuse the WHOLE launch. Before ef88e2bb this fell through to
     the same `claude --bg` mint as a genuine crossed-registry finding, exactly how
-    ferryman's real, resumable session got a stranger minted over it."""
+    workerk's real, resumable session got a stranger minted over it."""
     from src.cli import _cmd_resume_harness
 
     sense = tmp_path / "projects"
@@ -1652,18 +1652,18 @@ async def test_cmd_launch_harness_refuses_outright_one_hop_back_with_no_signed_t
 
 
 # ═══ tree_cwd (task #135/#136, 2026-08-03, ruling 983ec87a): `osiris launch` had drifted
-# from launch_seat's own #103 update — hardcoded to `office`, never reading `tree_cwd` at
+# from launch_seat's own #103 update, hardcoded to `office`, never reading `tree_cwd` at
 # all. Same three proofs test_trigger.py already carries for launch_seat itself, mirrored
-# here for the CLI door — two doors onto one act must return the same receipt. ═══
+# here for the CLI path, two doors onto one act must return the same receipt. ═══
 
 async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation) — a seat naming a
+    """OSIRIS NEVER PROVISIONS THE TREE (ff3bdc37: harness owns isolation), a seat naming a
     tree_cwd the harness never actually created is refused, cleanly, before anything spawns,
     exactly matching launch_seat's own refusal shape.
 
-    ALSO PROVES THE COPY-PASTE FIX (Thoth's msg 6256, call (b) — the same verb-naming
+    ALSO PROVES THE COPY-PASTE FIX (call (b), the same verb-naming
     treatment as anchor_cwd's own refusal): the message must print the actual
     `bind_seat_tree(seat_id=..., tree_cwd=..., because=...)` call with the real seat_id
     filled in, not a generic "osiris expects the harness to have created it" dead end."""
@@ -1682,7 +1682,7 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
     assert bind.get("error") is None
 
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — the tree check refuses first")
+        raise AssertionError("should never be called, the tree check refuses first")
 
     buf = io.StringIO()
     with redirect_stderr(buf):
@@ -1698,13 +1698,13 @@ async def test_cmd_launch_harness_refuses_a_tree_cwd_that_does_not_exist_on_disk
 async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter_names_a_real_tree(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE #199 MINT-TIME FABRICATION AT THE LAUNCH DOOR (operator, 2026-09-03: "launch has
-    a bug that lands the agent in the wrong cwd" — Jesus/Chad, bound at mint to a
+    """THE #199 MINT-TIME FABRICATION AT THE LAUNCH PATH (operator, 2026-09-03: "launch has
+    a bug that lands the agent in the wrong cwd", Workerq/Workerf, bound at mint to a
     convention-derived ~/code/<handle> holding nothing but a .osiris pin while their
     charters governed the real trees at ~/code/REPOS/Godel and ~/code/cdking): a bound
     tree_cwd that holds NO git tree, while the seat's charter governs a project whose
     recorded on_disk_path IS a git tree elsewhere, is refused BY NAME with the exact
-    bind_seat_tree remedy — never spawned into the bare directory, never silently
+    bind_seat_tree remedy, never spawned into the bare directory, never silently
     repointed. Negative control: the same seat with a REAL git tree bound launches."""
     import io
     from contextlib import redirect_stderr
@@ -1733,7 +1733,7 @@ async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter
     assert bind.get("error") is None
 
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — the fabrication check refuses first")
+        raise AssertionError("should never be called, the fabrication check refuses first")
 
     buf = io.StringIO()
     with redirect_stderr(buf):
@@ -1766,11 +1766,11 @@ async def test_cmd_launch_harness_refuses_a_fabricated_tree_cwd_when_the_charter
 async def test_cmd_launch_harness_refuses_a_fabricated_project_when_the_charter_disagrees(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE OPERATOR'S OWN BUG (2026-09-04, verbatim: "chad spawned in project chad and
-    jesus in project jesus ... it should not be their problem"), task #204's launch-
-    identity fix (Thoth msg 6935/6949, decision 68fba2e4): the seat's own OFFICE pin
+    """THE OPERATOR'S OWN BUG (2026-09-04, verbatim: "workerf spawned in project workerf and
+    workerq in project workerq ... it should not be their problem"), task #204's launch-
+    identity fix : the seat's own OFFICE pin
     still names the fabricated handle-project (the mint-time stamp this whole ruling
-    exists to stop trusting) while the charter now names the real repo — refused BY
+    exists to stop trusting) while the charter now names the real repo, refused BY
     NAME with transition_seat_project as the remedy, never spawned into the
     fabrication. Negative control: once the pin agrees with the charter, launch
     proceeds and the boot prompt names the resolved project explicitly."""
@@ -1790,10 +1790,10 @@ async def test_cmd_launch_harness_refuses_a_fabricated_project_when_the_charter_
     assert not charter.get("rejected"), charter
 
     async def _spawn_unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — the project check refuses first")
+        raise AssertionError("should never be called, the project check refuses first")
 
     async def _empty_roster(*a: Any, **k: Any) -> list[dict[str, Any]]:
-        return []  # the twin check runs before this refusal, unconditionally — never live
+        return []  # the twin check runs before this refusal, unconditionally, never live
 
     buf = io.StringIO()
     with redirect_stderr(buf):
@@ -1804,7 +1804,7 @@ async def test_cmd_launch_harness_refuses_a_fabricated_project_when_the_charter_
     assert "realrepo" in err and "fabprojseat" in err
     assert "transition-seat-project" in err
 
-    # NEGATIVE CONTROL: pin corrected to agree with the charter — launch proceeds and the
+    # NEGATIVE CONTROL: pin corrected to agree with the charter, launch proceeds and the
     # boot prompt names the resolved project explicitly ("working <project>").
     (office / ".osiris").write_text('project = "realrepo"\n')
     prompts: list[str] = []
@@ -1826,16 +1826,16 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE ONE-SIDED GUARD FAMILY, NEXT SPECIMEN (decision 27259e4d, thread bc11a2d3): the
-    operator's real specimen — `osiris launch marquee` died with a raw FileNotFoundError
+    operator's real specimen, `osiris launch workerx` died with a raw FileNotFoundError
     because tree_cwd got an existence check and anchor_cwd/office never did. A seat with NO
-    tree_cwd binding (the marquee shape exactly) falls back to office as launch_cwd, so a
-    stale/wrong anchor must refuse cleanly here too, before anything spawns — and the
+    tree_cwd binding (the workerx shape exactly) falls back to office as launch_cwd, so a
+    stale/wrong anchor must refuse cleanly here too, before anything spawns, and the
     message must name `anchor_cwd`, not `tree_cwd`, so the operator can tell which field
     disagrees.
 
-    ALSO PROVES THE COPY-PASTE FIX (Thoth's msg 6256, #97's stranger's test): the operator
-    literally went looking in ~/.osiris/seats/marquee/.osiris for the anchor and it was not
-    there — the anchor is a graph assertion, not a pin field. The message must say that AND
+    ALSO PROVES THE COPY-PASTE FIX (#97's stranger's test): the operator
+    literally went looking in ~/.osiris/seats/workerx/.osiris for the anchor and it was not
+    there, the anchor is a graph assertion, not a pin field. The message must say that AND
     print the actual `rebind_seat(seat=..., new_cwd=...)` call with the real handle filled
     in, not a generic "repoint it" with no verb to do so."""
     import io
@@ -1847,7 +1847,7 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
     assert seat.get("error") is None
 
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — the anchor check refuses first")
+        raise AssertionError("should never be called, the anchor check refuses first")
 
     buf = io.StringIO()
     with redirect_stderr(buf):
@@ -1864,7 +1864,7 @@ async def test_cmd_launch_harness_refuses_an_anchor_cwd_that_does_not_exist_on_d
 async def test_cmd_launch_harness_spawns_into_tree_cwd_not_office(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The office (identity) and the tree (code) are DISTINCT — a bound, real tree_cwd is
+    """The office (identity) and the tree (code) are DISTINCT, a bound, real tree_cwd is
     where the body actually spawns; the boot prompt still anchors mount() at the office."""
     from src.orchestrator.seats import bind_seat_tree
 
@@ -1917,7 +1917,7 @@ async def test_cmd_launch_harness_idempotency_matches_on_tree_cwd_not_office(
                          actor="operator", because="test: CLI idempotency proof")
 
     async def _unreachable(*a: Any, **k: Any) -> Any:
-        raise AssertionError("should never be called — a live body already holds this seat")
+        raise AssertionError("should never be called, a live body already holds this seat")
 
     async def _agents_json(*, cwd: str | None = None, **k: Any) -> list[dict[str, Any]]:
         return [{"name": "[OS] clitreewalker2", "cwd": str(tree), "sessionId": "sess-live"}]
@@ -1945,7 +1945,7 @@ def test_dirty_tracked_src_files_clean_tree_is_empty() -> None:
 
 
 def test_oneshot_deployed_scripts_reads_real_deploy_dir() -> None:
-    """Against the REAL repo's own deploy/ — proves the parser actually matches this
+    """Against the REAL repo's own deploy/, proves the parser actually matches this
     project's real oneshot units rather than a synthetic fixture only."""
     repo_root = Path(__file__).resolve().parent.parent
     found = oneshot_deployed_scripts(repo_root)
@@ -1994,7 +1994,7 @@ def test_composition_gap_notes_silent_when_caught_up() -> None:
 
 
 def test_composition_gap_notes_extra_user_saved_rows_never_mask_a_missing_default() -> None:
-    """The exact bug (thread a25365a9): a count comparison reads 'caught up' as long as the
+    """The exact bug : a count comparison reads 'caught up' as long as the
     table is at least as big as DEFAULT_COMPOSITIONS, even if what's padding the count is
     unrelated user-saved compositions rather than the defaults themselves. Eleven extras
     and one missing default, measured live, is the shape that produced two false all-clears
@@ -2023,7 +2023,7 @@ def test_composition_drift_notes_silent_when_specs_match() -> None:
 
 
 def test_composition_drift_notes_ignores_key_order() -> None:
-    """A spec is a dict, not a string — reordering keys during an unrelated refactor must
+    """A spec is a dict, not a string, reordering keys during an unrelated refactor must
     never read as drift (json.dumps(sort_keys=True) on both sides)."""
     live = {"a": {"op": "select", "object_type": "Commit"}}
     expected = {"a": {"object_type": "Commit", "op": "select"}}
@@ -2032,7 +2032,7 @@ def test_composition_drift_notes_ignores_key_order() -> None:
 
 def test_composition_drift_notes_never_reports_a_missing_composition() -> None:
     """A name in `expected` but absent from `live_specs` is composition_gap_notes' own job
-    (a missing default) — this function must stay silent about it, never double-report."""
+    (a missing default), this function must stay silent about it, never double-report."""
     live: dict[str, Any] = {}
     expected = {"a": {"op": "select"}}
     assert composition_drift_notes(live, expected) == []
@@ -2050,7 +2050,7 @@ def test_composition_drift_notes_multiple_drifts_all_named() -> None:
 async def test_composition_gaps_names_a_real_drifted_composition(actions: Actions) -> None:
     """End-to-end against a real seeded pool (this repo's own never-mock-the-DB rule): seed
     the real defaults, hand-mutate ONE composition's spec directly (standing in for "source
-    edited, DB row never re-pushed" — the exact a346a0d/project-briefing shape), confirm
+    edited, DB row never re-pushed", the exact a346a0d/project-briefing shape), confirm
     _composition_gaps names it while every other default stays silent."""
     assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
     await actions.pool.execute(
@@ -2091,7 +2091,7 @@ def test_alembic_head_reads_this_repos_real_migrations() -> None:
     assert _alembic_head(repo_root) is not None
 
 
-# --- _real_wait_for_pg_dump: same bounded-retry shape (Thoth mail 10214, a live incident:
+# --- _real_wait_for_pg_dump: same bounded-retry shape (a live incident:
 # restarting straight into a pg_dump blocked the console at startup behind its own lock on
 # `triggers`) ------------------------------------------------------------------------------
 
@@ -2132,7 +2132,7 @@ async def test_wait_for_pg_dump_clears_after_one_retry() -> None:
 
 
 async def test_wait_for_pg_dump_gives_up_at_the_ceiling_and_reports_honestly() -> None:
-    """A genuinely long-running dump is still reported — the bound protects against
+    """A genuinely long-running dump is still reported, the bound protects against
     hanging a deploy forever, it must never hide a real, sustained wait."""
     async def _always_active(pool: object) -> bool:
         return True
@@ -2184,7 +2184,7 @@ async def test_wait_for_smoke_clean_on_first_try_never_sleeps() -> None:
 
 async def test_wait_for_smoke_recovers_after_one_retry() -> None:
     """The exact live shape (batch 4's maiden osiris deploy run): all-red immediately,
-    all-green shortly after — never reported as a false alarm."""
+    all-green shortly after, never reported as a false alarm."""
     attempts = [["chrome /desk: connection refused"], []]
     slept: list[float] = []
 
@@ -2201,7 +2201,7 @@ async def test_wait_for_smoke_recovers_after_one_retry() -> None:
 
 
 async def test_wait_for_smoke_gives_up_at_the_ceiling_and_reports_honestly() -> None:
-    """A genuinely down service is still reported — the bound protects against false alarms
+    """A genuinely down service is still reported, the bound protects against false alarms
     on a SLOW startup, it must never hide a real, sustained failure."""
     async def _always_fails() -> list[str]:
         return ["osiris-mcp round-trip: error: connection refused"]
@@ -2231,7 +2231,7 @@ async def test_wait_for_smoke_backoff_is_capped() -> None:
     assert max(slept) == 8.0
 
 
-# --- _wait_for_health: same bounded-retry shape, run BEFORE smoke (Thoth DM 2823) -------------
+# --- _wait_for_health: same bounded-retry shape, run BEFORE smoke ( -------------
 
 async def test_wait_for_health_ready_on_first_try_never_sleeps() -> None:
     calls = []
@@ -2250,8 +2250,8 @@ async def test_wait_for_health_ready_on_first_try_never_sleeps() -> None:
 
 
 async def test_wait_for_health_recovers_after_startup() -> None:
-    """The exact measured shape (Thoth DM 2823): not-ready immediately, ready once the
-    console finishes its own cold start — reported as a real elapsed wait, never a guess."""
+    """The exact measured shape (not-ready immediately, ready once the
+    console finishes its own cold start, reported as a real elapsed wait, never a guess."""
     attempts = [False, False, True]
     slept: list[float] = []
 
@@ -2268,7 +2268,7 @@ async def test_wait_for_health_recovers_after_startup() -> None:
 
 
 async def test_wait_for_health_gives_up_at_the_ceiling_and_reports_honestly() -> None:
-    """A console that never comes up is still reported truthfully — the bound protects
+    """A console that never comes up is still reported truthfully, the bound protects
     against false alarms on a slow boot, it must never hide a real, sustained failure."""
     async def _never_ready() -> bool:
         return False
@@ -2332,7 +2332,7 @@ def test_diff_tool_lists_composes_all_three_kinds_in_thoths_own_example_shape() 
 
 # --- cmd_deploy: fake git_status/restart, a real pool for the seeder/migration comparison ------
 # wait_for_health/wait_for_smoke default to REAL bounded pollers (120s/30s ceilings, real
-# network round-trips against the live console/MCP) — every test whose restart succeeds and
+# network round-trips against the live console/MCP), every test whose restart succeeds and
 # falls through to that stage injects these fast fakes instead. cmd_deploy's own control flow
 # (order of calls, what it prints, what it returns) is what's under test here; the wait
 # LOGIC itself already has its own dedicated, correctly-mocked unit tests below.
@@ -2359,10 +2359,10 @@ async def test_cmd_deploy_refuses_to_record_when_the_whisper_probe_fails(
         return 0, "done"
 
     async def _bad_probe() -> tuple[bool, str]:
-        return False, "whisper probe: REFUSED — /automount returned 500: boom"
+        return False, "whisper probe: REFUSED, /automount returned 500: boom"
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the whisper probe refused first")
+        raise AssertionError("must never be called, the whisper probe refused first")
 
     import io
     from contextlib import redirect_stdout
@@ -2400,7 +2400,7 @@ async def test_cmd_deploy_records_normally_when_the_whisper_probe_succeeds(
     assert out == 0
 
 
-# --- THE ANCHOR INVARIANT (ruling 23771416, msg 6546/6577) — informational, never gating ----
+# --- THE ANCHOR INVARIANT (ruling 23771416, informational, never gating ----
 
 async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violation(
     actions: Actions, tmp_path: Path,
@@ -2430,7 +2430,7 @@ async def test_cmd_deploy_notes_but_never_blocks_on_an_anchor_invariant_violatio
             repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
             pool=actions.pool, wait_for_health=_fake_wait_for_health,
             wait_for_smoke=_fake_wait_for_smoke, check_whisper_probe=_fake_check_whisper_ok)
-    assert out == 0  # informational only — never refuses
+    assert out == 0  # informational only, never refuses
     assert "NOTE: anchor invariant" in buf.getvalue()
     assert "seat:deployanchor1" in buf.getvalue()
     assert "heal-seat-anchor" in buf.getvalue()
@@ -2455,19 +2455,19 @@ async def test_cmd_deploy_prints_no_anchor_note_when_the_fleet_is_clean(
     assert "NOTE: anchor invariant" not in buf.getvalue()
 
 
-# --- THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25) ---------------
+# --- THE FULL SUITE ON THE MERGED TREE (task #186, 2026-08-25) ---------------
 # OFF by default (every test above ran with it unset). These pin the ONE new step, fully
 # injected: `_real_full_suite_gate`'s own subprocess plumbing has no dedicated test here
-# (it would mean nesting a real pytest run inside this suite) — this only tests that
+# (it would mean nesting a real pytest run inside this suite), this only tests that
 # cmd_deploy WIRES the gate correctly and runs it BEFORE the chaos gate.
 
 async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: this asserts the FIELD'S OWN DEFAULT in source, never ambient env —
+    """thread be24817b: this asserts the FIELD'S OWN DEFAULT in source, never ambient env, 
     an explicitly constructed Settings() is the claim; reading get_settings() here would be
     testing whatever the process's environment happens to hold (which, the moment this very
-    gate is armed for a real deploy, is exactly the flag this test exists to disprove — the
+    gate is armed for a real deploy, is exactly the flag this test exists to disprove, the
     self-refuting loop this fix closes)."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -2491,7 +2491,7 @@ async def test_cmd_deploy_skips_the_full_suite_gate_by_default(
 async def test_cmd_deploy_records_normally_when_the_full_suite_gate_holds(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: an explicit Settings object arms the flag for THIS call only —
+    """thread be24817b: an explicit Settings object arms the flag for THIS call only, 
     never ambient env, which a real armed deploy's own subprocess would otherwise inherit
     into every test in the suite it spawns, this one included."""
     async def _restart(units: list[str]) -> tuple[int, str]:
@@ -2536,10 +2536,10 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
                "returncode": 1}
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the full suite gate refused first")
+        raise AssertionError("must never be called, the full suite gate refused first")
 
     async def _unreachable_chaos(pool: Any) -> dict[str, Any]:
-        raise AssertionError("must never be called — the full suite gate refuses BEFORE "
+        raise AssertionError("must never be called, the full suite gate refuses BEFORE "
                              "the chaos gate ever runs")
 
     import io
@@ -2563,8 +2563,8 @@ async def test_cmd_deploy_refuses_to_record_when_the_full_suite_gate_finds_a_rea
     assert "NOT recording this deploy" in text
 
 
-# --- CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — osiris_deploy_chaos_gate ---------
-# OFF by default (every test above ran with it unset — 159 unaffected). These pin the ONE
+# --- CRASH REPLAY AS A GATE (2026-08-18), osiris_deploy_chaos_gate ---------
+# OFF by default (every test above ran with it unset, 159 unaffected). These pin the ONE
 # new step, fully injected: chaos.py's own control flow has its own dedicated test suite
 # (tests/test_chaos.py); this only tests that cmd_deploy WIRES it correctly.
 
@@ -2572,7 +2572,7 @@ async def test_cmd_deploy_skips_the_chaos_gate_by_default(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """thread be24817b: an explicitly constructed Settings() pins the claim to the field's
-    own default in source, not to whatever the process's ambient environment holds — see
+    own default in source, not to whatever the process's ambient environment holds, see
     the full-suite gate's twin test above for the full self-refutation this closes."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -2596,7 +2596,7 @@ async def test_cmd_deploy_skips_the_chaos_gate_by_default(
 async def test_cmd_deploy_records_normally_when_the_chaos_gate_holds(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread be24817b: see the full-suite gate's twin test above — an explicit Settings
+    """thread be24817b: see the full-suite gate's twin test above, an explicit Settings
     object arms the flag for this call only, never ambient env."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -2647,7 +2647,7 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
                 "storm_fired": 25, "recovery_elapsed_secs": 3.0}
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the chaos gate refused first")
+        raise AssertionError("must never be called, the chaos gate refused first")
 
     import io
     from contextlib import redirect_stdout
@@ -2669,14 +2669,14 @@ async def test_cmd_deploy_refuses_to_record_when_the_chaos_gate_finds_a_real_vio
     assert "NOT recording this deploy" in text
 
 
-# --- THE HALCYON GATE (operator ruling 921eabcf, addendum to 6b1efacb, 2026-08-18) ----------
-# always-on (no kill switch), runs BEFORE the chaos gate — a cheap read, not a SIGKILL.
+# --- THE WORKERM GATE ----------
+# always-on (no kill switch), runs BEFORE the chaos gate, a cheap read, not a SIGKILL.
 
 async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE HALCYON SPECIMEN ITSELF: a generation carrying false_mint=true with a live
-    mount must block a deploy from recording — the deploy-time analogue of graph_lint's
+    """THE WORKERM SPECIMEN ITSELF: a generation carrying false_mint=true with a live
+    mount must block a deploy from recording, the deploy-time analogue of graph_lint's
     own `false-mint-live` check, no kill switch (a plain read, always on)."""
     from src.orchestrator import mounts
 
@@ -2690,7 +2690,7 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
         return 0, "done"
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the false-mint-live gate refused first")
+        raise AssertionError("must never be called, the false-mint-live gate refused first")
 
     import io
     from contextlib import redirect_stdout
@@ -2711,12 +2711,12 @@ async def test_cmd_deploy_refuses_when_a_false_mint_live_specimen_exists(
 async def test_check_false_mint_live_excludes_an_already_retired_candidate(
     actions: Actions,
 ) -> None:
-    """THE 2464d3ad SPECIMEN (msg 7542 item 3): task #204's bg-spare heartbeat bug left a
+    """THE 2464d3ad SPECIMEN : task #204's bg-spare heartbeat bug left a
     false_mint=true generation's mount row refreshing for a while AFTER phantom-fold had
-    already correctly retired it — five real deploys (abc056a/89d4605/cc3e4a3/eda0459/
+    already correctly retired it, five real deploys (abc056a/89d4605/cc3e4a3/eda0459/
     f66654a) ran unrecorded over exactly this shape. A candidate already carrying
-    retired=true can never be the halcyon "live body wrongly folded" this gate exists
-    for, whatever its stale mount row still says — excluded before the census read even
+    retired=true can never be the workerm "live body wrongly folded" this gate exists
+    for, whatever its stale mount row still says, excluded before the census read even
     runs."""
     from src.cli import _real_check_false_mint_live
     from src.orchestrator import mounts
@@ -2738,7 +2738,7 @@ async def test_check_false_mint_live_excludes_a_bg_spare_backed_candidate(
 ) -> None:
     """A NOT-YET-RETIRED false_mint candidate whose only matching harness body is a
     `claude bg-spare` pre-warm process (verified via /proc/<pid>/cmdline, the exact same
-    check the whisper hook runs on itself) is excluded too — a spare backing the row is
+    check the whisper hook runs on itself) is excluded too, a spare backing the row is
     never a genuine occupant."""
     from src.cli import _real_check_false_mint_live
     from src.orchestrator import mounts
@@ -2773,7 +2773,7 @@ async def test_check_false_mint_live_still_confirms_a_genuine_halcyon_specimen(
     actions: Actions,
 ) -> None:
     """Neither new exclusion over-suppresses: not retired, and the matching harness body
-    is an ORDINARY session (no bg-spare in its cmdline) — still reported, confirmed."""
+    is an ORDINARY session (no bg-spare in its cmdline), still reported, confirmed."""
     from src.cli import _real_check_false_mint_live
     from src.orchestrator import mounts
 
@@ -2806,8 +2806,8 @@ async def test_check_false_mint_live_still_confirms_a_genuine_halcyon_specimen(
 async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#52's own law (thread 3b34f6c5): a correct refusal to record must not leave the
-    ledger silently stale — the halcyon gate above still refuses the RECORD, but this
+    """#52's own law : a correct refusal to record must not leave the
+    ledger silently stale, the workerm gate above still refuses the RECORD, but this
     proves it also mints the withheld-record confession naming the real HEAD, so a later
     reader of the graph (not just the deploy's own stdout) can tell this HEAD shipped."""
     from src.actions.core import Actions as _Actions
@@ -2826,7 +2826,7 @@ async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
         return 0, "done"
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the false-mint-live gate refused first")
+        raise AssertionError("must never be called, the false-mint-live gate refused first")
 
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, record_deploy=_unreachable,
@@ -2845,7 +2845,7 @@ async def test_cmd_deploy_confesses_the_withheld_record_when_head_is_known(
     assert "agent:dh0002" in thread["summary"]
 
 
-# --- cmd_smoke_chaos — the standalone `osiris smoke --chaos` entry point --------------------
+# --- cmd_smoke_chaos, the standalone `osiris smoke --chaos` entry point --------------------
 
 async def test_cmd_smoke_chaos_records_the_ledger_and_prints_the_findings(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
@@ -2874,19 +2874,19 @@ async def test_cmd_smoke_chaos_records_the_ledger_and_prints_the_findings(
     assert _json.loads(cursor)["ok"] is False
 
 
-# --- cmd_smoke_reboot — REBOOT SURVIVAL's own drill (thread 194eac83) -----------------------
+# --- cmd_smoke_reboot, REBOOT SURVIVAL's own drill -----------------------
 
 async def _instant_sleep(secs: float) -> None:
-    """No real delay — every reboot-drill test below injects this so a bounded-backoff
+    """No real delay, every reboot-drill test below injects this so a bounded-backoff
     poll that never succeeds still runs in milliseconds, not `budget_secs` real seconds."""
 
 
 def test_port_open_probe_false_on_a_closed_port() -> None:
-    """No real server bound — a probe against a port nothing listens on must report False,
+    """No real server bound, a probe against a port nothing listens on must report False,
     never raise, the same 'not up yet, not a crash' discipline `_health_probe` holds."""
     import asyncio as _asyncio
 
-    probe = _port_open_probe("127.0.0.1", 1)  # port 1 — reserved, nothing binds it in CI
+    probe = _port_open_probe("127.0.0.1", 1)  # port 1, reserved, nothing binds it in CI
     assert _asyncio.run(probe()) is False
 
 
@@ -2950,7 +2950,7 @@ async def test_cmd_smoke_reboot_all_green(
 async def test_cmd_smoke_reboot_names_a_missing_port_and_stale_worker(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Never beats the worker heartbeat and one port never opens — both misses named,
+    """Never beats the worker heartbeat and one port never opens, both misses named,
     the other two ports still reported up, exit 1."""
     async def _fake_restart(units: list[str]) -> tuple[int, str]:
         return 0, "ok"
@@ -3044,7 +3044,7 @@ async def test_synthetic_automount_probe_refuses_on_a_network_failure() -> None:
 
 
 async def test_synthetic_automount_probe_still_refuses_when_cleanup_itself_fails() -> None:
-    """The /session-end cleanup call is best-effort — its own failure must never flip a
+    """The /session-end cleanup call is best-effort, its own failure must never flip a
     genuinely successful /automount into a false refusal, and must never crash the probe."""
     import httpx
 
@@ -3066,7 +3066,7 @@ async def test_cmd_deploy_refuses_on_a_dirty_src_tree(actions: Actions, tmp_path
         return [(" M", "src/orchestrator/handshake.py")]
 
     async def _unreachable(units: list[str]) -> tuple[int, str]:
-        raise AssertionError("must never be called — the dirty guard refuses first")
+        raise AssertionError("must never be called, the dirty guard refuses first")
 
     out = await cmd_deploy(repo_root=tmp_path, git_status=_dirty, restart=_unreachable,
                            pool=actions.pool)
@@ -3087,16 +3087,16 @@ def test_find_repo_root_finds_this_repo_from_a_subdirectory() -> None:
 async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # a real deploy/user/*.service pair — deploy_unit_names is DERIVED from these
+    # a real deploy/user/*.service pair, deploy_unit_names is DERIVED from these
     # (thread 2a280e07's own follow-up: never a hand-listed default), so a test exercising
     # the restart step needs real sources to derive from, same as production always has.
-    # THE LIVE INCIDENT THIS GUARDS AGAINST (Thoth mail 10242): this test doesn't pass
+    # THE LIVE INCIDENT THIS GUARDS AGAINST (this test doesn't pass
     # its own `install_units=` stub, so `cmd_deploy`'s default `_real_install_user_units`
-    # runs FOR REAL — with `Path.home` unpatched, that installer wrote straight into
+    # runs FOR REAL, with `Path.home` unpatched, that installer wrote straight into
     # THIS BOX's actual ~/.config/systemd/user, overwriting the live osiris-mcp/
     # osiris-pulse units with 30-byte stubs that left them dead across a reboot. Every
     # OTHER cmd_deploy test relies on `repo_root=tmp_path` carrying no deploy/user/ at
-    # all (see test_real_install_user_units_no_deploy_user_dir_touches_nothing) — this
+    # all (see test_real_install_user_units_no_deploy_user_dir_touches_nothing), this
     # is the one that genuinely needs the installer to run, so it's the one that must
     # patch `Path.home` itself, not rely on that shared assumption.
     fake_home = tmp_path / "fake-home"
@@ -3136,7 +3136,7 @@ async def test_cmd_deploy_restarts_and_reports_smoke_and_gaps(
                          check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [["osiris-mcp", "osiris-pulse"]]
     assert "osiris-mcp: started Thu 2026-09-11 00:00:00 UTC" in buf.getvalue()
-    # a blank test DB has no compositions/alembic_version rows seeded — this exercises the
+    # a blank test DB has no compositions/alembic_version rows seeded, this exercises the
     # gap-reporting path without asserting exact names (that's composition_gap_notes' own
     # unit test's job); only that cmd_deploy runs the comparison and returns cleanly either way.
     assert out in (0, 1)
@@ -3147,9 +3147,9 @@ async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_r
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Thread d96167c6: a deploy restart drops every live streamable-HTTP session
-    silently, and health/smoke can never see it (they probe a FRESH connection). Thoth's
+    silently, and health/smoke can never see it (they probe a FRESH connection). 
     plan: broadcast an fyi before the restart and another once health confirms it's back
-    — reconnect itself is the harness client's own job."""
+, reconnect itself is the harness client's own job."""
     from src.orchestrator import mounts
 
     await mounts.save_mount(actions.pool, job_dir="/x/jobs/deploywarn1", agent_id="agent:dw1",
@@ -3176,7 +3176,7 @@ async def test_cmd_deploy_broadcasts_a_disconnect_warning_before_and_after_the_r
 async def test_cmd_deploy_disconnect_warning_failure_never_blocks_the_deploy(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No mount under 'osiris' at all — send_message's own to_project validation refuses
+    """No mount under 'osiris' at all, send_message's own to_project validation refuses
     (ValueError), caught and printed as a NOTE, never blocking or failing the deploy."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -3230,7 +3230,7 @@ async def test_cmd_deploy_records_the_deployed_head_on_a_successful_restart(
                          check_whisper_probe=_fake_check_whisper_ok)
     assert calls == [(actions.pool, tmp_path)]
     assert "deploy ledger: recorded deadbeef" in buf.getvalue()
-    # #189 adoption meter (Thoth msg 5825) prints on every successful deploy, unconditionally
+    # #189 adoption meter ( prints on every successful deploy, unconditionally
     assert "adoption189:" in buf.getvalue()
 
 
@@ -3241,7 +3241,7 @@ async def test_cmd_deploy_never_records_when_the_restart_fails(
         return 1, "Unit osiris-mcp.service not found."
 
     async def _unreachable(pool: Any, repo_root: Path) -> str | None:
-        raise AssertionError("must never be called — the restart never succeeded")
+        raise AssertionError("must never be called, the restart never succeeded")
 
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [],
                            restart=_failing_restart, pool=actions.pool,
@@ -3252,7 +3252,7 @@ async def test_cmd_deploy_never_records_when_the_restart_fails(
 async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The default `_real_record_deploy` against a `tmp_path` (never a git checkout) — a
+    """The default `_real_record_deploy` against a `tmp_path` (never a git checkout), a
     real end-to-end exercise of the fail-open write side, not a fake."""
     async def _restart(units: list[str]) -> tuple[int, str]:
         return 0, "done"
@@ -3269,8 +3269,8 @@ async def test_cmd_deploy_reports_head_unknown_off_a_non_git_root(
     assert "deploy ledger: HEAD unknown, not recorded" in buf.getvalue()
 
 
-# --- osiris migrate + osiris deploy's migration gate (thread c4681c38) ---------------------------
-# a fake `state`/`run_migrations` pair instead of a real alembic.ini or a real DB revision —
+# --- osiris migrate + osiris deploy's migration gate ---------------------------
+# a fake `state`/`run_migrations` pair instead of a real alembic.ini or a real DB revision, 
 # never risk running a real upgrade, or mutating the shared test DB's alembic_version row.
 
 async def test_cmd_migrate_undeterminable_head_is_honest(actions: Actions, tmp_path: Path) -> None:
@@ -3288,7 +3288,7 @@ async def test_cmd_migrate_up_to_date_never_runs_anything(
         return "0038", "0038"
 
     async def _unreachable(root: Path) -> None:
-        raise AssertionError("must never be called — nothing is pending")
+        raise AssertionError("must never be called, nothing is pending")
 
     import io
     from contextlib import redirect_stdout
@@ -3359,11 +3359,11 @@ async def test_apply_pending_migrations_names_an_unrecognized_revision(
     actions: Actions,
 ) -> None:
     """Decision 8d3f5e2d, task #142 follow-up: a DB carrying a revision this tree's own
-    alembic chain has never heard of used to be refused only by ACCIDENT — alembic's own
+    alembic chain has never heard of used to be refused only by ACCIDENT, alembic's own
     `command.upgrade` errors on it, and the generic except around `run_migrations` reported
     whatever opaque text that exception happened to carry. This checks it explicitly first,
     with the real reason named, and never even attempts the upgrade. Real repo_root (this
-    checkout has a real alembic.ini) with a synthetic revision no script defines — never a
+    checkout has a real alembic.ini) with a synthetic revision no script defines, never a
     real DB or a real upgrade."""
     async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
         return "0099_unmerged_branch_revision", "0045"
@@ -3384,7 +3384,7 @@ async def test_apply_pending_migrations_still_falls_through_when_undeterminable(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """`known is None` (no alembic.ini under this repo_root, e.g. a bare tmp_path fixture)
-    must fall through to the EXISTING try/run_migrations path unchanged — this is the
+    must fall through to the EXISTING try/run_migrations path unchanged, this is the
     backward-compatibility guarantee for every pre-existing caller of this function."""
     async def _state(pool: Any, root: Path) -> tuple[str | None, str | None]:
         return "0037", "0038"
@@ -3404,7 +3404,7 @@ async def test_apply_pending_migrations_still_falls_through_when_undeterminable(
 async def test_cmd_deploy_applies_pending_migrations_before_restarting(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The whole point of leg 2: a deploy is atomic from the schema's point of view — the
+    """The whole point of leg 2: a deploy is atomic from the schema's point of view, the
     migration must run and land BEFORE anything restarts, never after."""
     order: list[str] = []
 
@@ -3442,7 +3442,7 @@ async def test_cmd_deploy_refuses_when_migration_fails_and_never_restarts(
         raise RuntimeError("could not connect to server")
 
     async def _unreachable(units: list[str]) -> tuple[int, str]:
-        raise AssertionError("must never be called — the migration gate refuses first")
+        raise AssertionError("must never be called, the migration gate refuses first")
 
     import io
     from contextlib import redirect_stdout
@@ -3458,7 +3458,7 @@ async def test_cmd_deploy_refuses_when_migration_fails_and_never_restarts(
 
 async def _casefold_twin(actions: Actions, upper: str, lower: str) -> None:
     """A minimal casefold-twin pair: `upper` populated (a real live link), `lower` the
-    phantom — the exact shape casefold_auto_merge_candidates keys on."""
+    phantom, the exact shape casefold_auto_merge_candidates keys on."""
     now = datetime.now(UTC)
     populated = await actions.create_or_find_object("SoftwareProject", f"repo:{upper}", "test")
     await actions.assert_property(populated, "name", upper, "test", now, 0.9)
@@ -3470,8 +3470,8 @@ async def _casefold_twin(actions: Actions, upper: str, lower: str) -> None:
 async def test_cmd_deploy_casefold_automerge_executes_by_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#108 piece 2 wiring, default flipped (operator's word: "automatic, not
-    bottlenecked by me" — `osiris deploy` is hand-invoked with no wrapper/cron to hang a
+    """#108 piece 2 wiring, default flipped (deploy should run automatically, not be
+    bottlenecked on a person; `osiris deploy` is hand-invoked with no wrapper/cron to hang a
     deploy-env-only flag on, so the flip IS the default): a run with no
     OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE, not just survey."""
     monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
@@ -3493,7 +3493,7 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
     assert "casefold auto-merge: EXECUTED: 1 candidate(s)" in text
     assert "deploytwina -> repo:DeployTwinA" in text
 
-    # the canonical migrates to the corrected (lowercase) case too now (DM 12786) — the
+    # the canonical migrates to the corrected (lowercase) case too now, the
     # SURVIVOR now answers to repo:deploytwina; the phantom's own merged corpse was
     # moved aside to free that string for it.
     row = await actions.pool.fetchrow(
@@ -3507,7 +3507,7 @@ async def test_cmd_deploy_casefold_automerge_executes_by_default(
 async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """OSIRIS_CASEFOLD_AUTOMERGE=0 is the escape hatch — a dry-run-only deploy, the
+    """OSIRIS_CASEFOLD_AUTOMERGE=0 is the escape hatch, a dry-run-only deploy, the
     inverse of the old opt-IN flag now that execute is the default."""
     monkeypatch.setenv("OSIRIS_CASEFOLD_AUTOMERGE", "0")
     await _casefold_twin(actions, "DeployTwinB", "deploytwinb")
@@ -3532,7 +3532,7 @@ async def test_cmd_deploy_casefold_automerge_opts_out_under_the_env_flag(
 
 
 async def _remote_url_dupe(actions: Actions, basename: str) -> None:
-    """A minimal remote_url-matched pair sharing a basename but NOT a case-fold twin —
+    """A minimal remote_url-matched pair sharing a basename but NOT a case-fold twin, 
     the exact #107 shape (path-shaped vs bare) remote_url_duplicate_candidates keys on."""
     now = datetime.now(UTC)
     path_id = await actions.create_or_find_object(
@@ -3548,8 +3548,8 @@ async def _remote_url_dupe(actions: Actions, basename: str) -> None:
 async def test_cmd_deploy_remote_url_automerge_executes_by_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#108 piece 3 wiring (decision 2ee34a9d): the SAME env flag as piece 2 gates both
-    steps — no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE this step too, not just casefold's."""
+    """#108 piece 3 wiring : the SAME env flag as piece 2 gates both
+    steps, no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE this step too, not just casefold's."""
     monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
     await _remote_url_dupe(actions, "deployremotea")
 
@@ -3600,7 +3600,7 @@ async def test_cmd_deploy_remote_url_automerge_opts_out_under_the_env_flag(
 
 
 async def _name_alias_dupe(actions: Actions, survivor: str, husk: str) -> None:
-    """A minimal name-alias-matched pair — the survivor's own graph already asserts
+    """A minimal name-alias-matched pair, the survivor's own graph already asserts
     "I am also called <husk>" (a DIFFERENT source than its own primary name, matching
     the real dtfb specimen: assert_property's same-source-only supersession would
     collapse two same-source names to one current row otherwise), and the husk carries
@@ -3616,8 +3616,8 @@ async def _name_alias_dupe(actions: Actions, survivor: str, husk: str) -> None:
 async def test_cmd_deploy_name_alias_automerge_executes_by_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """#108 piece 4 wiring (Thoth dispatch 6547): the SAME env flag as pieces 2/3 gates
-    this step too — no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE it, not just survey."""
+    """#108 piece 4 wiring (): the SAME env flag as pieces 2/3 gates
+    this step too, no OSIRIS_CASEFOLD_AUTOMERGE set must EXECUTE it, not just survey."""
     monkeypatch.delenv("OSIRIS_CASEFOLD_AUTOMERGE", raising=False)
     await _name_alias_dupe(actions, "deploynamea", "deploynamea-husk")
 
@@ -3669,8 +3669,8 @@ async def test_cmd_deploy_name_alias_automerge_opts_out_under_the_env_flag(
 
 # --- dev-box systemd USER units are repo-managed (thread e6fd3772 piece 3-infra) ---------------
 # `osiris deploy` installs deploy/user/*.service over ~/.config/systemd/user/ before restarting
-# — these units were previously five hand-installed files this box's own operator diverged from
-# the /opt SYSTEM templates by hand; nothing in git was ever the box's actual running config.
+#, these units were previously five hand-installed files this box's own operator diverged from
+# the /opt SYSTEM templates by hand; nothing in git was ever the sandbox's actual running config.
 
 _REQUIRED_UNIT_ENV = {
     "osiris-mcp.service": [
@@ -3692,12 +3692,12 @@ _REQUIRED_UNIT_ENV = {
     ],
     "osiris-boot-heal.service": [
         "DATABASE_URL=", "application_name=osiris-boot-heal", "REDIS_URL=",
-        "Type=oneshot",  # runs once, then stops — never Restart=always (see the sibling
+        "Type=oneshot",  # runs once, then stops, never Restart=always (see the sibling
         # hardening test below, which deliberately excludes this unit from that check)
     ],
 }
 
-# Units that are genuinely long-running daemons (Restart=always is correct for them) —
+# Units that are genuinely long-running daemons (Restart=always is correct for them), 
 # osiris-boot-heal is deliberately excluded: a oneshot with Restart=always would loop
 # tightly re-running itself the instant it exits, never the intended "once per boot".
 _RESTART_ALWAYS_UNITS = frozenset(_REQUIRED_UNIT_ENV) - {"osiris-boot-heal.service"}
@@ -3705,7 +3705,7 @@ _RESTART_ALWAYS_UNITS = frozenset(_REQUIRED_UNIT_ENV) - {"osiris-boot-heal.servi
 
 def test_deploy_user_units_contract_every_required_env_line_present() -> None:
     """Reads the REAL deploy/user/*.service files this repo ships (not a fixture standing in
-    for them) — a contract test in the literal sense: if a future edit drops
+    for them), a contract test in the literal sense: if a future edit drops
     OSIRIS_WORKER_ROLE=primary or an application_name tag, this fails at the source of truth,
     not at a copy of it."""
     repo_root = _find_repo_root(Path(__file__).resolve().parent)
@@ -3721,7 +3721,7 @@ def test_deploy_user_units_contract_every_required_env_line_present() -> None:
 
 def test_deploy_user_units_all_carry_reboot_survival_hardening() -> None:
     """REBOOT SURVIVAL, the units half (thread 194eac83, operator ruling aaa8e841): every
-    daemon unit — not just the ones already using Restart=always — must survive a cold
+    daemon unit, not just the ones already using Restart=always, must survive a cold
     boot where postgres (docker-compose.full.yml) answers late, without systemd's own
     default 5-tries/10s start-limit permanently stranding it as 'failed'. Reads the REAL
     files, same discipline as the env contract test above."""
@@ -3739,8 +3739,8 @@ def test_deploy_user_units_all_carry_reboot_survival_hardening() -> None:
 
 
 def test_osiris_boot_heal_unit_is_a_oneshot_ordered_before_the_daemons() -> None:
-    """REBOOT SURVIVAL (thread 194eac83): boot-heal must run BEFORE the daemons it repairs,
-    exactly once per boot (never Restart=always — that would tight-loop a oneshot the
+    """REBOOT SURVIVAL : boot-heal must run BEFORE the daemons it repairs,
+    exactly once per boot (never Restart=always, that would tight-loop a oneshot the
     instant it exits), and carry no Requires= that could turn a bug in the healer into a
     boot blocker for anything it orders itself ahead of."""
     repo_root = _find_repo_root(Path(__file__).resolve().parent)
@@ -3773,12 +3773,12 @@ def test_deploy_unit_names_is_derived_from_installed_units_never_hand_listed(
 ) -> None:
     """Thread 2a280e07's own follow-up: `osiris-pulse` was already installed via
     deploy/user/osiris-pulse.service (and covered by `_REQUIRED_UNIT_ENV`'s own contract
-    test above) but was never in the old hand-typed DEPLOY_UNITS restart tuple — a unit
+    test above) but was never in the old hand-typed DEPLOY_UNITS restart tuple, a unit
     a plain main merge doesn't reach ran two-day-stale code through two separate merged
     fixes before anyone noticed. Proves the derivation, not a fixed set: a name that
     exists ONLY in deploy/user/ (never hand-listed anywhere) is still restarted, and a
     real repo with none of the well-known three names still restarts exactly what it
-    finds — there is no second list for a fresh unit to fall out of sync with."""
+    finds, there is no second list for a fresh unit to fall out of sync with."""
     unit_dir = tmp_path / "deploy" / "user"
     unit_dir.mkdir(parents=True)
     (unit_dir / "osiris-pulse.service").write_text("[Service]\nExecStart=/bin/true\n")
@@ -3789,8 +3789,8 @@ def test_deploy_unit_names_is_derived_from_installed_units_never_hand_listed(
 
 def test_deploy_unit_names_matches_the_real_repos_own_deploy_user_dir() -> None:
     """The REAL repo's own deploy/user/ (not a fixture standing in for it) must include
-    every name _REQUIRED_UNIT_ENV's own contract test already requires — osiris-pulse
-    included — so this test fails at the source the moment a real unit file is removed
+    every name _REQUIRED_UNIT_ENV's own contract test already requires, osiris-pulse
+    included, so this test fails at the source the moment a real unit file is removed
     without updating the derivation's own caller."""
     repo_root = _find_repo_root(Path(__file__).resolve().parent)
     assert repo_root is not None
@@ -3802,11 +3802,11 @@ async def test_real_install_user_units_no_deploy_user_dir_touches_nothing(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The default installer must never mkdir into a real caller's home when the repo it was
-    handed carries no deploy/user/ — this is what every OTHER cmd_deploy test that skips
+    handed carries no deploy/user/, this is what every OTHER cmd_deploy test that skips
     `install_units=` relies on implicitly (repo_root=tmp_path with no deploy/user/ under
     it). The one exception, test_cmd_deploy_restarts_and_reports_smoke_and_gaps, DOES
-    create a deploy/user/ and DOES let the real installer run — and patches Path.home
-    itself for exactly that reason (Thoth mail 10242's own live incident: it used to not)."""
+    create a deploy/user/ and DOES let the real installer run, and patches Path.home
+    itself for exactly that reason ( 's own live incident: it used to not)."""
     fake_home = tmp_path / "not-a-real-home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
@@ -3817,7 +3817,7 @@ async def test_real_install_user_units_no_deploy_user_dir_touches_nothing(
 
 
 def _real_shaped_unit(repo_root: Path) -> str:
-    """A minimal but genuinely real-shaped unit body — passes `_placeholder_unit_reason`
+    """A minimal but genuinely real-shaped unit body, passes `_placeholder_unit_reason`
     (a `Description=` line, an `ExecStart=` under this repo's own checkout) without
     pulling in every field a real deploy/user/*.service carries."""
     return f"[Unit]\nDescription=test\n[Service]\nExecStart={repo_root}/.venv/bin/python\n"
@@ -3837,8 +3837,8 @@ async def test_real_install_user_units_installs_new_files_and_reloads(
     reload_calls: list[list[str]] = []
 
     async def _fake_exec(*args: str, **kwargs: Any) -> Any:
-        # the render step (WAVE 22) also calls create_subprocess_exec, against a repo
-        # with no .venv/ — let it "fail" (nonzero return) so _rendered_user_unit_contents
+        # the render step () also calls create_subprocess_exec, against a repo
+        # with no .venv/, let it "fail" (nonzero return) so _rendered_user_unit_contents
         # falls back to the raw file untouched, same as a real missing-venv repo would.
         is_daemon_reload = args and args[0] == "systemctl"
         if is_daemon_reload:
@@ -3877,8 +3877,8 @@ async def test_real_install_user_units_unchanged_content_skips_daemon_reload(
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
     async def _unreachable(*args: str, **kwargs: Any) -> Any:
-        # the render step (WAVE 22) also calls create_subprocess_exec first, against a
-        # repo with no .venv/ — let it "fail" so it falls back to the raw file untouched;
+        # the render step () also calls create_subprocess_exec first, against a
+        # repo with no .venv/, let it "fail" so it falls back to the raw file untouched;
         # only a daemon-reload call (which must never fire when nothing changed) raises.
         if args and args[0] == "systemctl":
             raise AssertionError("daemon-reload must never fire when nothing changed")
@@ -3900,8 +3900,8 @@ async def test_real_install_user_units_unchanged_content_skips_daemon_reload(
 async def test_real_install_user_units_refuses_a_unit_missing_a_description(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact incident shape (Thoth mail 10242): a bare `[Service]` stub with no
-    `[Unit]` Description= line — refused, never installed."""
+    """The exact incident shape (a bare `[Service]` stub with no
+    `[Unit]` Description= line, refused, never installed."""
     fake_home = tmp_path / "home"
     repo_root = tmp_path / "repo"
     src_dir = repo_root / "deploy" / "user"
@@ -3909,13 +3909,13 @@ async def test_real_install_user_units_refuses_a_unit_missing_a_description(
     (src_dir / "osiris-mcp.service").write_text("[Service]\nExecStart=/bin/true\n")
     monkeypatch.setattr(Path, "home", lambda: fake_home)
 
-    # the render step (WAVE 22) calls create_subprocess_exec first, against a repo
-    # with no .venv/ — let it "fail" (nonzero return) so _rendered_user_unit_contents
+    # the render step () calls create_subprocess_exec first, against a repo
+    # with no .venv/, let it "fail" (nonzero return) so _rendered_user_unit_contents
     # falls back to the raw file untouched; only a daemon-reload call (systemctl),
     # which must never fire on a refused batch, raises.
     async def _guard_daemon_reload(*args: str, **kwargs: Any) -> Any:
         if args and args[0] == "systemctl":
-            raise AssertionError("must never reach daemon-reload — refused before installing")
+            raise AssertionError("must never reach daemon-reload, refused before installing")
 
         class _Proc:
             returncode = 1
@@ -3936,7 +3936,7 @@ async def test_real_install_user_units_refuses_a_unit_missing_a_description(
 async def test_real_install_user_units_refuses_a_unit_with_a_bare_binary_execstart(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A Description= alone isn't enough — an ExecStart naming neither %h nor this
+    """A Description= alone isn't enough, an ExecStart naming neither %h nor this
     repo's own checkout (a bare `/bin/true`, the live incident's own exact value) is
     refused just as loudly."""
     fake_home = tmp_path / "home"
@@ -3956,7 +3956,7 @@ async def test_real_install_user_units_refuses_a_unit_with_a_bare_binary_execsta
 async def test_real_install_user_units_refuses_the_whole_batch_on_one_bad_unit(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One placeholder among several real units refuses ALL of them — never a partial
+    """One placeholder among several real units refuses ALL of them, never a partial
     install that leaves the fleet in a mixed, half-installed state."""
     fake_home = tmp_path / "home"
     repo_root = tmp_path / "repo"
@@ -3975,8 +3975,8 @@ async def test_real_install_user_units_refuses_the_whole_batch_on_one_bad_unit(
 async def test_real_install_user_units_the_repos_own_real_units_all_pass(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Every unit deploy/user/ actually ships must already pass this validation — a
-    live regression here would refuse every real `osiris deploy` on the box."""
+    """Every unit deploy/user/ actually ships must already pass this validation, a
+    live regression here would refuse every real `osiris deploy` on the sandbox."""
     fake_home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
     repo_root = _find_repo_root(Path(__file__).resolve().parent)
@@ -3989,7 +3989,7 @@ async def test_real_install_user_units_the_repos_own_real_units_all_pass(
 async def test_real_install_user_units_never_writes_outside_the_patched_home(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The exact live incident (Thoth mail 10242): a sibling test ran the REAL
+    """The exact live incident (a sibling test ran the REAL
     installer with `Path.home` unpatched, silently overwriting this box's actual
     ~/.config/systemd/user files with test stubs. Proves the installer's own boundary
     directly, not by trusting every future test to remember the patch: every actual
@@ -4023,14 +4023,14 @@ async def test_real_install_user_units_never_writes_outside_the_patched_home(
 
     await _real_install_user_units(repo_root)
 
-    assert written_paths  # actually wrote something — a vacuous pass proves nothing
+    assert written_paths  # actually wrote something, a vacuous pass proves nothing
     assert all(fake_home == p or fake_home in p.parents for p in written_paths)
 
 
 async def test_unit_install_drift_reports_missing_drifted_and_ok(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Khnum's own boot-heal/boot-status consume this directly (ruling aaa8e841) — pure
+    """Workert's own boot-heal/boot-status consume this directly , pure
     and read-only, never touches ~/.config itself."""
     fake_home = tmp_path / "home"
     monkeypatch.setattr(Path, "home", lambda: fake_home)
@@ -4085,8 +4085,8 @@ async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The live specimen this guards against: a real deploy restarted onto a stale unit set
-    while install_units printed ZERO `unit:` lines and the deploy still exited 0 (Thoth's
-    dispatch msg 5161, gate24's captured log). deploy/user/ carrying real files but
+    while install_units printed ZERO `unit:` lines and the deploy still exited 0 (
+    dispatch , gate24's captured log). deploy/user/ carrying real files but
     install_units reporting nothing must REFUSE before the restart, not restart blind."""
     (tmp_path / "deploy" / "user").mkdir(parents=True)
     (tmp_path / "deploy" / "user" / "osiris-mcp.service").write_text("[Service]\n")
@@ -4095,7 +4095,7 @@ async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
         return []
 
     async def _unreachable(units: list[str]) -> tuple[int, str]:
-        raise AssertionError("must never be called — the silent no-op guard refuses first")
+        raise AssertionError("must never be called, the silent no-op guard refuses first")
 
     import io
     from contextlib import redirect_stderr
@@ -4109,7 +4109,7 @@ async def test_cmd_deploy_refuses_on_a_silent_install_units_no_op(
     assert "reported nothing installed" in buf.getvalue()
 
 
-# --- deploy auto-installs the three machine-file installers (#204, Thoth ruling msg 6949:
+# --- deploy auto-installs the three machine-file installers (#204, 
 # "a read-only status line that can only report STALE was half a mechanism") -------------------
 
 def test_run_install_script_reports_source_missing(tmp_path: Path) -> None:
@@ -4140,8 +4140,8 @@ def _git_init(repo: Path) -> None:
 async def test_cmd_deploy_actually_runs_install_commands_sh(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Not just a status report — deploy must actually EXECUTE the installer, the exact
-    gap Thoth's ruling named. A synthetic repo_root with its own commands/ + install
+    """Not just a status report, deploy must actually EXECUTE the installer, the exact
+    gap the ruling named. A synthetic repo_root with its own commands/ + install
     script, and a synthetic CLAUDE_COMMANDS_DIR target so this never touches the real
     machine ~/.claude/commands."""
     import io
@@ -4186,11 +4186,11 @@ async def test_cmd_deploy_actually_runs_install_commands_sh(
 async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The vault-lane timers (Thoth mail 8437, "have deploy install these three units
+    """The vault-lane timers ("have deploy install these three units
     the way it installs slash commands") get the same real-execution proof as
     install_commands.sh above: a synthetic repo with the real script and a synthetic
     deploy/ carrying the three unit pairs, redirected via OSIRIS_SYSTEMD_USER_DIR so
-    this never touches the real machine's systemd user session — the same escape hatch
+    this never touches the real machine's systemd user session, the same escape hatch
     CLAUDE_COMMANDS_DIR gives install_commands.sh, which is exactly why the script is
     safe to actually run here rather than only being read."""
     import io
@@ -4235,10 +4235,10 @@ async def test_cmd_deploy_actually_runs_install_prune_timers_sh(
     assert (target / "osiris-base-backup.service").read_text() == "# osiris-base-backup service\n"
 
 
-# --- deploy snapshot (thread e29b260c, Thoth mail 12947) --------------------------------------
+# --- deploy snapshot (thread e29b260c, --------------------------------------
 
 def _git_init_and_commit(repo: Path) -> str:
-    """Same shape as `_git_init` above, but returns the resulting commit sha — needed here
+    """Same shape as `_git_init` above, but returns the resulting commit sha, needed here
     (unlike every other install-script test) because `update_deploy_snapshot.sh` actually
     pins a *worktree* at a real sha, not just files present on disk."""
     import subprocess
@@ -4248,11 +4248,11 @@ def _git_init_and_commit(repo: Path) -> str:
 
 
 def _git_commit_all(repo: Path, message: str) -> str:
-    """Stage everything and commit, returning the new HEAD sha — a plain (never async) sync
+    """Stage everything and commit, returning the new HEAD sha, a plain (never async) sync
     helper, deliberately: ruff's ASYNC221 flags a blocking subprocess.run written directly
     inside an `async def` test body, so every such call in this section goes through a
     helper like this one instead, same as `_git_init` already does above. Every call carries
-    its own `timeout=` (the unbounded-wait ratchet's own law, tests/test_unbounded_wait.py) —
+    its own `timeout=` (the unbounded-wait ratchet's own law, tests/test_unbounded_wait.py), 
     a plain local `git` op against a tiny synthetic repo, 10s is generous, never expected."""
     import subprocess
 
@@ -4267,7 +4267,7 @@ def _git_commit_all(repo: Path, message: str) -> str:
 
 
 def _run_shim(shim: Path) -> str:
-    """Actually invoke a pinned snapshot's `osiris` shim and return its stdout — a sync
+    """Actually invoke a pinned snapshot's `osiris` shim and return its stdout, a sync
     helper for the same ASYNC221 reason as `_git_commit_all` above."""
     import subprocess
 
@@ -4286,7 +4286,7 @@ def _git_head(repo: Path) -> str:
 
 def _synthetic_deployable_repo(root: Path) -> Path:
     """A tiny, real git repo with its own `[project.scripts] osiris = ...` entry point and
-    a copy of the REAL scripts/update_deploy_snapshot.sh — everything the script needs to
+    a copy of the REAL scripts/update_deploy_snapshot.sh, everything the script needs to
     actually run `git worktree add` + `uv sync` end to end, deliberately NOT this repo
     itself (a worktree pinned inside a worktree-isolated test session would be exactly the
     git operation the harness's own worktree guard refuses)."""
@@ -4331,7 +4331,7 @@ async def test_update_deploy_snapshot_pins_the_shim_end_to_end(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The real script, actually run: `git worktree add --detach` a synthetic repo at its
-    own HEAD, `uv sync` it, and retarget the shim symlink — proof this isn't just read, it
+    own HEAD, `uv sync` it, and retarget the shim symlink, proof this isn't just read, it
     executes and produces a genuinely runnable `osiris`. OSIRIS_DEPLOY_SNAPSHOT_DIR/_LINK
     redirect both the worktree and the shim into tmp_path, so this never touches the real
     box's ~/.local/share/osiris or ~/.local/bin/osiris."""
@@ -4355,7 +4355,7 @@ async def test_update_deploy_snapshot_moves_an_existing_worktree_to_a_new_sha(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A SECOND deploy, a NEW sha: the worktree already exists from a prior pin (the common
-    case in production — the box already has one deployed) and must move to the new commit
+    case in production, the sandbox already has one deployed) and must move to the new commit
     in place, never re-run `git worktree add` against an occupied path."""
     repo = _synthetic_deployable_repo(tmp_path)
     sha1 = _git_init_and_commit(repo)
@@ -4417,7 +4417,7 @@ async def test_cmd_deploy_pins_the_snapshot_only_on_a_green_smoke(
 async def test_cmd_deploy_skips_the_snapshot_when_smoke_fails(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A broken deploy must never become the operator's next CLI — the exact failure mode
+    """A broken deploy must never become the operator's next CLI, the exact failure mode
     this whole lane exists to prevent, just aimed at smoke instead of a gate's candidate
     tree. If this ever fires, `deployed_head` is real but the restart it names didn't
     actually come up clean."""
@@ -4434,7 +4434,7 @@ async def test_cmd_deploy_skips_the_snapshot_when_smoke_fails(
 
     async def _snapshot(root: Path, sha: str) -> str:
         calls.append((root, sha))
-        raise AssertionError("must never be called — smoke did not come back clean")
+        raise AssertionError("must never be called, smoke did not come back clean")
 
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, record_deploy=_record_deploy,
@@ -4450,7 +4450,7 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A non-git repo_root (or any other reason record_deploy returns None) has no sha to
-    pin a worktree at — the snapshot step must be skipped, not called with a garbage
+    pin a worktree at, the snapshot step must be skipped, not called with a garbage
     value."""
     calls: list[tuple[Path, str]] = []
 
@@ -4462,7 +4462,7 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
 
     async def _snapshot(root: Path, sha: str) -> str:
         calls.append((root, sha))
-        raise AssertionError("must never be called — deployed_head is unknown")
+        raise AssertionError("must never be called, deployed_head is unknown")
 
     out = await cmd_deploy(repo_root=tmp_path, git_status=lambda root: [], restart=_restart,
                            pool=actions.pool, record_deploy=_record_deploy,
@@ -4477,14 +4477,14 @@ async def test_cmd_deploy_skips_the_snapshot_when_head_is_unknown(
 def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
     tmp_path: Path,
 ) -> None:
-    """Wave 21 (thread f04cce36 piece 3) widened this from three to five; WAVE 22
-    (ruling 7be61879, thread 40d6eef3) widened it once more to six — osiris-pg-autotune
+    """ (thread f04cce36 piece 3) widened this from three to five; 
+    (ruling 7be61879, thread 40d6eef3) widened it once more to six, osiris-pg-autotune
     was the last hand-installed timer the census named (osiris-preflight was already
-    covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER (ruling be21384a) widens it
-    again to seven — osiris-offload. A config panel/registered schedule that silently
+    covered by piece 3); THE OPPORTUNISTIC OFFLOAD RUNNER widens it
+    again to seven, osiris-offload. A config panel/registered schedule that silently
     does nothing until a human hand-installs the unit is worse than no field. No
     `.venv` in this synthetic repo, so render_units.py's own subprocess call fails and
-    the script's fallback (a verbatim copy) takes over — proving the UNIT LIST widened,
+    the script's fallback (a verbatim copy) takes over, proving the UNIT LIST widened,
     independent of the render step's own DB behavior (covered in test_render_units.py
     instead)."""
     import os
@@ -4526,7 +4526,7 @@ def test_install_prune_timers_sh_now_covers_all_seven_timer_lane_units(
 # --- boot-status -------------------------------------------------------------------------------
 
 async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
-    """A blank test DB has no active Seats at all — no seats means no gaps, same "silent
+    """A blank test DB has no active Seats at all, no seats means no gaps, same "silent
     when there is nothing to name" contract as composition_gap_notes on a caught-up DB."""
     import io
     from contextlib import redirect_stdout
@@ -4538,7 +4538,7 @@ async def test_cmd_boot_status_clean_on_a_blank_db(actions: Actions) -> None:
     assert "every active seat carries a compiled managed section" in buf.getvalue()
 
 
-# --- cmd_boot_status --units: REBOOT SURVIVAL's own report axis (thread 194eac83) --------
+# --- cmd_boot_status --units: REBOOT SURVIVAL's own report axis --------
 
 def test_unit_drift_notes_clean_when_installed_matches_the_repo_source(
     tmp_path: Path,
@@ -4566,7 +4566,7 @@ def test_unit_drift_notes_names_a_not_installed_unit(tmp_path: Path) -> None:
 
 
 def test_unit_drift_notes_names_a_drifted_unit_the_live_specimen(tmp_path: Path) -> None:
-    """The exact live fault (thread 194eac83): a 30-byte stub installed where the repo's
+    """The exact live fault : a 30-byte stub installed where the repo's
     real unit content should be."""
     repo_root = tmp_path / "repo"
     (repo_root / "deploy" / "user").mkdir(parents=True)
@@ -4621,7 +4621,7 @@ async def test_cmd_boot_status_units_reports_drift_and_dead_and_exits_nonzero(
 
     monkeypatch.setattr(
         "src.cli.unit_drift_notes",
-        lambda root, d: ["osiris-pulse.service: DRIFTED — installed content differs"])
+        lambda root, d: ["osiris-pulse.service: DRIFTED, installed content differs"])
 
     async def _fake_health(units: list[str]) -> dict[str, dict[str, str]]:
         return {"osiris-mcp": {"is-enabled": "enabled", "is-failed": "failed"}}
@@ -4675,7 +4675,7 @@ async def test_cmd_boot_status_names_a_gap_and_exits_nonzero(
 async def test_cmd_boot_status_fleet_never_touches_the_rollout_gap_check(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """thread bc6a5d455da2: --fleet is a SEPARATE report — a blank census (no live
+    """thread bc6a5d455da2: --fleet is a SEPARATE report, a blank census (no live
     bodies at all) must still exit clean, and never print anything from the rollout-gap
     check above."""
     import io
@@ -4739,7 +4739,7 @@ async def test_cmd_boot_status_fleet_emits_json(
     assert out == 0
 
 
-# --- cmd_sweep_seat_trees: SEAT TREE FABRICATION priority fix (Thoth mail 11759) -----------
+# --- cmd_sweep_seat_trees: SEAT TREE FABRICATION priority fix ( -----------
 
 async def test_cmd_sweep_seat_trees_dry_run_reports_json(
     actions: Actions, capsys: pytest.CaptureFixture[str],
@@ -4752,7 +4752,7 @@ async def test_cmd_sweep_seat_trees_dry_run_reports_json(
     assert "entries" in payload
 
 
-# --- cmd_lint: the graph_lint mirror (WAVE 22 item 2, mail 10109, thread bf10608b) — a real
+# --- cmd_lint: the graph_lint mirror (item 2, thread bf10608b), a real
 # pool, never mocked, same as every other CLI test in this file. Finding-triggering recipes
 # reuse test_compositions.py's own cheap fixtures (the edgeless-closure-growth ceiling
 # monkeypatch) rather than inventing a second one for the identical population. ---------------
@@ -4792,7 +4792,7 @@ async def test_cmd_lint_names_a_finding_and_exits_nonzero(
 
 
 async def test_cmd_lint_check_filter_narrows_to_one_check(actions: Actions) -> None:
-    """`--check` only ever LISTS that one check's own findings — proven here on a check
+    """`--check` only ever LISTS that one check's own findings, proven here on a check
     guaranteed empty on a fresh tree (never touches the expensive full-fetch population
     live graphs carry), same contract graph_lint's own MCP tool exposes."""
     import io
@@ -4811,7 +4811,7 @@ async def test_cmd_lint_json_mode_emits_the_full_receipt(
     out = await cmd_lint(as_json=True, pool=actions.pool)
     assert out == 0
     payload = json.loads(capsys.readouterr().out)
-    # could_not_evaluate is present ONLY when non-empty (graph_lint's own contract) — a
+    # could_not_evaluate is present ONLY when non-empty (graph_lint's own contract), a
     # clean pass on a fresh tree has no query failures to name, so it's absent here.
     assert {"findings", "counts", "counts_by_severity", "severity"} <= set(payload)
     assert payload["findings"] == []
@@ -4820,8 +4820,8 @@ async def test_cmd_lint_json_mode_emits_the_full_receipt(
 async def test_cmd_lint_project_filter_keeps_a_matching_finding(
     actions: Actions, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The client-side --project filter (thread bf10608b — graph_lint has no SQL-level
-    scoping to mirror) matches on the finding's own subject/detail text — the
+    """The client-side --project filter (thread bf10608b, graph_lint has no SQL-level
+    scoping to mirror) matches on the finding's own subject/detail text, the
     edgeless-closure-growth finding's own `detail` always names 'bypass' verbatim
     (compositions.py's own land() call site), a real substring, not a fabricated one."""
     from datetime import UTC, datetime
@@ -4861,7 +4861,7 @@ async def test_cmd_lint_project_filter_excludes_a_nonmatching_finding(
 
     out = await cmd_lint(project="no-such-project-anywhere-zzz", as_json=True,
                          pool=actions.pool)
-    assert out == 0  # scoped result is empty — a clean pass for THIS project
+    assert out == 0  # scoped result is empty, a clean pass for THIS project
     payload = json.loads(capsys.readouterr().out)
     assert payload["findings"] == []
     assert "edgeless-closure-growth" in payload["project_filter"][
@@ -4872,7 +4872,7 @@ async def test_cmd_lint_project_filter_excludes_a_nonmatching_finding(
 
 async def test_cmd_audit_the_wall_runs_and_renders(actions: Actions) -> None:
     """`comp.run_composition` resolves a name against the DB `compositions` table only
-    (`_spec_of`, no DEFAULT_COMPOSITIONS fallback) — the live dev DB already carries
+    (`_spec_of`, no DEFAULT_COMPOSITIONS fallback), the live dev DB already carries
     every default from its own `osiris seed`; a fresh test DB needs the same seeding
     step every other composition-reading test in this suite already does."""
     assert await cmd_seed(compositions_only=True, pool=actions.pool) == 0
@@ -4901,8 +4901,8 @@ async def test_cmd_audit_json_mode_emits_the_composition_result(
 
 
 async def test_cmd_audit_every_declared_name_actually_runs(actions: Actions) -> None:
-    """AUDIT_NAMES is the argparse `choices=` population too — every name it lists must
-    resolve to a real DEFAULT_COMPOSITIONS entry, or the CLI door would advertise a
+    """AUDIT_NAMES is the argparse `choices=` population too, every name it lists must
+    resolve to a real DEFAULT_COMPOSITIONS entry, or the CLI path would advertise a
     choice that immediately refuses. Caught here, not discovered live."""
     from src.cli import AUDIT_NAMES
 
@@ -4918,7 +4918,7 @@ async def test_cmd_audit_unknown_name_refuses_with_exit_1(actions: Actions) -> N
     assert out == 1
 
 
-# --- WAVE 27, PARITY GAP 2 (Thoth mail 11752): osiris lint --check triage / --check
+# --- , PARITY GAP 2 (osiris lint --check triage / --check
 # <audit-name>, folding the whole graph-health namespace into one door -------------------
 
 async def test_cmd_lint_widens_check_to_triage_via_the_main_door(actions: Actions) -> None:
@@ -4989,7 +4989,7 @@ async def test_cmd_lint_audit_helper_json_mode(actions: Actions) -> None:
     assert out == 0
 
 
-# --- WAVE 27, PARITY GAP 5 (Thoth mail 11752): osiris inspect, the CLI-side aggregator
+# --- , PARITY GAP 5 (osiris inspect, the CLI-side aggregator
 # over dossier/object-events/succession-chain/candidates --------------------------------
 
 async def test_cmd_inspect_calls_dossier_only_by_default(monkeypatch: Any) -> None:
@@ -5035,7 +5035,7 @@ async def test_cmd_inspect_dark_daemon_reports_honestly(monkeypatch: Any, capsys
     assert "osiris-mcp" in capsys.readouterr().err
 
 
-# --- WAVE 27, PARITY GAP 6 (Thoth mail 11752): osiris practices, the plain-read door
+# --- , PARITY GAP 6 (osiris practices, the plain-read path
 # amend-practice's own write door never covered --------------------------------------------
 
 async def test_cmd_practices_list_on_a_blank_db(actions: Actions) -> None:
@@ -5051,14 +5051,14 @@ async def test_cmd_practices_show_finds_a_real_practice(
     pid = await actions.create_or_find_object(
         "Practice", "practice:cli-inspect-test", "test")
     await actions.assert_property(
-        pid, "statement", "test the CLI door, not just the MCP one", "test",
+        pid, "statement", "test the CLI path, not just the MCP one", "test",
         datetime.now(UTC), 0.9)
 
     out = await cmd_practices("show", str(pid), as_json=True, pool=actions.pool)
     assert out == 0
     payload = json.loads(capsys.readouterr().out)
     assert len(payload) == 1
-    assert payload[0]["statement"] == "test the CLI door, not just the MCP one"
+    assert payload[0]["statement"] == "test the CLI path, not just the MCP one"
 
 
 async def test_cmd_practices_show_unknown_ref_exits_1(actions: Actions) -> None:
@@ -5085,7 +5085,7 @@ async def test_cmd_practices_json_mode_emits_a_list(
     assert isinstance(payload, list)
 
 
-# --- fold-project: the sanctioned second door (thread 2446) — calls the SAME
+# --- fold-project: the sanctioned second door (thread 2446), calls the SAME
 # projects.fold_project the MCP wrapper calls, gate untouched -------------------------------
 
 async def _cli_stub_project(actions: Actions, canon: str, name: str) -> None:
@@ -5112,7 +5112,7 @@ async def test_cmd_fold_project_folds_and_reports(actions: Actions) -> None:
         "SELECT status FROM objects WHERE canonical='repo:clidupe1'")
     assert row["status"] == "merged"
     # THE RECEIPT DIVERGENCE (thread 2474): two doors onto one function must return the
-    # same evidence — the merge event and same_as link the MCP wrapper surfaces must
+    # same evidence, the merge event and same_as link the MCP wrapper surfaces must
     # print here too, not just live in the graph unreported.
     dupe_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical='repo:clidupe1'")
@@ -5131,7 +5131,7 @@ async def test_cmd_fold_project_folds_and_reports(actions: Actions) -> None:
 async def test_cmd_fold_project_does_not_soften_the_contradiction_gate(
     actions: Actions,
 ) -> None:
-    """The console-script door must not become a second, weaker path to the same act —
+    """The console-script path must not become a second, weaker path to the same act, 
     same test shape as the MCP wrapper's own negative control."""
     import io
     from contextlib import redirect_stderr
@@ -5180,7 +5180,7 @@ async def test_cli_parser_accepts_fold_project(actions: Actions) -> None:
     assert (args.dupe, args.into, args.evidence, args.actor) == ("a", "b", "e", "operator")
 
 
-# --- charter-for: the sanctioned second door (thread 2474) — calls the SAME
+# --- charter-for: the sanctioned second door (thread 2474), calls the SAME
 # charter.charter_for the MCP wrapper calls, guard untouched -------------------------------
 
 async def _cli_repo(actions: Actions, name: str) -> None:
@@ -5241,8 +5241,8 @@ async def test_cmd_charter_for_refuses_a_non_manager(actions: Actions) -> None:
 
 
 async def test_cmd_charter_for_ruling_bypasses_the_manager_check(actions: Actions) -> None:
-    """`osiris charter-for <seat> --ruling <decision id>` — the console-script's own
-    plumbing for Thoth mail 9382 item 3 (93b25ddc), CLI side."""
+    """`osiris charter-for <seat> --ruling <decision id>`, the console-script's own
+    plumbing for (93b25ddc), CLI side."""
     from src.orchestrator.capture import record_decision
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -5272,8 +5272,8 @@ async def test_cmd_charter_for_operator_actor_bypasses_managed_by(actions: Actio
     from src.orchestrator.seats import ensure_seat
 
     await _cli_repo(actions, "osiris")
-    # AUTHORITY BY CHARTER (thread 1d5b9773): the operator bypass now requires its OWN
-    # charter to cover the repo being declared — give person:operator that charter
+    # AUTHORITY BY CHARTER : the operator bypass now requires its OWN
+    # charter to cover the repo being declared, give person:operator that charter
     # directly, since this test is about the CLI wiring, not charter scoping.
     op_id = await ensure_operator_person(actions, source="test")
     proj_id = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='repo:osiris'")
@@ -5293,7 +5293,7 @@ async def test_cmd_charter_for_operator_actor_bypasses_managed_by(actions: Actio
 
 async def test_cli_parser_accepts_charter_for(actions: Actions) -> None:
     """argparse wiring: seat positional, --repos/--because/--actor required (comma-split
-    happens in main(), not the parser — args.repos stays the raw string here)."""
+    happens in main(), not the parser, args.repos stays the raw string here)."""
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
@@ -5380,7 +5380,7 @@ async def test_cli_parser_accepts_settings(actions: Actions) -> None:
     assert args.key == "daemon.pit_watch.enabled"
 
 
-# --- backup-settings: PARITY GAPS, WAVE 27 item 3, thread 45aff160 ----------------------------
+# --- backup-settings: PARITY GAPS,  item 3, thread 45aff160 ----------------------------
 
 async def test_cmd_backup_settings_get_reports_the_seeded_defaults(actions: Actions) -> None:
     import io
@@ -5445,7 +5445,7 @@ async def test_cmd_backup_settings_write_timer_schedules_full_replace(
     actions: Actions,
 ) -> None:
     """`timer_schedules` clears any unit missing from the given object, per its own
-    docstring — never leaves a stale override behind silently."""
+    docstring, never leaves a stale override behind silently."""
     import io
     import json
     from contextlib import redirect_stdout
@@ -5509,7 +5509,7 @@ async def test_cli_parser_accepts_backup_settings(actions: Actions) -> None:
 
 
 # --- backup-settings CLI ergonomics: --timer/--offload-add/--offload-remove,
-# THE BACKUP CLI DOOR piece 4 (Thoth mail 12809/12812) ------------------------------------------
+# THE BACKUP CLI DOOR piece 4 ( ------------------------------------------
 
 async def test_cli_parser_accepts_offload_add_and_remove(actions: Actions) -> None:
     from src.cli import _build_parser
@@ -5547,7 +5547,7 @@ async def test_cli_parser_accepts_repeated_timer_flags(actions: Actions) -> None
 async def test_cmd_backup_settings_offload_add_upserts_a_local_target(
     actions: Actions, tmp_path: Any,
 ) -> None:
-    """A real, live-mounted findmnt target isn't needed here — the write-time refusal
+    """A real, live-mounted findmnt target isn't needed here, the write-time refusal
     is shape-only for the STORED fields; presence is a read-time, never-refused verdict
     (test_backup_settings.py's own job to prove in depth)."""
     out = await cmd_backup_settings(
@@ -5659,12 +5659,12 @@ async def test_cmd_backup_settings_timer_rejects_a_bad_kv_shape(actions: Actions
     assert "UNIT=ONCALENDAR" in buf.getvalue()
 
 
-# --- backup-status: THE BACKUP CLI DOOR, Thoth mail 12809 -------------------------------------
+# --- backup-status: THE BACKUP CLI DOOR, -------------------------------------
 
 async def test_cmd_backup_status_renders_the_live_panel(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A real, empty vault/backups dir pair (tmp_path) — the same opt-in-args override
+    """A real, empty vault/backups dir pair (tmp_path), the same opt-in-args override
     _fn_backup_status's own docstring names, so this never touches the real production
     paths."""
     import io
@@ -5783,7 +5783,7 @@ async def test_cli_parser_accepts_amend_practice(actions: Actions) -> None:
     assert args.actor == "operator"
 
 
-# --- annotate-thread: the fourth sanctioned second door (thread 2474) — calls the SAME
+# --- annotate-thread: the fourth sanctioned second door (thread 2474), calls the SAME
 # capture.annotate_thread the MCP wrapper calls, guard untouched -------------------------------
 
 async def test_cmd_annotate_thread_annotates_and_reports(actions: Actions) -> None:
@@ -5792,7 +5792,7 @@ async def test_cmd_annotate_thread_annotates_and_reports(actions: Actions) -> No
 
     from src.orchestrator.capture import open_thread, thread_notes
 
-    tid = await open_thread(actions, "the console door needs a second door too")
+    tid = await open_thread(actions, "the console path needs a second entry point too")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -5831,7 +5831,7 @@ async def test_cli_parser_accepts_annotate_thread(actions: Actions) -> None:
     assert args.actor == "operator"
 
 
-# --- rematerialize: the soul store's own second door (task #51 piece 2) — calls the
+# --- rematerialize: the soul store's own second door (task #51 piece 2), calls the
 # SAME SoulStore.rematerialize_to_disk the MCP wrapper calls, guard untouched ------------------
 
 async def test_cmd_rematerialize_writes_and_reports(actions: Actions, tmp_path: Path) -> None:
@@ -5883,7 +5883,7 @@ async def test_cli_parser_accepts_rematerialize(actions: Actions) -> None:
     assert bare.force is False
 
 
-# --- amend-decision: the fifth sanctioned second door (thread 2474) — calls the SAME
+# --- amend-decision: the fifth sanctioned second door (thread 2474), calls the SAME
 # capture.amend_decision the MCP wrapper calls, guard untouched --------------------------------
 
 async def test_cmd_amend_decision_amends_and_reports(actions: Actions) -> None:
@@ -5949,7 +5949,7 @@ async def test_cli_parser_accepts_amend_decision(actions: Actions) -> None:
     assert args.actor == "operator"
 
 
-# --- send / decide / thread: THE WRITE TRIANGLE (dispatch a354ba28, msg 7882 item 2) —
+# --- send / decide / thread: THE WRITE TRIANGLE (dispatch a354ba28)
 # each calls the SAME orchestrator function its MCP twin wraps, guard untouched ------------------
 
 async def test_cmd_send_broadcasts_and_reports(actions: Actions) -> None:
@@ -5976,10 +5976,10 @@ async def test_cmd_send_broadcasts_and_reports(actions: Actions) -> None:
 async def test_cmd_send_honors_the_operators_stored_trigger_toggle_over_a_bare_env(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """thread bc6a5d455da2, the CLI trigger-dark false-negative (Thoth mail 10225/10253):
+    """thread bc6a5d455da2, the CLI trigger-dark false-negative (
     the operator's ACTUAL stored toggle (settings table, wake.trigger.enabled) is ON,
     but a bare CLI process's own environment (no worker systemd drop-in) reads
-    OSIRIS_TRIGGER_ENABLED as off — dispatch_dm must be handed the STORED value, not the
+    OSIRIS_TRIGGER_ENABLED as off, dispatch_dm must be handed the STORED value, not the
     bare env one, so a DM sent from a plain shell doesn't falsely report trigger-dark
     while the operator's own real setting is on."""
     from src.orchestrator import mounts
@@ -6114,8 +6114,8 @@ async def test_cmd_thread_bulk_dry_run_previews_only(actions: Actions) -> None:
 
     from src.orchestrator.capture import _thread_resolved_in, open_thread
 
-    t1 = await open_thread(actions, "bulk thread one for the console door")
-    t2 = await open_thread(actions, "bulk thread two for the console door")
+    t1 = await open_thread(actions, "bulk thread one for the console path")
+    t2 = await open_thread(actions, "bulk thread two for the console path")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -6155,8 +6155,8 @@ async def test_cli_parser_accepts_thread(actions: Actions) -> None:
     assert bare.dry_run is True
 
 
-# --- rebind-seat / correct-pin-value: the jesus/chad path from a terminal (thread 6437,
-# #199's parity lane) — both call the SAME orchestrator function their MCP twin wraps -----------
+# --- rebind-seat / correct-pin-value: the workerq/workerf path from a terminal (thread 6437,
+# #199's parity lane), both call the SAME orchestrator function their MCP twin wraps -----------
 
 async def test_cmd_rebind_seat_moves_the_anchor_and_reports(
     actions: Actions, tmp_path: Path,
@@ -6205,13 +6205,13 @@ async def test_cli_parser_accepts_rebind_seat(actions: Actions) -> None:
     """argparse wiring: seat/new_cwd positionals, --extract flag, --actor default."""
     from src.cli import _build_parser
 
-    args = _build_parser().parse_args(["rebind-seat", "Alfred", "/tmp/somewhere"])
+    args = _build_parser().parse_args(["rebind-seat", "Workerb", "/tmp/somewhere"])
     assert args.command == "rebind-seat"
-    assert (args.seat, args.new_cwd, args.extract) == ("Alfred", "/tmp/somewhere", False)
+    assert (args.seat, args.new_cwd, args.extract) == ("Workerb", "/tmp/somewhere", False)
     assert args.actor == "console"
 
     args2 = _build_parser().parse_args(
-        ["rebind-seat", "Alfred", "/tmp/elsewhere", "--extract", "--actor", "operator"])
+        ["rebind-seat", "Workerb", "/tmp/elsewhere", "--extract", "--actor", "operator"])
     assert args2.extract is True and args2.actor == "operator"
 
 
@@ -6257,7 +6257,7 @@ async def test_cmd_correct_pin_value_refuses_an_unclaimed_name(
 async def test_cmd_correct_pin_value_adds_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No parallel guard logic — the underlying correct_own_pin_value's own widened
+    """No parallel guard logic, the underlying correct_own_pin_value's own widened
     behavior (operator ruling b5663511, PROJECT IDENTITY DRIFT: a missing key is
     ADDED via write_pin_additions, never refused) surfaces through this door
     unchanged."""
@@ -6285,10 +6285,10 @@ async def test_cli_parser_accepts_correct_pin_value(actions: Actions) -> None:
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
-        ["correct-pin-value", "Alfred", "project", "newname", "--because", "reason"])
+        ["correct-pin-value", "Workerb", "project", "newname", "--because", "reason"])
     assert args.command == "correct-pin-value"
     assert (args.seat, args.key, args.value, args.reason) == (
-        "Alfred", "project", "newname", "reason")
+        "Workerb", "project", "newname", "reason")
 
 
 async def test_cmd_heal_seat_anchor_dry_run_reports_without_writing(
@@ -6319,7 +6319,7 @@ async def test_cmd_heal_seat_anchor_dry_run_reports_without_writing(
     rows = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
-    assert len(rows) == 2  # untouched — dry run
+    assert len(rows) == 2  # untouched, dry run
 
 
 async def test_cmd_heal_seat_anchor_apply_writes_and_reports(
@@ -6379,17 +6379,17 @@ async def test_cli_parser_accepts_heal_seat_anchor(actions: Actions) -> None:
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
-        ["heal-seat-anchor", "Jesus", "--because", "reason"])
+        ["heal-seat-anchor", "Workerq", "--because", "reason"])
     assert args.command == "heal-seat-anchor"
-    assert (args.seat, args.because, args.apply) == ("Jesus", "reason", False)
+    assert (args.seat, args.because, args.apply) == ("Workerq", "reason", False)
     assert args.actor == "console"
 
     args2 = _build_parser().parse_args(
-        ["heal-seat-anchor", "Jesus", "--because", "reason", "--apply", "--actor", "operator"])
+        ["heal-seat-anchor", "Workerq", "--because", "reason", "--apply", "--actor", "operator"])
     assert args2.apply is True and args2.actor == "operator"
 
 
-# --- #204: the five CLI doors the #199 lane 3B audit found as real gaps — thin wrappers
+# --- #204: the five CLI doors the #199 lane 3B audit found as real gaps, thin wrappers
 # on the identical orchestrator function each MCP tool wraps, same convention as
 # heal-seat-anchor/correct-pin-value above.
 
@@ -6435,9 +6435,9 @@ async def test_cli_parser_accepts_correct_agent_house(actions: Actions) -> None:
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
-        ["correct-agent-house", "Jesus", "--project", "godel", "--seat-generation", "3"])
+        ["correct-agent-house", "Workerq", "--project", "godel", "--seat-generation", "3"])
     assert args.command == "correct-agent-house"
-    assert (args.seat, args.project, args.seat_generation) == ("Jesus", "godel", 3)
+    assert (args.seat, args.project, args.seat_generation) == ("Workerq", "godel", 3)
     assert args.actor == "console"
 
 
@@ -6553,9 +6553,9 @@ async def test_cli_parser_accepts_backfill(actions: Actions) -> None:
 
     args2 = _build_parser().parse_args(
         ["backfill", "operator_charter", "--apply", "--because", "x", "--json",
-         "--only-bases", "a,b", "--actor", "sekhmet"])
+         "--only-bases", "a,b", "--actor", "workerad"])
     assert args2.apply is True and args2.because == "x" and args2.as_json is True
-    assert args2.only_bases == "a,b" and args2.actor == "sekhmet"
+    assert args2.only_bases == "a,b" and args2.actor == "workerad"
 
     with pytest.raises(SystemExit):
         _build_parser().parse_args(["backfill", "not-a-real-target"])
@@ -6579,7 +6579,7 @@ async def test_cmd_backfill_dry_run_reports_the_plan_and_exits_zero(
 async def test_cmd_backfill_apply_without_because_refuses_before_any_write(
     actions: Actions,
 ) -> None:
-    """This door's own stricter contract (thread c89a9873): `--because` is required to
+    """This door's own stricter contract : `--because` is required to
     `--apply` for EVERY target, including agent_project_links, which the underlying
     orchestrator function does not itself require it for."""
     import io
@@ -6676,14 +6676,14 @@ async def test_cli_parser_accepts_heal_seat_transcript(actions: Actions) -> None
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
-        ["heal-seat-transcript", "Jesus", "/a.jsonl", "/b.jsonl", "--because", "reason",
+        ["heal-seat-transcript", "Workerq", "/a.jsonl", "/b.jsonl", "--because", "reason",
          "--apply"])
     assert args.command == "heal-seat-transcript"
     assert (args.seat, args.source_paths, args.because, args.apply) == (
-        "Jesus", ["/a.jsonl", "/b.jsonl"], "reason", True)
+        "Workerq", ["/a.jsonl", "/b.jsonl"], "reason", True)
 
 
-# --- mint-seat: a different shape of second door (no stale-tool-index gap — mint_seat's own
+# --- mint-seat: a different shape of second door (no stale-tool-index gap, mint_seat's own
 # MCP tool infers `manager` from the caller's held seat, which a raw terminal has none of) ------
 
 async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
@@ -6707,7 +6707,7 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
     assert "minted CliMintWorker1" in text and "project=clihouse" in text
     assert "seat directory:" in text
     assert f"manager: {manager['seat_id']} (linked)" in text
-    # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/msg 6262 — this assertion used to
+    # THE MCP-SYNTAX LEAK, FIXED (thread bc11a2d3/, this assertion used to
     # PROVE the bug, not catch it: a terminal caller was handed `launch(target=...)`,
     # syntax that cannot run in a shell. next_step_cli is the terminal-appropriate twin.
     assert "occupancy: vacant" in text
@@ -6725,8 +6725,8 @@ async def test_cmd_mint_seat_mints_fresh_worker_and_reports(
 async def test_cmd_reissue_office_is_a_deprecated_alias_for_reissue_seat_dir(
     actions: Actions,
 ) -> None:
-    """ONE TAXONOMY (ruling 52a59652/70c001ec): the old subcommand still works this
-    release, but warns and delegates — never a second implementation."""
+    """ONE TAXONOMY : the old subcommand still works this
+    release, but warns and delegates, never a second implementation."""
     import io
     from contextlib import redirect_stderr
 
@@ -6776,8 +6776,8 @@ async def test_cmd_mint_seat_refuses_unknown_manager(actions: Actions) -> None:
 
 
 async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
-    """argparse wiring: handle positional required, everything else — including
-    --manager/--actor, both inferred since dispatch 3678/3681 — optional."""
+    """argparse wiring: handle positional required, everything else, including
+    --manager/--actor, both inferred since dispatch 3678/3681, optional."""
     from src.cli import _build_parser
 
     args = _build_parser().parse_args(
@@ -6792,7 +6792,7 @@ async def test_cli_parser_accepts_mint_seat(actions: Actions) -> None:
 
 async def test_cli_parser_defaults_actor_to_console_everywhere() -> None:
     """dispatch 3678: a human at a raw terminal shouldn't have to type a value that is
-    always going to be the same one — every sanctioned-second-door command defaults
+    always going to be the same one, every sanctioned-second-door command defaults
     --actor to the console operator sentinel (src.orchestrator.seats._OPERATOR_ACTORS)."""
     from src.cli import _build_parser
 
@@ -6826,7 +6826,7 @@ async def test_cli_parser_accepts_merge_and_unmerge() -> None:
 
 async def test_cmd_merge_folds_a_software_project_pair(actions: Actions) -> None:
     """cmd_merge dispatches to the SAME self-typing orchestrator.merge.merge the MCP tool
-    wraps — this is the replacement for the old cmd_fold_project, not a narrower rename."""
+    wraps, this is the replacement for the old cmd_fold_project, not a narrower rename."""
     import io
     from contextlib import redirect_stdout
 
@@ -6845,7 +6845,7 @@ async def test_cmd_merge_folds_a_software_project_pair(actions: Actions) -> None
 
 
 async def test_cmd_fold_project_prints_a_deprecation_pointer(actions: Actions) -> None:
-    """dispatch 3683: fold-project is a hidden, working, DEPRECATED alias for merge — it
+    """dispatch 3683: fold-project is a hidden, working, DEPRECATED alias for merge, it
     must say so on every call, not just quietly keep working forever unremarked."""
     import io
     from contextlib import redirect_stderr
@@ -6863,9 +6863,9 @@ async def test_cmd_fold_project_prints_a_deprecation_pointer(actions: Actions) -
 
 
 async def test_cmd_unmerge_refusal_still_emits_json(actions: Actions) -> None:
-    """Thoth dispatch 6746, specimen B: the refusal path used to short-circuit with a
+    """specimen B: the refusal path used to short-circuit with a
     bare stderr print BEFORE ever reaching render.emit, so `--json` was silently
-    ignored on exactly the path a script most needs it — found by RUNNING the command,
+    ignored on exactly the path a script most needs it, found by RUNNING the command,
     not by reading it (no existing test exercised this path at all)."""
     import io
     import json
@@ -6898,7 +6898,7 @@ async def test_cmd_unmerge_dry_run_by_default(actions: Actions) -> None:
         "SELECT status FROM objects WHERE canonical='repo:unmdupe1'")
     assert row["status"] == "merged"  # dry run: still merged, nothing executed
     # Through --json, the machine contract. The old form ORed in a bare "false"
-    # substring, which would have passed on almost any output at all — tightened
+    # substring, which would have passed on almost any output at all, tightened
     # to the actual receipt field while fixing the render.
     assert '"execute":false' in buf.getvalue().lower()
 
@@ -6949,7 +6949,7 @@ async def test_cmd_retention_refuses_an_unknown_table(actions: Actions) -> None:
 async def test_cmd_mint_seat_infers_manager_from_the_sole_seat_in_house(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Thoth mail 12000, implements 70c001ec: no --house flag any more — --manager
+    """ , implements 70c001ec: no --house flag any more, --manager
     omitted infers the ONE seat in the project pinned at the cwd (--house retired,
     no alias)."""
     import io
@@ -7025,7 +7025,7 @@ async def test_cmd_mint_seat_refuses_to_infer_manager_with_several_seats_in_hous
 
 
 def test_bare_osiris_shows_help_and_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
-    """dispatch 3678/3681: bare `osiris` must HELP, never just error — but the exit code
+    """dispatch 3678/3681: bare `osiris` must HELP, never just error, but the exit code
     (2, a real usage condition) stays exactly what it was before this build."""
     out = main([])
     assert out == 2
@@ -7038,45 +7038,45 @@ async def test_cli_parser_accepts_new(actions: Actions) -> None:
     from src.cli import _build_parser
 
     parser = _build_parser()
-    args = parser.parse_args(["new", "Henry"])
+    args = parser.parse_args(["new", "Workern"])
     assert args.command == "new"
-    assert args.handle == "Henry" and args.path is None
+    assert args.handle == "Workern" and args.path is None
     assert args.project is None and args.model is None and args.actor == "console"
 
-    with_path = parser.parse_args(["new", "Henry", "/tmp/henry-ws", "--project", "Custom"])
-    assert with_path.path == "/tmp/henry-ws" and with_path.project == "Custom"
+    with_path = parser.parse_args(["new", "Workern", "/tmp/workern-ws", "--project", "Custom"])
+    assert with_path.path == "/tmp/workern-ws" and with_path.project == "Custom"
 
 
 async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """cmd_new has no office_root passthrough (matching cmd_mint_seat's own shape) — the
+    """cmd_new has no office_root passthrough (matching cmd_mint_seat's own shape), the
     real default is offices._default_office_root(), redirected here via OSIRIS_OFFICE_ROOT
-    (wave 9, msg 6089) so this test never writes into the operator's actual
+    (,  so this test never writes into the operator's actual
     ~/.osiris/seats/."""
     import io
     from contextlib import redirect_stdout
 
-    workspace = tmp_path / "henry-ws"
+    workspace = tmp_path / "workern-ws"
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Henry", str(workspace), project=None, model=None,
+        out = await cmd_new("Workern", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
 
     assert out == 0
     text = buf.getvalue()
-    assert "founded Henry" in text and "self-managed, no manager" in text
-    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a jesus project and a
-    # chad project" — decision 24e0b761): no --project given, so none is invented, and
+    assert "founded Workern" in text and "self-managed, no manager" in text
+    # NO FABRICATION (the operator, 2026-09-02: "falsely creates a workerq project and a
+    # workerf project", decision 24e0b761): no --project given, so none is invented, and
     # the receipt confesses it plainly rather than staying silent. No separate --house
-    # print any more either (Thoth mail 12000, implements 70c001ec): house is always
+    # print any more either (implements 70c001ec): house is always
     # project's own value now, never a second line to confess separately.
     assert "project: unset" in text and "none invented" in text
-    assert "project: Henry" not in text
+    assert "project: Workern" not in text
     assert f"workspace: {workspace}" in text
-    assert "next: osiris launch Henry" in text
+    assert "next: osiris launch Workern" in text
     assert workspace.is_dir()
     assert (workspace / ".osiris").read_text() == ""
 
@@ -7084,7 +7084,7 @@ async def test_cmd_new_founds_a_self_managed_seat_and_prints_the_launch_line(
 async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # THE UNCHANGED DIRECTION (Thoth's acceptance item 2): an explicit --project still
+    # THE UNCHANGED DIRECTION (acceptance item 2): an explicit --project still
     # lands exactly as before.
     import io
     from contextlib import redirect_stdout
@@ -7106,12 +7106,12 @@ async def test_cmd_new_with_explicit_project_writes_it_and_prints_it(
 async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_default(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE OPERATOR'S REAL SPECIMEN (thread bc11a2d3/msg 6262): `mkdir cdking && cd
-    cdking && osiris new Chad` silently created ~/code/chad — cdking was left an
+    """THE OPERATOR'S REAL SPECIMEN (thread bc11a2d3/: `mkdir cdking && cd
+    cdking && osiris new Workerf` silently created ~/code/workerf, cdking was left an
     orphan. No path given, standing somewhere that isn't $HOME and isn't the default
     target: confess BEFORE anything writes, name both paths, give the exact remedy.
     Does NOT switch the default to cwd (deriving-by-convention is the trap the earlier
-    anchor_cwd bug came from) — cwd_ws below still ends up empty."""
+    anchor_cwd bug came from), cwd_ws below still ends up empty."""
     import io
     from contextlib import redirect_stderr
 
@@ -7119,24 +7119,24 @@ async def test_cmd_new_confesses_before_writing_when_cwd_disagrees_with_the_defa
     cwd_ws = tmp_path / "cdking"
     cwd_ws.mkdir()
     monkeypatch.setattr(Path, "cwd", staticmethod(lambda: cwd_ws))
-    default_workspace = Path.home() / "code" / "chad"
+    default_workspace = Path.home() / "code" / "workerf"
 
     buf = io.StringIO()
     with redirect_stderr(buf):
-        out = await cmd_new("Chad", None, project=None, model=None,
+        out = await cmd_new("Workerf", None, project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0  # the confession is advisory, never a refusal
     err = buf.getvalue()
     assert str(cwd_ws) in err
     assert str(default_workspace) in err
-    assert "osiris new Chad ." in err
+    assert "osiris new Workerf ." in err
     assert list(cwd_ws.iterdir()) == []  # cwd itself was never touched
 
 
 async def test_cmd_new_stays_silent_when_a_path_is_given(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The confession only fires when DEFAULTING — a caller who names a path explicitly
+    """The confession only fires when DEFAULTING, a caller who names a path explicitly
     (even one that differs from cwd) made a deliberate choice, nothing to confess."""
     import io
     from contextlib import redirect_stderr
@@ -7156,23 +7156,23 @@ async def test_cmd_new_stays_silent_when_a_path_is_given(
 async def test_cmd_new_notes_the_case_drift_when_handle_capitalization_differs(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE OPERATOR'S THIRD DEFECT (msg 6262): he typed 'Chad', got project 'Chad' but
-    paths 'chad' — case-insensitive resolution is correct, the silence about it is not.
+    """THE OPERATOR'S THIRD DEFECT: he typed 'Workerf', got project 'Workerf' but
+    paths 'workerf', case-insensitive resolution is correct, the silence about it is not.
     Say plainly which spelling is canonical, only when they actually differ."""
     import io
     from contextlib import redirect_stdout
 
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
-    workspace = tmp_path / "chad-ws"
+    workspace = tmp_path / "workerf-ws"
 
     buf = io.StringIO()
     with redirect_stdout(buf):
-        out = await cmd_new("Chad", str(workspace), project=None, model=None,
+        out = await cmd_new("Workerf", str(workspace), project=None, model=None,
                             actor="console", pool=actions.pool)
     assert out == 0
     text = buf.getvalue()
-    assert "note: paths use the lowercase form ('chad')" in text
-    assert "keeps your capitalization ('Chad')" in text
+    assert "note: paths use the lowercase form ('workerf')" in text
+    assert "keeps your capitalization ('Workerf')" in text
 
 
 async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
@@ -7192,16 +7192,16 @@ async def test_cmd_new_no_case_note_when_handle_is_already_lowercase(
     assert "note: paths use the lowercase form" not in buf.getvalue()
 
 async def test_cli_parser_accepts_resume(actions: Actions) -> None:
-    """The new verb (operator ruling 60c78788): a real positional handle + --model,
+    """The new verb : a real positional handle + --model,
     no --debug (resume has no PTY-broker fallback lane, launch's own concern only)."""
     from src.cli import _build_parser
 
     parser = _build_parser()
-    args = parser.parse_args(["resume", "Chad"])
+    args = parser.parse_args(["resume", "Workerf"])
     assert args.command == "resume"
-    assert args.handle == "Chad" and args.model is None
+    assert args.handle == "Workerf" and args.model is None
 
-    named = parser.parse_args(["resume", "Chad", "--model", "claude-sonnet-5"])
+    named = parser.parse_args(["resume", "Workerf", "--model", "claude-sonnet-5"])
     assert named.model == "claude-sonnet-5"
 
 
@@ -7222,7 +7222,7 @@ async def test_cli_parser_accepts_bootstrap(actions: Actions) -> None:
 async def test_cmd_bootstrap_ingests_memory_and_registers_the_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """#135 deliverable 3's last missing verb — the console-script door onto the SAME
+    """#135 deliverable 3's last missing verb, the console-script path onto the SAME
     bootstrap_project the MCP `bootstrap` tool wraps, no duplicated logic."""
     import io
     from contextlib import redirect_stdout
@@ -7230,7 +7230,7 @@ async def test_cmd_bootstrap_ingests_memory_and_registers_the_project(
     project_dir = tmp_path / "some-project"
     project_dir.mkdir()
     (project_dir / "CLAUDE.md").write_text(
-        "# CLAUDE.md — build log\n\n## 2026-08-16\nFirst entry.\n")
+        "# CLAUDE.md, build log\n\n## 2026-08-16\nFirst entry.\n")
 
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -7255,7 +7255,7 @@ async def test_cmd_bootstrap_refuses_the_live_db_fallback_without_confirmation(
     """9b9ba394's own specimen: this exact command wrote a real project into the shared
     fleet graph because apply_dev_fallback()'s "dev" DSN and every deployed service's
     own DATABASE_URL are the SAME database on this box. No `pool=` passed here (the
-    real no-pool path this guard sits in front of) — neither DATABASE_URL nor
+    real no-pool path this guard sits in front of), neither DATABASE_URL nor
     OSIRIS_ALLOW_LIVE set, so this must refuse before ever touching create_pool."""
     import io
     from contextlib import redirect_stderr
@@ -7279,7 +7279,7 @@ async def test_cmd_bootstrap_proceeds_when_database_url_is_already_set(
     actions: Actions, pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """An explicit DATABASE_URL (a deployed unit's own environment, or a caller who set
-    one deliberately) is never blocked — the guard only fires on the SILENT fallback.
+    one deliberately) is never blocked, the guard only fires on the SILENT fallback.
     `actions` (unused directly) forces the Type catalog to be seeded on this same
     database before cmd_bootstrap opens its OWN pool against the same DSN."""
     import io
@@ -7306,13 +7306,13 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
     """THE OFFICE RULING'S OWN HAZARD (2026-09-03): when a seat's spawn location moves
     (a rebound tree, resume now spawning at the office), a body of the SAME seat still
     sitting at the OLD cwd was invisible to the cwd-keyed twin check, and the next launch
-    forked the mind. The twin guard now also reads the holder lineage — a live
+    forked the mind. The twin guard now also reads the holder lineage, a live
     agent_mounts row for the lineage at ANY cwd reads as already-live (exit 0, nothing
     spawned). Negative control: a stale row (not live) lets the launch proceed.
 
-    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
+    THE LIVENESS CONVERGENCE FIX (Workerz's monsterhouse report):
     `_launch_target_setup`'s own shared occupancy gate now catches this case FIRST, via
-    `mounts.agent_liveness` (lineage-widened, same as before) — evidence now names the
+    `mounts.agent_liveness` (lineage-widened, same as before), evidence now names the
     seat's own recorded holder canonical ("agent:1ineage1"), not the specific live
     generation's own mount row ("agent:1ineage1-ii"): `agent_liveness`'s contract
     reports live/dead for a lineage, never which exact row matched, a coarser but
@@ -7354,7 +7354,7 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
     assert "already-live" in out_buf.getvalue()
     assert "agent:1ineage1" in err_buf.getvalue()
 
-    # NEGATIVE CONTROL: the same row gone stale is no twin — the launch proceeds
+    # NEGATIVE CONTROL: the same row gone stale is no twin, the launch proceeds
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 day' "
         "WHERE agent_id='agent:1ineage1-ii'")
@@ -7365,7 +7365,7 @@ async def test_cmd_launch_harness_sees_a_live_body_of_the_same_lineage_at_anothe
 
 
 class _NoRows:
-    """A pool double that resolves NO SoftwareProject and asserts NOTHING — every explicit
+    """A pool double that resolves NO SoftwareProject and asserts NOTHING, every explicit
     `window_tag` lookup (`_explicit_window_tag`'s own `_resolve_repo` + `current_assertions`
     reads) comes back empty, so `_house_tag`/`_window_name` fall all the way through to
     their derived first-two-letters behavior, exactly as before this task's own persisted-
@@ -7380,30 +7380,30 @@ class _NoRows:
 
 async def test_window_tag_never_falls_back_to_osiris() -> None:
     """Ruling 860b0306 (operator, 2026-09-06): a house is OPTIONAL, and an empty one must
-    never render as osiris's own tag — "[OS] Lilguy" sat in the agents list beside the real
+    never render as osiris's own tag, "[OS] Workeru" sat in the agents list beside the real
     osiris seats. House code when present, else the governed project's code, else no
     brackets at all.
 
     REGRESSION GUARD (window-tag-gets-an-owner): with no explicit `window_tag` assertion
-    anywhere (a pool that resolves nothing), `_house_tag`/`_window_name` — now async, DB-
-    backed reads — must still return EXACTLY what the old pure-derivation functions did."""
+    anywhere (a pool that resolves nothing), `_house_tag`/`_window_name`, now async, DB-
+    backed reads, must still return EXACTLY what the old pure-derivation functions did."""
     from src.orchestrator.trigger import _house_tag, _window_name
     pool: Any = _NoRows()
     assert await _house_tag(pool, "osiris") == "OS"
     assert await _house_tag(pool, "hector-vector") == "HE"
     assert await _house_tag(pool, "") == ""
     assert await _house_tag(pool, None) == ""
-    assert await _house_tag(pool, "", "lilguy") == "LI"
-    assert await _window_name(pool, "osiris", "Thoth") == "[OS] Thoth"
-    assert await _window_name(pool, None, "Lilguy", "lilguy") == "[LI] Lilguy"
-    assert await _window_name(pool, "", "Lilguy", None) == "Lilguy"
+    assert await _house_tag(pool, "", "workeru") == "WO"
+    assert await _window_name(pool, "osiris", "Workerah") == "[OS] Workerah"
+    assert await _window_name(pool, None, "Workeru", "workeru") == "[WO] Workeru"
+    assert await _window_name(pool, "", "Workeru", None) == "Workeru"
 
 
 async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) -> None:
     """A houseless seat with no `governs` edge still gets a window tag from its OWN pin
-    (operator 2026-09-07, chowder: minted for monsterhouse, launched as "[OS] chowder" by
+    (operator 2026-09-07, workerg: minted for monsterhouse, launched as "[OS] workerg" by
     the CLI's private tag copy that still fell back to osiris). The pin is the seat's own
-    hand — correct_own_pin_value fixes the tag from inside the seat."""
+    hand, correct_own_pin_value fixes the tag from inside the seat."""
     from src.orchestrator.trigger import _governed_project_name, _window_name
 
     (tmp_path / ".osiris").write_text('project = "monsterhouse"\n')
@@ -7412,12 +7412,12 @@ async def test_governed_project_name_falls_back_to_the_seat_pin(tmp_path: Path) 
     assert await _governed_project_name(pool, "seat:nobody", cwd=str(tmp_path)) == "monsterhouse"
     assert await _governed_project_name(pool, None, cwd=str(tmp_path)) == "monsterhouse"
     assert await _governed_project_name(pool, "seat:nobody") is None
-    assert await _window_name(pool, None, "chowder", "monsterhouse") == "[MO] chowder"
+    assert await _window_name(pool, None, "workerg", "monsterhouse") == "[MO] workerg"
 
 
 def test_cli_has_no_private_house_tag_copy() -> None:
     """The CLI's own `_house_tag` mirror kept the pre-860b0306 "OS" fallback for three
-    launch/resume doors after trigger.py dropped it — two resolvers, one drifted. One
+    launch/resume doors after trigger.py dropped it, two resolvers, one drifted. One
     resolver now: the CLI imports trigger's `_window_name`."""
     from src import cli
 
@@ -7427,12 +7427,12 @@ def test_cli_has_no_private_house_tag_copy() -> None:
 async def test_cmd_rename_project_discloses_the_gap_it_cannot_close(
     actions: Actions,
 ) -> None:
-    """RECEIPT LAW (Thoth mail 9122 item 1, wave 16): cmd_rename_project's own
+    """RECEIPT LAW (): cmd_rename_project's own
     docstring used to falsely claim it was "the SAME function the rename_project MCP
-    tool wraps" — the MCP door also does governing-seat evidence checking and heals
+    tool wraps", the MCP path also does governing-seat evidence checking and heals
     every already-mounted agent's in-process cache, neither of which this CLI path did.
     The cache-heal half is structurally inapplicable to a one-shot CLI process (no
-    `_agents` cache exists here to heal) — that gap must be DISCLOSED, not silently
+    `_agents` cache exists here to heal), that gap must be DISCLOSED, not silently
     left unmentioned, on every real (non-dry-run) rename."""
     await actions.create_or_find_object("SoftwareProject", "repo:cmdrenamesrc", "gitlog")
 
@@ -7441,7 +7441,7 @@ async def test_cmd_rename_project_discloses_the_gap_it_cannot_close(
         actor="agent:test", pool=actions.pool)
 
     assert code == 0
-    # the canonical MIGRATES too (operator ruling, DM 12786) — the object now answers
+    # the canonical MIGRATES too (operator ruling), the object now answers
     # to repo:cmdrenamedst, with repo:cmdrenamesrc an alias of the same object
     renamed = await actions.pool.fetchval(
         "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -7454,8 +7454,8 @@ async def test_cmd_rename_project_discloses_the_gap_it_cannot_close(
 async def test_cmd_rename_project_gathers_evidence_when_a_seat_governs_it(
     actions: Actions,
 ) -> None:
-    """The portable half of the MCP door's guarantee (governing-seat evidence, no
-    dependency on an in-process cache) now runs from the CLI too — this only proves the
+    """The portable half of the MCP path's guarantee (governing-seat evidence, no
+    dependency on an in-process cache) now runs from the CLI too, this only proves the
     evidence-gathering path runs cleanly end-to-end against a REAL governing seat
     (no disagreement fixture here, that's project_identity_evidence's own well-covered
     unit territory in test_project_identity.py); a crash here would mean the CLI's new

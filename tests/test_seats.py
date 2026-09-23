@@ -1,10 +1,10 @@
-"""The identity core, Phase A (ruling 5cef856b) — the Seat object + the attach ceremony.
+"""The identity core, Phase A: the Seat object and the attach process.
 
-Every test here demonstrates a rule of the ceremony against the bug that demanded it:
+Every test here demonstrates a rule of the process against the bug that demanded it:
 identity keyed on ephemeral facts (session, path) and RECONSTRUCTED by inference at every
-door was the collision class (2294e95d: a mind mounted into a SIBLING's seat; this session's
-own triple-mint boot). A Seat is minted once, exists before its first session, and a session
-ATTACHES with a one-time token — refusals loud, nothing written.
+door was the collision class: a mind mounted into a SIBLING's seat, or this session's
+own triple-mint boot. A Seat is minted once, exists before its first session, and a session
+ATTACHES with a one-time token: refusals loud, nothing written.
 """
 from __future__ import annotations
 
@@ -42,8 +42,8 @@ from src.orchestrator.seats import (
 
 async def _seated_agent(actions: Actions, agent_id: str, job_dir: str,
                         project: str = "osiris") -> None:
-    """A registered agent with a durable mount row — the state automount leaves behind
-    before the ceremony runs (the binding rides the mount row)."""
+    """A registered agent with a durable mount row, the state automount leaves behind
+    before the process runs (the binding rides the mount row)."""
     await actions.create_or_find_object("Agent", agent_id, agent_id)
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent_id, project=project,
                      cwd="/w/osiris", model="claude-fable-5", session_key=None)
@@ -58,17 +58,17 @@ async def _active_holds(actions: Actions, agent_id: str, seat_id: str) -> bool:
 
 
 async def test_ensure_seat_mints_once_and_is_idempotent(actions: Actions) -> None:
-    first = await ensure_seat(actions, house="osiris", handle="Thoth", source="test")
+    first = await ensure_seat(actions, house="osiris", handle="Castellan", source="test")
     assert first["minted"] is True
     assert first["seat_id"].startswith("seat:")
-    again = await ensure_seat(actions, house="osiris", handle="thoth", source="test")
+    again = await ensure_seat(actions, house="osiris", handle="castellan", source="test")
     assert again["minted"] is False                      # case-insensitive find
     assert again["seat_id"] == first["seat_id"]
     # a seat is OF a house: the same handle elsewhere is a different seat
-    other = await ensure_seat(actions, house="bytebye", handle="Thoth", source="test")
+    other = await ensure_seat(actions, house="bytebye", handle="Castellan", source="test")
     assert other["minted"] is True
     assert other["seat_id"] != first["seat_id"]
-    assert await find_seat(actions.pool, house="osiris", handle="Thoth") == first["seat_id"]
+    assert await find_seat(actions.pool, house="osiris", handle="Castellan") == first["seat_id"]
 
 
 async def test_attach_binds_the_session_and_links_the_holder(actions: Actions) -> None:
@@ -94,10 +94,10 @@ async def test_attach_binds_the_session_and_links_the_holder(actions: Actions) -
 async def test_attach_refuses_a_used_token_from_another_session_loudly(
     actions: Actions,
 ) -> None:
-    """The env-inheritance leak (0344e536) and the collision (2294e95d ask #1) in one rule:
+    """The env-inheritance leak and the collision case in one rule:
     a one-time token binds to its FIRST presenter; a second session is refused LOUDLY and
     nothing is written."""
-    seat = await ensure_seat(actions, house="osiris", handle="Maat", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Sable", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await _seated_agent(actions, "agent:bbbb0001", "/jobs/bbbb0001")
     await _seated_agent(actions, "agent:bbbb0002", "/jobs/bbbb0002")
@@ -119,7 +119,7 @@ async def test_attach_refuses_a_used_token_from_another_session_loudly(
 async def test_attach_same_presenter_resumes_idempotently(actions: Actions) -> None:
     """Same presenter re-presenting is a RESUME (claude --resume re-fires the whisper with
     the same session id → same job_dir), never an intruder."""
-    seat = await ensure_seat(actions, house="osiris", handle="Ra", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Nomad", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await _seated_agent(actions, "agent:cccc0001", "/jobs/cccc0001")
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
@@ -140,8 +140,8 @@ async def test_attach_same_presenter_resumes_idempotently(actions: Actions) -> N
 
 
 async def test_attach_refuses_unknown_token_and_mismatched_seat(actions: Actions) -> None:
-    seat_a = await ensure_seat(actions, house="osiris", handle="Aegis", source="test")
-    seat_b = await ensure_seat(actions, house="osiris", handle="Atlas", source="test")
+    seat_a = await ensure_seat(actions, house="osiris", handle="Onyx", source="test")
+    seat_b = await ensure_seat(actions, house="osiris", handle="Summit", source="test")
     await _seated_agent(actions, "agent:dddd0001", "/jobs/dddd0001")
 
     unknown = await attach_session(actions, seat_id=seat_a["seat_id"], token="not-a-token",
@@ -156,7 +156,7 @@ async def test_attach_refuses_unknown_token_and_mismatched_seat(actions: Actions
 
 
 async def test_attach_refuses_a_dead_seat(actions: Actions) -> None:
-    """A token for a seat the graph does not hold as a living object binds nothing —
+    """A token for a seat the graph does not hold as a living object binds nothing, 
     a forged or rotted seat id is refused before any write."""
     await _seated_agent(actions, "agent:eeee0001", "/jobs/eeee0001")
     token = await mint_attach_token(actions.pool, seat_id="seat:00000000")
@@ -166,9 +166,9 @@ async def test_attach_refuses_a_dead_seat(actions: Actions) -> None:
 
 
 async def test_attach_refuses_a_live_held_seat(actions: Actions) -> None:
-    """Two minds in one seat is the collision class itself — a seat bound to a session with
+    """Two minds in one seat is the collision class itself, a seat bound to a session with
     a fresh pulse is not vacant, even to a VALID fresh token."""
-    seat = await ensure_seat(actions, house="osiris", handle="Deckard", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Mason", source="test")
     t1 = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await _seated_agent(actions, "agent:ffff0001", "/jobs/ffff0001")
     await attach_session(actions, seat_id=seat["seat_id"], token=t1,
@@ -181,16 +181,16 @@ async def test_attach_refuses_a_live_held_seat(actions: Actions) -> None:
 
     assert "REFUSED" in out["error"] and "held LIVE" in out["error"]
     assert await seat_of_mount(actions.pool, job_dir="/jobs/ffff0002") is None
-    # the unused token survives, unclaimed — refusal wrote nothing
+    # the unused token survives, unclaimed, refusal wrote nothing
     row = await actions.pool.fetchrow(
         "SELECT used_at FROM seat_tokens WHERE token=$1", t2)
     assert row is not None and row["used_at"] is None
 
 
 async def test_attach_without_a_mount_row_refuses(actions: Actions) -> None:
-    """The binding rides the durable mount row — a session that never mounted has nothing
-    to bind to, and the ceremony says so instead of inventing a row."""
-    seat = await ensure_seat(actions, house="osiris", handle="Khepri", source="test")
+    """The binding rides the durable mount row, a session that never mounted has nothing
+    to bind to, and the process says so instead of inventing a row."""
+    seat = await ensure_seat(actions, house="osiris", handle="Garnet", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await actions.create_or_find_object("Agent", "agent:gggg0001", "agent:gggg0001")
     out = await attach_session(actions, seat_id=seat["seat_id"], token=token,
@@ -199,10 +199,10 @@ async def test_attach_without_a_mount_row_refuses(actions: Actions) -> None:
 
 
 async def test_the_binding_follows_the_lineage_head(actions: Actions) -> None:
-    """The mind layer keeps its seams (a882b334: a swap/compaction mints an heir) — but the
+    """The mind layer keeps its seams (a swap/compaction mints an heir), but the
     SEAT must keep pointing at whoever the mind is NOW, or the first compaction after an
     attach strands the seat on a corpse. mint_heir re-links; the old link heals, walkable."""
-    seat = await ensure_seat(actions, house="osiris", handle="Anubis", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Cobalt", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await _seated_agent(actions, "agent:hhhh0001", "/jobs/hhhh0001")
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
@@ -226,12 +226,12 @@ async def test_the_binding_follows_the_lineage_head(actions: Actions) -> None:
 
 
 async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
-    """THE THOTH SEAT-BINDING GAP (2026-07-21, two independent witnesses in one hour — wake()'s
+    """THE CASTELLAN SEAT-BINDING GAP (2026-07-21, two independent witnesses in one hour, wake()'s
     authorization gate and the mail envelope's handle lookup): a holds link minted for an
     ANCESTOR generation (agent:iiii0001) must still answer for a SUCCESSOR presenting its own
-    id (agent:iiii0001-iii) that the ordinary succession path never re-bound — held_seat now
+    id (agent:iiii0001-iii) that the ordinary succession path never re-bound, held_seat now
     matches anywhere in the lineage, not just the exact id presented."""
-    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Brisk", source="test")
     await actions.create_or_find_object("Agent", "agent:iiii0001", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:iiii0001")
 
@@ -242,10 +242,10 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
 
     bound = await held_seat(actions.pool, successor)
     assert bound is not None
-    assert bound["seat_id"] == seat["seat_id"] and bound["handle"] == "Ptah"
+    assert bound["seat_id"] == seat["seat_id"] and bound["handle"] == "Brisk"
 
     # NEWEST GENERATION WINS when more than one survives un-healed ON THE SAME SEAT (the
-    # same tiebreak follow_binding uses) — bind a second ancestor-generation link on the
+    # same tiebreak follow_binding uses), bind a second ancestor-generation link on the
     # SAME seat, directly, and a caller asking about a later generation still finds it.
     same_seat_older = "agent:iiii0001-ii"
     older_oid = await actions.create_or_find_object("Agent", same_seat_older, "test")
@@ -254,9 +254,9 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
     still_ptah = await held_seat(actions.pool, "agent:iiii0001-vii")
     assert still_ptah is not None and still_ptah["seat_id"] == seat["seat_id"]
 
-    # A FORKED LINEAGE (decision fb85dd4f, the werner/Thoth live specimen) is NOT the same
+    # A FORKED LINEAGE (the holt/Castellan live specimen) is NOT the same
     # case: rows naming DIFFERENT seats means a sibling generation was wrongly grafted
-    # onto this base — raw generation-number-wins would hand a caller a seat some
+    # onto this base, raw generation-number-wins would hand a caller a seat some
     # unrelated sibling holds. Bind yet another generation to a SECOND, different seat,
     # directly (create_link, not bind_holder, simulating exactly the un-healed state a
     # graft leaves behind).
@@ -265,19 +265,19 @@ async def test_held_seat_is_lineage_aware(actions: Actions) -> None:
     later_oid = await actions.create_or_find_object("Agent", later, "test")
     other_seat_oid = await actions.create_or_find_object("Seat", other_seat["seat_id"], "test")
     await actions.create_link(later_oid, other_seat_oid, "holds", "test", datetime.now(UTC), 0.9)
-    # a THIRD generation, with no holds row of its own, asks — genuinely ambiguous now
+    # a THIRD generation, with no holds row of its own, asks, genuinely ambiguous now
     # that two DIFFERENT seats are in play: never guess a branch, read as unbound.
     ambiguous = await held_seat(actions.pool, "agent:iiii0001-vii")
     assert ambiguous is None
-    # but the generation that DOES literally hold the second seat still resolves —
+    # but the generation that DOES literally hold the second seat still resolves, 
     # an EXACT match on the presented id is trusted even mid-fork.
     exact_match = await held_seat(actions.pool, later)
     assert exact_match is not None and exact_match["seat_id"] == other_seat["seat_id"]
 
 
 async def test_follow_binding_never_steals_a_live_siblings_hold(actions: Actions) -> None:
-    """c7524a2b's own live specimen (msg 7641/7646 item 1): the lineage-wide sweep that
-    heals Ra's stranded-seat gap is a double-edged sword — matching every generation
+    """The lineage-wide sweep that
+    heals Nomad's stranded-seat gap is a double-edged sword: matching every generation
     sharing the heir's base also matches a SIBLING generation that is genuinely, currently
     live and holding a seat of its own. mint_heir minting a fresh heir must never steal
     that sibling's seat out from under it; it must still, unconditionally, move the
@@ -291,10 +291,10 @@ async def test_follow_binding_never_steals_a_live_siblings_hold(actions: Actions
         "Agent", "agent:werner0001", "test")
     await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:werner0001")
 
-    # a genuinely live sibling generation of the SAME base, holding an UNRELATED seat —
+    # a genuinely live sibling generation of the SAME base, holding an UNRELATED seat, 
     # `save_mount` (via `_seated_agent`) is exactly what makes it read live.
     sibling = "agent:werner0001-v"
-    await _seated_agent(actions, sibling, "/jobs/werner-v")
+    await _seated_agent(actions, sibling, "/jobs/holt-v")
     await bind_holder(actions, seat_id=sibling_seat["seat_id"], agent_id=sibling)
 
     heir = "agent:werner0001-ii"
@@ -302,7 +302,7 @@ async def test_follow_binding_never_steals_a_live_siblings_hold(actions: Actions
     await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=heir_oid,
                          now=datetime.now(UTC))
 
-    # the ancestor's OWN hold moved — the ordinary succession case, unconditional.
+    # the ancestor's OWN hold moved, the ordinary succession case, unconditional.
     assert await _active_holds(actions, heir, ancestor_seat["seat_id"])
     assert not await _active_holds(actions, "agent:werner0001", ancestor_seat["seat_id"])
     # the LIVE sibling's hold on its own, different seat was never touched.
@@ -313,9 +313,9 @@ async def test_follow_binding_never_steals_a_live_siblings_hold(actions: Actions
 async def test_follow_binding_still_heals_a_stranded_but_dead_siblings_hold(
     actions: Actions,
 ) -> None:
-    """Ra's stranded seat itself (2026-07-17), unchanged by the live-sibling guard above: a
+    """Nomad's stranded seat itself (2026-07-17), unchanged by the live-sibling guard above: a
     FOLDED, no-longer-live sibling's un-healed hold is exactly the case the lineage-wide
-    sweep exists to heal — the guard only refuses a LIVE holder, never a cold one."""
+    sweep exists to heal, the guard only refuses a LIVE holder, never a cold one."""
     ancestor_seat = await ensure_seat(actions, house="osiris", handle="RaAncestor",
                                       source="test")
     stranded_seat = await ensure_seat(actions, house="osiris", handle="RaStranded",
@@ -324,7 +324,7 @@ async def test_follow_binding_still_heals_a_stranded_but_dead_siblings_hold(
     ancestor_oid = await actions.create_or_find_object("Agent", "agent:ra0001", "test")
     await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:ra0001")
 
-    # a folded sibling with NO mount row at all — cold, exactly like a graft left behind
+    # a folded sibling with NO mount row at all, cold, exactly like a graft left behind
     # after a fold with nobody left to keep it warm.
     folded = "agent:ra0001-iii"
     await actions.create_or_find_object("Agent", folded, "test")
@@ -341,7 +341,7 @@ async def test_follow_binding_still_heals_a_stranded_but_dead_siblings_hold(
 
 
 async def test_bind_holder_returns_an_old_new_holder_receipt(actions: Actions) -> None:
-    """msg 7646 item 2: bind_holder used to return None — a caller wanting to know who it
+    """: bind_holder used to return None, a caller wanting to know who it
     just displaced had to read the graph a second time. Now the write itself says so."""
     seat = await ensure_seat(actions, house="osiris", handle="Bes", source="test")
     await actions.create_or_find_object("Agent", "agent:bes-first", "test")
@@ -358,7 +358,7 @@ async def test_bind_holder_returns_an_old_new_holder_receipt(actions: Actions) -
 async def test_follow_binding_returns_a_receipt_per_seat_actually_moved(
     actions: Actions,
 ) -> None:
-    """msg 7646 item 2: the receipt lists only what actually moved — a live sibling's seat
+    """: the receipt lists only what actually moved, a live sibling's seat
     (skipped by the guard above) never appears, so a caller can tell the two cases apart
     without a second read."""
     ancestor_seat = await ensure_seat(actions, house="osiris", handle="ImhotepAncestor",
@@ -368,7 +368,7 @@ async def test_follow_binding_returns_a_receipt_per_seat_actually_moved(
     ancestor_oid = await actions.create_or_find_object("Agent", "agent:imhotep0001", "test")
     await bind_holder(actions, seat_id=ancestor_seat["seat_id"], agent_id="agent:imhotep0001")
     live_sibling = "agent:imhotep0001-v"
-    await _seated_agent(actions, live_sibling, "/jobs/imhotep-v")
+    await _seated_agent(actions, live_sibling, "/jobs/orin-v")
     await bind_holder(actions, seat_id=sibling_seat["seat_id"], agent_id=live_sibling)
 
     heir = "agent:imhotep0001-ii"
@@ -382,9 +382,9 @@ async def test_follow_binding_returns_a_receipt_per_seat_actually_moved(
 async def test_bind_holder_invalidates_the_agents_own_other_active_holds(
     actions: Actions,
 ) -> None:
-    """Guard-symmetry inventory (decision efd97c13, thread 6068/6088): bind_holder always
+    """Guard-symmetry inventory: bind_holder always
     invalidated a SEAT's prior holders before binding a new one; now it also invalidates
-    the AGENT's own other active `holds` edges elsewhere — a Seat is a specific identity
+    the AGENT's own other active `holds` edges elsewhere, a Seat is a specific identity
     (no charter-like concept sanctions one agent holding two), unlike works_in's
     additive-only fix, which stayed additive because a declared multi-project charter is a
     real, legitimate multi-value state that `holds` has no counterpart for."""
@@ -412,7 +412,7 @@ async def test_bind_holder_rebinding_the_same_seat_is_a_no_op_on_other_seats(
     actions: Actions,
 ) -> None:
     """The new agent-side invalidation must not fire on an ordinary re-bind (the same
-    agent, the same seat, called twice — e.g. a repeat claim_name) — only on a GENUINELY
+    agent, the same seat, called twice, e.g. a repeat claim_name), only on a GENUINELY
     different seat, mirroring the seat-side `f.canonical <> $2` exclusion already there."""
     seat = await ensure_seat(actions, house="osiris", handle="Sobek", source="test")
     await actions.create_or_find_object("Agent", "agent:same0001", "test")
@@ -421,7 +421,7 @@ async def test_bind_holder_rebinding_the_same_seat_is_a_no_op_on_other_seats(
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:same0001")
 
     assert await _active_holds(actions, "agent:same0001", seat["seat_id"])
-    # exactly one link row, never healed — a same-seat rebind touched nothing
+    # exactly one link row, never healed, a same-seat rebind touched nothing
     rows = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id "
@@ -430,7 +430,7 @@ async def test_bind_holder_rebinding_the_same_seat_is_a_no_op_on_other_seats(
     assert rows == 1
 
 
-# ═══ REHOLD_SEAT (decision fb85dd4f's own live specimen — the third-party re-hold door) ═══
+# ═══ REHOLD_SEAT (a live specimen: the third-party re-hold path) ═══
 
 async def test_rehold_seat_moves_the_holds_link_and_names_both_sides(
     actions: Actions,
@@ -451,9 +451,9 @@ async def test_rehold_seat_moves_the_holds_link_and_names_both_sides(
 
 
 async def test_rehold_seat_dry_run_previews_without_writing(actions: Actions) -> None:
-    """WAVE 27 BUG 4 follow-up (Thoth DM 11850): dry_run=True used to be silently dropped
-    — never declared on rehold_seat's own signature, so it never reached here at all, and
-    the write happened regardless. Now it runs every guard and stops before the bind."""
+    """dry_run=True used to be silently dropped, never declared on rehold_seat's own
+    signature, so it never reached here at all, and the write happened regardless.
+    Now it runs every guard and stops before the bind."""
     from src.orchestrator.seats import rehold_seat
 
     seat = await ensure_seat(actions, house="osiris", handle="ReholdDry", source="test")
@@ -466,13 +466,13 @@ async def test_rehold_seat_dry_run_previews_without_writing(actions: Actions) ->
     assert out["dry_run"] is True
     assert out["old_holder"] == "agent:reholddry-old"
     assert out["new_holder"] == "agent:reholddry-new"
-    # NOTHING WRITTEN — the old holder's link is untouched, the new one never gained one
+    # NOTHING WRITTEN, the old holder's link is untouched, the new one never gained one
     assert await _active_holds(actions, "agent:reholddry-old", seat["seat_id"])
     assert not await _active_holds(actions, "agent:reholddry-new", seat["seat_id"])
 
 
 async def test_rehold_seat_dry_run_still_runs_the_reason_guard(actions: Actions) -> None:
-    """A preview that skips a real guard is a lie, not a preview — dry_run must never
+    """A preview that skips a real guard is a lie, not a preview, dry_run must never
     mask a refusal a real call would also hit."""
     from src.orchestrator.seats import rehold_seat
 
@@ -501,13 +501,12 @@ async def test_rehold_seat_refuses_without_a_reason(actions: Actions) -> None:
 async def test_rehold_seat_refuses_a_borrowed_job_dir_target(
     actions: Actions,
 ) -> None:
-    """THE JENNY/DUSTIN CROSSING, closed at the third-party rehold door too (thread
-    b33fa26b/17819e83, Nebbercracker findings ab59c731/a0fd7e5b): a target that is a
-    real Agent object (agent_row exists — the check just above this one passes) but is
-    ACTUALLY another agent's own live job_dir slug is never a legitimate rehold target
-    — this is exactly the shape that kept re-corrupting jenny's seat even after
+    """THE PALOMA/TAREK CROSSING, closed at the third-party rehold path too: a target that is a
+    real Agent object (agent_row exists, the check just above this one passes) but is
+    ACTUALLY another agent's own live job_dir slug is never a legitimate rehold target.
+    This is exactly the shape that kept re-corrupting paloma's seat even after
     _bind_before_spawn's own equivalent guard shipped, because rehold_seat is a
-    SEPARATE door reaching the same holds edge."""
+    SEPARATE path reaching the same holds edge."""
     from src.orchestrator import mounts as mounts_module
     from src.orchestrator.seats import rehold_seat
 
@@ -528,7 +527,7 @@ async def test_rehold_seat_refuses_a_borrowed_job_dir_target(
                             because="test repair", actor="test")
     assert "error" in out
     assert "agent:realowner-vii" in out["error"]
-    # nothing moved — the old holder's own link stands, the borrowed id never gained one
+    # nothing moved, the old holder's own link stands, the borrowed id never gained one
     assert await _active_holds(actions, "agent:reholdborrowed-old", seat["seat_id"])
     assert not await _active_holds(actions, borrowed_id, seat["seat_id"])
 
@@ -573,8 +572,8 @@ async def test_rehold_seat_override_live_bypasses_the_guard(actions: Actions) ->
 async def test_rehold_seat_a_live_holder_from_the_same_lineage_never_refuses(
     actions: Actions,
 ) -> None:
-    """The exact fix's own shape: re-holding thoth by Thoth's own next generation is never
-    a cross-lineage theft, live or not — no override needed."""
+    """The exact fix's own shape: re-holding castellan by Castellan's own next generation is never
+    a cross-lineage theft, live or not, no override needed."""
     from src.orchestrator.seats import rehold_seat
 
     seat = await ensure_seat(actions, house="osiris", handle="Rehold5", source="test")
@@ -603,8 +602,8 @@ def _transcript(root: Path, cwd: str, model: str = "claude-fable-5") -> None:
 
 
 async def test_automount_carries_the_ceremony(actions: Actions, tmp_path: Path) -> None:
-    """The whisper's server half runs the full ceremony: env-exported seat + token arrive
-    with the hook payload, the session mounts AND binds in one breath — identity at birth."""
+    """The whisper's server half runs the full process: env-exported seat + token arrive
+    with the hook payload, the session mounts AND binds in one breath, identity at birth."""
     root = tmp_path / "projects"
     _transcript(root, "/w/osiris")
     seat = await ensure_seat(actions, house="osiris", handle="Horus", source="test")
@@ -625,7 +624,7 @@ async def test_automount_carries_the_ceremony(actions: Actions, tmp_path: Path) 
 async def test_automount_attach_refusal_is_loud_but_the_mount_stands(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A refused attach must never cost the session its mount: the ceremony degrades to
+    """A refused attach must never cost the session its mount: the process degrades to
     exactly the inferred path, plus a confession the whisper prints (never silence)."""
     root = tmp_path / "projects"
     _transcript(root, "/w/osiris")
@@ -648,7 +647,7 @@ async def test_resolve_seat_prefers_the_holds_binding_over_a_hotter_grave(
 ) -> None:
     """The grave-delivery shape, killed at the root: an old generation with a HOT mount row
     outranked the true holder under the assertion path's liveness ranking. A declared binding
-    is not a guess — the bound holder wins outright."""
+    is not a guess, the bound holder wins outright."""
     from src.orchestrator.agents import resolve_seat
 
     seat = await ensure_seat(actions, house="osiris", handle="Payne", source="test")
@@ -660,14 +659,14 @@ async def test_resolve_seat_prefers_the_holds_binding_over_a_hotter_grave(
                                   evidence_class="self_declared")
     await save_mount(actions.pool, job_dir="/jobs/iiii0001", agent_id="agent:iiii0001",
                      project="osiris", cwd="/w", model=None, session_key=None)
-    # the true holder: bound via the ceremony, mount released (not live)
+    # the true holder: bound via the process, mount released (not live)
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     await _seated_agent(actions, "agent:iiii0002", "/jobs/iiii0002")
     await attach_session(actions, seat_id=seat["seat_id"], token=token,
                          job_dir="/jobs/iiii0002", agent_id="agent:iiii0002")
 
     # ONE LIVENESS AUTHORITY, FOURTH DOOR: resolve_seat's own "live" cross-checks
-    # is_occupied_by_a_live_body — confirm the TRUE holder (not the impostor) as the
+    # is_occupied_by_a_live_body, confirm the TRUE holder (not the impostor) as the
     # harness-verified body.
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [{"sessionId": "iiii0002-0000-4000-8000-000000000000", "pid": 888,
@@ -684,7 +683,7 @@ async def test_resolve_seat_prefers_the_holds_binding_over_a_hotter_grave(
 
 
 async def test_resolve_seat_falls_back_to_the_assertion_path(actions: Actions) -> None:
-    """No Seat object, no binding — the assertion path answers exactly as before (every
+    """No Seat object, no binding, the assertion path answers exactly as before (every
     un-seated lineage keeps resolving; Phase B changes nothing for them)."""
     from src.orchestrator.agents import resolve_seat
 
@@ -700,7 +699,7 @@ async def test_resolve_seat_falls_back_to_the_assertion_path(actions: Actions) -
 
 
 async def test_resolve_seat_ambiguous_handle_falls_back(actions: Actions) -> None:
-    """Two houses, one handle: the seat world has no unique answer — the assertion path's
+    """Two houses, one handle: the seat world has no unique answer, the assertion path's
     liveness ranking arbitrates instead of a coin-flip between seats."""
     from src.orchestrator.agents import resolve_seat
 
@@ -718,18 +717,18 @@ async def test_resolve_seat_ambiguous_handle_falls_back(actions: Actions) -> Non
 
 
 async def test_a_vacant_seat_never_blocks_resolution(actions: Actions) -> None:
-    """A Seat with no active holder contributes nothing — the assertion path answers."""
+    """A Seat with no active holder contributes nothing, the assertion path answers."""
     from src.orchestrator.agents import resolve_seat
 
     await ensure_seat(actions, house="osiris", handle="Vacant", source="test")
     out = await resolve_seat(actions, "Vacant")
-    assert out["agent"] is None                   # nobody anywhere — honest empty
+    assert out["agent"] is None                   # nobody anywhere, honest empty
 
 
-# --- THE ADDRESSING REFUSAL (rulings 1a64ae9a/aee67e6d, DM 2360 — John XV/XVI) ---
+# --- THE ADDRESSING REFUSAL (Dashiell XV/XVI) ---
 # binding_of_handle collapses "no seat" / "ambiguous" / "genuinely vacant" / "a seat WITH a
-# marked-ineligible holder" into one bare None — resolve_seat then treats all four alike as
-# license to fall back to the assertion path, which found John's DEAD PREDECESSOR the one
+# marked-ineligible holder" into one bare None, resolve_seat then treats all four alike as
+# license to fall back to the assertion path, which found Dashiell's DEAD PREDECESSOR the one
 # time it mattered. seat_holder_ineligible names the fourth shape distinctly so a caller
 # (send_message) can refuse BEFORE that fallback ever runs.
 
@@ -768,7 +767,7 @@ async def test_seat_holder_ineligible_none_for_an_eligible_holder(actions: Actio
 async def test_seat_holder_ineligible_names_the_seat_when_the_holder_is_false_mint(
     actions: Actions,
 ) -> None:
-    """John's exact live shape: a unique seat, ONE active holder, and that holder is a
+    """Dashiell's exact live shape: a unique seat, ONE active holder, and that holder is a
     healed phantom mint. binding_of_handle's own NOT EXISTS guard excludes it silently;
     this function is the only thing that says why."""
     from src.orchestrator.seats import bind_holder, seat_holder_ineligible
@@ -811,7 +810,7 @@ async def test_seat_holder_ineligible_ignores_a_superseded_holders_own_marks(
     actions: Actions,
 ) -> None:
     """A mark on a PRIOR holder whose `holds` edge has already healed (bind_holder's own
-    succession, valid_until in the past) must never surface — only the CURRENT active
+    succession, valid_until in the past) must never surface, only the CURRENT active
     holder's marks matter, same predicate binding_of_handle itself runs."""
     from src.orchestrator.seats import bind_holder, seat_holder_ineligible
 
@@ -829,16 +828,16 @@ async def test_seat_holder_ineligible_ignores_a_superseded_holders_own_marks(
 async def test_seat_holder_ineligible_none_when_an_older_active_holder_is_eligible(
     actions: Actions,
 ) -> None:
-    """THOTH'S CORRECTION (DM 2377, caught in review — held the deploy of ddb8104): the
+    """A correction caught in review: the
     first build of this function checked whether the NEWEST active holds edge was marked,
     not whether ANY eligible holder existed among them. `bind_holder` always heals a prior
     edge before creating a new one, so it can never itself produce two simultaneously
-    active `holds` edges — but nothing else in the schema enforces single-holder (decision
-    6ce4ac5f), and seat:c476e7a2 carries exactly this shape live: two active edges, the
+    active `holds` edges, but nothing else in the schema enforces single-holder, and
+    seat:c476e7a2 carries exactly this shape live: two active edges, the
     newer one marked, the older one still eligible. Constructed here with create_link
     directly (bypassing bind_holder's own invalidation) to reproduce that shape, not
     theorize it. binding_of_handle filters marked holders out before ranking by recency, so
-    it resolves the older, eligible one fine — this function must agree, not refuse."""
+    it resolves the older, eligible one fine, this function must agree, not refuse."""
     from src.orchestrator.seats import seat_holder_ineligible
 
     seat = await ensure_seat(actions, house="osiris", handle="TwoHolders", source="test")
@@ -860,7 +859,7 @@ async def test_seat_holder_ineligible_none_when_an_older_active_holder_is_eligib
 async def test_seat_holder_ineligible_fires_when_every_active_holder_is_ineligible(
     actions: Actions,
 ) -> None:
-    """The genuine positive case with TWO active holders: both marked. Must still refuse —
+    """The genuine positive case with TWO active holders: both marked. Must still refuse, 
     the fix narrows the false-positive, it must not swallow the real one."""
     from src.orchestrator.seats import seat_holder_ineligible
 
@@ -918,13 +917,13 @@ async def test_reseed_binding_restores_a_session_ended_binding(actions: Actions)
 
 
 async def test_automount_reseeds_on_hand_resume(actions: Actions, tmp_path: Path) -> None:
-    """End to end: attach at birth, session ends, the SAME session hand-resumes with no env —
-    the whisper payload carries the re-earned binding."""
+    """End to end: attach at birth, session ends, the SAME session hand-resumes with no env,
+    and the resume payload carries the re-earned binding."""
     from src.orchestrator.handshake import session_end
 
     root = tmp_path / "projects"
     _transcript(root, "/w/osiris")
-    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Brisk", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
     born = await automount(actions, session_id=SID, cwd="/w/osiris",
                            actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
@@ -944,17 +943,17 @@ async def test_automount_reseeds_on_hand_resume(actions: Actions, tmp_path: Path
 async def test_session_end_releases_only_the_ending_door(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE DOOR-SCOPED RELEASE (the g40-v/g40-vi false-succession incident, 2026-07-17):
-    SessionEnd released EVERY row of the ending session's agent — so one closing
+    """THE ENDING-SESSION-SCOPED RELEASE (the g40-v/g40-vi false-succession incident):
+    SessionEnd released EVERY row of the ending session's agent, so one closing
     tab-view deleted the LIVING session's anchor, the emptied registry read as the
-    seat's death, and the office door minted false successors at thoth's own office.
-    Only the ending door's own rows may go; the seat-wide release is retire()'s."""
+    seat's death, and the office minted false successors at castellan's own office.
+    Only the ending session's own rows may go; the seat-wide release is retire()'s."""
     from src.orchestrator.handshake import session_end
     from src.orchestrator.mounts import save_mount
 
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "11ab5001"),
                      agent_id="agent:11ab5001", project="p", cwd="/w/p",
-                     model=None, session_key="whisper:11ab5001")
+                     model=None, session_key="hooktab:11ab5001")
     tab_sid = "beef7777-0000-4000-8000-000000000000"
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "beef7777"),
                      agent_id="agent:11ab5001", project="p", cwd="/w/p",
@@ -967,7 +966,7 @@ async def test_session_end_releases_only_the_ending_door(
         "SELECT agent_id FROM agent_mounts WHERE job_dir=$1",
         str(tmp_path / "jobs" / "11ab5001")) == "agent:11ab5001"   # the living anchor STANDS
 
-    # a resume's binding rides its ANCESTOR's job_dir, keyed sid:<its own id> — the
+    # a resume's binding rides its ANCESTOR's job_dir, keyed sid:<its own id>, so the
     # resumed session's own end must find and release that row too
     res_sid = "c0de9999-0000-4000-8000-000000000000"
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "0e1d0b99"),
@@ -981,7 +980,7 @@ async def test_session_end_releases_only_the_ending_door(
 
 
 async def test_seat_bearings_carries_the_binding(actions: Actions) -> None:
-    """orient/mount tell a bound mind WHICH ROLE it sits in — even one that never
+    """orient/mount tell a bound mind WHICH ROLE it sits in, even one that never
     claim_named itself in the assertion world (attached at birth, still anonymous)."""
     from src.orchestrator.agents import seat_bearings
 
@@ -1016,7 +1015,7 @@ async def _bound(actions: Actions, handle: str, agent: str, jobs: str) -> dict:
 
 
 async def test_dm_by_name_to_a_bound_seat_stores_the_seat_address(actions: Actions) -> None:
-    """A name that resolves through a BINDING stores the SEAT as the address — it survives
+    """A name that resolves through a BINDING stores the SEAT as the address, it survives
     every succession, so the mail reaches whoever holds the seat at READ time. The receipt
     names the seat, its current holder, and the holder's lineage head."""
     from src.orchestrator.mailbox import send_message
@@ -1056,13 +1055,13 @@ async def test_seat_mail_survives_succession_without_estate_transfer(
     actions: Actions,
 ) -> None:
     """THE POINT OF B2: a seat DM unread at the holder's death reaches the heir with NO
-    re-addressing — the row never changes; the heir holds the seat, therefore the heir
-    matches. mint_heir's estate-transfer UPDATE keeps covering agent-id mail only."""
+    re-addressing, the row never changes; the heir holds the seat, therefore the heir
+    matches. mint_heir's handoff-transfer UPDATE keeps covering agent-id mail only."""
     from src.orchestrator.mailbox import read_inbox, send_message, unread_count
 
-    seat = await _bound(actions, "Sekhmet", "agent:pppp0001", "/jobs/pppp0001")
+    seat = await _bound(actions, "Falcon", "agent:pppp0001", "/jobs/pppp0001")
     out = await send_message(actions.pool, from_agent="agent:pppp0099",
-                             from_project="elsewhere", to_agent="Sekhmet", body="in flight")
+                             from_project="elsewhere", to_agent="Falcon", body="in flight")
     ancestor_oid = await actions.create_or_find_object(
         "Agent", "agent:pppp0001", "agent:pppp0001")
 
@@ -1077,7 +1076,7 @@ async def test_seat_mail_survives_succession_without_estate_transfer(
     assert [m["id"] for m in got] == [out["id"]]
     stored = await actions.pool.fetchval(
         "SELECT to_agent FROM fleet_messages WHERE id=$1", out["id"])
-    assert stored == seat["seat_id"]      # the row NEVER changed — no estate transfer ran
+    assert stored == seat["seat_id"]      # the row NEVER changed, no handoff transfer ran
 
 
 async def test_raw_seat_address_is_an_act_of_intent(actions: Actions) -> None:
@@ -1117,8 +1116,8 @@ async def test_reply_to_a_seat_dm_routes_back_and_settles(actions: Actions) -> N
 
 
 async def test_an_unbound_name_keeps_snapshot_addressing(actions: Actions) -> None:
-    """No Seat object → the live holder's AGENT id is stored, exactly as before (ruling
-    1e02e069's snapshot semantics; the estate transfer still covers these)."""
+    """No Seat object → the live holder's AGENT id is stored, exactly as before (matching
+    prior snapshot semantics; the handoff transfer still covers these)."""
     from src.orchestrator.mailbox import send_message
 
     now = datetime.now(UTC)
@@ -1137,8 +1136,8 @@ async def test_an_unbound_name_keeps_snapshot_addressing(actions: Actions) -> No
 
 
 async def _visitor(actions: Actions, child: str, parent: str) -> None:
-    """The fixture shape alfred donated (ce348dc5/42bf712d, dead builder-orphans): a spawn
-    in the house — but WITH its spawned_by edge, the shape the stamped path now records."""
+    """The fixture shape denver donated (dead builder-orphans): a spawn
+    in the house, but WITH its spawned_by edge, the shape the stamped path now records."""
     from datetime import datetime as _dt
     now = _dt.now(UTC)
     p = await actions.create_or_find_object("Agent", parent, parent)
@@ -1171,14 +1170,14 @@ async def test_a_visitor_never_resolves_or_counts_as_a_holder(actions: Actions) 
                      project="osiris", cwd="/w", model=None, session_key=None)
 
     resolved = await resolve_seat(actions, "Leaked")
-    assert resolved["agent"] is None                 # a leak, not a holder — honest empty
+    assert resolved["agent"] is None                 # a leak, not a holder, honest empty
     holders = await seat_holders(actions.pool, "osiris", "Leaked")
     assert holders == []                             # and it never renumbers history
 
 
 async def test_attach_refuses_a_visitor(actions: Actions) -> None:
-    """A sidechain inherits its parent's environment — if it somehow presents a fresh valid
-    token first, the ceremony still refuses: a sub-agent never holds a seat."""
+    """A sidechain inherits its parent's environment, if it somehow presents a fresh valid
+    token first, the process still refuses: a sub-agent never holds a seat."""
     await _visitor(actions, "agent:vvvv0002", "agent:vvvv0001")
     seat = await ensure_seat(actions, house="osiris", handle="Sphinx", source="test")
     token = await mint_attach_token(actions.pool, seat_id=seat["seat_id"])
@@ -1200,7 +1199,7 @@ async def test_attach_refuses_a_visitor(actions: Actions) -> None:
 
 async def test_a_seated_sid_is_claimed_even_when_stale(actions: Actions) -> None:
     """The cwd-guess refuses sids held by LIVE mounts; Phase D extends the claim to SEATED
-    rows regardless of pulse — a holder dying must never make its identity guessable by an
+    rows regardless of pulse, a holder dying must never make its identity guessable by an
     anchorless stranger reading the hottest transcript. session_end releases the row, so a
     deliberately-closed seat frees its sid the honest way."""
     from src.orchestrator.mounts import live_claimed_sids, release_mounts
@@ -1214,7 +1213,7 @@ async def test_a_seated_sid_is_claimed_even_when_stale(actions: Actions) -> None
 
     claimed = await live_claimed_sids(actions.pool, exclude_session_key=None,
                                       within_secs=900)
-    assert "aead0001" in claimed            # stale, but SEATED — still claimed
+    assert "aead0001" in claimed            # stale, but SEATED, still claimed
 
     # an unseated stale row frees its sid exactly as before
     await _seated_agent(actions, "agent:aead0002", "/jobs/aead0002")
@@ -1237,7 +1236,7 @@ async def test_a_seated_sid_is_claimed_even_when_stale(actions: Actions) -> None
 
 async def test_claim_name_mints_and_binds_the_seat_object(actions: Actions) -> None:
     """A successful claim is the assertion world's own deliberate binding act: the Seat
-    OBJECT mints (or is found) and the claimer becomes its active holder — legacy seats
+    OBJECT mints (or is found) and the claimer becomes its active holder, legacy seats
     enter the Seat world the moment they are next claimed."""
     from src.orchestrator.agents import claim_name
 
@@ -1264,9 +1263,9 @@ async def test_claim_name_mints_and_binds_the_seat_object(actions: Actions) -> N
     assert not await _active_holds(actions, "agent:xxxx0001", out["seat_id"])
 
 
-# ═══ THE ORPHAN-SEAT BACKFILL (thread 749bf530 / occupancy piece C, 9f566244) ═══════════════
+# ═══ THE ORPHAN-SEAT BACKFILL (occupancy piece C) ═══════════════
 # A seat whose original claim predates the Seat-object binding never got a holds link, and
-# mint_heir's automatic succession only ever MOVES an existing one — never creates one from
+# mint_heir's automatic succession only ever MOVES an existing one, never creates one from
 # nothing. These tests simulate exactly that: a Seat object + a handle-asserted Agent, with
 # NO holds link between them at all (the pre-binding-era shape), never routed through
 # claim_name/bind_holder.
@@ -1275,7 +1274,7 @@ async def test_claim_name_mints_and_binds_the_seat_object(actions: Actions) -> N
 async def _legacy_unbound_seat(
     actions: Actions, *, handle: str, house: str = "osiris", agent_id: str = "agent:zzzz0001",
 ) -> tuple[str, str]:
-    """A Seat object + a live, handle-matching Agent — the pre-binding-era shape backfill
+    """A Seat object + a live, handle-matching Agent: the pre-binding-era shape backfill
     exists to heal. Returns (seat_id, agent_id)."""
     seat = await ensure_seat(actions, house=house, handle=handle, source="test")
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
@@ -1290,21 +1289,21 @@ async def _legacy_unbound_seat(
 
 
 async def test_backfill_dry_run_reports_without_writing(actions: Actions) -> None:
-    """DRY-RUN IS THE DEFAULT AND WRITES NOTHING (a2cf8405): the plan names the seat and its
-    resolvable holder, but no holds link exists afterward — a mutation is never hand-run
+    """DRY-RUN IS THE DEFAULT AND WRITES NOTHING: the plan names the seat and its
+    resolvable holder, but no holds link exists afterward, a mutation is never hand-run
     without surfacing the plan first."""
     from src.orchestrator.seats import backfill_unbound_seats
 
-    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Sekhmet")
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Falcon")
 
-    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): resolve_seat's own
+    # ONE LIVENESS AUTHORITY, FOURTH ENTRY POINT: resolve_seat's own
     # "live" now cross-checks is_occupied_by_a_live_body, so a harness-confirming fake is
-    # needed here too — _legacy_unbound_seat's own job_dir ("/jobs/zzzz0001") is exactly
+    # needed here too, _legacy_unbound_seat's own job_dir ("/jobs/zzzz0001") is exactly
     # 8 chars on purpose (registry_census keys agent_mounts.job_dir's basename against
     # sessionId[:8]).
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [{"sessionId": "zzzz0001-0000-4000-8000-000000000000", "pid": 777,
-                 "cwd": "/w/osiris", "name": "[OS] Sekhmet"}]
+                 "cwd": "/w/osiris", "name": "[OS] Falcon"}]
 
     out = await backfill_unbound_seats(
         actions, agents_json=_agents_json,
@@ -1314,25 +1313,25 @@ async def test_backfill_dry_run_reports_without_writing(actions: Actions) -> Non
     assert out["dry_run"] is True and out["bound"] == 0
     row = next(p for p in out["plan"] if p["seat_id"] == seat_id)
     assert row["holder"] == agent_id and row["live"] is True
-    assert await held_seat(actions.pool, agent_id) is None  # still unbound — nothing written
+    assert await held_seat(actions.pool, agent_id) is None  # still unbound, nothing written
 
 
 async def test_backfill_apply_binds_the_resolved_holder(actions: Actions) -> None:
-    """dry_run=False actually binds — the same act claim_name's own tail performs, run in
+    """dry_run=False actually binds, the same act claim_name's own tail performs, run in
     bulk for seats whose current holder will never call it unprompted."""
     from src.orchestrator.seats import backfill_unbound_seats
 
-    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Anubis")
+    seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Cobalt")
     out = await backfill_unbound_seats(actions, dry_run=False)
 
     assert out["bound"] == 1
     bound = await held_seat(actions.pool, agent_id)
-    assert bound is not None and bound["seat_id"] == seat_id and bound["handle"] == "Anubis"
+    assert bound is not None and bound["seat_id"] == seat_id and bound["handle"] == "Cobalt"
 
 
 async def test_backfill_is_idempotent(actions: Actions) -> None:
-    """A second pass — whether re-run deliberately or because a seat someone fixed by hand
-    meanwhile is now bound — finds nothing left to do and changes nothing."""
+    """A second pass, whether re-run deliberately or because a seat someone fixed by hand
+    meanwhile is now bound, finds nothing left to do and changes nothing."""
     from src.orchestrator.seats import backfill_unbound_seats
 
     await _legacy_unbound_seat(actions, handle="Bastet")
@@ -1344,7 +1343,7 @@ async def test_backfill_is_idempotent(actions: Actions) -> None:
 
 
 async def test_backfill_never_guesses_an_unresolvable_seat(actions: Actions) -> None:
-    """A seat with no live (or any) handle-matching Agent is reported, not guessed — apply
+    """A seat with no live (or any) handle-matching Agent is reported, not guessed, apply
     must not crash or bind a stranger to it."""
     from src.orchestrator.seats import backfill_unbound_seats
 
@@ -1357,8 +1356,8 @@ async def test_backfill_never_guesses_an_unresolvable_seat(actions: Actions) -> 
 
 
 async def test_backfill_only_seats_scopes_the_write(actions: Actions) -> None:
-    """THE OPERATOR'S STAGED ROLLOUT (2026-07-21: Thoth-first, fleet-wide only after that
-    lands clean) — only_seats restricts both the plan and the write to exactly the named
+    """THE OPERATOR'S STAGED ROLLOUT (2026-07-21: Castellan-first, fleet-wide only after that
+    lands clean), only_seats restricts both the plan and the write to exactly the named
     seats; every other unbound seat is counted in total_unbound but never appears in `plan`
     and is never touched, so a scoped apply cannot spill onto seats nobody signed off on."""
     from src.orchestrator.seats import backfill_unbound_seats
@@ -1374,13 +1373,13 @@ async def test_backfill_only_seats_scopes_the_write(actions: Actions) -> None:
     assert [p["seat_id"] for p in out["plan"]] == [scoped_seat]
     assert out["bound"] == 1
     assert (await held_seat(actions.pool, scoped_agent) or {}).get("seat_id") == scoped_seat
-    assert await held_seat(actions.pool, other_agent) is None  # untouched — out of scope
+    assert await held_seat(actions.pool, other_agent) is None  # untouched, out of scope
 
 
-# ═══ THE HOLE STOPS REGENERATING (Khnum's tail of 9f566244/749bf530) ═══════════════════════
+# ═══ THE HOLE STOPS REGENERATING (Talon's tail of the same bug) ═══════════════════════
 # The backfill above cures every orphan seat that exists TODAY. But mint_heir's automatic
 # succession is the one path that fires on every compaction/model-swap/session-death without
-# anyone asking — and until now it only ever MOVED an existing holds link (follow_binding),
+# anyone asking, and until now it only ever MOVED an existing holds link (follow_binding),
 # never created one from nothing. Left alone, the very next mint of an already-orphaned
 # lineage would re-open the identical hole the backfill just closed. These tests exercise
 # mint_heir directly against the same pre-binding-era shape _legacy_unbound_seat builds.
@@ -1388,7 +1387,7 @@ async def test_backfill_only_seats_scopes_the_write(actions: Actions) -> None:
 
 async def test_mint_heir_binds_a_never_claimed_orphan_seat(actions: Actions) -> None:
     """An heir minted for a handle that names an EXISTING, still-unbound Seat binds to it as
-    part of the mint itself — the same self-heal claim_name performs explicitly, now running
+    part of the mint itself, the same self-heal claim_name performs explicitly, now running
     at the one moment nobody has to think to call it."""
     seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Tefnut")
     assert await held_seat(actions.pool, agent_id) is None       # confirm the orphan shape
@@ -1403,7 +1402,7 @@ async def test_mint_heir_binds_a_never_claimed_orphan_seat(actions: Actions) -> 
 
 
 async def test_mint_heir_leaves_an_actively_held_seat_alone(actions: Actions) -> None:
-    """The bind-if-unbound path only fires when the seat is TRULY unbound — a lineage whose
+    """The bind-if-unbound path only fires when the seat is TRULY unbound, a lineage whose
     seat is already properly bound (the common case, via claim_name) keeps riding
     follow_binding exactly as before; the new code never double-writes or races it."""
     from src.orchestrator.agents import claim_name
@@ -1423,7 +1422,7 @@ async def test_mint_heir_leaves_an_actively_held_seat_alone(actions: Actions) ->
 
 
 async def test_mint_heir_never_mints_a_seat_that_never_existed(actions: Actions) -> None:
-    """Bind-if-unbound closes a hole that already has a NAME — it must never MINT a new Seat
+    """Bind-if-unbound closes a hole that already has a NAME, it must never MINT a new Seat
     object (ensure_seat's own law: minting is deliberate, only at a claim or an attach, never
     an automatic sweep). A handle with no Seat object stays exactly that plain."""
     anc = await actions.create_or_find_object("Agent", "agent:noseat01", "test")
@@ -1442,7 +1441,7 @@ async def test_mint_heir_never_mints_a_seat_that_never_existed(actions: Actions)
 
 async def test_mint_heir_orphan_bind_is_idempotent_across_successions(actions: Actions) -> None:
     """A SECOND mint of the now-bound lineage rides follow_binding forward exactly as it
-    always has — the orphan-bind fires once, at the mint that actually closes the hole, and
+    always has, the orphan-bind fires once, at the mint that actually closes the hole, and
     every later succession is the ordinary case."""
     seat_id, agent_id = await _legacy_unbound_seat(actions, handle="Neith")
     anc = await actions.create_or_find_object("Agent", agent_id, agent_id)
@@ -1458,17 +1457,17 @@ async def test_mint_heir_orphan_bind_is_idempotent_across_successions(actions: A
     assert not await _active_holds(actions, heir, seat_id)  # healed forward, one active link
 
 
-# ═══ OCCUPANCY — VACANT / OCCUPIED / COLD (occupancy piece B, 9f566244) ═══════════════════
-# The acceptance case: Ptah's office once showed four bodies where one lived — a seat with
+# ═══ OCCUPANCY: VACANT / OCCUPIED / COLD (occupancy piece B) ═══════════════════
+# The acceptance case: Brisk's office once showed four bodies where one lived. A seat with
 # no holder at all must read VACANT on its own, distinct from a seat that HAS a holder who
 # simply isn't live right now (COLD, the ordinary in-between state, never an alarm).
 
 
 async def test_occupancy_reads_vacant_for_a_seat_never_held(actions: Actions) -> None:
-    """A minted seat nobody has ever attached to — furniture, not yet a body."""
+    """A minted seat nobody has ever attached to, furniture, not yet a body."""
     from src.orchestrator.seats import seat_occupancy
 
-    seat = await ensure_seat(actions, house="osiris", handle="Ptah", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Brisk", source="test")
 
     occ = await seat_occupancy(actions.pool, seat["seat_id"])
     assert occ == {"state": "vacant", "holder": None, "live": False}
@@ -1490,7 +1489,7 @@ async def test_occupancy_reads_occupied_for_a_live_holder(actions: Actions) -> N
 
 
 async def test_occupancy_reads_cold_for_a_holder_who_is_not_live(actions: Actions) -> None:
-    """A bound holder with NO recent pulse (no mount row at all) reads COLD, not VACANT —
+    """A bound holder with NO recent pulse (no mount row at all) reads COLD, not VACANT, 
     the seat is not furniture, it is simply between sessions."""
     from src.orchestrator.seats import seat_occupancy
 
@@ -1504,7 +1503,7 @@ async def test_occupancy_reads_cold_for_a_holder_who_is_not_live(actions: Action
 
 async def test_occupancy_reads_cold_after_the_holder_moves_on(actions: Actions) -> None:
     """A seat HELD HISTORICALLY but with no active holder at all (the link healed by
-    valid_until and nothing replaced it) is COLD, not VACANT — it has a past, just no
+    valid_until and nothing replaced it) is COLD, not VACANT, it has a past, just no
     present holder."""
     from src.orchestrator.seats import seat_occupancy
 
@@ -1522,7 +1521,7 @@ async def test_occupancy_reads_cold_after_the_holder_moves_on(actions: Actions) 
 
 async def test_occupancy_is_lineage_aware_like_held_seat(actions: Actions) -> None:
     """A holder bound under an ancestor generation label but LIVE under its successor's
-    label still reads OCCUPIED — the same lineage-wide liveness held_seat already uses."""
+    label still reads OCCUPIED, the same lineage-wide liveness held_seat already uses."""
     from src.orchestrator.seats import seat_occupancy
 
     seat = await ensure_seat(actions, house="osiris", handle="Serqet", source="test")
@@ -1539,13 +1538,13 @@ async def test_occupancy_is_lineage_aware_like_held_seat(actions: Actions) -> No
 async def test_occupancy_never_reads_occupied_off_last_active_alone(
     actions: Actions,
 ) -> None:
-    """Thread 7dd09031 (the cupid specimen) supersedes decision 59b3092c's own earlier
+    """The lyric specimen supersedes an earlier
     fix here: `last_active` (this house's only real writer, the session miner's
     `_stamp_alive`) is stamped ONCE per lineage and never refreshed as later generations
-    keep working — trusting it as a standing occupancy signal is exactly what let a
+    keep working, trusting it as a standing occupancy signal is exactly what let a
     two-month-old property outrank a mount row minutes old. A holder with NO mount row
     at all, only a (however fresh-LOOKING) `last_active` assertion, now correctly reads
-    COLD, never OCCUPIED — occupancy is `agent_mounts.last_seen` alone."""
+    COLD, never OCCUPIED, occupancy is `agent_mounts.last_seen` alone."""
     from src.orchestrator.seats import seat_occupancy
 
     seat = await ensure_seat(actions, house="osiris", handle="Sobek", source="test")
@@ -1563,8 +1562,8 @@ async def test_occupancy_never_reads_occupied_off_last_active_alone(
 async def test_occupancy_and_fleet_occupancy_still_agree_with_each_other(
     actions: Actions,
 ) -> None:
-    """Thoth's own regression proof (msg 4405), re-pinned post-7dd09031: fleet(),
-    seat_occupancy() and agent_liveness() must never disagree about the SAME holder —
+    """A regression proof: fleet(),
+    seat_occupancy() and agent_liveness() must never disagree about the SAME holder,
     all three still delegate to the one shared `mounts.agent_liveness()`, so a REAL
     mount row reads live through every door, and (per the sibling test above) a
     last_active-only holder reads cold through every door too, not just one."""
@@ -1591,14 +1590,14 @@ async def test_occupancy_and_fleet_occupancy_still_agree_with_each_other(
 async def test_occupancy_refuses_a_custom_live_secs_rather_than_silently_ignoring_it(
     actions: Actions,
 ) -> None:
-    """`live_secs` is no longer a real knob — agent_liveness owns the one shared window.
+    """`live_secs` is no longer a real knob, agent_liveness owns the one shared window.
     Nothing in this codebase ever passed a non-default value (confirmed by grep before
     this fix), so a refusal here costs nothing today; the alternative (silently dropping
     the parameter) would let a future caller believe it changed behavior when it hadn't,
     exactly the class of silent divergence this whole fix exists to close."""
     from src.orchestrator.seats import seat_occupancy
 
-    seat = await ensure_seat(actions, house="osiris", handle="Khepri", source="test")
+    seat = await ensure_seat(actions, house="osiris", handle="Garnet", source="test")
     with pytest.raises(ValueError, match="no longer supports a custom live_secs"):
         await seat_occupancy(actions.pool, seat["seat_id"], live_secs=60)
 
@@ -1606,7 +1605,7 @@ async def test_occupancy_refuses_a_custom_live_secs_rather_than_silently_ignorin
 async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
     actions: Actions,
 ) -> None:
-    """The batch read fleet() renders from — every active Seat gets a row, vacant ones
+    """The batch read fleet() renders from, every active Seat gets a row, vacant ones
     included, so a seat with no body at all is as visible as one with a live holder."""
     from src.orchestrator.seats import fleet_occupancy
 
@@ -1627,15 +1626,15 @@ async def test_fleet_occupancy_lists_every_active_seat_including_vacant(
     assert rows[occupied["seat_id"]]["holder"] == "agent:fo000001"
 
 
-# ═══ ROSTER (task #140, Alfred's 2813da48) — cold is not vacant, and a pin is not certified ═
-# canonical. Alfred read mount()'s live-agent list as the roster, found his own house cold,
+# ═══ ROSTER: cold is not vacant, and a pin is not certified ═
+# canonical. Denver read mount()'s live-agent list as the roster, found his own house cold,
 # read COLD AS VACANT, and misrouted a repo's work to another seat's lineage while the seat
 # offices on disk held the right answer the whole time. These tests prove roster() answers
 # "who owns this repo, and is anybody home" from the graph, without collapsing any of the
 # axes that bug depended on collapsing.
 
 async def _repo(actions: Actions, name: str) -> None:
-    """Pre-mint a SoftwareProject, matching test_charter.py's own helper — simulates the
+    """Pre-mint a SoftwareProject, matching test_charter.py's own helper, simulates the
     graph already having independent evidence this repo is real."""
     await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
 
@@ -1703,7 +1702,7 @@ async def test_roster_pin_unreadable_on_malformed_toml(
 
     office = tmp_path / "office"
     office.mkdir()
-    (office / ".osiris").write_text('project: "brokentoml"\n')  # colon, not `=` — bad TOML
+    (office / ".osiris").write_text('project: "brokentoml"\n')  # colon, not `=`, bad TOML
     seat = await ensure_seat(actions, house="osiris", handle="Rpin3", source="test",
                              anchor_cwd=str(office))
 
@@ -1716,10 +1715,10 @@ async def test_roster_pin_unreadable_on_malformed_toml(
 async def test_roster_pin_is_unknown_office_with_no_anchor_cwd_and_no_conventional_office(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Alfred's third live-reproduced defect (thread 3806, msg 4066): no `anchor_cwd`
-    recorded is not the same claim as no office. This is the genuine miss — the probe of
+    """A third live-reproduced defect: no `anchor_cwd`
+    recorded is not the same claim as no office. This is the genuine miss: the probe of
     the conventional path (`~/.osiris/seats/<handle>/`, faked here so the test never
-    touches the real filesystem) ALSO finds nothing — so the honest state is
+    touches the real filesystem) ALSO finds nothing, so the honest state is
     `unknown-office`, never the old `no-office`."""
     from src.orchestrator.seats import roster
 
@@ -1737,9 +1736,9 @@ async def test_roster_pin_probes_the_conventional_office_when_no_anchor_cwd_is_r
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The other half of the same defect: a real, furnished office DOES exist at the
-    conventional path, just never recorded as this seat's anchor_cwd — exactly Alfred's 7
-    seats (Soundwave/vajra/Tantra/Ptah/Loupe/Ra/Marquee), invisible to roster() and, through
-    it, to Imhotep's plan_pin_migration undercount. The probe finds it; `anchor_cwd` stays
+    conventional path, just never recorded as this seat's anchor_cwd, exactly Denver's 7
+    seats (Wavelet/ember/Juniper/Brisk/Ledger/Nomad/Canopy), invisible to roster() and, through
+    it, to Orin's plan_pin_migration undercount. The probe finds it; `anchor_cwd` stays
     honestly null (the graph never recorded it) while `probed_anchor_cwd` shows what
     convention found."""
     from src.orchestrator.seats import roster
@@ -1790,19 +1789,19 @@ async def test_roster_reports_chartered_repos_from_charter_of(actions: Actions) 
 async def test_seated_house_prefers_the_seats_own_charter_over_its_house_name(
     actions: Actions,
 ) -> None:
-    """THE CHAD SPECIMEN, LIVE: a seat's own house is its NAME, not necessarily its WORK.
-    Chad's house is 'Chad' but its charter (and its office's own .osiris pin) names
-    'cdking' — the operator's own explicit correction, weeks old. `_seated_house`'s old
+    """THE JASPER SPECIMEN, LIVE: a seat's own house is its NAME, not necessarily its WORK.
+    Jasper's house is 'Jasper' but its charter (and its office's own .osiris pin) names
+    'cdking', the operator's own explicit correction, weeks old. `_seated_house`'s old
     law ("project is the seat's own house, unconditionally") never consulted the
-    charter at all, so it silently re-corrupted project back to 'Chad' on every single
-    mount — not a one-time historical artifact, a standing bug caught reproducing live
+    charter at all, so it silently re-corrupted project back to 'Jasper' on every single
+    mount, not a one-time historical artifact, a standing bug caught reproducing live
     tonight, two days after the anchor_cwd corruption this same specimen was thought
     closed."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import _seated_house, bind_holder
 
     await _repo(actions, "cdking")
-    seat = await ensure_seat(actions, house="Chad", handle="Chad", source="test")
+    seat = await ensure_seat(actions, house="Jasper", handle="Jasper", source="test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:chadtest1",
                       source="test")
     await set_charter(actions, seat["seat_id"], ["cdking"], actor="test")
@@ -1811,8 +1810,8 @@ async def test_seated_house_prefers_the_seats_own_charter_over_its_house_name(
 
 
 async def test_seated_house_falls_back_to_house_with_no_charter(actions: Actions) -> None:
-    """UNCHANGED BEHAVIOR for the common, self-managed case (Alfred's house IS 'alfred',
-    Thoth's IS 'osiris') — no charter declared, house wins exactly as before."""
+    """UNCHANGED BEHAVIOR for the common, self-managed case (Denver's house IS 'denver',
+    Castellan's IS 'osiris'), no charter declared, house wins exactly as before."""
     from src.orchestrator.seats import _seated_house, bind_holder
 
     seat = await ensure_seat(actions, house="osiris", handle="Housefallback1", source="test")
@@ -1826,7 +1825,7 @@ async def test_seated_house_falls_back_to_house_on_an_ambiguous_multi_repo_chart
     actions: Actions,
 ) -> None:
     """A seat governing MORE than one repo has no single answer to 'what is my project'
-    — refuse to arbitrate, same law as everywhere else in this house, and fall back to
+, refuse to arbitrate, same law as everywhere else in this house, and fall back to
     the house rather than guess among several."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import _seated_house, bind_holder
@@ -1844,10 +1843,10 @@ async def test_seated_house_falls_back_to_house_on_an_ambiguous_multi_repo_chart
 async def test_seated_house_stamps_the_renamed_name_not_the_frozen_canonical(
     actions: Actions,
 ) -> None:
-    """item (f), Thoth's live Marquee re-run (mail 12475/12481, decision 5d9192d0): a
-    seated agent's project used to read `charter_of`'s own entry verbatim — the
+    """A live re-run: a
+    seated agent's project used to read `charter_of`'s own entry verbatim, the
     project's CANONICAL, `repo:` stripped, which is frozen at mint forever
-    (rename_project's own law) — so get_status()/mount()/orient()'s own project field
+    (rename_project's own invariant), so get_status()/mount()/orient()'s own project field
     still showed 'dtfb' long after a real rename to 'lotstretcher'. Every OTHER seat-
     project derivation this drift already touched (resync_seat_project, _is_ghost_
     house, sweep_seat_trees) already resolves through project_current_name; this was
@@ -1866,7 +1865,7 @@ async def test_seated_house_stamps_the_renamed_name_not_the_frozen_canonical(
     assert await _seated_house(actions.pool, "agent:seatedrn1") == "seatednewname"
 
 
-# --- pin_charter_agreement: the jesus/chad/marquee detector (Thoth DM 6279/6287) ---------
+# --- pin_charter_agreement: the emmett/jasper/canopy detector (Castellan  ---------
 
 async def test_roster_pin_charter_agreement_agree_when_pin_is_among_charter(
     actions: Actions, tmp_path: Path,
@@ -1890,17 +1889,17 @@ async def test_roster_pin_charter_agreement_agree_when_pin_is_among_charter(
 async def test_roster_pin_charter_agreement_disagrees_the_jesus_chad_shape(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The live specimen (Thoth DM 6279): jesus's pin says 'Jesus', its real charter is
+    """The live specimen: emmett's pin says 'Emmett', its real charter is
     'godel'. A mechanism that already carries both facts in one row must mark them as
     disagreeing rather than leave a reader to notice by eye."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
     await _repo(actions, "godel")
-    await _repo(actions, "jesus")
+    await _repo(actions, "emmett")
     office = tmp_path / "office"
     office.mkdir()
-    (office / ".osiris").write_text('project = "jesus"\n')
+    (office / ".osiris").write_text('project = "emmett"\n')
     seat = await ensure_seat(actions, house="osiris", handle="Rdisagree1", source="test",
                              anchor_cwd=str(office))
     await set_charter(actions, seat["seat_id"], ["godel"], actor="test")
@@ -1913,7 +1912,7 @@ async def test_roster_pin_charter_agreement_disagrees_the_jesus_chad_shape(
 async def test_roster_pin_charter_agreement_na_when_pin_unset(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """An unset pin is a valid state (ruling fe8ec7ff), never a defect — must read 'n/a',
+    """An unset pin is a valid state, never a defect: must read 'n/a',
     never 'disagree', even when a real charter exists to compare against."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
@@ -1934,7 +1933,7 @@ async def test_roster_pin_charter_agreement_na_when_pin_unset(
 async def test_roster_pin_charter_agreement_na_when_uncharted(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A declared pin with no charter at all has nothing to disagree WITH — 'n/a', not
+    """A declared pin with no charter at all has nothing to disagree WITH, 'n/a', not
     'disagree'. An uncharted worker is an already-visible, ordinary state."""
     from src.orchestrator.seats import roster
 
@@ -1953,7 +1952,7 @@ async def test_roster_pin_charter_agreement_agrees_when_pin_is_one_of_several_ch
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A seat legitimately governing several repos while pinned to just one of them is
-    NOT a disagreement — the mark only fires when the pin's own value is absent from the
+    NOT a disagreement, the mark only fires when the pin's own value is absent from the
     whole charter set, never merely because the charter has more than one entry."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
@@ -1993,8 +1992,8 @@ async def test_roster_live_cwd_only_populated_when_occupied(actions: Actions) ->
 async def test_roster_reports_the_manager_handle_and_none_when_unmanaged(
     actions: Actions,
 ) -> None:
-    """Operator ruling, thread d575e68c: roster's per-seat row must be able to confirm
-    a promotion (`seat(action='promote')` mints the `managed_by` edge) by itself — a row's
+    """roster's per-seat row must be able to confirm
+    a promotion (`seat(action='promote')` mints the `managed_by` edge) by itself: a row's
     `manager` names the manager's own handle, resolved via `manager_of_seat`, or `None`
     when the seat is unmanaged."""
     from src.orchestrator.seats import roster
@@ -2017,7 +2016,7 @@ async def test_roster_repo_lookup_single_match_via_charter(actions: Actions) -> 
     from src.orchestrator.seats import roster
 
     await _repo(actions, "sutra")
-    seat = await ensure_seat(actions, house="alfred", handle="Rlk1", source="test")
+    seat = await ensure_seat(actions, house="denver", handle="Rlk1", source="test")
     await set_charter(actions, seat["seat_id"], ["sutra"], actor="test")
 
     out = await roster(actions.pool, repo="sutra")
@@ -2034,7 +2033,7 @@ async def test_roster_repo_lookup_single_match_via_pin(
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "phanspeed"\n')
-    await ensure_seat(actions, house="alfred", handle="Rlk2", source="test",
+    await ensure_seat(actions, house="denver", handle="Rlk2", source="test",
                       anchor_cwd=str(office))
 
     out = await roster(actions.pool, repo="phanspeed")
@@ -2045,18 +2044,18 @@ async def test_roster_repo_lookup_single_match_via_pin(
 async def test_roster_repo_lookup_conflict_when_charter_and_pin_disagree(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The exact shape of Alfred's incident, generalized: two independent signals naming
+    """The exact shape of Denver's incident, generalized: two independent signals naming
     different seats for the same repo must come back as BOTH, never silently one."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
     await _repo(actions, "mudra")
-    charter_seat = await ensure_seat(actions, house="alfred", handle="Rlk3a", source="test")
+    charter_seat = await ensure_seat(actions, house="denver", handle="Rlk3a", source="test")
     await set_charter(actions, charter_seat["seat_id"], ["mudra"], actor="test")
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "mudra"\n')
-    pin_seat = await ensure_seat(actions, house="alfred", handle="Rlk3b", source="test",
+    pin_seat = await ensure_seat(actions, house="denver", handle="Rlk3b", source="test",
                                  anchor_cwd=str(office))
 
     out = await roster(actions.pool, repo="mudra")
@@ -2068,20 +2067,20 @@ async def test_roster_repo_lookup_conflict_when_charter_and_pin_disagree(
 async def test_roster_repo_lookup_governed_when_charter_seat_manages_pin_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Alfred's live review (thread 3806, finding 3): a coordinator's charter and a worker
+    """Denver's live review (thread 3806, finding 3): a coordinator's charter and a worker
     it manages pinning the SAME repo is the normal, correctly-configured shape (his own
-    house: 8 repos, each governed by him and pinned by a different worker) — not a
+    house: 8 repos, each governed by him and pinned by a different worker), not a
     `conflict`, which trained readers to skip the word."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
     await _repo(actions, "kast")
-    coordinator = await ensure_seat(actions, house="alfred", handle="Rlk4a", source="test")
+    coordinator = await ensure_seat(actions, house="denver", handle="Rlk4a", source="test")
     await set_charter(actions, coordinator["seat_id"], ["kast"], actor="test")
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "kast"\n')
-    worker = await ensure_seat(actions, house="alfred", handle="Rlk4b", source="test",
+    worker = await ensure_seat(actions, house="denver", handle="Rlk4b", source="test",
                                anchor_cwd=str(office))
     worker_oid = await actions.create_or_find_object("Seat", worker["seat_id"], "test")
     coordinator_oid = await actions.create_or_find_object(
@@ -2098,19 +2097,19 @@ async def test_roster_repo_lookup_governed_when_charter_seat_manages_pin_seat(
 async def test_roster_repo_lookup_stays_conflict_when_the_manager_edge_points_the_other_way(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """`governed` requires the CHARTER-seat to manage the PIN-seat specifically — the
-    reverse (pin-seat manages charter-seat) is not the shape Alfred named and stays a real
+    """`governed` requires the CHARTER-seat to manage the PIN-seat specifically, the
+    reverse (pin-seat manages charter-seat) is not the shape Denver named and stays a real
     `conflict`, same as two genuinely unrelated seats."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
     await _repo(actions, "sutra2")
-    charter_seat = await ensure_seat(actions, house="alfred", handle="Rlk5a", source="test")
+    charter_seat = await ensure_seat(actions, house="denver", handle="Rlk5a", source="test")
     await set_charter(actions, charter_seat["seat_id"], ["sutra2"], actor="test")
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "sutra2"\n')
-    pin_seat = await ensure_seat(actions, house="alfred", handle="Rlk5b", source="test",
+    pin_seat = await ensure_seat(actions, house="denver", handle="Rlk5b", source="test",
                                  anchor_cwd=str(office))
     charter_oid = await actions.create_or_find_object("Seat", charter_seat["seat_id"], "test")
     pin_oid = await actions.create_or_find_object("Seat", pin_seat["seat_id"], "test")
@@ -2124,10 +2123,10 @@ async def test_roster_repo_lookup_stays_conflict_when_the_manager_edge_points_th
 async def test_roster_repo_lookup_shared_house_when_the_whole_house_shares_its_own_repo(
     actions: Actions,
 ) -> None:
-    """The house's own home repo — every worker legitimately charters/pins it — is NOT
-    several seats fighting over one thing (Thoth ruling msg 7425, off the obligation-
-    hygiene ladder's own false positive: roster(repo='osiris') matching 5 osiris workers
-    read as a plain `conflict` before this)."""
+    """The house's own home repo (every worker legitimately charters/pins it) is NOT
+    several seats fighting over one thing. This closes an earlier
+    false positive: roster(repo='osiris') matching 5 osiris workers
+    used to read as a plain `conflict`."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
@@ -2153,7 +2152,7 @@ async def test_roster_repo_lookup_shared_house_when_the_whole_house_shares_its_o
 async def test_roster_repo_lookup_stays_conflict_when_the_shared_house_isnt_this_repo(
     actions: Actions,
 ) -> None:
-    """Same house, N>2 matches — but the repo they share is NOT their own house's name, so
+    """Same house, N>2 matches, but the repo they share is NOT their own house's name, so
     it stays a plain `conflict`: shared-house is narrow, not a blanket exemption for any
     repo a house's seats happen to both claim."""
     from src.orchestrator.charter import set_charter
@@ -2161,7 +2160,7 @@ async def test_roster_repo_lookup_stays_conflict_when_the_shared_house_isnt_this
 
     await _repo(actions, "sharedexternal")
     for i in range(3):
-        seat = await ensure_seat(actions, house="alfred", handle=f"Rlk7{i}", source="test")
+        seat = await ensure_seat(actions, house="denver", handle=f"Rlk7{i}", source="test")
         await set_charter(actions, seat["seat_id"], ["sharedexternal"], actor="test")
 
     out = await roster(actions.pool, repo="sharedexternal")
@@ -2172,7 +2171,7 @@ async def test_roster_repo_lookup_stays_conflict_when_the_shared_house_isnt_this
 async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Alfred live-reproduced this exact shape (thread 3806, finding 2): the operator
+    """Denver live-reproduced this exact shape (thread 3806, finding 2): the operator
     renamed a repo family-wide (`RAMstein` -> `ramstein`) while a seat's pin still carried
     the old spelling. A bare `no-match` gave no evidence; near_misses does."""
     from src.orchestrator.seats import roster
@@ -2180,7 +2179,7 @@ async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "RAMstein"\n')
-    seat = await ensure_seat(actions, house="alfred", handle="Rlk6", source="test",
+    seat = await ensure_seat(actions, house="denver", handle="Rlk6", source="test",
                              anchor_cwd=str(office))
 
     out = await roster(actions.pool, repo="ramstein")
@@ -2193,13 +2192,13 @@ async def test_roster_repo_lookup_near_misses_on_case_and_separator_mismatch(
 async def test_roster_repo_lookup_near_misses_empty_when_agreement_is_not_no_match(
     actions: Actions,
 ) -> None:
-    """The extra scan only ever runs on a bare no-match (Alfred's own scoping: "costs one
-    extra pass on the miss path only") — a real match never pays for it."""
+    """The extra scan only ever runs on a bare no-match (Denver's own scoping: "costs one
+    extra pass on the miss path only"), a real match never pays for it."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import roster
 
     await _repo(actions, "gestalt")
-    seat = await ensure_seat(actions, house="alfred", handle="Rlk7", source="test")
+    seat = await ensure_seat(actions, house="denver", handle="Rlk7", source="test")
     await set_charter(actions, seat["seat_id"], ["gestalt"], actor="test")
 
     out = await roster(actions.pool, repo="gestalt")
@@ -2233,8 +2232,8 @@ async def test_roster_pin_triage_bucket_none_when_nothing_declared(
 async def test_roster_pin_triage_bucket_reuses_triages_own_verdict(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 251443ff's whole point: roster does not invent a second project-health
-    notion, it asks triage's own buckets mode and reports the answer verbatim — a fresh
+    """The whole point: roster does not invent a second project-health
+    notion, it asks triage's own buckets mode and reports the answer verbatim. A fresh
     zero-link SoftwareProject reads 'orphan' by triage's own priority order, same as it
     would from triage(mode='buckets') directly."""
     from src.orchestrator.seats import roster
@@ -2255,12 +2254,12 @@ async def test_roster_pin_triage_bucket_reuses_triages_own_verdict(
 async def test_roster_duplicate_suspect_names_its_siblings_never_a_winner(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Task #152 Build 2 (Thoth's dispatch, msg 4215): a seat's own pin can resolve to a
+    """A seat's own pin can resolve to a
     real, populated object that STILL reads duplicate_suspect because an unrelated,
-    unpopulated near-duplicate exists elsewhere — the exact werner/maat/till/aegis shape
-    (maat/till/aegis confirmed live). `duplicate_siblings` must name the OTHER object(s) and
+    unpopulated near-duplicate exists elsewhere: the exact holt/sable/till/onyx shape
+    (sable/till/onyx confirmed live). `duplicate_siblings` must name the OTHER object(s) and
     their own agent_count so a reader can judge the collision themselves; it must NEVER pick
-    a winner (#102, ruling 8cdf905) — the seat's own bucket stays exactly whatever triage
+    a winner (#102, ruling 8cdf905), the seat's own bucket stays exactly whatever triage
     already computed, unchanged."""
     from src.orchestrator.seats import roster
 
@@ -2273,7 +2272,7 @@ async def test_roster_duplicate_suspect_names_its_siblings_never_a_winner(
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "RAMstein"\n')
-    seat = await ensure_seat(actions, house="alfred", handle="Rdup1", source="test",
+    seat = await ensure_seat(actions, house="denver", handle="Rdup1", source="test",
                              anchor_cwd=str(office))
 
     row = next(r for r in (await roster(actions.pool))["seats"]
@@ -2286,7 +2285,7 @@ async def test_roster_duplicate_suspect_names_its_siblings_never_a_winner(
 async def test_roster_duplicate_siblings_absent_outside_duplicate_suspect(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The field must not appear at all (not even as an empty list) for any other bucket —
+    """The field must not appear at all (not even as an empty list) for any other bucket, 
     computing it costs a real query, so it is never paid on the common, unflagged path."""
     from src.orchestrator.seats import roster
 
@@ -2306,7 +2305,7 @@ async def test_roster_duplicate_siblings_absent_outside_duplicate_suspect(
 async def test_roster_names_a_pin_that_matches_a_name_not_a_canonical(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Task #152/#157 arc: the exact khepri mistake shape (decisions 126210f0/23b667d0) —
+    """The exact garnet mistake shape:
     a pin holding a project's post-rename DISPLAY NAME instead of its stable CANONICAL
     SUFFIX. roster()'s canonical-only lookup correctly reports no-such-project (nothing has
     THIS canonical); `pin.name_resolution` names what it actually found, WITHOUT ever
@@ -2338,7 +2337,7 @@ async def test_roster_names_resolution_stays_none_when_the_pin_genuinely_matches
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A pin that resolves via neither canonical nor name gets NO name_resolution field at
-    all — the field's presence itself is the signal that something was found by name."""
+    all, the field's presence itself is the signal that something was found by name."""
     from src.orchestrator.seats import roster
 
     office = tmp_path / "office"
@@ -2357,7 +2356,7 @@ async def test_roster_names_resolution_reports_ambiguity_never_picks(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Two live objects answering to the same name (#110's ballgem/sutra shape) must report
-    ambiguous:true and every candidate — never silently prefer one (#102's law)."""
+    ambiguous:true and every candidate, never silently prefer one (#102's law)."""
     from src.orchestrator.seats import roster
 
     p1 = await actions.create_or_find_object("SoftwareProject", "repo:twin-a", "test")
@@ -2388,8 +2387,8 @@ async def test_roster_always_returns_caveats(actions: Actions) -> None:
 
 
 async def test_roster_caveats_default_to_a_count_and_pointer(actions: Actions) -> None:
-    """RECEIPT DIET (context-bloat round 2, Thoth DM 7649): the 10-paragraph caveat list
-    rode every call by default — now opt-in, same as orient()'s blind_spots."""
+    """RECEIPT DIET, round 2: the 10-paragraph caveat list
+    rode every call by default, now opt-in, same as orient()'s blind_spots."""
     from src.orchestrator.seats import roster
 
     out = await roster(actions.pool)
@@ -2398,8 +2397,8 @@ async def test_roster_caveats_default_to_a_count_and_pointer(actions: Actions) -
     assert "want_caveats=True" in out["caveats_note"]
 
 
-# ═══ TREE LEDGER (task #158, dispatch msg 3900) — the pin-vs-graph disagreement report. ═══
-# Off Sekhmet's live repo:seats/repo:code phantom catch (rulings 719ed5b1/13af22fc): every
+# ═══ TREE LEDGER: the pin-vs-graph disagreement report. ═══
+# Off Falcon's live repo:seats/repo:code phantom catch: every
 # active SoftwareProject judged against the fleet's own declared-name index (`declared_by`),
 # and every cwd agent_mounts holds right now cross-checked against what the graph currently
 # believes. Live-measured against the real dev graph before these were written: the
@@ -2407,7 +2406,7 @@ async def test_roster_caveats_default_to_a_count_and_pointer(actions: Actions) -
 # phantom-suspect with zero prior knowledge of them baked in.
 
 async def _agent_works_in(actions: Actions, agent_id: str, project: str) -> None:
-    """Mint an Agent and a live `works_in` edge to `project` — same pattern
+    """Mint an Agent and a live `works_in` edge to `project`, same pattern
     test_agents.py's own mint_heir tests use for wiring an agent's graph attribution."""
     aoid = await actions.create_or_find_object("Agent", agent_id, "test")
     poid = await actions.create_or_find_object("SoftwareProject", f"repo:{project}", "test")
@@ -2444,9 +2443,9 @@ async def test_phantom_verdict_is_declared_when_a_seat_pins_it(
 
 
 async def test_phantom_verdict_is_declared_via_seat_origin_charter(actions: Actions) -> None:
-    """Sekhmet's own calibration (msg 3906): only a Seat-origin governs edge counts as a
+    """A calibration test: only a Seat-origin governs edge counts as a
     real charter. set_charter always mints Seat-origin edges (charter_of: l.from_id=seat),
-    so this proves the declared path fires through it without any extra code of its own —
+    so this proves the declared path fires through it without any extra code of its own, 
     an Agent-origin edge (the class that legitimized repo:code's own bogus edge) is never
     reachable through charter_of at all."""
     from src.orchestrator.charter import set_charter
@@ -2549,7 +2548,7 @@ async def test_live_cwd_partial_match_when_graph_carries_extra_stale_belief(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The residue class, measured live tonight on osiris's own worktrees: today's
-    resolution is correct, but the graph ALSO carries an older belief for the same cwd —
+    resolution is correct, but the graph ALSO carries an older belief for the same cwd, 
     worth a look, not urgent, and must not read the same as a genuine mismatch."""
     from src.orchestrator.seats import live_cwd_ledger
 
@@ -2576,7 +2575,7 @@ async def test_live_cwd_mismatch_when_resolution_and_graph_fully_disagree(
 ) -> None:
     """The live risk this instrument exists to catch: a currently-unpinned tree that would
     basename-fallback to a NEW name today, while the graph believes something else
-    entirely — the exact shape measured live on two real seats tonight (flip68real,
+    entirely, the exact shape measured live on two real seats tonight (flip68real,
     resumelanecheck)."""
     from src.orchestrator.seats import live_cwd_ledger
 
@@ -2597,10 +2596,10 @@ async def test_live_cwd_mismatch_when_resolution_and_graph_fully_disagree(
 async def test_live_cwd_graph_only_at_the_bare_office_root(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """13af22fc's own historical signature (repo:seats), reproduced live: today's code
+    """A historical signature (repo:seats), reproduced live: today's code
     correctly REFUSES to resolve anything at the bare seats container
     (resolved_today=None), while the graph still carries a belief there from before the
-    fix — exactly what should stay visible, not silently absent."""
+    fix, exactly what should stay visible, not silently absent."""
     from src.orchestrator.seats import live_cwd_ledger
 
     fake_root = tmp_path / "seats"
@@ -2621,20 +2620,20 @@ async def test_live_cwd_graph_only_at_the_bare_office_root(
 async def test_live_cwd_ghost_when_the_office_directory_is_gone(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's own catch (msg 3928), reproduced exactly: flip68real/resumelanecheck's
+    """Reproduced exactly: flip68real/resumelanecheck's
     directories were DELETED, not merely unpinned. The canonical `.osiris` reader climbs
-    past a missing cwd to its PARENT's own pin without ever checking `cwd` itself exists —
+    past a missing cwd to its PARENT's own pin without ever checking `cwd` itself exists,
     collapsing 'office is gone' into 'office exists, pin unset', two conditions with
     OPPOSITE dispositions (one wants a pin written, the other wants the graph's belief
     reaped). This proves the fix: a nonexistent cwd with a real parent pin must read
     directory_exists=False, pin_state='missing-directory', resolved_today=None,
-    agreement='ghost' — never 'unset'/'mismatch', this instrument's own first-draft bug."""
+    agreement='ghost', never 'unset'/'mismatch', this instrument's own first-draft bug."""
     from src.orchestrator.seats import live_cwd_ledger
 
     container = tmp_path / "seats"
     container.mkdir()
     (container / ".osiris").write_text('kind = "container"\n')
-    ghost_office = container / "deletedseat"  # never created — the office is GONE
+    ghost_office = container / "deletedseat"  # never created, the office is GONE
 
     await _agent_works_in(actions, "agent:ledgerghost1", "osiris")
     await save_mount(actions.pool, job_dir="/jobs/ledgerghost1",
@@ -2665,7 +2664,7 @@ async def test_tree_ledger_combines_both_sections_and_caveats(actions: Actions) 
 async def test_project_ledger_surfaces_the_generic_basename_list_in_the_output(
     actions: Actions,
 ) -> None:
-    """Thoth's own instruction (msg 3920): a hidden deny-list is an unfalsifiable claim —
+    """A hidden deny-list is an unfalsifiable claim:
     the editable phantom-suspect basis must be VISIBLE in the data a caller actually reads,
     not just documented in a docstring or a private module constant."""
     from src.orchestrator.seats import _GENERIC_PATH_BASENAMES, project_ledger
@@ -2678,7 +2677,7 @@ async def test_project_ledger_surfaces_the_generic_basename_list_in_the_output(
 async def test_live_cwd_ledger_states_its_own_non_durability_in_section(
     actions: Actions,
 ) -> None:
-    """Thoth's own instruction (msg 3920): 'nobody reads the bottom' — the caveat belongs
+    """Assuming nobody reads the bottom is not safe: the caveat belongs
     where a reader hits it, inside this section's own output, not only in the report-level
     caveats list."""
     from src.orchestrator.seats import live_cwd_ledger
@@ -2688,12 +2687,12 @@ async def test_live_cwd_ledger_states_its_own_non_durability_in_section(
     assert "evict" in out["note"].lower()
 
 
-# ═══ REACHABILITY (ruling d739d486) — a TRUTHFUL "can I reach this lineage right now?" ═════
-# Ra's clean repro: a mail send-receipt refused a fresh successor ("no resumable session —
-# never handed to a fresh twin") while the daemon's own job_for on the same lineage held a
+# ═══ REACHABILITY: a TRUTHFUL "can I reach this lineage right now?" ═════
+# Nomad's clean repro: a mail send-receipt refused a fresh successor ("no resumable session,
+# never handed to a fresh successor") while the daemon's own job_for on the same lineage held a
 # live, resumable job the whole time. A stale disk/DB snapshot infers; job_for reads the
 # one place that cannot lag the seam. These tests fake claude_daemon.job_for directly (the
-# same monkeypatch shape test_trigger.py's own hermetic fixture uses) — never a live socket.
+# same monkeypatch shape test_trigger.py's own hermetic fixture uses), never a live socket.
 
 
 async def test_reachability_confirms_a_live_daemon_job(
@@ -2721,7 +2720,7 @@ async def test_reachability_confirms_a_live_daemon_job(
 async def test_reachability_is_honest_when_the_daemon_is_dark(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A dark daemon (no job found) reads unreachable — but the detail says so plainly as
+    """A dark daemon (no job found) reads unreachable, but the detail says so plainly as
     'couldn't confirm', never as proof the lineage is dead."""
     from src.ingest.harness import claude_daemon
     from src.orchestrator.seats import reachability
@@ -2744,7 +2743,7 @@ async def test_reachability_is_honest_when_the_daemon_is_dark(
 async def test_reachability_has_nothing_to_ask_about_an_unmounted_lineage(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """No agent_mounts row at all — never even asks the daemon, since there is no job_dir
+    """No agent_mounts row at all, never even asks the daemon, since there is no job_dir
     to ask about."""
     from src.ingest.harness import claude_daemon
     from src.orchestrator.seats import reachability
@@ -2764,8 +2763,8 @@ async def test_reachability_has_nothing_to_ask_about_an_unmounted_lineage(
 async def test_reachability_is_lineage_wide_like_held_seat(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ra's exact shape: the mount row still names the PRE-compaction generation, but the
-    caller asks about the POST-compaction successor — the daemon check must still find it,
+    """Nomad's exact shape: the mount row still names the PRE-compaction generation, but the
+    caller asks about the POST-compaction successor, the daemon check must still find it,
     the same base-or-'-suffix' match held_seat/seat_occupancy already use."""
     from src.ingest.harness import claude_daemon
     from src.orchestrator.seats import reachability
@@ -2785,7 +2784,7 @@ async def test_reachability_is_lineage_wide_like_held_seat(
     assert out["reachable"] is True and out["job"] == job
 
 
-# ═══ MANAGER_OF_SEAT (notify-at-seam, thread aeae9977) — the single-pair managed_by read,
+# ═══ MANAGER_OF_SEAT: the single-pair managed_by read,
 # mirroring osiris_stophook.py's own local `_manager_seat` query so mint_heir's compaction
 # path doesn't hand-roll a third copy of the same SQL. ═══════════════════════════════════
 
@@ -2808,7 +2807,7 @@ async def test_manager_of_seat_none_when_unmanaged(actions: Actions) -> None:
     assert await manager_of_seat(actions.pool, "seat:mos2cccc") is None
 
 
-# ═══ SEATS_MANAGED_BY (msg 4761/4798, obligation f6a40441 — the reverse of manager_of_seat:
+# ═══ SEATS_MANAGED_BY, the reverse of manager_of_seat:
 # "does this seat manage anyone", the one non-inferred signal a manager-authored-code flag
 # could ever use) ═══════════════════════════════════════════════════════════════════════
 
@@ -2840,7 +2839,7 @@ async def test_seats_managed_by_empty_for_a_worker_seat(actions: Actions) -> Non
 
 
 async def test_seats_managed_by_ignores_a_detached_worker(actions: Actions) -> None:
-    """An INVALIDATED managed_by edge (detach_seat's own act) must not still count — this
+    """An INVALIDATED managed_by edge (detach_seat's own act) must not still count, this
     reads live edges only, matching manager_of_seat's own valid_until guard."""
     from src.orchestrator.seats import detach_seat, seats_managed_by
 
@@ -2854,7 +2853,7 @@ async def test_seats_managed_by_ignores_a_detached_worker(actions: Actions) -> N
     assert await seats_managed_by(actions.pool, "seat:smb3mgr0") == []
 
 
-# ═══ DETACH_SEAT (thread fad0dc14) — the toolkit hole: unpeer heals peer_of, nothing healed
+# ═══ DETACH_SEAT: the toolkit gap: unpeer heals peer_of, nothing healed
 # managed_by before this. A coordinator is DEFINED by having no manager, so this is a
 # REMOVAL of the edge, never a repoint. ══════════════════════════════════════════════════
 
@@ -2911,7 +2910,7 @@ async def test_detach_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     assert "no such active seat" in out["error"]
 
 
-# ═══ ATTACH_SEAT (thread fad0dc14, the other half) — managed_by is created in exactly two
+# ═══ ATTACH_SEAT (the other half): managed_by is created in exactly two
 # places in the whole codebase (mint_seat's birth edge, fold_seat's re-point); this is the
 # third, deliberate one, the mirror of detach_seat above. ═══════════════════════════════
 
@@ -2924,17 +2923,17 @@ async def test_attach_seat_creates_the_managed_by_edge(actions: Actions) -> None
     assert await derive_role(actions.pool, "seat:att1aaaa") == "coordinator"
 
     out = await attach_seat(actions, "seat:att1aaaa", "seat:att1bbbb",
-                            evidence="operator: alfred manages this seat", actor="test")
+                            evidence="operator: denver manages this seat", actor="test")
 
     assert out == {"attached": "seat:att1aaaa", "now_managed_by": "seat:att1bbbb",
-                   "evidence": "operator: alfred manages this seat"}
+                   "evidence": "operator: denver manages this seat"}
     assert await manager_of_seat(actions.pool, "seat:att1aaaa") == "seat:att1bbbb"
     assert await derive_role(actions.pool, "seat:att1aaaa") == "worker"
     reason = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a "
         "ON a.object_id=o.id AND a.name='attached_evidence' WHERE o.canonical=$1",
         "seat:att1aaaa")
-    assert reason == "operator: alfred manages this seat"
+    assert reason == "operator: denver manages this seat"
 
 
 async def test_attach_seat_refuses_blank_evidence(actions: Actions) -> None:
@@ -2994,7 +2993,7 @@ async def test_attach_seat_refuses_a_silent_repoint(actions: Actions) -> None:
 
 
 async def test_attach_seat_after_detach_seat_succeeds(actions: Actions) -> None:
-    """The documented path for a real repoint: detach, then attach — not a single call
+    """The documented path for a real repoint: detach, then attach, not a single call
     silently swapping the manager out from under the worker."""
     from src.orchestrator.seats import attach_seat, detach_seat, manager_of_seat
 
@@ -3012,9 +3011,9 @@ async def test_attach_seat_after_detach_seat_succeeds(actions: Actions) -> None:
     assert await manager_of_seat(actions.pool, "seat:att7aaaa") == "seat:att7cccc"
 
 
-# ═══ PROMOTE_SEAT (khnum-promotion-verb, operator 2026-09-07: "promotion should be a verb
-# that agents can handle on their own with my word ... thoth cannot do it, it has to be
-# self managed") — the nebbercracker specimen: a target seat that's currently a PEER of
+# ═══ PROMOTE_SEAT (talon-promotion-verb, operator 2026-09-07: "promotion should be a verb
+# that agents can handle on their own with my word ... castellan cannot do it, it has to be
+# self managed"), the holloway specimen: a target seat that's currently a PEER of
 # its workers, promoted over them in one call. ═══════════════════════════════════════════
 
 async def test_promote_seat_converts_a_peer_bond_and_derives_house(actions: Actions) -> None:
@@ -3028,26 +3027,26 @@ async def test_promote_seat_converts_a_peer_bond_and_derives_house(actions: Acti
 
     head = await ensure_seat(actions, house="monsterhouse", handle="PromHouse",
                              source="test")
-    target = (await ensure_seat(actions, house=None, handle="Nebbercracker",
+    target = (await ensure_seat(actions, house=None, handle="Holloway",
                                 source="test"))["seat_id"]
-    worker = (await ensure_seat(actions, house=None, handle="Jenny", source="test"))[
+    worker = (await ensure_seat(actions, house=None, handle="Paloma", source="test"))[
         "seat_id"]
     await attach_seat(actions, target, head["seat_id"], evidence="joins monsterhouse",
                       actor="test")
     await peer_seats(actions, target, worker, because="today's peer pairing", actor="test")
-    await bind_holder(actions, seat_id=target, agent_id="agent:nebbercracker-holder",
+    await bind_holder(actions, seat_id=target, agent_id="agent:holloway-holder",
                       source="test")
 
-    # SELF-MANAGED, the operator's own stated primary calling convention ("it has to be
-    # self managed") — deliberately NOT actor="operator": derive_house's own pre-existing
-    # house-ANCHOR rule (ruling b4208fa3) stops the walk at ANY managed_by edge an operator
+    # SELF-MANAGED is the primary calling convention: it has to be self managed,
+    # deliberately NOT actor="operator": derive_house's own pre-existing
+    # house-ANCHOR rule stops the walk at ANY managed_by edge an operator
     # sentinel sourced, regardless of whether a house boundary was genuinely crossed, so an
     # operator-run promotion would leave `worker` anchored at its own (unset) house instead
-    # of inheriting target's — a real interaction with existing code, reported in this
+    # of inheriting target's. This is a real interaction with existing code, reported in this
     # commit's own brief, not something this verb papers over by stamping a different
     # source than attach_seat's own established precedent does.
-    out = await promote_seat(actions, target, [worker], because="nebbercracker leads now",
-                             actor="agent:nebbercracker-holder")
+    out = await promote_seat(actions, target, [worker], because="holloway leads now",
+                             actor="agent:holloway-holder")
 
     assert out["workers"][worker] == "bonded"
     assert out["promoted"] == target
@@ -3101,7 +3100,7 @@ async def test_promote_seat_worker_managed_by_someone_else_is_refused(
 
     assert out["workers"][worker] == f"refused: already managed by {other_manager}"
     assert await manager_of_seat(actions.pool, worker) == other_manager
-    # the refusal touched nothing else — target's own unrelated peer bond stands
+    # the refusal touched nothing else, target's own unrelated peer bond stands
     from src.orchestrator.seats import peer_of_seat
     assert await peer_of_seat(actions.pool, target) == bystander
 
@@ -3174,7 +3173,7 @@ async def test_promote_seat_unknown_worker_reads_as_a_manifest_refusal(
 async def test_promote_seat_every_worker_appears_in_the_manifest_never_dropped(
     actions: Actions,
 ) -> None:
-    """Three workers, three different outcomes — the manifest names all three, never
+    """Three workers, three different outcomes, the manifest names all three, never
     silently drops the one that failed (the spec's own explicit requirement)."""
     from src.orchestrator.seats import promote_seat
 
@@ -3208,7 +3207,7 @@ async def test_promote_seat_a_mid_batch_refusal_does_not_roll_back_an_earlier_bo
 ) -> None:
     """THE TRANSACTION-SEMANTIC QUESTION THE BRIEF ASKED FOR: promote_seat's own
     docstring says the batch shares ONE actions.atomic() block, but a per-worker
-    REFUSAL (unlike a real DB error) never raises inside that block — it just
+    REFUSAL (unlike a real DB error) never raises inside that block, it just
     `continue`s, contributing zero writes for that worker while an earlier worker's
     successful writes in the SAME transaction still commit at the end. Proven here by
     putting the refusal (an already-managed-by-someone-else worker) BETWEEN two workers
@@ -3285,15 +3284,15 @@ async def test_attach_seat_mcp_wrapper_refuses_before_mount(actions: Actions) ->
     assert "mount first" in out["error"]
 
 
-# ═══ RESOLVE_PROJECT (ruling 577988ed, hoisted msg 1888) — the ONE project resolver every
+# ═══ RESOLVE_PROJECT: the ONE project resolver every
 # reader (mount, the stop hook, census) now funnels through, replacing four hand-rolled
 # `Path(cwd).name` copies that could mint a phantom "seats" project. ═══════════
 
 async def test_promote_mcp_dispatcher_delegates_reissues_offices_and_heals_the_cache(
     actions: Actions,
 ) -> None:
-    """The FULL door: `seat(action='promote')` through `_seat_impl`, not the bare
-    orchestrator function — proves the authorization check, the office-reissue call (best-
+    """The FULL path: `seat(action='promote')` through `_seat_impl`, not the bare
+    orchestrator function, proves the authorization check, the office-reissue call (best-
     effort: no real CLAUDE.md on disk here, so it reports its own per-seat error rather
     than raising), and the `_agents` in-process cache heal (thread text: 'refresh...mount
     cache') all actually run from the live dispatcher path, not just documented as
@@ -3332,7 +3331,7 @@ async def test_promote_mcp_dispatcher_delegates_reissues_offices_and_heals_the_c
     assert out["promoted"] == target
     assert out["workers"][worker] == "bonded"
     assert await manager_of_seat(actions.pool, worker) == target
-    # office_refresh names BOTH affected seats — best-effort, no real office on disk here
+    # office_refresh names BOTH affected seats, best-effort, no real office on disk here
     assert set(out["office_refresh"]) == {target, worker}
     for verdict in out["office_refresh"].values():
         assert "error" in verdict  # no CLAUDE.md/anchor exists for either seat in this test
@@ -3341,11 +3340,11 @@ async def test_promote_mcp_dispatcher_delegates_reissues_offices_and_heals_the_c
 async def test_establish_seat_dir_is_canonical_establish_office_a_deprecated_alias(
     actions: Actions,
 ) -> None:
-    """ONE TAXONOMY (ruling 52a59652/70c001ec, WAVE 28): establish_office is retired in
-    favor of establish_seat_dir at the MCP-facing action-name layer only — the
-    underlying orchestrator function stays named establish_office unchanged (Imhotep's
-    own doc-scope finding, decision 445b1091: 'office' verbs are kept). Both action
-    strings must normalize to the SAME dispatch branch — asserted here by their
+    """ONE TAXONOMY: establish_office is retired in
+    favor of establish_seat_dir at the MCP-facing action-name layer only. The
+    underlying orchestrator function stays named establish_office unchanged (Orin's
+    own doc-scope finding: 'office' verbs are kept). Both action
+    strings must normalize to the SAME dispatch branch, asserted here by their
     identical receipt, not by re-testing establish_office's own behavior (test_offices.py
     already covers that in full)."""
     from src import mcp_server as srv
@@ -3356,7 +3355,7 @@ async def test_establish_seat_dir_is_canonical_establish_office_a_deprecated_ali
             request = None
             session = object()
 
-    # two SEPARATE seats — establish_office's own receipt is not idempotent-identical
+    # two SEPARATE seats, establish_office's own receipt is not idempotent-identical
     # across repeats on the SAME seat (a second establish is a genuinely different
     # lifecycle point), so the fair comparison is two fresh, otherwise-identical seats,
     # one per spelling.
@@ -3378,7 +3377,7 @@ async def test_establish_seat_dir_is_canonical_establish_office_a_deprecated_ali
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     # both reach the SAME real establish_office call (never "unknown action", never two
-    # different behaviors) — proven by the receipt SHAPE agreeing, not a field-by-field
+    # different behaviors), proven by the receipt SHAPE agreeing, not a field-by-field
     # diff (seat_id/office/handle/rebind naturally differ, one real seat per call)
     assert "unknown action" not in str(canonical.get("error", ""))
     assert canonical.keys() == alias.keys()
@@ -3402,8 +3401,8 @@ async def test_promote_mcp_dispatcher_refuses_before_mount(actions: Actions) -> 
 async def test_attach_mcp_dispatcher_reissues_both_the_worker_and_the_new_managers_office(
     actions: Actions,
 ) -> None:
-    """Thread 613cda0a: attach_seat mints the SAME managed_by edge promote does, but
-    before this it refreshed no office at all — a manager's own team listing and the
+    """attach_seat mints the SAME managed_by edge promote does, but
+    before this it refreshed no office at all: a manager's own team listing and the
     worker's own manager-of-record line both went stale the moment attach ran outside
     promote. `seat(action='attach')` must reissue both sides, same best-effort shape
     promote's own dispatcher test already proves (no real CLAUDE.md on disk here, so
@@ -3486,18 +3485,18 @@ async def test_detach_mcp_dispatcher_reissues_both_the_worker_and_the_old_manage
         assert "error" in verdict
 
 
-# ═══ MOUNT-CACHE HEAL GENERALIZATION (wave 6, dispatch 7dfc38a5): `_heal_mount_cache_for_
+# ═══ MOUNT-CACHE HEAL GENERALIZATION: `_heal_mount_cache_for_
 # seats`, extracted from promote's own inline heal above, wired into charter/charter_for/
-# attach/detach too — a live holder's cached identity must reflect a house-moving write
+# attach/detach too. A live holder's cached identity must reflect a house-moving write
 # immediately, not wait ~30 minutes for staleness to clear on its own. ═══════════════════
 
 async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
     actions: Actions,
 ) -> None:
-    """THE INTERESTING CASE (charter_for is third-party — someone ELSE's seat had its
+    """THE INTERESTING CASE (charter_for is third-party, someone ELSE's seat had its
     charter declared FOR it): a real Seat + holds binding, so `held_seat` actually
     resolves the target's live holder, and a stale `_agents` cache entry bound to that
-    holder heals via the new seat-bound path — not the generation-prefix match rebind/
+    holder heals via the new seat-bound path, not the generation-prefix match rebind/
     correct_house/transition_project/invalidate_works_in use (this holder is NOT the
     caller)."""
     from src import mcp_server as srv
@@ -3505,8 +3504,8 @@ async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
     from src.orchestrator.capture import ensure_operator_person
 
     await _repo(actions, "chfor-repo")
-    # AUTHORITY BY CHARTER (thread 1d5b9773): the operator's bypass below now requires
-    # its OWN charter to cover the repo being declared — this test is about the MCP
+    # AUTHORITY BY CHARTER: the operator's bypass below now requires
+    # its OWN charter to cover the repo being declared. This test is about the MCP
     # dispatcher's cache-healing, not charter scoping, so give person:operator that
     # charter directly rather than exercising the scoping question here.
     op_id = await ensure_operator_person(actions, source="test")
@@ -3534,7 +3533,7 @@ async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
     holder_ctx = _CtxHolder()
     caller_ident = AgentIdentity(agent_id="operator", session="chfor-caller", project="p",
                                  model=None, cwd=None)
-    # the TARGET's own live holder, cached with an already-stale project — proving the
+    # the TARGET's own live holder, cached with an already-stale project, proving the
     # heal is a fresh graph read, not a copy of the caller's own state.
     holder_ident = AgentIdentity(agent_id="agent:chfor-holder", session="chfor-holder",
                                  project="stale-before-charter", model=None, cwd=None)
@@ -3552,9 +3551,9 @@ async def test_charter_for_mcp_dispatcher_heals_the_targets_live_holders_cache(
         srv._agents.pop(srv._conn_key(holder_ctx), None)
     assert out["charter"] == ["chfor-repo"]
     # the seat-bound heal ran: the holder's cache moved from the stale value to the
-    # seat's own resolved project — its single, just-declared charter (`_seated_house`'s
+    # seat's own resolved project, its single, just-declared charter (`_seated_house`'s
     # own "exactly one charter" branch), the very thing this charter_for call just
-    # changed — via a fresh `_resolve_project_seat_first` call, never a string-match
+    # changed, via a fresh `_resolve_project_seat_first` call, never a string-match
     # (the stale value never matched anything by construction).
     assert holder_ident.project == "chfor-repo"
 
@@ -3563,7 +3562,7 @@ async def test_attach_seat_mcp_dispatcher_heals_the_workers_live_holders_cache(
     actions: Actions,
 ) -> None:
     """attach/detach change the worker's managed_by chain, which its derived house depends
-    on — the worker's own live holder must see that reflected immediately."""
+    on, the worker's own live holder must see that reflected immediately."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -3601,7 +3600,7 @@ async def test_attach_seat_mcp_dispatcher_heals_the_workers_live_holders_cache(
         srv._agents.pop(srv._conn_key(caller_ctx), None)
         srv._agents.pop(srv._conn_key(holder_ctx), None)
     assert out["attached"] == worker and out["now_managed_by"] == manager
-    # worker now derives house through manager's chain — the holder's stale cache heals
+    # worker now derives house through manager's chain, the holder's stale cache heals
     # to that fresh answer, not left at its pre-attach stale value.
     assert holder_ident.project == "managerhouse"
 
@@ -3609,7 +3608,7 @@ async def test_attach_seat_mcp_dispatcher_heals_the_workers_live_holders_cache(
 async def test_refresh_project_mcp_dispatcher_forces_a_fresh_graph_read(
     actions: Actions,
 ) -> None:
-    """seat(action='refresh_project'): self-service, no target — a body that suspects its
+    """seat(action='refresh_project'): self-service, no target, a body that suspects its
     own cached project string is stale can force a fresh check without a full re-mount.
     Mutate the seat's own house DIRECTLY in the DB, bypassing every existing heal path, so
     only refresh_project's own fresh `_resolve_project_seat_first` call could possibly
@@ -3638,7 +3637,7 @@ async def test_refresh_project_mcp_dispatcher_forces_a_fresh_graph_read(
             "SELECT id FROM objects WHERE canonical=$1", seat)
         await actions.assert_property(seat_oid, "house", "afterhouse", "test",
                                       datetime.now(UTC), 0.95)
-        assert ident.project == "beforehouse"          # still stale — nothing healed it yet
+        assert ident.project == "beforehouse"          # still stale, nothing healed it yet
 
         out = await srv._seat_impl("refresh_project", ctx=ctx)
     finally:
@@ -3665,7 +3664,7 @@ async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
     actions: Actions,
 ) -> None:
     """The core contract: a seated agent's project is its seat's derived house,
-    unconditionally — cwd is irrelevant when a real seat backs the agent."""
+    unconditionally, cwd is irrelevant when a real seat backs the agent."""
     from src.orchestrator.seats import bind_holder, resolve_project
 
     head = await actions.create_or_find_object("Seat", "seat:rp1head0", "test")
@@ -3682,8 +3681,8 @@ async def test_resolve_project_a_seated_agent_gets_its_house_not_the_cwd(
 async def test_resolve_project_a_seated_agent_in_its_own_office_gets_the_house_not_the_handle(
     actions: Actions,
 ) -> None:
-    """THE LITERAL GUARD (msg 1888): `~/.osiris/seats/<handle>` must resolve to the seat's
-    HOUSE, not the handle basename — exactly the shape a caller sees when cwd IS the
+    """THE LITERAL GUARD: `~/.osiris/seats/<handle>` must resolve to the seat's
+    HOUSE, not the handle basename, exactly the shape a caller sees when cwd IS the
     agent's own office directory."""
     from src.orchestrator.seats import bind_holder, resolve_project
 
@@ -3701,8 +3700,8 @@ async def test_resolve_project_a_seated_agent_in_its_own_office_gets_the_house_n
 async def test_resolve_project_an_unseated_agent_at_the_bare_office_root_refuses(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE LIVE SPECIMEN (Thoth, msg 1888): an agent with no seat at all, sitting at the
-    bare container root, must never mint the phantom "seats" — refuse (None), same honesty
+    """THE LIVE SPECIMEN: an agent with no seat at all, sitting at the
+    bare container root, must never mint the phantom "seats", refuse (None), same honesty
     resolve_identity already keeps for the identical cwd."""
     from src.orchestrator.seats import resolve_project
 
@@ -3717,7 +3716,7 @@ async def test_resolve_project_an_unseated_agent_at_the_bare_office_root_refuses
 async def test_resolve_project_an_unseated_agent_falls_back_to_an_ordinary_cwd_guess(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No seat, no office-root hazard — an ordinary repo cwd guesses its basename exactly
+    """No seat, no office-root hazard, an ordinary repo cwd guesses its basename exactly
     like resolve_identity's own cwd fold, the fallback this function exists to preserve."""
     from src.orchestrator.seats import resolve_project
 
@@ -3751,9 +3750,9 @@ async def test_resolve_project_an_unseated_agent_with_no_cwd_at_all_is_none(
     assert await resolve_project(actions.pool, "agent:rp6aaaa0", None) is None
 
 
-# ═══ DERIVE_HOUSE (ruling ff6148b0, decision 4c9e4bd7) — house is DERIVED off the managed_by
-# chain to the head, never a stored snapshot that drifts (Alfred's legacy bytebye, Vajra's
-# twin house=vajra). The head's own stored house is the one legitimate anchor. ═══════════
+# ═══ DERIVE_HOUSE: house is DERIVED off the managed_by
+# chain to the head, never a stored snapshot that drifts (Denver's legacy bytebye, Ember's
+# duplicate house=ember). The head's own stored house is the one legitimate anchor. ═══════════
 
 
 async def _link_managed_by(
@@ -3764,40 +3763,40 @@ async def _link_managed_by(
 
 
 async def test_derive_house_of_a_head_reads_its_own_stored_house(actions: Actions) -> None:
-    """No managed_by edge out = the head; its own stamped house is authoritative — the one
-    legitimate place house is still stored (a deliberate anchor, e.g. Alfred's 'alfred')."""
+    """No managed_by edge out = the head; its own stamped house is authoritative, the one
+    legitimate place house is still stored (a deliberate anchor, e.g. Denver's 'denver')."""
     from src.orchestrator.seats import derive_house
 
     head = await actions.create_or_find_object("Seat", "seat:dh1head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
 
-    assert await derive_house(actions.pool, "seat:dh1head0") == "alfred"
+    assert await derive_house(actions.pool, "seat:dh1head0") == "denver"
 
 
 async def test_derive_house_walks_the_chain_ignoring_a_worker_s_own_stale_stamp(
     actions: Actions,
 ) -> None:
     """THE ACTUAL BUG: a worker's own stored house ('bytebye', a legacy mint-time snapshot)
-    is WRONG — but it's never read. Only the chain up to the head matters, however many
+    is WRONG, but it's never read. Only the chain up to the head matters, however many
     hops. Two levels here (worker -> manager -> head) to prove it isn't just one hop."""
     from src.orchestrator.seats import derive_house
 
     head = await actions.create_or_find_object("Seat", "seat:dh2head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
     manager = await actions.create_or_find_object("Seat", "seat:dh2mgr00", "test")
     worker = await actions.create_or_find_object("Seat", "seat:dh2wrk00", "test")
     await actions.assert_property(worker, "house", "bytebye", "test", datetime.now(UTC), 0.9)
     await _link_managed_by(actions, manager, head)
     await _link_managed_by(actions, worker, manager)
 
-    assert await derive_house(actions.pool, "seat:dh2wrk00") == "alfred"
-    assert await derive_house(actions.pool, "seat:dh2mgr00") == "alfred"
+    assert await derive_house(actions.pool, "seat:dh2wrk00") == "denver"
+    assert await derive_house(actions.pool, "seat:dh2mgr00") == "denver"
 
 
 async def test_derive_house_detects_a_managed_by_cycle_without_hanging(
     actions: Actions,
 ) -> None:
-    """A seat reappearing in its own chain is a graph BUG, not a deep hierarchy — this must
+    """A seat reappearing in its own chain is a graph BUG, not a deep hierarchy, this must
     terminate (never infinite-loop) and read as None, not crash or hang."""
     from src.orchestrator.seats import derive_house
 
@@ -3815,15 +3814,15 @@ async def test_derive_house_none_for_an_unknown_seat(actions: Actions) -> None:
     assert await derive_house(actions.pool, "seat:dh4ghost") is None
 
 
-# --- THE HOUSE ANCHOR (ruling b4208fa3, thread 105f3425/bec2e4af — cross-house adoption
-# silently annexed Ferryman/halcyon into osiris and, escalated, leaked 50 of Thoth's own
+# --- THE HOUSE ANCHOR (cross-house adoption
+# silently annexed Courier/meridian into osiris and, escalated, leaked 50 of Castellan's own
 # messages into a hector-vector seat's mailbox) ---------------------------------------------
 
 async def test_derive_house_anchors_on_an_operator_sourced_managed_by_link(
     actions: Actions,
 ) -> None:
-    """THE LIVE REPRO'S ACTUAL SHAPE (halcyon): an ALREADY-EXISTING seat's own `house`
-    property keeps its ORIGINAL, unrelated source (an old agent id) — only the managed_by
+    """THE LIVE REPRO'S ACTUAL SHAPE (meridian): an ALREADY-EXISTING seat's own `house`
+    property keeps its ORIGINAL, unrelated source (an old agent id), only the managed_by
     LINK itself carries today's operator-sourced adoption. The anchor must fire off the
     LINK's source, not just the property's, or this exact seat is silently missed."""
     from src.orchestrator.seats import derive_house
@@ -3843,8 +3842,8 @@ async def test_derive_house_anchors_on_an_operator_sourced_managed_by_link(
 async def test_derive_house_anchors_on_an_operator_sourced_house_property(
     actions: Actions,
 ) -> None:
-    """THE LITERAL TEXT OF THE RULING: a seat whose own `house` property was freshly
-    operator-stamped (Ferryman's own shape — minted fresh at the operator's word) anchors
+    """A seat whose own `house` property was freshly
+    operator-stamped (minted fresh by the operator directly) anchors
     even if the managed_by link itself was asserted by an ordinary agent."""
     from src.orchestrator.seats import derive_house
 
@@ -3861,7 +3860,7 @@ async def test_derive_house_anchors_on_an_operator_sourced_house_property(
 async def test_derive_house_an_ordinary_managed_seat_still_derives_its_manager_s(
     actions: Actions,
 ) -> None:
-    """NEITHER signal present (an ordinary worker, an ordinary manager, an ordinary link) —
+    """NEITHER signal present (an ordinary worker, an ordinary manager, an ordinary link), 
     derivation is UNCHANGED: the worker still walks to its manager's house exactly as
     before this fix. The regression this fix must never introduce."""
     from src.orchestrator.seats import derive_house
@@ -3879,7 +3878,7 @@ async def test_derive_house_an_ordinary_managed_seat_still_derives_its_manager_s
 async def test_derive_house_anchor_chains_correctly_past_a_third_generation(
     actions: Actions,
 ) -> None:
-    """An anchor's OWN manager still derives normally past it — the anchor stops the
+    """An anchor's OWN manager still derives normally past it, the anchor stops the
     WALK for the anchored seat's own lookup, it doesn't turn its manager into an anchor
     too, and a seat BEYOND the anchor (if any) is unaffected by this specific edge."""
     from src.orchestrator.seats import derive_house
@@ -3898,9 +3897,9 @@ async def test_derive_house_anchor_chains_correctly_past_a_third_generation(
 async def test_derive_house_operator_sourced_edge_onto_a_houseless_worker_derives_through(
     actions: Actions,
 ) -> None:
-    """a418b017's own amendment (Thoth's ruling on Khnum's own flag from thread 3d5046dd):
-    BOTH signals are required, never either alone. The promote-from-operator-tab shape —
-    an operator-sourced managed_by edge onto a worker with NO stamped house of its own —
+    """An amendment (Castellan's ruling on Talon's own flag):
+    BOTH signals are required, never either alone. The promote-from-operator-tab shape:
+    an operator-sourced managed_by edge onto a worker with NO stamped house of its own, 
     has the operator's hand but nothing to cross: the worker has never had a house, so
     there is no boundary for the edge to violate. It must derive the manager's house, not
     anchor at nothing (the bug this amendment exists to close)."""
@@ -3918,9 +3917,9 @@ async def test_derive_house_operator_sourced_edge_onto_a_houseless_worker_derive
 async def test_derive_house_ghost_stamp_under_a_real_house_manager_derives_the_manager(
     actions: Actions,
 ) -> None:
-    """THE GHOST CLAUSE (operator ruling, thread a732e331): a seat's own stamped `house`
+    """THE GHOST CLAUSE: a seat's own stamped `house`
     equal (case-insensitive) to its own governed project's name is a leftover from before
-    houses were optional — never a real declaration. Even with BOTH anchor signals present
+    houses were optional, never a real declaration. Even with BOTH anchor signals present
     (an operator-sourced link AND an operator-sourced property), a ghost never anchors: it
     reads as empty before the comparison ever runs, so the seat derives its manager's real
     house exactly as an ordinary houseless worker would."""
@@ -3944,9 +3943,9 @@ async def test_derive_house_ghost_stamp_under_a_real_house_manager_derives_the_m
 async def test_derive_house_ghost_clause_compares_against_the_renamed_project_name(
     actions: Actions,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511): the ghost clause's own
+    """PROJECT IDENTITY DRIFT: the ghost clause's own
     "house stamp equals its governed project's name" comparison must resolve through
-    to that project's CURRENT name — a house correctly re-stamped to a renamed
+    to that project's CURRENT name. A house correctly re-stamped to a renamed
     project by resync_seat_project must still ghost-match, not anchor as a false
     boundary crossing just because charter_of's raw canonical no longer matches it."""
     from src.orchestrator.seats import derive_house
@@ -3972,8 +3971,8 @@ async def test_derive_house_none_clause_a_houseless_manager_never_anchors_a_real
     actions: Actions,
 ) -> None:
     """THE NONE CLAUSE (same ruling): a boundary needs TWO REAL, DIFFERENT houses. A worker
-    carries a genuine (non-ghost) house stamp with the operator's hand on the crossing —
-    both anchor signals present — but its manager's OWN chain derives to None (houseless
+    carries a genuine (non-ghost) house stamp with the operator's hand on the crossing, 
+    both anchor signals present, but its manager's OWN chain derives to None (houseless
     all the way up). None on the manager's side never anchors, whoever asserted the edge:
     the worker walks through to that None instead of anchoring at its own orphaned value."""
     from src.orchestrator.seats import derive_house
@@ -3998,26 +3997,26 @@ async def test_held_seat_reports_the_derived_house_not_the_stale_stamp(
     from src.orchestrator.seats import bind_holder, held_seat
 
     head = await actions.create_or_find_object("Seat", "seat:dh5head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
     a = await actions.create_or_find_object("Agent", "agent:dh5wrk01", "test")
     await actions.assert_property(a, "project", "osiris", "test", datetime.now(UTC), 0.9,
                                   evidence_class="self_declared")
-    claimed = await claim_name(actions, "agent:dh5wrk01", "Vajra", source="test")
+    claimed = await claim_name(actions, "agent:dh5wrk01", "Ember", source="test")
     worker = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
-    # a legacy stray stamp on the worker's OWN seat — must never be read now
-    await actions.assert_property(worker, "house", "vajra", "test", datetime.now(UTC), 0.9)
+    # a legacy stray stamp on the worker's OWN seat, must never be read now
+    await actions.assert_property(worker, "house", "ember", "test", datetime.now(UTC), 0.9)
     await _link_managed_by(actions, worker, head)
     await bind_holder(actions, seat_id=claimed["seat_id"], agent_id="agent:dh5wrk01")
 
     bound = await held_seat(actions.pool, "agent:dh5wrk01")
-    assert bound is not None and bound["house"] == "alfred"
+    assert bound is not None and bound["house"] == "denver"
 
 
 async def test_fleet_occupancy_reports_derived_house_per_seat(actions: Actions) -> None:
     from src.orchestrator.seats import bind_holder, ensure_seat, fleet_occupancy
 
     head = await actions.create_or_find_object("Seat", "seat:dh6head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
     worker = await ensure_seat(actions, house="stale-nonsense", handle="Tefnut6",
                                source="test")
     await _link_managed_by(actions, await actions.create_or_find_object(
@@ -4026,25 +4025,25 @@ async def test_fleet_occupancy_reports_derived_house_per_seat(actions: Actions) 
 
     rows = await fleet_occupancy(actions.pool)
     row = next(r for r in rows if r["seat_id"] == worker["seat_id"])
-    assert row["house"] == "alfred"
+    assert row["house"] == "denver"
 
 
 async def test_seat_facts_returns_all_four_keys_with_derived_house(actions: Actions) -> None:
     """The shared resolver (mintseat.py + trigger.py's own duplicate _seat_facts,
-    consolidated here) — always all four keys present, `house` derived not stored."""
+    consolidated here), always all four keys present, `house` derived not stored."""
     from src.orchestrator.seats import seat_facts
 
     head = await actions.create_or_find_object("Seat", "seat:sf1head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
     worker = await actions.create_or_find_object("Seat", "seat:sf1wrk00", "test")
-    await actions.assert_property(worker, "handle", "Vajra", "test", datetime.now(UTC), 0.9)
-    await actions.assert_property(worker, "anchor_cwd", "/home/vajra", "test",
+    await actions.assert_property(worker, "handle", "Ember", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(worker, "anchor_cwd", "/home/ember", "test",
                                   datetime.now(UTC), 0.9)
     await _link_managed_by(actions, worker, head)
 
     facts = await seat_facts(actions.pool, "seat:sf1wrk00")
-    assert facts == {"handle": "Vajra", "house": "alfred", "intended_model": None,
-                     "anchor_cwd": "/home/vajra", "tree_cwd": None}
+    assert facts == {"handle": "Ember", "house": "denver", "intended_model": None,
+                     "anchor_cwd": "/home/ember", "tree_cwd": None}
 
 
 async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None:
@@ -4055,9 +4054,9 @@ async def test_seat_facts_all_none_for_an_unknown_seat(actions: Actions) -> None
         "tree_cwd": None}
 
 
-# ═══ ANCHOR_CWD BACKFILL (task #141 shape 3, decision eda71c32) ═══════════════════════════
+# ═══ ANCHOR_CWD BACKFILL ═══════════════════════════════════════════════════════
 # A seat OCCUPIED right now with no anchor_cwd ever captured has no durable trace of its
-# office — the moment it goes cold, the location is gone from the graph entirely. This
+# office. The moment it goes cold, the location is gone from the graph entirely. This
 # stamps anchor_cwd from a live, first-hand observation while one exists, additive-only.
 
 
@@ -4069,27 +4068,27 @@ async def test_backfill_stamps_anchor_cwd_for_an_occupied_seat_with_none_on_file
         seat_facts,
     )
 
-    seat = await ensure_seat(actions, house="rotten-apple", handle="Ra", source="test")
+    seat = await ensure_seat(actions, house="rotten-apple", handle="Nomad", source="test")
     await actions.create_or_find_object("Agent", "agent:baraobs1", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:baraobs1")
     await save_mount(actions.pool, job_dir="/jobs/baraobs1", agent_id="agent:baraobs1",
-                     project="rotten-apple", cwd="/home/asuramaya/.osiris/seats/ra",
+                     project="rotten-apple", cwd="/home/asuramaya/.osiris/seats/nomad",
                      model="claude-sonnet-5", session_key=None)
 
     out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
-    assert out["stamped"].get(seat["seat_id"]) == "/home/asuramaya/.osiris/seats/ra"
+    assert out["stamped"].get(seat["seat_id"]) == "/home/asuramaya/.osiris/seats/nomad"
     assert seat["seat_id"] not in out["skipped_has_anchor"]
     assert seat["seat_id"] not in out["skipped_not_occupied"]
     assert seat["seat_id"] not in out["skipped_ambiguous"]
 
     facts = await seat_facts(actions.pool, seat["seat_id"])
-    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/ra"
+    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/nomad"
     row = await actions.pool.fetchrow(
         "SELECT a.evidence_class FROM current_assertions a JOIN objects o "
         "ON o.id=a.object_id WHERE o.canonical=$1 AND a.name='anchor_cwd'", seat["seat_id"])
     assert row["evidence_class"] == "direct_observation"  # an OBSERVATION, never a declaration
 
-    # idempotent-safe: a second run must not re-stamp or error — the seat now HAS an anchor
+    # idempotent-safe: a second run must not re-stamp or error, the seat now HAS an anchor
     out2 = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
     assert seat["seat_id"] not in out2["stamped"]
     assert seat["seat_id"] in out2["skipped_has_anchor"]
@@ -4097,27 +4096,27 @@ async def test_backfill_stamps_anchor_cwd_for_an_occupied_seat_with_none_on_file
 
 async def test_backfill_never_overwrites_an_existing_anchor_cwd(actions: Actions) -> None:
     """The one absolute law: a seat that already has an answer, even a stale one, is this
-    function's business only to skip — never to arbitrate or correct."""
+    function's business only to skip, never to arbitrate or correct."""
     from src.orchestrator.seats import (
         backfill_anchor_cwd_from_live_observation,
         seat_facts,
     )
 
-    seat = await ensure_seat(actions, house="alfred", handle="William", source="test")
+    seat = await ensure_seat(actions, house="denver", handle="Perrin", source="test")
     await actions.assert_property((await actions.create_or_find_object(
         "Seat", seat["seat_id"], "test")), "anchor_cwd",
-        "/home/asuramaya/.osiris/seats/tjmax", "test", datetime.now(UTC), 0.9)
+        "/home/asuramaya/.osiris/seats/lumen", "test", datetime.now(UTC), 0.9)
     await actions.create_or_find_object("Agent", "agent:barwm0001", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:barwm0001")
     await save_mount(actions.pool, job_dir="/jobs/barwm0001", agent_id="agent:barwm0001",
-                     project="alfred", cwd="/somewhere/else/entirely",
+                     project="denver", cwd="/somewhere/else/entirely",
                      model="claude-sonnet-5", session_key=None)
 
     out = await backfill_anchor_cwd_from_live_observation(actions, actor="test")
     assert seat["seat_id"] not in out["stamped"]
     assert seat["seat_id"] in out["skipped_has_anchor"]
     facts = await seat_facts(actions.pool, seat["seat_id"])
-    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/tjmax"  # untouched
+    assert facts["anchor_cwd"] == "/home/asuramaya/.osiris/seats/lumen"  # untouched
 
 
 async def test_backfill_skips_a_seat_that_is_not_occupied(actions: Actions) -> None:
@@ -4138,15 +4137,15 @@ async def test_backfill_skips_a_seat_that_is_not_occupied(actions: Actions) -> N
 async def test_backfill_writes_nothing_when_the_live_holder_is_ambiguous(
     actions: Actions,
 ) -> None:
-    """More than one DISTINCT fresh cwd for the same holder — two concurrent sessions
-    disagreeing — is not this function's call to arbitrate: a missing value is
+    """More than one DISTINCT fresh cwd for the same holder, two concurrent sessions
+    disagreeing, is not this function's call to arbitrate: a missing value is
     recoverable, a wrong one is not."""
     from src.orchestrator.seats import (
         backfill_anchor_cwd_from_live_observation,
         seat_facts,
     )
 
-    seat = await ensure_seat(actions, house="dealer-to-fb", handle="Marquee", source="test")
+    seat = await ensure_seat(actions, house="dealer-to-fb", handle="Canopy", source="test")
     await actions.create_or_find_object("Agent", "agent:bamqamb1", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:bamqamb1")
     await save_mount(actions.pool, job_dir="/jobs/bamqamb1", agent_id="agent:bamqamb1",
@@ -4164,10 +4163,10 @@ async def test_backfill_writes_nothing_when_the_live_holder_is_ambiguous(
 
 
 async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Actions) -> None:
-    """THE OPERATOR'S OWN SIGHTING (decision 105f3425): 'Ferryman said [OS] instead of
-    [HE]'. seat_facts (the shared resolver launch()'s window tag is built from) must
+    """A live sighting: the window tag showed [OS] instead of
+    [HE] for Courier. seat_facts (the shared resolver launch()'s window tag is built from) must
     report the anchored seat's OWN house, not its osiris manager's, and _house_tag must
-    render it correctly — the full path the operator actually looks at, proven together
+    render it correctly. This proves the full path a reader actually looks at, together,
     rather than trusting derive_house's own fix in isolation."""
     from src.orchestrator.seats import seat_facts
     from src.orchestrator.trigger import _house_tag
@@ -4175,23 +4174,23 @@ async def test_the_window_tag_renders_an_anchored_seat_s_true_house(actions: Act
     manager = await actions.create_or_find_object("Seat", "seat:wt1mgr00", "test")
     await actions.assert_property(manager, "house", "osiris", "test", datetime.now(UTC), 0.9)
     worker = await actions.create_or_find_object("Seat", "seat:wt1worker", "test")
-    await actions.assert_property(worker, "handle", "Ferryman", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(worker, "handle", "Courier", "test", datetime.now(UTC), 0.9)
     await actions.assert_property(worker, "house", "hector-vector", "agent:old-mint",
                                   datetime.now(UTC), 0.9)
     await _link_managed_by(actions, worker, manager, source="operator")
 
     facts = await seat_facts(actions.pool, "seat:wt1worker")
     assert facts["house"] == "hector-vector"
-    assert await _house_tag(actions.pool, facts["house"]) == "HE"  # not "OS" — the bug the
+    assert await _house_tag(actions.pool, facts["house"]) == "HE"  # not "OS", the bug the
     # operator caught live
 
 
 async def test_explicit_window_tag_overrides_the_derived_default(actions: Actions) -> None:
     """THE GAP window-tag-gets-an-owner CLOSES: a persisted `window_tag` assertion on the
     SoftwareProject a house/project name resolves to (via `set_project_window_tag`) must
-    win over `_house_tag`'s own first-two-letters derivation — the operator's own declared
-    "MH" for monsterhouse, instead of the auto-derived "MO" (decision 26f4f825's own
-    specimen: [MH] Chowder vs the expected-by-derivation [MO] Chowder)."""
+    win over `_house_tag`'s own first-two-letters derivation. This declares
+    "MH" for monsterhouse, instead of the auto-derived "MO" (a live
+    specimen: [MH] Harlow vs the expected-by-derivation [MO] Harlow)."""
     from src.orchestrator.projects import set_project_window_tag
     from src.orchestrator.trigger import _house_tag, _window_name
 
@@ -4209,12 +4208,12 @@ async def test_explicit_window_tag_overrides_the_derived_default(actions: Action
 
     # AFTER: the explicit assertion wins, never the derived "MO"
     assert await _house_tag(actions.pool, "monsterhouse") == "MH"
-    assert await _window_name(actions.pool, "monsterhouse", "Chowder") == "[MH] Chowder"
+    assert await _window_name(actions.pool, "monsterhouse", "Harlow") == "[MH] Harlow"
 
 
 async def test_no_explicit_tag_leaves_derivation_unchanged(actions: Actions) -> None:
     """REGRESSION GUARD: a house/project with NO `window_tag` assertion at all renders
-    EXACTLY the pre-existing first-two-letters derivation — the persisted-override read
+    EXACTLY the pre-existing first-two-letters derivation, the persisted-override read
     must never change behavior for the overwhelming majority of houses that never declare
     one."""
     from src.orchestrator.trigger import _house_tag, _window_name
@@ -4226,11 +4225,11 @@ async def test_no_explicit_tag_leaves_derivation_unchanged(actions: Actions) -> 
         "name", "untagged-house", "test", datetime.now(UTC), 0.9)
 
     assert await _house_tag(actions.pool, "untagged-house") == "UN"
-    assert (await _window_name(actions.pool, "untagged-house", "Ferryman")
-            == "[UN] Ferryman")
+    assert (await _window_name(actions.pool, "untagged-house", "Courier")
+            == "[UN] Courier")
 
 
-# ═══ ATTENDANCE (thread 96f62338, replacing ruling d8a77f80's broken managed_by proxy) ═══
+# ═══ ATTENDANCE (replacing a broken managed_by proxy) ═══
 
 async def _attended_value(actions: Actions, seat_id: str) -> str | None:
     return await actions.pool.fetchval(
@@ -4249,7 +4248,7 @@ async def test_set_seat_attended_stamps_and_is_read_back(actions: Actions) -> No
     assert out == {"seat": seat, "attended": "human", "because": "this seat is operator-fronted"}
     assert await _attended_value(actions, seat) == "human"
 
-    # a later stamp reversing it supersedes cleanly — one current value, not a pile-up
+    # a later stamp reversing it supersedes cleanly, one current value, not a pile-up
     await set_seat_attended(actions, seat_id=seat, attended="worker", actor="operator",
                             because="handed off to full automation")
     assert await _attended_value(actions, seat) == "worker"
@@ -4301,11 +4300,11 @@ async def test_set_seat_attended_refuses_a_retired_seat(actions: Actions) -> Non
 
 
 async def test_set_seat_attended_refuses_a_non_manager_non_operator(actions: Actions) -> None:
-    """NEGATIVE CONTROL (census a5e53ed8/3f97f9c7, fixed 2026-08-02): this docstring
+    """NEGATIVE CONTROL (fixed 2026-08-02): this docstring
     claimed "OPERATOR-APPROVED TO CHANGE" for weeks while any mounted caller could stamp
-    any seat's attendance signal — confirmed against pre-fix code (see every OTHER test
+    any seat's attendance signal, confirmed against pre-fix code (see every OTHER test
     in this section, all of which had to be updated to actor="operator" to keep passing,
-    since none of them were testing authority before — there was none to test)."""
+    since none of them were testing authority before, there was none to test)."""
     from src.orchestrator.seats import attach_seat, bind_holder, set_seat_attended
 
     manager = (await ensure_seat(actions, house="demo", handle="AttendMgr",
@@ -4338,7 +4337,7 @@ async def test_set_seat_attended_allows_the_target_seats_own_manager(actions: Ac
     assert await _attended_value(actions, worker) == "human"
 
 
-# ═══ RENAME_SEAT (operator-ordered, 2026-07-28 — the casing-drift build) ═══
+# ═══ RENAME_SEAT (operator-ordered, 2026-07-28, the casing-drift build) ═══
 
 async def _handle_of(actions: Actions, canonical: str) -> str | None:
     return await actions.pool.fetchval(
@@ -4350,23 +4349,23 @@ async def _handle_of(actions: Actions, canonical: str) -> str | None:
 async def test_rename_seat_stamps_seat_and_its_current_holder(actions: Actions) -> None:
     from src.orchestrator.seats import bind_holder, rename_seat
 
-    seat = (await ensure_seat(actions, house="demo", handle="tjmax", source="test"))["seat_id"]
+    seat = (await ensure_seat(actions, house="demo", handle="lumen", source="test"))["seat_id"]
     await bind_holder(actions, seat_id=seat, agent_id="agent:tjholder", source="test")
     await actions.assert_property(
         await actions.create_or_find_object("Agent", "agent:tjholder", "test"),
-        "handle", "TJMAX", "agent:tjholder", datetime.now(UTC), 0.9, evidence_class="self_declared")
+        "handle", "LUMEN", "agent:tjholder", datetime.now(UTC), 0.9, evidence_class="self_declared")
 
-    out = await rename_seat(actions, seat_id=seat, new_handle="William", actor="operator",
-                            because="after William Shockley, replacing a linux-function name")
-    assert out["seat"] == seat and out["old_handle"] == "tjmax" and out["new_handle"] == "William"
+    out = await rename_seat(actions, seat_id=seat, new_handle="Perrin", actor="operator",
+                            because="after Perrin Shockley, replacing a linux-function name")
+    assert out["seat"] == seat and out["old_handle"] == "lumen" and out["new_handle"] == "Perrin"
     assert out["holder_stamped"] == "agent:tjholder"
     assert "harness" in out["note"] and "next spawn" in out["note"]
-    assert await _handle_of(actions, seat) == "William"
-    assert await _handle_of(actions, "agent:tjholder") == "William"
-    # old handle stays in history — never deleted, just superseded
+    assert await _handle_of(actions, seat) == "Perrin"
+    assert await _handle_of(actions, "agent:tjholder") == "Perrin"
+    # old handle stays in history, never deleted, just superseded
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM assertions a JOIN objects o ON o.id=a.object_id "
-        "WHERE o.canonical=$1 AND a.name='handle' AND a.value #>> '{}' = 'tjmax'", seat) == 1
+        "WHERE o.canonical=$1 AND a.name='handle' AND a.value #>> '{}' = 'lumen'", seat) == 1
 
 
 async def test_rename_seat_on_a_vacant_seat_only_stamps_the_seat(actions: Actions) -> None:
@@ -4382,13 +4381,13 @@ async def test_rename_seat_on_a_vacant_seat_only_stamps_the_seat(actions: Action
 async def test_rename_seat_refuses_a_name_another_seat_already_carries(
     actions: Actions,
 ) -> None:
-    """The exact drift lesson: 'vajra' and 'Vajra' must never both be claimable."""
+    """The exact drift lesson: 'ember' and 'Ember' must never both be claimable."""
     from src.orchestrator.seats import rename_seat
 
-    await ensure_seat(actions, house="demo", handle="Vajra", source="test")
+    await ensure_seat(actions, house="demo", handle="Ember", source="test")
     other = (await ensure_seat(actions, house="demo", handle="Renameme",
                                source="test"))["seat_id"]
-    out = await rename_seat(actions, seat_id=other, new_handle="vajra", actor="operator",
+    out = await rename_seat(actions, seat_id=other, new_handle="ember", actor="operator",
                             because="attempting a casing-only collision")
     assert "error" in out and "already claimed" in out["error"]
     assert await _handle_of(actions, other) == "Renameme"
@@ -4428,9 +4427,9 @@ async def test_rename_seat_refuses_an_unknown_seat(actions: Actions) -> None:
 
 
 async def test_rename_seat_refuses_a_non_manager_non_operator(actions: Actions) -> None:
-    """NEGATIVE CONTROL (census a5e53ed8/3f97f9c7, fixed 2026-08-02): this docstring
+    """NEGATIVE CONTROL (fixed 2026-08-02): this docstring
     claimed "manager/operator-invoked, no self-service" for weeks while any mounted
-    caller could rename any active seat — confirmed against pre-fix code (a stranger's
+    caller could rename any active seat, confirmed against pre-fix code (a stranger's
     actor="test" call renamed the seat cleanly before this gate existed, see every OTHER
     test in this section, all of which had to be updated to actor="operator" to keep
     passing). Mirrors charter_for's own refusal shape exactly."""
@@ -4470,8 +4469,8 @@ async def test_rename_seat_self_authorizes_an_unmanaged_seats_own_holder(
     actions: Actions,
 ) -> None:
     """SELF-MANAGED SEATS SELF-AUTHORIZE (operator ruling 2026-09-09, decision
-    1bad18ad08b7, the henry specimen): a seat with no manager on record used to have no
-    legal actor at all for its own rename — not even its own holder. Mirrors
+    1bad18ad08b7, the arlo specimen): a seat with no manager on record used to have no
+    legal actor at all for its own rename, not even its own holder. Mirrors
     bind_seat_tree's own carve-out (test_bind_seat_tree_self_authorizes_an_unmanaged_
     seats_own_holder) exactly."""
     from src.orchestrator.seats import bind_holder, ensure_seat, rename_seat
@@ -4493,7 +4492,7 @@ async def test_rename_seat_self_authorizes_an_unmanaged_seats_own_holder(
 async def test_rename_seat_still_refuses_a_managed_seats_holder_bypassing_its_manager(
     actions: Actions,
 ) -> None:
-    """Self-authorization is scoped to the UNMANAGED case only — a managed seat's own
+    """Self-authorization is scoped to the UNMANAGED case only, a managed seat's own
     holder must still go through its manager (or the operator), same law bind_seat_tree
     already enforces."""
     from src.orchestrator.seats import attach_seat, bind_holder, ensure_seat, rename_seat
@@ -4513,12 +4512,12 @@ async def test_rename_seat_still_refuses_a_managed_seats_holder_bypassing_its_ma
     assert await _handle_of(actions, worker) == "RenameWkr3"
 
 
-# ═══ bind_seat_tree (task #103's re-scope, ff3bdc37, Thoth DM 2794 sign-off) ═══
+# ═══ bind_seat_tree (a re-scope, Castellan sign-off) ═══
 
 async def test_bind_seat_tree_records_a_distinct_property_from_anchor_cwd(
     actions: Actions,
 ) -> None:
-    """The office (identity) and the tree (code) are TWO properties, not one — binding a
+    """The office (identity) and the tree (code) are TWO properties, not one, binding a
     tree must never touch anchor_cwd."""
     from src.orchestrator.seats import bind_seat_tree, seat_facts
 
@@ -4552,10 +4551,10 @@ async def test_bind_seat_tree_rebinding_reports_the_old_value(actions: Actions) 
 async def test_bind_seat_tree_supersedes_a_different_sources_prior_tree(
     actions: Actions,
 ) -> None:
-    """THE SEAT TREE FABRICATION FIX (Thoth mail 11759, live specimen: seat:7740974b/
-    dustin carried BOTH a fabricated 'console'-sourced tree_cwd and nebbercracker's own
-    later, correct one, simultaneously current — plain assert_property's own same-
-    source-only supersession let the correction silently coexist instead of winning).
+    """THE SEAT TREE FABRICATION FIX, live specimen: seat:7740974b/
+    tarek carried BOTH a fabricated 'console'-sourced tree_cwd and holloway's own
+    later, correct one, simultaneously current. Plain assert_property's own same-
+    source-only supersession let the correction silently coexist instead of winning.
     A rebind from a DIFFERENT actor than the one who wrote the prior value must still
     collapse to exactly one current tree_cwd, never two contradicting rows."""
     from src.orchestrator.seats import bind_seat_tree
@@ -4608,7 +4607,7 @@ async def test_bind_seat_tree_refuses_an_unknown_seat(actions: Actions) -> None:
 
 async def test_bind_seat_tree_refuses_a_non_manager_non_operator(actions: Actions) -> None:
     """THE NEGATIVE CONTROL (2026-08-02): before this gate existed, ANY mounted caller
-    could rebind ANY seat's tree_cwd — a code-execution vector at the seat's next launch,
+    could rebind ANY seat's tree_cwd, a code-execution vector at the seat's next launch,
     not a metadata drift. This is the specimen that proves the gate now actually fires."""
     from src.orchestrator.seats import bind_seat_tree
 
@@ -4639,10 +4638,10 @@ async def test_bind_seat_tree_allows_the_target_seats_own_manager(actions: Actio
 async def test_bind_seat_tree_self_authorizes_an_unmanaged_seats_own_holder(
     actions: Actions,
 ) -> None:
-    """THE DECKARD SPECIMEN (thread ae93d2e1, Deckard msg 7719 item 3): an UNMANAGED seat
-    had no legal actor at all for its own tree, not even its own holder — seat:51da7e71
+    """THE MASON SPECIMEN: an UNMANAGED seat
+    had no legal actor at all for its own tree, not even its own holder, seat:51da7e71
     stranded on a dead on_disk_path with nobody able to correct it. A holder acting on its
-    OWN seat, with no manager to defer to, is now let through — and the receipt confesses
+    OWN seat, with no manager to defer to, is now let through, and the receipt confesses
     it rather than reading identically to a manager-approved write."""
     from src.orchestrator.seats import bind_holder, bind_seat_tree, ensure_seat
 
@@ -4661,7 +4660,7 @@ async def test_bind_seat_tree_self_authorizes_an_unmanaged_seats_own_holder(
 async def test_bind_seat_tree_still_refuses_a_managed_seats_holder_bypassing_its_manager(
     actions: Actions,
 ) -> None:
-    """Self-authorization is scoped to the UNMANAGED case only — a managed seat's own
+    """Self-authorization is scoped to the UNMANAGED case only, a managed seat's own
     holder must still go through its manager (or the operator), same as before. Widening
     self-authorization to every seat would let a compromised or careless holder bypass a
     real manager gate that exists precisely to catch a hostile tree_cwd rebind."""
@@ -4680,7 +4679,7 @@ async def test_bind_seat_tree_still_refuses_a_managed_seats_holder_bypassing_its
     assert "not authorized to bind" in out["error"]
 
 
-# --- sweep_seat_trees (Thoth mail 11759, operator-flagged via Nebbercracker DM 11747) ------
+# --- sweep_seat_trees ------
 
 async def test_sweep_seat_trees_repairs_a_fabricated_tree_on_apply(
     actions: Actions, tmp_path: Path,
@@ -4722,9 +4721,9 @@ async def test_sweep_seat_trees_repairs_a_fabricated_tree_on_apply(
 async def test_sweep_seat_trees_repo_label_reflects_a_rename(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511): governed_trees' own repo
-    label feeds the receipt/audit text, never a graph write of its own -- but a stale
-    canonical-derived label there is exactly the confusion this ruling exists to end.
+    """PROJECT IDENTITY DRIFT: governed_trees' own repo
+    label feeds the receipt/audit text, never a graph write of its own, but a stale
+    canonical-derived label there is exactly the confusion this rule exists to end.
     The entry's own `repo` must read the project's CURRENT name."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import sweep_seat_trees
@@ -4750,7 +4749,7 @@ async def test_sweep_seat_trees_repo_label_reflects_a_rename(
 async def test_sweep_seat_trees_reports_a_seat_with_zero_current_rows_without_crashing(
     actions: Actions,
 ) -> None:
-    """Thoth mail 11961, live regression from w331: a seat with NO tree_cwd assertion
+    """A live regression: a seat with NO tree_cwd assertion
     at all (an unfixed no-charter seat from an earlier sweep, or one never bound)
     crashed the collapse-pass read with IndexError on `tree_cwds[0]` -- the empty-
     list case was never in the original two-row/one-row split."""
@@ -4804,9 +4803,9 @@ async def test_sweep_seat_trees_skips_a_seat_with_a_real_tree_already(
 async def test_sweep_seat_trees_collapses_a_real_row_stuck_beside_a_fabricated_one(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth mail 11844: the LIMIT-1 read used to skip a seat whenever its real row
+    """The LIMIT-1 read used to skip a seat whenever its real row
     happened to win the read, leaving a fabricated sibling row current forever
-    (dustin/chowder's own live specimen)."""
+    (tarek/harlow's own live specimen)."""
     from src.orchestrator.seats import sweep_seat_trees
 
     real_tree = tmp_path / "real-beside-fabricated"
@@ -4843,8 +4842,8 @@ async def test_sweep_seat_trees_collapses_a_real_row_stuck_beside_a_fabricated_o
 async def test_sweep_seat_trees_collapses_a_same_value_duplicate(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """jenny's own specimen (Thoth mail 11844): two current rows asserting the SAME
-    real value from different sources — still two rows to collapse to one."""
+    """A live specimen: two current rows asserting the SAME
+    real value from different sources, still two rows to collapse to one."""
     from src.orchestrator.seats import sweep_seat_trees
 
     real_tree = tmp_path / "same-value-duplicate"
@@ -4871,11 +4870,11 @@ async def test_sweep_seat_trees_collapses_a_same_value_duplicate(
     assert rows[0]["v"] == str(real_tree)
 
 
-# ═══ SEAT LIFECYCLE (ruling ff6148b0's completion, decision 87953278, thread cb374585) ═══
+# ═══ SEAT LIFECYCLE ═══
 
 
 async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) -> None:
-    """The motivating case: Alfred (a head, no managed_by out) corrects bytebye -> alfred
+    """The motivating case: Denver (a head, no managed_by out) corrects bytebye -> denver
     on himself. A delegate re-derives the new value immediately."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import correct_house, derive_house
@@ -4883,25 +4882,25 @@ async def test_correct_house_lets_a_head_fix_its_own_anchor(actions: Actions) ->
     head = await actions.create_or_find_object("Agent", "agent:ch1alfrd", "test")
     await actions.assert_property(head, "project", "bytebye", "test", datetime.now(UTC), 0.9,
                                   evidence_class="self_declared")
-    claimed = await claim_name(actions, "agent:ch1alfrd", "Alfred", source="test")
+    claimed = await claim_name(actions, "agent:ch1alfrd", "Denver", source="test")
     assert claimed.get("error") is None
 
-    out = await correct_house(actions, "agent:ch1alfrd", "alfred", source="test")
-    assert out == {"seat_id": claimed["seat_id"], "house": "alfred", "was": "bytebye",
+    out = await correct_house(actions, "agent:ch1alfrd", "denver", source="test")
+    assert out == {"seat_id": claimed["seat_id"], "house": "denver", "was": "bytebye",
                    "already_correct": False, "still_contradicted": []}
-    assert await derive_house(actions.pool, claimed["seat_id"]) == "alfred"
+    assert await derive_house(actions.pool, claimed["seat_id"]) == "denver"
 
 
 async def test_correct_house_names_when_it_corrected_nothing(actions: Actions) -> None:
-    """The fourth 42176e16 specimen, Alfred's own catch: a call whose `new_house` already
-    matches `was` still writes (harmless, append-only) but corrects nothing — `was`
+    """A fourth specimen, Denver's own catch: a call whose `new_house` already
+    matches `was` still writes (harmless, append-only) but corrects nothing. `was`
     alone reads identically to a real correction. `already_correct` says so plainly.
 
-    UPDATED FOR fe8ec7ff mechanism 3a (self-heal at write time, ruling df646654): a stale,
-    outvoted contradicting value from a different source no longer survives a correction —
+    UPDATED FOR self-heal at write time: a stale,
+    outvoted contradicting value from a different source no longer survives a correction.
     correct_house now heals it in the same call, so `still_contradicted` reads empty right
     after the write instead of naming a row a human would once have had to invalidate by
-    hand (decision 7a46db36's own gap, closed here)."""
+    hand (an earlier gap, closed here)."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import correct_house
 
@@ -4918,14 +4917,14 @@ async def test_correct_house_names_when_it_corrected_nothing(actions: Actions) -
 
     again = await correct_house(actions, "agent:ch5alrdy", "alfred5", source="test")
     assert again["was"] == "alfred5" and again["house"] == "alfred5"
-    assert again["already_correct"] is True  # the real catch — was == house, nothing to fix
+    assert again["already_correct"] is True  # the real catch, was == house, nothing to fix
     assert again["still_contradicted"] == []  # stays healed
 
 
 async def test_correct_house_surfaces_prior_art_never_refuses_on_it(
     actions: Actions, monkeypatch,
 ) -> None:
-    """obligation e4612853's sibling (Thoth DM 3169/3185) — same guard as rename_project,
+    """A sibling case (Castellan): the same guard as rename_project,
     generalized: never blocks the write, just makes sure it isn't silently unread."""
     from src.orchestrator.agents import claim_name
     from src.orchestrator.seats import correct_house
@@ -4950,7 +4949,7 @@ async def test_correct_house_refuses_a_non_head(actions: Actions) -> None:
     from src.orchestrator.seats import correct_house
 
     head = await actions.create_or_find_object("Seat", "seat:ch2head0", "test")
-    await actions.assert_property(head, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(head, "house", "denver", "test", datetime.now(UTC), 0.9)
     worker = await actions.create_or_find_object("Seat", "seat:ch2wrk00", "test")
     await _link_managed_by(actions, worker, head)
     await actions.create_or_find_object("Agent", "agent:ch2wrker", "test")
@@ -4977,7 +4976,7 @@ async def test_correct_house_refuses_a_caller_with_no_seat(actions: Actions) -> 
 
 
 # ═══ resync_seat_house_third_party (task #152's Seat.house repair, the third-party sibling
-# of correct_house — a rename_project that never propagates to the seat's own house) ═══
+# of correct_house, a rename_project that never propagates to the seat's own house) ═══
 
 async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions) -> None:
     from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
@@ -4987,10 +4986,10 @@ async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions
 
     out = await resync_seat_house_third_party(
         actions, "seat:rs1khepr", "cultural-infrastructure", source="test",
-        reason="task #152: repo:tony was renamed, khepri's Seat.house never followed")
+        reason="task #152: repo:tony was renamed, garnet's Seat.house never followed")
     assert out == {"written": True, "seat_id": "seat:rs1khepr",
                    "house": "cultural-infrastructure", "was": "tony",
-                   "reason": "task #152: repo:tony was renamed, khepri's Seat.house never "
+                   "reason": "task #152: repo:tony was renamed, garnet's Seat.house never "
                              "followed",
                    "still_contradicted": []}  # same source: the old value is superseded
     facts = await seat_facts(actions.pool, "seat:rs1khepr")
@@ -5000,8 +4999,8 @@ async def test_resync_seat_house_third_party_writes_a_new_value(actions: Actions
 async def test_resync_seat_house_third_party_refuses_a_nonexistent_seat(
     actions: Actions,
 ) -> None:
-    """WAVE 21 item 4 (mail 9869 ad48598f): this door used to have NO existence check at
-    all — it reached straight for create_or_find_object, so a nonexistent-seat call
+    """This path used to have NO existence check at
+    all: it reached straight for create_or_find_object, so a nonexistent-seat call
     silently MINTED a stray Seat rather than refuse. Same refusal shape as its own
     precedent-named sibling, reconcile_seat_identity_third_party."""
     from src.orchestrator.seats import resync_seat_house_third_party
@@ -5033,9 +5032,9 @@ async def test_resync_seat_house_third_party_is_a_noop_when_already_correct(
 async def test_resync_seat_house_third_party_heals_a_lingering_different_source(
     actions: Actions,
 ) -> None:
-    """UPDATED FOR fe8ec7ff mechanism 3a (self-heal at write time, ruling df646654): a
+    """UPDATED FOR self-heal at write time: a
     different source's contradicting value used to survive a real write forever, reported
-    but never invalidated — a real WRITE branch now heals it in the same call, so
+    but never invalidated, a real WRITE branch now heals it in the same call, so
     `still_contradicted` reads empty right after."""
     from src.orchestrator.seats import resync_seat_house_third_party
 
@@ -5068,8 +5067,8 @@ async def test_resync_seat_house_third_party_refuses_an_empty_reason(
 async def test_resync_seat_house_third_party_an_empty_string_unsets_like_none(
     actions: Actions,
 ) -> None:
-    """Whitespace-only normalizes to unset, same as an explicit None — an empty string is
-    itself a fabricated placeholder (decision 68fba2e4/thread 19d6bdcb7fa9), never a
+    """Whitespace-only normalizes to unset, same as an explicit None, an empty string is
+    itself a fabricated placeholder, never a
     distinct third state this function refuses on."""
     from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
 
@@ -5082,7 +5081,7 @@ async def test_resync_seat_house_third_party_an_empty_string_unsets_like_none(
     assert out["house"] is None
     facts = await seat_facts(actions.pool, "seat:rs4empty0")
     # the ESTABLISHED empty-string sentinel every derive_house reader already treats as
-    # unset (their own docstrings: "a genuinely EMPTY derived house... 'no seat yet'") —
+    # unset (their own docstrings: "a genuinely EMPTY derived house... 'no seat yet'"), 
     # not a new state, just a new door reaching it; only this function's own RECEIPT
     # normalizes to a clean None for its external contract.
     assert not facts.get("house")
@@ -5091,20 +5090,20 @@ async def test_resync_seat_house_third_party_an_empty_string_unsets_like_none(
 async def test_resync_seat_house_third_party_none_unsets_a_fabricated_house(
     actions: Actions,
 ) -> None:
-    """THE LIVE REPAIR SHAPE (decision 68fba2e4/thread 19d6bdcb7fa9): a seat whose house
-    was fabricated at mint (=handle, decision 24e0b761's own class) repairs to genuinely
+    """THE LIVE REPAIR SHAPE: a seat whose house
+    was fabricated at mint (=handle) repairs to genuinely
     unset, never a placeholder string."""
     from src.orchestrator.seats import resync_seat_house_third_party, seat_facts
 
     seat = await actions.create_or_find_object("Seat", "seat:rs6chad0", "test")
-    await actions.assert_property(seat, "house", "Chad", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "house", "Jasper", "test", datetime.now(UTC), 0.9)
 
     out = await resync_seat_house_third_party(
         actions, "seat:rs6chad0", None, source="test",
-        reason="decision 68fba2e4: Chad's house was fabricated =handle at mint, repair to "
+        reason="Jasper's house was fabricated =handle at mint, repair to "
                "genuinely unset")
-    assert out == {"written": True, "seat_id": "seat:rs6chad0", "house": None, "was": "Chad",
-                   "reason": "decision 68fba2e4: Chad's house was fabricated =handle at "
+    assert out == {"written": True, "seat_id": "seat:rs6chad0", "house": None, "was": "Jasper",
+                   "reason": "Jasper's house was fabricated =handle at "
                              "mint, repair to genuinely unset",
                    "still_contradicted": []}
     facts = await seat_facts(actions.pool, "seat:rs6chad0")
@@ -5118,7 +5117,7 @@ async def test_resync_seat_house_third_party_none_is_a_noop_when_already_unset(
 
     seat_id = "seat:rs7nohous"
     await actions.create_or_find_object("Seat", seat_id, "test")
-    # never stamped `house` at all — genuinely unset from birth
+    # never stamped `house` at all, genuinely unset from birth
 
     out = await resync_seat_house_third_party(
         actions, seat_id, None, source="test", reason="x")
@@ -5126,9 +5125,9 @@ async def test_resync_seat_house_third_party_none_is_a_noop_when_already_unset(
                    "still_contradicted": []}
 
 
-# ═══ resync_seat_project (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY") ═══════════
+# ═══ resync_seat_project, implements "ONE TAXONOMY" ═══════════
 # Collapses correct_house (self-scoped) and resync_seat_house_third_party (third-party,
-# above) into one door: a seat's project is never a second, declared value — it always
+# above) into one door: a seat's project is never a second, declared value, it always
 # re-derives from the seat's own charter, so there is no value argument left to take.
 
 async def test_resync_seat_project_re_derives_from_the_charter(actions: Actions) -> None:
@@ -5152,7 +5151,7 @@ async def test_resync_seat_project_re_derives_from_the_charter(actions: Actions)
 async def test_resync_seat_project_stamps_the_renamed_name_not_the_canonical(
     actions: Actions,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511, live specimen: repo:xxit
+    """PROJECT IDENTITY DRIFT (a live specimen: repo:xxit
     renamed to 'handlingtheloop'): a governed project's canonical stays frozen at
     mint forever (rename_project's own law); this must stamp the seat's own house
     with the project's CURRENT name, never charter_of's raw canonical."""
@@ -5221,7 +5220,7 @@ async def test_resync_seat_project_collapses_a_cross_source_duplicate(
 ) -> None:
     """The exact SEAT TREE FABRICATION shape, one property over: two simultaneously-
     current `house` rows from different sources both retire to the one re-derived
-    value, cross-source (assert_singular_property, ruling 1335332e)."""
+    value, cross-source (assert_singular_property)."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.seats import resync_seat_project
 
@@ -5244,9 +5243,9 @@ async def test_resync_seat_project_collapses_a_cross_source_duplicate(
 async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
     actions: Actions,
 ) -> None:
-    """THE SAME ACCEPTANCE TEST invalidate_works_in's own wrapper carries (Thoth's ruling,
-    thread 8640a625 / decision 4001f6d1 — the gap that made John's own fix appear to take
-    effect three steps late): a live session correcting its OWN house must see orient()'s
+    """THE SAME ACCEPTANCE TEST invalidate_works_in's own wrapper carries (Castellan's ruling,
+    the gap that made Dashiell's own fix appear to take
+    effect three steps late: a live session correcting its OWN house must see orient()'s
     resolution move WITHOUT reconnecting, not just the DB row."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity, claim_name
@@ -5274,7 +5273,7 @@ async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
         out = await srv.correct_house("newhouse", ctx=ctx)
         assert out["house"] == "newhouse"
 
-        after = await srv.orient(ctx=ctx)                    # SAME ctx — no reconnect
+        after = await srv.orient(ctx=ctx)                    # SAME ctx, no reconnect
     finally:
         srv._pool = saved_pool
         srv._agents.pop(key, None)
@@ -5284,7 +5283,7 @@ async def test_correct_house_mcp_wrapper_moves_orient_without_reconnecting(
 async def test_resync_seat_house_mcp_wrapper_unsets_a_fabricated_house(
     actions: Actions,
 ) -> None:
-    """THE MISSING DOOR (decision 68fba2e4/thread 19d6bdcb7fa9): resync_seat_house_third_
+    """THE MISSING MCP PATH: resync_seat_house_third_
     party existed, unreached from MCP, until the six-seat house repair needed it. THIRD-
     PARTY like its own function, unlike correct_house: the caller need not hold the
     target seat at all."""
@@ -5292,7 +5291,7 @@ async def test_resync_seat_house_mcp_wrapper_unsets_a_fabricated_house(
     from src.orchestrator.agents import AgentIdentity
 
     seat = await actions.create_or_find_object("Seat", "seat:rswrap01", "test")
-    await actions.assert_property(seat, "house", "Chad", "test", datetime.now(UTC), 0.9)
+    await actions.assert_property(seat, "house", "Jasper", "test", datetime.now(UTC), 0.9)
 
     class _Ctx:
         class request_context:  # noqa: N801
@@ -5309,19 +5308,19 @@ async def test_resync_seat_house_mcp_wrapper_unsets_a_fabricated_house(
     srv._agents[key] = ident
     try:
         out = await srv.resync_seat_house(
-            "seat:rswrap01", None, "decision 68fba2e4: repair a fabricated house", ctx=ctx)
+            "seat:rswrap01", None, "repair a fabricated house", ctx=ctx)
     finally:
         srv._pool = saved_pool
         srv._agents.pop(key, None)
-    assert out == {"written": True, "seat_id": "seat:rswrap01", "house": None, "was": "Chad",
-                   "reason": "decision 68fba2e4: repair a fabricated house",
+    assert out == {"written": True, "seat_id": "seat:rswrap01", "house": None, "was": "Jasper",
+                   "reason": "repair a fabricated house",
                    "still_contradicted": []}
 
 
 async def test_correct_pin_value_mcp_wrapper_targets_the_callers_own_office(
     actions: Actions, tmp_path, monkeypatch,
 ) -> None:
-    """msg 4761, obligation 114f7ac9 — the MCP tool that gives `offices.correct_pin_value`
+    """The MCP tool that gives `offices.correct_pin_value`
     a reachable surface, always self-scoped to the CALLER's own office (never a path the
     caller supplies)."""
     from src import mcp_server as srv
@@ -5376,16 +5375,16 @@ async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
     actions: Actions,
 ) -> None:
     """Reproduces the exact live shape: a twin with TWO concurrent holders (the anomaly
-    itself — two sessions bound to the wrong seat) folds into the real, org-anchored seat.
+    itself, two sessions bound to the wrong seat) folds into the real, org-anchored seat.
     Both are re-pointed (named in holders_moved); they converge to ONE active holder on
-    the survivor — the NEWEST — matching bind_holder's own one-seat-one-holder law rather
+    the survivor, the NEWEST, matching bind_holder's own one-seat-one-holder law rather
     than preserving the twin's anomaly on the far side of the fold."""
     from src.orchestrator.seats import fold_seat, held_seat, manager_of_seat
 
-    alfred = await actions.create_or_find_object("Seat", "seat:fs1alfrd", "test")
-    await actions.assert_property(alfred, "house", "alfred", "test", datetime.now(UTC), 0.9)
+    denver = await actions.create_or_find_object("Seat", "seat:fs1alfrd", "test")
+    await actions.assert_property(denver, "house", "denver", "test", datetime.now(UTC), 0.9)
     real = await actions.create_or_find_object("Seat", "seat:fs1real0", "test")
-    await _link_managed_by(actions, real, alfred)
+    await _link_managed_by(actions, real, denver)
     twin = await actions.create_or_find_object("Seat", "seat:fs1twin0", "test")
     h1 = await actions.create_or_find_object("Agent", "agent:fs1hld01", "test")
     h2 = await actions.create_or_find_object("Agent", "agent:fs1hld02", "test")
@@ -5396,7 +5395,7 @@ async def test_fold_seat_moves_active_holders_and_estate_the_vajra_shape(
     await mailbox_send(actions, to_agent="seat:fs1twin0")
 
     out = await fold_seat(actions, dupe="seat:fs1twin0", into="seat:fs1real0",
-                          evidence="test: the Vajra twin shape", actor="test")
+                          evidence="test: the Ember twin shape", actor="test")
     assert set(out["holders_moved"]) == {"agent:fs1hld01", "agent:fs1hld02"}
     assert out["mail_moved"] == 1
 
@@ -5412,11 +5411,11 @@ async def test_fold_seat_survives_a_crash_between_mail_move_and_merge(
     actions: Actions,
 ) -> None:
     """Task #59's own precondition fix: fold_seat's mail leg now moves BEFORE
-    Actions.merge_objects (holders/managed_by already did) — a process death in that
+    Actions.merge_objects (holders/managed_by already did), a process death in that
     window leaves dupe.status=='active', so a retry continues rather than hitting
-    fold_seat's own "already folded — nothing to do" refusal with mail stranded on the
+    fold_seat's own "already folded, nothing to do" refusal with mail stranded on the
     dupe seat forever. Simulated by hand (mirroring fold_seat's own mail-move query) with
-    merge_objects never called, then the real verb — proving it does not refuse and that
+    merge_objects never called, then the real verb, proving it does not refuse and that
     re-moving already-moved mail is a true no-op."""
     from src.orchestrator.seats import fold_seat
 
@@ -5426,7 +5425,7 @@ async def test_fold_seat_survives_a_crash_between_mail_move_and_merge(
     await mailbox_send(actions, to_agent="seat:fs5crsh0")
 
     # THE SIMULATED CRASH: fold_seat's own mail-move query, run by hand, with
-    # merge_objects never called — the state a real crash in that window would leave.
+    # merge_objects never called, the state a real crash in that window would leave.
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         "seat:fs5real0", "seat:fs5crsh0")
@@ -5438,7 +5437,7 @@ async def test_fold_seat_survives_a_crash_between_mail_move_and_merge(
                           evidence="retry after a simulated mid-fold crash", actor="test")
 
     assert "error" not in out                # the retry completed, it did not refuse
-    assert out["mail_moved"] == 0             # already moved by the "crash" — a true no-op
+    assert out["mail_moved"] == 0             # already moved by the "crash", a true no-op
 
 
 async def mailbox_send(actions: Actions, *, to_agent: str) -> None:
@@ -5476,8 +5475,8 @@ async def test_fold_seat_refuses_an_unknown_seat(actions: Actions) -> None:
     assert "unknown seat" in out["error"] and "seat:fs4ghost" in out["error"]
 
 
-# ═══ unfold_seat (ruling 31c02dca's PARITY requirement: fold_seat had NO reversal before
-# this — a Seat fold was permanent, task #127's own named case) ═══
+# ═══ unfold_seat (a PARITY requirement: fold_seat had NO reversal before
+# this, a Seat fold was permanent) ═══
 
 
 async def test_unfold_seat_dry_run_plans_the_holder_and_managed_by_restore(
@@ -5497,7 +5496,7 @@ async def test_unfold_seat_dry_run_plans_the_holder_and_managed_by_restore(
                     evidence="test: a twin", actor="test")
 
     out = await unfold_seat(actions, dupe="seat:us1dupe0",
-                            because="wrongful fold — a real second seat",
+                            because="wrongful fold, a real second seat",
                             actor="agent:judge")
     assert out["execute"] is False
     assert out["was_merged_into"] == "seat:us1into0"
@@ -5600,7 +5599,7 @@ async def test_unfold_seat_does_not_restore_a_holder_who_moved_on_since(
 ) -> None:
     """The unfold_agent honesty model, generalized to links: a holder only gets restored
     to dupe when their CURRENT active seat is still exactly what the fold left them on. A
-    holder who has since moved to a THIRD seat is never guessed back — reported as simply
+    holder who has since moved to a THIRD seat is never guessed back, reported as simply
     not among the reversible items, the same discipline unfold_agent holds for mail it
     cannot prove was ever the dupe's own."""
     from src.orchestrator.seats import fold_seat, held_seat, unfold_seat
@@ -5615,9 +5614,9 @@ async def test_unfold_seat_does_not_restore_a_holder_who_moved_on_since(
 
     await fold_seat(actions, dupe="seat:us6dupe0", into="seat:us6into0",
                     evidence="test: a twin", actor="test")
-    # the holder moves on to a THIRD seat, unrelated to the fold — a real transfer vacates
+    # the holder moves on to a THIRD seat, unrelated to the fold, a real transfer vacates
     # the old seat first (bind_holder alone only heals a SEAT's prior holder, never an
-    # AGENT's own other seat) — nothing should stitch this back onto dupe when the fold is
+    # AGENT's own other seat), nothing should stitch this back onto dupe when the fold is
     # later reversed
     now = datetime.now(UTC)
     await actions.invalidate_link(holder, into, "holds", "test", now)
@@ -5648,7 +5647,7 @@ async def test_unfold_seat_reports_unreturnable_mail(actions: Actions) -> None:
     assert len(out["estate_unreturnable"]["mail"]) == 1
 
 
-# ═══ reconcile_seat_fold (#127, the repair path fold_seat never had — mirrors
+# ═══ reconcile_seat_fold (#127, the repair path fold_seat never had, mirrors
 # reconcile_project_fold's exact design, sharing the SAME _move_seat_estate fold_seat
 # itself calls) ═══
 
@@ -5656,7 +5655,7 @@ async def test_unfold_seat_reports_unreturnable_mail(actions: Actions) -> None:
 async def test_reconcile_seat_fold_repairs_an_orphaned_holder_from_a_partial_fold(
     actions: Actions,
 ) -> None:
-    """An OLD-style merge (a raw merge_objects call with no estate-move at all) leaves an
+    """An OLD-style merge (a raw merge_objects call with no handoff-move at all) leaves an
     active holder stranded on the now-merged dupe seat. reconcile repairs it without
     re-performing the merge."""
     from src.orchestrator.seats import held_seat, reconcile_seat_fold
@@ -5666,7 +5665,7 @@ async def test_reconcile_seat_fold_repairs_an_orphaned_holder_from_a_partial_fol
     holder = await actions.create_or_find_object("Agent", "agent:rs1hld00", "test")
     await actions.create_link(holder, dupe, "holds", "test", datetime.now(UTC), 0.9,
                               evidence_class="self_declared")
-    # simulate the OLD, estate-blind merge path directly — no fold_seat involved
+    # simulate the OLD, handoff-blind merge path directly, no fold_seat involved
     await actions.merge_objects(into, dupe, justification="old-style merge", actor="test")
     events_before = await actions.pool.fetchval(
         "SELECT count(*) FROM object_events WHERE event_type='merge'")
@@ -5682,7 +5681,7 @@ async def test_reconcile_seat_fold_repairs_an_orphaned_holder_from_a_partial_fol
         "SELECT count(*) FROM object_events WHERE event_type='merge'")
     assert events_after == events_before
     status = await actions.pool.fetchval("SELECT status FROM objects WHERE id=$1", dupe)
-    assert status == "merged"  # unchanged — still exactly one merge, ever
+    assert status == "merged"  # unchanged, still exactly one merge, ever
 
 
 async def test_reconcile_seat_fold_is_a_true_noop_on_a_healthy_fold(actions: Actions) -> None:
@@ -5710,7 +5709,7 @@ async def test_reconcile_seat_fold_is_a_true_noop_on_a_healthy_fold(actions: Act
 
 
 async def test_reconcile_seat_fold_refuses_a_still_active_dupe(actions: Actions) -> None:
-    """REFUSAL CONTROL: reconcile must never become a side door into performing a fold —
+    """REFUSAL CONTROL: reconcile must never become a side door into performing a fold, 
     an active (never-folded) dupe is fold_seat's job, not this one's."""
     from src.orchestrator.seats import reconcile_seat_fold
 
@@ -5727,7 +5726,7 @@ async def test_reconcile_seat_fold_refuses_a_still_active_dupe(actions: Actions)
 
 
 async def test_reconcile_seat_fold_refuses_to_redirect_a_merge(actions: Actions) -> None:
-    """A dupe already merged into A is not this pair's business if the caller names B —
+    """A dupe already merged into A is not this pair's business if the caller names B, 
     reconcile never guesses or redirects which merge a repair applies to."""
     from src.orchestrator.seats import fold_seat, reconcile_seat_fold
 
@@ -5774,8 +5773,8 @@ async def test_retire_seat_closes_a_vacant_seat(actions: Actions) -> None:
 
 
 async def test_retire_seat_flips_object_status_too(actions: Actions) -> None:
-    """THE STATUS GAP (Seshat msg 1686, operator-caught msg 1713): the property alone left
-    objects.status readable as 'active' forever — a fresh claim could still bind to a seat
+    """THE STATUS GAP: the property alone left
+    objects.status readable as 'active' forever, a fresh claim could still bind to a seat
     that LOOKED retired. Both layers must flip together."""
     from src.orchestrator.seats import retire_seat
 
@@ -5810,8 +5809,8 @@ async def test_retire_seat_refuses_an_unknown_seat(actions: Actions) -> None:
 
 
 async def test_retire_seat_refuses_a_peered_seat(actions: Actions) -> None:
-    """THE PEER GUARD (Khnum IX's review, msg 1774): unpeer requires BOTH seats active to
-    resolve them — nothing stopped retiring a peered seat first, stranding the bond
+    """THE PEER GUARD: unpeer requires BOTH seats active to
+    resolve them, nothing stopped retiring a peered seat first, stranding the bond
     pointing at a dead seat forever with no sanctioned verb able to heal it. unpeer first,
     same discipline as the active-holder guard."""
     from src.orchestrator.seats import peer_seats, retire_seat
@@ -5823,13 +5822,13 @@ async def test_retire_seat_refuses_a_peered_seat(actions: Actions) -> None:
 
     out = await retire_seat(actions, "seat:rs5peer0", actor="test")
     assert "peered with seat:rs5peer1" in out["error"]
-    # refused loudly — nothing written; the seat is still active and still peered
+    # refused loudly, nothing written; the seat is still active and still peered
     row = await actions.pool.fetchrow(
         "SELECT status FROM objects WHERE canonical='seat:rs5peer0'")
     assert row["status"] == "active"
 
 
-# ═══ vacate_holder (thread 445a7356) — retire_seat's stale-holder refusal is correct;
+# ═══ vacate_holder: retire_seat's stale-holder refusal is correct;
 # this is its complement, releasing a holder WITHOUT closing the seat. It trusts its
 # caller (trigger.vacate_dead_seat gathers the liveness evidence) and does the write.
 
@@ -5852,7 +5851,7 @@ async def test_vacate_holder_releases_the_active_holder(actions: Actions) -> Non
         "SELECT a.value #>> '{}' FROM objects o JOIN current_assertions a ON a.object_id=o.id "
         "AND a.name='vacated_because' WHERE o.canonical=$1", "seat:vh1dead0")
     assert because == "process confirmed dead"
-    # the seat itself is untouched — never retired, still ready for a fresh claim
+    # the seat itself is untouched, never retired, still ready for a fresh claim
     status = await actions.pool.fetchval(
         "SELECT status FROM objects WHERE canonical=$1", "seat:vh1dead0")
     assert status == "active"
@@ -5866,7 +5865,7 @@ async def test_vacate_holder_refuses_a_blank_because(actions: Actions) -> None:
                       source="test")
     out = await vacate_holder(actions, seat_id="seat:vh2blank", actor="test", because="  ")
     assert "because is required" in out["error"]
-    # nothing written — the holder is still bound
+    # nothing written, the holder is still bound
     holder = await actions.pool.fetchval(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
@@ -5892,7 +5891,7 @@ async def test_vacate_holder_refuses_an_already_vacant_seat(actions: Actions) ->
 
 
 # #172 (2026-08-18 00:08-00:23Z): pg_advisory_lock on a borrowed pool connection wedged the
-# fleet — a cancelled/wedged holder returned its connection to the pool still owning the
+# fleet, a cancelled/wedged holder returned its connection to the pool still owning the
 # lock (advisory locks are session-scoped, untouched by asyncpg's connection.reset()), and
 # the next unrelated borrower inherited it. _seat_lock/_peer_lock/mint_lock are now
 # XACT-scoped: the lock dies with the transaction, no finally required.
@@ -5914,7 +5913,7 @@ async def test_seat_lock_releases_even_when_the_holder_is_cancelled(
     with pytest.raises(asyncio.CancelledError):
         await task
 
-    # the cancelled holder's xact rolled back with it — the key is free, not still owned
+    # the cancelled holder's xact rolled back with it, the key is free, not still owned
     async with actions.pool.acquire() as conn:
         key = "seat:osiris/wedge-cancel"
         got_it = await conn.fetchval("SELECT pg_try_advisory_lock(hashtext($1))", key)
@@ -5986,7 +5985,7 @@ async def test_seat_lock_wedged_waiter_fails_loud_named(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """A holder that is genuinely still working the key (not cancelled, not dead) makes a
-    waiter fail LOUD past lock_timeout with a named error — never park silently."""
+    waiter fail LOUD past lock_timeout with a named error, never park silently."""
     monkeypatch.setattr(seats_mod, "_LOCK_TIMEOUT", "200ms")
     holder_ready = asyncio.Event()
     release = asyncio.Event()
@@ -6007,17 +6006,17 @@ async def test_seat_lock_wedged_waiter_fails_loud_named(
         await task
 
 
-# ═══ MECHANICAL SEAT MOUNT (thread dae06a32, operator 2026-09-07): a body dropped into
+# ═══ MECHANICAL SEAT MOUNT: a body dropped into
 # an existing project's own tree gets its seat mounted mechanically too, not just the
-# project — chowder's own mount row read seat_id None, dj had no seat at all. ═══════════
+# project. harlow's own mount row read seat_id None; dj had no seat at all. ═══════════
 
 async def test_tree_seat_hint_reads_the_osiris_pin_seat_line(tmp_path: Path) -> None:
     from src.orchestrator.agents import read_seat_handle
 
     cwd = tmp_path / "monsterhouse"
     cwd.mkdir()
-    (cwd / ".osiris").write_text('project = "monsterhouse"\nseat = "Chowder"\n')
-    assert read_seat_handle(str(cwd)) == "Chowder"
+    (cwd / ".osiris").write_text('project = "monsterhouse"\nseat = "Harlow"\n')
+    assert read_seat_handle(str(cwd)) == "Harlow"
 
 
 async def test_tree_seat_hint_prefers_an_already_bound_tree_cwd_over_the_pin(
@@ -6078,8 +6077,8 @@ async def test_project_coordinator_seat_none_when_nobody_governs_it(
 async def test_automount_mechanically_mounts_a_seat_declared_by_the_osiris_pin(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """chowder's own live specimen: a fresh body lands in an existing project's tree
-    carrying a `.osiris` pin naming its seat — mints under the project's coordinator,
+    """harlow's own live specimen: a fresh body lands in an existing project's tree
+    carrying a `.osiris` pin naming its seat, mints under the project's coordinator,
     binds THIS session as holder, stamps tree_cwd, all before the model's first token."""
     from datetime import UTC as _UTC
     from datetime import datetime as _dt
@@ -6098,23 +6097,23 @@ async def test_automount_mechanically_mounts_a_seat_declared_by_the_osiris_pin(
 
     cwd = tmp_path / "chowderhouse"
     cwd.mkdir()
-    (cwd / ".osiris").write_text('project = "chowderhouse"\nseat = "Chowder"\n')
+    (cwd / ".osiris").write_text('project = "chowderhouse"\nseat = "Harlow"\n')
 
     out = await automount(actions, session_id="chowdersession01", cwd=str(cwd),
                           actor="test", root=tmp_path)
 
-    assert out["mechanical_seat_mount"]["handle"] == "Chowder"
+    assert out["mechanical_seat_mount"]["handle"] == "Harlow"
     assert out["mechanical_seat_mount"]["minted"] is True
-    chowder_seat = await find_seat(actions.pool, house="chowderhouse", handle="Chowder")
+    chowder_seat = await find_seat(actions.pool, house="chowderhouse", handle="Harlow")
     assert chowder_seat is not None
     held = await held_seat(actions.pool, out["agent"])
-    assert held is not None and held["handle"] == "Chowder"
+    assert held is not None and held["handle"] == "Harlow"
 
 
 async def test_automount_never_mints_a_seat_for_a_bare_checkout(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No pin line, no bound tree_cwd — the ordinary project-only mount, untouched."""
+    """No pin line, no bound tree_cwd, the ordinary project-only mount, untouched."""
     cwd = tmp_path / "barecheckout"
     cwd.mkdir()
     (cwd / ".osiris").write_text('project = "barecheckout"\n')
@@ -6148,14 +6147,14 @@ async def test_mint_lock_wedged_waiter_fails_loud_named(
         await task
 
 
-# ═══ pause_seat_or_agent (thread fba386dc item 5) — extracted from the MCP dispatcher's ═══
-# own inlined seat(action='pause') branch so a console/CLI door can wire it directly.
+# ═══ pause_seat_or_agent, extracted from the MCP dispatcher's ═══
+# own inlined seat(action='pause') branch so a console/CLI entry point can wire it directly.
 
 async def test_pause_seat_or_agent_is_directly_callable_outside_the_mcp_dispatcher(
     actions: Actions,
 ) -> None:
     """The whole point of the extraction: the resolve+write logic is a standalone function
-    in seats.py, callable with nothing but an Actions and a target string — no MCP Context,
+    in seats.py, callable with nothing but an Actions and a target string, no MCP Context,
     no dispatcher plumbing. Proves both the pause and the release, plus the queued-DM
     count and the receipt shape the MCP tool's own callers already depend on."""
     seat_id = (await ensure_seat(actions, house="test", handle="PauseExtract",
@@ -6183,7 +6182,7 @@ async def test_pause_seat_or_agent_is_directly_callable_outside_the_mcp_dispatch
 async def test_pause_seat_or_agent_refuses_an_ineligible_bare_name(
     actions: Actions,
 ) -> None:
-    """The same refusal `seat_holder_ineligible` names for send_message — a plain-name
+    """The same refusal `seat_holder_ineligible` names for send_message, a plain-name
     target whose only holder is retired/false_mint must never fall through to a dead
     generation, extraction or not."""
     seat_id = (await ensure_seat(actions, house="test", handle="PauseGhostExtract",

@@ -1,4 +1,4 @@
-"""The promoted offload-ritual boxes (ruling c5b184cd) — shared by the Stop hook and the
+"""The promoted offload-ritual boxes, shared by the Stop hook and the
 /settle MCP tool, so the two never drift into disagreeing copies."""
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 def test_standing_orders_touched_absent_file_cannot_be_evaluated(tmp_path: Path) -> None:
-    """No charter.md here at all — a repo cwd, not an office — fails open, never punished."""
+    """No charter.md here at all, a repo cwd rather than an office, fails open, never punished."""
     assert standing_orders_touched(str(tmp_path), datetime.now(UTC)) is None
 
 
@@ -49,7 +49,7 @@ async def test_standing_orders_status_none_for_an_ordinary_session_untouched(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A repo cwd with no charter.md and no charter()/practice()/unchanged-confirmation
-    this session — the ordinary, non-office common case — still fails open (None), never
+    this session, the ordinary, non-office common case, still fails open (None), never
     collapsed into False just because the three graph signals are always evaluable."""
     agent = "agent:standing01"
     await actions.create_or_find_object("Agent", agent, agent)
@@ -73,9 +73,9 @@ async def test_standing_orders_status_true_from_the_file_mtime_alone(
 async def test_standing_orders_status_true_from_charter_for_this_session(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE SEAT-OFFICE SPECIMEN (thread 8686cba4): a seat-office body whose charter.md
+    """A seat-office body whose charter.md
     never happens to change can still close this box by declaring/amending its own
-    governs edge THIS session — a real signal `standing_orders_touched` alone could never
+    governs edge THIS session, a real signal `standing_orders_touched` alone could never
     see. Keyed on `actor` (the mind that typed it), not `source_id` (set_charter stamps
     that as the SEAT, deliberately, so two generations of one lineage read as one source)."""
     from src.orchestrator.charter import set_charter
@@ -88,7 +88,7 @@ async def test_standing_orders_status_true_from_charter_for_this_session(
     mounted_at = datetime.now(UTC)
     assert await standing_orders_status(
         actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
-    ) is None  # nothing yet — still an ordinary, unevaluated case
+    ) is None  # nothing yet, still an ordinary, unevaluated case
     await set_charter(actions, seat_id, ["standingdemo"], actor=agent)
     assert await standing_orders_status(
         actions.pool, agent_id=agent, mounted_at=mounted_at, cwd=str(tmp_path)
@@ -99,7 +99,7 @@ async def test_standing_orders_status_never_credited_to_a_different_actor(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A charter declared by SOMEONE ELSE'S hand (a manager's charter_for, or a stale
-    fixture) must never close THIS session's own box — `actor` is who typed it, not
+    fixture) must never close THIS session's own box, `actor` is who typed it, not
     who the edge is about."""
     from src.orchestrator.charter import set_charter
 
@@ -132,7 +132,7 @@ async def test_standing_orders_status_true_from_an_explicit_unchanged_confirmati
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The FIFTH shape: settle(standing_orders='unchanged', because=...) records a real
-    property this function reads back directly — never a silent pass."""
+    property this function reads back directly, never a silent pass."""
     agent = "agent:standing06"
     a = await actions.create_or_find_object("Agent", agent, agent)
     mounted_at = datetime.now(UTC)
@@ -147,9 +147,9 @@ async def test_standing_orders_status_true_from_an_explicit_unchanged_confirmati
 async def test_settle_tool_standing_orders_unchanged_closes_the_box_honestly(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """END TO END (thread 8686cba4): a seat-office body whose charter.md genuinely never
+    """END TO END: a seat-office body whose charter.md genuinely never
     changed this session declares so explicitly, and the SAME box the file-mtime check
-    feeds reads True off it — never a silent pass, a real recorded property."""
+    feeds reads True off it, never a silent pass, a real recorded property."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
@@ -178,7 +178,7 @@ async def test_settle_tool_standing_orders_unchanged_closes_the_box_honestly(
         rejected_out = await srv.settle(ctx=ctx, standing_orders="unchanged")
         assert any(r.get("kind") == "standing_orders" for r in rejected_out["rejected"])
         # no because given -> nothing was written, so the box is still whatever it was
-        # before (None here — an ordinary cwd with no charter.md), never silently False
+        # before (None here, an ordinary cwd with no charter.md), never silently False
         assert rejected_out["boxes"]["standing orders touched this session"] is None
 
         out = await srv.settle(
@@ -196,7 +196,7 @@ async def test_settle_tool_standing_orders_unchanged_closes_the_box_honestly(
 
 
 async def test_seat_chartered_none_seat_id_cannot_be_evaluated(actions: Actions) -> None:
-    """RULING 205668ec's declaration half: no seat, no charter to hold — fails open, same
+    """The declaration half: no seat, no charter to hold, fails open, same
     convention every box in this module follows."""
     assert await seat_chartered(actions.pool, None) is None
 
@@ -205,7 +205,7 @@ async def test_seat_chartered_reads_the_governs_edge_independent_of_the_file(
     actions: Actions,
 ) -> None:
     """The whole point of the split: this asks the DECLARATION question, never the file
-    question — a seat can be chartered with a stale/absent charter.md, or hold a
+    question, a seat can be chartered with a stale/absent charter.md, or hold a
     freshly-touched charter.md while genuinely ungoverned. Verified against set_charter's
     own governs edge, not a second hand-rolled write."""
     from src.orchestrator.charter import set_charter
@@ -219,7 +219,7 @@ async def test_seat_chartered_reads_the_governs_edge_independent_of_the_file(
 
 
 def test_missing_boxes_only_names_explicit_false() -> None:
-    """None (fog-of-war, unevaluable) and True (satisfied) never count as missing —
+    """None (fog-of-war, unevaluable) and True (satisfied) never count as missing,
     only an explicit False does."""
     assert missing_boxes({"a": True, "b": False, "c": None, "d": False}) == ["b", "d"]
     assert missing_boxes({"a": True, "b": None}) == []
@@ -228,8 +228,8 @@ def test_missing_boxes_only_names_explicit_false() -> None:
 
 def test_unevaluated_boxes_only_names_explicit_none(
 ) -> None:
-    """Thoth DM 3076, defect 1(b): None (could not evaluate) is a DIFFERENT state from
-    missing (False) and satisfied (True), and must be its own visible list — the exact
+    """Defect 1(b): None (could not evaluate) is a DIFFERENT state from
+    missing (False) and satisfied (True), and must be its own visible list, the exact
     distinction standing_orders_touched's own #128 masking collapsed away."""
     assert unevaluated_boxes({"a": True, "b": False, "c": None, "d": None}) == ["c", "d"]
     assert unevaluated_boxes({"a": True, "b": False}) == []
@@ -244,7 +244,7 @@ async def test_uncommitted_git_work_none_cwd_cannot_be_evaluated() -> None:
 
 
 async def test_uncommitted_git_work_a_non_repo_dir_cannot_be_evaluated(tmp_path: Path) -> None:
-    """The common, innocent case: a seat-office cwd, or any ordinary non-repo directory —
+    """The common, innocent case: a seat-office cwd, or any ordinary non-repo directory,
     fails open, same as standing_orders_touched on a missing file."""
     assert await uncommitted_git_work(str(tmp_path)) is None
 
@@ -264,7 +264,7 @@ async def test_uncommitted_git_work_names_the_dirty_files(tmp_path: Path) -> Non
     assert out is not None and any("untracked.txt" in line for line in out)
 
 
-# --- resolve_dirty_tree_owner (thread fe1d91bc, Thoth dispatch 9870/9976/10000) -----------
+# --- resolve_dirty_tree_owner -----------
 
 async def test_resolve_dirty_tree_owner_none_when_the_tree_is_clean(
     actions: Actions, tmp_path: Path,
@@ -281,8 +281,8 @@ async def test_resolve_dirty_tree_owner_none_when_the_tree_is_clean(
 async def test_resolve_dirty_tree_owner_none_when_no_mount_matches_that_cwd(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Never a guess — a dirty tree with no matching mount row returns None so the
-    caller's own disclaimer stays verbatim, same fail-open law uncommitted_git_work
+    """Never a guess, a dirty tree with no matching mount row returns None so the
+    caller's own disclaimer stays verbatim, same fail-open rule uncommitted_git_work
     itself already holds."""
     from src.orchestrator.mounts import resolve_dirty_tree_owner
 
@@ -310,7 +310,7 @@ async def test_resolve_dirty_tree_owner_matches_a_stale_vacated_seats_mount_row(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A seat that stopped without unmounting leaves its mount row exactly where it
-    always was — deliberately still a match (Thoth's own requirement, dispatch 10000):
+    always was, deliberately still a match (a prior requirement):
     this function never decides a mount is "too old to count," it hands `last_seen`
     back so the caller can judge staleness for itself."""
     from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
@@ -331,7 +331,7 @@ async def test_resolve_dirty_tree_owner_matches_a_stale_vacated_seats_mount_row(
 async def test_resolve_dirty_tree_owner_exact_cwd_match_not_a_prefix_match(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A sibling worktree that merely shares a path prefix must never match — the exact-
+    """A sibling worktree that merely shares a path prefix must never match, the exact-
     cwd discipline this function's own docstring commits to."""
     from src.orchestrator.mounts import resolve_dirty_tree_owner, save_mount
 
@@ -350,7 +350,7 @@ async def test_resolve_dirty_tree_owner_exact_cwd_match_not_a_prefix_match(
 async def test_settle_boxes_works_against_a_pool_not_just_a_raw_connection(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The whole point of the promotion: settle_boxes must serve BOTH callers — the hook's
+    """The whole point of the promotion: settle_boxes must serve BOTH callers, the hook's
     raw asyncpg.Connection (its ~1s budget can't hold a pool) and the MCP server's
     asyncpg.Pool. Exercised here via the pool directly, unlike test_stophook.py's coverage
     (which only ever calls it through the hook's own connection)."""
@@ -395,9 +395,8 @@ async def test_settle_boxes_a_non_minted_agent_carries_no_succession_box(
 
 class _RaisingOnMintedCheck:
     """Delegates every query to the real pool EXCEPT the outer `minted_because` check,
-    which always raises — reproducing 60bc15db specimen 1: the outer gate's own query
-    failing must never be indistinguishable from a confirmed non-mint (60bc15db,
-    decision 01e0c69a)."""
+    which always raises, reproducing a known specimen: the outer gate's own query
+    failing must never be indistinguishable from a confirmed non-mint."""
 
     def __init__(self, pool: Any) -> None:
         self._pool = pool
@@ -415,7 +414,7 @@ async def test_settle_boxes_outer_minted_check_failure_is_unevaluated_not_missin
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The bug: the outer `minted` gate used to swallow its own query failure to `False`,
-    which SKIPPED the box entirely — a query that could not run was indistinguishable
+    which SKIPPED the box entirely, a query that could not run was indistinguishable
     from a confirmed non-mint. Both must stay honest: a genuine non-mint still carries no
     key at all (unchanged, see the test above); a failed determination must surface as
     `None` (unevaluated_boxes), never silently drop the box."""
@@ -430,8 +429,8 @@ async def test_settle_boxes_outer_minted_check_failure_is_unevaluated_not_missin
            not in missing_boxes(boxes))
 
 
-# ═══ filed_under_check — settle verifies WHAT you wrote, never WHO can read it ═══
-# (Thoth's Lane 4 finding, 2026-07-31): report-only, never folded into missing_boxes.
+# ═══ filed_under_check: settle verifies WHAT you wrote, never WHO can read it ═══
+# (finding from 2026-07-31): report-only, never folded into missing_boxes.
 
 
 async def test_filed_under_check_none_when_project_unknown() -> None:
@@ -442,7 +441,7 @@ async def test_filed_under_check_none_when_project_unknown() -> None:
 async def test_filed_under_check_none_when_nothing_written_this_session(
     actions: Actions,
 ) -> None:
-    """No signal either way — silence is not evidence of a mismatch."""
+    """No signal either way, silence is not evidence of a mismatch."""
     agent = "agent:fu02"
     await actions.create_or_find_object("Agent", agent, agent)
     out = await filed_under_check(actions.pool, agent_id=agent, mounted_at=datetime.now(UTC),
@@ -466,8 +465,8 @@ async def test_filed_under_check_coherent_when_writes_match_filed_under_project(
 
 
 async def test_filed_under_check_flags_a_mismatch_without_erroring(actions: Actions) -> None:
-    """John XVI's exact shape: writes land under a DIFFERENT project than the one this
-    session is filed under. Report-only — the function itself has no notion of failure,
+    """The exact shape of a real incident: writes land under a DIFFERENT project than the one this
+    session is filed under. Report-only, the function itself has no notion of failure,
     just names both sides plainly."""
     agent = "agent:fu04"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
@@ -497,8 +496,8 @@ async def test_filed_under_check_names_every_distinct_project_written_to(
 async def test_filed_under_check_normalizes_a_folded_filed_under_label(
     actions: Actions,
 ) -> None:
-    """Decision 6b4d185e / thread aa6b52af: a session filed under a label that has since
-    been FOLDED into another must not permanently false-fire 'incoherent' — went_to reads
+    """A session filed under a label that has since
+    been FOLDED into another must not permanently false-fire 'incoherent', went_to reads
     off the LIVE (already re-pointed) in_repo edge, so it reports the survivor; the raw
     `project` param must normalize the same way before comparing, or every write this
     lineage ever made under the OLD name reads as a mismatch forever after the fold."""
@@ -521,10 +520,10 @@ async def test_filed_under_check_normalizes_a_folded_filed_under_label(
 async def test_filed_under_check_coherent_when_multi_repo_spread_matches_the_charter(
     actions: Actions,
 ) -> None:
-    """Thread 992c0121, Soundwave XVI's specimen: a seat CHARTERED for two repos writes to
-    both from one experiment — a DECLARED arrangement, not drift. Verdict flips to
+    """A specimen at settle()'s own surface: a seat CHARTERED for two repos writes to
+    both from one experiment, a DECLARED arrangement, not drift. Verdict flips to
     coherent; the seat's own charter rides along in the receipt so the behavior stays
-    observable rather than a silent scope change (same discipline decision 275d5d7ac2f8's
+    observable rather than a silent scope change (same discipline the
     charter-aware readers already keep)."""
     from src.orchestrator.charter import set_charter
 
@@ -548,8 +547,8 @@ async def test_filed_under_check_coherent_when_multi_repo_spread_matches_the_cha
 async def test_filed_under_check_stays_incoherent_when_spread_exceeds_the_charter(
     actions: Actions,
 ) -> None:
-    """Ruling 0222fd37 (unintended dual-project DRIFT, surfaced not resolved) stays
-    UNTOUCHED — only a spread FULLY covered by the charter changes verdict. A seat
+    """An unintended dual-project DRIFT case (surfaced, not resolved) stays
+    UNTOUCHED, only a spread FULLY covered by the charter changes verdict. A seat
     chartered for just ONE of the two repos it wrote to still reads coherent:false,
     exactly as before this build, with no charter_repos key at all (the exceeding case
     looks identical to the pre-charter-aware receipt)."""
@@ -573,7 +572,7 @@ async def test_filed_under_check_stays_incoherent_when_spread_exceeds_the_charte
 
 
 async def test_filed_under_check_stays_incoherent_without_a_seat_id(actions: Actions) -> None:
-    """No seat_id, no charter lookup — the exact prior behavior for a caller that cannot
+    """No seat_id, no charter lookup, the exact prior behavior for a caller that cannot
     resolve one (an unmounted/unseated session)."""
     agent = "agent:fu09"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
@@ -590,15 +589,15 @@ async def test_filed_under_check_stays_incoherent_without_a_seat_id(actions: Act
 async def test_filed_under_check_coherent_when_filed_under_is_a_dead_display_name(
     actions: Actions,
 ) -> None:
-    """Thread fba386dc item 2, the real gap: `_normalize_project_label_through_merge`
-    only ever matches an EXACT (or case-variant) canonical — it has no name-property
+    """The real gap: `_normalize_project_label_through_merge`
+    only ever matches an EXACT (or case-variant) canonical, it has no name-property
     fallback. `_seated_house`'s own multi-charter/no-charter fallback hands `ident.
-    project` a seat's derived HOUSE label, never necessarily a project's own canonical —
+    project` a seat's derived HOUSE label, never necessarily a project's own canonical,
     and even a single-project seat can be `filed_under` a plain display name (a bare
     handle, a project's `name` property post-rename) that was never itself the literal
     canonical suffix. Without a covering charter, the OLD code reported this incoherent
     forever: a real, single-project write, misdiagnosed purely because the label doesn't
-    string-match. No seat_id, no charter at all here — proves the fix stands on its own,
+    string-match. No seat_id, no charter at all here, proves the fix stands on its own,
     not riding the charter-aware fallback."""
     agent = "agent:fu10"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
@@ -613,8 +612,8 @@ async def test_filed_under_check_coherent_when_filed_under_is_a_dead_display_nam
     assert out is not None
     assert out["coherent"] is True
     assert out["writes_went_to"] == ["fu10-oldcanon"]
-    # thread 8678/8687 (Thoth/Metron): once the rescue resolves a real canonical, the
-    # receipt reports THAT canonical on both sides — never the raw alias that failed the
+    # Once the rescue resolves a real canonical, the
+    # receipt reports THAT canonical on both sides, never the raw alias that failed the
     # literal compare next to the real canonical it was rescued against.
     assert out["filed_under"] == "fu10-oldcanon"
     assert "charter_repos" not in out                 # never touched the charter rescue
@@ -624,7 +623,7 @@ async def test_filed_under_check_stays_incoherent_when_the_dead_name_names_nothi
     actions: Actions,
 ) -> None:
     """A `filed_under` that resolves to no real SoftwareProject at all (canonical or name)
-    is a genuine, honest mismatch — the fix must never manufacture a false rescue."""
+    is a genuine, honest mismatch, the fix must never manufacture a false rescue."""
     agent = "agent:fu11"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await record_decision(actions, "fu11's own ruling", repo="fu11-real", source=agent)
@@ -639,15 +638,14 @@ async def test_filed_under_check_stays_incoherent_when_the_dead_name_names_nothi
 async def test_filed_under_check_shows_the_canonical_on_a_genuinely_split_rename(
     actions: Actions,
 ) -> None:
-    """Thread 8678/8687, Thoth relaying Metron's acceptance (8672), UPDATED for the
-    operator's later ruling "A RENAME MIGRATES THE CANONICAL TOO" (grounds 488ae750/
-    b5663511, Thoth DM 12786): a project's `canonical` now migrates WITH `rename_project`
-    (repo:<old> -> repo:<new_name>, in the same atomic block as the `name` write) — the
+    """Updated for the later rule that a rename migrates the canonical too:
+    a project's `canonical` now migrates WITH `rename_project`
+    (repo:<old> -> repo:<new_name>, in the same atomic block as the `name` write), the
     exact split this test was built to catch (a session mounted under the post-rename
     display name while every write still lands `in_repo` of the frozen pre-rename
     canonical) can no longer occur for a plain rename: `went_to` reads the object's own
     LIVE canonical (now the migrated one), and `project` normalizes to the SAME live
-    label — both sides of the receipt agree on `fu12-newdisplay` with no rescue needed."""
+    label, both sides of the receipt agree on `fu12-newdisplay` with no rescue needed."""
     from src.orchestrator.project_identity import rename_project
 
     agent = "agent:fu12"
@@ -668,14 +666,14 @@ async def test_filed_under_check_shows_the_canonical_on_a_genuinely_split_rename
     assert out["filed_under"] == "fu12-newdisplay"
 
 
-# ═══ closure_edge_coverage — Phase 1b (decision cb38d922): "78% OF CLOSURES LEAVE NO
-# TRAVERSABLE TRACE" — report-only, same discipline as filed_under_check above.
+# ═══ closure_edge_coverage: most closures leave no traversable trace,
+# report-only, same discipline as filed_under_check above. ═══
 
 
 async def test_closure_edge_coverage_none_when_nothing_resolved_this_session(
     actions: Actions,
 ) -> None:
-    """No signal either way — a session that closed zero threads is never punished for
+    """No signal either way, a session that closed zero threads is never punished for
     the silence, the same convention filed_under_check uses."""
     agent = "agent:cec01"
     await actions.create_or_find_object("Agent", agent, agent)
@@ -689,11 +687,11 @@ async def test_closure_edge_coverage_counts_resolved_threads_and_their_edges(
 ) -> None:
     """One thread closed WITH a traversable edge (record_decision's own resolves=), one
     resolved WITHOUT any closing verb at all (a raw status property write, the shape a
-    pre-Phase-1a/legacy or miner-inferred closure still takes) — coverage counts both as
-    resolved this session but only the first as edged. Since Phase 1a (23c5991) + Phase 2b
-    (closed_by wired into thread_closure_edges, migration 0044), resolve_thread() itself
-    ALWAYS mints some edge, so it can no longer produce the unedged case on its own — the
-    asymmetry cb38d922 measured now lives in closures that bypass the sanctioned verbs
+    legacy or miner-inferred closure still takes), coverage counts both as
+    resolved this session but only the first as edged. Since an earlier migration wired
+    closed_by into thread_closure_edges, resolve_thread() itself
+    ALWAYS mints some edge, so it can no longer produce the unedged case on its own, the
+    earlier-measured asymmetry now lives in closures that bypass the sanctioned verbs
     entirely, not in resolve_thread's artifact-less path."""
     agent = "agent:cec02"
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
@@ -709,7 +707,7 @@ async def test_closure_edge_coverage_counts_resolved_threads_and_their_edges(
     assert out == {"resolved_this_session": 2, "with_closure_edge": 1}
 
 
-# ═══════════ THE settle() MCP TOOL — ruling c5b184cd ═══════════
+# ═══════════ THE settle() MCP TOOL ═══════════
 
 
 async def test_settle_tool_refuses_when_unmounted(actions: Actions) -> None:
@@ -725,7 +723,7 @@ async def test_settle_tool_refuses_when_unmounted(actions: Actions) -> None:
 
 
 async def test_settle_tool_receipt_carries_context_pct(actions: Actions) -> None:
-    """#93, THE MECHANICAL SETTLE (Thoth mail 11789, item 3): settle's own receipt gains
+    """THE MECHANICAL SETTLE: settle's own receipt gains
     a plain numeric `context_pct` -- scripts/osiris_hook.py's PreToolUse gate needs a
     number to compare against MECHANICAL_SETTLE_PCT, not the debounced prose `_seam_field`
     puts on every OTHER tool's receipt. None here (no agent_mounts row for this identity,
@@ -758,7 +756,7 @@ async def test_settle_tool_receipt_carries_context_pct(actions: Actions) -> None
 async def test_settle_tool_accepts_a_decision_and_a_thread_and_verifies_landed(
     actions: Actions,
 ) -> None:
-    """ACCEPT composes the real verbs — never reimplements the write."""
+    """ACCEPT composes the real verbs, never reimplements the write."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -798,8 +796,8 @@ async def test_settle_tool_accepts_a_decision_and_a_thread_and_verifies_landed(
 async def test_settle_threads_open_defaults_an_ownerless_obligation_and_names_it(
     actions: Actions,
 ) -> None:
-    """settle()'s own threads_open is the SECOND live door onto capture.open_thread
-    (#5546 items 1+3, Thoth's ruling msg 5605 — "one door, two callers, same shape"): the
+    """settle()'s own threads_open is the SECOND live path onto capture.open_thread
+    (meant to give "one path, two callers, same shape"): the
     default-never-refuse behavior must fire here too, and the receipt must name it, not
     just settle's own kind='obligation' case."""
     from src import mcp_server as srv
@@ -838,9 +836,9 @@ async def test_settle_bulk_loops_default_repo_to_the_callers_own_project(
     actions: Actions,
 ) -> None:
     """The repo identity-default lives in the MCP record_decision/open_thread wrappers,
-    not in capture.record_decision/capture.open_thread themselves — settle's own bulk
+    not in capture.record_decision/capture.open_thread themselves, settle's own bulk
     decisions/threads_open loops call capture directly and would otherwise bypass it
-    entirely (msg 5703/5720, orphan-door fix). Both loops must default and name it."""
+    entirely (the orphan-project fix). Both loops must default and name it."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -878,9 +876,9 @@ async def test_settle_bulk_loops_default_repo_to_the_callers_own_project(
     assert d_linked == 1 and t_linked == 1
 
 
-# --- WAVE 2 / LANE B, THE settle() BULK-LOOP LEG (thread 6c262aee): the SAME shared
-# ladder record_decision/open_thread/ingest_reference's own wrappers climb, now covering
-# settle's two capture-calling bulk loops too — the fourth and last deferred surface. ----
+# --- LANE B, THE settle() BULK-LOOP LEG: the SAME shared
+# pattern record_decision/open_thread/ingest_reference's own wrappers use, now covering
+# settle's two capture-calling bulk loops too, the fourth and last deferred surface. ----
 
 async def test_settle_bulk_loops_fall_back_to_the_lineage_when_identity_has_no_project(
     actions: Actions,
@@ -933,8 +931,8 @@ async def test_settle_bulk_loops_fall_back_to_the_lineage_when_identity_has_no_p
 async def test_settle_bulk_loops_abstain_and_record_why_on_lineage_ambiguity(
     actions: Actions,
 ) -> None:
-    """THE ABSTAIN LAW inside settle's own bulk loops too: two distinct projects across
-    the lineage must mint NOTHING — never break the tie by recency or generation count."""
+    """THE ABSTAIN RULE inside settle's own bulk loops too: two distinct projects across
+    the lineage must mint NOTHING, never break the tie by recency or generation count."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -975,7 +973,7 @@ async def test_settle_bulk_loops_abstain_and_record_why_on_lineage_ambiguity(
     assert set(d_entry["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
     assert t_entry["lineage_repo_derivation"]["minted"] is False
     assert set(t_entry["lineage_repo_derivation"]["candidates"]) == {str(proj_a), str(proj_b)}
-    # settle's own receipt carries only the 8-char short id — resolve it back the same
+    # settle's own receipt carries only the 8-char short id, resolve it back the same
     # way any other caller would, then verify against the durable graph directly.
     did = await capture._find_decision(actions.pool, d_entry["id"], require_identifier=True)
     tid = await capture._find_thread(actions.pool, t_entry["id"], require_identifier=True)
@@ -984,7 +982,7 @@ async def test_settle_bulk_loops_abstain_and_record_why_on_lineage_ambiguity(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", did)
     t_linked = await actions.pool.fetchval(
         "SELECT count(*) FROM links WHERE from_id=$1 AND type='in_repo'", tid)
-    assert d_linked == 0 and t_linked == 0  # nothing minted — both stay honestly unlinked
+    assert d_linked == 0 and t_linked == 0  # nothing minted, both stay honestly unlinked
     d_abstained = await actions.pool.fetchval(
         "SELECT a.value FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='derivation_abstained_in_repo'", did)
@@ -998,7 +996,7 @@ async def test_settle_bulk_loops_abstain_and_record_why_on_lineage_ambiguity(
 async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
     actions: Actions,
 ) -> None:
-    """Thoth's ruling on #107's fork (DM 2250): settle is the end-of-context ritual — a
+    """A prior ruling on this fork: settle is the end-of-context ritual, a
     whole-batch abort on one bad item (a path-shaped repo) would lose EVERYTHING else in
     the same call, exactly the failure settle exists to prevent. The good sibling still
     lands; the bad one is NAMED in `rejected`, never silently dropped; `complete` reads
@@ -1034,7 +1032,7 @@ async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
 
-    # the good decision AND the unrelated thread both still landed — the bad sibling never
+    # the good decision AND the unrelated thread both still landed, the bad sibling never
     # vetoed either of them
     assert len(out["accepted"]["decisions"]) == 1
     assert len(out["accepted"]["threads_opened"]) == 1
@@ -1053,9 +1051,9 @@ async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
         good_summary) == 1
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Thread'") == 1
-    # ...and the bad one genuinely never landed — no Decision, no bogus SoftwareProject
+    # ...and the bad one genuinely never landed, no Decision, no bogus SoftwareProject
     # minted from ITS path-shaped repo (the good sibling's own repo= now legitimately
-    # defaults to the mounted identity's project, "settleproj" — the orphan-door fix;
+    # defaults to the mounted identity's project, "settleproj", the orphan-project fix;
     # that is a real, expected link, not the bug this assertion guards against)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE name='summary' "
@@ -1068,7 +1066,7 @@ async def test_settle_tool_rejects_a_bad_repo_decision_without_sinking_the_dump(
 async def test_settle_tool_rejects_a_bad_repo_thread_without_sinking_the_dump(
     actions: Actions,
 ) -> None:
-    """Same per-item degrade, the threads_open loop — a distinct code path from decisions,
+    """Same per-item degrade, the threads_open loop, a distinct code path from decisions,
     tested independently rather than assumed to behave the same way."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -1113,7 +1111,7 @@ async def test_settle_tool_rejects_a_bad_repo_thread_without_sinking_the_dump(
         "SELECT count(*) FROM current_assertions WHERE name='summary' "
         "AND value #>> '{}' = $1", bad_summary) == 0
     # the good sibling's own repo= now legitimately defaults to "settleproj" (the
-    # orphan-door fix) — only the bad path-shaped repo must never mint a project
+    # orphan-project fix), only the bad path-shaped repo must never mint a project
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
         "AND canonical ILIKE '%ballgem%'") == 0
@@ -1146,14 +1144,14 @@ async def test_settle_tool_resolve_thread_item_reports_a_miss_without_erroring(
     assert "error" in result and "no-such-thread-anywhere" in result["error"]
 
 
-# ═══ PHASE 1b — settle wires the closure edge a decision+threads_resolve pair in the SAME
-# call already establishes (decision cb38d922, DM 2506) ═══
+# ═══ PHASE 1b: settle wires the closure edge a decision+threads_resolve pair in the SAME
+# call already establishes ═══
 
 
 async def test_settle_tool_wires_the_reverse_edge_for_a_pair_the_batch_establishes(
     actions: Actions,
 ) -> None:
-    """settle already holds BOTH halves in one payload — a decision that resolves= a
+    """settle already holds BOTH halves in one payload, a decision that resolves= a
     thread, and a threads_resolve item naming the SAME thread, with no artifact= of its
     own. record_decision's resolves= already mints the `answers` edge (Decision->Thread);
     this proves settle ALSO wires the reverse `resolved_by` edge (Thread->Decision), for
@@ -1208,8 +1206,8 @@ async def test_settle_tool_wires_the_reverse_edge_for_a_pair_the_batch_establish
 async def test_settle_tool_conservative_join_mints_nothing_when_the_batch_does_not_pair_them(
     actions: Actions,
 ) -> None:
-    """A decision with no resolves= at all, and an UNRELATED thread in threads_resolve —
-    the payload never establishes a pair, so settle wires nothing (Thoth's ask: 'a wrong
+    """A decision with no resolves= at all, and an UNRELATED thread in threads_resolve,
+    the payload never establishes a pair, so settle wires nothing (the standing rule: 'a wrong
     edge is worse than a missing one'). Plain resolution still proceeds unaffected."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -1248,7 +1246,7 @@ async def test_settle_tool_conservative_join_mints_nothing_when_the_batch_does_n
 async def test_settle_tool_negative_control_decisions_without_resolutions(
     actions: Actions,
 ) -> None:
-    """decisions present, threads_resolve absent — mints nothing, and does not error."""
+    """decisions present, threads_resolve absent: mints nothing, and does not error."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -1276,7 +1274,7 @@ async def test_settle_tool_negative_control_decisions_without_resolutions(
 async def test_settle_tool_negative_control_resolutions_without_decisions(
     actions: Actions,
 ) -> None:
-    """threads_resolve present, decisions absent — mints nothing, and does not error."""
+    """threads_resolve present, decisions absent: mints nothing, and does not error."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -1306,7 +1304,7 @@ async def test_settle_tool_negative_control_resolutions_without_decisions(
 
 async def test_settle_tool_never_overrides_a_caller_supplied_artifact(actions: Actions) -> None:
     """The caller's own explicit artifact= wins outright, even when a batch decision would
-    otherwise match by the conservative join — settle's wiring only fills a GAP, it never
+    otherwise match by the conservative join, settle's wiring only fills a GAP, it never
     second-guesses an explicit choice."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -1351,19 +1349,19 @@ async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Report-only, same discipline as identity_coherence: 'this session resolved N
-    threads; M of them now carry a closure edge' — computed AFTER the batch dispatch so it
+    threads; M of them now carry a closure edge', computed AFTER the batch dispatch so it
     reflects edges wired by this very call too. Deliberately PARTIAL coverage here (one
     thread resolved by a raw status write, no closing verb, earlier this same session; one
     freshly edged by this call) proves the field never gates `complete`, however incomplete
     the coverage looks. resolve_thread() itself can no longer produce the unedged case
-    since Phase 1a's closed_by fallback + Phase 2b's view wiring (migration 0044) — see
+    since an earlier migration wired closed_by fallback and view wiring together, see
     test_closure_edge_coverage_counts_resolved_threads_and_their_edges above."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
 
     agent = "agent:settlecc1"
-    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars — matches session[:8]
+    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars, matches session[:8]
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
@@ -1405,13 +1403,13 @@ async def test_settle_tool_surfaces_closure_coverage_without_blocking_complete(
 async def test_settle_tool_omits_closure_coverage_when_nothing_resolved_this_session(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No signal either way — the field stays absent rather than asserting a false zero."""
+    """No signal either way, the field stays absent rather than asserting a false zero."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
 
     agent = "agent:settlecc3"
-    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars — matches session[:8]
+    job_dir = str(tmp_path / "jobs" / "settlecc")  # EXACTLY 8 chars, matches session[:8]
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
                      cwd=str(tmp_path), model=None, session_key=None)
@@ -1440,8 +1438,8 @@ async def test_settle_tool_omits_closure_coverage_when_nothing_resolved_this_ses
 async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_property(
     actions: Actions,
 ) -> None:
-    """THE PAYOFF (ruling c5b184cd): a successor's orient() finds the handoff via the
-    TYPED property is_handoff='true' — the summary text below contains neither 'handoff'
+    """THE PAYOFF: a successor's orient() finds the handoff via the
+    TYPED property is_handoff='true', the summary text below contains neither 'handoff'
     nor 'letter', so the OLD ILIKE path could never have found it. Word-matching identity
     is the disease this closes."""
     from src import mcp_server as srv
@@ -1465,7 +1463,7 @@ async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_prop
         agent_id=ancestor, session="settlehr1", project="handoffproj", model=None, cwd=None)
     try:
         settled = await srv.settle(
-            decisions=[{"summary": "the estate is settled structurally, no grep required",
+            decisions=[{"summary": "the transition is settled structurally, no grep required",
                        "kind": "choice", "is_handoff": True}],
             ctx=actx)
     finally:
@@ -1488,13 +1486,13 @@ async def test_settle_tool_handoff_marker_is_found_by_orient_via_structured_prop
     assert "settled structurally" in " ".join(n["text"] for n in note["notes"])
 
 
-# ═══ THE is_handoff BLEED FIX, READ-RECEIPT VERSION (operator ruling, 2026-08-03) ═════════
+# ═══ THE is_handoff BLEED FIX, READ-RECEIPT VERSION (2026-08-03) ═════════
 # Measured before ANY fix: orient()'s own terse payload carried 6 uncapped is_handoff rows,
-# 39.7% of its total bytes (10,395 of 26,153), because nothing ever retired the exemption
-# DM 3090 granted. Thoth DM 3355's first version retired on a NEW is_handoff WRITE (same-
-# lineage earlier records auto-retired the moment you minted your own). The operator asked
-# for something tighter: retirement on an EXPLICIT READ RECEIPT, keyed by id, mirroring
-# inbox()'s own lease-vs-settle split — settle()/orient() never retire anything now; only
+# 39.7% of its total bytes (10,395 of 26,153), because nothing ever retired the earlier
+# exemption. An earlier version retired on a NEW is_handoff WRITE (same-
+# lineage earlier records auto-retired the moment you minted your own). The design settled
+# on something tighter: retirement on an EXPLICIT READ RECEIPT, keyed by id, mirroring
+# inbox()'s own lease-vs-settle split. settle()/orient() never retire anything now; only
 # ack_handoff(ref=...) does. _retire_stale_handoffs survives ONLY as a manual one-time
 # backfill utility (not wired into any live call path) for the population that accumulated
 # before this existed.
@@ -1525,11 +1523,11 @@ async def _settle_as(pool: Any, agent_id: str, **kwargs: Any) -> dict[str, Any]:
 
 
 async def _is_handoff_value(pool: Any, short_id: str) -> str | None:
-    """The CURRENT winner only — same resolution every composition in this codebase uses
+    """The CURRENT winner only, same resolution every composition in this codebase uses
     (ORDER BY confidence DESC, observed_at DESC LIMIT 1), never a bare unordered fetchval:
     is_handoff can carry competing assertions from TWO sources (the original author's
-    'true', a later retirement's 'false') that legitimately coexist in current_assertions
-    — only this ordering picks the one _cap_text/compositions actually see."""
+    'true', a later retirement's 'false') that legitimately coexist in current_assertions,
+    only this ordering picks the one _cap_text/compositions actually see."""
     return await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE a.name='is_handoff' AND o.id::text LIKE $1 || '%' "
@@ -1546,11 +1544,11 @@ async def _status_value(pool: Any, short_id: str) -> str | None:
 
 async def _succeed(actions: Actions, heir: str, predecessor: str) -> None:
     """Record a REAL succeeded_from property (heir -> predecessor), the same shape
-    register_agent's own real minting path writes — needed since ack_handoff's lineage
-    check now walks succeeded_from EDGES (60bc15db, decision 61cb1f02) instead of
+    register_agent's own real minting path writes, needed since ack_handoff's lineage
+    check now walks succeeded_from EDGES instead of
     comparing id STRINGS, so a test fixture that only shares a naming convention (ackone /
     ackone-ii) with no recorded edge is no longer 'the same lineage' as far as the tool is
-    concerned — exactly the gap the fix closes. Mirrors
+    concerned, exactly the gap the fix closes. Mirrors
     test_nearest_handoff_ancestor_walks_past_silence_within_the_bound's own convention."""
     oid = await actions.create_or_find_object("Agent", heir, heir)
     await actions.assert_property(oid, "succeeded_from", predecessor, heir,
@@ -1558,7 +1556,7 @@ async def _succeed(actions: Actions, heir: str, predecessor: str) -> None:
 
 
 async def _ack_as(pool: Any, agent_id: str, ref: str) -> dict[str, Any]:
-    """Mount `agent_id` on a throwaway ctx, call ack_handoff(ref), release the ctx — same
+    """Mount `agent_id` on a throwaway ctx, call ack_handoff(ref), release the ctx, same
     pattern as `_settle_as`."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -1577,7 +1575,7 @@ async def _ack_as(pool: Any, agent_id: str, ref: str) -> dict[str, Any]:
 
 async def test_settle_no_longer_auto_retires_on_a_new_handoff_write(actions: Actions) -> None:
     """THE OLD TRIGGER IS GONE: writing a NEW is_handoff record must not touch an older
-    same-lineage one anymore — only an explicit ack_handoff call does now."""
+    same-lineage one anymore, only an explicit ack_handoff call does now."""
     gen1 = await _settle_as(
         actions.pool, "agent:bleedone",
         decisions=[{"summary": "bleedone's own state of the board", "kind": "choice",
@@ -1595,20 +1593,20 @@ async def test_settle_no_longer_auto_retires_on_a_new_handoff_write(actions: Act
 
 
 async def test_ack_handoff_retires_a_legacy_prose_only_handoff(actions: Actions) -> None:
-    """#cd101070 (Thoth mail 12808 item 1), the live specimen reproduced: a Decision whose
+    """The live specimen reproduced: a Decision whose
     self_declared summary mentions "handoff" in prose but NEVER had an explicit
-    `is_handoff` property asserted on it at all — nearest_handoff_ancestor/get_status's
-    own HANDOFF_LIVE_PREDICATE_SQL surfaces it via the ILIKE fallback (same law
+    `is_handoff` property asserted on it at all, nearest_handoff_ancestor/get_status's
+    own HANDOFF_LIVE_PREDICATE_SQL surfaces it via the ILIKE fallback (same rule
     test_nearest_handoff_ancestor_walks_past_silence_within_the_bound already covers on
     the pointer side), but before this fix ack_handoff only ever checked the structured
-    property and refused every such ref as "already acknowledged or is not a handoff" —
+    property and refused every such ref as "already acknowledged or is not a handoff",
     a permanently stuck pointer nothing could ever retire. Fixed: ack_handoff now shares
     the identical predicate (`is_live_handoff`), succeeds here, and writes an explicit
     `is_handoff='false'` that converts the legacy prose match into a real retirement."""
     from src.orchestrator.agents import nearest_handoff_ancestor
 
     did = str(await record_decision(
-        actions, "OPERATOR RULING — this mints a handoff marker on PreCompact, prose only",
+        actions, "this mints a handoff marker on PreCompact, prose only",
         kind="ruling", source="agent:legacyhandoff0001", repo="handoffbleed"))[:8]
     assert await _is_handoff_value(actions.pool, did) is None  # never asserted
     found, complete = await nearest_handoff_ancestor(actions.pool, "agent:legacyhandoff0001")
@@ -1620,7 +1618,7 @@ async def test_ack_handoff_retires_a_legacy_prose_only_handoff(actions: Actions)
     assert out == {"id": did, "acknowledged": True, "resolved": False}
     assert await _is_handoff_value(actions.pool, did) == "false"
 
-    # and the pointer agrees now — no more disagreement between get_status and ack_handoff
+    # and the pointer agrees now, no more disagreement between get_status and ack_handoff
     found2, complete2 = await nearest_handoff_ancestor(
         actions.pool, "agent:legacyhandoff0001-ii")
     assert found2 is None
@@ -1631,7 +1629,7 @@ async def test_ack_handoff_refuses_an_object_with_no_handoff_prose_and_no_proper
     actions: Actions,
 ) -> None:
     """The fallback recognizes real prose ("handoff"/"letter"); an ordinary decision that
-    mentions neither, and never had the property asserted, still refuses — is_live_handoff
+    mentions neither, and never had the property asserted, still refuses, is_live_handoff
     must not turn into "anything goes"."""
     did = str(await record_decision(
         actions, "ordinary ruling about the backup timer schedule, no relation to succession",
@@ -1653,7 +1651,7 @@ async def test_ack_handoff_retires_a_same_lineage_handoff(actions: Actions) -> N
     await _succeed(actions, "agent:ackone-ii", "agent:ackone")
 
     out = await _ack_as(actions.pool, "agent:ackone-ii", d1)
-    # resolved is False: d1 is a Decision, which has no `status` to resolve — a clean no-op
+    # resolved is False: d1 is a Decision, which has no `status` to resolve, a clean no-op
     # on the Thread-only resolve_thread call, not a failure of this fix.
     assert out == {"id": d1, "acknowledged": True, "resolved": False}
     assert await _is_handoff_value(actions.pool, d1) == "false"
@@ -1672,11 +1670,11 @@ async def test_ack_handoff_refuses_a_different_lineage(actions: Actions) -> None
 
 
 async def test_ack_handoff_succeeds_across_an_id_format_change(actions: Actions) -> None:
-    """60bc15db specimen (decision 61cb1f02), live-reproduced against Thoth herself before
+    """A known specimen, live-reproduced against a real agent before
     this fix: the OLD lineage check compared `_generation()`'s STRING-parsed root, which
     goes blind the moment a generation's own id-SUFFIX stops looking like a roman numeral
     (a real renumbering shape: agent:ackformat-g40-g40 succeeds agent:ackformat-g40-xxxix,
-    six real hops apart in this test's own analogue, sharing NOTHING as strings — "g40" is
+    six real hops apart in this test's own analogue, sharing NOTHING as strings, "g40" is
     not a roman numeral, so the old check rooted the heir at itself and refused its own
     predecessor's handoff). The new lineage_root check walks the REAL succeeded_from
     chain instead and must succeed here, where the old check would have refused it."""
@@ -1685,8 +1683,8 @@ async def test_ack_handoff_succeeds_across_an_id_format_change(actions: Actions)
         decisions=[{"summary": "ackformat's own state of the board", "kind": "choice",
                    "is_handoff": True}])
     d1 = gen1["accepted"]["decisions"][0]["id"]
-    # a chain of ordinary roman-numeral generations, THEN a renumbered id shape at the end —
-    # exactly Thoth's own live specimen (agent:ad1a1cb0-g40-g40 succeeding ...-g40-xxxix)
+    # a chain of ordinary roman-numeral generations, THEN a renumbered id shape at the end,
+    # exactly a known live specimen (agent:examplehandle-g40-g40 succeeding ...-g40-xxxix)
     await _succeed(actions, "agent:ackformat-ii", "agent:ackformat")
     await _succeed(actions, "agent:ackformat-iii", "agent:ackformat-ii")
     await _succeed(actions, "agent:ackformat-g40-g40", "agent:ackformat-iii")
@@ -1720,7 +1718,7 @@ async def test_lineage_root_walks_edges_not_id_strings(actions: Actions) -> None
 async def test_lineage_root_reports_incomplete_when_the_chain_exceeds_max_hops(
     actions: Actions,
 ) -> None:
-    """decision 1cb389be, found live in Thoth's own 76-generation lineage: a chain longer
+    """Found live in a real 76-generation lineage: a chain longer
     than `max_hops` must say so, not silently hand back whatever intermediate ancestor the
     walk happened to reach -- the exact defect this fix removes from the function built to
     fix a sibling instance of the same ruling."""
@@ -1743,7 +1741,7 @@ async def test_lineage_root_reports_incomplete_when_the_chain_exceeds_max_hops(
 
 async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actions) -> None:
     """_retire_stale_handoffs carried the identical string-parse defect ack_handoff's own
-    lineage guard did (decision 61cb1f02's sibling check) -- fixed the same way, same
+    lineage guard did (its sibling check) -- fixed the same way, same
     specimen shape: a format-changed heir's own backfill run must still retire its real
     predecessor's stale handoff, and must still leave an unrelated lineage's alone."""
     import uuid as uuid_mod
@@ -1778,8 +1776,8 @@ async def test_retire_stale_handoffs_survives_an_id_format_change(actions: Actio
 async def test_retire_stale_handoffs_refuses_on_the_actors_own_truncated_walk(
     actions: Actions,
 ) -> None:
-    """decision 1cb389be: the one caller that decides for a WHOLE POPULATION at once must
-    REFUSE outright rather than silently under-retire on an unverified root — the failure
+    """The one caller that decides for a WHOLE POPULATION at once must
+    REFUSE outright rather than silently under-retire on an unverified root, the failure
     mode that made the real 220+-record backlog disposition unsafe."""
     import uuid as uuid_mod
     from datetime import UTC, datetime
@@ -1832,8 +1830,8 @@ async def test_retire_stale_handoffs_skips_a_candidate_with_a_truncated_walk(
 async def test_retire_stale_handoffs_dry_run_names_the_population_without_writing(
     actions: Actions,
 ) -> None:
-    """#150 backlog disposition (Thoth msg 5254): dry_run=True must report the EXACT same
-    `retired` population a live call would touch — same query, same lineage_root walk —
+    """A backlog disposition: dry_run=True must report the EXACT same
+    `retired` population a live call would touch, same query, same lineage_root walk,
     but never call assert_property, so a preview can be trusted byte-for-byte against the
     execute that follows it."""
     import uuid as uuid_mod
@@ -1862,7 +1860,7 @@ async def test_retire_stale_handoffs_dry_run_names_the_population_without_writin
     assert await _is_handoff_value(actions.pool, old_id) == "false"  # the live run DOES write
 
 
-# ═══ _retire_handoff_backlog — the fleet-wide #150 disposition, Thoth msg 5254 ═══
+# ═══ _retire_handoff_backlog: the fleet-wide backlog disposition ═══
 # composed entirely from _retire_stale_handoffs (one lineage-root walk implementation,
 # never a second mutation path); groups every live is_handoff='true' record by root and
 # keeps the newest per root.
@@ -1937,7 +1935,7 @@ async def test_retire_handoff_backlog_refuses_whole_run_on_any_incomplete_walk(
     assert await _is_handoff_value(actions.pool, deep_id) == "true"  # untouched, whole run refused
 
 
-# ═══ _resolve_acked_handoff_threads — the retroactive backfill, msg 4673/decision 4bf6d835 ═══
+# ═══ _resolve_acked_handoff_threads: the retroactive backfill ═══
 # ack_handoff's own status-resolution fix (this same dispatch) only covers FUTURE acks; this
 # is the one-time cleanup for the population that accumulated before it existed. Same shape
 # and reasoning as _retire_stale_handoffs right above it: manual, never a live trigger.
@@ -1946,12 +1944,12 @@ async def test_resolve_acked_handoff_threads_resolves_an_already_acked_open_thre
     actions: Actions,
 ) -> None:
     """THE EXACT SPECIMEN THIS FIX EXISTS FOR: is_handoff already 'false' (a real ack
-    already happened, simulated here by writing it directly — as it would have, before
+    already happened, simulated here by writing it directly, as it would have, before
     ack_handoff itself resolved the status), status still 'open'. THE DISCRIMINATOR IS THE
-    ACK, never time — this thread's own creation timestamp is irrelevant to the query."""
+    ACK, never time, this thread's own creation timestamp is irrelevant to the query."""
     from src import mcp_server as srv
 
-    tid = await open_thread(actions, "already-acked, still open — the backfill's own target",
+    tid = await open_thread(actions, "already-acked, still open: the backfill's own target",
                             kind="obligation", source="agent:backfillone")
     await actions.assert_property(tid, "is_handoff", "true", "agent:backfillone",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -1970,11 +1968,11 @@ async def test_resolve_acked_handoff_threads_resolves_an_already_acked_open_thre
 async def test_resolve_acked_handoff_threads_leaves_an_unacked_handoff_open(
     actions: Actions,
 ) -> None:
-    """AN UNACKED HANDOFF IS NOT STALE, IT IS UNREAD — the whole binding constraint (msg
-    4673: "the discriminator is the ack, never time"). This must never be swept in."""
+    """AN UNACKED HANDOFF IS NOT STALE, IT IS UNREAD, the whole binding constraint
+    (the discriminator is the ack, never time). This must never be swept in."""
     from src import mcp_server as srv
 
-    tid = await open_thread(actions, "unacked — must stay open no matter how old",
+    tid = await open_thread(actions, "unacked: must stay open no matter how old",
                             kind="obligation", source="agent:backfillunread")
     await actions.assert_property(tid, "is_handoff", "true", "agent:backfillunread",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -2006,9 +2004,9 @@ async def test_resolve_acked_handoff_threads_ignores_an_already_resolved_one(
 
 
 async def test_resolve_acked_handoff_threads_can_scope_to_one_repo(actions: Actions) -> None:
-    """`repo` scopes the backfill to one project's in_repo-linked Threads — the safe,
-    house-boundary-respecting shape (Sekhmet's own already-vetted osiris population, msg
-    4673), never a blind fleet-wide sweep unless explicitly asked for."""
+    """`repo` scopes the backfill to one project's in_repo-linked Threads, the safe,
+    house-boundary-respecting shape (an already-vetted osiris population),
+    never a blind fleet-wide sweep unless explicitly asked for."""
     from src import mcp_server as srv
 
     in_scope = await open_thread(actions, "acked, in the scoped repo",
@@ -2029,7 +2027,7 @@ async def test_resolve_acked_handoff_threads_can_scope_to_one_repo(actions: Acti
     assert await _status_value(actions.pool, out_short) == "open"  # untouched, different repo
 
 
-# ═══ misfiled_by_lineage — #145's discovery half (decision b89477a0/61cb1f02) ═══
+# ═══ misfiled_by_lineage: the discovery half of a lineage-wide audit ═══
 # identity_coherence (filed_under_check, above) only ever checks THIS session's own
 # writes forward from its own mounted_at; this walks the whole lineage, all of history.
 
@@ -2091,7 +2089,7 @@ async def test_misfiled_by_lineage_survives_an_id_format_change(actions: Actions
 async def test_misfiled_by_lineage_never_hides_an_incomplete_chain_behind_a_clean_answer(
     actions: Actions,
 ) -> None:
-    """Thoth's own explicit constraint (DM 4114): a short/empty misfiled list must never
+    """An explicit constraint: a short/empty misfiled list must never
     render identically to a fully-verified clean one. Force max_hops below the real chain
     length -- nothing misfiled among what WAS reached, but the walk did not terminate, so
     the caveat must survive rather than collapsing to None."""
@@ -2110,9 +2108,9 @@ async def test_misfiled_by_lineage_never_hides_an_incomplete_chain_behind_a_clea
 async def test_misfiled_by_lineage_normalizes_a_folded_project_and_ignores_healed_edges(
     actions: Actions,
 ) -> None:
-    """Decision 6b4d185e's fifth specimen: an ancestor's write, correctly filed under a
+    """A fifth specimen: an ancestor's write, correctly filed under a
     label that has since been FOLDED into another, must not report as 'misfiled' just
-    because the caller's own `project` still names the pre-fold label — and the fold's
+    because the caller's own `project` still names the pre-fold label, and the fold's
     own invalidated pre-fold edge must not double-count alongside its live replacement
     (the same compounding gap fixed in filed_under_check, same pass)."""
     from src.orchestrator.agents import misfiled_by_lineage
@@ -2132,17 +2130,17 @@ async def test_misfiled_by_lineage_normalizes_a_folded_project_and_ignores_heale
 async def test_misfiled_by_lineage_normalizes_a_post_rename_display_name(
     actions: Actions,
 ) -> None:
-    """Decision 6b4d185e item (5), the sibling gap to filed_under_check's own (closed at
-    thread 8678/8687 by f298e23) — never actually closed here until now. `rename_project`
+    """The sibling gap to filed_under_check's own, never actually closed here until now.
+    `rename_project`
     never touches a project's own immutable `canonical`, only the mutable `name` property
     (project_identity.rename_project's own docstring), so a successor mounted under the
     CURRENT display name after a rename fails `_normalize_project_label_through_merge`'s
     exact-canonical match (that helper only ever resolves a fold's survivor, no name-
     property fallback) and used to report every one of its own lineage's correctly-filed
-    writes as 'misfiled' forever — purely because the label doesn't string-match, exactly
+    writes as 'misfiled' forever, purely because the label doesn't string-match, exactly
     the false-positive class this whole function exists to avoid. Resolved the same way
     filed_under_check's own display-name rescue is: canonical-or-name-property, one real
-    project, unambiguous — and `project` itself is reassigned so a caller reading this
+    project, unambiguous, and `project` itself is reassigned so a caller reading this
     receipt's own `filed_under` sees the same canonical `misfiled` is compared against."""
     from src.orchestrator.agents import misfiled_by_lineage
     from src.orchestrator.project_identity import rename_project
@@ -2163,7 +2161,7 @@ async def test_misfiled_by_lineage_normalizes_a_post_rename_display_name(
 async def test_orient_surfaces_misfiled_elsewhere_for_a_correctly_filed_successor(
     actions: Actions,
 ) -> None:
-    """The real #145 acceptance case, through orient() itself: a correctly-filed
+    """The real acceptance case, through orient() itself: a correctly-filed
     successor's own orient() call must surface an ANCESTOR's misfiled write -- something
     identity_coherence (settle-time, this-session-only) could never do."""
     from src import mcp_server as srv
@@ -2212,8 +2210,8 @@ async def test_ack_handoff_refuses_an_unresolvable_ref(actions: Actions) -> None
 
 
 async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actions) -> None:
-    """The real specimen this session measured: Sekhmet V's THREAD-shaped handoff (6c4d6669)
-    and Sekhmet VIII's DECISION-shaped one (3fb1a5fc) both needed the same door — ack_handoff
+    """The real specimen this session measured: a THREAD-shaped handoff
+    and a DECISION-shaped one both needed the same path, ack_handoff
     must not care which shape it's naming."""
     gen1 = await _settle_as(
         actions.pool, "agent:ackcross",
@@ -2224,7 +2222,7 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
     await _succeed(actions, "agent:ackcross-ii", "agent:ackcross")
     out = await _ack_as(actions.pool, "agent:ackcross-ii", t1)
     assert out["acknowledged"] is True
-    assert out["resolved"] is True  # the Thread half of this fix (msg 4673)
+    assert out["resolved"] is True  # the Thread half of this fix
     assert await _is_handoff_value(actions.pool, t1) == "false"
     assert await _status_value(actions.pool, t1) == "resolved"
 
@@ -2236,12 +2234,12 @@ async def test_ack_handoff_works_across_decision_and_thread_types(actions: Actio
     await _succeed(actions, "agent:ackcross-iii", "agent:ackcross-ii")
     out2 = await _ack_as(actions.pool, "agent:ackcross-iii", d2)
     assert out2["acknowledged"] is True
-    assert out2["resolved"] is False  # a Decision has no status to resolve — clean no-op
+    assert out2["resolved"] is False  # a Decision has no status to resolve, clean no-op
     assert await _is_handoff_value(actions.pool, d2) == "false"
 
 
 async def test_ack_handoff_leaves_the_record_fully_readable(actions: Actions) -> None:
-    """Ack touches ONE property, never the record itself — recall() must still return the
+    """Ack touches ONE property, never the record itself, recall() must still return the
     whole thing, same discipline as amend_decision/amend_practice."""
     from src.orchestrator.recall import recall
 
@@ -2261,12 +2259,12 @@ async def test_ack_handoff_leaves_the_record_fully_readable(actions: Actions) ->
 async def test_settle_handoff_survives_whole_across_repeated_unacked_orients(
     actions: Actions,
 ) -> None:
-    """THE NON-NEGOTIABLE ACCEPTANCE TEST (Thoth DM 3355, verbatim, unchanged by the
-    read-receipt redesign): 'a fresh seat's orient() must still receive its OWN IMMEDIATE
-    PREDECESSOR'S handoff WHOLE.' Under the receipt model this holds by CONSTRUCTION, not
-    careful ordering — orient() never writes anything for a handoff, so it is delivered
+    """THE NON-NEGOTIABLE ACCEPTANCE TEST, unchanged by the
+    read-receipt redesign: a fresh seat's orient() must still receive its OWN IMMEDIATE
+    PREDECESSOR'S handoff WHOLE. Under the receipt model this holds by CONSTRUCTION, not
+    careful ordering, orient() never writes anything for a handoff, so it is delivered
     whole on the first call AND every repeated call, for as long as it stays unacked
-    (mail's own redelivery-until-settled shape). Only ack_handoff retires it, and only a
+    (the same redelivery-until-settled shape as inbox). Only ack_handoff retires it, and only a
     call AFTER that stops the delivery."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -2296,9 +2294,9 @@ async def test_settle_handoff_survives_whole_across_repeated_unacked_orients(
 
     first = await _orient_as_heir()
     row = next(r for r in first["recent_decisions"] if r["summary"].startswith("thirteen"))
-    assert row["summary"] == long_handoff  # whole — no "…" marker
+    assert row["summary"] == long_handoff  # whole, no "…" marker
 
-    # a SECOND, still-unacked orient() call delivers it whole again — redelivery, not a
+    # a SECOND, still-unacked orient() call delivers it whole again, redelivery, not a
     # one-shot lease that quietly consumes itself on the first read.
     second = await _orient_as_heir()
     row2 = next(r for r in second["recent_decisions"] if r["summary"].startswith("thirteen"))
@@ -2317,13 +2315,13 @@ async def test_settle_handoff_survives_whole_across_repeated_unacked_orients(
 async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     actions: Actions, tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """DEFECT 1 (Thoth DM 3076), THE LIVE SPECIMEN REPRODUCED: a seated agent's mount cwd
-    reads as the bare office CONTAINER (a #128-class correction, not this agent's real
-    office at <container>/<handle>) — before the fix, standing_orders_touched checked the wrong
+    """DEFECT 1, THE LIVE SPECIMEN REPRODUCED: a seated agent's mount cwd
+    reads as the bare office CONTAINER (a correction, not this agent's real
+    office at <container>/<handle>), before the fix, standing_orders_touched checked the wrong
     directory, found nothing, returned None, and `missing_boxes` silently dropped it: a
     real, 11-day-stale charter.md sat unevaluated forever. The SEAT BINDING (bind_holder's
     own `holds` link + the seat's `handle` property) must be resolved instead of trusting
-    the corrupted cwd — proving `held_seat`'s own lineage-aware resolution is reused, not
+    the corrupted cwd, proving `held_seat`'s own lineage-aware resolution is reused, not
     a naive re-derivation that could reintroduce the ancestor-generation gap it exists to
     close."""
     from src import mcp_server as srv
@@ -2334,7 +2332,7 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(tmp_path / "seats"))
     container = tmp_path / "seats"
     container.mkdir()
-    real_office = container / "thoth"
+    real_office = container / "scribe"
     real_office.mkdir()
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     (real_office / "charter.md").write_text("# eleven days old, untouched this session\n")
@@ -2344,7 +2342,7 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     agent = "agent:settleseat1"
     seat_id = "seat:settleseat1"
     seat_oid = await actions.create_or_find_object("Seat", seat_id, agent)
-    await actions.assert_property(seat_oid, "handle", "Thoth", agent, mounted_at, 0.9,
+    await actions.assert_property(seat_oid, "handle", "Scribe", agent, mounted_at, 0.9,
                                   evidence_class="self_declared")
     await bind_holder(actions, seat_id=seat_id, agent_id=agent)
 
@@ -2364,7 +2362,7 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
     srv._pool = actions.pool
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
         agent_id=agent, session="settleseat1", project="osiris", model=None,
-        cwd=str(container))  # ident.cwd is the bare container, exactly Thoth's own specimen
+        cwd=str(container))  # ident.cwd is the bare container, exactly this specimen's shape
     try:
         out = await srv.settle(ctx=ctx)
     finally:
@@ -2378,14 +2376,14 @@ async def test_settle_tool_resolves_the_seat_office_over_a_corrected_mount_cwd(
 async def test_settle_tool_charter_box_still_none_for_an_unseated_session(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The refutation, backed by evidence, of Thoth's own instinct that None should always
-    block `complete` (DM 3076 defect 1b): an UNSEATED session (no `holds` link at all — an
+    """The refutation, backed by evidence, of an earlier instinct that None should always
+    block `complete` (defect 1b): an UNSEATED session (no `holds` link at all, an
     ordinary code-repo session, not a seat office) has no seat binding to resolve and no
     charter.md was ever scaffolded for it. Falls back to the cwd it was given; still
-    legitimately unevaluable, still non-blocking — ruling 577988ed's own reasoning (a
+    legitimately unevaluable, still non-blocking, a prior ruling's own reasoning (a
     check that can false-positive must never refuse-to-serve) applies here exactly as it
     already does for identity_coherence/closure_coverage. Now VISIBLE though, in
-    `unevaluated_boxes` and `note` — the part of the defect that WAS a real gap."""
+    `unevaluated_boxes` and `note`, the part of the defect that WAS a real gap."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
@@ -2420,7 +2418,7 @@ async def test_settle_tool_charter_box_still_none_for_an_unseated_session(
     assert out["boxes"]["standing orders touched this session"] is None
     assert "standing orders touched this session" not in out["missing_boxes"]
     assert "standing orders touched this session" in out["unevaluated_boxes"]
-    assert out["complete"] is True, out  # still non-blocking — refuted, not assumed
+    assert out["complete"] is True, out  # still non-blocking, refuted, not assumed
     assert "could not evaluate" in out["note"]
     assert "standing orders touched this session" in out["note"]
 
@@ -2434,7 +2432,7 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     from src.orchestrator.mounts import save_mount
 
     agent = "agent:settlecf1"
-    job_dir = str(tmp_path / "jobs" / "settlecf")  # EXACTLY 8 chars — see below
+    job_dir = str(tmp_path / "jobs" / "settlecf")  # EXACTLY 8 chars, see below
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await actions.create_or_find_object("Agent", agent, "test")
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
@@ -2450,7 +2448,7 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     ctx = _Ctx()
     saved_pool = srv._pool
     srv._pool = actions.pool
-    # ident.session's first 8 chars must match job_dir's own trailing 8 chars — the same
+    # ident.session's first 8 chars must match job_dir's own trailing 8 chars, the same
     # LIKE '%/jobs/' || sid[:8] contract mounts.find_session_row runs on everywhere
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
         agent_id=agent, session="settlecf1", project="settleproj", model=None,
@@ -2472,7 +2470,7 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
     assert out["complete"] is True, out
     assert out["missing_boxes"] == []
     assert out["open_obligations"] == []
-    # this session is UNSEATED (no Seat/held_seat binding) — "seat is chartered" has no
+    # this session is UNSEATED (no Seat/held_seat binding), "seat is chartered" has no
     # seat to ask about and reads None (fog-of-war), same honest-not-invisible law
     # unevaluated_boxes already enforces above; it never gates `complete`.
     assert out["unevaluated_boxes"] == ["seat is chartered (governs a repo)"]
@@ -2484,9 +2482,9 @@ async def test_settle_tool_confirms_complete_after_a_full_dump(
 async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_complete(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE NEW BOX (operator, 2026-07-26, watching a live compaction): dirty git state in
-    the mounted cwd is named in the receipt and the note. DEFECT 2 (Thoth DM 3076): it must
-    NOT gate `complete` — a shared tree's `git status` has no notion of whose hand staged
+    """THE NEW BOX, added after watching a live compaction: dirty git state in
+    the mounted cwd is named in the receipt and the note. DEFECT 2: it must
+    NOT gate `complete`, a shared tree's `git status` has no notion of whose hand staged
     what, so a manager's own settle used to flip false/true purely off a WORKER's commit
     timing, deciding this agent's compaction-safety by another agent's action. `complete`
     now answers only "is THIS session's own graph knowledge deposited", the same report-
@@ -2496,7 +2494,7 @@ async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_com
     from src.orchestrator.mounts import save_mount
 
     agent = "agent:settlegit1"
-    job_dir = str(tmp_path / "jobs" / "settlegi")  # EXACTLY 8 chars — the find_session_row contract
+    job_dir = str(tmp_path / "jobs" / "settlegi")  # EXACTLY 8 chars, the find_session_row contract
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="settleproj",
                      cwd=str(tmp_path), model=None, session_key=None)
@@ -2530,12 +2528,12 @@ async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_com
     assert out["complete"] is True, out  # never gated by uncommitted git state
     assert out["uncommitted_git_files"] is not None
     assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
-    assert out["git_checked_path"] == str(tmp_path)  # no repo_path given — falls back to cwd
+    assert out["git_checked_path"] == str(tmp_path)  # no repo_path given, falls back to cwd
     assert "uncommitted git file" in out["note"]
     assert "informational" in out["note"]
-    # the caller IS the owner here (its own mount's cwd == git_checked_path) — the
-    # generic disclaimer stays, never "looks like {self}'s own work" (thread fe1d91bc,
-    # Thoth's own requirement 1: never name an owner that is just the caller itself
+    # the caller IS the owner here (its own mount's cwd == git_checked_path), the
+    # generic disclaimer stays, never "looks like {self}'s own work" (a prior
+    # requirement: never name an owner that is just the caller itself
     # reading back its own note, and never fabricate a name when the caller already
     # knows whose tree this is).
     assert agent not in out["note"]
@@ -2544,8 +2542,8 @@ async def test_settle_tool_uncommitted_git_work_is_surfaced_but_never_blocks_com
 async def test_settle_tool_names_the_real_owner_of_a_foreign_uncommitted_hunk(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX (thread fe1d91bc, Thoth dispatch 9870/9976/10000): the ORIGINAL incident
-    this thread exists for — an alarm about a foreign hunk addressed to the one party
+    """THE FIX: the ORIGINAL incident
+    this thread exists for, an alarm about a foreign hunk addressed to the one party
     who could neither have written it nor restored it, while its real owner (a DIFFERENT
     mounted agent at the exact same cwd) was never told. settle()'s own uncommitted_git_
     work box now names that real owner directly instead of a bare disclaimer."""
@@ -2572,7 +2570,7 @@ async def test_settle_tool_names_the_real_owner_of_a_foreign_uncommitted_hunk(
     saved_pool = srv._pool
     srv._pool = actions.pool
     # the CALLER is mounted at a DIFFERENT cwd but points settle at this shared repo
-    # via repo_path — a coordinator checking a directory that isn't its own workspace,
+    # via repo_path, a coordinator checking a directory that isn't its own workspace,
     # settle.py's own documented load-bearing scenario.
     srv._agents[srv._conn_key(ctx)] = AgentIdentity(
         agent_id=caller, session="settlecal1", project="p", model=None,
@@ -2591,8 +2589,8 @@ async def test_settle_tool_names_the_real_owner_of_a_foreign_uncommitted_hunk(
 async def test_settle_tool_a_vacated_seats_stale_mount_still_names_it_as_owner(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's own requirement 2 (dispatch 10000): a stale mount row for a seat that
-    vacated without unmounting still matches — the receipt names the owner PLUS its
+    """A second requirement: a stale mount row for a seat that
+    vacated without unmounting still matches, the receipt names the owner PLUS its
     last_seen age, so a reader can judge staleness themselves rather than this box
     silently deciding the mount is too old to count."""
     from src import mcp_server as srv
@@ -2634,15 +2632,15 @@ async def test_settle_tool_a_vacated_seats_stale_mount_still_names_it_as_owner(
 async def test_settle_tool_repo_path_overrides_the_office_cwd(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIX for Thoth's catch (msg 1381): a seat-office agent's mounted cwd is the
-    OFFICE, never the repo it governs — checking cwd alone reads None for the entire
-    seat-office fleet and never solves the operator's complaint. `repo_path` names the
+    """THE FIX for an earlier catch: a seat-office agent's mounted cwd is the
+    OFFICE, never the repo it governs, checking cwd alone reads None for the entire
+    seat-office fleet and never solves the original complaint. `repo_path` names the
     real repo explicitly; it must be checked INSTEAD of cwd, not merely in addition."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
 
-    office = tmp_path / "office"  # never a git repo — matches ~/.osiris/seats/<handle>
+    office = tmp_path / "office"  # never a git repo, matches ~/.osiris/seats/<handle>
     office.mkdir()
     repo = tmp_path / "repo"  # the code the agent actually governs
     repo.mkdir()
@@ -2671,7 +2669,7 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
         cwd=str(office))
     try:
         no_repo_path = await srv.settle(ctx=ctx)
-        assert no_repo_path["uncommitted_git_files"] is None  # office cwd — can't evaluate
+        assert no_repo_path["uncommitted_git_files"] is None  # office cwd, can't evaluate
         assert no_repo_path["git_checked_path"] == str(office)
 
         out = await srv.settle(repo_path=str(repo), ctx=ctx)
@@ -2681,7 +2679,7 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
     assert out["git_checked_path"] == str(repo)
     assert out["uncommitted_git_files"] is not None
     assert any("dirty.txt" in line for line in out["uncommitted_git_files"])
-    # complete stays False here regardless — this session recorded no decisions/threads at
+    # complete stays False here regardless, this session recorded no decisions/threads at
     # all, an unrelated reason (defect 2 only changed whether uncommitted git state ITSELF
     # can gate complete; see test_settle_tool_uncommitted_git_work_is_surfaced_but_never_
     # blocks_complete for that specific proof, isolated from these other boxes). Still
@@ -2693,14 +2691,14 @@ async def test_settle_tool_repo_path_overrides_the_office_cwd(
 async def test_settle_tool_carries_open_obligations_without_blocking_complete(
     actions: Actions,
 ) -> None:
-    """thread f0511eed (found on Thoth's first live dogfood): `complete` used to read False
-    whenever ANY open obligation named this agent's lineage as owner — even ancient
+    """Found on a first live dogfood: `complete` used to read False
+    whenever ANY open obligation named this agent's lineage as owner, even ancient
     backlog this session never touched, so a manager's project (which always has SOME
     open obligation) could never read complete. An open Thread is already durably
-    RECORDED — that is what open_thread's write accomplishes — so it is not "unwritten
+    RECORDED, that is what open_thread's write accomplishes, so it is not "unwritten
     state a compaction could lose" the way a missing box or a dirty git tree is.
     Obligations still surface in the receipt (carried forward, informational) but no
-    longer gate `complete` — a pure surface call is safe and read-only either way."""
+    longer gate `complete`, a pure surface call is safe and read-only either way."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -2733,10 +2731,10 @@ async def test_settle_tool_carries_open_obligations_without_blocking_complete(
 async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's Lane 4 finding: settle verified WHAT John XVI wrote, never WHETHER his own
-    successor could read it from where orient() looks — his writes landed in a different
-    project than the one he was filed under. A mismatch surfaces LOUDLY in the receipt and
-    its note but never gates `complete` (ruling 577988ed: a fleet-wide single point of
+    """A finding from live use: settle verified WHAT a session wrote, never WHETHER its own
+    successor could read it from where orient() looks, its writes landed in a different
+    project than the one it was filed under. A mismatch surfaces LOUDLY in the receipt and
+    its note but never gates `complete` (a fleet-wide single point of
     failure must never refuse-to-serve on a check that can itself false-positive)."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -2774,7 +2772,7 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
         srv._agents.pop(srv._conn_key(ctx), None)
     assert out["complete"] is True, out          # never gated by the coherence check
     # the thread's own repo= was never given, so it now legitimately defaults to the
-    # mounted identity's own project, "redmonth" (the orphan-door fix) — alongside the
+    # mounted identity's own project, "redmonth" (the orphan-project fix), alongside the
     # decision's explicit, deliberately mismatched "ballgem"; the mismatch this test is
     # about is still visible and still marks `coherent: False`
     assert out["identity_coherence"] == {
@@ -2786,14 +2784,14 @@ async def test_settle_tool_surfaces_identity_coherence_without_blocking_complete
 async def test_settle_tool_omits_identity_coherence_when_nothing_written(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No writes this session — no signal, so the field stays absent rather than asserting
+    """No writes this session, no signal, so the field stays absent rather than asserting
     a false 'coherent'."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
     from src.orchestrator.mounts import save_mount
 
     agent = "agent:settleic2"
-    job_dir = str(tmp_path / "jobs" / "settleic")  # EXACTLY 8 chars — matches session[:8]
+    job_dir = str(tmp_path / "jobs" / "settleic")  # EXACTLY 8 chars, matches session[:8]
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="redmonth",
                      cwd=str(tmp_path), model=None, session_key=None)
@@ -2822,10 +2820,10 @@ async def test_settle_tool_omits_identity_coherence_when_nothing_written(
 async def test_settle_tool_reads_coherent_for_a_charter_declared_multi_repo_spread(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 992c0121, Soundwave XVI's specimen, at the settle() tool's own surface: a
-    seat CHARTERED for two repos writes to both — coherent, per filed_under_check's own
-    charter-aware verdict — but the successor-blindness sentence STILL fires (Soundwave's
-    own insistence): a successor mounting under `filed_under` alone genuinely will not see
+    """A specimen at the settle() tool's own surface: a
+    seat CHARTERED for two repos writes to both, coherent, per filed_under_check's own
+    charter-aware verdict, but the successor-blindness sentence STILL fires (by
+    design): a successor mounting under `filed_under` alone genuinely will not see
     the other repo's writes, chartered or not. Fix the verdict, keep the disclosure."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -2844,7 +2842,7 @@ async def test_settle_tool_reads_coherent_for_a_charter_declared_multi_repo_spre
     await set_charter(actions, seat["seat_id"], ["chartertest", "chartrepo2"], actor="test")
 
     job_dir = str(tmp_path / "jobs" / "settleic4"[:8])  # find_session_row matches job_dir's
-    # basename against session[:8] exactly (no trailing chars) — see the two sibling tests
+    # basename against session[:8] exactly (no trailing chars), see the two sibling tests
     # above for the same convention.
     mounted_at = datetime.now(UTC) - timedelta(minutes=5)
     await save_mount(actions.pool, job_dir=job_dir, agent_id=agent, project="chartertest",

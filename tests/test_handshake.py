@@ -1,7 +1,7 @@
-"""The whisper's server half — automount: every session wakes up already mounted.
+"""The SessionStart hook's server half: automount, every session wakes up already mounted.
 
-Drives the same tested mount path the tool uses, so these tests focus on what the whisper
-ADDS: the derived job_dir anchor (durable + resolved, visible to the liveness probe), the
+Drives the same tested mount path the tool uses, so these tests focus on what the hook
+ADDS: the derived job_dir anchor (durable and resolved, visible to the liveness probe), the
 payload the hook prints (mail/desk/away), and idempotence on hook re-fire.
 """
 from __future__ import annotations
@@ -49,9 +49,9 @@ def _transcript(root: Path, cwd: str, model: str = "claude-fable-5") -> None:
 async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path: Path) -> None:
     root = tmp_path / "projects"
     _transcript(root, "/w/sibling-eight")
-    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
-    # #117) -- a throwaway, differently-named seed row (never agent:39fb22a2, the identity
-    # this test's own automount() call mints below) registers existence without a live pulse.
+    # send_message refuses a to_project nobody has ever mounted under (a specific historical
+    # bug fix) -- a throwaway, differently-named seed row (never the identity this test's
+    # own automount() call mints below) registers existence without a live pulse.
     await mounts_mod.save_mount(
         actions.pool, job_dir="/test/seed/sibling-eight", agent_id="agent:seed-sibling-eight",
         project="sibling-eight", cwd="/test", model=None, session_key=None, alive=False)
@@ -70,7 +70,7 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
     row = await actions.pool.fetchrow(
         "SELECT agent_id, project FROM agent_mounts WHERE agent_id='agent:39fb22a2'")
     assert row is not None and row["project"] == "sibling-eight"
-    # hook re-fire (session resume) is idempotent — same identity, and under the full
+    # hook re-fire (session resume) is idempotent, same identity, and under the full
     # visitor gate NO greeting mints an object: the graph stays clean until the first act
     again = await automount(actions, session_id=SID, cwd="/w/sibling-eight",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
@@ -82,9 +82,9 @@ async def test_automount_is_a_durable_anchored_mount(actions: Actions, tmp_path:
 async def test_automount_reingests_a_soul_stored_session_the_heal_just_rewrote(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 6e56cf7e item 5, end to end: a DIFFERENT session, already soul-stored,
+    """A specific past bug fix, end to end: a DIFFERENT session, already soul-stored,
     sits under this cwd's own slug directory but is internally addressed to a former
-    home — automount's own heal rewrites its cwd on disk (already proven elsewhere);
+    home. automount's own heal rewrites its cwd on disk (already proven elsewhere);
     this proves the follow-on wiring actually reconciles the soul store too, not just
     the file."""
     import os
@@ -101,7 +101,7 @@ async def test_automount_reingests_a_soul_stored_session_the_heal_just_rewrote(
     moved_path.write_text(json.dumps(
         {"type": "assistant", "cwd": "/w/former-home",
          "message": {"content": [{"type": "text", "text": "line one"}]}}) + "\n")
-    stale = time.time() - 3600  # NOT an open tab's pen — heal_slug_transcripts' own
+    stale = time.time() - 3600  # NOT an open tab's window: heal_slug_transcripts' own
     os.utime(moved_path, (stale, stale))  # quiet_secs guard would otherwise defer this
 
     store = SoulStore(actions.pool)
@@ -123,22 +123,22 @@ async def test_automount_reingests_a_soul_stored_session_the_heal_just_rewrote(
 async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """thread 6a00e942: THE ACTUAL SPECIMEN — a background job's FIRST whisper fires from
-    the bare seats CONTAINER root (~/.osiris/seats), not the interactive mount() tool.
+    """A specific historical bug: the FIRST SessionStart hook call fires from the bare
+    seats CONTAINER root (~/.osiris/seats), not the interactive mount() tool.
     mount()'s own project write already overrides a seated session's project with its
-    seat's derived house (mcp_server._resolve_project_seat_first) — automount() never
-    did, so a session whisper-mounted here permanently filed its registry row under no
+    seat's derived house (mcp_server._resolve_project_seat_first), but automount() never
+    did, so a session mounted here via the hook permanently filed its registry row under no
     project at all, while orient()/mount() (re-deriving live via the same seat binding
-    on every later call) told the correct story. Same seat, same session, two answers —
-    the 60bc15db shape."""
+    on every later call) told the correct story: same seat, same session, two different
+    answers."""
     fake_root = tmp_path / ".osiris" / "seats"
     fake_root.mkdir(parents=True)
     monkeypatch.setenv("OSIRIS_OFFICE_ROOT", str(fake_root))
 
     seat = await ensure_seat(actions, house="osiris", handle="Barewhisper", source="test")
     assert seat.get("error") is None
-    # the job_dir a whisper for THIS session_id will derive — bind the seat to the SAME
-    # agent id BEFORE the first breath, exactly as a returning/pre-charted seat would be
+    # the job_dir a hook call for THIS session_id will derive: bind the seat to the SAME
+    # agent id BEFORE the session starts, exactly as a returning/pre-charted seat would be
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:39fb22a2",
                       source="test")
 
@@ -149,10 +149,10 @@ async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
         "SELECT project FROM agent_mounts WHERE agent_id='agent:39fb22a2'")
     assert row is not None
     assert row["project"] == "osiris", (
-        "the whisper's own registry write must carry the seated house too — a background "
-        "job's first breath must never file a seated agent under no project at all")
+        "the hook's own registry write must carry the seated house too: a background "
+        "job's first session must never file a seated agent under no project at all")
     # THE ACTUAL REPORTED SYMPTOM: fleet() reads the AGENT's own current_assertions
-    # 'project', not agent_mounts.project — this is register_agent's own stamp,
+    # 'project', not agent_mounts.project. This is register_agent's own stamp,
     # written BEFORE the seat-first correction, so it must be checked separately.
     fleet_row = await actions.pool.fetchrow(
         "SELECT value #>> '{}' AS project FROM current_assertions a "
@@ -164,18 +164,17 @@ async def test_automount_from_a_bare_seats_root_writes_the_seated_house(
         "fleet() must file the seated agent under its house, never '?'")
 
 
-async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_stranger(
+async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_new_identity(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE FIRST-BREATH SEAT RESCUE, end to end (thread 124732175759, Thoth mail 13096 —
-    the live Thoth/a93f82b4 specimen). Unlike the bare-seats-root test above, the seat's
-    real holder has a lineage id UNRELATED to the job_dir's own derived basename — the
-    exact shape that specimen's own job_dir/a93f82b4 vs. seat-holder agent:ad1a1cb0
-    mismatch had, and which the seat-first-before-mint law (checked only against the
-    FRESHLY-derived identity) cannot catch on its own. A fake agent_mounts wipe (the
-    real, audited sweep_ghost_doors, not a hand-rolled DELETE) releases the row; automount
-    must re-adopt the seat's current holder, never mint a stranger under the job_dir's
-    own derived name."""
+    """THE FIRST-SESSION SEAT RESCUE, end to end (a specific historical bug fix). Unlike the
+    bare-seats-root test above, the seat's real holder has a lineage id UNRELATED to the
+    job_dir's own derived basename: the exact shape a prior real mismatch between the
+    job_dir's derived basename and the seat-holder's agent id had, and which the
+    seat-first-before-mint law (checked only against the FRESHLY-derived identity) cannot
+    catch on its own. A fake agent_mounts wipe (the real, audited sweep_ghost_doors, not a
+    hand-rolled DELETE) releases the row; automount must re-adopt the seat's current
+    holder, never mint a new identity under the job_dir's own derived name."""
     seat = await ensure_seat(actions, house="osiris", handle="Rescueholder",
                              anchor_cwd=str(tmp_path / "seats" / "rescueholder"),
                              source="test")
@@ -208,8 +207,8 @@ async def test_automount_rescues_a_ghost_swept_seat_holder_instead_of_minting_a_
 async def test_automount_demotes_a_self_reinforcing_stranger_and_re_adopts_the_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """LAW 3a, end to end (thread 124732175759, Thoth mail 13141 — Thoth's own SECOND
-    specimen): the trap the first rescue alone cannot close — a wrong mint from law 1's
+    """LAW 3a, end to end (a second real specimen of the same class of bug): the trap the
+    first rescue alone cannot close: a wrong mint from law 1's
     own gap registers its OWN live agent_mounts row, so the NEXT restart's find_mount
     finds THAT row directly and never even reaches rescue_seat_holder_mount. automount
     must still re-adopt the seat's current holder, retiring the stranger's live claim
@@ -233,7 +232,7 @@ async def test_automount_demotes_a_self_reinforcing_stranger_and_re_adopts_the_h
     await mounts_mod.sweep_ghost_doors(
         actions, body_cwds=set(), body_projects=set(), actor="cron:test")
     # THE SELF-REINFORCING WRITE: a stranger (a wrong mint from an earlier restart)
-    # already owns a LIVE row for this exact job_dir — find_mount alone would keep
+    # already owns a LIVE row for this exact job_dir: find_mount alone would keep
     # finding it forever.
     stranger = "agent:5e1f708f-iii"
     await actions.create_or_find_object("Agent", stranger, "test")
@@ -244,20 +243,20 @@ async def test_automount_demotes_a_self_reinforcing_stranger_and_re_adopts_the_h
     out = await automount(actions, session_id=SID, cwd="/w/irrelevant-launch-cwd",
                           actor="analyst:operator", job_dir=job_dir, jobs_home=tmp_path / "jobs")
     assert out["agent"] == holder  # the seat's own current holder, not the stranger
-    # the stranger's OWN Agent object is left untouched — only its job_dir claim is gone
+    # the stranger's OWN Agent object is left untouched, only its job_dir claim is gone
     assert await actions.pool.fetchval(
         "SELECT status FROM objects WHERE type='Agent' AND canonical=$1", stranger) == "active"
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='retire_seatless_mount_claim'") == 1
 
 
-async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
+async def test_automount_hands_back_the_durable_anchor_that_prevents_a_duplicate(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """The reconnect-twin fix (thread 883a24f4): the whisper returns the derived job_dir, and a
-    later mount carrying THAT anchor re-attaches to the same identity instead of minting a twin —
-    even though $CLAUDE_JOB_DIR is empty. Co-located sessions stay distinct (own session → own
-    anchor), so sibling-three cloud+engine on one dir never collide."""
+    """A specific reconnect-duplication bug fix: automount returns the derived job_dir, and a
+    later mount carrying THAT anchor re-attaches to the same identity instead of minting a
+    duplicate, even though $CLAUDE_JOB_DIR is empty. Co-located sessions stay distinct (own
+    session, own anchor), so sibling-three cloud+engine on one dir never collide."""
     from src.orchestrator.agents import register_agent, resolve_identity
 
     root = tmp_path / "projects"
@@ -271,7 +270,7 @@ async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
     # a RECONNECT re-mount carrying the whisper's anchor (not $CLAUDE_JOB_DIR) re-attaches
     reident = resolve_identity(cwd="/w/sibling-three", job_dir=anchor, root=root)
     await register_agent(actions, reident, actor="analyst:operator")
-    assert reident.agent_id == out["agent"]               # SAME identity — no twin
+    assert reident.agent_id == out["agent"]               # SAME identity, no duplicate
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical='agent:39fb22a2'") == 1
 
@@ -287,10 +286,10 @@ async def test_whisper_hands_back_the_durable_anchor_that_prevents_the_twin(
 
 
 async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) -> None:
-    """Ruling a882b334, fork 2 (operator overruled the same-weights argument): a compaction is
-    a DEATH — the weights survive but the memory the operator was talking to does not. The
-    SessionStart source='compact' whisper mints the lineage's next generation, the seat passes,
-    and the durable row follows the heir."""
+    """A past ruling settled a debate over whether a compaction is really a fresh identity:
+    it is, because the weights survive but the memory the operator was talking to does not.
+    The SessionStart source='compact' hook mints the lineage's next generation, the seat
+    passes, and the durable row follows the heir."""
     from src.orchestrator.agents import claim_name
 
     root = tmp_path / "projects"
@@ -299,47 +298,48 @@ async def test_compaction_mints_the_next_mind(actions: Actions, tmp_path: Path) 
                           root=root, jobs_home=tmp_path / "jobs", source="startup")
     assert out["agent"] == "agent:39fb22a2"
     # the visitor gate holds at the greeting; the first ACT (mount's register) mints,
-    # then the mind claims its name — the production order
+    # then the mind claims its name, matching the real production order
     from src.orchestrator.agents import register_agent, resolve_identity
     ident = resolve_identity(cwd="/w/osiris", job_dir=str(tmp_path / "jobs" / SID[:8]),
                              root=root)
     await register_agent(actions, ident, actor="analyst:operator")
-    await claim_name(actions, "agent:39fb22a2", "Thoth", source="agent:39fb22a2")
+    await claim_name(actions, "agent:39fb22a2", "Scribe", source="agent:39fb22a2")
 
-    # the harness compacts the session — same sid, same transcript, same model: still a death
+    # the harness compacts the session, same sid, same transcript, same model: still a death
     reborn = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                              root=root, jobs_home=tmp_path / "jobs", source="compact")
     assert reborn["agent"] == "agent:39fb22a2-ii"
-    assert reborn["minted"] == "agent:39fb22a2"       # the whisper confesses the succession
-    assert reborn["seat"] == "Thoth II"               # the seat passed, the numeral ticked
+    assert reborn["minted"] == "agent:39fb22a2"       # automount confesses the succession
+    assert reborn["seat"] == "Scribe II"              # the seat passed, the numeral ticked
     assert await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical='agent:39fb22a2-ii' AND a.name='minted_because'") == "compaction"
-    # the durable row moved with the seat — per-render reads resolve to the new mind
+    # the durable row moved with the seat: per-render reads resolve to the new mind
     assert await actions.pool.fetchval(
         "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/jobs/' || $1",
         SID[:8]) == "agent:39fb22a2-ii"
-    # a SECOND compaction is a second death — the numeral keeps counting, PROVIDED "-ii"
-    # actually lived (ruling d3531cd8): give it a witnessed act first, or this is exactly
+    # a SECOND compaction is a second death: the numeral keeps counting, PROVIDED "-ii"
+    # actually lived (per a past ruling): give it a witnessed act first, or this is exactly
     # the zero-turn-fold's own shape (two compactions, no acts between) and "-ii" folds
-    # instead of "-iii" ever minting — see test_two_zero_turn_compactions_fold below.
+    # instead of "-iii" ever minting: see test_two_zero_turn_compactions_fold below.
     from src.orchestrator.capture import record_decision
     await record_decision(actions, "39fb22a2-ii did real work", source="agent:39fb22a2-ii")
     third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                             root=root, jobs_home=tmp_path / "jobs", source="compact")
-    assert third["agent"] == "agent:39fb22a2-iii" and third["seat"] == "Thoth III"
-    # ...but a plain resume between deaths is NOT one — same mind, same numeral
+    assert third["agent"] == "agent:39fb22a2-iii" and third["seat"] == "Scribe III"
+    # ...but a plain resume between deaths is NOT one: same mind, same numeral
     resumed = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                               root=root, jobs_home=tmp_path / "jobs", source="resume")
     assert resumed["agent"] == "agent:39fb22a2-iii"
 
 
 async def test_two_zero_turn_compactions_fold(actions: Actions, tmp_path: Path) -> None:
-    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8) — the canonical repro,
-    through the REAL production whisper path: two SessionStart source='compact' events
-    back-to-back with no witnessed act between them (the exact shape of /compact then
-    /model, zero turns) must not chain a third generation onto a mind that never lived.
-    The second compaction's heir lands on the ORIGINAL agent, reusing '-ii', not '-iii'."""
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (a past ruling settled this): the
+    canonical repro, through the REAL production automount path: two SessionStart
+    source='compact' events back-to-back with no witnessed act between them (the exact
+    shape of /compact then /model, zero turns) must not chain a third generation onto a
+    mind that never lived. The second compaction's heir lands on the ORIGINAL agent,
+    reusing '-ii', not '-iii'."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
 
     root = tmp_path / "projects"
@@ -349,13 +349,13 @@ async def test_two_zero_turn_compactions_fold(actions: Actions, tmp_path: Path) 
     ident = resolve_identity(cwd="/w/osiris", job_dir=str(tmp_path / "jobs" / SID[:8]),
                              root=root)
     await register_agent(actions, ident, actor="analyst:operator")
-    await claim_name(actions, "agent:39fb22a2", "Thoth", source="agent:39fb22a2")
+    await claim_name(actions, "agent:39fb22a2", "Scribe", source="agent:39fb22a2")
 
     reborn = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                              root=root, jobs_home=tmp_path / "jobs", source="compact")
     assert reborn["agent"] == "agent:39fb22a2-ii"
 
-    # NO witnessed act here — the phantom's whole life is this one silent mint
+    # NO witnessed act here: the phantom's whole life is this one silent mint
     third = await automount(actions, session_id=SID, cwd="/w/osiris", actor="analyst:operator",
                             root=root, jobs_home=tmp_path / "jobs", source="compact")
     assert third["agent"] == "agent:39fb22a2-ii", "the silent '-ii' folds; the numeral is reused"
@@ -365,10 +365,10 @@ async def test_two_zero_turn_compactions_fold(actions: Actions, tmp_path: Path) 
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1") == "true"
 
 
-async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
-    """Soundwave V's complaint (thread 33838160): a new tab deliberately wearing a seat (its
-    session row bound to a foreign lineage) must NEVER be re-asserted as its session hash by
-    the whisper — and a compaction seam mints on the SEAT's lineage, not a phantom twin's."""
+async def test_automount_honors_a_bound_seat(actions: Actions, tmp_path: Path) -> None:
+    """A specific past bug report: a new tab deliberately wearing a seat (its session row
+    bound to a foreign lineage) must NEVER be re-asserted as its session hash by
+    automount, and a compaction seam mints on the SEAT's lineage, not a phantom duplicate's."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import claim_name
 
@@ -381,39 +381,39 @@ async def test_the_whisper_honors_a_bound_seat(actions: Actions, tmp_path: Path)
                                   __import__("datetime").datetime.now(
                                       __import__("datetime").UTC), 0.85,
                                   evidence_class=EvidenceClass.DIRECT_OBSERVATION.value)
-    await claim_name(actions, "agent:0806072e", "Soundwave", source="agent:0806072e")
+    await claim_name(actions, "agent:0806072e", "Warden", source="agent:0806072e")
     # the new tab's session row is BOUND to the seat (what mount(session_anchor=...) writes)
     session_row = str(tmp_path / "jobs" / SID[:8])
     await mounts.save_mount(actions.pool, job_dir=session_row, agent_id="agent:0806072e",
                             project="sibling-two", cwd="/w/sibling-two",
                             model="claude-fable-5", session_key="k")
-    # the whisper re-fires on RESUME: it must assert the seat, not agent:39fb22a2
+    # automount re-fires on RESUME: it must assert the seat, not agent:39fb22a2
     out = await automount(actions, session_id=SID, cwd="/w/sibling-two",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="resume")
     assert out["agent"] == "agent:0806072e"
-    assert out["seat"] == "Soundwave I"
-    # ...and a COMPACTION is a death of the SEAT's mind: the heir is Soundwave II, no twin
+    assert out["seat"] == "Warden I"
+    # ...and a COMPACTION is a death of the SEAT's mind: the heir is Warden II, no duplicate
     reborn = await automount(actions, session_id=SID, cwd="/w/sibling-two",
                              actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                              source="compact")
-    assert reborn["agent"] == "agent:0806072e-ii" and reborn["seat"] == "Soundwave II"
+    assert reborn["agent"] == "agent:0806072e-ii" and reborn["seat"] == "Warden II"
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:39fb22a2%'"
-    ) == 0  # the hash twin was never born
+    ) == 0  # the hash duplicate was never born
 
 
-async def test_the_whisper_reads_the_current_seat_generation_not_a_text_max(
+async def test_automount_reads_the_current_seat_generation_not_a_text_max(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread 43c84fa9 (stale generation label): _seat_of used to pick seat_generation via
+    """A past bug fix for a stale generation label: _seat_of used to pick seat_generation via
     a bare MAX(value) TEXT aggregate across EVERY current_assertions row for the property,
     instead of the one CURRENT (highest-confidence, most-recent) value that seat_bearings
-    already reads correctly — current_assertions can carry more than one non-superseded
+    already reads correctly. current_assertions can carry more than one non-superseded
     row per (object, name) under multiple writers (a real, live-confirmed condition), and a
     bare text MAX picks whichever sorts highest as a STRING, not the right one: '9' text-
     sorts above '12' even though 12 is the true, higher-confidence generation. This is
-    exactly why the resume-hook whisper (automount -> _seat_of) could announce a stale
+    exactly why the resume-hook automount call (automount -> _seat_of) could announce a stale
     numeral while orient() (-> seat_bearings), moments later in the same session, read
     correctly."""
     from src.orchestrator.agents import claim_name
@@ -421,12 +421,12 @@ async def test_the_whisper_reads_the_current_seat_generation_not_a_text_max(
     root = tmp_path / "projects"
     _transcript(root, "/w/text-max")
     seat = await actions.create_or_find_object("Agent", "agent:7e57c0de", "agent:7e57c0de")
-    await claim_name(actions, "agent:7e57c0de", "Deckard", source="agent:7e57c0de")
+    await claim_name(actions, "agent:7e57c0de", "Courier", source="agent:7e57c0de")
     now = datetime.now(UTC)
-    # the correct, current generation — high confidence, from the normal minting writer
+    # the correct, current generation: high confidence, from the normal minting writer
     await actions.assert_property(seat, "seat_generation", "12", "agent:7e57c0de", now, 0.9,
                                   evidence_class="self_declared")
-    # a conflicting stray from another writer — LOWER confidence, but text-sorts ABOVE "12"
+    # a conflicting stray from another writer: LOWER confidence, but text-sorts ABOVE "12"
     await actions.assert_property(seat, "seat_generation", "9", "agent:stray-writer", now, 0.4,
                                   evidence_class="self_declared")
     session_row = str(tmp_path / "jobs" / SID[:8])
@@ -436,28 +436,28 @@ async def test_the_whisper_reads_the_current_seat_generation_not_a_text_max(
     out = await automount(actions, session_id=SID, cwd="/w/text-max",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="resume")
-    assert out["seat"] == "Deckard XII"
+    assert out["seat"] == "Courier XII"
 
 
 async def test_a_stranger_compacting_at_birth_mints_nothing(actions: Actions,
                                                             tmp_path: Path) -> None:
-    """You can only die if you lived: a session whose FIRST whisper arrives at a compact
-    boundary (hook installed mid-session, server was down at startup) mounts fresh — no
+    """You can only die if you lived: a session whose FIRST hook call arrives at a compact
+    boundary (hook installed mid-session, server was down at startup) mounts fresh: no
     phantom ancestor, no -ii for a lineage with no I."""
     root = tmp_path / "projects"
     _transcript(root, "/w/fresh")
     out = await automount(actions, session_id=SID, cwd="/w/fresh", actor="analyst:operator",
                           root=root, jobs_home=tmp_path / "jobs", source="compact")
-    assert out["agent"] == "agent:39fb22a2"           # generation 1 — nothing preceded it
+    assert out["agent"] == "agent:39fb22a2"           # generation 1, nothing preceded it
     assert out["minted"] is None
 
 
 async def test_a_joiner_inherits_the_rooms_settle_state(actions: Actions,
                                                         tmp_path: Path) -> None:
-    """The zombie-count fix (operator-observed, 2026-07-09): a wake-minted second session
-    counted 5 broadcasts its sibling had already settled. Joining the group chat does not
-    make handled history your unread — but mail NOBODY settled still greets you (the wake
-    pipeline's cause survives), and members who already joined keep their own unread."""
+    """A past zombie-count fix: a wake-minted second session counted 5 broadcasts its
+    sibling had already settled. Joining the group chat does not make handled history
+    your unread, but mail NOBODY settled still greets you (the wake pipeline's cause
+    survives), and members who already joined keep their own unread."""
     from src.orchestrator.mailbox import ack_messages, read_inbox, send_message, unread_count
 
     root = tmp_path / "projects"
@@ -482,7 +482,7 @@ async def test_a_joiner_inherits_the_rooms_settle_state(actions: Actions,
     # the incumbent's own state is untouched: its unsettled message is still its unread
     assert await unread_count(actions.pool, "osiris", reader_agent=first["agent"],
                               lease_secs=0) == 1
-    # re-fire (resume) does not re-stamp anything — join-settle is a first-mount event
+    # re-fire (resume) does not re-stamp anything: join-settle is a first-mount event
     again = await automount(actions, session_id=sid2, cwd="/w/osiris",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert again["mail"] == 1
@@ -490,8 +490,8 @@ async def test_a_joiner_inherits_the_rooms_settle_state(actions: Actions,
 
 async def test_no_greeting_mints_an_object_anywhere(actions: Actions,
                                                     tmp_path: Path) -> None:
-    """THE FULL VISITOR GATE (Phase 1b of ruling 120fcc81): the office rule extends to
-    every threshold — an unknown fresh session at an ORDINARY cwd gets a row and nothing
+    """THE FULL VISITOR GATE (a past design ruling): the office rule extends to
+    every threshold: an unknown fresh session at an ORDINARY cwd gets a row and nothing
     else, however many times its greeting re-fires; the object is earned at the first
     authenticated act (mount()/_reattach's register)."""
     from src.orchestrator import mounts
@@ -508,15 +508,15 @@ async def test_no_greeting_mints_an_object_anywhere(actions: Actions,
     # ...but the ROW (the address) is there, so mail and liveness have a door
     assert await mounts.find_mount(
         actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8])) is not None
-    # a RE-FIRED greeting (hook refire, resume) still mints nothing — the row is the
+    # a RE-FIRED greeting (hook refire, resume) still mints nothing: the row is the
     # gate's own artifact, never evidence of a life
     again = await automount(actions, session_id=SID, cwd="/w/anywhere",
                             actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert again["agent"] == out["agent"]
     assert await actions.pool.fetchval(
         "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", out["agent"]) is None
-    # ...and a compact re-fire for a row-only stranger mints NO phantom heir either:
-    # you can only die if you lived, and a whisper row alone is not a life
+    # ...and a compact re-fire for a row-only unknown agent mints NO phantom heir either:
+    # you can only die if you lived, and a hook-created row alone is not a life
     compacted = await automount(actions, session_id=SID, cwd="/w/anywhere",
                                 actor="analyst:operator", root=root,
                                 jobs_home=tmp_path / "jobs", source="compact")
@@ -534,10 +534,11 @@ async def test_no_greeting_mints_an_object_anywhere(actions: Actions,
 
 async def test_a_declared_child_is_born_denominated(actions: Actions,
                                                     tmp_path: Path) -> None:
-    """THE WAKE-ORPHAN CURE (operator ruling 2026-07-17: 'orphans like that are
-    structurally impossible going forward'): a spawner that declared parentage before the
-    child's first breath (OSIRIS_SPAWNED_BY → the whisper's spawned_by) gets a REGISTERED
-    CHILD — spawned_by edge, roman.arabic patronym — never an anonymous stranger."""
+    """THE WAKE-ORPHAN CURE (a past operator ruling that this class of orphan should be
+    structurally impossible going forward): a spawner that declared parentage before the
+    child's first session (OSIRIS_SPAWNED_BY -> automount's spawned_by) gets a REGISTERED
+    CHILD, with a spawned_by edge and a roman.arabic patronym, never an anonymous, unlinked
+    agent."""
     from datetime import UTC, datetime
 
     root = tmp_path / "projects"
@@ -562,7 +563,7 @@ async def test_a_declared_child_is_born_denominated(actions: Actions,
         "        WHERE o.canonical='agent:39fb22a2' AND a.name='patronym') AS patronym")
     assert row["parented"] == 1                      # the edge exists from breath one
     assert row["patronym"] and row["patronym"].startswith("Sower")  # roman.arabic
-    # a re-fired greeting converges on the SAME child — no twin, no stranger
+    # a re-fired greeting converges on the SAME child, no duplicate, no anonymous agent
     again = await automount(actions, session_id=SID, cwd="/w/wakehouse",
                             actor="analyst:operator", root=root,
                             jobs_home=tmp_path / "jobs",
@@ -576,12 +577,12 @@ async def test_a_declared_child_is_born_denominated(actions: Actions,
 async def test_a_failed_child_registration_confesses_rather_than_omitting(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """60bc15db specimen 2 (decision 01e0c69a): a spawner DID declare parentage, but
-    register_spawn itself failed — this must never render identically to "no spawner
-    declared parentage at all" (the genuine, correctly-silent case). The mount still
-    degrades to a plain visitor (identity binding stays conservative), but the receipt
-    must confess, matching attach/transcripts_healed's own "...FAILED..." shape two
-    blocks away in the same function."""
+    """A past specific bug fix: a spawner DID declare parentage, but register_spawn itself
+    failed. This must never render identically to "no spawner declared parentage at all"
+    (the genuine, correctly-silent case). The mount still degrades to a plain visitor
+    (identity binding stays conservative), but the receipt must confess, matching
+    attach/transcripts_healed's own "...FAILED..." shape two blocks away in the same
+    function."""
     import src.orchestrator.lineage as lineage_mod
 
     async def _raise(*args: object, **kwargs: object) -> str:
@@ -601,14 +602,14 @@ async def test_a_failed_child_registration_confesses_rather_than_omitting(
 
     assert out["child_of"] == "agent:dad0beef2"       # confessed, not omitted
     assert out["child_note"] is not None and "FAILED" in out["child_note"]
-    # identity binding stayed conservative — never rebound to a phantom child
+    # identity binding stayed conservative: never rebound to a phantom child
     assert out["agent"] != "agent:dad0beef2"
 
 
 async def test_automount_survives_a_sessionless_stranger(actions: Actions,
                                                          tmp_path: Path) -> None:
     # no transcript, junk session id → still a valid (unresolved) mount, never a crash:
-    # the whisper is fail-open end to end
+    # automount is fail-open end to end
     out = await automount(actions, session_id="x", cwd="/w/mystery",
                           actor="analyst:operator", root=tmp_path / "empty",
                           jobs_home=tmp_path / "jobs")
@@ -619,11 +620,11 @@ async def test_automount_survives_a_sessionless_stranger(actions: Actions,
 async def test_session_end_releases_the_seat_the_same_way_retire_does(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """The ghost-seat fix (heinrich's filing, thread 1fe6811c): SessionEnd is the harness's
-    REAL close signal (Stop fires per-turn and cannot mean this) — releasing the durable mount
-    row the instant the tab closes, instead of leaving it to age out of `last_seen`'s 15-minute
-    window. #178 piece (a): "released" means SUSPENDED, never deleted — the row survives
-    (findable, restorable), only its liveness reads dead immediately."""
+    """A past ghost-seat fix: SessionEnd is the harness's REAL close signal (Stop fires
+    per-turn and cannot mean this), releasing the durable mount row the instant the tab
+    closes, instead of leaving it to age out of `last_seen`'s 15-minute window. #178 piece
+    (a): "released" means SUSPENDED, never deleted. The row survives (findable,
+    restorable), only its liveness reads dead immediately."""
     from src.orchestrator import mounts
     from src.orchestrator.handshake import session_end
 
@@ -638,17 +639,17 @@ async def test_session_end_releases_the_seat_the_same_way_retire_does(
     out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
 
     assert out["agent"] == mounted["agent"] and out["released"] == 1
-    # the row SURVIVES — #178 piece (a) never deletes — but its liveness is dead immediately
+    # the row SURVIVES: #178 piece (a) never deletes, but its liveness is dead immediately
     row = await mounts.find_mount(actions.pool, job_dir=job_dir)
     assert row is not None
     last_seen = await actions.pool.fetchval(
         "SELECT last_seen FROM agent_mounts WHERE job_dir=$1", job_dir)
     assert not mounts.is_live(last_seen)
-    # a second session_end call on the same (now-suspended) row is a genuine no-op — never
-    # re-counted as a fresh release (idempotent, matching the file's own "gone" receipt law)
+    # a second session_end call on the same (now-suspended) row is a genuine no-op: never
+    # re-counted as a fresh release (idempotent, matching the file's own "gone" receipt rule)
     again = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
     assert again["released"] == 0
-    # NOT a retire(): no permanent certificate — the Agent object is untouched
+    # NOT a retire(): no permanent certificate, the Agent object is untouched
     assert await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='retired'", mounted["agent"]) is None
@@ -658,7 +659,7 @@ async def test_session_end_lets_the_same_session_id_resume_clean(
     actions: Actions, tmp_path: Path
 ) -> None:
     """Deliberately not a farewell: the SAME session id resuming later (`claude --resume`) fires
-    SessionStart again, and its automount re-earns the row from scratch — no reanimation
+    SessionStart again, and its automount re-earns the row from scratch: no reanimation
     warning, no succession seam, exactly as if session_end() had never fired."""
     from src.orchestrator.handshake import session_end
 
@@ -673,7 +674,7 @@ async def test_session_end_lets_the_same_session_id_resume_clean(
                               actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                               source="resume")
 
-    assert resumed["agent"] == first["agent"]         # same identity, no twin minted
+    assert resumed["agent"] == first["agent"]         # same identity, no duplicate minted
     assert resumed["minted"] is None and resumed["swap"] is None
     # never retired, so the Agent carries no certificate a resume could reanimate
     assert await actions.pool.fetchval(
@@ -685,7 +686,7 @@ async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
     actions: Actions, tmp_path: Path
 ) -> None:
     """A session id nobody ever automounted (a phantom that never earned a row, or one this
-    server never saw) must not error — SessionEnd fires unconditionally at every close."""
+    server never saw) must not error: SessionEnd fires unconditionally at every close."""
     from src.orchestrator.handshake import session_end
 
     out = await session_end(actions, session_id="deadbeef0000", jobs_home=tmp_path / "jobs")
@@ -695,13 +696,13 @@ async def test_session_end_on_a_never_mounted_session_is_a_quiet_no_op(
     assert out2["released"] == 0
 
 
-async def test_whisper_names_live_co_agents_at_first_breath(
+async def test_automount_names_live_co_agents_at_first_session(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """Task #40 (thread 2b784653): the shared-tree collision warning used to arrive at
-    mount() — AFTER a session may already have staged or pushed. The whisper payload now
-    carries live co-agents on the same project from breath one; a lone session carries
-    none (no wolf-crying on an uncontended tree)."""
+    """A past bug fix: the shared-tree collision warning used to arrive at
+    mount(), AFTER a session may already have staged or pushed. The automount payload now
+    carries live co-agents on the same project from the first session; a lone session carries
+    none (no false-positive warning on an uncontended tree)."""
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -713,19 +714,19 @@ async def test_whisper_names_live_co_agents_at_first_breath(
     out = await automount(actions, session_id=SID, cwd="/w/sibling-nine",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
     assert out.get("co_agents") == ["agent:c0a9e9e1"]
-    # ...and the sibling's own whisper sees us back; a project with no OTHER live door
-    # gets no key at all — absence, not an empty list
+    # ...and the sibling's own automount call sees us back; a project with no OTHER live door
+    # gets no key at all: absence, not an empty list
     lone = await automount(actions, session_id="feed0002-0000-4000-8000-000000000000",
                            cwd="/w/lonely", actor="analyst:operator",
                            root=tmp_path / "empty", jobs_home=tmp_path / "jobs")
     assert "co_agents" not in lone
 
 
-async def test_whisper_co_agents_confesses_when_truncated_past_the_display_cap(
+async def test_automount_co_agents_confesses_when_truncated_past_the_display_cap(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Same shared `live_co_agents` query as mount()/orient()'s own — the whisper's cap (6)
-    is lower than mount()'s (8), and it confesses a drop the same way (Thoth msg 5741)."""
+    """Same shared `live_co_agents` query as mount()/orient()'s own: automount's cap (6)
+    is lower than mount()'s (8), and it confesses a drop the same way."""
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -743,14 +744,14 @@ async def test_whisper_co_agents_confesses_when_truncated_past_the_display_cap(
 async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE RESUME RACE (Alfred's field report msgs 717/718, 2026-07-19): a window resume
-    fires the predecessor's SessionEnd beside the successor's SessionStart, and when the
-    end lands second (automount 20:03:03, session-end 20:03:04, observed live) it deleted
-    the door the greeting had just seated — Maat's window then answered every probe
-    {live:false, last_seen:NULL} and the poke lane skipped it while a build order sat
-    unread. An end arriving within the greeting's grace is the OLD incarnation's obituary,
-    not the new one's: it must yield and leave the door standing. A true close (long after
-    any greeting) still releases — the previous tests pin that half."""
+    """THE RESUME RACE (a past field report): a window resume fires the predecessor's
+    SessionEnd beside the successor's SessionStart, and when the end lands second (automount
+    then session-end moments later, observed live) it deleted the door the greeting had
+    just seated: a live window then answered every probe {live:false, last_seen:NULL} and
+    the poke lane skipped it while a build order sat unread. An end arriving within the
+    greeting's grace is the OLD incarnation's obituary, not the new one's: it must yield
+    and leave the door standing. A true close (long after any greeting) still releases,
+    as the previous tests pin."""
     from src.orchestrator.handshake import session_end
 
     root = tmp_path / "projects"
@@ -758,7 +759,7 @@ async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
     await automount(actions, session_id=SID, cwd="/w/sibling-nine",
                     actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
 
-    # the end lands one breath after the greeting — the observed race, exactly
+    # the end lands right after the greeting: the observed race, exactly
     out = await session_end(actions, session_id=SID, jobs_home=tmp_path / "jobs")
 
     assert out["released"] == 0 and out.get("yielded") is True
@@ -769,12 +770,13 @@ async def test_session_end_yields_to_a_fresh_greeting_the_resume_race(
 async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE ALIAS-CLONE CURE (2026-07-16, the operator's '2 clones just spawned'): a tab
-    attached to a live session fires a whisper under the TAB's own sid — no state.json
-    receipt (the daemon's artifact), no transcript of its own — so every archaeology in
-    fork_seat found nobody and a fresh anonymous agent was minted beside the living
-    original. The hook's transcript_path names the conversation the tab continues:
-    adopt that session's soul; the window registers as the mind it shows."""
+    """THE ALIAS-CLONE CURE: the operator once observed two clones spawning where only one
+    should have. Root cause: a tab attached to a live session fires the SessionStart hook
+    under the TAB's own sid, with no state.json receipt (the daemon's artifact) and no
+    transcript of its own, so every archaeology in fork_seat found nobody and a fresh
+    anonymous agent was minted beside the living original. The hook's transcript_path names
+    the conversation the tab continues: adopt that session's soul; the window registers as
+    the mind it shows."""
     root = tmp_path / "projects"
     _transcript(root, "/w/viewed-repo")   # the REAL session's transcript (sid SID)
     first = await automount(actions, session_id=SID, cwd="/w/viewed-repo",
@@ -784,7 +786,7 @@ async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           transcript_path=str(root / "-w-viewed-repo" / f"{SID}.jsonl"))
     assert out["agent"] == first["agent"]           # the window IS the soul it shows
-    assert out["view_of"] == SID[:8]                # ...and the whisper confesses it
+    assert out["view_of"] == SID[:8]                # ...and automount confesses it
     row = await actions.pool.fetchrow(
         "SELECT agent_id, session_key FROM agent_mounts WHERE job_dir=$1",
         str(tmp_path / "jobs" / "ab12cd34"))
@@ -797,7 +799,7 @@ async def test_automount_adopts_a_tab_view_instead_of_minting_a_clone(
 async def test_automount_never_adopts_a_sessions_own_transcript(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """A fresh session appending its OWN transcript is genuinely new — a transcript_path
+    """A fresh session appending its OWN transcript is genuinely new: a transcript_path
     naming the session's own sid must not suppress the mint."""
     root = tmp_path / "projects"
     _transcript(root, "/w/fresh-repo")
@@ -811,8 +813,8 @@ async def test_automount_never_adopts_a_sessions_own_transcript(
 async def test_the_office_crowns_at_the_first_act_never_the_greeting(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE FOURTH DOOR, re-cut (16e3cee9, the title-generator incident): the whisper
-    fires for plumbing exactly as for minds, so the GREETING mints nobody — it only
+    """A past fix, re-applied (a specific title-generator incident): the SessionStart hook
+    fires for plumbing exactly as for minds, so the GREETING mints nobody: it only
     HINTS whose office this is. The session's first authenticated ACT (office_claim at
     mount/re-attach) seats it as the seat's next life; and once the new life is minted,
     a second claimant is refused (succession is never parallel)."""
@@ -834,7 +836,7 @@ async def test_the_office_crowns_at_the_first_act_never_the_greeting(
                      project="offahouse", cwd=str(office), model=None, session_key=None)
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' "
-        "WHERE agent_id='agent:0ffab001'")   # the prior life is COLD — ended, not parallel
+        "WHERE agent_id='agent:0ffab001'")   # the prior life is COLD, ended, not parallel
 
     fresh_sid = "0f45b117-0000-4000-8000-000000000000"
     out = await automount(actions, session_id=fresh_sid, cwd=str(office),
@@ -865,7 +867,7 @@ async def test_the_office_crowns_at_the_first_act_never_the_greeting(
     assert "office_of" not in guest                  # and no hint dangled at a taken seat
     assert await office_claim(actions, cwd=str(office), agent_id="agent:9ce57000",
                               office_root=offices) is None
-    # ...and the guest's GREETING minted no object either (the fa4462d5 orphan class)
+    # ...and the guest's GREETING minted no object either (that orphan class, again)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
         "AND canonical='agent:9ce57000'") == 0
@@ -874,9 +876,8 @@ async def test_the_office_crowns_at_the_first_act_never_the_greeting(
 async def test_office_seat_no_longer_refuses_on_a_fresh_but_bodiless_mount_row(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE ATLAS SHAPE (door census item 3, obligation 555d5eb6/164fc26c, Thoth msg
-    5772/5741, thread 2c3c2b9a): a fresh/refreshing agent_mounts row used to be enough,
-    alone, to call a lineage 'alive' and refuse the office-birth mint — even when
+    """A past bug shape: a fresh/refreshing agent_mounts row used to be enough,
+    alone, to call a lineage 'alive' and refuse the office-birth mint, even when
     registry_census confirms NO body actually backs it. Cross-checked now: an unconfirmed
     fresh row no longer blocks a genuinely free office-claim."""
     from src.orchestrator.handshake import office_seat
@@ -888,8 +889,8 @@ async def test_office_seat_no_longer_refuses_on_a_fresh_but_bodiless_mount_row(
     o = await actions.create_or_find_object("Agent", "agent:haunt001", "agent:haunt001")
     await actions.assert_property(o, "handle", "Haunt", "agent:haunt001",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    # a FRESH row (registry_census's own default caller would confirm this is empty —
-    # no real harness process backs "agent:haunt001", the exact atlas shape)
+    # a FRESH row (registry_census's own default caller would confirm this is empty:
+    # no real harness process backs "agent:haunt001", the exact bug shape above)
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "haunt001"),
                      agent_id="agent:haunt001", project="haunthouse",
                      cwd=str(office), model=None, session_key=None)
@@ -906,8 +907,8 @@ async def test_office_seat_still_refuses_when_the_fresh_row_is_harness_confirmed
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The other half of the same fix: a fresh row that registry_census DOES confirm still
-    refuses — this cross-check narrows a false positive, it never weakens the genuine
-    halcyon-shape protection (a real live body wrongly displaced)."""
+    refuses. This cross-check narrows a false positive; it never weakens the genuine
+    protection against a real live body wrongly displaced."""
     from src.orchestrator.handshake import office_seat
     from src.orchestrator.mounts import save_mount
 
@@ -938,8 +939,9 @@ async def test_office_seat_still_refuses_when_the_fresh_row_is_harness_confirmed
 async def test_a_stub_at_the_office_is_never_crowned(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """The title-generator replay (16e3cee9): harness plumbing whispers at a dead seat's
-    office and never acts — however long it sits there, the lineage NEVER ticks."""
+    """A past title-generator incident, replayed: harness plumbing hits the SessionStart
+    hook at a dead seat's office and never acts, however long it sits there, so the lineage
+    NEVER ticks."""
     from datetime import UTC, datetime
 
     root = tmp_path / "projects"
@@ -954,7 +956,7 @@ async def test_a_stub_at_the_office_is_never_crowned(
                                   evidence_class="self_declared")
     await actions.assert_property(o, "office", str(office), "agent:deed0b01", now, 0.9,
                                   evidence_class="direct_observation")
-    # NO mount row for this lineage — the seat is dead; the deed alone names the office
+    # NO mount row for this lineage: the seat is dead; the deed alone names the office
 
     stub_sid = "cb083341-0000-4000-8000-000000000000"
     out = await automount(actions, session_id=stub_sid, cwd=str(office),
@@ -963,8 +965,8 @@ async def test_a_stub_at_the_office_is_never_crowned(
                           source="startup")
     assert out["agent"] == "agent:cb083341"          # its own hash, nothing more
     assert out["office_of"] == "agent:deed0b01"      # the hint fired (deed path, no rows)
-    # the stub never acts — the lineage never ticked, AND no object was minted for a
-    # GREETING at an office (the fa4462d5 orphan class: identity is earned by the act)
+    # the stub never acts: the lineage never ticked, AND no object was minted for a
+    # GREETING at an office (that same orphan class: identity is earned by the act)
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
         "AND canonical LIKE 'agent:deed0b01-%'") == 0
@@ -980,9 +982,9 @@ async def test_a_stub_at_the_office_is_never_crowned(
 async def test_a_known_sid_rebinds_from_the_ledger_never_minting(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE SESSION LEDGER (the g40-vi replay, 16e3cee9): a named session's registry row
-    is wiped by an accident; its next whisper REBINDS to its lineage from the graph —
-    it neither mints a hash twin nor crowns itself a false successor."""
+    """THE SESSION LEDGER (a past incident, replayed): a named session's registry row
+    is wiped by an accident; its next hook call REBINDS to its lineage from the graph.
+    It neither mints a hash duplicate nor crowns itself a false successor."""
     from datetime import UTC, datetime
 
     root = tmp_path / "projects"
@@ -1003,14 +1005,14 @@ async def test_a_known_sid_rebinds_from_the_ledger_never_minting(
     assert out["agent"] == "agent:1edece01"          # rebound from the ledger
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' "
-        "AND canonical='agent:77aa88bb'") == 0       # no twin was ever minted
+        "AND canonical='agent:77aa88bb'") == 0       # no duplicate was ever minted
 
 
-async def test_the_whisper_files_a_named_binding_on_the_ledger(
+async def test_automount_files_a_named_binding_on_the_ledger(
     actions: Actions, tmp_path: Path
 ) -> None:
     """THE SESSION LEDGER, write side: a session bound to a NAMED identity files its
-    sid→soul fact at the whisper, so no future registry accident can orphan it. The
+    sid-to-soul fact at automount time, so no future registry accident can orphan it. The
     self-evident anonymous case (canonical IS the sid hash) files nothing."""
     from src.orchestrator.mounts import save_mount
 
@@ -1031,9 +1033,9 @@ async def test_the_whisper_files_a_named_binding_on_the_ledger(
 
 async def test_the_ledger_remembers_every_sid_of_a_lineage(actions: Actions) -> None:
     """The first backfill's catch: current_assertions keeps ONE winner per (object,
-    name), so a shared 'anchor_sid' name gave a many-sid lineage amnesia — only the
+    name), so a shared 'anchor_sid' name gave a many-sid lineage amnesia: only the
     last-filed sid survived. Namespaced names (anchor_sid:<sid8>) make each sid its own
-    fact: every door of a long life must stay resolvable."""
+    fact: every session of a long life must stay resolvable."""
     from datetime import UTC, datetime
 
     o = await actions.create_or_find_object("Agent", "agent:9a9a0001", "agent:9a9a0001")
@@ -1058,17 +1060,17 @@ async def test_the_ledger_remembers_every_sid_of_a_lineage(actions: Actions) -> 
 async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """task #68 binding leg: a background-job fork's CLAUDE_CODE_BRIDGE_SESSION_ID resolves
-    to its lineage's living head — the class fork_seat cannot see, because this kind of
-    fork's transcript starts fresh (sessionKind='bg') and shares no record uuid with its
-    ancestor's at all. FORKS ARE SUBAGENTS, NOT SUCCESSIONS (decision d438f6b7, thread
-    0f7bf055): the resolved bridge owner is never adopted outright — the fork mints its
-    own DOTTED CHILD (spawned_by-linked, patronym-named), never an anonymous stranger and
-    never the ancestor's own identity object either."""
+    """A background-job fork's CLAUDE_CODE_BRIDGE_SESSION_ID resolves to its lineage's
+    living head, a class fork_seat cannot see, because this kind of fork's transcript
+    starts fresh (sessionKind='bg') and shares no record uuid with its ancestor's at all.
+    FORKS ARE SUBAGENTS, NOT SUCCESSIONS (a past design decision): the resolved bridge
+    owner is never adopted outright. The fork mints its own DOTTED CHILD (spawned_by-linked,
+    patronym-named), never an anonymous, unlinked agent and never the ancestor's own
+    identity object either."""
     root = tmp_path / "projects"
     o = await actions.create_or_find_object("Agent", "agent:5198945f", "agent:5198945f")
     now = datetime.now(UTC)
-    await actions.assert_property(o, "handle", "Imhotep", "agent:5198945f", now, 0.9,
+    await actions.assert_property(o, "handle", "Relay", "agent:5198945f", now, 0.9,
                                   evidence_class="self_declared")
     bridge = "session_01Ckh2yDH5pi945rm4iLBsfa"
     wrote = await record_bridge_anchor(actions, agent_id="agent:5198945f",
@@ -1076,14 +1078,14 @@ async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
     assert wrote is True
 
     fork_sid = "e08c3850-4180-4876-b313-fafef21d368a"
-    _transcript(root, "/w/imhotep-repo")
-    out = await automount(actions, session_id=fork_sid, cwd="/w/imhotep-repo",
+    _transcript(root, "/w/relay-repo")
+    out = await automount(actions, session_id=fork_sid, cwd="/w/relay-repo",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="startup", bridge_session_id=bridge)
     assert out["agent"] == "agent:e08c3850"            # its OWN dotted-child object
     child = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE type='Agent' AND canonical='agent:e08c3850'")
-    assert child is not None                           # a real, distinct object — never anonymous
+    assert child is not None                           # a real, distinct object, never anonymous
     parent_id = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical='agent:5198945f'")
     linked = await actions.pool.fetchval(
@@ -1093,14 +1095,14 @@ async def test_bridged_seat_rebinds_a_known_bridge_id_never_minting(
     patronym = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='patronym'", child)
-    assert patronym == "Imhotep I.1"                   # the dotted-child shape (decision d438f6b7)
+    assert patronym == "Relay I.1"                      # the dotted-child shape
 
 
 async def test_no_bridge_id_never_touches_the_bridge_door(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A session with no CLAUDE_CODE_BRIDGE_SESSION_ID (the ordinary case, still the vast
-    majority) must resolve exactly as before — the bridge door is additive, never a
+    majority) must resolve exactly as before: the bridge path is additive, never a
     default-path regression."""
     root = tmp_path / "projects"
     _transcript(root, "/w/no-bridge-repo")
@@ -1110,10 +1112,11 @@ async def test_no_bridge_id_never_touches_the_bridge_door(
     assert out["agent"] == f"agent:{SID[:8]}"
 
 
-async def test_the_whisper_files_a_bridge_binding(actions: Actions, tmp_path: Path) -> None:
-    """THE BRIDGE, write side: a session bound to a NAMED identity files its bridge id at the
-    whisper (same gate record_session_anchor's own write-side test uses — a genuine stranger
-    mints no object at all, per the full visitor gate, so there is nothing yet to stamp)."""
+async def test_automount_files_a_bridge_binding(actions: Actions, tmp_path: Path) -> None:
+    """THE BRIDGE, write side: a session bound to a NAMED identity files its bridge id at
+    automount time (same gate record_session_anchor's own write-side test uses: a genuine
+    unknown session mints no object at all, per the full visitor gate, so there is nothing
+    yet to stamp)."""
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -1134,14 +1137,14 @@ async def test_the_whisper_files_a_bridge_binding(actions: Actions, tmp_path: Pa
 async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The whole point of the bridge door: office_seat REFUSES to crown a new session when
+    """The whole point of the bridge path: office_seat REFUSES to crown a new session when
     the office's own lineage still has a live pulse ('two parallel fresh contexts must
-    never both be the seat' — office_seat's own law, correct for a cwd-GUESS). The bridge is
-    not a guess — the harness said so directly — so it must succeed exactly where office_hint
-    would decline and mint a guest — as a DOTTED CHILD of the live ancestor (decision
-    d438f6b7, thread 0f7bf055), never a fresh anonymous guest and never the ancestor's own
-    identity object either. This is the exact shape of Imhotep's own six-id biography: a
-    fork landing while its ancestor is still live and running."""
+    never both be the seat', office_seat's own rule, correct for a cwd-GUESS). The bridge
+    is not a guess, the harness said so directly, so it must succeed exactly where
+    office_hint would decline and mint a guest: as a DOTTED CHILD of the live ancestor (a
+    past design decision), never a fresh anonymous guest and never the ancestor's own
+    identity object either. This is the exact shape of a real prior fork's multi-id
+    biography: a fork landing while its ancestor is still live and running."""
     from src.orchestrator.mounts import save_mount
 
     root = tmp_path / "projects"
@@ -1152,8 +1155,8 @@ async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive
     now = datetime.now(UTC)
     await actions.assert_property(o, "handle", "Nefer", "agent:aaaa1111", now, 0.9,
                                   evidence_class="self_declared")
-    # a LIVE pulse for the ancestor (save_mount's own alive=True default) — exactly what
-    # makes office_seat refuse and mint a guest instead, the bug this door fixes.
+    # a LIVE pulse for the ancestor (save_mount's own alive=True default): exactly what
+    # makes office_seat refuse and mint a guest instead, the bug this path fixes.
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / "aaaa1111"),
                      agent_id="agent:aaaa1111", project="neferhouse",
                      cwd=str(office), model=None, session_key=None)
@@ -1183,12 +1186,12 @@ async def test_automount_rebinds_via_the_bridge_even_while_the_ancestor_is_alive
 async def test_all_four_session_boundaries_never_mint_an_anonymous_id(
     actions: Actions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE FOUR-BOUNDARY WALK (operator ruling, decision d438f6b7, thread 0f7bf055):
-    spawn, resume, fork, and compact on one synthetic seat, closing 0f7bf055 on this
-    commit. Spawn/resume/compact were already measured live and correct (0f7bf055's own
-    boundary walk, 2026-09-10) — carried here as the regression guard; fork was the one
-    genuinely broken boundary, reproduced live as a bare anonymous mint with zero holds
-    links (agent:6eff8929), which this test proves can no longer happen."""
+    """THE FOUR-BOUNDARY WALK (a past operator ruling): spawn, resume, fork, and compact
+    on one synthetic seat, closing out a past investigation with this commit.
+    Spawn/resume/compact were already measured live and correct in that investigation's own
+    boundary walk, carried here as the regression guard; fork was the one genuinely broken
+    boundary, reproduced live as a bare anonymous mint with zero holds links, which this
+    test proves can no longer happen."""
     from src.ingest.soul_store import SoulStore
 
     fake_root = tmp_path / ".osiris" / "seats"
@@ -1216,7 +1219,7 @@ async def test_all_four_session_boundaries_never_mint_an_anonymous_id(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical=$1", parent_agent) == 1
 
-    # --- RESUME: the same session id returns — rebind, never a twin ---
+    # --- RESUME: the same session id returns, rebind, never a duplicate ---
     resumed = await automount(actions, session_id=parent_sid, cwd=seat_cwd,
                               actor="analyst:operator", root=transcripts,
                               jobs_home=tmp_path / "jobs", source="resume")
@@ -1236,7 +1239,7 @@ async def test_all_four_session_boundaries_never_mint_an_anonymous_id(
     assert forked["agent"] != parent_agent          # never the parent's own identity object
     fork_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE type='Agent' AND canonical=$1", forked["agent"])
-    assert fork_oid is not None                     # a real object — never anonymous
+    assert fork_oid is not None                     # a real object, never anonymous
     parent_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1", parent_agent)
     assert await actions.pool.fetchval(
@@ -1280,12 +1283,11 @@ async def test_all_four_session_boundaries_never_mint_an_anonymous_id(
 
 
 async def test_record_bridge_anchor_serializes_concurrent_writers(actions: Actions) -> None:
-    """The write-side half of ruling 61e00f25 (thread dc9d1eed, Khnum VII's review finding
-    d224f186): two concurrent automounts carrying the IDENTICAL bridge id — the exact shape
-    of several background forks of one conversation booting near-simultaneously — must not
-    both land the anchor. Before the mint_lock wrap, both racers could pass the exists-check
-    before either committed; the lock makes the loser's own exists-check see the winner's
-    committed row and no-op."""
+    """The write-side half of a past ruling and review finding: two concurrent automounts
+    carrying the IDENTICAL bridge id, the exact shape of several background forks of one
+    conversation booting near-simultaneously, must not both land the anchor. Before the
+    mint_lock wrap, both racers could pass the exists-check before either committed; the
+    lock makes the loser's own exists-check see the winner's committed row and no-op."""
     now = datetime.now(UTC)
     for cid in ("agent:c0000001", "agent:c0000002"):
         o = await actions.create_or_find_object("Agent", cid, cid)
@@ -1309,7 +1311,7 @@ async def test_record_bridge_anchor_serializes_concurrent_writers(actions: Actio
 async def test_bridged_seat_refuses_on_multi_owner_ambiguity(actions: Actions) -> None:
     """The read-side half: ambiguity already minted (a race the lock doesn't cover, or one
     that pre-dates this fix) must be refused loudly, never guessed away by picking whichever
-    lineage happened to write last — the exact silent-mis-resolve d224f186 found."""
+    lineage happened to write last: the exact silent mis-resolve a past review found."""
     now = datetime.now(UTC)
     for cid in ("agent:d1111111", "agent:d2222222"):
         o = await actions.create_or_find_object("Agent", cid, cid)
@@ -1325,7 +1327,7 @@ async def test_bridged_seat_same_lineage_repeat_write_is_not_ambiguous(
     actions: Actions,
 ) -> None:
     """One lineage bridging more than once (ordinary repeated forking of the same
-    conversation) must never be mistaken for the multi-lineage race — both rows agree on
+    conversation) must never be mistaken for the multi-lineage race: both rows agree on
     the SAME base, so this resolves to the lineage's living head exactly as before."""
     now = datetime.now(UTC)
     base = await actions.create_or_find_object("Agent", "agent:e1111111", "agent:e1111111")
@@ -1343,11 +1345,11 @@ async def test_bridged_seat_same_lineage_repeat_write_is_not_ambiguous(
 async def test_automount_falls_through_to_office_hint_on_bridge_ambiguity(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The whisper must never die of an ambiguous bridge (ruling 61e00f25's 'refuse loudly,
-    but the whisper itself never dies of one' — same law as the attach ceremony and the
-    resume heal): it falls through to the ordinary stranger resolution exactly as a bare
-    'no known bridge id' would, and confesses the ambiguity in the payload instead of
-    silently swallowing or crashing on it."""
+    """automount must never die of an ambiguous bridge (a past ruling's rule: refuse loudly,
+    but never crash on it, the same rule the attach flow and the resume heal follow): it
+    falls through to the ordinary unknown-session resolution exactly as a bare 'no known
+    bridge id' would, and confesses the ambiguity in the payload instead of silently
+    swallowing or crashing on it."""
     now = datetime.now(UTC)
     for cid in ("agent:f1111111", "agent:f2222222"):
         o = await actions.create_or_find_object("Agent", cid, cid)
@@ -1370,9 +1372,10 @@ async def test_automount_falls_through_to_office_hint_on_bridge_ambiguity(
 async def test_a_seat_walking_home_files_its_own_deed(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """A LIVE migration needs no ceremony (the Thoth pattern, 6886ca2a): a claimed seat
-    whose running session breathes at its own office self-files the deed at the whisper
-    door — so its NEXT death cannot orphan the office the way Ra's did."""
+    """A LIVE migration needs no special handling (a past pattern established this): a
+    claimed seat whose running session breathes at its own office self-files the deed at
+    automount time, so its NEXT death cannot orphan the office the way a past incident
+    did."""
     from datetime import UTC, datetime
 
     from src.orchestrator.mounts import save_mount
@@ -1404,9 +1407,9 @@ async def test_a_seat_walking_home_files_its_own_deed(
 async def test_automount_inlines_the_top_of_the_obligations_wall(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """INLINE THE FOLD (thread a3a3d512): the thing a resumed mind re-derives every time
-    is its project's live obligation set — automount's payload now carries the top of the
-    SAME ranked wall orient() renders (obligations-first, echoes excluded), so the whisper
+    """INLINE THE FOLD: the thing a resumed mind re-derives every time
+    is its project's live obligation set. automount's payload now carries the top of the
+    SAME ranked wall orient() renders (obligations-first, echoes excluded), so a session
     can show it without a full orient() round-trip."""
     from src.orchestrator.capture import open_thread
 
@@ -1424,10 +1427,10 @@ async def test_automount_inlines_the_top_of_the_obligations_wall(
     summaries = [o["summary"] for o in out["obligations"]]
     assert any("fix the thing" in s for s in summaries)
     assert not any("just a question" in s for s in summaries)  # an echo, never inlined
-    # THE WHISPER SPEAKS PLAIN JSON (2026-08-18, decision 49510a2f's tail): the /automount
-    # route serialises this exact payload with `json` — a datetime riding along in the
-    # ranked wall (`last_touched`) 500'd the whisper on 60 of 63 arrivals in a day, for two
-    # weeks, silently — so the payload must round-trip through json.dumps with NO default.
+    # AUTOMOUNT SPEAKS PLAIN JSON (a past bug fix): the /automount
+    # route serialises this exact payload with `json`. A datetime riding along in the
+    # ranked wall (`last_touched`) 500'd this route on 60 of 63 arrivals in a day, for two
+    # weeks, silently, so the payload must round-trip through json.dumps with NO default.
     import json
     json.dumps(out)
 
@@ -1437,7 +1440,7 @@ async def test_automount_ranks_a_seat_owned_obligation_above_an_unrelated_one(
 ) -> None:
     """#185 leg (a): reader_identity_set folds the seat's own HANDLE into the wall's
     ranking identity, so a self-declared-charter nudge (owner='<handle>') sorts ahead of
-    an unrelated project-wide item at automount time — the same ranking orient() gives,
+    an unrelated project-wide item at automount time, the same ranking orient() gives,
     without a full orient() round-trip."""
     from src.orchestrator.capture import open_thread
     from src.orchestrator.mounts import save_mount
@@ -1448,36 +1451,36 @@ async def test_automount_ranks_a_seat_owned_obligation_above_an_unrelated_one(
     await open_thread(actions, "an unrelated project-wide obligation",
                       repo="handle-owned-project", kind="obligation",
                       owner="handle-owned-project")
-    await open_thread(actions, "aegis's own undeclared charter nudge",
-                      repo="handle-owned-project", kind="obligation", owner="aegis")
+    await open_thread(actions, "echo's own undeclared charter nudge",
+                      repo="handle-owned-project", kind="obligation", owner="echo")
 
-    await actions.create_or_find_object("Agent", "agent:aegis0001", "agent:aegis0001")
+    await actions.create_or_find_object("Agent", "agent:echo0001", "agent:echo0001")
     # a SEATED agent's project is its seat's derived HOUSE, unconditionally (resolve_project,
-    # ruling 577988ed) — the house must match this test's own project name or the wall
-    # query below looks under the wrong SoftwareProject entirely.
-    seat = await ensure_seat(actions, house="handle-owned-project", handle="aegis",
+    # a past ruling settled this): the house must match this test's own project name or the
+    # wall query below looks under the wrong SoftwareProject entirely.
+    seat = await ensure_seat(actions, house="handle-owned-project", handle="echo",
                              source="test")
-    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:aegis0001")
-    # a pre-existing mount row is how automount resolves THIS session to aegis's own
-    # agent id, rather than minting a fresh stranger for a never-seen session/cwd pair
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:echo0001")
+    # a pre-existing mount row is how automount resolves THIS session to echo's own
+    # agent id, rather than minting a fresh unknown agent for a never-seen session/cwd pair
     await save_mount(actions.pool, job_dir=str(tmp_path / "jobs" / SID[:8]),
-                     agent_id="agent:aegis0001", project="handle-owned-project",
+                     agent_id="agent:echo0001", project="handle-owned-project",
                      cwd="/w/handle-owned-project", model=None, session_key=None)
 
     out = await automount(actions, session_id=SID, cwd="/w/handle-owned-project",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs")
 
     summaries = [o["summary"] for o in out["obligations"]]
-    assert summaries.index("aegis's own undeclared charter nudge") < \
+    assert summaries.index("echo's own undeclared charter nudge") < \
         summaries.index("an unrelated project-wide obligation")
 
 
-# --- SAY IT AT THE MOMENT IT IS ACTIONABLE (thread e2326ab7, Soundwave XIV's report): the
-# whisper now carries `charter_missing` on every boot for a seated-but-uncharted agent, the
-# same live governs-edge fact settle.py's own `seat_chartered` box checks — but surfaced at
-# the FIRST breath, not only at the terminal ritual. --------------------------------------
+# --- SAY IT AT THE MOMENT IT IS ACTIONABLE (a past report on this): automount now
+# carries `charter_missing` on every boot for a seated-but-uncharted agent, the
+# same live governs-edge fact settle.py's own `seat_chartered` check makes, but surfaced at
+# the FIRST session, not only at the terminal step. --------------------------------------
 
-async def test_whisper_names_charter_missing_for_a_seated_uncharted_agent(
+async def test_automount_names_charter_missing_for_a_seated_uncharted_agent(
     actions: Actions, tmp_path: Path,
 ) -> None:
     from src.orchestrator.mounts import save_mount
@@ -1498,10 +1501,10 @@ async def test_whisper_names_charter_missing_for_a_seated_uncharted_agent(
     assert "charter(repos=[...])" in out["charter_missing"]
 
 
-async def test_whisper_omits_charter_missing_once_the_seat_is_chartered(
+async def test_automount_omits_charter_missing_once_the_seat_is_chartered(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The SAME seated agent as above, but chartered first — the whisper must not nag a
+    """The SAME seated agent as above, but chartered first: automount must not nag a
     seat that already governs a repo. Reads the live governs edge, never a stale file."""
     from src.orchestrator.charter import set_charter
     from src.orchestrator.mounts import save_mount
@@ -1523,10 +1526,10 @@ async def test_whisper_omits_charter_missing_once_the_seat_is_chartered(
     assert "charter_missing" not in out
 
 
-async def test_whisper_omits_charter_missing_for_an_anonymous_agent(
+async def test_automount_omits_charter_missing_for_an_anonymous_agent(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No seat held at all — the anonymous-mind claim_name prompt already covers this gap
+    """No seat held at all: the anonymous-mind claim_name prompt already covers this gap
     (seat_bearings' own `vacant_seats` note); this nudge must not double up on it."""
     root = tmp_path / "projects"
     _transcript(root, "/w/anon-project")
@@ -1538,10 +1541,10 @@ async def test_whisper_omits_charter_missing_for_an_anonymous_agent(
 async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_thread(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """SUCCESSION STEERING (d80621a7 piece 4): a freshly minted heir's summary-steering
-    anchor is resolved BY QUERY — the office's charter file (self-filed at a live seat's
-    own office) plus the newest kind='obligation' thread this project owns — never an id
-    copied into the whisper script once and left to rot."""
+    """SUCCESSION STEERING: a freshly minted heir's summary-steering anchor is resolved BY
+    QUERY: the office's charter file (self-filed at a live seat's own office) plus the
+    newest kind='obligation' thread this project owns, never an id copied into the
+    automount script once and left to rot."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
     from src.orchestrator.capture import open_thread
 
@@ -1556,7 +1559,7 @@ async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_th
     assert ident.project == "testhouse"  # decoupled from the office dir name (the handle)
     await register_agent(actions, ident, actor="analyst:operator")
     await claim_name(actions, ident.agent_id, "Steward", source=ident.agent_id)
-    # the live seat breathes at its own office — automount self-files the deed (the
+    # the live seat breathes at its own office: automount self-files the deed (the
     # existing 'a seat walking home files its own deed' path), here just setup
     await automount(actions, session_id=SID, cwd=str(office), actor="analyst:operator",
                     root=root, jobs_home=tmp_path / "jobs", office_root=offices,
@@ -1580,7 +1583,7 @@ async def test_automount_points_a_fresh_heir_at_charter_and_newest_succession_th
     succ = reborn.get("succession")
     assert succ is not None
     assert "the actual handoff" in succ["thread_summary"]
-    # #155: charter_file now rides identity_anchor, unconditional — not succession
+    # #155: charter_file now rides identity_anchor, unconditional, not succession
     anchor = reborn.get("identity_anchor")
     assert anchor is not None
     assert anchor["charter_file"] == f"{office}/CLAUDE.md"
@@ -1615,7 +1618,7 @@ async def test_succession_pointer_prefers_charter_md_over_claude_md(
                              actor="analyst:operator", root=root,
                              jobs_home=tmp_path / "jobs", office_root=offices,
                              source="compact")
-    # #155: charter_file now rides identity_anchor, unconditional — not succession
+    # #155: charter_file now rides identity_anchor, unconditional, not succession
     anchor = reborn.get("identity_anchor")
     assert anchor is not None
     assert anchor["charter_file"] == f"{office}/charter.md"
@@ -1624,9 +1627,9 @@ async def test_succession_pointer_prefers_charter_md_over_claude_md(
 async def test_identity_anchor_fires_on_an_ordinary_mount_never_gated_on_succession(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """#155's whole point, live: gating identity delivery on succession WAS the bug
-    (Thoth's own ruling, msg 3853 — she had generalized from her own most-compacted-seat-
-    in-the-fleet experience). A single ordinary mount (source='startup', nothing minted)
+    """#155's whole point, live: gating identity delivery on succession WAS the bug (a past
+    ruling settled this, generalizing from experience with the most-compacted seat in the
+    fleet). A single ordinary mount (source='startup', nothing minted)
     must still carry the identity anchor, including the compiled office pointer, which is
     exactly what a tree-bound seat's harness never auto-loads (#141)."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
@@ -1638,7 +1641,7 @@ async def test_identity_anchor_fires_on_an_ordinary_mount_never_gated_on_success
     office.mkdir(parents=True)
     (office / ".osiris").write_text('project = "sentinelhouse"\n')
     (office / "CLAUDE.md").write_text(
-        "# sentinel — seat office\n\n" + wrap_managed("role: WORKER", "abc123"))
+        "# sentinel, seat office\n\n" + wrap_managed("role: WORKER", "abc123"))
     _transcript(root, str(office))
 
     ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
@@ -1659,8 +1662,8 @@ async def test_identity_anchor_compiled_office_fails_open_when_never_compiled(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A scaffolded office whose CLAUDE.md has no osiris:compiled markers at all (never
-    reissue_office'd) must still carry charter_file — compiled_office is simply absent,
-    never an exception that breaks the whisper (577988ed)."""
+    reissue_office'd) must still carry charter_file: compiled_office is simply absent,
+    never an exception that breaks automount."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
 
     root = tmp_path / "projects"
@@ -1668,7 +1671,7 @@ async def test_identity_anchor_compiled_office_fails_open_when_never_compiled(
     office = offices / "outrider"
     office.mkdir(parents=True)
     (office / ".osiris").write_text('project = "outriderhouse"\n')
-    (office / "CLAUDE.md").write_text("# outrider — seat office\n\nplain, never compiled.\n")
+    (office / "CLAUDE.md").write_text("# outrider, seat office\n\nplain, never compiled.\n")
     _transcript(root, str(office))
 
     ident = resolve_identity(cwd=str(office), job_dir=str(tmp_path / "jobs" / SID[:8]), root=root)
@@ -1687,10 +1690,10 @@ async def test_identity_anchor_compiled_office_fails_open_when_never_compiled(
 async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebase_decoy(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """Thoth LI's optional tightening (msg 861): 'owned by this project' must also match a
+    """An optional past tightening: 'owned by this project' must also match a
     SPECIFIC incarnation's id ('agent:base-iii'), not only the bare project name or bare
-    lineage base — real obligations are filed that way. But the wide SQL prefilter
-    (LIKE base||'%') is unsafe alone — the deckard-rebase trap: an UNRELATED lineage that
+    lineage base: real obligations are filed that way. But the wide SQL prefilter
+    (LIKE base||'%') is unsafe alone, a past rebase trap: an UNRELATED lineage that
     merely shares the hash prefix ('agent:base-extra-ii') must never be picked over (or
     instead of) the genuine match, however recent it is."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
@@ -1712,10 +1715,10 @@ async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebas
                     root=root, jobs_home=tmp_path / "jobs", office_root=offices,
                     source="startup")
 
-    # older, but owned by a SPECIFIC past incarnation of this exact lineage — must match
+    # older, but owned by a SPECIFIC past incarnation of this exact lineage: must match
     await open_thread(actions, "owned by a specific past incarnation, not the bare base",
                       repo="wardenhouse", kind="obligation", owner=f"{base}-iii")
-    # newer, but an UNRELATED lineage that only shares the hash prefix — must NOT match
+    # newer, but an UNRELATED lineage that only shares the hash prefix: must NOT match
     await open_thread(actions, "a decoy from an unrelated rebased lineage",
                       repo="wardenhouse", kind="obligation", owner=f"{base}extra-ii")
 
@@ -1729,13 +1732,13 @@ async def test_succession_owner_match_finds_a_specific_incarnation_never_a_rebas
     assert "decoy" not in succ["thread_summary"]
 
 
-async def test_the_whisper_carries_the_handoff_specifically(
+async def test_automount_carries_the_handoff_specifically(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread e749036e (Thoth LX): the whisper's succession steering finds the newest OPEN
-    obligation — deliberately never claimed to be a handoff (Thoth LI's amend, msg 861).
+    """A past amendment: automount's succession steering finds the newest OPEN
+    obligation, deliberately never claimed to be a handoff.
     This is the OTHER half: a REAL handoff (is_handoff='true') rides alongside it under its
-    own `handoff` key, found via the same bounded chain-walk orient() uses — never
+    own `handoff` key, found via the same bounded chain-walk orient() uses, never
     confused with an ordinary fresh-but-unrelated open thread."""
     from src.orchestrator.agents import claim_name, register_agent, resolve_identity
     from src.orchestrator.capture import open_thread
@@ -1754,14 +1757,14 @@ async def test_the_whisper_carries_the_handoff_specifically(
                     root=root, jobs_home=tmp_path / "jobs", office_root=offices,
                     source="startup")
 
-    # an ordinary open obligation — NOT a handoff, must never be reported as one
+    # an ordinary open obligation, NOT a handoff, must never be reported as one
     await open_thread(actions, "just an ordinary open obligation, unrelated to any handoff",
                       repo="envoyhouse", kind="obligation", owner="envoyhouse")
     # the REAL handoff, structurally marked, sourced by the mind that's about to be superseded
     now = datetime.now(UTC)
     handoff_obj = await actions.create_or_find_object("Decision", "decision:envoy-marker",
                                                        ident.agent_id)
-    await actions.assert_property(handoff_obj, "summary", "the estate is settled structurally",
+    await actions.assert_property(handoff_obj, "summary", "the work is settled structurally",
                                   ident.agent_id, now, 0.9, evidence_class="self_declared")
     await actions.assert_property(handoff_obj, "is_handoff", "true", ident.agent_id, now, 0.9,
                                   evidence_class="self_declared")
@@ -1776,18 +1779,18 @@ async def test_the_whisper_carries_the_handoff_specifically(
     handoff = succ.get("handoff")
     assert handoff is not None, "the structurally-marked handoff must ride along, separately"
     assert handoff["from"] == ident.agent_id
-    assert "estate is settled structurally" in " ".join(n["text"] for n in handoff["notes"])
+    assert "work is settled structurally" in " ".join(n["text"] for n in handoff["notes"])
 
 
 async def test_the_ledger_refuses_a_sid_whose_own_transcript_names_another_lineage(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """THE TRANSCRIPT OUTRANKS THE ANCHOR (Chad + Jesus, 2026-09-03): a hand resume run
+    """THE TRANSCRIPT OUTRANKS THE ANCHOR (a specific past incident): a hand resume run
     from another agent's shell carried that agent's CLAUDE_JOB_DIR, resolved as the
-    leaker, and the ledger — first writer wins, forever — filed both seats' real sessions
-    under Khnum's lineage; every later resume then re-bound the window to Khnum. Before
-    filing a sid under an agent, the write side reads the session's own newest ACT (a
-    mount/send receipt, never a whisper greeting): a different lineage means this claim
+    leaker, and the ledger, first writer wins forever, filed both seats' real sessions
+    under one lineage; every later resume then re-bound the window to that same lineage.
+    Before filing a sid under an agent, the write side reads the session's own newest ACT
+    (a mount/send receipt, never a bare greeting): a different lineage means this claim
     is the leak, and nothing is filed. A transcript with no act yet files normally."""
     import json as _json
 
@@ -1824,10 +1827,10 @@ def _write_transcript_lines(path: Path, lines: list[dict[str, object]]) -> None:
 async def test_automount_mints_the_heir_on_a_manual_compacts_new_session_id(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE MANUAL COMPACT (Jesus's own incident, thread 6835): the harness mints a fresh
+    """THE MANUAL COMPACT (a specific past incident): the harness mints a fresh
     session id at /compact whose first line's logicalParentUuid names the prior session's
     own last message. compact_seat must resolve it to the prior lineage's HEAD and mint
-    the heir there — never a fresh root, never adopting the same generation unminted."""
+    the heir there, never a fresh root, never adopting the same generation unminted."""
     from src.ingest.soul_store import SoulStore
 
     prior_uuid = "5af45aa8-2d28-4095-b130-2382b04fdab0"
@@ -1837,7 +1840,7 @@ async def test_automount_mints_the_heir_on_a_manual_compacts_new_session_id(
          "message": {"content": [{"type": "text", "text": "earlier turn"}]}},
         {"type": "assistant", "uuid": prior_uuid,
          "message": {"content": [{"type": "text",
-                     "text": 'mount receipt {"agent":"agent:9a9a0003","project":"jesushouse"}'
+                     "text": 'mount receipt {"agent":"agent:9a9a0003","project":"compacthouse"}'
                              " logged"}]}},
     ])
     store = SoulStore(actions.pool)
@@ -1846,12 +1849,12 @@ async def test_automount_mints_the_heir_on_a_manual_compacts_new_session_id(
 
     root = tmp_path / "projects"
     new_sid = "bbbb0002-0000-4000-8000-000000000000"
-    _write_transcript_lines(root / "-w-jesus-repo" / f"{new_sid}.jsonl", [
+    _write_transcript_lines(root / "-w-compact-repo" / f"{new_sid}.jsonl", [
         {"parentUuid": None, "logicalParentUuid": prior_uuid, "isSidechain": False,
          "type": "system", "subtype": "compact_boundary", "content": "Conversation compacted",
-         "cwd": "/w/jesus-repo"},
+         "cwd": "/w/compact-repo"},
     ])
-    out = await automount(actions, session_id=new_sid, cwd="/w/jesus-repo",
+    out = await automount(actions, session_id=new_sid, cwd="/w/compact-repo",
                           actor="analyst:operator", root=root, jobs_home=tmp_path / "jobs",
                           source="startup")
     assert out["agent"] == "agent:9a9a0003-ii"          # minted the heir, not a fresh root
@@ -1863,11 +1866,11 @@ async def test_automount_mints_the_heir_on_a_manual_compacts_new_session_id(
 async def test_automount_refuses_a_compact_when_act_and_assertion_disagree(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE CROSSED-REGISTRY REFUSAL (Thoth's ruling on the Chad/aad6603a incident, msg
-    6842): when the owning session's newest ACT names one lineage but the graph's own
-    anchor_sid assertion already names a DIFFERENT one (an anchor leak already poisoned
-    it), compact_seat must refuse outright — never pick either side — and the whisper
-    falls through to its ordinary fresh-mint behavior."""
+    """THE CROSSED-REGISTRY REFUSAL (a past ruling on a specific incident): when the owning
+    session's newest ACT names one lineage but the graph's own anchor_sid assertion already
+    names a DIFFERENT one (an anchor leak already poisoned it), compact_seat must refuse
+    outright, never pick either side, and automount falls through to its ordinary
+    fresh-mint behavior."""
     from src.ingest.soul_store import SoulStore
     from src.orchestrator.handshake import record_session_anchor
 
@@ -1883,7 +1886,7 @@ async def test_automount_refuses_a_compact_when_act_and_assertion_disagree(
     await store.ingest_path(str(prior_file), anchor_sid="7c7c0004")
     await actions.create_or_find_object("Agent", "agent:7c7c0004", "agent:7c7c0004")
     # THE POISONED ASSERTION: a different lineage's own anchor leak stamped this sid to
-    # itself first (exactly Chad's own incident shape) — a positive disagreement, not an
+    # itself first (exactly a past incident's shape): a positive disagreement, not an
     # absence of evidence.
     await actions.create_or_find_object("Agent", "agent:deadbeef", "agent:deadbeef")
     assert await record_session_anchor(
@@ -1907,10 +1910,10 @@ async def test_automount_refuses_a_compact_when_act_and_assertion_disagree(
 async def test_automount_refuses_an_inherited_job_dirs_leaked_binding(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE INHERITED-JOB_DIR LEAK (Chad's own incident, Thoth's ruling msg 6852 item (a)):
+    """THE INHERITED-JOB_DIR LEAK (a past incident and the ruling it produced):
     a hand-run `claude --resume` from ANOTHER agent's own shell carries that agent's
-    CLAUDE_JOB_DIR — `find_mount` then hands back the LEAKER's own registry row for THIS
-    session's anchor. Before trusting it, the whisper must read THIS session's own
+    CLAUDE_JOB_DIR. `find_mount` then hands back the LEAKER's own registry row for THIS
+    session's anchor. Before trusting it, automount must read THIS session's own
     transcript: a newest ACT naming a different lineage refuses the binding outright,
     falling through rather than greeting the window as the leaker."""
     from src.orchestrator.mounts import save_mount
@@ -1936,18 +1939,18 @@ async def test_automount_refuses_an_inherited_job_dirs_leaked_binding(
     assert out["agent"] != "agent:leaker01"          # refused the leaked binding
 
 
-# ═══ THE THIN-PROJECT FLAG (thread fba386dc item 1) — resolved through the project's own ═══
-# canonical, never a raw ident.project string match.
+# ═══ THE THIN-PROJECT FLAG: resolved through the project's own canonical, never a raw ═══
+# ident.project string match.
 
 async def test_automount_thin_flag_resolves_through_the_projects_own_canonical(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Metron's own specimen: a project with 431 real decisions still read 'young' because
-    the old check matched `'repo:' || ident.project` literally — any caller whose own
+    """A real past specimen: a project with 431 real decisions still read 'young' because
+    the old check matched `'repo:' || ident.project` literally, so any caller whose own
     project label differs from the canonical (a post-rename display name, or simply a
     name-property match rather than the exact canonical) saw a false 'thin' flag. The
     project here is chartered under a canonical the SessionStart banner never sees
-    directly (`ident.project` carries the DISPLAY name via `project_label`) — real
+    directly (`ident.project` carries the DISPLAY name via `project_label`), and real
     Decision activity must still be found."""
     from src.orchestrator.capture import record_decision
 
@@ -1975,7 +1978,7 @@ async def test_automount_thin_flag_true_for_a_genuinely_new_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The honest positive: a project with no SoftwareProject on record at all (never
-    chartered, never ingested) still reads thin — this fix must not make every project
+    chartered, never ingested) still reads thin: this fix must not make every project
     read as non-thin by accident."""
     root = tmp_path / "projects"
     _transcript(root, "/w/thinflag-fresh")

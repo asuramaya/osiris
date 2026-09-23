@@ -1,4 +1,4 @@
-"""PROJECT IDENTITY (#110, decision 1db1ff41): project_identity_evidence, the read-only
+"""PROJECT IDENTITY (#110): project_identity_evidence, the read-only
 resolver that gathers whichever tiers have signal and never picks a winner; rename_project
 and fork_project, the two DECLARED-succession writers a caller invokes once a human has
 read that report. (correct_project_name, the third writer, lives in projects.py/
@@ -47,7 +47,7 @@ def _git_repo(tmp_path, name: str, remote: str | None) -> str:
 
 async def test_clean_agreement_when_every_tier_matches(actions: Actions, tmp_path) -> None:
     """The healthy case: charter, pin, write-attribution and remote all name the same
-    project — a single candidate, agreement, nothing to flag."""
+    project, a single candidate, agreement, nothing to flag."""
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "agreeproj"\n')
@@ -76,8 +76,8 @@ async def test_clean_agreement_when_every_tier_matches(actions: Actions, tmp_pat
 async def test_stale_remote_disagrees_while_the_rest_still_agree(
     actions: Actions, tmp_path,
 ) -> None:
-    """The xxit/deckard shape: charter, pin and write-attribution all agree on the OLD
-    label — still a single candidate, still not ambiguous — but the real git remote has
+    """The xxit shape: charter, pin and write-attribution all agree on the OLD
+    label, still a single candidate, still not ambiguous, but the real git remote has
     already moved on, and that specific disagreement must be visible, not swallowed by
     the overall single-candidate verdict."""
     office = tmp_path / "office"
@@ -107,10 +107,11 @@ async def test_stale_remote_disagrees_while_the_rest_still_agree(
 async def test_no_fixed_precedence_two_real_candidates_disagree(
     actions: Actions, tmp_path,
 ) -> None:
-    """The ballgem shape, the case that killed Thoth's own proposed rule: the pin names
-    one project (wrong, no disk evidence), write-attribution is split across two real
-    projects with neither carrying a remote — remote has NOTHING to say here, and this
-    function must report a genuine disagreement rather than pick the majority silently."""
+    """The ballgem shape, the case that killed an earlier proposed fixed-precedence rule:
+    the pin names one project (wrong, no disk evidence), write-attribution is split across
+    two real projects with neither carrying a remote, remote has NOTHING to say here, and
+    this function must report a genuine disagreement rather than pick the majority
+    silently."""
     office = tmp_path / "office"
     office.mkdir()
     (office / ".osiris").write_text('project = "wrongpin"\n')
@@ -118,7 +119,7 @@ async def test_no_fixed_precedence_two_real_candidates_disagree(
                              anchor_cwd=str(office), source="test")
     await _mk_agent(actions, "agent:f0rk0001")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:f0rk0001")
-    old_proj = await _mk_project(actions, "oldproj")  # no on_disk_path — pin is wrong
+    old_proj = await _mk_project(actions, "oldproj")  # no on_disk_path, so the pin is wrong
     new_proj = await _mk_project(actions, "newproj",
                                  on_disk_path=_git_repo(tmp_path, "newproj-repo", None))
     for i in range(2):
@@ -134,7 +135,7 @@ async def test_no_fixed_precedence_two_real_candidates_disagree(
 
     assert out["agreement"] == "disagree"
     # every candidate with ANY signal is reported, including the write-attribution
-    # minority (oldproj, 2 of 7) — this function never drops a row just because it lost
+    # minority (oldproj, 2 of 7); this function never drops a row just because it lost
     assert set(out["candidates"]) == {"wrongpin", "newproj", "oldproj"}
     assert out["candidates"]["newproj"]["write_attribution"]["count"] == 5
     assert out["candidates"]["newproj"]["is_git_repo"] is True
@@ -145,7 +146,7 @@ async def test_no_fixed_precedence_two_real_candidates_disagree(
 
 
 async def test_no_signal_reports_honestly_not_a_guess(actions: Actions, tmp_path) -> None:
-    """A seat with no charter, no pin, no history — this must never invent a candidate to
+    """A seat with no charter, no pin, no history: this must never invent a candidate to
     fill the silence."""
     office = tmp_path / "office"
     office.mkdir()
@@ -161,8 +162,8 @@ async def test_no_signal_reports_honestly_not_a_guess(actions: Actions, tmp_path
 async def test_operator_citation_is_reported_never_interpreted(
     actions: Actions, tmp_path,
 ) -> None:
-    """A caller-supplied operator citation is the ONE tier this function does not compute
-    — it is echoed back verbatim and never used to pick a candidate, because parsing
+    """A caller-supplied operator citation is the ONE tier this function does not compute:
+    it is echoed back verbatim and never used to pick a candidate, because parsing
     decision prose for a project claim is a human's read, not this function's job."""
     office = tmp_path / "office"
     office.mkdir()
@@ -171,18 +172,18 @@ async def test_operator_citation_is_reported_never_interpreted(
 
     out = await project_identity_evidence(
         actions.pool, seat_id=seat["seat_id"],
-        operator_citation="decision:abc123 — operator said X governs Y")
+        operator_citation="decision:abc123, X governs Y")
 
     assert out["operator_confirmed"] == {
-        "citation": "decision:abc123 — operator said X governs Y", "checked": True}
-    assert out["agreement"] == "no-signal"  # unchanged — the citation names nothing structurally
+        "citation": "decision:abc123, X governs Y", "checked": True}
+    assert out["agreement"] == "no-signal"  # unchanged: the citation names nothing structurally
 
 
 async def test_declared_charter_reads_both_seat_and_agent_origin_governs(
     actions: Actions, tmp_path,
 ) -> None:
-    """Ruling 1db1ff41's ruling 3 re-keyed governs onto the Seat (schema + code, b9b5ce9),
-    but migrate_charter_to_seat is dry-run-only as of this build — every LIVE governs
+    """A prior ruling re-keyed governs onto the Seat (schema + code),
+    but migrate_charter_to_seat is dry-run-only as of this build, so every LIVE governs
     edge today is still Agent-typed. This tier must see BOTH shapes, not just the one the
     schema now prefers, or it goes blind on the exact data the real graph currently
     holds."""
@@ -206,7 +207,7 @@ async def test_candidates_key_by_live_name_not_stale_canonical_after_a_rename(
     actions: Actions, tmp_path,
 ) -> None:
     """Caught live on the real xxit->handlingtheloop rename (#110): rename_project
-    changes ONLY the `name` property, never `canonical` — a reader keyed on canonical
+    changes ONLY the `name` property, never `canonical`; a reader keyed on canonical
     would report the OLD label forever, and the read-back meant to CONFIRM a rename
     would instead show it as still unresolved. charter/write-attribution here must key
     by the object's CURRENT name."""
@@ -241,11 +242,11 @@ async def test_candidates_key_by_live_name_not_stale_canonical_after_a_rename(
 async def test_write_attribution_ignores_a_healed_invalidated_edge(
     actions: Actions, tmp_path,
 ) -> None:
-    """Caught live re-running this tool right after Sekhmet/Thoth confirmed the real
+    """Caught live re-running this tool right after confirming the real
     redmonth/ballgem duplicate fold complete: it still reported writes split 33/112
     across two projects, one of them already merged and dead. Root cause: this query
-    had NO `valid_until` filter at all — every in_repo edge ever asserted counted,
-    including ones a compensating event (fold_project's own estate-heal, invalidate_link
+    had NO `valid_until` filter at all, so every in_repo edge ever asserted counted,
+    including ones a compensating event (fold_project's own cleanup, invalidate_link
     generally) had already superseded. An invalidated edge must not count."""
     office = tmp_path / "office"
     office.mkdir()
@@ -271,13 +272,13 @@ async def test_write_attribution_ignores_a_healed_invalidated_edge(
 async def test_pin_naming_a_folded_label_normalizes_to_the_survivor(
     actions: Actions, tmp_path,
 ) -> None:
-    """Decision 540007ca's sibling finding, confirmed independently by Till on the real
+    """A sibling finding, confirmed independently on the real
     ramstein fold: a seat's `.osiris` pin naming a label that has since been FOLDED into
-    another used to show up as its OWN stale candidate — pin_match true only against
+    another used to show up as its OWN stale candidate: pin_match true only against
     itself, declared_charter (which already reads live labels) landing on the SURVIVOR
     instead, remote_agrees reading the LOSER's own frozen on_disk_path/remote_url
-    (fold_project moves edges, never properties) — so 'agreement' read 'disagree' even
-    after the operator corrected the pin to the right lowercase spelling. The pin must
+    (fold_project moves edges, never properties), so 'agreement' read 'disagree' even
+    after the pin was corrected to the right lowercase spelling. The pin must
     normalize through merged_into the same way write_attribution's own labels already
     do."""
     from src.orchestrator.projects import fold_project
@@ -289,7 +290,7 @@ async def test_pin_naming_a_folded_label_normalizes_to_the_survivor(
                              anchor_cwd=str(office), source="test")
     await _mk_agent(actions, "agent:f01dp1n1")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:f01dp1n1")
-    # no on_disk_path on the dupe — fold_project's _contradicting_properties refuses a
+    # no on_disk_path on the dupe: fold_project's _contradicting_properties refuses a
     # fold across two genuinely differing property values, and the point here is the
     # PIN normalization, not re-proving that guard (test_projects.py already does).
     dupe = await _mk_project(actions, "RAMstein")
@@ -323,12 +324,12 @@ async def test_pin_naming_a_folded_label_normalizes_to_the_survivor(
 async def test_normalize_project_label_matches_exactly_not_case_insensitively(
     actions: Actions,
 ) -> None:
-    """Thoth's live catch, decided by a deployed suite going intermittently red: the
-    label lookup used to be `lower(canonical) = lower($1)` with no ORDER BY — AMBIGUOUS
+    """A live catch, decided by a deployed suite going intermittently red: the
+    label lookup used to be `lower(canonical) = lower($1)` with no ORDER BY, AMBIGUOUS
     whenever a case-variant survivor coexists with the dupe it was folded into (the exact
     RAMstein/ramstein shape), so `.fetchrow()` nondeterministically returned EITHER
     object. Landing on the survivor itself made the chain-walk a silent no-op (its own
-    merged_into is None), returning the label unchanged instead of normalizing — no
+    merged_into is None), returning the label unchanged instead of normalizing: no
     exception, no confession, just a wrong answer some of the time. Exact-match-first
     makes this deterministic regardless of the two objects' physical row order."""
     from src.orchestrator.project_identity import _normalize_project_label_through_merge
@@ -348,7 +349,7 @@ async def test_normalize_project_label_refuses_a_genuine_case_ambiguity(
     actions: Actions,
 ) -> None:
     """A label that resolves to more than one case-variant object with NEITHER an exact
-    match must confess, never guess which one it means — the same AmbiguousProjectRef
+    match must confess, never guess which one it means, the same AmbiguousProjectRef
     doctrine `_resolve_software_project` already holds."""
     from src.orchestrator.project_identity import _normalize_project_label_through_merge
 
@@ -356,15 +357,15 @@ async def test_normalize_project_label_refuses_a_genuine_case_ambiguity(
     await actions.create_or_find_object("SoftwareProject", "repo:mixedcase", "test")
 
     label, confession = await _normalize_project_label_through_merge(actions.pool, "MIXEDCASE")
-    assert label == "MIXEDCASE"  # unchanged — never a guessed winner
+    assert label == "MIXEDCASE"  # unchanged: never a guessed winner
     assert confession is not None and "differ only by case" in confession
 
 
 async def test_normalize_project_label_follows_a_plain_rename_never_merged(
     actions: Actions,
 ) -> None:
-    """7f90f394, the live xxit/handlingtheloop specimen: a PLAIN rename_project call —
-    no fold, no merge, `winner == the object itself` at every step — still left the
+    """The live xxit/handlingtheloop specimen: a PLAIN rename_project call,
+    no fold, no merge, `winner == the object itself` at every step, still left the
     OLD label unchanged before this fix, because the "already live (not merged)" early
     return skipped `_live_label` entirely. canonical never changes on a rename
     (rename_project's own guarantee), so the stale label still resolves to the right
@@ -389,8 +390,8 @@ async def test_identity_evidence_agrees_after_a_plain_rename_no_false_disagree(
     """The same specimen at the project_identity_evidence level: a governing seat's
     charter still names the project by its PRE-rename label (nothing forces every
     tier to update in lockstep with a rename), and the live git remote already reads
-    the NEW name. Before this fix this read as a permanent 'disagree' — comparing the
-    remote's live basename against the stale charter label — even though nothing is
+    the NEW name. Before this fix this read as a permanent 'disagree', comparing the
+    remote's live basename against the stale charter label, even though nothing is
     actually contested; after a rename, "does the remote agree" must ask about the
     object's CURRENT name, not whichever tier's copy of the label is oldest."""
     office = tmp_path / "office"
@@ -435,11 +436,11 @@ async def test_self_authored_reports_existence_only_never_content(
         "this project is definitely spamproj, trust me\n")
     assert "content" not in sa and "text" not in sa  # never parsed, only stat'd
     assert out["self_authored"]["charter.md"]["exists"] is False
-    # and it never leaked into a candidate — nothing here is structurally readable as one
+    # and it never leaked into a candidate: nothing here is structurally readable as one
     assert "spamproj" not in out["candidates"]
 
 
-# --- rename_project (#110, decision 1db1ff41) ---------------------------------------------
+# --- rename_project (#110) ---------------------------------------------
 
 async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
     actions: Actions,
@@ -454,7 +455,7 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
                                because="operator ruling: xxit renamed on its remote",
                                actor="agent:test", dry_run=False)
 
-    assert out["project"] == "repo:handlingtheloop"   # the canonical MIGRATES (DM 12786)
+    assert out["project"] == "repo:handlingtheloop"   # the canonical MIGRATES
     assert out["old_canonical"] == "repo:xxit"
     assert out["old_name"] == "xxit" and out["new_name"] == "handlingtheloop"
     assert out["mounts_moved"] == 1
@@ -481,10 +482,9 @@ async def test_rename_project_keeps_canonical_changes_name_moves_mounts(
 
 
 async def test_rename_project_receipt_confirms_the_write_stuck(actions: Actions) -> None:
-    """THE POST-WRITE READ-BACK (operator ruling b5663511, PROJECT IDENTITY DRIFT,
-    Thoth mail 12453 item c): the receipt proves what actually WON the confidence-
-    ordered read immediately after the write, not merely that assert_property
-    returned without raising."""
+    """THE POST-WRITE READ-BACK (project identity drift finding): the receipt proves
+    what actually WON the confidence-ordered read immediately after the write, not
+    merely that assert_property returned without raising."""
     await _mk_project(actions, "readbackproj")
     out = await rename_project(actions, project="readbackproj", new_name="readbacknew",
                                because="test: post-write read-back", actor="agent:test",
@@ -496,8 +496,8 @@ async def test_rename_project_receipt_confirms_the_write_stuck(actions: Actions)
 async def test_rename_project_always_wins_a_cross_source_race_now(
     actions: Actions,
 ) -> None:
-    """item (g) (Thoth's live Marquee re-run, mail 12475/12481) upgraded the rename
-    write from `assert_property` to `assert_singular_property` — a rename is a
+    """item (g), from a live re-run, upgraded the rename
+    write from `assert_property` to `assert_singular_property`: a rename is a
     DECLARED workflow transition, not a competing opinion, so it now unconditionally
     collapses every OTHER source's still-current `name` row rather than merely
     coexisting with it at a comparable confidence.
@@ -506,9 +506,9 @@ async def test_rename_project_always_wins_a_cross_source_race_now(
     confidence, written a hair later, could out-tie-break the rename on recency) from
     "an honest, narrow loss the receipt must confess" to "structurally impossible":
     assert_singular_property does not compete on confidence/observed_at ordering at
-    all, it retires every other current row outright. Same sabotage setup as before —
+    all, it retires every other current row outright. Same sabotage setup as before:
     a rival row already sitting current, timestamped INTO THE FUTURE, would have won
-    the old tie-break — now the rename still wins, and `rename_confirmed` is True."""
+    the old tie-break. Now the rename still wins, and `rename_confirmed` is True."""
     proj = await _mk_project(actions, "readbackrace")
     from src.orchestrator.project_identity import _RENAME_CONF
 
@@ -526,9 +526,9 @@ async def test_change_canonical_migrates_the_string_and_aliases_the_old_one(
     actions: Actions,
 ) -> None:
     """Actions.change_canonical, the kernel primitive rename_project builds on
-    (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/b5663511,
-    Thoth DM 12786): the uuid never moves, a compensating `canonical_changed` event is
-    recorded, and the retired string becomes a resolvable alias."""
+    (ruling: "a rename migrates the canonical too"): the uuid never moves, a compensating
+    `canonical_changed` event is recorded, and the retired string becomes a resolvable
+    alias."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:ccold", "test")
 
     out = await actions.change_canonical(proj, "repo:ccnew", "test migration",
@@ -560,8 +560,8 @@ async def test_change_canonical_refuses_a_live_holder(actions: Actions) -> None:
 async def test_create_or_find_object_never_mints_a_stub_under_an_alias(
     actions: Actions,
 ) -> None:
-    """The kernel choke point every mint door funnels through (item 1, Thoth DM 12786):
-    a caller passing the RETIRED canonical finds the migrated object, never a twin."""
+    """The kernel choke point every mint door funnels through (item 1):
+    a caller passing the RETIRED canonical finds the migrated object, never a duplicate."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:aliasedold", "test")
     await actions.change_canonical(proj, "repo:aliasednew", "x", "agent:test")
 
@@ -575,8 +575,8 @@ async def test_create_or_find_object_never_mints_a_stub_under_an_alias(
 async def test_rename_project_refuses_when_object_aliases_is_missing(
     actions: Actions,
 ) -> None:
-    """Thoth's own addition (DM 12798): refuse rather than silently orphan the old
-    canonical on a box that has not yet run alembic 0072."""
+    """An additional guard: refuse rather than silently orphan the old
+    canonical on an instance that has not yet run alembic 0072."""
     await _mk_project(actions, "premigrate")
     await actions.pool.execute("ALTER TABLE object_aliases RENAME TO object_aliases_hidden")
     try:
@@ -589,7 +589,7 @@ async def test_rename_project_refuses_when_object_aliases_is_missing(
 
 
 async def test_rename_project_migrates_off_graph_project_columns(actions: Actions) -> None:
-    """item 6/DM 12798: the six plain-text project columns outside objects/links/
+    """item 6: the six plain-text project columns outside objects/links/
     assertions are re-addressed in the SAME door, receipt naming exactly what moved."""
     from src.orchestrator.mounts import save_mount
 
@@ -617,10 +617,10 @@ async def test_rename_project_migrates_off_graph_project_columns(actions: Action
 
 
 async def test_rename_project_never_collides_with_a_merged_object(actions: Actions) -> None:
-    """item (d), Thoth's live Marquee re-run (mail 12471, decision 5d9192d0): after
+    """item (d), from a live re-run: after
     folding a name-only stub into a project, renaming that project back onto the
     stub's own old label used to still refuse as a collision (status=merged),
-    forcing merge_into=True even though nothing ACTIVE disputes the name — a merged
+    forcing merge_into=True even though nothing ACTIVE disputes the name. A merged
     object is permanently dead, never a rival identity to acknowledge."""
     from src.orchestrator.projects import fold_project
 
@@ -641,7 +641,7 @@ async def test_rename_project_still_refuses_colliding_with_a_retired_project(
     actions: Actions,
 ) -> None:
     """The scope boundary of item (d): only `merged` (permanent, terminal) is
-    excluded — `retired` stays a real collision, unchanged from 93af8ced, since a
+    excluded; `retired` stays a real collision, unchanged from the earlier fix, since a
     retired project is dormant, not dead, and could still be revived under its own
     name."""
     await _mk_project(actions, "willstayretired")
@@ -660,11 +660,11 @@ async def test_rename_project_still_refuses_colliding_with_a_retired_project(
 async def test_rename_project_collapses_every_other_sources_current_name(
     actions: Actions,
 ) -> None:
-    """item (g), Thoth's live Marquee re-run (mail 12475/12481, live specimen:
+    """item (g), from a live specimen:
     repo:dtfb's dossier listed 9 old "dtfb" rows beside the new "lotstretcher" one as
     agreement=contradicting): a declared rename now collapses every OTHER source's
     still-current `name` opinion via assert_singular_property, so a real rename never
-    reads as a live, unresolved multi-source dispute — exactly the surface
+    reads as a live, unresolved multi-source dispute, exactly the surface
     entity_dossier's own #102 agreement marker would otherwise flag."""
     proj = await _mk_project(actions, "manynamed")
     for i in range(3):
@@ -684,10 +684,10 @@ async def test_rename_project_collapses_every_other_sources_current_name(
 
 
 async def test_link_repo_confesses_a_genuine_mint(actions: Actions) -> None:
-    """The mint confession (Thoth's live Marquee re-run, mail 12464/12481, item (a)
+    """The mint confession (item (a),
     closed as a NARROWER addition rather than the earlier reverted refuse-not-mint
     rewrite): a hand-typed `repo=` that finds nothing genuinely new still mints, same
-    as always — this just stops it being silent."""
+    as always, this just stops it being silent."""
     from src.orchestrator.capture import link_repo
 
     thread = await actions.create_or_find_object("Thread", "thread:confessone", "test")
@@ -702,7 +702,7 @@ async def test_link_repo_never_confesses_finding_an_existing_project(
     actions: Actions,
 ) -> None:
     """The confession's own negative case: linking to a project that already exists
-    is the ordinary, silent find-or-create path — no confession, exactly as before
+    is the ordinary, silent find-or-create path, no confession, exactly as before
     this fix (additive, not a behavior change for the common case)."""
     from src.orchestrator.capture import link_repo
 
@@ -716,33 +716,32 @@ async def test_link_repo_never_confesses_finding_an_existing_project(
 async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
     actions: Actions,
 ) -> None:
-    """THE OPERATOR'S OWN WORD, relayed via Thoth mail 12460 (decision 55921b94): "the
-    repo/project name is now lotstretcher, osiris should be able to handle the rename
-    as a common thing not a weird special case." The acceptance test on the exact live
-    specimen (repo:dtfb -> lotstretcher), all five criteria in one place — not three
+    """The project's name is now lotstretcher, and osiris should be able to handle the
+    rename as a common thing, not a weird special case. The acceptance test on the exact
+    live specimen (repo:dtfb -> lotstretcher), all five criteria in one place, not three
     separate patches trusted in isolation.
 
     (1) dossier's own name resolution reads the new name.
-    (2) BOTH the old name (via canonical — a rename never rewrites `objects.canonical`,
+    (2) BOTH the old name (via canonical, a rename never rewrites `objects.canonical`,
         rename_project's own law) and the new name (via the now-correctly-current
         `name` property) resolve to the SAME object, through every "which project"
-        door this ruling's own fixes touch — capture's repo=, and mount's own
+        door this ruling's own fixes touch, capture's repo=, and mount's own
         identity.project resolution (_resolve_or_mint_project, agents.py, already
-        fixed pre-dating this ruling per decision 0cdc5735) — never a stub, either
+        fixed pre-dating this ruling), never a stub, either
         name.
-    (3) an agent's own `project` property (what get_status/orient actually read —
+    (3) an agent's own `project` property (what get_status/orient actually read,
         thin readers of this one stored fact, no separate logic of their own to
         re-verify) resolves correctly for a pin declaring EITHER name.
     (4) re-running the rename with the same new_name is a clean, confirmed no-op.
     (5) a name-only stub (the exact live shape: one edge, no real content) folds
         through merge() into the real object without any manual intervention.
 
-    EXTENDED (operator ruling "A RENAME MIGRATES THE CANONICAL TOO", grounds 488ae750/
-    b5663511, Thoth DM 12786/12798): the rename now migrates repo:dtfb's own canonical
-    to repo:lotstretcher — (6) the receipt's own `project` is the migrated canonical;
-    (7) the OLD canonical resolves (via object_aliases) to the SAME object, never a
-    stub, and dossier flags it `resolved_via_alias`; (8) project_identity_census
-    (`osiris lint --check project_identity`) reports no alias conflict for it."""
+    EXTENDED (ruling: "a rename migrates the canonical too"): the rename now migrates
+    repo:dtfb's own canonical to repo:lotstretcher, (6) the receipt's own `project` is
+    the migrated canonical; (7) the OLD canonical resolves (via object_aliases) to the
+    SAME object, never a stub, and dossier flags it `resolved_via_alias`; (8)
+    project_identity_census (`osiris lint --check project_identity`) reports no alias
+    conflict for it."""
     from src.orchestrator.agents import register_agent, resolve_identity
     from src.orchestrator.charter import set_charter
     from src.orchestrator.compositions import project_identity_census
@@ -779,7 +778,7 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
     assert old_via_alias["resolved_via_alias"] == "repo:dtfb"
     assert await actions.resolve_alias("SoftwareProject", "repo:dtfb") == proj
 
-    # (2) capture's repo= — both spellings, no stub, same object
+    # (2) capture's repo=, both spellings, no stub, same object
     d_old = await record_decision(actions, "filed under the old spelling", repo="dtfb")
     d_new = await record_decision(actions, "filed under the new spelling", repo="lotstretcher")
     for d_id in (d_old, d_new):
@@ -787,7 +786,7 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
             "SELECT p.id FROM links l JOIN objects p ON p.id=l.to_id "
             "WHERE l.from_id=$1 AND l.type='in_repo'", d_id)
         assert target == proj
-    # exactly one SoftwareProject answers to the (now migrated) canonical — the object
+    # exactly one SoftwareProject answers to the (now migrated) canonical: the object
     # itself, never a second stub minted under it
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject' "
@@ -816,7 +815,7 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
     assert again["current_name_after_write"] == "lotstretcher"
     assert again["project"] == "repo:lotstretcher"
 
-    # (5) a name-only stub folds through merge() without manual help — `into` still
+    # (5) a name-only stub folds through merge() without manual help, `into` still
     # names the OLD spelling, resolving through the alias to the same live object
     stub = await actions.create_or_find_object(
         "SoftwareProject", "repo:lotstretcher-stub", "agent:stray-mount")
@@ -846,10 +845,10 @@ async def test_rename_end_to_end_is_a_common_thing_not_a_weird_special_case(
 async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion(
     actions: Actions,
 ) -> None:
-    """THE TIE-BREAK GAP (thread 04907b12, live specimen: repo:xxit's winning name row
+    """THE TIE-BREAK GAP (live specimen: repo:xxit's winning name row
     stayed "xxit" long after the rename, because an ordinary mount re-asserting the OLD
     name from a stale pin wrote at the SAME self_declared/0.9 confidence rename_project
-    itself used — current_assertions' tie-break falls through to pure recency, so a
+    itself used; current_assertions' tie-break falls through to pure recency, so a
     later, uninformed write silently overturned a deliberate one). rename_project must
     write its own name at a confidence strictly above the self_declared ceiling, so a
     later ordinary self_declared write can never out-tie-break it regardless of recency."""
@@ -857,7 +856,7 @@ async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion
     await rename_project(actions, project="renametieold", new_name="renametienew",
                          because="test: the tie-break shape", actor="agent:test",
                          dry_run=False)
-    # a later, ordinary mount re-asserts the OLD name at ordinary self_declared/0.9 —
+    # a later, ordinary mount re-asserts the OLD name at ordinary self_declared/0.9,
     # exactly what an uninformed ordinary mount from a stale pin would write
     await actions.assert_property(proj, "name", "renametieold", "agent:stale-mount",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
@@ -870,9 +869,9 @@ async def test_rename_project_outranks_a_later_ordinary_mounts_stale_reassertion
 async def test_rename_project_names_a_seat_left_stale_by_the_rename(
     actions: Actions,
 ) -> None:
-    """Same acceptance shape as fold_project's own (Thoth dispatch 6484/6493): renaming a
+    """Same acceptance shape as fold_project's own: renaming a
     project moves zero edges (they're id-keyed already), but a seat's OWN house/anchor_cwd
-    still carries the OLD name — this proves the rename's own receipt now names it."""
+    still carries the OLD name; this proves the rename's own receipt now names it."""
     await _mk_project(actions, "renseat1")
     await ensure_seat(actions, house="renseat1", handle="stale-rename-seat", source="test")
 
@@ -887,13 +886,13 @@ async def test_rename_project_names_a_seat_left_stale_by_the_rename(
 async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
     actions: Actions, monkeypatch,
 ) -> None:
-    """obligation e4612853's sibling (Thoth DM 3169/3185): a standing Decision covering
+    """A sibling obligation: a standing Decision covering
     this exact rename is surfaced in the receipt, never blocks the write."""
     await _mk_project(actions, "bytebye")
 
     async def _fake_prior_art(pool, *, subject_canonical, field, new_value, because, actor):
         return {"prior_art": [{"id": "1db87191", "type": "Decision"}],
-               "prior_art_flag": f"a standing ruling (1db87191) may already cover "
+               "prior_art_flag": f"a standing decision may already cover "
                                   f"{subject_canonical}'s {field!r}"}
 
     monkeypatch.setattr(
@@ -902,7 +901,7 @@ async def test_rename_project_surfaces_prior_art_never_refuses_on_it(
                                because="tidying casing", actor="agent:test", dry_run=False)
     assert out["new_name"] == "ByeByte"  # the write still happened
     assert out["prior_art_flag"] == (
-        "a standing ruling (1db87191) may already cover repo:ByeByte's 'name'")
+        "a standing decision may already cover repo:ByeByte's 'name'")
 
 
 async def test_rename_project_refuses_blank_new_name_or_because(actions: Actions) -> None:
@@ -950,8 +949,8 @@ async def test_rename_project_refuses_colliding_with_a_different_active_project(
 async def test_rename_project_refuses_colliding_with_a_retired_project_too(
     actions: Actions,
 ) -> None:
-    """#93af8ced: the old check only fired on an ACTIVE collision, so a name still held
-    by a RETIRED project silently reused it — this closes that gap."""
+    """An earlier fix's gap: the old check only fired on an ACTIVE collision, so a name
+    still held by a RETIRED project silently reused it. This closes that gap."""
     await _mk_project(actions, "willretire")
     await _mk_project(actions, "renameme")
     retired = await actions.pool.fetchval(
@@ -969,7 +968,7 @@ async def test_rename_project_merge_into_lifts_the_collision_refusal(
     actions: Actions,
 ) -> None:
     """merge_into=True is an explicit override, never a merge itself (fold_project stays
-    the only verb that actually merges two objects) — it only lets the caller proceed
+    the only verb that actually merges two objects); it only lets the caller proceed
     having acknowledged the collision."""
     await _mk_project(actions, "willretire2")
     await _mk_project(actions, "renameme2")
@@ -986,7 +985,7 @@ async def test_rename_project_merge_into_lifts_the_collision_refusal(
 
 
 async def test_rename_project_dry_run_writes_nothing(actions: Actions) -> None:
-    """#93af8ced (Deckard's report, msg 7719): dry_run=True must be a pure preview —
+    """From a real-run report: dry_run=True must be a pure preview:
     zero object_events, zero assertions, zero agent_mounts changes. This is the one
     concrete case this thread was opened to fix; the old code performed the write
     regardless of dry_run."""
@@ -1014,7 +1013,7 @@ async def test_rename_project_dry_run_writes_nothing(actions: Actions) -> None:
     assert mount_row == "drypreview"  # unchanged
 
 
-# --- THE RENAME CASCADE (dispatch 2589353a, operator 2026-09-07) --------------------------
+# --- THE RENAME CASCADE (2026-09-07) --------------------------
 
 async def test_rename_cascade_reports_no_governing_seats_as_an_empty_manifest(
     actions: Actions,
@@ -1024,16 +1023,16 @@ async def test_rename_cascade_reports_no_governing_seats_as_an_empty_manifest(
                                because="x", actor="agent:test", dry_run=False)
     assert out["manifest"]["seats"] == {}
     assert "folder_path" in out["manifest"]["could_not_reach"]
-    # repo_root_osiris moved OUT of could_not_reach (Thoth mail 9122 item 5, wave 16)
-    # — it's a real per-seat tier now, not a static non-answer.
+    # repo_root_osiris moved OUT of could_not_reach (item 5):
+    # it's a real per-seat tier now, not a static non-answer.
     assert "repo_root_osiris" not in out["manifest"]["could_not_reach"]
 
 
 async def test_rename_cascade_touches_pin_and_house_reports_charter_already_correct(
     actions: Actions, tmp_path,
 ) -> None:
-    """Charter's own status is fixed at "already-correct" for a first-ever rename too
-    (mail 8749) — pin/house genuinely change (the on-disk pin file, the seat's own
+    """Charter's own status is fixed at "already-correct" for a first-ever rename too:
+    pin/house genuinely change (the on-disk pin file, the seat's own
     house label), but charter_of always reads a project's immutable canonical, and
     set_charter's own resolve-then-diff can never add or remove anything for it."""
     office = tmp_path / "office"
@@ -1053,10 +1052,10 @@ async def test_rename_cascade_touches_pin_and_house_reports_charter_already_corr
     dtiers = dry["manifest"]["seats"][seat["seat_id"]]
     assert dtiers["pin"]["status"] == "touched"
     assert dtiers["house"]["status"] == "touched"
-    # charter can never actually change on a plain rename (canonical is immutable,
-    # mail 8749) — "already-correct" is the honest answer, not a phantom "touched".
+    # charter can never actually change on a plain rename (canonical is immutable);
+    # "already-correct" is the honest answer, not a phantom "touched".
     assert dtiers["charter"]["status"] == "already-correct"
-    # a dry run previews only — nothing on disk or in the graph moved
+    # a dry run previews only: nothing on disk or in the graph moved
     assert (office / ".osiris").read_text() == 'project = "cascadeold"\n'
 
     out = await rename_project(actions, project="cascadeold", new_name="cascadenew",
@@ -1070,7 +1069,7 @@ async def test_rename_cascade_touches_pin_and_house_reports_charter_already_corr
     from src.orchestrator.charter import charter_of
     from src.orchestrator.seats import seat_facts
     # charter_of reports a CANONICAL-derived label, and the canonical now MIGRATES with
-    # the rename (DM 12786) — the governs edge keys on the uuid, so it follows for free.
+    # the rename: the governs edge keys on the uuid, so it follows for free.
     # What matters is exactly ONE live governs edge, never a duplicate or a dropped one.
     assert await charter_of(actions.pool, seat["seat_id"]) == ["cascadenew"]
     assert (await seat_facts(actions.pool, seat["seat_id"]))["house"] == "cascadenew"
@@ -1095,11 +1094,11 @@ async def test_rename_cascade_reports_already_correct_on_a_second_run(
 
     # renaming again (a truly free new_name this time): pin/house are keyed on the
     # SEAT's own current declared value, so they correctly settle to already-correct.
-    # CHARTER TOO (CORRECTED, mail 8749 — Deckard's real run proved the earlier
+    # CHARTER TOO (CORRECTED: a real production run proved the earlier
     # "touched again is honest" framing here was itself the phantom-write bug): charter
     # always returns the project's immutable mint-time canonical, so a charter entry
     # differing from new_name on its own STRING resolves right back down to that SAME
-    # canonical the moment set_charter tries to write it — nothing ever actually
+    # canonical the moment set_charter tries to write it; nothing ever actually
     # changes on a plain rename, no matter how many times it's re-triggered. Reporting
     # "touched" here was the lie set_charter's own diff (added:[], removed:[]) would
     # have caught; "already-correct" is what plan and apply now both, honestly, agree on.
@@ -1114,26 +1113,26 @@ async def test_rename_cascade_reports_already_correct_on_a_second_run(
 async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_literal_string(
     actions: Actions, tmp_path,
 ) -> None:
-    """Deckard's own live shape (Thoth's dry-run report): a seat's charter carries a
+    """A live shape from a dry-run report: a seat's charter carries a
     project's MINT-TIME canonical label ("xxit") through an EARLIER, separate rename to
-    "handlingtheloop" — `charter_of`'s canonical-derived entry never moves off "xxit",
+    "handlingtheloop"; `charter_of`'s canonical-derived entry never moves off "xxit",
     ever (rename_project's own contract: canonical is immutable). THIS rename call's
     old_name/new_name pair (handlingtheloop -> flowrenamed) is neither literal string
     ever seen in the charter, so the pre-fix literal `old_name in current_charter` /
     `new_name in current_charter` compare silently reported a false 'already-correct'
     with the note 'names neither'. The fix resolves "xxit" against the project's OWN id
     (via `_resolve_repo`, the same resolver `set_charter` itself already uses) and
-    correctly recognizes it as the entry NAMING this project — the RIGHT verified
+    correctly recognizes it as the entry NAMING this project, the RIGHT verified
     diagnosis, not the "names neither" lie.
 
-    CORRECTED AGAIN (Thoth/Deckard, mail 8749, Deckard's real run on 7b709ce): the first
+    CORRECTED AGAIN, from a real production run: the first
     version of this fix treated that resolved entry as 'stale' and planned to SWAP it
-    for the display name — but `set_charter` itself resolves every candidate back to
+    for the display name, but `set_charter` itself resolves every candidate back to
     its own canonical before writing, and "flowrenamed" resolves right back down to
-    "xxit" — the SAME entry already there. Nothing set_charter could ever actually add
+    "xxit", the SAME entry already there. Nothing set_charter could ever actually add
     or remove; the "would swap" plan was a promise the real apply could never honor.
     'already-correct' is the true, honest answer on BOTH the dry run and the real
-    apply — this is the exact test 'plan and apply share one comparison' now proves."""
+    apply; this is the exact test 'plan and apply share one comparison' now proves."""
     office = tmp_path / "deckard_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="handlingtheloop", handle="Deckardseat",
@@ -1141,7 +1140,7 @@ async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_li
     await _mk_agent(actions, "agent:deck0001")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:deck0001")
     proj = await _mk_project(actions, "xxit")  # mint-time canonical: repo:xxit, forever
-    # the EARLIER, separate rename: only the `name` property moves, never the canonical —
+    # the EARLIER, separate rename: only the `name` property moves, never the canonical,
     # exactly rename_project's own contract, done here directly to set up the specimen.
     await actions.assert_property(proj, "name", "handlingtheloop", "test",
                                   datetime.now(UTC), 0.95, evidence_class="self_declared")
@@ -1170,9 +1169,9 @@ async def test_rename_cascade_charter_resolves_a_stale_older_alias_not_either_li
 async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_shape(
     actions: Actions, tmp_path,
 ) -> None:
-    """Thoth's own note: 'Metron's seat shows the identical row' — a SECOND, differently
+    """A SECOND, differently
     named seat/project pair hitting the exact same underlying defect, proving the charter
-    fix is not a Deckard-only patch narrowly matched to one literal specimen."""
+    fix is not a narrow patch matched to one literal specimen."""
     office = tmp_path / "metron_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="metroncurrent", handle="Metronseat",
@@ -1192,9 +1191,9 @@ async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_
     out = await rename_project(actions, project="metroncurrent", new_name="metronfinal",
                                because="x", actor="agent:test", dry_run=False)
     tiers = out["manifest"]["seats"][seat["seat_id"]]
-    # mail 8749: the governs edge keys on the uuid, so the charter needs no write —
+    # the governs edge keys on the uuid, so the charter needs no write:
     # "already-correct" is the honest, verified answer, not "touched". The label it
-    # reads back is the MIGRATED canonical (DM 12786).
+    # reads back is the MIGRATED canonical.
     assert tiers["charter"]["status"] == "already-correct"
     assert "error" not in tiers["charter"]
     assert await charter_of(actions.pool, seat["seat_id"]) == ["metronfinal"]
@@ -1203,16 +1202,16 @@ async def test_rename_cascade_charter_stale_alias_fix_generalizes_a_second_seat_
 async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governing_seat(
     actions: Actions, tmp_path,
 ) -> None:
-    """Deckard's addendum (mail 8687): 'already-correct' used to conflate two different
-    states — an entry genuinely matching new_name (verified) versus 'names neither'
+    """An addendum: 'already-correct' used to conflate two different
+    states, an entry genuinely matching new_name (verified) versus 'names neither'
     (not-evaluated, a lie dressed as a pass). The two now carry distinct status strings.
     This proves the invariant that makes 'not-evaluated' structurally unreachable in
     practice: every seat this cascade processes was selected BY an active governs edge
     to the project being renamed, so charter_of(seat_id) always contains at least one
-    entry whose own canonical resolves to that exact project — it either already equals
-    new_name (already-correct) or lands in `stale`, which (mail 8749, Deckard's real
+    entry whose own canonical resolves to that exact project: it either already equals
+    new_name (already-correct) or lands in `stale`, which (per a real production
     run) can never actually change anything set_charter would write either, since
-    canonical is immutable — also 'already-correct', never 'not-evaluated', across a
+    canonical is immutable, also 'already-correct', never 'not-evaluated', across a
     single-project seat, a multi-project seat, and a project renamed twice in a row
     (testing the SAME invariant on a seat that has already been through one heal)."""
     from src.orchestrator.charter import charter_of
@@ -1237,7 +1236,7 @@ async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governin
     tiers1 = out1["manifest"]["seats"][seat["seat_id"]]
     assert tiers1["charter"]["status"] == "already-correct"
 
-    # renamed a SECOND time (the same seat, already through one heal) — the invariant
+    # renamed a SECOND time (the same seat, already through one heal); the invariant
     # must hold again, not just on a fresh mint-time specimen
     out2 = await rename_project(actions, project="invariantnext", new_name="invariantfinal",
                                 because="x", actor="agent:test", dry_run=False)
@@ -1249,10 +1248,10 @@ async def test_rename_cascade_charter_never_reports_not_evaluated_for_a_governin
 async def test_rename_cascade_charter_not_evaluated_actually_renders_on_a_broken_governs_edge(
     actions: Actions, tmp_path,
 ) -> None:
-    """Mail 8749: confirm 'not-evaluated' actually renders — not a crash, not silently
-    something else — on a seat whose charter tier genuinely cannot verify anything.
+    """Confirm 'not-evaluated' actually renders, not a crash, not silently
+    something else, on a seat whose charter tier genuinely cannot verify anything.
     Never reachable through the public `rename_project` verb (which refuses to rename
-    a non-active project, guaranteeing `project_oid` itself is always active) — built
+    a non-active project, guaranteeing `project_oid` itself is always active); built
     directly against `_cascade_governing_seats` by retiring the governed project AFTER
     its governs edge was minted: `_resolve_repo` filters `status='active'`, so a
     retired project's own canonical no longer resolves through it even though
@@ -1282,18 +1281,18 @@ async def test_rename_cascade_charter_not_evaluated_actually_renders_on_a_broken
 async def test_rename_cascade_self_rename_reports_already_correct_never_a_phantom_touched(
     actions: Actions, tmp_path,
 ) -> None:
-    """Deckard's own two re-runs, in order. FIRST (Thoth's catch on mail 8678): a
+    """Two real-run cases, in order. FIRST: a
     self-rename (old_name == new_name == the project's own winning name) is exactly
-    how this verb's own repair population gets invoked — an operator calling
+    how this verb's own repair population gets invoked, an operator calling
     rename(X, X) ON PURPOSE to heal a stale alias. The first version of this fix
     guarded the resolve loop with `if new_name != old_name`, which silently no-op'd
     this exact specimen (charter holds "xxit", winning name already "handlingtheloop").
 
-    SECOND, CORRECTED AGAIN (mail 8749, Deckard's REAL run on 7b709ce/8711): removing
+    SECOND, CORRECTED AGAIN, from a real production run: removing
     that guard made the tier correctly recognize "xxit" as the entry naming this
-    project — but the fix then treated that as 'stale' and planned to SWAP it for the
-    display name, reporting 'touched'. Deckard's real apply proved that promise false:
-    set_charter's own receipt showed added:[], removed:[] — nothing to swap TO, since
+    project, but the fix then treated that as 'stale' and planned to SWAP it for the
+    display name, reporting 'touched'. The real apply proved that promise false:
+    set_charter's own receipt showed added:[], removed:[], nothing to swap TO, since
     "selfstalecur" resolves right back down to the SAME "selfstaleorig" canonical
     already in the charter. There was never anything to heal; 'already-correct' is the
     true, honest answer set_charter's own diff would show, and now plan/apply agree."""
@@ -1331,7 +1330,7 @@ async def test_rename_cascade_self_rename_with_no_stale_alias_stays_a_no_op(
     actions: Actions, tmp_path,
 ) -> None:
     """The complementary case: a self-rename where the charter already holds ONLY the
-    winning name (no stale alias anywhere) must still report a clean already-correct —
+    winning name (no stale alias anywhere) must still report a clean already-correct;
     removing the old blanket guard must not turn every self-rename into a spurious write."""
     office = tmp_path / "selfclean_office"
     office.mkdir()
@@ -1354,15 +1353,15 @@ async def test_rename_cascade_self_rename_with_no_stale_alias_stays_a_no_op(
 async def test_rename_cascade_charter_plan_and_apply_agree_deckards_live_bug(
     actions: Actions, tmp_path,
 ) -> None:
-    """Thoth's mail 8749, URGENT: Deckard ran the cascade FOR REAL on 7b709ce (8711).
+    """URGENT, from a real production run: the cascade was run FOR REAL.
     The dry run minutes earlier promised plan: ['xxit'] -> ['handlingtheloop']. The
     real apply's own receipt showed charter {status: touched, detail: {charter:
-    ["xxit"], added: [], removed: []}} — a manifest reporting a write it never made,
-    worse than the honest already-correct it replaced. His hypothesis: plan compares
+    ["xxit"], added: [], removed: []}}, a manifest reporting a write it never made,
+    worse than the honest already-correct it replaced. Hypothesis: plan compares
     against the display name (change needed), apply compares against the canonical
-    (repo:xxit == repo:xxit, no-op) — the same split now sitting between plan and
-    apply. This is the exact test he named: on this seat, a dry run's plan must equal
-    the real run's detail — both now predict/observe the identical, honest outcome."""
+    (repo:xxit == repo:xxit, no-op), the same split now sitting between plan and
+    apply. This is the exact test named for it: on this seat, a dry run's plan must equal
+    the real run's detail, both now predict/observe the identical, honest outcome."""
     office = tmp_path / "planapply_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="planapplycur", handle="Planapplyseat",
@@ -1390,9 +1389,9 @@ async def test_rename_cascade_charter_plan_and_apply_agree_deckards_live_bug(
 async def test_rename_cascade_office_already_correct_when_nothing_upstream_changed(
     actions: Actions, tmp_path,
 ) -> None:
-    """Thoth's mail 8749, second observation: 'office reports touched on every run even
+    """A second observation: 'office reports touched on every run even
     when nothing upstream changed; it should be already-correct when charter and house
-    are verified-equal' — a self-rename with no stale pin/house/charter drift used to
+    are verified-equal', a self-rename with no stale pin/house/charter drift used to
     still reissue the office file (a real write, a fresh version, byte-identical
     content) every single call. Office must skip the reissue and report
     already-correct when pin, house, and charter are ALL already-correct."""
@@ -1421,7 +1420,7 @@ async def test_rename_cascade_office_still_reissues_when_pin_or_house_genuinely_
     actions: Actions, tmp_path,
 ) -> None:
     """The complementary case: office's new upstream gate must not turn into a blanket
-    skip — pin and house DO genuinely change on a real rename (unlike charter), and
+    skip: pin and house DO genuinely change on a real rename (unlike charter), and
     office must still reissue when either of them does."""
     from src.orchestrator.boot_compiler import reissue_office
 
@@ -1437,7 +1436,7 @@ async def test_rename_cascade_office_still_reissues_when_pin_or_house_genuinely_
     seat_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1", seat["seat_id"])
     await actions.create_link(seat_oid, proj, "governs", "test", datetime.now(UTC), 0.9)
-    # bootstrap a properly marked managed section first — the cascade's own reissue call
+    # bootstrap a properly marked managed section first; the cascade's own reissue call
     # never passes adopt=True (a legacy, marker-less file refuses loudly, on purpose;
     # see boot_compiler's own adopt tests), so this fixture pre-adopts once, matching how
     # any real office reaches this state before ever meeting the rename cascade.
@@ -1457,9 +1456,9 @@ async def test_rename_project_self_rename_collision_receipt_reports_no_op_never_
     actions: Actions,
 ) -> None:
     """BUG 2: renaming a project to the name it ALREADY holds resolves `new_name` back to
-    the SAME object (`collide["id"] == row["id"]`) — never a real collision, and the
+    the SAME object (`collide["id"] == row["id"]`), never a real collision, and the
     dry-run receipt's own `collision` field must say so (`None`), never the old
-    hardcoded 'would proceed only because merge_into=True' text — especially since here
+    hardcoded 'would proceed only because merge_into=True' text, especially since here
     `merge_into` was never passed at all (defaults False), the exact contradiction the
     old text always asserted regardless of what was actually passed."""
     await _mk_project(actions, "selfnoop")
@@ -1475,7 +1474,7 @@ async def test_rename_project_genuine_collision_receipt_reports_the_actual_merge
     actions: Actions,
 ) -> None:
     """A REAL collision (new_name already names a DIFFERENT active project) with
-    merge_into=True passed explicitly still surfaces as a collision — but the receipt
+    merge_into=True passed explicitly still surfaces as a collision, but the receipt
     must echo the caller's ACTUAL merge_into value, not a hardcoded assumption; proven by
     checking the exact value appears in the message, not just that a message exists."""
     await _mk_project(actions, "collideother")
@@ -1492,10 +1491,10 @@ async def test_rename_project_genuine_collision_receipt_reports_the_actual_merge
 async def test_charter_display_label_shows_name_beside_canonical_when_they_differ(
     actions: Actions,
 ) -> None:
-    """The presentation half of the 5031a74 finding (Thoth/Deckard, mail 8788): a
+    """The presentation half of the 5031a74 finding: a
     charter entry (always canonical, per charter_of's own contract) is rendered for a
     human as "name (repo:canonical)" when the project's live name differs from its
-    canonical — the exact post-rename shape "xxit" never stops being."""
+    canonical, the exact post-rename shape "xxit" never stops being."""
     from src.orchestrator.project_identity import charter_display_label, charter_display_labels
 
     proj = await _mk_project(actions, "displayxxit")
@@ -1510,7 +1509,7 @@ async def test_charter_display_label_shows_name_beside_canonical_when_they_diffe
 async def test_charter_display_label_stays_bare_when_name_equals_canonical(
     actions: Actions,
 ) -> None:
-    """No redundant parenthetical for a project never renamed — its live name IS its own
+    """No redundant parenthetical for a project never renamed: its live name IS its own
     canonical, so showing both would just repeat the same string."""
     from src.orchestrator.project_identity import charter_display_label
 
@@ -1523,7 +1522,7 @@ async def test_charter_display_label_degrades_to_the_bare_entry_when_unresolvabl
 ) -> None:
     """A charter entry naming nothing real (should not happen given charter_of's own
     contract, but a presentation refinement must never be the reason a charter line
-    goes blind, 577988ed) degrades to the bare string rather than erroring."""
+    goes blind) degrades to the bare string rather than erroring."""
     from src.orchestrator.project_identity import charter_display_label
 
     assert await charter_display_label(actions.pool, "nothing-names-this") == "nothing-names-this"
@@ -1533,7 +1532,7 @@ async def test_rename_cascade_never_overwrites_an_unrelated_house(
     actions: Actions, tmp_path,
 ) -> None:
     """A seat sharing a house with siblings under a THIRD name (neither old nor new) is
-    never this cascade's to guess — proven directly against the graph, not just the
+    never this cascade's to guess, proven directly against the graph, not just the
     receipt, since a wrong guess here is a silent identity corruption."""
     office = tmp_path / "office"
     office.mkdir()
@@ -1560,7 +1559,7 @@ async def test_rename_cascade_never_writes_or_infers_tree_binding(
 ) -> None:
     """Tree binding is DETECT-ONLY: even when the old-named path is gone and a same-
     shaped new-named path genuinely exists on disk, the cascade must never call
-    bind_seat_tree itself — only report the finding."""
+    bind_seat_tree itself; only report the finding."""
     old_tree = tmp_path / "code" / "treeold"
     new_tree = tmp_path / "code" / "treenew"
     new_tree.mkdir(parents=True)
@@ -1586,23 +1585,23 @@ async def test_rename_cascade_never_writes_or_infers_tree_binding(
     assert tiers["tree"]["status"] == "could-not"
     assert str(new_tree) in tiers["tree"]["detail"]
     from src.orchestrator.seats import seat_facts
-    # unchanged — this cascade never rebinds a tree on its own
+    # unchanged: this cascade never rebinds a tree on its own
     assert (await seat_facts(actions.pool, seat["seat_id"]))["tree_cwd"] == str(old_tree)
 
 
 async def test_rename_cascade_tree_tier_recognizes_an_already_renamed_tree_cwd(
     actions: Actions, tmp_path,
 ) -> None:
-    """Thread 7a3576df, Thoth mail 12880, live dtfb->lotstretcher specimen: a rename
+    """Live dtfb->lotstretcher specimen: a rename
     that migrates ONLY the canonical (the project's display `name` was already
     corrected under the old, name-only rename law, so old_name == new_name by the time
     this call runs) must not misread a tree_cwd that already carries the new label as
-    stale — the detector was comparing against the wrong side. Two rename_project
+    stale, the detector was comparing against the wrong side. Two rename_project
     calls, each proving one shape: a genuinely stale tree_cwd (old_name != new_name,
     still names the old label) stays could-not exactly as before; an already-renamed
     one, under the canonical-only-migration shape (old_name == new_name), now reads
     already-correct instead of falsely flagging "references the old name"."""
-    # SHAPE 1 — genuinely stale: an ordinary rename, tree_cwd still names the old label.
+    # SHAPE 1, genuinely stale: an ordinary rename, tree_cwd still names the old label.
     stale_tree = tmp_path / "code" / "treeoldd"
     stale_tree.mkdir(parents=True)
     office = tmp_path / "office"
@@ -1627,7 +1626,7 @@ async def test_rename_cascade_tree_tier_recognizes_an_already_renamed_tree_cwd(
     assert tiers1["tree"]["status"] == "could-not"
     assert "treeoldd" in tiers1["tree"]["detail"]
 
-    # SHAPE 2 — already-renamed: the display name was already corrected under the old,
+    # SHAPE 2, already-renamed: the display name was already corrected under the old,
     # name-only rename law (old_name == new_name by the time this call runs), and
     # tree_cwd already carries the new label too.
     renamed_tree = tmp_path / "code" / "treenewf"
@@ -1661,8 +1660,8 @@ async def test_rename_cascade_tree_tier_recognizes_an_already_renamed_tree_cwd(
 async def test_rename_cascade_writes_the_repo_root_osiris_pin(
     actions: Actions, tmp_path,
 ) -> None:
-    """Thoth mail 9122 item 5, wave 16: repo_root_osiris used to be permanently
-    could_not_reach — now a real write, the same correct_pin_value primitive the
+    """item 5: repo_root_osiris used to be permanently
+    could_not_reach; now a real write, the same correct_pin_value primitive the
     seat's own office/anchor/workspace pins already use, resolved off tree_cwd."""
     tree = tmp_path / "code" / "rootold"
     tree.mkdir(parents=True)
@@ -1786,16 +1785,16 @@ async def test_rename_cascade_office_reports_could_not_with_no_claude_md(
     assert out["manifest"]["seats"][seat["seat_id"]]["office"]["status"] == "could-not"
 
 
-# --- fork_project / unfork_project (#110, decision 1db1ff41) ------------------------------
+# --- fork_project / unfork_project (#110) ------------------------------
 
-async def test_fork_project_mints_the_edge_and_moves_no_estate(actions: Actions) -> None:
+async def test_fork_project_mints_the_edge_and_moves_no_existing_data(actions: Actions) -> None:
     redmonth = await _mk_project(actions, "forkredmonth")
     ballgem = await _mk_project(actions, "forkballgem")
     t = await actions.create_or_find_object("Thread", "thread:forkkeep1", "test")
-    await actions.create_link(t, redmonth, "in_repo", "agent:john", datetime.now(UTC), 0.9)
+    await actions.create_link(t, redmonth, "in_repo", "agent:actor1", datetime.now(UTC), 0.9)
 
     out = await fork_project(actions, project="forkredmonth", fork_into="forkballgem",
-                             because="John's own decision: new sibling, redmonth untouched",
+                             because="the actor's own decision: new sibling, redmonth untouched",
                              actor="agent:test")
 
     assert out["forked_from"] == "repo:forkredmonth" and out["into"] == "repo:forkballgem"
@@ -1803,7 +1802,7 @@ async def test_fork_project_mints_the_edge_and_moves_no_estate(actions: Actions)
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='forked_from' "
         "AND (valid_until IS NULL OR valid_until > now())", ballgem, redmonth)
     assert edge == 1
-    # the estate never moved — redmonth's own in_repo edge still points at redmonth
+    # the existing data never moved: redmonth's own in_repo edge still points at redmonth
     still_there = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='in_repo' "
         "AND (valid_until IS NULL OR valid_until > now())", t, redmonth)
@@ -1849,7 +1848,7 @@ async def test_fork_project_refuses_a_retired_side(actions: Actions) -> None:
 
 
 async def test_unfork_project_reverses_the_edge_reversibility_proven(actions: Actions) -> None:
-    """Thoth's own gate (DM 2427): reversibility PROVEN, not claimed — round-trip fork
+    """A standing gate: reversibility PROVEN, not claimed. Round-trip fork
     then unfork and confirm the edge is actually gone, not just unreported."""
     await _mk_project(actions, "revfrom")
     await _mk_project(actions, "revinto")
@@ -1881,7 +1880,7 @@ async def test_unfork_project_refuses_when_nothing_to_unfork(actions: Actions) -
     assert "nothing to unfork" in out["error"]
 
 
-# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2, thread 6778/6788): fork_project and
+# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2): fork_project and
 # unfork_project used to be two separate @mcp.tool() wrappers; now `fork_project` takes
 # `direction="fork"|"unfork"` and unfork_project is a hidden, deprecated alias. WATCHED
 # FAIL BEFORE THIS CHANGE: `srv.fork_project(..., direction="unfork")` raised
@@ -1929,7 +1928,7 @@ async def test_consolidated_fork_project_direction_param_reverses_the_edge(
         srv._agents.pop(key, None)
 
     listed = {t.name for t in await srv.mcp.list_tools()}
-    # fork_project ALSO hidden now (#202 project dispatcher, Thoth dispatch 7095) —
+    # fork_project ALSO hidden now (#202 project dispatcher):
     # both fold into project(action='fork'/'unfork'); still fully callable, same
     # mechanism this test's own two calls above just exercised.
     assert "unfork_project" not in listed
@@ -1938,7 +1937,7 @@ async def test_consolidated_fork_project_direction_param_reverses_the_edge(
     assert srv.mcp._tool_manager.get_tool("fork_project") is not None
 
 
-# --- create_project (#139's CREATE half — NOT a seventh mint door) ---------------------
+# --- create_project (#139's CREATE half, NOT a seventh mint door) ---------------------
 # layers task #107's _validate_repo_name with task #137's case-insensitive de-dup, both
 # reused verbatim; never a fresh, unguarded create_or_find_object of its own.
 
@@ -1978,7 +1977,7 @@ async def test_create_project_reuses_an_exact_match_never_a_twin(actions: Action
 async def test_create_project_reuses_a_case_insensitive_twin_never_a_second_object(
     actions: Actions,
 ) -> None:
-    """The ramstein/RAMstein shape (task #137's own live proof) — #107's shape validation
+    """The ramstein/RAMstein shape (task #137's own live proof): #107's shape validation
     alone would happily mint 'Ramstein' as a SEPARATE object from an existing 'ramstein';
     the case-insensitive layer on top is what stops it."""
     await _mk_project(actions, "ramstein")
@@ -1990,13 +1989,13 @@ async def test_create_project_reuses_a_case_insensitive_twin_never_a_second_obje
         "lower(canonical)='repo:ramstein'") == 1
 
 
-# --- rename_evidence_verdict (#137's arc, operator ruling: DO NOT CROWN A TIER) --------
+# --- rename_evidence_verdict (#137's arc, ruling: DO NOT CROWN A TIER) --------
 # a NAMED signal against a SPECIFIC new_name, distinct from project_identity_evidence's
-# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER) —
+# own "agreement" field (which only says whether a seat's tiers agree with EACH OTHER),
 # though the verdict function reuses that exact field rather than re-deriving it.
 
 def _evidence(candidates: dict[str, dict[str, object]], agreement: str) -> dict[str, object]:
-    """A minimal project_identity_evidence-shaped dict — only the fields the verdict
+    """A minimal project_identity_evidence-shaped dict: only the fields the verdict
     function reads, so these tests pin its contract without a live seat/DB round trip.
     `agreement` must be supplied explicitly (never recomputed here) so each test states
     the exact input the real function would have produced, rather than a second copy of
@@ -2027,17 +2026,17 @@ def test_rename_evidence_verdict_disagrees_when_the_sole_strong_candidate_is_not
 
 
 def test_rename_evidence_verdict_disagrees_on_internal_disagreement_even_if_new_name_wins() -> None:
-    """LIVE-VERIFIED SPECIMEN, run against production data 2026-08-13 (Thoth's dispatch
-    msg 4213, requirement 3): seat:ddafff44 (khepri, governs repo:tony). remote_agrees
+    """LIVE-VERIFIED SPECIMEN, run against production data 2026-08-13 (requirement 3):
+    a seat governing repo:tony. remote_agrees
     AND write_attribution both back "cultural-infrastructure" (the current declared
-    name) — the STRONGER case by any tiebreak — while the seat's own PIN still says
+    name), the STRONGER case by any tiebreak, while the seat's own PIN still says
     "tony". A verdict that only asked "does new_name have real signal" would have
     called this "confirms" and buried exactly the stale-pin disagreement #137 exists to
     catch. Reusing `agreement == "disagree"` directly (rather than re-deriving a
     per-name "is it the strongest" comparison) is what catches it: ambiguity itself is
     the finding, and new_name having a stronger case among the rivals does not resolve
-    it — that would be crowning a tier by magnitude instead of by name, the same
-    mistake the operator's ruling forbids."""
+    it, that would be crowning a tier by magnitude instead of by name, the same
+    mistake this ruling forbids."""
     live_shape = _evidence({
         "cultural-infrastructure": {"declared_charter": False, "pin_match": False,
                                     "remote_agrees": True},
@@ -2056,16 +2055,16 @@ def test_rename_evidence_verdict_no_signal_when_agreement_says_so() -> None:
 
 
 # --- MCP surface (task #163's arc: this whole module existed, tested, and had ZERO ------
-# MCP wiring until now — grep against src/mcp_server.py before this change: zero hits) ---
+# MCP wiring until now; grep against src/mcp_server.py before this change: zero hits) ---
 
 async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
     actions: Actions, tmp_path,
 ) -> None:
     """The MCP `rename_project` tool wires project_identity_evidence in as a PRE-WRITE
-    CHECK (task #163's arc, #137's own root-cause fix, operator ruling: DO NOT CROWN A
+    CHECK (task #163's arc, #137's own root-cause fix, ruling: DO NOT CROWN A
     TIER): every Seat currently GOVERNING the project being renamed gets its own evidence
-    report attached to the receipt, classified into a NAMED verdict — no-signal/confirms/
-    disagrees — against the specific new_name declared, so a caller sees in the SAME turn
+    report attached to the receipt, classified into a NAMED verdict (no-signal/confirms/
+    disagrees) against the specific new_name declared, so a caller sees in the SAME turn
     whether that seat's pin/charter/remote still disagrees. NOT A TIER RULING: this never
     refuses and never picks a winner on it; the rename itself always proceeds regardless,
     but a disagreement surfaces as an unmissable top-level warning, never buried."""
@@ -2106,17 +2105,17 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
         seat_evidence = entry["evidence"]
         assert seat_evidence["seat_id"] == seat["seat_id"]
         assert "candidates" in seat_evidence
-        # the pin still says the OLD name — exactly the #137 disagreement this must
+        # the pin still says the OLD name, exactly the #137 disagreement this must
         # surface, not hide, since the rename never touches the seat's own .osiris file
         assert "oldname" in seat_evidence["candidates"]
         # NAMED, NEVER SILENT: the pin's disagreement becomes an explicit verdict, and
-        # an unmissable top-level warning — never something a caller has to notice by
+        # an unmissable top-level warning, never something a caller has to notice by
         # diffing candidates themselves
         assert entry["verdict"] == "disagrees"
         assert out["evidence_disagrees"] is True
         assert seat["seat_id"] in out["warning"]
-        # SELF-CONSISTENCY, NOT VERIFICATION (Thoth's msg 4232): "confirms" must never be
-        # readable as "verified correct" — the receipt says so in its own wording, not
+        # SELF-CONSISTENCY, NOT VERIFICATION: "confirms" must never be
+        # readable as "verified correct", the receipt says so in its own wording, not
         # only in a docstring a caller may never read
         assert "self-consistency" in out["rename_evidence_note"].lower()
         assert "not" in out["rename_evidence_note"].lower()
@@ -2128,8 +2127,8 @@ async def test_mcp_rename_project_surfaces_evidence_by_governing_seat(
 async def test_mcp_rename_project_refusal_never_claims_it_was_written(
     actions: Actions, tmp_path,
 ) -> None:
-    """7f90f394: the evidence/warning attachment used to run unconditionally, even when
-    `_rename_project` itself refused (a name collision here) — so a governing seat whose
+    """The evidence/warning attachment used to run unconditionally, even when
+    `_rename_project` itself refused (a name collision here), so a governing seat whose
     OWN evidence happened to disagree with the never-written new_name produced a receipt
     reading "'newname' was written, but ..." on a call that wrote nothing at all. The
     warning (and the whole rename_evidence block) must only ever appear on an actual,
@@ -2176,8 +2175,8 @@ async def test_mcp_rename_project_refusal_never_claims_it_was_written(
 async def test_mcp_rename_project_heals_every_stale_mount_cache_entry(
     actions: Actions,
 ) -> None:
-    """#93af8ced (Deckard's report, msg 7719): get_status()'s `project` field reads a
-    connection's cached AgentIdentity.project, never a fresh graph read — the same
+    """From a real-run report: get_status()'s `project` field reads a
+    connection's cached AgentIdentity.project, never a fresh graph read, the same
     process-local cache transition_project/correct_house/invalidate_works_in already
     heal after their own writes. rename_project had no such heal, so get_status() (and
     anything else reading the mount cache) kept reporting the pre-rename name for every
@@ -2227,14 +2226,14 @@ async def test_mcp_rename_project_heals_every_stale_mount_cache_entry(
 async def test_mcp_rename_project_also_heals_a_genuinely_seated_cache_entry_via_seat_bound_path(
     actions: Actions, tmp_path,
 ) -> None:
-    """Mount-cache heal generalization, wave 6, dispatch 7dfc38a5: the string-match heal
-    above only catches a cached entry whose `.project` happens to equal the old bare name
-    — a governing seat's own live holder whose cache is ALREADY wrong for some unrelated
+    """Mount-cache heal generalization: the string-match heal
+    above only catches a cached entry whose `.project` happens to equal the old bare name;
+    a governing seat's own live holder whose cache is ALREADY wrong for some unrelated
     reason would never string-match and so would never heal by that path alone. Set up a
     real governing seat via the cascade's own charter tier (same fixture shape as
     test_rename_cascade_touches_pin_and_house_reports_charter_already_correct above), bind a
     fake `_agents` cache entry to that seat's holder agent_id, and give it a DELIBERATELY
-    DIFFERENT stale project string than old_bare — proving it's the NEW seat-bound heal
+    DIFFERENT stale project string than old_bare, proving it's the NEW seat-bound heal
     doing the work, not the string-match one (which would have nothing to match)."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -2249,11 +2248,11 @@ async def test_mcp_rename_project_also_heals_a_genuinely_seated_cache_entry_via_
     await _mk_agent(actions, "agent:seatbound1")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:seatbound1")
     proj = await _mk_project(actions, "seatboundold")
-    # a SECOND, unrelated governs edge — `_seated_house` only reads charter_of as this
+    # a SECOND, unrelated governs edge: `_seated_house` only reads charter_of as this
     # seat's own project when it declares EXACTLY ONE, and a charter's own CANONICAL-
     # derived label never moves on a rename by design (see the sibling cascade test's own
     # comment above): with two, this falls through to the seat's DERIVED HOUSE instead,
-    # which the rename cascade's own house tier DOES move — the thing this test means to
+    # which the rename cascade's own house tier DOES move, the thing this test means to
     # prove the seat-bound heal picks up.
     other_proj = await _mk_project(actions, "seatboundsibling")
     seat_oid = await actions.pool.fetchval(
@@ -2267,7 +2266,7 @@ async def test_mcp_rename_project_also_heals_a_genuinely_seated_cache_entry_via_
             session = object()
 
     ctx = _Ctx()
-    # deliberately NOT old_bare ("seatboundold") — a stale value the string-match heal
+    # deliberately NOT old_bare ("seatboundold"), a stale value the string-match heal
     # could never touch, so only the seat-bound path (held_seat -> in the manifest's own
     # seat set -> _resolve_project_seat_first) can possibly fix this.
     _agents[_conn_key(ctx)] = AgentIdentity(
@@ -2290,7 +2289,7 @@ async def test_mcp_project_identity_evidence_and_fork_doors(
     actions: Actions, tmp_path,
 ) -> None:
     """Smoke test for the three other doors this arc wired: project_identity_evidence,
-    fork_project, unfork_project — each already existed and was tested via direct import,
+    fork_project, unfork_project. Each already existed and was tested via direct import,
     but nothing outside a Python import could ever reach them."""
     import src.mcp_server as srv
     from src.mcp_server import _agents, _conn_key
@@ -2344,7 +2343,7 @@ async def test_mcp_project_identity_evidence_and_fork_doors(
 
 
 async def test_mcp_create_project_door(actions: Actions) -> None:
-    """#139's create half, reachable from the MCP surface — the door existed as a Python
+    """#139's create half, reachable from the MCP surface: the door existed as a Python
     function only until now, same gap the other three doors had before this arc's earlier
     wiring pass."""
     import src.mcp_server as srv
@@ -2376,16 +2375,15 @@ async def test_mcp_create_project_door(actions: Actions) -> None:
 async def test_rename_project_migrates_edges_never_orphans_them(
     actions: Actions, tmp_path,
 ) -> None:
-    """ADVERSARIAL TEST (Thoth's ask, msg 4083 — Alfred's charter rides on the answer):
-    rename a project carrying a `governs` edge from one Seat AND a `works_in` edge from a
-    DIFFERENT-source Agent, then confirm both still resolve from the renamed object and
-    no second object with the old canonical survives. `rename_project` never calls
-    create_or_find_object at all (confirmed by re-reading it end to end for this
-    question) — it resolves the EXISTING row, then `assert_property`s `name` on that SAME
-    `id`; `canonical` is never rewritten. So there is nothing to migrate: every edge was
-    always keyed on the object's immutable `id`, never on its name or canonical, and stays
-    correct automatically. This proves it against a live object rather than trusting the
-    docstring's own claim."""
+    """ADVERSARIAL TEST: rename a project carrying a `governs` edge from one Seat AND a
+    `works_in` edge from a DIFFERENT-source Agent, then confirm both still resolve from
+    the renamed object and no second object with the old canonical survives.
+    `rename_project` never calls create_or_find_object at all (confirmed by re-reading
+    it end to end for this question); it resolves the EXISTING row, then
+    `assert_property`s `name` on that SAME `id`; `canonical` is never rewritten. So there
+    is nothing to migrate: every edge was always keyed on the object's immutable `id`,
+    never on its name or canonical, and stays correct automatically. This proves it
+    against a live object rather than trusting the docstring's own claim."""
     office = tmp_path / "governing_office"
     office.mkdir()
     seat = await ensure_seat(actions, house="osiris", handle="Governseat",
@@ -2407,7 +2405,7 @@ async def test_rename_project_migrates_edges_never_orphans_them(
                                dry_run=False)
     assert out["new_name"] == "aftername"
     assert out["old_canonical"] == old_canonical
-    assert out["project"] == "repo:aftername"  # the canonical MIGRATED (DM 12786)
+    assert out["project"] == "repo:aftername"  # the canonical MIGRATED
 
     # the object's id is unchanged; its canonical MIGRATED and the old string is an alias
     new_canonical = await actions.pool.fetchval(
@@ -2415,7 +2413,7 @@ async def test_rename_project_migrates_edges_never_orphans_them(
     assert new_canonical == "repo:aftername"
     assert await actions.resolve_alias("SoftwareProject", old_canonical) == proj
 
-    # BOTH edges still resolve FROM THE SAME object id — nothing needed to migrate because
+    # BOTH edges still resolve FROM THE SAME object id, nothing needed to migrate because
     # nothing ever pointed at name/canonical to begin with
     governs_live = await actions.pool.fetchval(
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs' "
@@ -2426,7 +2424,7 @@ async def test_rename_project_migrates_edges_never_orphans_them(
     assert governs_live == 1
     assert works_in_live == 1
 
-    # no second object minted under any name — exactly one SoftwareProject answers to
+    # no second object minted under any name: exactly one SoftwareProject answers to
     # either the old or the new label
     count = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='SoftwareProject' AND canonical=$1",

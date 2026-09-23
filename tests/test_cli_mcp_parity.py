@@ -1,19 +1,19 @@
-"""ONE ACT, ONE NAME, ONE VOCABULARY (decision 0b29f1cbcc5a, dispatch 3683, the operator's
+"""ONE ACT, ONE NAME, ONE VOCABULARY (decision 0b29f1cbcc5a, the operator's
 own words: "I need consistency and unity across the surfaces for humans and machines so we
-can communicate properly") — the drift detector that law demanded. Every act that exists on
+can communicate properly"), the drift detector that law demanded. Every act that exists on
 BOTH the CLI and the MCP surface must carry the SAME name and the SAME parameter names; any
 asymmetry must be DECLARED here, with a reason, rather than left for an operator to notice a
 month later. THREE MEASURED SPECIMENS proved this recurs and nothing was catching it:
-fold-project/merge (renamed alongside this test, dispatch 3683), mint-seat's --adopt/--force
-(msg 3681, now stated explicitly in mint_seat's own MCP docstring), and launch's
-handle/target (found BUILDING this detector, not by a human — named honestly below rather
+fold-project/merge (renamed alongside this test), mint-seat's --adopt/--force
+(now stated explicitly in mint_seat's own MCP docstring), and launch's
+handle/target (found BUILDING this detector, not by a human, named honestly below rather
 than hidden, since fixing it is a separate, riskier decision this dispatch didn't ask for).
 
 WALKS BOTH SURFACES LIVE, never a hand-maintained mirror of either: CLI names/params come
-from `_build_parser()`'s own argparse structure, MCP names/params from `mcp.list_tools()`'s
-own inputSchema — the same measurement `_measure_tool_contract()` already trusts. A rename
+from `_build_parser`'s own argparse structure, MCP names/params from `mcp.list_tools`'s
+own inputSchema, the same measurement `_measure_tool_contract` already trusts. A rename
 on EITHER side that isn't reflected here fails this test, not a human noticing a month
-later — that is the whole point: discipline cannot hold this because the two surfaces are
+later, that is the whole point: discipline cannot hold this because the two surfaces are
 edited by different people at different times for different reasons.
 """
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any, TypedDict
 from src.actions.core import Actions
 from src.cli import _build_parser
 
-# MCP session-identity plumbing present on SOME tools' own signatures (never all — a raw
+# MCP session-identity plumbing present on SOME tools' own signatures (never all, a raw
 # terminal invocation has no "subagent" or "session anchor" concept at all to reach parity
 # with, so these are exempt globally rather than repeated per command).
 _MCP_ONLY_PLUMBING = frozenset({
@@ -34,69 +34,69 @@ _MCP_ONLY_PLUMBING = frozenset({
 })
 
 # Every sanctioned-second-door command takes --actor; no MCP tool does (an agent caller is
-# identified by its own mounted session, msg 3681 — never a caller-supplied string that
+# identified by its own mounted session, never a caller-supplied string that
 # could simply be forged). One reason, every command, rather than the same sentence six
 # times over.
 _CLI_ONLY_GLOBAL = frozenset({"actor"})
 
 # CLI commands with NO MCP tool at all (decision 0b29f1cbcc5a's own census). Five are
-# operator devops acts with no agent equivalent BY DESIGN — the fix there is documentation,
+# operator devops acts with no agent equivalent BY DESIGN, the fix there is documentation,
 # never harmonising for symmetry's own sake. The sixth is `fold-project`, the deprecated
-# alias for `merge` kept working for muscle memory and deliberately never advertised —
+# alias for `merge` kept working for muscle memory and deliberately never advertised,
 # not a live act left to reconcile, so it belongs here too, not in a rename.
 NO_MCP_EQUIVALENT = {
-    "attach": "a human's own terminal act (attach to a live PTY session) — no agent "
+    "attach": "a human's own terminal act (attach to a live PTY session), no agent "
              "equivalent",
     "boot-status": "operator devops read across the fleet's own compiled bodies",
-    "lint": "NOT actually MCP-less — wraps the graph_lint MCP tool's own orchestrator "
+    "lint": "NOT actually MCP-less, wraps the graph_lint MCP tool's own orchestrator "
         "function (comp.run_spec over the 'lint' Function), same call graph_lint itself "
-        "makes; named 'lint' on the CLI (WAVE 22 item 2, mail 10109) rather than "
+        "makes; named 'lint' on the CLI (this wave item 2) rather than "
         "'graph-lint' for a shorter headless-cron command, deliberately not name-matched.",
-    "layout": "NOT actually MCP-less — wraps the layout_migrate MCP tool's own shared "
+    "layout": "NOT actually MCP-less, wraps the layout_migrate MCP tool's own shared "
         "function (graph_layout.run_layout_migrate, the SAME loop the CLI, MCP, and "
-        "REST doors all call); named 'layout --migrate' on the CLI (Thoth mail 10609) "
+        "REST doors all call); named 'layout --migrate' on the CLI  "
         "since --migrate is the only mode today and a bare verb reads better than "
         "'layout-migrate' for an operator's own shell, deliberately not name-matched.",
-    "graph-export": "operator/cron-shaped bulk act, not an agent verb — the CLI mirror "
+    "graph-export": "operator/cron-shaped bulk act, not an agent verb, the CLI mirror "
         "of GET /graph/stream (NAVIGABLE SPACE piece B, thread b6cb1d7c0b36), "
         "direct-to-Postgres and headless like lint's own entry above, but exporting "
         "tens of thousands of positioned objects as a binary blob has no sensible MCP "
-        "tool-call shape (no model needs the raw typed-array payload) — the REST route "
+        "tool-call shape (no model needs the raw typed-array payload), the REST route "
         "and the three.js renderer are this capability's real consumers.",
-    "backup-status": "NOT actually MCP-less — THE BACKUP CLI DOOR (Thoth mail 12809): "
+    "backup-status": "NOT actually MCP-less, THE BACKUP CLI DOOR : "
         "calls compositions._fn_backup_status directly, the SAME Function "
         "composition(action='run', name='backup_status') already runs; no single MCP "
         "tool named 'backup_status' exists to mirror because the composition dispatcher "
         "has no per-Function args passthrough for its own vault/backups path overrides "
-        "— same NO_MCP_EQUIVALENT shape as audit/inspect's own entries: a CLI-side "
+        ", same NO_MCP_EQUIVALENT shape as audit/inspect's own entries: a CLI-side "
         "direct call over an existing Function, never a second implementation.",
-    "audit": "NOT actually MCP-less — one CLI door (WAVE 22 item 2) fans out to FIVE "
+    "audit": "NOT actually MCP-less, one CLI door (this wave item 2) fans out to FIVE "
         "differently-named compositions (closure-health/the-wall/type-census/family-"
         "consistency/family-drift) via comp.run_composition, the same function "
         "composition(action='run') calls; no single MCP tool named 'audit' to match "
-        "1:1, by design (Thoth's own instruction: one door, not a subcommand each).",
-    "inspect": "NOT actually MCP-less — WAVE 27, PARITY GAP 5 (Thoth mail 11752): one "
+        "1:1, by design (instruction: one door, not a subcommand each).",
+    "inspect": "NOT actually MCP-less, this wave, PARITY GAP 5 : one "
         "CLI door fans out to FOUR existing tools (dossier/object_events/"
         "succession_chain/candidates), same shape as audit's own entry directly above "
         "and the same reason the block comment above cmd_dossier already gives: no "
-        "single MCP tool named 'inspect' exists to mirror, and candidates() has no "
-        "per-object ref at all — a pure CLI-side aggregator over four wire calls, by "
+        "single MCP tool named 'inspect' exists to mirror, and candidates has no "
+        "per-object ref at all, a pure CLI-side aggregator over four wire calls, by "
         "design, not a new tool.",
-    "deploy": "operator devops act — an agent should not restart shared services",
-    "migrate": "operator devops act — an agent should not run schema migrations",
-    "graph-migrate": "DRAWING THE WHOLE GRAPH (thread 325ef660, Thoth mail 11407/11423): "
+    "deploy": "operator devops act, an agent should not restart shared services",
+    "migrate": "operator devops act, an agent should not run schema migrations",
+    "graph-migrate": "DRAWING THE WHOLE GRAPH : "
         "built to a CLI-only spec (`osiris migrate <name> [--dry-run]`, the dispatch's "
         "own literal wording) for a real-population graph repair, not a routine agent-"
-        "callable verb — same operator-cautious class as deploy/migrate/retention "
+        "callable verb, same operator-cautious class as deploy/migrate/retention "
         "above. An MCP tool can follow if a live caller actually needs one; none was "
         "asked for in this tip.",
-    "retention": "operator devops act (thread e6fd3772 piece 1, Khnum 288675e) — a retention "
+    "retention": "operator devops act, a retention "
                  "DELETE on outbox/audit_log has no unmerge; execute=False is the only "
                  "default and the act is deliberately kept off the agent-callable surface, "
                  "same class as deploy/migrate",
     "seed": "operator devops bootstrap act, rare and deliberate, not an ordinary agent verb",
-    "soul-key": "operator devops bootstrap act (Thoth DM 9194/9245 wave 17; THE KEY "
-        "DOOR, mail 12810/12830) — init/rotate mint or re-wrap the soul-store "
+    "soul-key": "operator devops bootstrap act (this wave; THE KEY "
+        "DOOR), init/rotate mint or re-wrap the soul-store "
         "encryption key, meant to be run by a human in their own terminal so the "
         "mandatory offline recovery secret prints in front of a person, never inside "
         "a daemon's log; an MCP tool would put key generation behind an agent call, "
@@ -104,183 +104,183 @@ NO_MCP_EQUIVALENT = {
         "DO touch Postgres/restic (unlike the original init-only door), but stay off "
         "the agent-callable surface for the same human-hands-only reason, matching "
         "THE KEY DOOR's own REST layer (operator-only authority, never an MCP tool).",
-    "restic-key": "THE OFFLOAD RUNNER's own credential door (ruling e0b98ff2's 'same "
+    "restic-key": "THE OFFLOAD RUNNER's own credential door ('s 'same "
         "shape for the restic repository password'), same reasoning as soul-key above "
-        "— init mints a credential, meant to be run by a human in their own terminal, "
+        ", init mints a credential, meant to be run by a human in their own terminal, "
         "never behind an agent call.",
     "offload-runner": "operator devops act, same class as deploy/migrate/retention above "
-        "— one tick runs real restic subprocess backups against real infrastructure "
+        ", one tick runs real restic subprocess backups against real infrastructure "
         "(the docked drive, the NAS over sftp), meant as osiris-offload.timer's own "
         "ExecStart or a human's own by-hand run, not an ordinary agent-callable verb.",
-    "fold-project": "deprecated alias for merge (dispatch 3683) — kept working for muscle "
+    "fold-project": "deprecated alias for merge, kept working for muscle "
                     "memory, never advertised; not a live act to reconcile",
-    "correct-agent-house": "NOT actually MCP-less — correct_agent_house is hidden from "
-        "`list_tools()` by the deprecated-alias mechanism (meta={'deprecated': True}, "
-        "retirement wave 1, zero traffic at the time) but stays fully callable, same "
-        "shape as heal_seat_anchor_third_party's own hidden alias. _mcp_tools() reads "
+    "correct-agent-house": "NOT actually MCP-less, correct_agent_house is hidden from "
+        "`list_tools` by the deprecated-alias mechanism (meta={'deprecated': True}, "
+        "retirement this wave, zero traffic at the time) but stays fully callable, same "
+        "shape as heal_seat_anchor_third_party's own hidden alias. _mcp_tools reads "
         "the FILTERED listing (what a model actually sees), which is right for the "
-        "forward param-shape check but blind to a hidden-but-real tool's existence — "
+        "forward param-shape check but blind to a hidden-but-real tool's existence, "
         "named here rather than left as a false 'no MCP tool at all' (#204: the CLI "
         "door built for the #199 lane 3B audit's own real gap).",
-    "reconcile-merge": "NOT actually MCP-less — same hidden-alias shape as "
+    "reconcile-merge": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry directly above; reconcile_merge carries the "
         "identical deprecated meta from the same retirement wave (#204).",
-    "annotate-thread": "NOT actually MCP-less — same hidden-alias shape as "
+    "annotate-thread": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry above; annotate_thread carries meta="
         "{'deprecated': True} from the #202 wave-3 thread_action fold, still fully "
         "callable, its own CLI door untouched by the fold.",
-    "retire-agent": "NOT actually MCP-less — same hidden-alias shape as "
+    "retire-agent": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry above; retire_agent carries meta="
         "{'deprecated': True} from the #202 wave-3 retire_object fold, still fully "
         "callable, its own CLI door untouched by the fold.",
-    "stop": "NOT actually MCP-less — same hidden-alias shape as correct-agent-house's own "
+    "stop": "NOT actually MCP-less, same hidden-alias shape as correct-agent-house's own "
         "entry above; stop carries meta={'deprecated': True} from the #202 seat-dispatcher "
-        "build (msg 7039), still fully callable, its own CLI door untouched by the fold.",
-    "charter-for": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "build, still fully callable, its own CLI door untouched by the fold.",
+    "charter-for": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; charter_for carries meta={'deprecated': True} from the "
-        "#202 seat-dispatcher build (msg 7039), still fully callable.",
-    "rebind-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "#202 seat-dispatcher build, still fully callable.",
+    "rebind-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; rebind_seat carries meta={'deprecated': True} from the "
-        "#202 seat-dispatcher build (msg 7039), still fully callable.",
-    "correct-pin-value": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "#202 seat-dispatcher build, still fully callable.",
+    "correct-pin-value": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; correct_pin_value carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable.",
-    "heal-seat-anchor": "NOT actually MCP-less — same hidden-alias shape as correct-"
+    "heal-seat-anchor": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; heal_seat_anchor carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039) ON TOP OF "
-        "its own pre-existing self/third-party consolidation (task #199 lane 2) — still "
+        "{'deprecated': True} from the #202 seat-dispatcher build ON TOP OF "
+        "its own pre-existing self/third-party consolidation (task #199 lane 2), still "
         "fully callable either way.",
-    "transition-seat-project": "NOT actually MCP-less — same hidden-alias shape as "
+    "transition-seat-project": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry above; transition_seat_project carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable.",
-    "heal-seat-transcript": "NOT actually MCP-less — same hidden-alias shape as correct-"
+    "heal-seat-transcript": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; heal_seat_transcript carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable.",
-    "mint-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+    "mint-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; mint_seat carries meta={'deprecated': True} from the "
-        "#202 seat-dispatcher build (msg 7039), still fully callable.",
-    # WAVE 3 (thread 5bf6447c, Thoth dispatch 7943): the sixteen re-read NO_CLI_EQUIVALENT
+        "#202 seat-dispatcher build, still fully callable.",
+    # this wave : the sixteen re-read NO_CLI_EQUIVALENT
     # excuses that turned out to have a real orchestrator function, all shipped as their
-    # own CLI door this wave — every one of them, same as mint-seat/correct-agent-house
+    # own CLI door this wave, every one of them, same as mint-seat/correct-agent-house
     # above, is a hidden deprecated alias, not truly MCP-less.
-    "attach-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+    "attach-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; attach_seat carries meta={'deprecated': True} from "
-        "the #202 wave-3 seat_edge fold (msg 6987), still fully callable.",
-    "detach-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 wave-3 seat_edge fold, still fully callable.",
+    "detach-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; detach_seat carries meta={'deprecated': True} from "
-        "the #202 wave-3 seat_edge fold (msg 6987), still fully callable.",
-    "vacate-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 wave-3 seat_edge fold, still fully callable.",
+    "vacate-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; vacate_seat carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable.",
-    "retire-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 seat-dispatcher build, still fully callable.",
+    "retire-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; retire_seat carries meta={'deprecated': True} from "
-        "the #202 wave-3 retire_object fold (msg 6987), still fully callable.",
-    "bind-seat-tree": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 wave-3 retire_object fold, still fully callable.",
+    "bind-seat-tree": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; bind_seat_tree carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable.",
-    "sweep-seat-disk": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 seat-dispatcher build, still fully callable.",
+    "sweep-seat-disk": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; sweep_seat_disk carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable.",
+        "the #202 seat-dispatcher build, still fully callable.",
     "sweep-seat-trees": "SEAT TREE FABRICATION priority fix (operator-flagged via "
-        "Nebbercracker DM 11747, Thoth mail 11759): a genuinely NEW capability, built "
+        "): a genuinely NEW capability, built "
         "CLI-only per the dispatch's own literal wording ('osiris seat sweep-trees "
-        "[--apply]'), same precedent as graph-migrate's own entry above — an MCP tool "
+        "[--apply]'), same precedent as graph-migrate's own entry above, an MCP tool "
         "can follow if a live caller actually needs one; none was asked for in this tip.",
-    "rename-seat": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+    "rename-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; rename_seat carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable.",
-    "set-seat-attended": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "the #202 seat-dispatcher build, still fully callable.",
+    "set-seat-attended": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; set_seat_attended carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable.",
-    "reissue-office": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+    "reissue-office": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; reissue_office carries meta={'deprecated': True} from "
-        "the #202 seat-dispatcher build (msg 7039), still fully callable. DEPRECATED "
+        "the #202 seat-dispatcher build, still fully callable. DEPRECATED "
         "CLI alias for reissue-seat-dir this release only (ONE TAXONOMY, ruling "
-        "52a59652/70c001ec).",
-    "establish-office": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        ").",
+    "establish-office": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; establish_office carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable. DEPRECATED CLI alias for establish-seat-dir this release only "
-        "(ONE TAXONOMY, ruling 52a59652/70c001ec).",
-    "reissue-seat-dir": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "(ONE TAXONOMY).",
+    "reissue-seat-dir": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; the underlying MCP action is still named "
-        "reissue_office (Sekhmet's own MCP-surface rename lands separately, ONE "
-        "TAXONOMY wave 28) — this CLI door renamed ahead of it, ruling 52a59652/"
-        "70c001ec.",
-    "establish-seat-dir": "NOT actually MCP-less — same hidden-alias shape as correct-"
+        "reissue_office (MCP-surface rename lands separately, ONE "
+        "TAXONOMY this wave), this CLI door renamed ahead of it, /"
+        ".",
+    "establish-seat-dir": "NOT actually MCP-less, same hidden-alias shape as correct-"
         "agent-house's own entry above; the underlying MCP action is still named "
-        "establish_office (Sekhmet's own MCP-surface rename lands separately, ONE "
-        "TAXONOMY wave 28) — this CLI door renamed ahead of it, ruling 52a59652/"
-        "70c001ec.",
-    "correct-agent-project": "NOT actually MCP-less — same hidden-alias shape as "
+        "establish_office (MCP-surface rename lands separately, ONE "
+        "TAXONOMY this wave), this CLI door renamed ahead of it, /"
+        ".",
+    "correct-agent-project": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry above; the underlying MCP action is still "
-        "named correct_agent_house (Sekhmet's own MCP-surface rename lands "
-        "separately, ONE TAXONOMY wave 28) — this CLI door renamed ahead of it, "
-        "ruling 52a59652/70c001ec.",
-    "resync-seat-project": "a GENUINELY NEW door (Thoth mail 12000, implements "
-        "70c001ec, \"ONE TAXONOMY\"): collapses the two MCP actions correct_house "
+        "named correct_agent_house (MCP-surface rename lands "
+        "separately, ONE TAXONOMY this wave), this CLI door renamed ahead of it, "
+        ".",
+    "resync-seat-project": "a GENUINELY NEW door (implements "
+        ", \"ONE TAXONOMY\"): collapses the two MCP actions correct_house "
         "(self-scoped) and resync_seat_house (third-party) into one re-derive-from-"
-        "charter door with no single MCP tool of its own to match — an MCP tool can "
+        "charter door with no single MCP tool of its own to match, an MCP tool can "
         "follow if a live caller actually needs one; none was asked for in this tip.",
-    "reconcile-seat-identity": "NOT actually MCP-less — same hidden-alias shape as "
+    "reconcile-seat-identity": "NOT actually MCP-less, same hidden-alias shape as "
         "correct-agent-house's own entry above; reconcile_seat_identity carries meta="
-        "{'deprecated': True} from the #202 seat-dispatcher build (msg 7039), still "
+        "{'deprecated': True} from the #202 seat-dispatcher build, still "
         "fully callable.",
-    "create-project": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+    "create-project": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; create_project carries meta={'deprecated': True} from "
-        "the #202 project-dispatcher build (msg 7095), still fully callable.",
-    "rename-project": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 project-dispatcher build, still fully callable.",
+    "rename-project": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; rename_project carries meta={'deprecated': True} from "
-        "the #202 project-dispatcher build (msg 7095), still fully callable.",
-    "retire-project": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 project-dispatcher build, still fully callable.",
+    "retire-project": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; retire_project carries meta={'deprecated': True} from "
-        "the #202 wave-3 retire_object fold (msg 6987), repointed by the #202 project-"
-        "dispatcher (msg 7095), still fully callable.",
-    "fork-project": "NOT actually MCP-less — same hidden-alias shape as correct-agent-"
+        "the #202 wave-3 retire_object fold, repointed by the #202 project-"
+        "dispatcher, still fully callable.",
+    "fork-project": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; fork_project carries meta={'deprecated': True} from "
-        "the #202 project-dispatcher build (msg 7095), still fully callable.",
+        "the #202 project-dispatcher build, still fully callable.",
     "new": "an OPERATOR founding a self-managed seat for a mind that does not exist yet "
-          "(dispatch 3685/3688) is a DIFFERENT act from walk_in's self-naming (a mind "
-          "that already exists arriving and naming ITSELF) — different actor, different "
+          " is a DIFFERENT act from walk_in's self-naming (a mind "
+          "that already exists arriving and naming ITSELF), different actor, different "
           "precondition, different moment. The unity law binds one act to one name on "
           "both surfaces; it does not force two genuinely different acts to share one "
           "just because they're adjacent in purpose. Reasoned explicitly, not assumed.",
     "desk": "a deliberately NARROWED, terminal-native door onto inbox(project='operator', "
-           "peek=True) — thread 00913be9, Thoth's CLI-surface audit: the operator's own "
+           "peek=True), the CLI-surface audit: the operator's own "
            "desk was readable only via the web console or an agent peeking on his behalf. "
-           "Not a rename (the MCP tool answers a broader question — any project's mailbox, "
-           "leasing, ack) — 'desk' fixes both params to the one question a human at his "
+           "Not a rename (the MCP tool answers a broader question, any project's mailbox, "
+           "leasing, ack), 'desk' fixes both params to the one question a human at his "
            "own terminal actually asks, so it earns its own name rather than exposing "
            "inbox's full parameter surface as CLI flags.",
-    "show": "a deliberately NARROWED, terminal-native door onto recall(ref=...) — same "
-           "audit, same reasoning as 'desk' above: recall() is already the exact verb, "
+    "show": "a deliberately NARROWED, terminal-native door onto recall(ref=..), same "
+           "audit, same reasoning as 'desk' above: recall is already the exact verb, "
            "'show' is simply the word a human reaches for at a prompt.",
 }
 
 # (cli_command, param) -> reason: a CLI-only param beyond the blanket "actor" exemption.
 CLI_ONLY_PARAMS = {
-    ("send", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's own "
+    ("send", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's own "
         "entry below.",
-    ("decide", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("decide", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
-    ("thread", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("thread", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
-    ("proposal", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("proposal", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
-    ("settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("settings", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
-    ("backup-settings", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
-        "fleet's own entry below (PARITY GAPS, WAVE 27 item 3, thread 45aff160).",
-    ("backup-settings", "timer"): "THE BACKUP CLI DOOR ergonomics (Thoth mail 12809/12812) "
-        "— a repeatable UNIT=ONCALENDAR CLI convenience that reads current timer_schedules "
+    ("backup-settings", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
+        "fleet's own entry below (PARITY GAPS, this wave item 3).",
+    ("backup-settings", "timer"): "THE BACKUP CLI DOOR ergonomics  "
+        ", a repeatable UNIT=ONCALENDAR CLI convenience that reads current timer_schedules "
         "and merges just the named unit(s) before calling write_backup_settings' own "
         "timer_schedules param (still the wire shape); the MCP tool has no matching param "
         "because the merge-then-full-replace dance only makes sense as CLI ergonomics.",
-    ("backup-settings", "offload_add"): "THE BACKUP CLI DOOR ergonomics — upserts ONE "
+    ("backup-settings", "offload_add"): "THE BACKUP CLI DOOR ergonomics, upserts ONE "
         "offload_targets entry by name via the same read-merge-write dance as --timer "
         "above, over the wire shape's own offload_targets param.",
     ("backup-settings", "offload_kind"): "--offload-add's own sub-field, same reasoning "
@@ -293,130 +293,130 @@ CLI_ONLY_PARAMS = {
         "reasoning as offload_add's own entry.",
     ("backup-settings", "offload_disabled"): "--offload-add's own sub-field, same "
         "reasoning as offload_add's own entry.",
-    ("backup-settings", "offload_remove"): "THE BACKUP CLI DOOR ergonomics — drops ONE "
+    ("backup-settings", "offload_remove"): "THE BACKUP CLI DOOR ergonomics, drops ONE "
         "offload_targets entry by name, same reasoning as offload_add's own entry.",
-    ("backfill", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("backfill", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
     ("backfill", "apply"): "the CLI's own --apply is the same concept as the MCP tool's "
         "dry_run, inverted and renamed to match this house's --apply repair convention "
-        "(thread c89a9873) — identical shape to seat:heal_anchor's own entry below.",
-    ("practices", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+        ", identical shape to seat:heal_anchor's own entry below.",
+    ("practices", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry below.",
-    ("practices", "action"): "WAVE 27, PARITY GAP 6 (Thoth mail 11752): 'list' calls the "
-        "SAME practices() MCP tool; 'show REF' reaches past that public wrapper straight "
+    ("practices", "action"): "this wave, PARITY GAP 6 : 'list' calls the "
+        "SAME practices MCP tool; 'show REF' reaches past that public wrapper straight "
         "to the underlying composition function's own `id` arg (the door amend_practice's "
-        "own receipt already uses) — the public tool exposes no by-id lookup at all, so "
+        "own receipt already uses), the public tool exposes no by-id lookup at all, so "
         "this dispatch param has nothing on the MCP side to name-match.",
-    ("practices", "ref"): "show-only: the practice to look up by id — see the 'action' "
-        "entry directly above for why the public practices() tool has no equivalent param.",
-    ("send", "from_project"): "the WRITE TRIANGLE's own gap (dispatch a354ba28): the send "
-        "MCP tool derives from_project from the caller's own mount (`ident.project`) — a "
+    ("practices", "ref"): "show-only: the practice to look up by id, see the 'action' "
+        "entry directly above for why the public practices tool has no equivalent param.",
+    ("send", "from_project"): "the WRITE TRIANGLE's own gap : the send "
+        "MCP tool derives from_project from the caller's own mount (`ident.project`), a "
         "bare console caller has no mount to derive it from, so this names the gap with "
         "an explicit flag rather than guessing or leaving broadcast-reply routing "
         "unreachable from a terminal.",
     ("launch", "debug"): "the PTY-broker fallback lane is an operational/incident choice; "
         "the MCP tool only ever spawns the harness-native default substrate",
     ("mint-seat", "manager"): "MCP infers the manager from the caller's own held seat by "
-        "design (\"there is no override param\" — mint_seat's own MCP docstring); a raw "
+        "design (\"there is no override param\", mint_seat's own MCP docstring); a raw "
         "terminal holds no seat of its own to infer it from",
     ("mint-seat", "adopt"): "deliberate console-only escape hatch, stated explicitly in "
-        "mint_seat's own MCP docstring (dispatch 3678 addendum, msg 3681)",
+        "mint_seat's own MCP docstring (addendum)",
     ("mint-seat", "force"): "deliberate console-only escape hatch, same docstring",
     ("bootstrap", "project"): "bootstrap_project itself takes this override; the MCP "
-        "tool's own wrapper never exposes it, always inferring from cwd's basename — a "
+        "tool's own wrapper never exposes it, always inferring from cwd's basename, a "
         "gap on that side, not an inconsistency to hide here",
     ("smoke", "chaos"): "the crash replay SIGKILLs osiris-mcp/osiris-worker and fires a "
-        "session-end storm — an operator/manager-hand operational act (every worker "
+        "session-end storm, an operator/manager-hand operational act (every worker "
         "charter says 'you NEVER restart services'); deliberately unreachable from any "
-        "MCP tool a seat could call mid-turn (Sekhmet bfa2bd2, #178 residual). Still true "
-        "for the REAL production daemons after #186 (dispatch 5690): this entry is about "
+        "MCP tool a seat could call mid-turn (#178 residual). Still true "
+        "for the REAL production daemons after #186: this entry is about "
         "CLI-vs-MCP surface parity, unchanged. What #186 added is a SEPARATE, test-only "
-        "pathway — tests/test_chaos.py's own isolated osiris-mcp/osiris-worker pair (own "
-        "port, own testcontainer DB/Redis) — so the crash-replay mechanism itself is now "
+        "pathway, tests/test_chaos.py's own isolated osiris-mcp/osiris-worker pair (own "
+        "port, own testcontainer DB/Redis), so the crash-replay mechanism itself is now "
         "exercised for real in the suite; neither a CLI param nor an MCP tool, so this "
         "table's own claim is untouched by it.",
-    ("smoke", "reboot"): "REBOOT SURVIVAL (thread 194eac83, operator ruling aaa8e841): "
+    ("smoke", "reboot"): "REBOOT SURVIVAL (operator): "
         "restarts every real daemon unit in dependency order and asserts each port/the "
-        "worker heartbeat answers — same operator/manager-hand-only class as `chaos` "
+        "worker heartbeat answers, same operator/manager-hand-only class as `chaos` "
         "directly above (every worker charter says 'you NEVER restart services'), "
         "deliberately unreachable from any MCP tool a seat could call mid-turn.",
     ("fleet", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
-        "caller, so it has no second format to choose between — the counterpart would be "
+        "caller, so it has no second format to choose between, the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
-        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+        "tty, never what the verb does or returns.",
     ("roster", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
-        "caller, so it has no second format to choose between — the counterpart would be "
+        "caller, so it has no second format to choose between, the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
-        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
-    ("backlog", "as_json"): "a PRESENTATION flag, not an act — same reason as roster's "
-        "own entry above (Thoth LXXXVII, 2026-08-28); the CLI's own counterpart to "
+        "tty, never what the verb does or returns.",
+    ("backlog", "as_json"): "a PRESENTATION flag, not an act, same reason as roster's "
+        "own entry above; the CLI's own counterpart to "
         "backlog's MCP-only `render` param (see MCP_ONLY_PARAMS below).",
-    ("threads", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's "
+    ("threads", "as_json"): "a PRESENTATION flag, not an act, same reason as backlog's "
         "own entry above; the CLI's own counterpart to threads's MCP-only `render` param "
         "(see MCP_ONLY_PARAMS below).",
-    ("inbox", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+    ("inbox", "as_json"): "a PRESENTATION flag, not an act, same reason as backlog's own "
         "entry above; the CLI's own counterpart to inbox's MCP-only `render` param (see "
         "MCP_ONLY_PARAMS below).",
-    ("team", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+    ("team", "as_json"): "a PRESENTATION flag, not an act, same reason as backlog's own "
         "entry above; the CLI's own counterpart to team's MCP-only `render` param (see "
         "MCP_ONLY_PARAMS below).",
-    ("status", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
+    ("status", "as_json"): "a PRESENTATION flag, not an act, same reason as backlog's own "
         "entry above; the CLI's own counterpart to get_status's MCP-only `render` param "
         "(see MCP_ONLY_PARAMS below).",
-    ("search", "as_json"): "a PRESENTATION flag, not an act — same reason as backlog's own "
-        "entry above; search() has no render param of its own to counter (its receipt is "
+    ("search", "as_json"): "a PRESENTATION flag, not an act, same reason as backlog's own "
+        "entry above; search has no render param of its own to counter (its receipt is "
         "already small), so this is purely the terminal-vs-caller presentation split.",
-    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `--text` prints the raw
+    # #92, THE ZERO-TOKEN READ HOOK : `--text` prints the raw
     # server-rendered string verbatim (or, where none exists server-side, the same human
-    # render --text-less mode already gives) — a SECOND presentation flag alongside
+    # render --text-less mode already gives), a SECOND presentation flag alongside
     # --json, same "terminal-vs-caller split" reasoning as every --json entry above, for
     # the hook's own static `osiris <verb> --text` invocation to have a real flag to pass.
     ("roster", "text"): "same PRESENTATION-flag reasoning as roster's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("backlog", "text"): "same PRESENTATION-flag reasoning as backlog's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("threads", "text"): "same PRESENTATION-flag reasoning as threads's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("inbox", "text"): "same PRESENTATION-flag reasoning as inbox's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("team", "text"): "same PRESENTATION-flag reasoning as team's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("status", "text"): "same PRESENTATION-flag reasoning as status's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("search", "text"): "same PRESENTATION-flag reasoning as search's own --json entry "
-        "above — #92, the zero-token read hook.",
-    ("team", "seat"): "the named gap's own fix (thread 68f1bafa/642c4754): a terminal has "
-        "no mounted identity for team()'s deliberately self-scoped MCP contract to resolve "
+        "above, #92, the zero-token read hook.",
+    ("team", "seat"): "the named gap's own fix : a terminal has "
+        "no mounted identity for team's deliberately self-scoped MCP contract to resolve "
         "-- --seat resolves the manager by handle DIRECTLY against postgres (seats.py's "
-        "seat_by_handle + team_roster, the identical query team() itself calls, never a "
+        "seat_by_handle + team_roster, the identical query team itself calls, never a "
         "second copy) rather than adding an override param to the MCP tool's own contract.",
     ("unmerge", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
-        "caller, so it has no second format to choose between — the counterpart would be "
+        "caller, so it has no second format to choose between, the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
-        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
+        "tty, never what the verb does or returns.",
     ("retention", "as_json"): "a PRESENTATION flag, not an act: --json picks the compact "
         "one-line machine render over the human one at the terminal boundary "
         "(src/cli_render.emit). An MCP tool ALREADY returns structured data to its "
-        "caller, so it has no second format to choose between — the counterpart would be "
+        "caller, so it has no second format to choose between, the counterpart would be "
         "meaningless, not missing. Identical content either way; this changes bytes on a "
-        "tty, never what the verb does or returns (Thoth LXXXVII, 2026-08-28)",
-    ("stop", "as_json"): "a PRESENTATION flag, not an act — same reason as the four read "
+        "tty, never what the verb does or returns.",
+    ("stop", "as_json"): "a PRESENTATION flag, not an act, same reason as the four read "
         "verbs above; the stop receipt renders for a human by default and as one compact "
         "JSON line under --json, for the teardown scripts this verb exists to serve "
-        "(Thoth LXXXVII, 2026-08-28)",
-    ("smoke", "as_json"): "a PRESENTATION flag, not an act — same reason as the read "
-        "verbs above (Thoth dispatch 6746, specimen A: the CLI's own top-level help "
+        "",
+    ("smoke", "as_json"): "a PRESENTATION flag, not an act, same reason as the read "
+        "verbs above (specimen A: the CLI's own top-level help "
         "promises every read verb takes --json, which was false for this one until "
         "this fix). Never --chaos's own path, which keeps its separate text-only receipt.",
     ("correct-pin-value", "seat"): "the MCP tool correct_pin_value is SELF-scoped by "
-        "design (resolved off the mounted caller's own held_seat, msg 4761/obligation "
-        "114f7ac9 — it can only ever correct ITS OWN seat's pin). A terminal has no "
+        "design (resolved off the mounted caller's own held_seat, obligation "
+        ", it can only ever correct ITS OWN seat's pin). A terminal has no "
         "mounted identity to be self about, so the console door (thread 6437) takes an "
         "EXPLICIT target instead, resolved the same way rebind-seat's own console door "
         "resolves its target (resolve_handle, falling back to a raw agent id that "
@@ -424,12 +424,12 @@ CLI_ONLY_PARAMS = {
     ("heal-seat-anchor", "apply"): "the SAME dry-run/apply concept as MCP's `dry_run` "
         "below, INVERTED and renamed to match every other repair script's own --apply "
         "convention in this house (scripts/backfill_*.py) rather than the MCP tools' "
-        "dry_run=True-default convention — apply=False means dry_run=True. Declared "
+        "dry_run=True-default convention, apply=False means dry_run=True. Declared "
         "here, not reconciled: the two conventions serve different callers (a human "
         "typing a flag vs. an agent passing a keyword) and forcing one shape onto both "
         "would fight one of them.",
     ("transition-seat-project", "seat"): "the MCP tool transition_seat_project is "
-        "SELF-scoped by design (resolved off the mounted caller's own held_seat) — a "
+        "SELF-scoped by design (resolved off the mounted caller's own held_seat), a "
         "terminal has no mounted identity to be self about, so the console door takes "
         "an EXPLICIT target instead, same resolution shape correct-pin-value's own "
         "console door already uses.",
@@ -437,77 +437,77 @@ CLI_ONLY_PARAMS = {
         "`dry_run` below, INVERTED and renamed to match this house's --apply repair "
         "convention, same declared split as heal-seat-anchor's own entry above.",
     ("heal-seat-transcript", "apply"): "the SAME dry-run/apply concept as MCP's `dry_run` "
-        "below, INVERTED and renamed — identical shape to heal-seat-anchor's own entry "
+        "below, INVERTED and renamed, identical shape to heal-seat-anchor's own entry "
         "above, same reasoning (#204: the CLI door built for the #199 lane 3B audit's "
         "original specimen).",
-    # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832): every new
-    # read/write door's own --json is a PRESENTATION flag, not an act — same reasoning
+    # CLI PARITY, THE NEXT CENSUS GAPS : every new
+    # read/write door's own --json is a PRESENTATION flag, not an act, same reasoning
     # as fleet's own entry above, repeated once per new command rather than folded into
     # a blanket exemption (the house convention every prior --json entry already keeps).
-    ("dossier", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
+    ("dossier", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
         "own entry above.",
-    ("object-events", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+    ("object-events", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
         "fleet's own entry above.",
-    ("succession-chain", "as_json"): "a PRESENTATION flag, not an act — same reasoning "
+    ("succession-chain", "as_json"): "a PRESENTATION flag, not an act, same reasoning "
         "as fleet's own entry above.",
-    ("candidates", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+    ("candidates", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
         "fleet's own entry above.",
     ("dossier", "text"): "same PRESENTATION-flag reasoning as dossier's own --json entry "
-        "above — #92, the zero-token read hook.",
+        "above, #92, the zero-token read hook.",
     ("candidates", "text"): "same PRESENTATION-flag reasoning as candidates's own --json "
-        "entry above — #92, the zero-token read hook.",
-    ("digest", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
-        "own entry above — #92, the zero-token read hook (fleet_digest had no CLI door "
+        "entry above, #92, the zero-token read hook.",
+    ("digest", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
+        "own entry above, #92, the zero-token read hook (fleet_digest had no CLI door "
         "at all until this).",
     ("digest", "text"): "same PRESENTATION-flag reasoning as digest's own --json entry "
-        "directly above — #92, the zero-token read hook.",
-    ("settle", "as_json"): "a PRESENTATION flag, not an act — same reasoning as fleet's "
-        "own entry above — #93, the mechanical settle (settle had no CLI door at all "
+        "directly above, #92, the zero-token read hook.",
+    ("settle", "as_json"): "a PRESENTATION flag, not an act, same reasoning as fleet's "
+        "own entry above, #93, the mechanical settle (settle had no CLI door at all "
         "until this).",
     ("settle", "text"): "same PRESENTATION-flag reasoning as settle's own --json entry "
-        "directly above — #93, the mechanical settle.",
+        "directly above, #93, the mechanical settle.",
     # 'composition' is a DISPATCHER tool (COMPOSITION_INPUT_SCHEMA's oneOf, task #202,
-    # operator ruling f9182ad7): its own bare top-level schema has NO properties at all
-    # (every real param lives behind one of the save/run/list branches) — same shape
-    # `_mcp_dispatcher_action_params()`'s own docstring names for every dispatcher's
-    # bare name. This CLI door (Thoth mail 10441, thread 163c6832) fans across all
+    # operator): its own bare top-level schema has NO properties at all
+    # (every real param lives behind one of the save/run/list branches), same shape
+    # `_mcp_dispatcher_action_params`'s own docstring names for every dispatcher's
+    # bare name. This CLI door fans across all
     # three branches via a single --action argument that varies per invocation, so no
     # one 'tool:action' pseudo-name can capture the union the way stop/mint-seat/
-    # thread's own single-branch pseudo-names do — same precedent as 'audit' (one
+    # thread's own single-branch pseudo-names do, same precedent as 'audit' (one
     # door, not a subcommand each, by design), just declared per-param here rather
     # than at NO_MCP_EQUIVALENT's whole-command level since 'composition' the bare
     # tool name does exist (with an empty property set, not absent). The CLI door
-    # itself calls call_mcp_tool(url, 'composition', {action, ...}) — same function,
-    # same params per action — checked by reading cmd_composition's own body, not this
+    # itself calls call_mcp_tool(url, 'composition', {action, ..}), same function,
+    # same params per action, checked by reading cmd_composition's own body, not this
     # table's per-param mechanism.
-    ("composition", "action"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "name"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "spec"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "kind"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "subject"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "fields"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "take"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "depth"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "offset"): "dispatcher fan-out param — see the block comment above.",
-    ("composition", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+    ("composition", "action"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "name"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "spec"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "kind"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "subject"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "fields"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "take"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "depth"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "offset"): "dispatcher fan-out param, see the block comment above.",
+    ("composition", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
         "fleet's own entry above.",
-    ("retire-assertion", "as_json"): "a PRESENTATION flag, not an act — same reasoning "
+    ("retire-assertion", "as_json"): "a PRESENTATION flag, not an act, same reasoning "
         "as unmerge's own entry above.",
-    ("retire-link", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+    ("retire-link", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
         "unmerge's own entry above.",
-    ("cite", "as_json"): "a PRESENTATION flag, not an act — same reasoning as unmerge's "
+    ("cite", "as_json"): "a PRESENTATION flag, not an act, same reasoning as unmerge's "
         "own entry above.",
-    ("citation", "as_json"): "a PRESENTATION flag, not an act — same reasoning as "
+    ("citation", "as_json"): "a PRESENTATION flag, not an act, same reasoning as "
         "fleet's own entry above.",
 }
 
 # CLI COMMAND -> ITS REAL MCP TARGET, when dash-to-underscore is the wrong mapping (task
-# #202/#204, Thoth msg 7039/7040/7059): a CLI verb whose function now lives behind an
+# #202/#204): a CLI verb whose function now lives behind an
 # object-type dispatcher's own ACTION, not a same-named standalone tool. `_find_problems`
 # below falls back to the old `cli_name.replace("-", "_")` guess for every command not
-# listed here — this table is additive, never a wholesale renaming of the mechanism.
-# `_mcp_dispatcher_action_params()` is what makes these "tool:action" pseudo-names real,
-# checkable entries in `_mcp_tools()`'s own dict, not just labels.
+# listed here, this table is additive, never a wholesale renaming of the mechanism.
+# `_mcp_dispatcher_action_params` is what makes these "tool:action" pseudo-names real,
+# checkable entries in `_mcp_tools`'s own dict, not just labels.
 CLI_TO_MCP_NAME: dict[str, str] = {
     "stop": "seat:stop",
     "mint-seat": "seat:mint",
@@ -517,51 +517,51 @@ CLI_TO_MCP_NAME: dict[str, str] = {
     "heal-seat-anchor": "seat:heal_anchor",
     "transition-seat-project": "seat:transition_project",
     "heal-seat-transcript": "seat:heal_transcript",
-    # #202 agent dispatcher (Thoth dispatch 7162): fleet-reconcile's own CLI door
-    # matched the bare fleet_reconcile tool 1:1 before this fold — now it matches the
+    # #202 agent dispatcher : fleet-reconcile's own CLI door
+    # matched the bare fleet_reconcile tool 1:1 before this fold, now it matches the
     # dispatcher action instead, same shape as seat's own entries above.
     "fleet-reconcile": "agent:fleet_reconcile",
-    # thread 07ca68ca (wave 8): fleet-prune's own CLI door matches the agent dispatcher's
+    # this wave: fleet-prune's own CLI door matches the agent dispatcher's
     # fleet_prune action, same shape as fleet-reconcile's own entry above.
     "fleet-prune": "agent:fleet_prune",
-    # #202 practice dispatcher (Thoth dispatch 7162, proposal decision 07395004):
+    # #202 practice dispatcher (proposal):
     # amend-practice's own CLI door matched the bare amend_practice tool 1:1 before
-    # this fold — now it matches the dispatcher action instead, same shape as
+    # this fold, now it matches the dispatcher action instead, same shape as
     # fleet-reconcile's own entry above. record_practice has no CLI door at all
     # (nothing to reconcile there).
     "amend-practice": "practice:amend",
-    # status — the read triangle's own console face (thread 68f1bafa/3703a3a9) onto
-    # get_status(), the MCP tool's own established name (the "glance" verb, task #whatever
-    # first shipped it) — the CLI door is named for the human at a terminal, not renamed
+    # status, the read triangle's own console face onto
+    # get_status, the MCP tool's own established name (the "glance" verb, task #whatever
+    # first shipped it), the CLI door is named for the human at a terminal, not renamed
     # to match.
     "status": "get_status",
-    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): `digest` is the terminal-
-    # native word for fleet_digest, same naming-freedom `status`'s own entry above takes —
+    # #92, THE ZERO-TOKEN READ HOOK : `digest` is the terminal-
+    # native word for fleet_digest, same naming-freedom `status`'s own entry above takes,
     # matches a real tool 1:1, just not by literal name.
     "digest": "fleet_digest",
-    # THE WRITE TRIANGLE (dispatch a354ba28, msg 7882 item 2): `decide` is the terminal-
+    # THE WRITE TRIANGLE : `decide` is the terminal-
     # native word for record_decision, same naming-freedom `desk`/`show` already took for
-    # inbox/recall (NO_MCP_EQUIVALENT above) — but this one DOES match a real tool 1:1,
+    # inbox/recall (NO_MCP_EQUIVALENT above), but this one DOES match a real tool 1:1,
     # so it belongs here, not there. `thread` is a DELIBERATE NARROWING to the dispatcher's
     # own `action='resolve'` branch (closing a thread is what a bare "thread" verb means
-    # at a terminal) — the other three actions (annotate/correct_summary/reclassify) have
+    # at a terminal), the other three actions (annotate/correct_summary/reclassify) have
     # no CLI door under this name; annotate already has its own (`annotate-thread`).
     # `send` needs no entry here: its name already matches the MCP tool's own 1:1.
     "decide": "record_decision",
     "thread": "thread:resolve",
-    # `promote` (khnum-promotion-verb, operator 2026-09-07) — a brand-new seat dispatcher
+    # `promote` (the promotion-verb dispatch, operator 2026-09-07), a brand-new seat dispatcher
     # action, same shape as stop/mint-seat/charter-for above: the CLI door's own params
     # (target, workers, because) already match the dispatcher branch's own names 1:1, so
     # this entry is only the tool-name pointer, nothing in CLI_ONLY_PARAMS/MCP_ONLY_PARAMS/
     # RENAMED_PARAMS needed on top of it.
     "promote": "seat:promote",
-    # `set-project-tag` (window-tag-gets-an-owner, wave 11, decision 26f4f825's
-    # corollary) — a brand-new project dispatcher action, same shape as promote's own
+    # `set-project-tag` (window-tag-gets-an-owner, this wave, 's
+    # corollary), a brand-new project dispatcher action, same shape as promote's own
     # entry above: the CLI door's own params (project, tag, because) already match the
     # dispatcher branch's own names 1:1.
     "set-project-tag": "project:set_tag",
-    # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832): the two
-    # short terminal-native names the dispatch asked for by name — real, live,
+    # CLI PARITY, THE NEXT CENSUS GAPS : the two
+    # short terminal-native names the dispatch asked for by name, real, live,
     # standalone tools, so they belong here (matching 1:1 on params) rather than in
     # NO_MCP_EQUIVALENT, same shape as `decide`/`status` above.
     "cite": "cite_transcript",
@@ -570,23 +570,23 @@ CLI_TO_MCP_NAME: dict[str, str] = {
 
 # (mcp_tool, param) -> reason: an MCP-only param with no CLI counterpart.
 MCP_ONLY_PARAMS = {
-    ("seat:mint", "house"): "Thoth mail 12000, implements 70c001ec, \"ONE TAXONOMY\": "
-        "mint-seat's own --house flag retired outright, no alias — a seat's project "
+    ("seat:mint", "house"): ", implements, \"ONE TAXONOMY\": "
+        "mint-seat's own --house flag retired outright, no alias, a seat's project "
         "is never a second, independently-given value; the new worker's project "
         "comes from its manager's own project by construction (mint_seat's own "
         "`house or manager_house`, house always omitted from this CLI door now). "
-        "The MCP tool's own `house` param stays for now (Sekhmet's own MCP-surface "
+        "The MCP tool's own `house` param stays for now (MCP-surface "
         "rename, if any, lands separately).",
     ("launch", "message"): "the CLI has no way to deliver an opening brief in one act "
-        "today — a real gap, named rather than hidden, not yet built",
-    ("resume", "message"): "same gap as launch's own message param above — the CLI has "
+        "today, a real gap, named rather than hidden, not yet built",
+    ("resume", "message"): "same gap as launch's own message param above, the CLI has "
         "no way to deliver an opening brief in one act today; not yet built",
-    # RESTORED (task #202/#204, Thoth msg 7039/7040/7059's own gate-half): these three
+    # RESTORED (task #202/#204, 's own gate-half): these three
     # lived here as (heal_seat_anchor, dry_run) etc. before the #202 seat dispatcher
     # shipped, and were DELETED rather than pointed at a name the gate couldn't check yet
-    # (_mcp_tools() read seat's own flat inputSchema["properties"] as empty). Now
+    # (_mcp_tools read seat's own flat inputSchema["properties"] as empty). Now
     # pointed at their real "seat:action" pseudo-name via CLI_TO_MCP_NAME/
-    # _mcp_dispatcher_action_params above — the fix those deletion comments named.
+    # _mcp_dispatcher_action_params above, the fix those deletion comments named.
     ("seat:heal_anchor", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) "
         "is the same concept, inverted and renamed to match this house's --apply repair "
         "convention rather than the MCP tools' own dry_run=True default.",
@@ -595,35 +595,35 @@ MCP_ONLY_PARAMS = {
         "repair convention rather than the MCP tools' own dry_run=True default.",
     ("seat:heal_transcript", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS "
         "above) is the same concept, inverted and renamed to match this house's --apply "
-        "repair convention rather than the MCP tools' own dry_run=True default — "
+        "repair convention rather than the MCP tools' own dry_run=True default, "
         "identical shape to seat:heal_anchor's own entry above.",
     ("backfill", "dry_run"): "the CLI's own `apply` (see CLI_ONLY_PARAMS above) is the "
         "same concept, inverted and renamed to match this house's --apply repair "
-        "convention (thread c89a9873) — identical shape to seat:heal_anchor's own entry "
+        "convention, identical shape to seat:heal_anchor's own entry "
         "above.",
     ("backlog", "render"): "the read triangle's own server-side text mode (thread "
-        "68f1bafa/3703a3a9) — a slash-command/model caller's concern (avoid the model "
+        "), a slash-command/model caller's concern (avoid the model "
         "re-prettifying JSON at token cost). The CLI already has its own presentation "
         "split (--json vs the human view, src/cli_render.emit) so render='text' has no "
         "terminal-side counterpart to be missing.",
-    ("threads", "render"): "same reason as backlog's own entry above — the read "
+    ("threads", "render"): "same reason as backlog's own entry above, the read "
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
-    ("roster", "render"): "same reason as backlog's own entry above — the read "
+    ("roster", "render"): "same reason as backlog's own entry above, the read "
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
-    ("inbox", "render"): "same reason as backlog's own entry above — the read triangle's "
+    ("inbox", "render"): "same reason as backlog's own entry above, the read triangle's "
         "server-side text mode has no terminal-side counterpart to be missing.",
     ("retire_object", "kind"): "two DIFFERENT CLI doors reach this one MCP tool now "
         "(retire-agent for kind='agent', retire-object for kind='object', thread "
-        "92dde6cc) — each CLI door is single-purpose (its own kind hardcoded in the "
+        "), each CLI door is single-purpose (its own kind hardcoded in the "
         "call, same shape retire-project's own CLI door already has for kind="
         "'project'), so `kind` itself is never a CLI-side flag to be missing.",
     ("retire_object", "override_live"): "only kind='agent' ever reads this flag "
-        "(retire-agent's own CLI door already lacks it too — see its own RENAMED_PARAMS "
+        "(retire-agent's own CLI door already lacks it too, see its own RENAMED_PARAMS "
         "entry, this MCP-only pairing just needed a name to check itself against); "
         "kind='object' (retire-object) has its own liveness signal (live links/"
-        "non-layout assertions) with no override, by design — a bare junk object has "
+        "non-layout assertions) with no override, by design, a bare junk object has "
         "no session to be 'live'.",
-    ("inbox", "peek"): "the CLI console door (thread 68f1bafa/3703a3a9) is ALWAYS a peek "
+    ("inbox", "peek"): "the CLI console door  is ALWAYS a peek "
         "-- a human glancing from a terminal never leases mail, same reasoning as `desk`'s "
         "own always-peek design above (read_desk). Not a gap: peek=True is simply never a "
         "variable on this door.",
@@ -633,7 +633,7 @@ MCP_ONLY_PARAMS = {
     ("inbox", "want_prior_art"): "a real gap, named rather than hidden: the CLI's own "
         "render.emit already shows whatever the MCP tool returns, but no --want-prior-art "
         "flag exists yet to ask for the fuller payload. Not yet built.",
-    ("inbox", "as_seat"): "9dc3ce8b/c56f3d94, MAIL IS UNSURFACEABLE: a coordinator's "
+    ("inbox", "as_seat"): ", MAIL IS UNSURFACEABLE: a coordinator's "
         "charter-gated cross-seat read, an agent-to-agent capability with no terminal-"
         "side analog -- a human at a console already sees whatever seat they're sitting "
         "at; reading ANOTHER seat's mail from a bare terminal has no charter identity "
@@ -641,102 +641,102 @@ MCP_ONLY_PARAMS = {
         "deliberately agent-only.",
     ("inbox", "include_settled"): "same reason as as_seat directly above -- a parameter "
         "of that same agent-only door, meaningless without it.",
-    ("team", "render"): "same reason as backlog's own entry above — the read triangle's "
+    ("team", "render"): "same reason as backlog's own entry above, the read triangle's "
         "server-side text mode has no terminal-side counterpart to be missing.",
-    ("get_status", "render"): "same reason as backlog's own entry above — the read "
+    ("get_status", "render"): "same reason as backlog's own entry above, the read "
         "triangle's server-side text mode has no terminal-side counterpart to be missing.",
 }
 
 # (cli_command, cli_param, mcp_tool, mcp_param) -> reason: the SAME concept under TWO
-# DIFFERENT NAMES — the sharpest shape this law names. Neither renamed here: fixing either
+# DIFFERENT NAMES, the sharpest shape this law names. Neither renamed here: fixing either
 # risks CLI muscle memory (launch is the front door itself) or an MCP tool-contract cost
-# nobody has weighed yet — naming the drift honestly is this dispatch's job, not silently
+# nobody has weighed yet, naming the drift honestly is this dispatch's job, not silently
 # picking a side.
 RENAMED_PARAMS = {
     ("launch", "handle", "launch", "target"):
-        "the same seat reference, two names — found building this detector, not by a "
+        "the same seat reference, two names, found building this detector, not by a "
         "human; not yet reconciled",
-    # RESTORED (task #202/#204, Thoth msg 7039/7040/7059) — same reasoning as the three
+    # RESTORED (task #202/#204), same reasoning as the three
     # MCP_ONLY_PARAMS restorations above: pointed at the real "seat:action" pseudo-name
-    # now that _mcp_dispatcher_action_params() makes it a checkable entry.
+    # now that _mcp_dispatcher_action_params makes it a checkable entry.
     ("stop", "handle", "seat:stop", "target"):
-        "the same seat reference, two names — MATCHES launch's own handle/target split "
+        "the same seat reference, two names, MATCHES launch's own handle/target split "
         "exactly (the entry above), and deliberately so: stop is launch's inverse and the "
         "pair must read identically at the terminal. Reconciling this means reconciling "
-        "BOTH together, never one of them (Thoth LXXXVII, 2026-08-28)",
+        "BOTH together, never one of them ",
     ("charter-for", "seat", "seat:charter_for", "target"):
-        "the same seat reference, two names — found building this detector; not yet "
-        "reconciled. mcp_param renamed from the pre-dispatcher seat_id to target — the "
+        "the same seat reference, two names, found building this detector; not yet "
+        "reconciled. mcp_param renamed from the pre-dispatcher seat_id to target, the "
         "#202 seat dispatcher's own PARAM UNIFICATION (one shared name for 'which "
         "existing seat/agent' across every action).",
     ("resume", "handle", "resume", "target"):
-        "the same seat reference, two names — MATCHES launch's own handle/target split "
+        "the same seat reference, two names, MATCHES launch's own handle/target split "
         "exactly (both entries above), and deliberately so: resume is launch's own sibling "
-        "verb now, split from it by the same ruling (60c78788/41a41437); the pair must "
+        "verb now, split from it by the same ruling ; the pair must "
         "read identically at the terminal for the same reason stop/launch already do",
     ("heal-seat-anchor", "seat", "seat:heal_anchor", "target"):
-        "the same seat reference, two names — same shape as charter-for/seat above, "
+        "the same seat reference, two names, same shape as charter-for/seat above, "
         "restored the same way: mcp_param renamed from seat_id to target under the #202 "
         "seat dispatcher's own PARAM UNIFICATION. The CLI door (`osiris heal-seat-anchor "
         "<seat> --because`) still calls identity_heal.heal_seat_anchor_third_party "
         "directly, unchanged and unaffected by the MCP-layer fold.",
     # NEWLY SURFACED by this lane's own (tool, action)-aware gate (task #202/#204, msg
-    # 7040/7059) — the #202 seat dispatcher's own PARAM UNIFICATION renamed EVERY
+    # 7040/7059), the #202 seat dispatcher's own PARAM UNIFICATION renamed EVERY
     # folded action's object-reference param to `target`, including these two whose
     # pre-dispatcher standalone tools used `seat`. Neither drift had ever been checked
     # before (the old gate could only see the dispatcher's empty top-level param set),
-    # so this is the gate catching real, previously-invisible drift on its first run —
+    # so this is the gate catching real, previously-invisible drift on its first run,
     # not a pre-existing gap this lane merely renamed.
     ("rebind-seat", "seat", "seat:rebind", "target"):
-        "the same seat reference, two names — the #202 seat dispatcher's PARAM "
+        "the same seat reference, two names, the #202 seat dispatcher's PARAM "
         "UNIFICATION renamed rebind_seat's own `seat` param to `target`; the CLI door "
         "(`osiris rebind-seat <seat> <new_cwd>`) still calls mounts.rebind_seat "
         "directly, unchanged and unaffected by the MCP-layer fold.",
     ("heal-seat-transcript", "seat", "seat:heal_transcript", "target"):
-        "the same seat reference, two names — same shape as rebind-seat/seat above: "
+        "the same seat reference, two names, same shape as rebind-seat/seat above: "
         "the #202 seat dispatcher's PARAM UNIFICATION renamed heal_seat_transcript's "
         "own `seat` param to `target`; the CLI door still calls "
         "identity_heal.heal_seat_transcript directly, unchanged and unaffected by the "
         "MCP-layer fold.",
     ("retire-agent", "seat", "retire_object", "target"):
-        "the same agent reference, two names — same shape as charter-for/seat and "
+        "the same agent reference, two names, same shape as charter-for/seat and "
         "heal-seat-anchor/seat above (#204: the CLI door names its positional arg `seat` "
         "for the same reason every other third-party-target repair door in this file "
-        "does — a human types a handle far more often than a raw agent:... id). Retargeted "
-        "from retire_agent to retire_object/target (#202 wave 3): retire_agent is now "
+        "does, a human types a handle far more often than a raw agent:... id). Retargeted "
+        "from retire_agent to retire_object/target (#202 this wave): retire_agent is now "
         "hidden (meta={'deprecated': True}), the CLI door still calls agents.retire_agent "
-        "directly, unchanged and unaffected by the MCP-layer fold — same reasoning as "
+        "directly, unchanged and unaffected by the MCP-layer fold, same reasoning as "
         "heal-seat-anchor's own entry above, this comparison just needs a LIVE mcp name "
-        "to check itself against. UNCHANGED by the #202 seat dispatcher (msg 7039): "
+        "to check itself against. UNCHANGED by the #202 seat dispatcher : "
         "retire_object stays its own live tool (kind='project'/'agent' still route "
         "through it; only kind='seat' also gained a seat(action='retire') door).",
-    # ("heal-seat-transcript", "seat", ...) DELETED, same reason as heal-seat-anchor
-    # above — covered by NO_MCP_EQUIVALENT instead.
+    # ("heal-seat-transcript", "seat", ..) DELETED, same reason as heal-seat-anchor
+    # above, covered by NO_MCP_EQUIVALENT instead.
     ("retire-object", "ref", "retire_object", "target"):
-        "thread 92dde6cc: retire_object(kind='object') added for a bare junk object "
+        ": retire_object(kind='object') added for a bare junk object "
         "with no other kind's door to cover it. The CLI door calls "
         "retirement.retire_bare_object directly (its own `ref` param, matching "
         "resolve_ref's own naming used throughout retirement.py) rather than the MCP "
-        "tool's shared `target` — same dual-door shape retire-project/retire-agent "
+        "tool's shared `target`, same dual-door shape retire-project/retire-agent "
         "above already establish, this entry just needs a name pair to check itself "
         "against.",
 }
 
-# LANE 3 (Thoth dispatch, msg 6438): the drift detector above walks ONE direction only —
+# LANE 3: the drift detector above walks ONE direction only,
 # every CLI command needs an MCP tool or a declared reason (NO_MCP_EQUIVALENT). It has no
 # reverse loop at all, so an MCP tool with zero CLI counterpart is structurally invisible to
-# it — not exempted, never checked. That is the actual, code-level reason it never caught the
+# it, not exempted, never checked. That is the actual, code-level reason it never caught the
 # seat/office/project binding-verb population being wildly CLI-poor (measured: 4 of ~20 had a
-# CLI door before Khnum's khnum-cli-parity lane added two more).
+# CLI door before a later CLI-parity sweep added two more).
 #
-# The fix is NOT "walk all 147 MCP tools looking for a missing CLI door" — most of them
+# The fix is NOT "walk all 147 MCP tools looking for a missing CLI door", most of them
 # (search, recall, record_decision, dossier, ingest_*, the whole mail/thread/lease surface)
 # are agent-cognition primitives with no terminal analogue BY NATURE, and forcing every one
-# to carry a NO_CLI_EQUIVALENT reason would be the exact hollow-by-declaration failure Thoth
-# warned about: a table so large nobody reads it, satisfied by rote rather than judgment.
+# to carry a NO_CLI_EQUIVALENT reason would be the exact hollow-by-declaration failure to
+# guard against: a table so large nobody reads it, satisfied by rote rather than judgment.
 # Ruling (decision this dispatch records): SCOPE THE GATE to the population the dispatch is
-# actually about — verbs that MOVE A BINDING (a seat's identity, tree, office, or a
-# project's own existence) — named explicitly here rather than inferred from a naming
+# actually about, verbs that MOVE A BINDING (a seat's identity, tree, office, or a
+# project's own existence), named explicitly here rather than inferred from a naming
 # convention, so adding a new binding-moving MCP tool later means adding it to this set on
 # purpose, not drifting into or out of scope silently.
 BINDING_VERBS = frozenset({
@@ -747,44 +747,44 @@ BINDING_VERBS = frozenset({
     "correct_pin_value", "create_project",
     "rename_project", "retire_project", "fork_project",
     "heal_seat_anchor",
-    # ADDED per Thoth ruling on decision 6283c51a's own audit (msg 6823): "a verb that
-    # writes holds, house, handle, managed_by or a merge estate moves a binding by
+    # ADDED per a ruling on a prior audit: "a verb that
+    # writes holds, house, handle, managed_by or a merge's leftover state moves a binding by
     # definition; 'adjacent to' is not a category." merge/unmerge were the STALE-LIST
-    # finding named in that same ruling — both already have CLI doors and simply were
+    # finding named in that same ruling, both already have CLI doors and simply were
     # never added to the population that credits them for it.
-    # correct_agent_house + reconcile_merge are HIDDEN (retirement wave 1, f38e135) but
-    # still callable deprecated aliases — Seshat's d232cb3 reads existence off the raw
+    # correct_agent_house + reconcile_merge are HIDDEN (retirement this wave, f38e135) but
+    # still callable deprecated aliases, the d232cb3 reads existence off the raw
     # registry, so they stay in the gated population rather than misreading as stale.
     "correct_house", "correct_agent_house", "reconcile_merge", "retire", "retire_agent",
     "fleet_reconcile", "heal_seat_transcript", "merge", "unmerge",
-    # `resume` (task #199 lane 3C, ruling 41a41437) — a brand-new tool tonight, already
+    # `resume` (task #199 lane 3C), a brand-new tool tonight, already
     # declared in NEW_TOOL_DECLARATIONS below, not grandfathered in the snapshot.
     "resume",
-    # `transition_seat_project` (task #199's core-verbs lane, Thoth dispatch 6901) — a
+    # `transition_seat_project` (task #199's core-verbs lane), a
     # brand-new tool, already declared in NEW_TOOL_DECLARATIONS below: composes
     # invalidate_works_in + correct_pin_value + set_charter, writes works_in/pin/
     # governs, a binding-mover by the same 6823 rule the seven above were added under.
     "transition_seat_project",
-    # `resync_seat_house` (decision 68fba2e4/thread 19d6bdcb7fa9, the house/project
-    # ruling's six-seat repair) — writes Seat.house third-party, the same 6823 rule
+    # `resync_seat_house` (/thread 19d6bdcb7fa9, the house/project
+    # ruling's six-seat repair), writes Seat.house third-party, the same 6823 rule
     # correct_house/correct_agent_house were added under two lines up.
     "resync_seat_house",
-    # `seat_edge` (#202 wave 3, Thoth dispatch 6987) — attach_seat/detach_seat folded
+    # `seat_edge` (#202 this wave), attach_seat/detach_seat folded
     # into one door; still writes managed_by, same binding-mover status the two hidden
     # aliases already carried.
     "seat_edge",
-    # `retire_object` (#202 wave 3, Thoth dispatch 6987) — retire_seat/retire_project/
+    # `retire_object` (#202 this wave), retire_seat/retire_project/
     # retire_agent folded into one door; flips objects.status the same way each of the
     # three hidden aliases already did.
     "retire_object",
-    # `seat` (#202 seat dispatcher, operator ruling f9182ad7, Thoth dispatch 7039) — the
+    # `seat` (#202 seat dispatcher, operator), the
     # first object-type dispatcher: 23 of the binding-mover names above (mint_seat
     # through heal_seat_transcript) fold into this one door's actions, all kept as
     # hidden deprecated aliases. Writes holds/house/handle/managed_by/pin/works_in
     # across nearly every action, the same 6823 rule the individual verbs it absorbs
     # were each added under.
     "seat",
-    # `project` (#202 project dispatcher, Thoth dispatch 7095) — the third object-type
+    # `project` (#202 project dispatcher), the third object-type
     # dispatcher: create_project/rename_project/retire_project/fork_project (already
     # binding-movers above, individually) plus ingest_project/project_identity_evidence/
     # assert_project_property fold into this one door's actions, all kept as hidden
@@ -792,7 +792,7 @@ BINDING_VERBS = frozenset({
     # unfork/retire), the same 6823 rule the individual verbs it absorbs were each
     # added under.
     "project",
-    # `agent` (#202 agent dispatcher, Thoth dispatch 7162) — the fifth object-type
+    # `agent` (#202 agent dispatcher), the fifth object-type
     # dispatcher: correct_agent_house/retire_agent/fleet_reconcile (already binding-
     # movers above, individually) plus claim_name/file_subagent/file_subagents fold
     # into this one door's actions, all kept as hidden deprecated aliases. Writes
@@ -804,103 +804,103 @@ BINDING_VERBS = frozenset({
 
 # mcp_tool -> reason: a BINDING_VERBS member with no CLI door at all (mirrors
 # NO_MCP_EQUIVALENT's shape, reversed). "not yet built" is still a DECLARED gap, not a
-# hidden one — distinct from a "by design" entry, and worth re-reading before assuming any
+# hidden one, distinct from a "by design" entry, and worth re-reading before assuming any
 # one of these should stay this way forever.
 NO_CLI_EQUIVALENT = {
-    "walk_in": "agent-only by design (same shape as found_seat/launch, Thoth dispatch "
-        "6438): 'a mind with nothing but this server' names itself — there is no human "
+    "walk_in": "agent-only by design (same shape as found_seat/launch): "
+        "'a mind with nothing but this server' names itself, there is no human "
         "at a terminal on the other end of this call, ever.",
     "charter": "self-charter has no CLI door by design: it resolves the target seat from "
         "the CALLING agent's own mounted identity (set_charter), and a raw terminal holds "
         "no such identity to be self about. charter_for (the operator-on-another's-behalf "
         "form) already has one, --repos and all.",
-    "resync_seat_house": "RETIRED from the CLI outright, no alias (Thoth mail 12000, "
-        "implements 70c001ec, \"ONE TAXONOMY\"): resync-seat-project collapses this "
+    "resync_seat_house": "RETIRED from the CLI outright, no alias ("
+        "implements, \"ONE TAXONOMY\"): resync-seat-project collapses this "
         "AND correct_house into one door that re-derives from the charter, taking no "
-        "arbitrary declared value at all — there is no CLI shape left that mirrors "
+        "arbitrary declared value at all, there is no CLI shape left that mirrors "
         "this MCP action's own (new_house, source, reason) signature.",
-    # WAVE 3 (thread 5bf6447c, Thoth dispatch 7943, "re-read the 25 excuses one by one"):
+    # this wave ("re-read the 25 excuses one by one"):
     # sixteen of the twenty-five below turned out to have a real, standalone, third-party-
     # capable orchestrator function all along, verified by reading each MCP tool's own
-    # forwarding body — attach-seat/detach-seat/vacate-seat/retire-seat/bind-seat-tree/
+    # forwarding body, attach-seat/detach-seat/vacate-seat/retire-seat/bind-seat-tree/
     # sweep-seat-disk/rename-seat/set-seat-attended/reissue-office/establish-office/
     # resync-seat-house/reconcile-seat-identity/create-project/rename-project/
     # retire-project/fork-project all shipped this wave, same mechanical shape as
     # rebind-seat's own door. Nine entries genuinely stay excused: two self-scoped-by-
-    # design joining charter above (invalidate_works_in, discovered this wave — it
+    # design joining charter above (invalidate_works_in, discovered this wave, it
     # resolves off ident.agent_id, not an explicit target, same as charter/correct_house/
-    # retire), pause_seat (a real, DIFFERENT reason found this wave — see below), the
+    # retire), pause_seat (a real, DIFFERENT reason found this wave, see below), the
     # three BY-DESIGN dispatchers (seat/project/agent) and the two folds beneath them
     # (seat_edge, retire_object) whose own individual actions are now the covered
     # population, and correct_house/retire (unchanged from before this wave).
     "invalidate_works_in": "self-scoped by design, found re-reading this wave (thread "
-        "5bf6447c): `_seat_impl`'s own invalidate_works_in branch resolves the target off "
-        "`ident.agent_id` — the CALLING agent's own works_in edge, never an explicit "
-        "third-party target — same shape as charter/correct_house/retire directly above. "
+        "): `_seat_impl`'s own invalidate_works_in branch resolves the target off "
+        "`ident.agent_id`, the CALLING agent's own works_in edge, never an explicit "
+        "third-party target, same shape as charter/correct_house/retire directly above. "
         "A raw terminal has no mounted identity to be self about, and no third-party form "
         "exists to give a CLI door instead (unlike correct_house -> correct_agent_house).",
     "pause_seat": "not yet built, and NOT mechanical like its fifteen wave-3 siblings: "
-        "re-read this wave (thread 5bf6447c) — `_seat_impl`'s own pause branch has no "
+        "re-read this wave, `_seat_impl`'s own pause branch has no "
         "standalone orchestrator function to call. The target-resolution (seat vs agent "
         "vs bare name) and the `paused`/`paused_reason` assert_property writes are both "
         "INLINED directly in the MCP dispatcher. A CLI door here would either duplicate "
         "that resolution logic (the exact drift this house's own discipline exists to "
         "prevent) or require extracting it into a real orchestrator.seats function first "
-        "— a separate, real refactor, not scoped to this pass.",
-    "seat_edge": "BY DESIGN — folds attach_seat/detach_seat (#202 wave-3, msg 6987), both "
-        "of which now have their own direct CLI doors (attach-seat/detach-seat, wave 3, "
-        "thread 5bf6447c); the fold itself stays unscoped, same reasoning seat's own "
+        ", a separate, real refactor, not scoped to this pass.",
+    "seat_edge": "BY DESIGN, folds attach_seat/detach_seat (#202 wave-3), both "
+        "of which now have their own direct CLI doors (attach-seat/detach-seat, this wave, "
+        "); the fold itself stays unscoped, same reasoning seat's own "
         "entry below gives for retire_object/project/agent.",
-    "retire_object": "BY DESIGN — folds retire_seat/retire_project/retire_agent (#202 "
-        "wave-3, msg 6987), all three of which now have their own direct CLI doors "
-        "(retire-seat and retire-project shipped wave 3, thread 5bf6447c; retire-agent's "
+    "retire_object": "BY DESIGN, folds retire_seat/retire_project/retire_agent (#202 "
+        "wave-3), all three of which now have their own direct CLI doors "
+        "(retire-seat and retire-project shipped this wave, ; retire-agent's "
         "own door predates the fold, #204); the fold itself stays unscoped, same "
         "reasoning seat/project/agent's own entries give for their own folds.",
-    "seat": "BY DESIGN, permanent — the operator's own price-minimizer #3 (ruling "
-        "f9182ad7, Thoth dispatch 7039): 'the CLI stays verb-per-command' even as the "
-        "MCP surface moves to object-type dispatchers. Every action seat(action=...) "
+    "seat": "BY DESIGN, permanent, the operator's own price-minimizer #3 (ruling "
+        "): 'the CLI stays verb-per-command' even as the "
+        "MCP surface moves to object-type dispatchers. Every action seat(action=..) "
         "covers now has its own CLI subcommand (stop, mint-seat, rebind-seat, attach-"
         "seat, detach-seat, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk, "
         "rename-seat, set-seat-attended, reissue-office, establish-office, resync-seat-"
-        "house, reconcile-seat-identity, ...) calling the underlying orchestrator "
-        "function directly, unaffected by the MCP-layer fold — a raw `osiris seat "
-        "--action=...` door was deliberately never scoped, not a gap to close.",
-    "project": "BY DESIGN, permanent — same price-minimizer #3 reasoning as seat's own "
-        "entry above (ruling f9182ad7, Thoth dispatch 7095): every action "
-        "project(action=...) covers now has its own CLI subcommand (create-project, "
-        "rename-project, retire-project, fork-project, wave 3 thread 5bf6447c) calling "
+        "house, reconcile-seat-identity, ..) calling the underlying orchestrator "
+        "function directly, unaffected by the MCP-layer fold, a raw `osiris seat "
+        "--action=..` door was deliberately never scoped, not a gap to close.",
+    "project": "BY DESIGN, permanent, same price-minimizer #3 reasoning as seat's own "
+        "entry above : every action "
+        "project(action=..) covers now has its own CLI subcommand (create-project, "
+        "rename-project, retire-project, fork-project, this wave) calling "
         "the underlying orchestrator function directly, unaffected by the MCP-layer "
-        "fold — a raw `osiris project --action=...` door was deliberately never scoped, "
+        "fold, a raw `osiris project --action=..` door was deliberately never scoped, "
         "not a gap to close.",
-    "agent": "BY DESIGN, permanent — same price-minimizer #3 reasoning as seat/"
-        "project's own entries above (Thoth dispatch 7162): correct_agent_house/"
+    "agent": "BY DESIGN, permanent, same price-minimizer #3 reasoning as seat/"
+        "project's own entries above : correct_agent_house/"
         "retire_agent/fleet_reconcile each already have (or, for fleet-reconcile, "
         "route through via CLI_TO_MCP_NAME) their own CLI subcommand calling the "
         "underlying orchestrator function directly; claim_name/file_subagent/"
         "file_subagents have no CLI door at all today, a real gap this fold doesn't "
-        "create — a raw `osiris agent --action=...` door was deliberately never "
+        "create, a raw `osiris agent --action=..` door was deliberately never "
         "scoped, not a gap to close.",
-    # THE SEVEN FROM THE #199 LANE 3B AUDIT (decision 6283c51a, Thoth ruling msg 6823:
-    # "a verb that writes holds, house, handle, managed_by or a merge estate moves a
+    # THE SEVEN FROM THE #199 LANE 3B AUDIT (from a ruling:
+    # "a verb that writes holds, house, handle, managed_by or a merge's leftover state moves a
     # binding by definition"). merge/unmerge (also added to BINDING_VERBS above) already
-    # have CLI doors and need no entry here — they were the STALE-LIST half of the same
+    # have CLI doors and need no entry here, they were the STALE-LIST half of the same
     # ruling, simply never credited.
     "correct_house": "self-scoped by design (same shape as charter above): it resolves "
-        "the target seat from the CALLING agent's own mounted identity — a raw terminal "
+        "the target seat from the CALLING agent's own mounted identity, a raw terminal "
         "holds no such identity to be self about. correct_agent_house (the third-party, "
         "explicit-target form) now has its own CLI door (#204); see NO_MCP_EQUIVALENT "
         "for why it still reads as a declared exemption rather than a plain match.",
     "retire": "self-scoped by design (same shape as charter/correct_house above): it "
-        "marks THIS mounted session retired off the caller's own identity — a raw "
+        "marks THIS mounted session retired off the caller's own identity, a raw "
         "terminal has no mounted session of that kind to retire. retire_agent (the "
         "third-party, explicit-target form) now has its own CLI door (#204).",
     # correct_agent_house, reconcile_merge, retire_agent, fleet_reconcile,
-    # heal_seat_transcript: ALL FIVE BUILT (#204, the #199 lane 3B audit's own gaps) —
+    # heal_seat_transcript: ALL FIVE BUILT (#204, the #199 lane 3B audit's own gaps),
     # correct-agent-house, reconcile-merge, retire-agent, fleet-reconcile,
     # heal-seat-transcript. The first two still carry a NO_MCP_EQUIVALENT entry (their
-    # MCP twin is real but hidden from list_tools() by the deprecated-alias mechanism);
+    # MCP twin is real but hidden from list_tools by the deprecated-alias mechanism);
     # retire-agent and heal-seat-transcript carry RENAMED_PARAMS/CLI_ONLY_PARAMS entries
-    # for their own seat/agent_id and apply/dry_run naming — see those tables.
+    # for their own seat/agent_id and apply/dry_run naming, see those tables.
 }
 
 
@@ -911,15 +911,15 @@ def _find_missing_cli_doors(
     all_registered: frozenset[str] | None = None,
 ) -> list[str]:
     """The REVERSE of _find_problems's own direction, deliberately scoped to
-    BINDING_VERBS rather than all of `mcp` — see the ruling above the table this reads.
+    BINDING_VERBS rather than all of `mcp`, see the ruling above the table this reads.
     Returns one string per binding verb that exists on MCP, has no CLI command of the same
     name (dashes for underscores), and carries no reason in NO_CLI_EQUIVALENT.
 
-    `all_registered` is the UNFILTERED tool-name population (_mcp_registered_names) —
-    existence is checked against it, not against `mcp` (list_tools()'s own filtered dict),
+    `all_registered` is the UNFILTERED tool-name population (_mcp_registered_names),
+    existence is checked against it, not against `mcp` (list_tools's own filtered dict),
     so a hidden alias (meta={"deprecated": True}, thread 6778) reads as 'exists, still
     needs its CLI-door-or-reason' rather than misreading as a deleted 'stale entry'.
-    Defaults to `frozenset(mcp)` when omitted — the old, pre-hidden-alias behavior, kept so
+    Defaults to `frozenset(mcp)` when omitted, the old, pre-hidden-alias behavior, kept so
     the synthetic proof tests below don't need to fabricate a second population."""
     cli_as_mcp_names = {name.replace("-", "_") for name in cli}
     known = all_registered if all_registered is not None else frozenset(mcp)
@@ -927,7 +927,7 @@ def _find_missing_cli_doors(
     for name in sorted(binding_verbs):
         if name not in known:
             problems.append(
-                f"{name!r} is in BINDING_VERBS but no such MCP tool exists — stale entry")
+                f"{name!r} is in BINDING_VERBS but no such MCP tool exists, stale entry")
             continue
         if name in cli_as_mcp_names:
             continue
@@ -943,7 +943,7 @@ async def test_every_binding_verb_has_a_cli_door_or_declares_why_not() -> None:
         _cli_commands(), await _mcp_tools(), all_registered=await _mcp_registered_names())
     assert problems == [], (
         "a seat/office/project binding-moving verb drifted out of CLI reach, undeclared "
-        "(Thoth dispatch 6438 — BINDING_VERBS is the scoped population this lane gates; "
+        "(BINDING_VERBS is the scoped population this lane gates; "
         "add a NO_CLI_EQUIVALENT reason, or build the door):\n" + "\n".join(problems))
 
 
@@ -953,12 +953,12 @@ def test_no_cli_equivalent_entries_still_name_real_binding_verbs() -> None:
     fail here rather than sit stale and unread."""
     for name in NO_CLI_EQUIVALENT:
         assert name in BINDING_VERBS, (
-            f"{name!r} is in NO_CLI_EQUIVALENT but not in BINDING_VERBS — either scope it "
+            f"{name!r} is in NO_CLI_EQUIVALENT but not in BINDING_VERBS, either scope it "
             f"in or drop the now-pointless entry")
 
 
 def test_the_reverse_detector_itself_catches_an_undeclared_missing_cli_door() -> None:
-    """PROVE THE MECHANISM — same discipline as the forward detector's own proof tests."""
+    """PROVE THE MECHANISM, same discipline as the forward detector's own proof tests."""
     cli: dict[str, set[str]] = {}
     mcp: dict[str, set[str]] = {"some_binding_verb": set()}
     problems = _find_missing_cli_doors(
@@ -977,13 +977,13 @@ def test_the_reverse_detector_itself_catches_an_undeclared_missing_cli_door() ->
 
 
 def test_a_hidden_alias_reads_as_exists_not_stale() -> None:
-    """THE GAP THIS LANE FIXES (Imhotep msg 6836, off decision b49a844f): a binding verb
-    hidden via meta={"deprecated": True} (thread 6778) vanishes from `mcp` (list_tools()'s
-    own filtered dict) but is still a real, callable tool — it must not read as a deleted
+    """THE GAP THIS LANE FIXES (off): a binding verb
+    hidden via meta={"deprecated": True} (thread 6778) vanishes from `mcp` (list_tools's
+    own filtered dict) but is still a real, callable tool, it must not read as a deleted
     'stale entry'. Without `all_registered`, the OLD behavior stands (still useful for a
     caller with no separate raw-registry read) and misreads it as stale."""
     cli: dict[str, set[str]] = {}
-    mcp: dict[str, set[str]] = {}  # hidden from list_tools() — this is the whole point
+    mcp: dict[str, set[str]] = {}  # hidden from list_tools, this is the whole point
     verbs = frozenset({"some_hidden_verb"})
 
     old_behavior = _find_missing_cli_doors(cli, mcp, binding_verbs=verbs, no_cli_equivalent={})
@@ -993,7 +993,7 @@ def test_a_hidden_alias_reads_as_exists_not_stale() -> None:
         cli, mcp, binding_verbs=verbs, no_cli_equivalent={},
         all_registered=frozenset({"some_hidden_verb"}))
     assert len(with_raw_registry) == 1 and "stale entry" not in with_raw_registry[0], (
-        "known-but-hidden must still demand a CLI door or a NO_CLI_EQUIVALENT reason — "
+        "known-but-hidden must still demand a CLI door or a NO_CLI_EQUIVALENT reason, "
         "existing, not exempt from the check entirely")
 
     declared = _find_missing_cli_doors(
@@ -1004,7 +1004,7 @@ def test_a_hidden_alias_reads_as_exists_not_stale() -> None:
 
 def _cli_commands() -> dict[str, set[str]]:
     """Every registered subcommand's own param set (positional dest + optional dest,
-    `-h`/`--help` excluded) — read live off `_build_parser()`, never hand-copied."""
+    `-h`/`--help` excluded), read live off `_build_parser`, never hand-copied."""
     parser = _build_parser()
     sub_action = next(
         a for a in parser._actions if isinstance(a, argparse._SubParsersAction))
@@ -1015,11 +1015,11 @@ def _cli_commands() -> dict[str, set[str]]:
 
 
 async def _mcp_tools() -> dict[str, set[str]]:
-    """Every registered MCP tool's own param set, plumbing stripped — read live off
-    `mcp.list_tools()`'s own inputSchema, the same source `_measure_tool_contract()`
+    """Every registered MCP tool's own param set, plumbing stripped, read live off
+    `mcp.list_tools`'s own inputSchema, the same source `_measure_tool_contract`
     trusts for the ratchet. ALSO includes every hand-built dispatcher's own per-action
     param sets (see `_mcp_dispatcher_action_params` below) under `"tool:action"` pseudo-
-    names, additively — a dispatcher's own bare name still maps to its (empty, since a
+    names, additively, a dispatcher's own bare name still maps to its (empty, since a
     oneOf schema has no top-level `properties`) flat set, unchanged, for anything that
     still keys off tool-level existence alone."""
     from src import mcp_server as srv
@@ -1034,17 +1034,17 @@ async def _mcp_tools() -> dict[str, set[str]]:
 
 
 def _mcp_dispatcher_action_params() -> dict[str, set[str]]:
-    """THE (TOOL, ACTION) GAP #202's OWN SEAT-DISPATCHER COMMIT NAMED AND LEFT OPEN (msg
-    7039/7040/7059): `_mcp_tools()`'s flat `inputSchema["properties"]` read is empty for
-    ANY hand-built dispatcher (`src/mcp_server.py`'s `_HAND_BUILT_SCHEMAS`) — its real,
+    """THE (TOOL, ACTION) GAP THE #202 SEAT-DISPATCHER COMMIT NAMED AND LEFT OPEN:
+    `_mcp_tools`'s flat `inputSchema["properties"]` read is empty for
+    ANY hand-built dispatcher (`src/mcp_server.py`'s `_HAND_BUILT_SCHEMAS`), its real,
     per-action params live one level down, inside each `oneOf` branch. Six real
     CLI<->param reconciliation entries (heal_seat_anchor/transition_seat_project/
     heal_seat_transcript's own `dry_run`, stop/charter-for/heal-seat-anchor's own
     seat-reference rename) had to be DELETED rather than left stale when seat first
-    shipped, for exactly this reason — this is the fix that lets them come back, pointed
+    shipped, for exactly this reason, this is the fix that lets them come back, pointed
     at a real, checkable name.
 
-    Generic over every dispatcher registered in `_HAND_BUILT_SCHEMAS` — a second
+    Generic over every dispatcher registered in `_HAND_BUILT_SCHEMAS`, a second
     dispatcher gets this for free the moment it's added there, never a seat-specific
     hardcode. Each branch's own `action` key is stripped (dispatch-selection plumbing,
     never a real param either side would name), same discipline `_MCP_ONLY_PLUMBING`
@@ -1062,21 +1062,21 @@ def _mcp_dispatcher_action_params() -> dict[str, set[str]]:
 
 
 async def _mcp_registered_names() -> frozenset[str]:
-    """EVERY tool the server actually knows, hidden aliases included — read off the raw
+    """EVERY tool the server actually knows, hidden aliases included, read off the raw
     ToolManager (the same private seam BoundedMCP.call_tool/list_tools already reach into,
-    src/mcp_server.py), never off `mcp.list_tools()`'s own filtered output. A tool shipped
+    src/mcp_server.py), never off `mcp.list_tools`'s own filtered output. A tool shipped
     with `meta={"deprecated": True}` (the hidden-alias mechanism, thread 6778/commit
-    e94158d) is DROPPED from list_tools() on purpose — that is what makes it invisible to
-    a model — but it stays fully resolvable by call_tool, i.e. still real. `_mcp_tools()`'s
+    e94158d) is DROPPED from list_tools on purpose, that is what makes it invisible to
+    a model, but it stays fully resolvable by call_tool, i.e. still real. `_mcp_tools`'s
     filtered dict is right for the forward param-shape check (a model only ever sees the
     unfiltered surface), but WRONG as the sole existence test for a BINDING_VERBS member:
     reading absence-from-listing as absence-from-the-server conflates 'hidden' with
-    'deleted' — exactly the gap Imhotep's retirement wave 1 (decision b49a844f) had to
+    'deleted', exactly the gap the retirement this wave  had to
     dodge by hand (reverting 7 BINDING_VERBS tools rather than hiding them) instead of the
     gate telling the two cases apart on its own.
 
     ALSO includes every dispatcher's own `"tool:action"` pseudo-names (same population
-    `_mcp_dispatcher_action_params` builds) — a BINDING_VERBS member expressed as an
+    `_mcp_dispatcher_action_params` builds), a BINDING_VERBS member expressed as an
     action pair is exactly as real as one expressed as a bare tool name, and must read
     the same way here, never as a stale entry just because no literal tool by that
     string exists in the raw registry."""
@@ -1095,7 +1095,7 @@ def _find_problems(
     cli_to_mcp_name: dict[str, str] = CLI_TO_MCP_NAME,
 ) -> list[str]:
     """The reconciler's own core check, extracted so it can be proven against synthetic
-    fixtures (see test_the_detector_itself below) rather than only exercised live — the
+    fixtures (see test_the_detector_itself below) rather than only exercised live, the
     same "prove the mechanism, don't just assert it" discipline the merge-driver reconciler
     used. Returns one string per UNDECLARED mismatch; empty means everything either
     matches or is named on an allowlist.
@@ -1103,7 +1103,7 @@ def _find_problems(
     `cli_to_mcp_name` overrides the default `cli_name.replace("-", "_")` guess for a CLI
     command whose real target is a dispatcher ACTION, not a same-named standalone tool
     (task #202/#204: `osiris stop` <-> `seat(action='stop')`, not a tool literally named
-    `stop`'s own params at the top level) — additive, every command not listed here keeps
+    `stop`'s own params at the top level), additive, every command not listed here keeps
     the old guess unchanged."""
     problems: list[str] = []
     for cli_name, cli_params in cli.items():
@@ -1139,14 +1139,14 @@ def _find_problems(
 async def test_every_cli_command_and_param_matches_its_mcp_tool_or_declares_why_not() -> None:
     problems = _find_problems(_cli_commands(), await _mcp_tools())
     assert problems == [], (
-        "CLI/MCP surfaces drifted apart, undeclared (decision 0b29f1cbcc5a — an act on "
+        "CLI/MCP surfaces drifted apart, undeclared (decision 0b29f1cbcc5a, an act on "
         "both surfaces needs the same name and params, or a stated reason):\n"
         + "\n".join(problems))
 
 
 def test_allowlist_entries_still_name_real_things() -> None:
     """An allowlist that outlives what it excuses stops meaning anything a reader can
-    trust — every entry's own command/param must still exist on the side it claims to,
+    trust, every entry's own command/param must still exist on the side it claims to,
     so a later rename or removal is caught here rather than leaving a dangling exemption
     nobody notices is now pointless."""
     cli = _cli_commands()
@@ -1175,12 +1175,12 @@ async def test_allowlist_entries_still_name_real_mcp_things() -> None:
 
 
 def test_the_detector_itself_catches_an_undeclared_drift() -> None:
-    """PROVE THE MECHANISM, DON'T JUST ASSERT IT — a synthetic pair with a real,
+    """PROVE THE MECHANISM, DON'T JUST ASSERT IT, a synthetic pair with a real,
     undeclared mismatch must fail; the same pair, once the mismatch is allowlisted, must
     pass. Never trust a checker that has only ever seen a clean tree."""
     cli = {"widget": {"name", "actor"}}
     mcp = {"widget": {"name"}}
-    assert _find_problems(cli, mcp) == []  # "actor" is globally exempt — a true non-issue
+    assert _find_problems(cli, mcp) == []  # "actor" is globally exempt, a true non-issue
 
     cli_drifted = {"widget": {"name", "surprise_param"}}
     problems = _find_problems(cli_drifted, mcp)
@@ -1215,9 +1215,9 @@ def test_the_detector_itself_catches_a_rename_without_a_declared_pair() -> None:
 
 
 def test_the_detector_catches_a_cli_verb_with_no_tool_action_twin() -> None:
-    """THE (TOOL, ACTION)-AWARE GATE ITSELF (task #202/#204, Thoth msg 7039/7040/7059):
+    """THE (TOOL, ACTION)-AWARE GATE ITSELF (task #202/#204):
     a CLI command routed at a dispatcher ACTION via CLI_TO_MCP_NAME must still be held
-    to the SAME standard as an ordinary same-named tool — an undeclared param drift
+    to the SAME standard as an ordinary same-named tool, an undeclared param drift
     fails exactly like it would for a flat tool, and a genuinely missing action-name
     twin (nothing in `mcp` under that pseudo-name at all) reads as no-MCP-equivalent,
     never silently ignored just because the name contains a colon."""
@@ -1227,7 +1227,7 @@ def test_the_detector_catches_a_cli_verb_with_no_tool_action_twin() -> None:
         cli, mcp, cli_to_mcp_name={"widget-verb": "gadget:verb"})
     assert len(problems) == 1 and "gadget:verb" in problems[0]
 
-    # now the twin exists, but with a drifted param — same as any flat-tool mismatch
+    # now the twin exists, but with a drifted param, same as any flat-tool mismatch
     mcp_with_twin = {"gadget:verb": {"seat_ref"}}
     drifted = _find_problems(
         cli, mcp_with_twin, cli_to_mcp_name={"widget-verb": "gadget:verb"})
@@ -1242,7 +1242,7 @@ def test_the_detector_catches_a_cli_verb_with_no_tool_action_twin() -> None:
 
 
 def test_mcp_dispatcher_action_params_reads_every_branch_of_a_real_dispatcher() -> None:
-    """Proven against the LIVE seat schema, not a synthetic one — the same discipline
+    """Proven against the LIVE seat schema, not a synthetic one, the same discipline
     test_seat_dispatcher_schema.py already runs, applied to this lane's own extraction
     instead of just the schema's own well-formedness."""
     out = _mcp_dispatcher_action_params()
@@ -1253,90 +1253,90 @@ def test_mcp_dispatcher_action_params_reads_every_branch_of_a_real_dispatcher() 
 
 
 # ============================================================================================
-# LANE 3B — THE GROWTH RATCHET (task #199, operator's mandate upgrade msg 6789: "make sure
+# LANE 3B, THE GROWTH RATCHET (task #199, operator's mandate upgrade: "make sure
 # they go in and fix all 3 problems end to end"). heal_seat_transcript shipped tonight with
-# no CLI door and no declaration anywhere — not because BINDING_VERBS's own gate above was
+# no CLI door and no declaration anywhere, not because BINDING_VERBS's own gate above was
 # unenforced, but because heal_seat_transcript was never ADDED to the population that gate
-# walks. The first fix attempted (decision dd5b6ced, reconciled with Seshat, approved by
-# Thoth msg 6771) was an AST walk auto-deriving BINDING_VERBS's membership from five named
+# walks. The first fix attempted (reconciled and approved)
+# was an AST walk auto-deriving BINDING_VERBS's membership from five named
 # source modules (identity_heal/mounts/seats/projects/offices.py), matching MCP tool names
 # to same-named orchestrator functions. BUILT NOTHING FROM IT: reading every one of those
 # five modules directly (not grepped, not inferred) before writing the walk showed the
 # same-name/same-module premise is FALSE for roughly half of BINDING_VERBS's own 29 current
-# members — create_project/rename_project/fork_project/unfork_project live in
+# members, create_project/rename_project/fork_project/unfork_project live in
 # project_identity.py (not projects.py); charter_for lives in charter.py, mint_seat in
 # mintseat.py, neither of the five; charter's MCP tool delegates to set_charter (charter.py,
 # different name); sweep_seat_disk's own docstring says outright it wires TWO differently-
 # named functions (sweep_retired_office/sweep_seat_workspace, offices.py) to one MCP tool;
 # launch and vacate_seat delegate to launch_seat/vacate_dead_seat in trigger.py (a SIXTH
-# module, mismatched names both); pause_seat has no separate orchestrator function at all —
+# module, mismatched names both); pause_seat has no separate orchestrator function at all,
 # implemented natively inline in mcp_server.py. An AST walk of that five-module list would
 # have silently missed ~14 of 29 KNOWN verbs on day one: the identical failure shape
 # heal_seat_transcript itself demonstrates, just relocated from "verb name" to "module name."
-# Reported to Thoth (msg 6796) rather than built anyway; the operator picked the replacement
-# below directly (msg to Khnum, 2026-09-03, "B, ... what is the shape").
+# Reported rather than built anyway; the operator picked the replacement
+# below directly ("B, ... what is the shape").
 #
 # BINDING-VERB-NESS IS A SEMANTIC JUDGMENT, proven above not to be safely re-derivable from
 # source structure (file location, naming convention) by any mechanism tried so far. What
 # CAN be made self-maintaining instead is narrower and does not depend on structure at all:
 # did a BRAND-NEW MCP tool ship without anyone declaring anything about it whatsoever. A
-# GROWTH RATCHET keyed on the one thing that's unambiguous — the tool's own NAME, read live
-# off mcp.list_tools(), same as every other check in this file:
+# GROWTH RATCHET keyed on the one thing that's unambiguous, the tool's own NAME, read live
+# off mcp.list_tools, same as every other check in this file:
 #
-#   KNOWN_TOOLS_AT_SNAPSHOT — every tool name that existed at the moment this ratchet was
-#   built (151, captured live, 2026-09-03). GRANDFATHERED, ZERO retroactive justification
-#   required for any of them — this is what avoids the hollow-by-declaration batch-backfill
-#   Thoth's own condition on the earlier design explicitly ruled out (a 112-entry table of
-#   boilerplate reasons nobody would read, #189's dark-gate failure wearing a completeness
-#   ratchet's clothes). Never edit this set to "grandfather" a tool that ships AFTER today —
-#   that defeats the ratchet; use NEW_TOOL_DECLARATIONS below instead.
+#  KNOWN_TOOLS_AT_SNAPSHOT, every tool name that existed at the moment this ratchet was
+#  built (151, captured live, 2026-09-03). GRANDFATHERED, ZERO retroactive justification
+#  required for any of them, this is what avoids the hollow-by-declaration batch-backfill
+#  condition on the earlier design explicitly ruled out (a 112-entry table of
+#  boilerplate reasons nobody would read, #189's dark-gate failure wearing a completeness
+#  ratchet's clothes). Never edit this set to "grandfather" a tool that ships AFTER today,
+#  that defeats the ratchet; use NEW_TOOL_DECLARATIONS below instead.
 #
-#   NEW_TOOL_DECLARATIONS — every tool name that ships after the snapshot MUST appear here
-#   with a structured declaration (never free text alone — a reason string nobody is forced
-#   to make specific is exactly NO_CLI_EQUIVALENT's failure mode for a different question)
-#   covering BOTH open questions live tonight:
-#     "binding_verb": bool — is this a seat/office/project binding-mover. Checked for
-#       CONSISTENCY against live BINDING_VERBS membership below, not just declared and
-#       trusted: claiming True without adding the name to BINDING_VERBS (or vice versa)
-#       fails the gate. A True entry inherits the EXISTING BINDING_VERBS gate's own
-#       CLI-door-or-NO_CLI_EQUIVALENT requirement above — this ratchet does not duplicate
-#       that check, only forces the author to enter the population it walks.
-#     "parameterizes": str | None — Imhotep's counterweight field (msg 6801, thread 6778):
-#       the name of an existing MCP tool this one's underlying call could have been a
-#       parameter on, when one exists — checkable against tool_traffic()/a read of the
-#       candidate's own implementation, not assumed from name-matching alone (his own
-#       caught trap: retryable_ambiguous_abstentions/retry_ambiguous_abstentions LOOK like
-#       a consolidation pair and are not — one is a free unmounted read, the other requires
-#       a mounted identity even in preview mode; collapsing them would be a real behavior
-#       change hiding inside an apparent refactor).
-#     "not_parameterized_because": str | None — meaningful ONLY alongside `parameterizes`
-#       (Imhotep's own words: "it's the 'why not' justification for a real candidate that
-#       was found and rejected, not a blank-check exemption") — set without `parameterizes`
-#       fails the gate.
+#  NEW_TOOL_DECLARATIONS, every tool name that ships after the snapshot MUST appear here
+#  with a structured declaration (never free text alone, a reason string nobody is forced
+#  to make specific is exactly NO_CLI_EQUIVALENT's failure mode for a different question)
+#  covering BOTH open questions live tonight:
+#  "binding_verb": bool, is this a seat/office/project binding-mover. Checked for
+#  CONSISTENCY against live BINDING_VERBS membership below, not just declared and
+#  trusted: claiming True without adding the name to BINDING_VERBS (or vice versa)
+#  fails the gate. A True entry inherits the EXISTING BINDING_VERBS gate's own
+#  CLI-door-or-NO_CLI_EQUIVALENT requirement above, this ratchet does not duplicate
+#  that check, only forces the author to enter the population it walks.
+#  "parameterizes": str | None, the counterweight field (thread 6778):
+#  the name of an existing MCP tool this one's underlying call could have been a
+#  parameter on, when one exists, checkable against tool_traffic/a read of the
+#  candidate's own implementation, not assumed from name-matching alone (his own
+#  caught trap: retryable_ambiguous_abstentions/retry_ambiguous_abstentions LOOK like
+#  a consolidation pair and are not, one is a free unmounted read, the other requires
+#  a mounted identity even in preview mode; collapsing them would be a real behavior
+#  change hiding inside an apparent refactor).
+#  "not_parameterized_because": str | None, meaningful ONLY alongside `parameterizes`
+#  (words: "it's the 'why not' justification for a real candidate that
+#  was found and rejected, not a blank-check exemption"), set without `parameterizes`
+#  fails the gate.
 #
-#   A tool retired via the meta={"deprecated": True} hidden-alias mechanism (Imhotep, commit
-#   e94158d, task #199 lane 2) is EXEMPT from needing its own declaration at all — it
-#   forwards to whatever its `use_instead` target already declares, checked live off each
-#   tool's own `meta` (a genuine field on mcp.types.Tool, confirmed live before trusting it).
+#  A tool retired via the meta={"deprecated": True} hidden-alias mechanism
+#  is EXEMPT from needing its own declaration at all, it
+#  forwards to whatever its `use_instead` target already declares, checked live off each
+#  tool's own `meta` (a genuine field on mcp.types.Tool, confirmed live before trusting it).
 #
-# THE AUDIT THOTH ASKED FOR ("watch it fail on the current undeclared set... that red list
-# IS a deliverable... report separately from the gate itself", msg 6771/6789): since this
+# THE AUDIT ASKED FOR ("watch it fail on the current undeclared set... that red list
+# IS a deliverable... report separately from the gate itself"): since this
 # ratchet grandfathers every existing tool with zero mechanical check of binding-verb-ness
-# (the whole point — that question needs a human, proven above), there is no code-level red
+# (the whole point, that question needs a human, proven above), there is no code-level red
 # list to run. The equivalent honest measurement is a ONE-TIME MANUAL AUDIT of the 151-tool
 # snapshot against BINDING_VERBS, done by direct reading (keyword-filtered candidates, each
-# individually read, not grep-and-trust) rather than mechanized — reported to Thoth
+# individually read, not grep-and-trust) rather than mechanized, reported
 # alongside this commit, not encoded here as a heuristic gate ("do not let anyone talk the
-# audience check into a heuristic", msg 6771). Found, beyond the already-known
+# audience check into a heuristic"). Found, beyond the already-known
 # heal_seat_transcript: correct_house/correct_agent_house (same family as correct_pin_value/
-# reconcile_seat_identity, already in BINDING_VERBS — these move a seat's own house stamp,
+# reconcile_seat_identity, already in BINDING_VERBS, these move a seat's own house stamp,
 # clearly binding-moving, currently outside the population), reconcile_merge (repairs the
-# mail/mount/thread/holder/managed_by estate a partial merge left stranded — same family as
+# mail/mount/thread/holder/managed_by data a partial merge left stranded, same family as
 # merge/unmerge, NEITHER of which is in BINDING_VERBS either despite both having CLI doors
 # already), retire/retire_agent (releases a held seat on retirement, adjacent to but distinct
 # from retire_seat), fleet_reconcile (bulk mount/binding reaper, fold_agent-backed). None
-# added to BINDING_VERBS by this commit — that population change is a judgment call for
-# Thoth to make with the same care BINDING_VERBS's original 29 got, not a side effect of
+# added to BINDING_VERBS by this commit, that population change is a judgment call to
+# make with the same care BINDING_VERBS's original 29 got, not a side effect of
 # building the ratchet that measures a DIFFERENT thing (tool-name growth, not verb
 # semantics).
 # ============================================================================================
@@ -1502,18 +1502,18 @@ class NewToolDeclaration(TypedDict, total=False):
     not_parameterized_because: str | None
 
 
-# Empty at birth — the ratchet's whole point is that this population grows only by someone
+# Empty at birth, the ratchet's whole point is that this population grows only by someone
 # adding an entry here, in the same PR that adds the tool. See the block comment above for
 # what each field means.
 NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
-    # layout_migrate — THE MIGRATION DOOR (Thoth mail 10609, product law): drives the
+    # layout_migrate, THE MIGRATION DOOR (product law): drives the
     # layout heartbeat's own graph_layout.layout_batch to quiescence right now instead
     # of waiting on its cron cadence. Not a seat/office/project binding-mover; not a
-    # parameterization of any existing tool — no existing door loops a bulk placement
+    # parameterization of any existing tool, no existing door loops a bulk placement
     # pass to quiescence.
     "layout_migrate": {"binding_verb": False},
-    # physics_layout_migrate — THE PHYSICS LAYOUT's own migration door (Thoth mail
-    # 11047, product law): a single global force simulation, never a batch loop the
+    # physics_layout_migrate, THE PHYSICS LAYOUT's own migration door (product law):
+    # a single global force simulation, never a batch loop the
     # way layout_migrate is (see graph_physics.run_physics_migrate's own docstring
     # for why it can't be sliced the same way). Not a seat/office/project binding-
     # mover; not a parameterization of layout_migrate itself since the two are
@@ -1521,241 +1521,241 @@ NEW_TOOL_DECLARATIONS: dict[str, NewToolDeclaration] = {
     # a shared loop.
     "physics_layout_migrate": {"binding_verb": False},
     "resume": {"binding_verb": True},
-    # proposal(action=...) — miners as last resort, item 2 (decision ac892cd9, Thoth
-    # mail 8842/8920/8945): propose/accept/reject over a NEW Proposal object type. Not
+    # proposal(action=..), miners as last resort, item 2:
+    # propose/accept/reject over a NEW Proposal object type. Not
     # a seat/office/project binding-mover; not a parameterization of any existing
-    # tool — a genuinely new capability, no prior verb it could have ridden on.
+    # tool, a genuinely new capability, no prior verb it could have ridden on.
     "proposal": {"binding_verb": False},
-    # record_evaluation — Graph-Engineering arc item 1 (thread 7f547426, decision
-    # fba38e62, Thoth DM 9136): the mint door for the NEW Evaluation object type (a
+    # record_evaluation, Graph-Engineering arc item 1 (decision
+    # ): the mint door for the NEW Evaluation object type (a
     # run/artifact's own verdict). Not a seat/office/project binding-mover; single
     # write shape today (unlike practice/proposal, which dispatch multiple actions),
-    # so shaped like ingest_reference rather than folded onto an existing tool — no
+    # so shaped like ingest_reference rather than folded onto an existing tool, no
     # existing door names a different object type's verdict as one of its own params.
     "record_evaluation": {"binding_verb": False},
-    # record_artifact — Graph-Engineering arc item 2/3 (thread 7f547426, decision
-    # f47d14a7): the mint door for the NEW Artifact object type, gated by
+    # record_artifact, Graph-Engineering arc item 2/3 (decision
+    # ): the mint door for the NEW Artifact object type, gated by
     # _enforce_required_links' new incoming direction (artifact-has-authoring-run-
-    # plus-version). Same shape as record_evaluation just above — single write, no
+    # plus-version). Same shape as record_evaluation just above, single write, no
     # existing door names an authoring-run requirement as one of its own params.
     "record_artifact": {"binding_verb": False},
-    # cite_transcript / read_citation — CITATION SHAPE (operator ruling c6d25164,
-    # thread 9d2aaf4d, Thoth DM 9377/9383): the explicit, reasoned citation door and
+    # cite_transcript / read_citation, CITATION SHAPE (operator,
+    # ): the explicit, reasoned citation door and
     # its verified read-back for one line of an Agent generation's own transcript.
     # Not a seat/office/project binding-mover; single-write and single-read shapes,
     # no existing door names a soul-store line citation as one of its own params.
     "cite_transcript": {"binding_verb": False},
     "read_citation": {"binding_verb": False},
-    # pulse — piece 3 (thread 879c97b9, "VENDOR-NEUTRAL DOOR", Thoth mail 9559): a
+    # pulse, piece 3 ("VENDOR-NEUTRAL DOOR"): a
     # harness-neutral liveness refresh, self-scoped (no target param, ever). Not a seat/
-    # office/project binding-mover — it touches only agent_mounts.last_seen, never
-    # `holds`/house/handle/pin/works_in. Not a parameterization of any existing tool —
-    # get_status reads liveness, mount()'s own re-attach already refreshes it as a side
+    # office/project binding-mover, it touches only agent_mounts.last_seen, never
+    # `holds`/house/handle/pin/works_in. Not a parameterization of any existing tool,
+    # get_status reads liveness, mount's own re-attach already refreshes it as a side
     # effect of a much heavier ceremony; no existing door offers a lightweight, callable-
     # on-its-own liveness touch a non-Claude harness could reach for on its own terms.
     "pulse": {"binding_verb": False},
-    # backfill(target=...) — Imhotep's families wave (4b72154): five backfill_* tools
+    # backfill(target=..), the families wave (4b72154): five backfill_* tools
     # folded into one HONEST DISPATCH (its docstring says so). Parameterizes the five
     # names, which stay callable as hidden deprecated aliases.
     "backfill": {"binding_verb": False, "parameterizes": "backfill_agent_project_links"},
-    # transition_seat_project — the self-service TRANSITION verb (Thoth dispatch 6901):
+    # transition_seat_project, the self-service TRANSITION verb:
     # composes invalidate_works_in + correct_pin_value + set_charter, one act, MCP + CLI
     # in the same commit (osiris transition-seat-project). Not a parameterization of any
-    # existing tool — it's a NEW composition over three already-declared verbs, no
+    # existing tool, it's a NEW composition over three already-declared verbs, no
     # existing tool's underlying call could have taken this as a param.
     "transition_seat_project": {"binding_verb": True},
-    # list_unfiled_threads — the H-bucket instrument gap (#203, decision a49d2730/
-    # 38755abe, Thoth dispatch 6966): a Thread filter on absence of an in_repo edge,
-    # not a binding-mover. Not a parameterization of get_thread_list — that tool's
+    # list_unfiled_threads, the H-bucket instrument gap (#203, /
+    # ): a Thread filter on absence of an in_repo edge,
+    # not a binding-mover. Not a parameterization of get_thread_list, that tool's
     # entire query JOINs on the in_repo edge this one explicitly filters the ABSENCE
     # of; a shared `project=None` param would silently change get_thread_list's own
     # required-project contract rather than add a mode to it.
     "list_unfiled_threads": {"binding_verb": False},
-    # resync_seat_house — the MCP door onto seats.resync_seat_house_third_party (existed,
-    # unreached until decision 68fba2e4's own six-seat repair task needed it). Writes
+    # resync_seat_house, the MCP door onto seats.resync_seat_house_third_party (existed,
+    # unreached until 's own six-seat repair task needed it). Writes
     # Seat.house third-party, same family as correct_house/correct_agent_house.
     "resync_seat_house": {"binding_verb": True},
-    # thread_action(action=...) — #202 wave 3 (Thoth dispatch 6987, operator's relaxed
+    # thread_action(action=..), #202 this wave (operator's relaxed
     # dispatch-shape rule): resolve_thread/annotate_thread/correct_thread_summary/
     # reclassify_thread folded into one door, all four kept as hidden deprecated
     # aliases forwarding to the shared _thread_action_impl. Not a binding-mover (acts
     # on Thread objects only). Parameterizes resolve_thread, the largest of the four.
     "thread_action": {"binding_verb": False, "parameterizes": "resolve_thread"},
-    # lease(action=...) — #202 wave 3 (same dispatch, same commit shape as thread_
+    # lease(action=..), #202 this wave (same dispatch, same commit shape as thread_
     # action above): acquire_lease/release_lease/check_lease/reap_stale_leases folded
     # into one door, all four kept as hidden deprecated aliases. Not a binding-mover
     # (coordinates over an arbitrary shared resource, never seat/project state).
     "lease": {"binding_verb": False, "parameterizes": "acquire_lease"},
-    # seat_edge(action=...) — #202 wave 3: attach_seat/detach_seat folded into one
-    # door, both kept as hidden deprecated aliases. Writes managed_by — a binding-
+    # seat_edge(action=..), #202 this wave: attach_seat/detach_seat folded into one
+    # door, both kept as hidden deprecated aliases. Writes managed_by, a binding-
     # mover, same as the two hidden aliases already were in BINDING_VERBS above.
     "seat_edge": {"binding_verb": True, "parameterizes": "attach_seat"},
-    # retire_object(kind=...) — #202 wave 3: retire_seat/retire_project/retire_agent
+    # retire_object(kind=..), #202 this wave: retire_seat/retire_project/retire_agent
     # folded into one door, all three kept as hidden deprecated aliases. self-scoped
-    # retire() and retire_assertion deliberately excluded (see the wave-3 proposal,
-    # decision 1ddf8e1c) — different auth shape / genuinely unrelated param shape.
+    # retire and retire_assertion deliberately excluded (see the wave-3 proposal),
+    # different auth shape / genuinely unrelated param shape.
     "retire_object": {"binding_verb": True, "parameterizes": "retire_seat"},
-    # current_flags(action=...) — #202 wave 4 (Thoth dispatch 7034, decision 6fe4305c):
+    # current_flags(action=..), #202 this wave:
     # stale_current_flags/repair_stale_current_flags folded into one door (both hidden
-    # deprecated aliases). Not a binding-mover — acts on current_assertions kernel flags,
+    # deprecated aliases). Not a binding-mover, acts on current_assertions kernel flags,
     # never seat/project/office state.
     "current_flags": {"binding_verb": False, "parameterizes": "repair_stale_current_flags"},
-    # fold_review(action=...) — #202 wave 4: fold_candidates/resolve_fold folded into one
-    # door (both hidden deprecated aliases). Not a binding-mover itself — resolve_fold's
+    # fold_review(action=..), #202 this wave: fold_candidates/resolve_fold folded into one
+    # door (both hidden deprecated aliases). Not a binding-mover itself, resolve_fold's
     # decision='merged' branch still inherits fold_agent's own separate operator gate
     # unchanged, no new binding-write of its own added by the fold.
     "fold_review": {"binding_verb": False, "parameterizes": "fold_candidates"},
-    # get_object_list(object_type=...) — #202 wave 4: get_thread_list/get_decision_list
+    # get_object_list(object_type=..), #202 this wave: get_thread_list/get_decision_list
     # folded into one door (both hidden deprecated aliases). Pure read, not a binding-mover.
     "get_object_list": {"binding_verb": False, "parameterizes": "get_thread_list"},
-    # seat(action=...) — #202 SEAT DISPATCHER, operator ruling f9182ad7, Thoth dispatch
-    # 7039, migration plan decision 620bdb32: the first object-type dispatcher under the
+    # seat(action=..), #202 SEAT DISPATCHER, operator ruling,
+    # migration plan: the first object-type dispatcher under the
     # new surface-shape rule. 23 standalone tools fold in as hidden deprecated aliases
     # (mint_seat, stop, walk_in, pause_seat, vacate_seat, rebind_seat, bind_seat_tree,
     # seat_edge, charter, charter_for, heal_seat_anchor, heal_seat_transcript,
     # transition_seat_project, resync_seat_house, sweep_seat_disk, rename_seat,
     # set_seat_attended, reissue_office, establish_office, invalidate_works_in,
-    # reconcile_seat_identity, correct_house, correct_pin_value, revert_own_pin_write —
+    # reconcile_seat_identity, correct_house, correct_pin_value, revert_own_pin_write,
     # 24 names, one more than "23" above counts because seat_edge itself was already a
     # wave-3 dispatcher whose two actions (attach/detach) both fold in under this one
     # name). launch/resume/wake/wake_preflight ALSO dispatch here but stay separately
-    # named (not aliases, not decaying) — see the migration plan's own reasoning for
-    # keeping them dual-reachable. retire_object and retire() deliberately stay OUT
+    # named (not aliases, not decaying), see the migration plan's own reasoning for
+    # keeping them dual-reachable. retire_object and retire deliberately stay OUT
     # (retire_object still serves kind='project'/'agent', no dispatcher for those yet;
-    # retire() is session-lifecycle, a documented open question per the plan's own
+    # retire is session-lifecycle, a documented open question per the plan's own
     # correction addendum). Binding-mover: writes holds/house/handle/managed_by/pin/
     # works_in across nearly every action.
     "seat": {"binding_verb": True, "parameterizes": "mint_seat"},
-    # composition(action=...) — #202 COMPOSITION DISPATCHER, operator ruling f9182ad7,
-    # Thoth dispatch 7073/7095: the second object-type dispatcher, re-scanned and
+    # composition(action=..), #202 COMPOSITION DISPATCHER, operator,
+    # : the second object-type dispatcher, re-scanned and
     # approved AFTER the seat dispatcher's own traffic day (the old fold rule required
     # return-type coherence and correctly declined this cluster; the new rule tolerates
     # a hand-built oneOf schema's divergent per-action shapes instead). 3 standalone
     # tools fold in as hidden deprecated aliases: save_composition, run_composition,
-    # list_compositions. Not a binding-mover — acts on Composition objects (saved
+    # list_compositions. Not a binding-mover, acts on Composition objects (saved
     # queries/lenses), never seat/project/office state.
     "composition": {"binding_verb": False, "parameterizes": "save_composition"},
-    # project(action=...) — #202 PROJECT DISPATCHER, Thoth dispatch 7095: the third
+    # project(action=..), #202 PROJECT DISPATCHER, : the third
     # object-type dispatcher. 8 names fold in (7 standalone tools + retire_project,
     # already a hidden alias before this fold, repointed): create_project,
     # ingest_project, rename_project, fork_project (action='fork'), unfork_project
     # (action='unfork'), retire_project, project_identity_evidence,
-    # assert_project_property — all kept as hidden deprecated aliases. Binding-mover:
+    # assert_project_property, all kept as hidden deprecated aliases. Binding-mover:
     # create/rename/fork/unfork/retire all write SoftwareProject lifecycle state, the
     # same 6823 rule create_project/rename_project/retire_project/fork_project already
     # sat in BINDING_VERBS under individually.
     "project": {"binding_verb": True, "parameterizes": "create_project"},
-    # thread(action=...) — #202 THREAD DISPATCHER, Thoth dispatch 7162: the fourth
+    # thread(action=..), #202 THREAD DISPATCHER, : the fourth
     # object-type dispatcher, absorbing `thread_action` ITSELF (already a wave-3
     # action-dispatcher, see thread_action's own entry above) into the object-type-
-    # dispatcher naming convention and its hand-built oneOf schema (price-minimizer #1)
-    # — a re-platforming, not a second fold of the same four names again.
+    # dispatcher naming convention and its hand-built oneOf schema (price-minimizer #1),
+    # a re-platforming, not a second fold of the same four names again.
     # thread_action is now hidden, forwarding to the identical _thread_action_impl;
     # `open_thread` deliberately stays OUT and separately named (it MINTS). Not a
-    # binding-mover — acts on Thread objects only, same as thread_action's own entry.
+    # binding-mover, acts on Thread objects only, same as thread_action's own entry.
     "thread": {"binding_verb": False, "parameterizes": "resolve_thread"},
-    # agent(action=...) — #202 AGENT DISPATCHER, Thoth dispatch 7162, proposal decision
-    # 65a6eb73 approved as scoped: the fifth object-type dispatcher. 6 names fold in —
-    # correct_agent_house (already hidden, zero-traffic, before this fold — repointed),
-    # retire_agent (already a hidden alias of retire_object(kind='agent') — repointed,
+    # agent(action=..), #202 AGENT DISPATCHER, proposal decision
+    #  approved as scoped: the fifth object-type dispatcher. 6 names fold in,
+    # correct_agent_house (already hidden, zero-traffic, before this fold, repointed),
+    # retire_agent (already a hidden alias of retire_object(kind='agent'), repointed,
     # same dual-door precedent seat/project(action='retire') established),
     # fleet_reconcile, claim_name, file_subagent (already hidden, zero-traffic, before
-    # this fold — repointed), file_subagents — all kept as hidden deprecated aliases.
-    # Declined: retire() (self-scoped, different auth shape), walk_in (already
+    # this fold, repointed), file_subagents, all kept as hidden deprecated aliases.
+    # Declined: retire (self-scoped, different auth shape), walk_in (already
     # seat(action='walk_in')), merge/unmerge/reconcile_merge (polymorphic, stay named),
     # backfill_agent_project_links (already routed to a different dispatcher),
     # restore_attribution (keyed on project, not agent_id), lift/identify_agent/
-    # succession_chain/unwitnessed_spawns (dead or genuinely distinct reads) — see
-    # decision 65a6eb73 for the full reasoning on each. Binding-mover: correct_house/
+    # succession_chain/unwitnessed_spawns (dead or genuinely distinct reads), see
+    #  for the full reasoning on each. Binding-mover: correct_house/
     # retire/fleet_reconcile write Agent identity/lineage state and reap fleet mounts,
     # the same 6823 rule those three already sat in BINDING_VERBS under individually.
     "agent": {"binding_verb": True, "parameterizes": "correct_agent_house"},
-    # practice(action=...) — #202 PRACTICE DISPATCHER, Thoth dispatch 7162, proposal
-    # decision 07395004 approved as scoped — the sixth and FINAL object-type dispatcher
-    # of #202's own fold arc. 2 names fold in: record_practice, amend_practice — both
+    # practice(action=..), #202 PRACTICE DISPATCHER, proposal
+    #  approved as scoped, the sixth and FINAL object-type dispatcher
+    # of #202's own fold arc. 2 names fold in: record_practice, amend_practice, both
     # kept as hidden deprecated aliases. A literal "decision" dispatcher was declined
-    # (amend_decision has no siblings of its own object type — record_decision stays
-    # hot-ten-named — so a one-action dispatcher would be pure renaming, the exact
+    # (amend_decision has no siblings of its own object type, record_decision stays
+    # hot-ten-named, so a one-action dispatcher would be pure renaming, the exact
     # catch-all shape the operator's own fold-endpoint ruling forbids); Practice
     # genuinely has two write verbs of its own, the real consolidation this fold
-    # captures instead. Not a binding-mover — acts on Practice objects only (a
+    # captures instead. Not a binding-mover, acts on Practice objects only (a
     # knowledge record, never seat/project/office/agent state).
     "practice": {"binding_verb": False, "parameterizes": "record_practice"},
     # graph_census shipped new, then was demoted same-reign to a hidden deprecated alias
-    # (Thoth's own fold correction, dispatch 7543 item 2 — see the tool-count ceiling's
+    # (fold correction, see the tool-count ceiling's
     # own changelog, test_tool_contract_diet.py, for the full account). No entry needed
     # here: _find_undeclared_new_tools skips any tool meta={"deprecated": True} before
     # ever checking this dict, same as run_composition/save_composition/list_compositions
     # above never needed one either.
-    # backlog — the read triangle's own obligation-pressure verb (thread 68f1bafa/3703a3a9,
-    # Thoth DM 7883/7907), standalone rather than only living inside fleet_digest's fuller
+    # backlog, the read triangle's own obligation-pressure verb (
+    # ), standalone rather than only living inside fleet_digest's fuller
     # payload. Not a binding-mover (read-only, no state change) and not a parameterization
     # of fleet_digest -- fleet_digest's own obligation_pressure field stays as-is; this is
     # a narrower, differently-scoped read (caller's-project-default vs. fleet_digest's
     # always-every-project), not a mode switch on the same call.
     "backlog": {"binding_verb": False},
-    # threads — the read triangle's own MINE verb (thread 68f1bafa/3703a3a9): every open
+    # threads, the read triangle's own MINE verb : every open
     # thread the caller owns, single-project, one line each with a short id. Not a
     # binding-mover, and not a parameterization of get_object_list/get_thread_list --
     # those take an EXPLICIT owner and are charter-widened across every governed repo;
     # this defaults to the caller's own identity (every owner_refs spelling) and is
     # deliberately single-project ("mine, in front of me right now").
     "threads": {"binding_verb": False},
-    # team — the read triangle's own manager-view verb (thread 68f1bafa/3703a3a9): every
+    # team, the read triangle's own manager-view verb : every
     # seat managed_by the caller's own held seat, live/owe/envelope. Not a binding-mover
-    # (read-only), and not a parameterization of fleet -- fleet() is the unscoped
+    # (read-only), and not a parameterization of fleet -- fleet is the unscoped
     # fleet-wide roster+tree; this is self-scoped to what ONE manager governs, an
     # opposite-shape narrowing the same way threads narrows get_object_list.
     "team": {"binding_verb": False},
-    # object_events — the witness surface dossier() deliberately hides (thread
-    # 085039cc/0cc53329, Thoth DM 2469): merge/unmerge/split events plus same_as/
+    # object_events, the witness surface dossier deliberately hides (thread
+    # ): merge/unmerge/split events plus same_as/
     # not_same_as links for one object, read-only. Not a binding-mover (writes
-    # nothing) and not a parameterization of dossier() — dossier's own
+    # nothing) and not a parameterization of dossier, dossier's own
     # _HIDDEN_LINK_TYPES exclusion of same_as/not_same_as is a deliberate, separate
     # design choice (identity bookkeeping vs. the entity's own network); this reads
-    # exactly the population dossier() excludes, not a mode switch on the same call.
+    # exactly the population dossier excludes, not a mode switch on the same call.
     "object_events": {"binding_verb": False},
-    # retire_link — thread badb4040, Thoth mail 9122 item 4, wave 16: retire_assertion's
+    # retire_link, this wave: retire_assertion's
     # own sibling for the link-retraction half of "retract a wrongly-minted X". Not a
     # binding-mover (acts on any (from, to, type) triple on any object types, never
     # specifically seat/office/project state). Not a parameterization of retire_
-    # assertion — genuinely different underlying primitives (Actions.supersede_
+    # assertion, genuinely different underlying primitives (Actions.supersede_
     # assertion vs. Actions.invalidate_link), disjoint signatures (name/superseded_id/
     # value vs. from_ref/to_ref/link_type), no shared call either could have ridden on.
     "retire_link": {"binding_verb": False},
-    # backup_settings — Wave 21 (operator's word 2026-09-11, thread f04cce36 piece 3):
+    # backup_settings, this wave (2026-09-11, piece 3):
     # the backup config panel's write door (action='get'/'write'), gated to operator
     # authority via charter_for's own shape (verify_ruling for a worker citing a
-    # standing ruling). Not a seat/office/project binding-mover — it writes a
+    # standing ruling). Not a seat/office/project binding-mover, it writes a
     # singleton settings row (console_state's own pattern), never seat/house state.
-    # Not a parameterization of any existing tool — this domain (the backup lane's
+    # Not a parameterization of any existing tool, this domain (the backup lane's
     # vault path, timer schedules, off-box repositories) had no config layer at all
     # before this (the scope report's own finding); no existing door names a backup
     # setting as one of its own params.
     "backup_settings": {"binding_verb": False},
-    # settings — THE SETTINGS MENU piece 1 (thread f4498ab304e4, Thoth mail 10040):
+    # settings, THE SETTINGS MENU piece 1 (thread f4498ab304e4):
     # list/get/write over the settings registry (src/config/settings_registry.py),
     # generalizing backup_settings' own shape above over a declared registry instead
-    # of one hardcoded field set. Not a seat/office/project binding-mover — it writes
+    # of one hardcoded field set. Not a seat/office/project binding-mover, it writes
     # the `settings` table (EAV-shaped, migration 0067), never seat/house state. Not a
-    # parameterization of backup_settings or any other tool — a distinct registry-wide
+    # parameterization of backup_settings or any other tool, a distinct registry-wide
     # door, backup_settings itself stays a separate, already-shipped door (folding it
-    # into this registry is Seshat's own later piece).
+    # into this registry is later piece).
     "settings": {"binding_verb": False},
-    # declare_machine_identity — THE declare-machine-identity DOOR (thread 2619f011,
-    # ruling edb6b0fc): manual override for git ingest's own MachineIdentity heuristic
+    # declare_machine_identity, THE declare-machine-identity DOOR (
+    # ): manual override for git ingest's own MachineIdentity heuristic
     # (a bot on a real-looking domain, a local part matching no ingested repo). Not a
-    # seat/office/project binding-mover — it mints a MachineIdentity/committer_for/
+    # seat/office/project binding-mover, it mints a MachineIdentity/committer_for/
     # same_as over the entity graph, never touches seat/house state. Not a
-    # parameterization of ingest_project/ingest_reference or any other tool — no
+    # parameterization of ingest_project/ingest_reference or any other tool, no
     # existing door mints this object type or bridges a Person via same_as on demand.
     "declare_machine_identity": {"binding_verb": False},
 }
 
 
 async def _live_tool_meta() -> dict[str, dict[str, Any]]:
-    """name -> its own `meta` dict (empty if none), read live off mcp.list_tools() — the
-    same source _mcp_tools() already trusts, just carrying `meta` through instead of
+    """name -> its own `meta` dict (empty if none), read live off mcp.list_tools, the
+    same source _mcp_tools already trusts, just carrying `meta` through instead of
     stripping it."""
     from src import mcp_server as srv
 
@@ -1782,7 +1782,7 @@ def _find_undeclared_new_tools(
         if name not in declarations:
             problems.append(
                 f"{name!r} is a NEW MCP tool (not in KNOWN_TOOLS_AT_SNAPSHOT, not "
-                f"meta={{'deprecated': True}}) with no entry in NEW_TOOL_DECLARATIONS — "
+                f"meta={{'deprecated': True}}) with no entry in NEW_TOOL_DECLARATIONS, "
                 f"add one before shipping it (see the block comment above the snapshot)")
             continue
         decl = declarations[name]
@@ -1791,14 +1791,13 @@ def _find_undeclared_new_tools(
         if is_binding != in_binding_verbs:
             problems.append(
                 f"{name!r} declares binding_verb={is_binding} but BINDING_VERBS "
-                f"membership is {in_binding_verbs} — keep the declaration and the set in "
+                f"membership is {in_binding_verbs}, keep the declaration and the set in "
                 f"sync (adding/removing from BINDING_VERBS is the actual judgment call; "
                 f"this only catches the two disagreeing)")
         if decl.get("not_parameterized_because") and not decl.get("parameterizes"):
             problems.append(
-                f"{name!r} sets not_parameterized_because without parameterizes — that "
-                f"justification only means something alongside a real candidate tool "
-                f"(Imhotep, msg 6801)")
+                f"{name!r} sets not_parameterized_because without parameterizes, that "
+                f"justification only means something alongside a real candidate tool")
     return problems
 
 
@@ -1862,47 +1861,47 @@ def test_the_growth_ratchet_catches_an_orphaned_not_parameterized_reason() -> No
 
 def test_known_tools_at_snapshot_and_declarations_never_collide() -> None:
     """The snapshot and the declarations table are two DIFFERENT eras of the same tool's
-    life — a name in both is a stale declaration nobody removed after grandfathering it in
+    life, a name in both is a stale declaration nobody removed after grandfathering it in
     (or a copy/paste into the wrong table), never a legitimate state."""
     collision = KNOWN_TOOLS_AT_SNAPSHOT & NEW_TOOL_DECLARATIONS.keys()
     assert collision == set(), (
         f"{sorted(collision)} appear in BOTH KNOWN_TOOLS_AT_SNAPSHOT and "
-        f"NEW_TOOL_DECLARATIONS — a tool is grandfathered or declared, never both")
+        f"NEW_TOOL_DECLARATIONS, a tool is grandfathered or declared, never both")
 
 
 # ============================================================================================
-# THE THIRD SURFACE (Thoth ruling msg 6823, on Seshat's parked question msg 6809): a slash
-# command's prose (`commands/*.md`) names MCP tools and CLI commands it composes —
-# "composes the `X` MCP tool", "shells out to `osiris Y`" — and nothing anywhere checks those
+# THE THIRD SURFACE (from a ruling on a parked question): a slash
+# command's prose (`commands/*.md`) names MCP tools and CLI commands it composes,
+# "composes the `X` MCP tool", "shells out to `osiris Y`", and nothing anywhere checks those
 # names still exist. This is the SAME drift class the CLI<->MCP gate above already catches
 # for its own two surfaces, just never extended to the third.
 #
-# #204's STRUCTURAL FIX (Thoth ruling msg 6918, decision 012b36fb, SUPERSEDING a34a9850):
-# this gate used to read `~/.claude/commands/*.md` LIVE, off the machine, because decision
-# a34a9850's own original reasoning was that the directory sat outside every git repo
-# entirely and "no portable pytest gate can see it" any other way. That same property — a
-# file the git diff being committed cannot contain — let one agent's unfinished edit to that
+# #204's STRUCTURAL FIX (superseding the earlier approach):
+# this gate used to read `~/.claude/commands/*.md` LIVE, off the machine, because the earlier
+# reasoning was that the directory sat outside every git repo
+# entirely and "no portable pytest gate can see it" any other way. That same property, a
+# file the git diff being committed cannot contain, let one agent's unfinished edit to that
 # shared, unversioned file fail every OTHER agent's pre-commit gate: THREE workers blocked at
 # once on 2026-09-04, all on the same live seat.md race. `commands/*.md` is now the tracked
 # SOURCE OF TRUTH inside this repo; `scripts/install_commands.sh` copies it to
 # `~/.claude/commands` the same way `install_gate_hook.sh` already installs the pre-commit
-# hook. This gate reads the REPO copy — the only one a commit's own diff can ever change —
+# hook. This gate reads the REPO copy, the only one a commit's own diff can ever change,
 # so it can never again fail on content outside what's actually being committed.
 #
-# Static shape only for most commands (Thoth: "static is fine for shape"); at least one test
+# Static shape only for most commands ("static is fine for shape"); at least one test
 # below actually EXECUTES the CLI function a slash command names and parses its real output,
-# same discipline test_cli_json_promise.py already established — the parity gate's own known
+# same discipline test_cli_json_promise.py already established, the parity gate's own known
 # blindness (two static comparisons, never invoking either surface) is exactly what let
 # specimens A and B through there, and nothing here should repeat it for a third surface.
 # ============================================================================================
 
 _SLASH_COMMANDS_DIR = Path(__file__).resolve().parent.parent / "commands"
 
-# TWO PHRASINGS, BOTH LIVE (wave 3, thread 5bf6447c): `` `X` MCP tool `` (an optional
+# TWO PHRASINGS, BOTH LIVE (this wave): `` `X` MCP tool `` (an optional
 # parenthetical between the name and "MCP tool" tolerated) was the only shape surveyed when
-# this was first written; the read/write triangle's own rewrite (thread 68f1bafa/a354ba28,
+# this was first written; the read/write triangle's own rewrite (
 # 12 of today's 18 files) settled on the REVERSE order, "the osiris MCP tool `X`", which the
-# original pattern never matched — a real blind spot found building the slash-parity gate,
+# original pattern never matched, a real blind spot found building the slash-parity gate,
 # not a hypothetical: `test_every_slash_command_reference_names_a_real_live_verb` was
 # silently skipping every reference in status/backlog/threads/roster/team/mail/send/decide/
 # thread/launch/resume/stop.md until this fix. Both shapes covered now, surveyed directly
@@ -1915,7 +1914,7 @@ _SLASH_CLI_REF = re.compile(r"`osiris ([a-z][a-z-]*)")
 
 def _slash_command_files() -> dict[str, str]:
     """name -> raw text, read off this repo's own tracked commands/*.md (#204: the SOURCE
-    of what scripts/install_commands.sh puts on the machine, not the machine copy itself —
+    of what scripts/install_commands.sh puts on the machine, not the machine copy itself,
     see the module docstring above for why that distinction is the whole point)."""
     if not _SLASH_COMMANDS_DIR.is_dir():
         return {}
@@ -1923,27 +1922,27 @@ def _slash_command_files() -> dict[str, str]:
 
 
 def _slash_command_references(text: str) -> tuple[set[str], set[str]]:
-    """(mcp tool names, cli command names) a slash doc's own prose claims to compose —
+    """(mcp tool names, cli command names) a slash doc's own prose claims to compose,
     extracted, never hand-copied, so a doc edit that renames what it points at is exactly
     what this is for. Two alternation branches means `findall` hands back (name, "") or
-    ("", name) pairs, never both non-empty at once — flattened to the one real name."""
+    ("", name) pairs, never both non-empty at once, flattened to the one real name."""
     mcp_refs = {a or b for a, b in _SLASH_MCP_TOOL_REF.findall(text)}
     return mcp_refs, set(_SLASH_CLI_REF.findall(text))
 
 
 async def test_every_slash_command_reference_names_a_real_live_verb() -> None:
     files = _slash_command_files()
-    # #204: commands/ is tracked in this repo, so it exists on every checkout — a missing
+    # #204: commands/ is tracked in this repo, so it exists on every checkout, a missing
     # or empty directory here is a real defect (the repo lost its own source), never a
     # "machine doesn't have it" case to skip past the way the old live-file check did.
-    assert files, (f"{_SLASH_COMMANDS_DIR} has no *.md files — the repo's own tracked slash "
+    assert files, (f"{_SLASH_COMMANDS_DIR} has no *.md files, the repo's own tracked slash "
                    "command source is missing or empty")
     mcp = await _mcp_tools()
     # #204: a slash doc may deliberately name a HIDDEN-but-real tool (the deprecated-alias
-    # mechanism, e.g. correct_agent_house/reconcile_merge — retirement wave 1, zero traffic
-    # at the time, still fully callable) — same blind spot _find_missing_cli_doors's own
+    # mechanism, e.g. correct_agent_house/reconcile_merge, retirement this wave, zero traffic
+    # at the time, still fully callable), same blind spot _find_missing_cli_doors's own
     # `all_registered` parameter already dodges for the CLI-door gate; check existence
-    # against the UNFILTERED registry, not `_mcp_tools()`'s own list_tools()-filtered dict.
+    # against the UNFILTERED registry, not `_mcp_tools`'s own list_tools-filtered dict.
     registered = await _mcp_registered_names()
     cli = _cli_commands()
     problems: list[str] = []
@@ -1952,16 +1951,16 @@ async def test_every_slash_command_reference_names_a_real_live_verb() -> None:
         for ref in sorted(mcp_refs):
             if ref not in mcp and ref not in registered:
                 problems.append(
-                    f"{name}.md references `{ref}` as an MCP tool — no such live tool "
+                    f"{name}.md references `{ref}` as an MCP tool, no such live tool "
                     f"(renamed, retired, or a typo)")
         for ref in sorted(cli_refs):
             if ref not in cli:
                 problems.append(
-                    f"{name}.md references `osiris {ref}` — no such live CLI command "
+                    f"{name}.md references `osiris {ref}`, no such live CLI command "
                     f"(renamed, retired, or a typo)")
     assert problems == [], (
         "a slash command's own prose references a verb that no longer exists on the "
-        "surface it names (Thoth ruling, msg 6823):\n" + "\n".join(problems))
+        "surface it names:\n" + "\n".join(problems))
 
 
 def test_the_slash_reference_extractor_itself_catches_a_stale_name() -> None:
@@ -1972,8 +1971,8 @@ def test_the_slash_reference_extractor_itself_catches_a_stale_name() -> None:
 
 
 def test_the_slash_reference_extractor_catches_the_reverse_phrasing_too() -> None:
-    """The read/write triangle's own convention (thread 68f1bafa/a354ba28, 12 of today's
-    18 files): 'call the osiris MCP tool `X`' — name AFTER the words, not before. Both
+    """The read/write triangle's own convention (12 of today's
+    18 files): 'call the osiris MCP tool `X`', name AFTER the words, not before. Both
     orders must extract identically; the old order-only pattern silently missed all 12."""
     text = "Call the osiris MCP tool `get_status` with render='text'."
     mcp_refs, _cli_refs = _slash_command_references(text)
@@ -1981,21 +1980,21 @@ def test_the_slash_reference_extractor_catches_the_reverse_phrasing_too() -> Non
 
 
 # ============================================================================================
-# THE FOURTH SURFACE (wave 3, thread 5bf6447c, Thoth dispatch 7943, operator "we never quite
-# closed the cli and mcp gap"): the CLI-door-or-NO_CLI_EQUIVALENT law above (BINDING_VERBS),
-# mirrored for SLASH — "every human-facing verb (the read verbs and the operator-facing
+# THE FOURTH SURFACE (this wave: the CLI/MCP gap was never fully closed): the
+# CLI-door-or-NO_CLI_EQUIVALENT law above (BINDING_VERBS),
+# mirrored for SLASH, "every human-facing verb (the read verbs and the operator-facing
 # writes) must have a slash face in commands/ or a written reason, the same law the console
-# [this file's own word for the CLI surface — see NO_MCP_EQUIVALENT's own "console-only-
+# [this file's own word for the CLI surface, see NO_MCP_EQUIVALENT's own "console-only-
 # verb"/"console door" vocabulary above] already lives under."
 #
 # SCOPED, DELIBERATELY NARROWER THAN BINDING_VERBS (same reasoning BINDING_VERBS itself gives
 # for not walking all 73 MCP tools): "the read verbs and the operator-facing writes" names
-# exactly the population THIS SAME WAVE built dedicated render='text' slash faces for —
-# Seshat's read triangle (get_status/backlog/threads/roster/team/inbox) and Imhotep's write
-# triangle (send/record_decision/thread/launch/resume/stop), thread 68f1bafa/a354ba28. Most
+# exactly the population THIS SAME WAVE built dedicated render='text' slash faces for,
+# the read triangle (get_status/backlog/threads/roster/team/inbox) and the write
+# triangle (send/record_decision/thread/launch/resume/stop). Most
 # of BINDING_VERBS' own 30 members are seat/office lifecycle plumbing an operator reaches
 # through `/seat <verb>`'s own composed menu (seat.md's free-text "Verbs:" line), not a
-# per-verb slash file — extracting THAT prose reliably would need a second, fragile parser
+# per-verb slash file, extracting THAT prose reliably would need a second, fragile parser
 # this file's own discipline has never used (every existing extractor reads a structured,
 # regex-matchable REFERENCE, never a free-text verb enumeration); scoping to the triangle's
 # own 12 verbs keeps this gate the same shape as every sibling one, checkable by inspection,
@@ -2003,9 +2002,9 @@ def test_the_slash_reference_extractor_catches_the_reverse_phrasing_too() -> Non
 HUMAN_FACING_VERBS = frozenset({
     "get_status", "backlog", "threads", "roster", "team", "inbox",   # the read triangle
     "send", "record_decision", "thread", "launch", "resume", "stop",  # the write triangle
-    # WAVE 27 follow-up (Thoth mail 11780, thread 11771/11772): the second read triangle
+    # this wave follow-up (thread 11771/11772): the second read triangle
     # plus the operator-facing ops verbs, each gaining a dedicated slash face this same
-    # wave — same population-widening shape as the two comments above.
+    # wave, same population-widening shape as the two comments above.
     "search", "graph_search", "dossier", "object_events", "succession_chain", "candidates",
     "recall", "open_thread", "wake", "merge", "unmerge", "graph_lint", "triage",
     "fleet_digest", "settings", "backup_settings", "smoke", "orient", "ack_handoff",
@@ -2016,11 +2015,11 @@ HUMAN_FACING_VERBS = frozenset({
 # commands/*.md. Mirrors NO_CLI_EQUIVALENT's own shape exactly.
 NO_SLASH_EQUIVALENT: dict[str, str] = {
     "stop": "stop.md exists and performs this exact act, but deliberately never names the "
-        "bare `stop` tool — its own text reads 'never the deprecated bare `stop` tool', "
+        "bare `stop` tool, its own text reads 'never the deprecated bare `stop` tool', "
         "composing `seat` with action='stop' instead (the #202 seat-dispatcher fold). A "
         "reference-extraction gate that requires the literal tool name would force the doc "
         "to point at the deprecated alias it was written specifically to steer callers away "
-        "from — the doc's own restraint, not a gap.",
+        "from, the doc's own restraint, not a gap.",
 }
 
 
@@ -2030,9 +2029,9 @@ def _find_missing_slash_faces(
     no_slash_equivalent: dict[str, str] = NO_SLASH_EQUIVALENT,
 ) -> list[str]:
     """One string per human-facing verb with no slash reference anywhere and no declared
-    reason — mirrors `_find_missing_cli_doors`'s own shape, checked against the UNION of
+    reason, mirrors `_find_missing_cli_doors`'s own shape, checked against the UNION of
     every slash doc's own MCP-tool references (`_slash_command_references`'s first element,
-    collected across every file) rather than one file at a time — a verb's own face may
+    collected across every file) rather than one file at a time, a verb's own face may
     live in ANY doc (project.md references `dossier`, not just its own name)."""
     problems: list[str] = []
     for name in sorted(human_facing):
@@ -2046,7 +2045,7 @@ def _find_missing_slash_faces(
 
 
 def _all_slash_mcp_references() -> set[str]:
-    """Every MCP tool name any slash doc's own prose references, anywhere — the coverage
+    """Every MCP tool name any slash doc's own prose references, anywhere, the coverage
     set `_find_missing_slash_faces` diffs HUMAN_FACING_VERBS against."""
     covered: set[str] = set()
     for text in _slash_command_files().values():
@@ -2059,7 +2058,7 @@ def test_every_human_facing_verb_has_a_slash_face_or_declares_why_not() -> None:
     problems = _find_missing_slash_faces(_all_slash_mcp_references())
     assert problems == [], (
         "a read verb or an operator-facing write drifted out of slash reach, undeclared "
-        "(wave 3, thread 5bf6447c — HUMAN_FACING_VERBS is the scoped population this lane "
+        "(this wave, HUMAN_FACING_VERBS is the scoped population this lane "
         "gates; add a NO_SLASH_EQUIVALENT reason, or build the doc):\n" + "\n".join(problems))
 
 
@@ -2069,12 +2068,12 @@ def test_no_slash_equivalent_entries_still_name_real_human_facing_verbs() -> Non
     should fail here rather than sit stale and unread."""
     for name in NO_SLASH_EQUIVALENT:
         assert name in HUMAN_FACING_VERBS, (
-            f"{name!r} is in NO_SLASH_EQUIVALENT but not in HUMAN_FACING_VERBS — either "
+            f"{name!r} is in NO_SLASH_EQUIVALENT but not in HUMAN_FACING_VERBS, either "
             f"scope it in or drop the now-pointless entry")
 
 
 def test_the_slash_face_detector_itself_catches_an_undeclared_missing_face() -> None:
-    """PROVE THE MECHANISM — same discipline as the CLI-door reverse detector's own proof
+    """PROVE THE MECHANISM, same discipline as the CLI-door reverse detector's own proof
     test above."""
     problems = _find_missing_slash_faces(
         set(), human_facing=frozenset({"some_human_facing_verb"}), no_slash_equivalent={})
@@ -2092,15 +2091,15 @@ def test_the_slash_face_detector_itself_catches_an_undeclared_missing_face() -> 
 
 
 async def test_seat_slash_docs_stop_claim_is_true_not_just_written(actions: Actions) -> None:
-    """THE EXECUTION LEG (Thoth: "at least ONE test must EXECUTE a slash-command's
-    underlying CLI and parse its output, same as test_cli_json_promise.py" — never just
+    """THE EXECUTION LEG ("at least ONE test must EXECUTE a slash-command's
+    underlying CLI and parse its output, same as test_cli_json_promise.py", never just
     read the prose and trust it). seat.md's own `stop` entry claims: "Both callers
     already reach the identical stop_seat function today ... prefer the MCP tool when
     mounted, shell out otherwise. No seam here." Proven two ways, not one: (1) cmd_stop's
     own docstring states it calls trigger.stop_seat directly, the same function the MCP
     `stop` tool wraps (read from source, not asserted); (2) the CLI door is actually RUN
     here (a real refusal, not a mock) and its real stdout is parsed, same edge shape
-    test_cli_json_promise.py's own cmd_stop test uses — proving the shell-out this slash
+    test_cli_json_promise.py's own cmd_stop test uses, proving the shell-out this slash
     doc describes is a working command today, not prose describing a claim gone stale."""
     import inspect
     import io
@@ -2110,7 +2109,7 @@ async def test_seat_slash_docs_stop_claim_is_true_not_just_written(actions: Acti
 
     source = inspect.getsource(cmd_stop)
     assert "trigger.stop_seat" in source or "stop_seat" in source, (
-        "cmd_stop no longer visibly calls stop_seat — seat.md's 'identical function, no "
+        "cmd_stop no longer visibly calls stop_seat, seat.md's 'identical function, no "
         "seam' claim needs re-checking against whatever it calls instead")
 
     buf = io.StringIO()
@@ -2122,10 +2121,10 @@ async def test_seat_slash_docs_stop_claim_is_true_not_just_written(actions: Acti
 
 
 # ============================================================================================
-# THE 25 EXCUSES RE-READ (wave 3, thread 5bf6447c): sixteen of them had a real, standalone,
-# third-party-capable orchestrator function all along — just never scoped a console door.
+# THE 25 EXCUSES RE-READ (this wave): sixteen of them had a real, standalone,
+# third-party-capable orchestrator function all along, just never scoped a console door.
 # Each new command below is proven EXECUTING against the real test pool, same discipline the
-# stop.md execution leg above established — never just "it parses," a real call with a real
+# stop.md execution leg above established, never just "it parses," a real call with a real
 # refusal or a real receipt.
 # ============================================================================================
 
@@ -2164,7 +2163,7 @@ async def test_cmd_create_project_actually_creates_one(actions: Actions) -> None
 
 
 async def test_cmd_attach_detach_seat_are_real_inverse_calls(actions: Actions) -> None:
-    """attach then detach the SAME pair — proves both new doors call the real
+    """attach then detach the SAME pair, proves both new doors call the real
     orchestrator functions (a managed_by edge appears, then disappears), not just that
     each one prints something on its own."""
     from src.cli import cmd_attach_seat, cmd_detach_seat
@@ -2187,17 +2186,17 @@ async def test_cmd_attach_detach_seat_are_real_inverse_calls(actions: Actions) -
 
 
 # ============================================================================================
-# HOUSE VOCABULARY, NOT JUST NAMES (wave 18 item 3, mail 9541 cc05c70c): decision 0b29f1cbcc5a
-# ("ONE ACT, ONE NAME, ONE VOCABULARY") already governs the tests above — same act, same verb,
+# HOUSE VOCABULARY, NOT JUST NAMES (this wave item 3): decision 0b29f1cbcc5a
+# ("ONE ACT, ONE NAME, ONE VOCABULARY") already governs the tests above, same act, same verb,
 # same params. This is the sibling gap that check never covered: the WORDS a description uses
 # for a house CONCEPT (office, seat, charter, desk), which can drift even when the verb and
 # params line up perfectly. A full pairwise CLI-help-vs-MCP-docstring text diff is exactly the
-# kind of brittle, false-positive-prone check this house avoids (a legitimate word — "homeless"
-# in `osiris new`'s own --house help, ruling 68fba2e4 — contains the substring "home" with no
-# relation to an office at all); this pins the one real specimen an audit actually found (Thoth
-# mail 9541, agent audit a50d035379cb89dd8) — seat()'s own action-table line for
+# kind of brittle, false-positive-prone check this house avoids (a legitimate word, "homeless"
+# in `osiris new`'s own --house help, contains the substring "home" with no
+# relation to an office at all); this pins the one real specimen an audit actually found:
+# seat's own action-table line for
 # `establish_office` said "Osiris-owned home" while every sibling line beside it (sweep_disk)
-# and every CLI description of the identical ceremony already said "office" — as an EXACT
+# and every CLI description of the identical action already said "office", as an EXACT
 # anchored phrase check, never a bare word ban, so it catches a real recurrence of THIS drift
 # without flagging unrelated legitimate uses of "home".
 # ============================================================================================
@@ -2207,8 +2206,8 @@ _FORBIDDEN_OFFICE_SYNONYM_RE = re.compile(r"Osiris-owned home\b")
 
 def test_seat_docstring_never_calls_the_office_a_home() -> None:
     """The exact specimen (mcp_server.py:3846, offices.py:1): `establish_office`'s own
-    action-table line described the identical ceremony `sweep_disk`'s neighboring line
-    already calls an "office" — the one house-term divergence a real audit found. Reads
+    action-table line described the identical action `sweep_disk`'s neighboring line
+    already calls an "office", the one house-term divergence a real audit found. Reads
     the live docstrings (never a hand-copied string that could itself drift from the
     source), so a future re-introduction of "Osiris-owned home" fails here instead of
     waiting for the next audit."""
@@ -2219,11 +2218,11 @@ def test_seat_docstring_never_calls_the_office_a_home() -> None:
 
     seat_doc = inspect.getdoc(seat) or ""
     assert not _FORBIDDEN_OFFICE_SYNONYM_RE.search(seat_doc), (
-        "seat()'s own docstring calls the office a 'home' again — establish_office's "
+        "seat's own docstring calls the office a 'home' again, establish_office's "
         "action-table line drifted from its sweep_disk neighbor's own 'office' wording")
     offices_doc = inspect.getdoc(establish_office) or ""
     # establish_office's own function docstring is a one-liner forwarding to the module
-    # docstring's own ceremony description in prose elsewhere in offices.py — checked
+    # docstring's own description in prose elsewhere in offices.py, checked
     # directly against the module's own top-of-file text, not this function's doc alone.
     import src.orchestrator.offices as offices_mod
     module_doc = offices_mod.__doc__ or ""
