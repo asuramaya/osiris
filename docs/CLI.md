@@ -303,6 +303,18 @@ written); review it, then re-run with `--execute` to apply it. Built alongside
 `merge`'s own CLI rename, since the two verbs are a pair on the MCP side and had no
 reason to stay asymmetric here.
 
+## `osiris rehold <seat> --agent <agent:id> --because <text> [--override-live] [--apply] [--actor <who>]`
+
+The command-line equivalent of `orchestrator.seats.rehold_seat`, the same function the
+`seat(action='rehold')` MCP tool wraps: third-party re-assignment of a seat's `holds`
+link, for the case a compaction successor's own binding is grafted onto the wrong
+sibling generation with no other sanctioned way to put it back. Refuses without a
+stated `--because`, the same rule as every other third-party correction on this page.
+Refuses onto a seat whose current holder is live and on a different lineage than
+`--agent`, unless `--override-live` names that as deliberate. **Dry run is the
+default**, matching the MCP tool's own convention: without `--apply` this only prints
+the preview (nothing written); review it, then re-run with `--apply`.
+
 ## `osiris charter-for <seat> --repos a,b,c --because <text> [--actor <who>]`
 
 The command-line equivalent of `charter.charter_for`, with the same guard as the MCP

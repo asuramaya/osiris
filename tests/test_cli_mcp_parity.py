@@ -189,6 +189,12 @@ NO_MCP_EQUIVALENT = {
         "CLI-only per the dispatch's own literal wording ('osiris seat sweep-trees "
         "[--apply]'), same precedent as graph-migrate's own entry above, an MCP tool "
         "can follow if a live caller actually needs one; none was asked for in this tip.",
+    "rehold": "NOT actually MCP-less, wraps orchestrator.seats.rehold_seat directly, "
+        "the SAME function seat(action='rehold') already exposes on the MCP side "
+        "(obligation 9bab01db, that dispatcher action's own missing CLI door); named "
+        "'rehold' on the CLI directly, not routed through a new standalone tool, since "
+        "no live caller needed one and the dispatcher action already covers every MCP "
+        "caller, same shape as lint/layout/backup-status's own entries above.",
     "rename-seat": "NOT actually MCP-less, same hidden-alias shape as correct-agent-"
         "house's own entry above; rename_seat carries meta={'deprecated': True} from "
         "the #202 seat-dispatcher build, still fully callable.",
