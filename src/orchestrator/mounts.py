@@ -1,16 +1,16 @@
-"""The durable half of the mount registry — identity that survives a server bounce.
+"""The durable half of the mount registry: identity that survives a server restart.
 
 The MCP server's in-memory registry dies with the process, and the process dies routinely
-(deploy restarts, an OOM-kill — diagnosed 56f6a0d6): every bounce wiped the WHOLE fleet's
-mounts at once, and each agent rediscovered it by a hard "mount(cwd) first" failure mid-work.
-This table is the memory the dict doesn't have: mount() upserts here, and any later call that
-misses the dict can RE-ATTACH by the client's job_dir (presented per-request via the
-X-Osiris-Job header) instead of failing until the agent notices.
+(deploy restarts, an out-of-memory kill): every restart wiped the whole fleet's mounts at
+once, and each agent rediscovered it by a hard "mount(cwd) first" failure mid-work. This
+table is the memory the in-memory dict doesn't have: mount() upserts here, and any later
+call that misses the dict can re-attach by the client's job_dir (presented per-request via
+the X-Osiris-Job header) instead of failing until the agent notices.
 
-Keyed by job_dir — the one durable handle the client re-presents. A mount without a job_dir
+Keyed by job_dir: the one durable handle the client re-presents. A mount without a job_dir
 has nothing to re-attach by, so it stays memory-only (exactly the old behavior, degraded
-gracefully). session_key is informational (which MCP session last touched the mount), never a
-lookup key: a reconnecting client gets a fresh session id, so it can't be one.
+gracefully). session_key is informational (which MCP session last touched the mount), never
+a lookup key: a reconnecting client gets a fresh session id, so it can't be one.
 """
 from __future__ import annotations
 
@@ -36,17 +36,17 @@ from src.parsers.evidence import confidence_for
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
-# THE GREET LEDGER (the resume race, Alfred's field report msgs 717/718, 2026-07-19):
-# a window resume fires the predecessor's SessionEnd and the successor's SessionStart
-# CONCURRENTLY, and when the end lands second (observed live: automount 20:03:03,
-# session-end 20:03:04) it deleted the door the greeting had just seated — the seat then
-# answered every probe {live:false, last_seen:NULL} until the next human act, and the
-# poke lane read the dead registry and skipped the window while a build order sat unread.
-# Both handlers live in one process, so the discriminator is this module-level stamp:
-# automount notes each greeting; session-end YIELDS when the same sid was greeted within
-# the grace. Yielding is the safe side of the asymmetry — a wrongly-kept door is reaped
-# by the census sweep within ~2 minutes; a wrongly-killed door blinds probes and pokes
-# until a human types into the window.
+# THE GREETING LEDGER (a resume race observed in 2026-07): a window resume fires the
+# predecessor's SessionEnd and the successor's SessionStart concurrently, and when the
+# end lands second (observed live: automount 20:03:03, session-end 20:03:04) it deleted
+# the mount row the greeting had just registered. The seat then answered every probe
+# {live:false, last_seen:NULL} until the next human act, and the poke lane read the dead
+# registry and skipped the window while a build order sat unread. Both handlers live in
+# one process, so the discriminator is this module-level stamp: automount notes each
+# greeting; session-end yields when the same sid was greeted within the grace period.
+# Yielding is the safe side of the asymmetry: a wrongly-kept row is reaped by the census
+# sweep within about 2 minutes; a wrongly-killed row blinds probes and pokes until a
+# human types into the window.
 _GREETS: dict[str, float] = {}
 _GREET_GRACE_SECS = 10.0
 
@@ -58,14 +58,14 @@ def note_greeting(session_id: str) -> None:
         return
     now = time.monotonic()
     _GREETS[sid8] = now
-    if len(_GREETS) > 256:  # bounded: anything past the grace is dead weight
+    if len(_GREETS) > 256:  # bounded: anything past the grace period is dead weight
         for k, t in list(_GREETS.items()):
             if now - t > _GREET_GRACE_SECS:
                 _GREETS.pop(k, None)
 
 
 def greeted_within_grace(session_id: str, *, grace: float = _GREET_GRACE_SECS) -> bool:
-    """Did a greeting for this sid land within the grace? session-end's yield check."""
+    """Did a greeting for this sid land within the grace period? Session-end's yield check."""
     sid8 = (session_id or "").strip().lower()[:8]
     t = _GREETS.get(sid8)
     return t is not None and (time.monotonic() - t) < grace
@@ -87,32 +87,34 @@ async def save_mount(
     model: str | None, session_key: str | None, alive: bool = True,
 ) -> datetime | None:
     """Upsert the durable mount row. Called at mount() and again at every re-attach (bumping
-    last_seen — the fleet's liveness signal for the listener probe). Returns the PREVIOUS
-    last_seen (None on first mount) — the anchor for the while-you-were-away fold: everything
+    last_seen: the fleet's liveness signal for the listener probe). Returns the PREVIOUS
+    last_seen (None on first mount): the anchor for the while-you-were-away fold, everything
     that happened in this lineage's name between its last sign of life and this re-entry.
 
-    `alive=False` SEATS WITHOUT A PULSE — the provisional mount, and it exists because of the
-    GHOST (Anubis XII, msg 424). Claude Code fires SessionStart for processes that are not
-    anybody: `claude bg-spare` pre-warms, pty hosts, claim-socket daemons. Each has a real
-    session id and a real cwd, so the whisper seats it, and `last_seen=now()` handed it a
-    HEARTBEAT — which made it live by every test the fleet has. It inflated the roster, it made
-    the co-agent warning cry wolf on an uncontended tree, and it could take delivery of a DM into
-    a process that will never read anything.
+    `alive=False` registers a mount without a liveness pulse: a provisional mount, needed
+    because of a ghost-process problem. Claude Code fires SessionStart for processes that are
+    not real agent sessions: background pre-warm processes, pty hosts, claim-socket daemons.
+    Each has a real session id and a real cwd, so the startup handshake registers it, and
+    `last_seen=now()` handed it a heartbeat, which made it read as live by every test the
+    fleet has. It inflated the roster, it made the co-agent warning cry wolf on an
+    uncontended tree, and it could take delivery of a message into a process that will never
+    read anything.
 
         A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING.
 
-    So the whisper seats you (your identity is ready the moment you exist) but does not certify
-    you as living. A real session proves itself within seconds — its first Osiris call bumps this
-    row, or its transcript grows and observe_liveness stamps it. A spare never does either, and
-    lies there with a null pulse, costing nothing and fooling no one.
+    So the startup handshake registers the caller (its identity is ready the moment it
+    exists) but does not certify it as living. A real session proves itself within seconds:
+    its first Osiris call bumps this row, or its transcript grows and observe_liveness stamps
+    it. A spare process never does either, and lies there with a null pulse, costing nothing
+    and fooling no one.
 
-    EARNED-PULSE (THE EARNED-PULSE COLUMN, thread 870d7391, operator ruling 2026-09-11): this
-    `alive=True` path is one of exactly two writers ever allowed to STAMP `earned_pulse_at`
-    (the other is liveness.py's `observe_liveness`, a real transcript growing) — FIRST-EARN
-    ONLY (`COALESCE(agent_mounts.earned_pulse_at, now())` on conflict), never re-stamped by a
-    later touch, so the column answers "did this row EVER earn a pulse", not "when was it last
-    seen". Every other writer that bumps `last_seen` must read this column first and refuse to
-    grant a pulse a row never earned — this is the one column that says whether they may.
+    EARNED PULSE: this `alive=True` path is one of exactly two writers ever allowed to stamp
+    `earned_pulse_at` (the other is liveness.py's `observe_liveness`, a real transcript
+    growing): first-earn only (`COALESCE(agent_mounts.earned_pulse_at, now())` on conflict),
+    never re-stamped by a later touch, so the column answers "did this row ever earn a
+    pulse", not "when was it last seen". Every other writer that bumps `last_seen` must read
+    this column first and refuse to grant a pulse a row never earned: this is the one column
+    that says whether they may.
     """
     return await pool.fetchval(  # type: ignore[no-any-return]
         "WITH old AS (SELECT last_seen FROM agent_mounts WHERE job_dir=$1) "
@@ -122,8 +124,8 @@ async def save_mount(
         "                          CASE WHEN $7 THEN now() END) "
         "ON CONFLICT (job_dir) DO UPDATE SET agent_id=$2, project=$3, cwd=$4, model=$5, "
         "session_key=$6, "
-        # a greeting must never REVOKE a pulse either: a re-whispered session that is already
-        # proven alive keeps what it earned.
+        # A greeting must never revoke a pulse either: a re-registered session that is
+        # already proven alive keeps what it earned.
         "last_seen=CASE WHEN $7 THEN now() ELSE agent_mounts.last_seen END, "
         "earned_pulse_at=CASE WHEN $7 "
         "  THEN COALESCE(agent_mounts.earned_pulse_at, now()) "
@@ -134,53 +136,53 @@ async def save_mount(
 
 
 async def release_mounts(pool: asyncpg.Pool, agent_id: str) -> int:
-    """Close every durable mount row naming `agent_id` — retire()'s seat release (thread
-    b47b3814: Anubis VII held a live seat after its farewell, haunting the fleet chrome and
-    the liveness counts). The registry is hot state, not the event-sourced kernel — the
-    retirement itself is stamped on the Agent object, so dropping the seat loses no record.
-    Exact-id only: a successor re-mounted on the same job_dir has already overwritten the
-    row with its own agent_id and is never touched. Returns rows released."""
+    """Close every durable mount row naming `agent_id`: retire()'s seat release (an earlier
+    incident had an agent hold a live seat after its farewell, still appearing in the fleet
+    display and liveness counts). The registry is hot state, not the event-sourced kernel:
+    the retirement itself is stamped on the Agent object, so dropping the seat loses no
+    record. Exact-id only: a successor re-mounted on the same job_dir has already overwritten
+    the row with its own agent_id and is never touched. Returns rows released."""
     tag = await pool.execute("DELETE FROM agent_mounts WHERE agent_id=$1", agent_id)
     return int(tag.rsplit(" ", 1)[-1])
 
 
-# the "suspended, no genuine sighting" sentinel — a real datetime, not a Postgres literal
-# string: asyncpg binds params by Python type before any server-side cast runs, so a bare
-# 'epoch' string fails to bind against a timestamptz column.
+# The "suspended, no genuine sighting" sentinel: a real datetime, not a Postgres literal
+# string, because asyncpg binds params by Python type before any server-side cast runs, so
+# a bare 'epoch' string fails to bind against a timestamptz column.
 SUSPENDED_AT = datetime.fromtimestamp(0, tz=UTC)
 
 
 async def release_session_mounts(
     pool: asyncpg.Pool, *, job_dir: str, session_id: str,
 ) -> int:
-    """THE DOOR-SCOPED RELEASE (the g40-v/g40-vi false-succession incident, 2026-07-17):
-    SessionEnd releases the ENDING SESSION's rows — its own anchor row plus any row its
-    binding rode elsewhere (a resume anchors at its ancestor's job_dir, marked
-    session_key='sid:<its own id>') — and NEVER the whole seat. release_mounts(agent_id)
-    here let one closing tab-view delete a LIVING session's anchor row; the wrongly
-    emptied registry then read as the seat's death, and the office door — correct on its
-    own evidence — minted false successors at thoth's own office (a title-generator stub
-    nearly took the throne). A row is an ADDRESS: only the addressed door's death may
-    release it. Seat-wide release stays retire()'s — a mind's deliberate farewell.
+    """THE SESSION-SCOPED RELEASE (a false-succession incident): SessionEnd releases the
+    ending session's rows (its own anchor row plus any row its binding rode elsewhere, since
+    a resume anchors at its ancestor's job_dir, marked session_key='sid:<its own id>') and
+    never the whole seat. release_mounts(agent_id) once let one closing tab-view delete a
+    living session's anchor row; the wrongly emptied registry then read as the seat's death,
+    and downstream logic, correct on its own evidence, minted a false successor at the
+    original seat's office (a title-generator stub nearly took over). A row is an address:
+    only the addressed row's death may release it. Seat-wide release stays retire()'s own: an
+    agent's deliberate farewell.
 
-    NEVER A DELETE (#178 piece a, Thoth dispatch msg 5224): this used to DELETE the row —
-    correct for LIVENESS (the row must stop answering any probe immediately, same law as
-    before) but wrong for the REGISTRY, because SessionEnd firing does not always mean the
-    body is actually gone (the exact resume-race class this function's own docstring
-    already guards elsewhere: `greeted_within_grace` catches the ordering race, this catches
-    the SURVIVAL case — a daemon re-adopt or a body the harness still lists). Suspends
-    instead: `last_seen` flips to the epoch sentinel (constitution #3 — heal with
-    compensating events, never DELETE), which reads exactly as dead to `is_live()` (same
-    immediate liveness effect the DELETE always had) while the ROW ITSELF survives, findable
-    by `find_mount`. A genuine re-adopt or resume then PROMOTES IT BACK the ordinary way —
-    `save_mount`'s own `ON CONFLICT (job_dir) DO UPDATE` refreshes `last_seen=now()` on the
-    SAME row, no different from any other re-mount. Idempotent: a row already suspended is
-    excluded from the receipt (re-suspending nothing is not a release).
+    NEVER A DELETE: this used to delete the row, correct for liveness (the row must stop
+    answering any probe immediately, same effect as before) but wrong for the registry,
+    because SessionEnd firing does not always mean the process is actually gone (the exact
+    resume-race class this function's own docstring already guards elsewhere:
+    `greeted_within_grace` catches the ordering race, this catches the survival case, a
+    daemon re-adopt or a process the harness still lists). Suspends instead: `last_seen`
+    flips to the epoch sentinel (heal with compensating events, never delete), which reads
+    exactly as dead to `is_live()` (same immediate liveness effect the delete always had)
+    while the row itself survives, findable by `find_mount`. A genuine re-adopt or resume
+    then promotes it back the ordinary way: `save_mount`'s own `ON CONFLICT (job_dir) DO
+    UPDATE` refreshes `last_seen=now()` on the same row, no different from any other
+    re-mount. Idempotent: a row already suspended is excluded from the result (re-suspending
+    nothing is not a release).
 
-    EARNED-PULSE (thread 870d7391): clears `earned_pulse_at` alongside `last_seen` — a
-    suspended address's earned pulse dies with it, same as the address itself; a future
-    occupant of the same job_dir/session_key re-earns its OWN pulse via a genuine act
-    rather than silently inheriting whatever the address earned before it went quiet."""
+    EARNED PULSE: clears `earned_pulse_at` alongside `last_seen`: a suspended address's
+    earned pulse dies with it, same as the address itself; a future occupant of the same
+    job_dir/session_key re-earns its own pulse via a genuine act rather than silently
+    inheriting whatever the address earned before it went quiet."""
     sid32 = (session_id or "").replace("-", "").strip().lower()
     n = await pool.fetchval(
         "WITH gone AS (UPDATE agent_mounts SET last_seen=$3, earned_pulse_at=NULL "
@@ -191,17 +193,16 @@ async def release_session_mounts(
 
 
 async def suspend_mounts_for_agents(pool: asyncpg.Pool, agent_ids: list[str]) -> int:
-    """THE KILL PATH'S OWN AGENT-SCOPED SUSPEND (thread b0699dcc, Thoth mail 9873/9896):
-    `release_session_mounts`'s sibling, keyed by exact `agent_id` membership rather than
-    `job_dir`/`session_key` — for a caller (`stop_seat`) that already knows WHICH minds
-    to release but not, in advance, which door each one mounted at. A `--fork-session`
-    child (`agent_type='fork'`, spawned_by-linked, no seat of its own) mounts its own
-    row under its own agent_id at its own job_dir — stop_seat's own release step never
-    reached it (neither the seat's stable anchor nor any succession_chain generation's
-    own derived job_dir matches a fork's row), so a live fork process under a stopped
-    seat stayed falsely 'live' indefinitely. Same law as release_session_mounts: SUSPEND
-    (never delete, constitution #3) — `last_seen` flips to the epoch sentinel, the row
-    itself survives. Idempotent: a row already suspended is excluded from the receipt.
+    """THE KILL PATH'S OWN AGENT-SCOPED SUSPEND: `release_session_mounts`'s sibling, keyed
+    by exact `agent_id` membership rather than `job_dir`/`session_key`, for a caller
+    (`stop_seat`) that already knows which agents to release but not, in advance, which row
+    each one mounted at. A `--fork-session` child (`agent_type='fork'`, spawned_by-linked, no
+    seat of its own) mounts its own row under its own agent_id at its own job_dir:
+    stop_seat's own release step never reached it (neither the seat's stable anchor nor any
+    succession_chain generation's own derived job_dir matches a fork's row), so a live fork
+    process under a stopped seat stayed falsely "live" indefinitely. Same rule as
+    release_session_mounts: suspend, never delete: `last_seen` flips to the epoch sentinel,
+    the row itself survives. Idempotent: a row already suspended is excluded from the result.
     Empty `agent_ids` is a no-op, never a wildcard match."""
     if not agent_ids:
         return 0
@@ -221,44 +222,43 @@ async def registry_census(
     pool: asyncpg.Pool, *, agents_json: AgentsJsonFn | None = None,
     read_exe: ProcReadFn | None = None, read_cwd: ProcReadFn | None = None,
 ) -> dict[str, Any]:
-    """THE REGISTRY+/PROC CENSUS (#178 piece c, Thoth dispatch msg 5224) — the harness's
-    own live-body list (`claude agents --json`, trigger.py's `_claude_agents_json`, reused
-    verbatim rather than reinvented), each row VERIFIED against `/proc` (census.py's
-    `_proc_exe`/`_proc_cwd` — a harness row is trusted only once `/proc` confirms the pid
-    is really a claude body) — this is what "is a body live right now" answers going
-    forward. `agent_mounts` is the CACHE this reconciles against, never a second source of
-    truth: `matched` names rows the census confirms are real; `rowless` names live,
-    verified bodies with NO agent_mounts row at all (session_id prefix matches nothing) —
-    exactly the population #178 pieces (a)/(b) exist to close to zero.
+    """THE REGISTRY+/PROC CENSUS: the harness's own live-process list (`claude agents
+    --json`, trigger.py's `_claude_agents_json`, reused verbatim rather than reinvented),
+    each row verified against `/proc` (census.py's `_proc_exe`/`_proc_cwd`, a harness row is
+    trusted only once `/proc` confirms the pid is really a claude process): this is what "is
+    a process live right now" answers going forward. `agent_mounts` is the cache this
+    reconciles against, never a second source of truth: `matched` names rows the census
+    confirms are real; `rowless` names live, verified processes with no agent_mounts row at
+    all (session_id prefix matches nothing), the exact population this reconciliation exists
+    to close to zero.
 
-    OCCUPANCY, NOT IDENTITY (Ptah's framing, msg 5219 — the boundary this function must
-    never cross): this answers "is a body running, and what does the harness/OS say about
-    it" — it never resolves which AGENT LINEAGE holds a seat, never touches `holds` links
-    or `claim_name`'s own arbitration. A caller wanting IDENTITY reads the graph
-    (seats.py/agents.py); a caller wanting OCCUPANCY reads this. Conflating the two is
-    exactly the class of bug the two-body-problem ruling (719ed5b1) and this house's own
-    "never let one answer for the other" law both guard against.
+    OCCUPANCY, NOT IDENTITY: the boundary this function must never cross. This answers "is a
+    process running, and what does the harness/OS say about it"; it never resolves which
+    agent lineage holds a seat, never touches `holds` links or `claim_name`'s own
+    arbitration. A caller wanting identity reads the graph (seats.py/agents.py); a caller
+    wanting occupancy reads this. Conflating the two is exactly the class of bug the
+    two-body-problem ruling and this codebase's own "never let one answer for the other"
+    rule both guard against.
 
     Injectable (`agents_json`/`read_exe`/`read_cwd`) so tests drive this with fakes, same
-    seam discipline as census.py's own pgrep/proc functions — the real defaults (harness
+    seam discipline as census.py's own pgrep/proc functions: the real defaults (harness
     subprocess + real /proc) are imported lazily to avoid a module-load-time cycle between
     mounts.py (imported early, by agents.py among others) and trigger.py/census.py
-    (themselves importing agents.py). Fails open on a harness read failure — a census that
-    could not run reports `verified: []`, `blind: true`, never a false-empty population
-    read as "nothing is live" (same law as census.py's own pgrep=None handling).
+    (themselves importing agents.py). Fails open on a harness read failure: a census that
+    could not run reports `verified: []`, `blind: true`, never a false-empty population read
+    as "nothing is live" (same rule as census.py's own pgrep=None handling).
 
-    PULSE-LIVE, A DISTINCT POPULATION (thread 879c97b9 piece 3, Thoth's guard #3): the
-    Claude-only harness registry above can never confirm a non-Claude body by construction
-    — `pulse_live` names the agents a non-Claude harness's OWN self-reported freshness
-    (`pulse_mount`, below) currently backs, kept SEPARATE from `matched` on purpose (a
-    census-confirmed body and a self-reported-fresh one are different grades of evidence;
-    conflating them into one list would erase exactly the visibility this guard exists
-    for). Scoped to agents whose own stamped `harness` property (mount()'s own
-    `assert_property(..., "harness", ...)`) reads anything but 'claude-code' — a Claude
-    session's liveness is answered by the census above alone, unchanged. A 5-minute
-    freshness window, STRICTER than the 15-minute mount-staleness window the census path
-    rides on elsewhere (resolve_seat), since a self-report is weaker evidence than a
-    verified census match and earns a tighter leash."""
+    PULSE-LIVE, A DISTINCT POPULATION: the Claude-only harness registry above can never
+    confirm a non-Claude process by construction. `pulse_live` names the agents a non-Claude
+    harness's own self-reported freshness (`pulse_mount`, below) currently backs, kept
+    separate from `matched` on purpose (a census-confirmed process and a self-reported-fresh
+    one are different grades of evidence; conflating them into one list would erase exactly
+    the visibility this guard exists for). Scoped to agents whose own stamped `harness`
+    property (mount()'s own `assert_property(..., "harness", ...)`) reads anything but
+    'claude-code': a Claude session's liveness is answered by the census above alone,
+    unchanged. A 5-minute freshness window, stricter than the 15-minute mount-staleness
+    window the census path rides on elsewhere (resolve_seat), since a self-report is weaker
+    evidence than a verified census match and earns a tighter leash."""
     from src.orchestrator import census as _census
     from src.orchestrator.trigger import _claude_agents_json
 
@@ -289,7 +289,7 @@ async def registry_census(
         pid = r.get("pid")
         exe = read_exe(int(pid)) if isinstance(pid, int) else None
         if not _census._is_claude_body(exe):
-            continue  # the harness claims a body; /proc does not confirm it — not counted
+            continue  # the harness claims a process; /proc does not confirm it, not counted
         verified.append({
             "session_id": sid, "job_dir_key": sid[:8], "pid": pid,
             "harness_cwd": r.get("cwd"), "harness_name": r.get("name"),
@@ -318,36 +318,34 @@ async def registry_census(
 async def apply_boot_time_fleet_pass(
     actions: Actions, *, census_fn: Any = None, actor: str = "boot-fleet-pass",
 ) -> dict[str, Any]:
-    """REBOOT SURVIVAL, the fleet half (thread bc6a5d455da2, operator ruling 2026-09-13
-    "it has to survive and recover reboot by itself"): the 17:26 CDT reboot's own live
-    specimen — the harness daemon resumed every seat body within five minutes, but
-    osiris's own side did nothing to notice. `agent_mounts.last_seen` for a resumed body
-    stayed frozen at its PRE-reboot value until that body's own next MCP call — every
-    liveness reader (agent_liveness, seat_occupancy, fleet()) read every resumed seat as
-    COLD for however long it took that body to next speak, even though the harness
-    itself already confirmed the body alive again.
+    """REBOOT SURVIVAL, the fleet half: a live specimen from a real reboot showed the
+    harness daemon resumed every seat's process within five minutes, but the osiris side did
+    nothing to notice. `agent_mounts.last_seen` for a resumed process stayed frozen at its
+    pre-reboot value until that process's own next MCP call: every liveness reader
+    (agent_liveness, seat_occupancy, fleet()) read every resumed seat as cold for however
+    long it took that process to next speak, even though the harness itself already
+    confirmed the process alive again.
 
     Runs `registry_census` (the same harness+/proc cross-check `fleet_prune`'s own
-    `_unclaimed_bodies` already trusts) and, for every `matched` row (a live body the
-    census already ties to an EXISTING agent_mounts row), refreshes that row's
-    `last_seen` to now() and stamps a durable `boot_resumed_at` property on the Agent —
-    evidence this specific generation was independently confirmed live at THIS moment,
-    never overwritten, so a later investigation can see exactly when a resumed body was
-    first noticed rather than inferring it from a mount row's own bumped timestamp alone.
+    `_unclaimed_bodies` already trusts) and, for every `matched` row (a live process the
+    census already ties to an existing agent_mounts row), refreshes that row's `last_seen` to
+    now() and stamps a durable `boot_resumed_at` property on the Agent: evidence this
+    specific generation was independently confirmed live at this moment, never overwritten,
+    so a later investigation can see exactly when a resumed process was first noticed rather
+    than inferring it from a mount row's own bumped timestamp alone.
 
-    `rowless` bodies (a verified live body with NO agent_mounts row at all) are NAMED
-    here, never bound — `fleet_prune`'s own `unclaimed_body` bucket already resolves and
-    binds these via `tree_seat_hint` on its own 15-minute cadence (classification_laws_
-    heartbeat); duplicating that resolve-then-bind logic here would be a second copy of
-    the same mechanism for a population the existing sweep already reaches within 15
-    minutes regardless. A blind census (the harness registry read itself failed) reports
-    nothing rather than guessing — the same "could not look" law every reader of this
-    census already holds to.
+    `rowless` processes (a verified live process with no agent_mounts row at all) are named
+    here, never bound: `fleet_prune`'s own `unclaimed_body` bucket already resolves and binds
+    these via `tree_seat_hint` on its own 15-minute cadence; duplicating that resolve-then-
+    bind logic here would be a second copy of the same mechanism for a population the
+    existing sweep already reaches within 15 minutes regardless. A blind census (the harness
+    registry read itself failed) reports nothing rather than guessing, the same "could not
+    look" rule every reader of this census already holds to.
 
-    Called BOTH at worker startup (arq_worker.py's own `startup()`, once per process
-    boot — the automatic fleet-wide side) and on demand via `osiris boot-status
-    --fleet` (an operator wanting to check right now, without waiting for the next
-    worker restart) — the SAME function, never two copies."""
+    Called both at worker startup (arq_worker.py's own `startup()`, once per process boot,
+    the automatic fleet-wide side) and on demand via `osiris boot-status --fleet` (an
+    operator wanting to check right now, without waiting for the next worker restart): the
+    same function, never two copies."""
     census_fn = census_fn or registry_census
     census = await census_fn(actions.pool)
     if census.get("blind"):
@@ -381,20 +379,19 @@ async def apply_boot_time_fleet_pass(
 
 
 async def pulse_mount(pool: asyncpg.Pool, *, agent_id: str) -> dict[str, Any]:
-    """THE HARNESS-NEUTRAL PULSE (thread 879c97b9 piece 3, Thoth's guard #1): a
-    lightweight, SELF-SCOPED liveness refresh any MCP client can call directly, no
-    whisper hook or statusline required. Touches ONLY `agent_id`'s OWN `agent_mounts`
-    rows — there is no `target` parameter, by construction, so a caller can never refresh
-    another mind's row; the caller's own resolved identity is the entire address space.
-    A well-behaved non-Claude client that simply calls mount() periodically already gets
-    this for free (`save_mount`'s own upsert already bumps `last_seen`); this exists for
-    the cheaper, more frequent case — a client that wants to stay fresh without paying
-    mount()'s full re-attach ceremony every time.
+    """THE HARNESS-NEUTRAL PULSE: a lightweight, self-scoped liveness refresh any MCP
+    client can call directly, no startup hook or statusline required. Touches only
+    `agent_id`'s own `agent_mounts` rows: there is no `target` parameter, by construction, so
+    a caller can never refresh another agent's row; the caller's own resolved identity is the
+    entire address space. A well-behaved non-Claude client that simply calls mount()
+    periodically already gets this for free (`save_mount`'s own upsert already bumps
+    `last_seen`); this exists for the cheaper, more frequent case, a client that wants to
+    stay fresh without paying mount()'s full re-attach cost every time.
 
-    Feeds `registry_census`'s own `pulse_live` population above, the ONLY thing that
-    changes for a non-Claude harness's own liveness reading (`is_occupied_by_a_live_body`)
-    — the Claude census path is entirely untouched. Zero rows touched (an agent_id with no
-    durable mount row at all) is a legal, reportable no-op, never an error."""
+    Feeds `registry_census`'s own `pulse_live` population above, the only thing that changes
+    for a non-Claude harness's own liveness reading (`is_occupied_by_a_live_body`); the
+    Claude census path is entirely untouched. Zero rows touched (an agent_id with no durable
+    mount row at all) is a legal, reportable no-op, never an error."""
     rows = await pool.fetch(
         "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1 "
         "RETURNING job_dir, last_seen", agent_id)
@@ -411,7 +408,7 @@ _MOUNT_COLS = (
 
 def _mount_snapshot(row: asyncpg.Record) -> dict[str, Any]:
     """An `agent_mounts` row -> a JSON-safe snapshot. `audit_log.payload` is jsonb and the
-    pool's codec is plain `json.dumps` with no datetime default (src/db/pool.py) — the two
+    pool's codec is plain `json.dumps` with no datetime default (src/db/pool.py): the two
     timestamptz columns must be stringified before they ever reach it, or the INSERT below
     raises. The inverse of `undrop_dead_project_mount`'s own restore-from-snapshot read."""
     out: dict[str, Any] = {}
@@ -424,30 +421,29 @@ def _mount_snapshot(row: asyncpg.Record) -> dict[str, Any]:
 async def drop_dead_project_mount(
     actions: Actions, *, job_dir: str, project: str, actor: str,
 ) -> dict[str, Any]:
-    """Release ONE mount row that is residue against an already-retired project (task #59
-    phase 2, fleet_reconcile.py's drop_ephemeral_test_cwd bucket). Row-scoped by `job_dir`
-    — the durable per-row key (`agent_mounts.job_dir` is the table's own ON CONFLICT target)
-    — never agent-id-wide: `release_mounts`' own lesson, the g40-v/vi false-succession
-    incident, where an agent-id-wide DELETE killed a LIVE sibling session's row. The same
-    doctrine `release_session_mounts` already keeps: a row is an ADDRESS, and only the
-    addressed door's own death may release it.
+    """Release ONE mount row that is residue against an already-retired project
+    (fleet_reconcile.py's drop_ephemeral_test_cwd bucket). Row-scoped by `job_dir`, the
+    durable per-row key (`agent_mounts.job_dir` is the table's own ON CONFLICT target),
+    never agent-id-wide: `release_mounts`' own lesson from a past false-succession incident,
+    where an agent-id-wide DELETE killed a live sibling session's row. The same rule
+    `release_session_mounts` already keeps: a row is an address, and only the addressed
+    row's own death may release it.
 
-    REVERSIBLE AND AUDITED (Thoth's gate, DM 2677 — this was a bare `pool.execute`, no
-    audit_log, no object_events; not merely irreversible but UNWITNESSED, worse than "no
-    undo" because after it ran there was nothing to reconstruct from, by anyone). The row
-    is snapshotted whole into an `audit_log` row (action='drop_dead_project_mount') BEFORE
-    the delete, in the same transaction. `audit_log`, not `object_events`, deliberately:
-    `object_events.object_id` is NOT NULL, and attaching the witness to a freshly-minted
-    Agent object would violate an existing, deliberate invariant this same reaper's own
-    test enforces (test_fleet_reconcile.py: "a drop releases the RESIDUE ROW only — no
-    Agent object was ever minted here") — a drop must promote nothing, including its own
-    witness. Pass the returned `audit_id` to `undrop_dead_project_mount` to replay the row
-    back exactly.
+    REVERSIBLE AND AUDITED: this was once a bare `pool.execute`, no audit_log, no
+    object_events; not merely irreversible but unwitnessed, worse than "no undo" because
+    after it ran there was nothing to reconstruct from, by anyone. The row is snapshotted
+    whole into an `audit_log` row (action='drop_dead_project_mount') before the delete, in
+    the same transaction. `audit_log`, not `object_events`, deliberately: `object_events.
+    object_id` is NOT NULL, and attaching the record to a freshly-minted Agent object would
+    violate an existing, deliberate invariant this same reaper's own test enforces
+    (test_fleet_reconcile.py: "a drop releases the residue row only, no Agent object was
+    ever minted here"): a drop must promote nothing, including its own record. Pass the
+    returned `audit_id` to `undrop_dead_project_mount` to replay the row back exactly.
 
-    Re-checks `project` at delete time rather than trusting the caller's earlier read — a
+    Re-checks `project` at delete time rather than trusting the caller's earlier read: a
     row whose project changed between a sweep's report and this call (re-mounted into a
-    live project in the interim) no longer matches and is left untouched, and NOTHING is
-    written, audit row included: a witness for a delete that didn't happen would itself be
+    live project in the interim) no longer matches and is left untouched, and nothing is
+    written, audit row included: a record for a delete that didn't happen would itself be
     a false record. Returns {"dropped": 0|1, "audit_id": int|None} (job_dir is unique, so
     at most one row can ever match)."""
     async with actions.pool.acquire() as conn, conn.transaction():
@@ -468,26 +464,26 @@ async def drop_dead_project_mount(
 _MOUNT_DROP_ACTIONS = frozenset({
     "drop_dead_project_mount", "sweep_ghost_doors", "sweep_stale_doors",
     "drop_dead_transcript_mount", "retire_seatless_mount_claim",
-})  # every action that snapshots a row via `_mount_snapshot` before deleting it — same
-    # payload shape regardless of which one wrote it, so one inverse undoes all three
-    # (Thoth DM 2835: "do not invent a second shape for the same problem"); also the
-    # exact set `rescue_seat_holder_mount` walks — `retire_seatless_mount_claim`
-    # (law 3a, thread 124732175759) is deliberately included so that walk sees past its
-    # own compensating entry to an OLDER one naming the real seat holder, rather than
-    # stopping cold on a drop that (by construction) never names one
+})  # every action that snapshots a row via `_mount_snapshot` before deleting it: same
+    # payload shape regardless of which one wrote it, so one inverse undoes all of them
+    # (do not invent a second shape for the same problem); also the exact set
+    # `rescue_seat_holder_mount` walks: `retire_seatless_mount_claim` is deliberately
+    # included so that walk sees past its own compensating entry to an older one naming
+    # the real seat holder, rather than stopping cold on a drop that (by construction)
+    # never names one
 
 
 async def drop_dead_transcript_mount(
     actions: Actions, *, job_dir: str, actor: str,
 ) -> dict[str, Any]:
     """Release ONE mount row whose own anchor directory (`job_dir`) no longer exists on
-    disk (thread 07ca68ca, wave 8's "dead transcript" class) — the same reversible,
-    audited, row-scoped shape `drop_dead_project_mount` already proves, keyed on
-    `job_dir` alone rather than (job_dir, project) since a gone directory has no project
-    to re-check. Re-checks existence at delete time under the row lock, same discipline
-    as `drop_dead_project_mount`'s own re-check of `project` — a directory recreated
-    between a sweep's report and this call (a rare but real race: a job_dir reused, or a
-    slow NFS mount) is left untouched, and nothing is written, audit row included."""
+    disk (a "dead transcript" class of cleanup): the same reversible, audited, row-scoped
+    shape `drop_dead_project_mount` already proves, keyed on `job_dir` alone rather than
+    (job_dir, project) since a gone directory has no project to re-check. Re-checks
+    existence at delete time under the row lock, same discipline as `drop_dead_project_
+    mount`'s own re-check of `project`: a directory recreated between a sweep's report and
+    this call (a rare but real race: a job_dir reused, or a slow NFS mount) is left
+    untouched, and nothing is written, audit row included."""
     async with actions.pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
             f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
@@ -505,19 +501,19 @@ async def drop_dead_transcript_mount(
 async def undrop_dead_project_mount(
     actions: Actions, *, audit_id: int, actor: str,
 ) -> dict[str, Any]:
-    """The compensating inverse (task #59's gate, Thoth DM 2677; widened to cover the door
-    sweeps per Thoth DM 2835): replays the exact row a `_MOUNT_DROP_ACTIONS` audit_log row
-    witnessed, back into `agent_mounts` unchanged. `audit_id` — not `job_dir` — pins exactly
-    WHICH drop to undo: the same job_dir can be dropped, re-mounted, and dropped again, and
-    a replay must never reach for the wrong generation of that history.
+    """The compensating inverse, later widened to cover the row sweeps too: replays the
+    exact row a `_MOUNT_DROP_ACTIONS` audit_log row recorded, back into `agent_mounts`
+    unchanged. `audit_id`, not `job_dir`, pins exactly which drop to undo: the same job_dir
+    can be dropped, re-mounted, and dropped again, and a replay must never reach for the
+    wrong generation of that history.
 
-    Refuses LOUDLY (an error dict, nothing written) when: no such audit_log row, or its
+    Refuses loudly (an error dict, nothing written) when: no such audit_log row, or its
     `action` isn't one of `_MOUNT_DROP_ACTIONS` (an undrop never invents a snapshot from an
-    unrelated audit entry); the job_dir is already occupied — a live session re-mounted
-    there since the drop, so the newer row is the truth and reviving the old one underneath
-    it would fork identity, never overwrite.
+    unrelated audit entry); the job_dir is already occupied, a live session re-mounted there
+    since the drop, so the newer row is the truth and reviving the old one underneath it
+    would fork identity, never overwrite.
 
-    PROOF, NOT ASSERTION: the restored row round-trips through the SAME `_mount_snapshot`
+    PROOF, NOT ASSERTION: the restored row round-trips through the same `_mount_snapshot`
     the drop used, so `undrop(...); read; _mount_snapshot(...) == original_snapshot` is a
     literal equality a caller (or test) can check, not an eyeballed match."""
     row = await actions.pool.fetchrow(
@@ -553,55 +549,53 @@ async def undrop_dead_project_mount(
 async def find_session_row(
     db: Any, session_id: str,
 ) -> Any | None:
-    """THE ONE LOOKUP from a harness session id to its mount row (thread a61b6bc7, task
-    #33): every per-window surface — statusline, stop hook, live_succession — resolves a
-    window's identity through THIS, never its own copy (the vitals law: a copy is a fork
-    that forgets it is one). Returns the row (job_dir, agent_id, project, model,
-    context_window_size, mounted_at) or None.
+    """THE ONE LOOKUP from a harness session id to its mount row: every per-window surface
+    (statusline, stop hook, live_succession) resolves a window's identity through this,
+    never its own copy (a copy is a fork that forgets it is one). Returns the row (job_dir,
+    agent_id, project, model, context_window_size, mounted_at) or None.
 
     Three lanes, strongest evidence first:
-      1. THE ANCHOR NAMED FOR THE SID — the whisper derives ~/.claude/jobs/<sid8> for
-         every session it greets, so this covers first lives, resumes, and forks alike.
-         GUARDED (wave 16 item 1): an 8-char prefix collides across real sessions often
-         enough that this rung refuses a SUSPENDED row (SUSPENDED_AT, release_session_
-         mounts' own sentinel) or one naming a RETIRED Agent — compute_heartbeat trusts
-         whatever this returns enough to UPDATE it unconditionally, so a dead/retired
-         match here would resurrect a corpse's last_seen under a live session's own
-         heartbeat.
-      2. THE SESSION LEDGER — anchor_sid:<sid8> assertions (handshake.record_session_anchor
-         files sid→soul at every whisper for identities the sid alone could not re-derive);
-         the owner's lineage's freshest row answers for a window whose durable anchor
-         wears another name (a mount(job_dir=<inherited anchor>) session).
-      3. SELF-EVIDENT DERIVATION (thread #174, Ptah's gap, 2026-08-17): record_session_anchor
-         deliberately never WRITES an anchor_sid entry when the sid already IS the agent's own
-         generation-derived identity ("the ledger holds only what a wiped registry could not
-         reconstruct") — but that optimization assumed a reader could re-derive it directly,
-         and until this lane existed, none could: lane 1 needs job_dir to itself carry the sid
-         (false for a `-p --resume` wake, whose job_dir is a FRESH per-wake anchor unrelated to
-         the resumed transcript's own sid), and lane 2 finds nothing because nothing was ever
-         written to find. Verified live: Ptah (agent:02eaaa7a-iii)'s mount row lives under
-         job_dir=jobs/c8a22a05 (the wake's own job anchor) while his transcript file (and his
-         own identity) is 02eaaa7a-ea67-4fac-a9fc-d9377c6f8474.jsonl — both prior lanes missed
-         him; fleet() read him cold at 23:53 while he was actively working (his own msg 5164
-         carries the symptom). This lane performs the SAME re-derivation record_session_anchor's
-         skip already assumed was possible, closing the loop without any new write.
-    DEAD END, verified 2026-07-19 and recorded so nobody re-walks it: agent_mounts.
-    session_key's 'sid:<hex>' is the MCP CONNECTION id (Mcp-Session-Id), never the harness
-    sid — it cannot serve this lookup. `db` is any fetchrow-capable handle (pool or
-    connection), so the hook scripts can pass their own single connection."""
+      1. THE ANCHOR NAMED FOR THE SID: the startup handshake derives ~/.claude/jobs/<sid8>
+         for every session it registers, so this covers first lives, resumes, and forks
+         alike. Guarded: an 8-char prefix collides across real sessions often enough that
+         this rung refuses a suspended row (SUSPENDED_AT, release_session_mounts' own
+         sentinel) or one naming a retired Agent: compute_heartbeat trusts whatever this
+         returns enough to update it unconditionally, so a dead/retired match here would
+         resurrect a corpse's last_seen under a live session's own heartbeat.
+      2. THE SESSION LEDGER: anchor_sid:<sid8> assertions (handshake.record_session_anchor
+         files sid to agent at every registration for identities the sid alone could not
+         re-derive); the owner's lineage's freshest row answers for a window whose durable
+         anchor wears another name (a mount(job_dir=<inherited anchor>) session).
+      3. SELF-EVIDENT DERIVATION: record_session_anchor deliberately never writes an
+         anchor_sid entry when the sid already is the agent's own generation-derived
+         identity ("the ledger holds only what a wiped registry could not reconstruct"),
+         but that optimization assumed a reader could re-derive it directly, and until this
+         lane existed, none could: lane 1 needs job_dir to itself carry the sid (false for a
+         `-p --resume` wake, whose job_dir is a fresh per-wake anchor unrelated to the
+         resumed transcript's own sid), and lane 2 finds nothing because nothing was ever
+         written to find. Verified live in one incident: an agent's mount row lived under
+         job_dir=jobs/c8a22a05 (the wake's own job anchor) while its transcript file (and
+         its own identity) was a different uuid entirely: both prior lanes missed it, and
+         a fleet status read it cold while it was actively working. This lane performs the
+         same re-derivation record_session_anchor's skip already assumed was possible,
+         closing the loop without any new write.
+    DEAD END, recorded so nobody re-walks it: agent_mounts.session_key's 'sid:<hex>' is the
+    MCP connection id (Mcp-Session-Id), never the harness sid: it cannot serve this lookup.
+    `db` is any fetchrow-capable handle (pool or connection), so the hook scripts can pass
+    their own single connection."""
     sid = (session_id or "").strip().lower()
     if len(sid) < 8:
         return None
     cols = "job_dir, agent_id, project, model, context_window_size, mounted_at"
-    # DSH session ids come in TWO shapes (verified live, 2026-08-23): depth-0 ids
-    # carry a `session-` prefix, spawned subagent ids are a bare uuid. Either way
-    # the mount row keys on the FULL session dir path (job_dir ends with the id),
-    # and the sid8 anchor the ledger and self-evident lanes speak is the UUID's
-    # first 8, never `session-` (which would collide across every DSH session on
-    # the box). Normalized once, here, so every lane below speaks the same grammar.
-    # _UUID_RE is REUSED, never re-declared: sessions.py:301 and handshake.py:185 already
-    # each carry a copy, and a third would be the second-implementation class this house
-    # keeps paying for. Function-local because handshake/sessions both import mounts —
+    # DSH session ids come in two shapes: depth-0 ids carry a `session-` prefix, spawned
+    # subagent ids are a bare uuid. Either way the mount row keys on the full session dir
+    # path (job_dir ends with the id), and the sid8 anchor the ledger and self-evident
+    # lanes speak is the uuid's first 8, never `session-` (which would collide across
+    # every DSH session on the box). Normalized once, here, so every lane below speaks
+    # the same grammar.
+    # _UUID_RE is reused, never re-declared: sessions.py:301 and handshake.py:185 already
+    # each carry a copy, and a third would be a duplicate implementation this codebase
+    # keeps paying for. Function-local because handshake/sessions both import mounts;
     # module-level would be circular; sessions' own import of mounts is function-local too.
     from src.ingest.sessions import _UUID_RE
     dsh_uuid = None
@@ -617,14 +611,14 @@ async def find_session_row(
         if row is not None:
             return row
     sid8 = dsh_uuid[:8] if dsh_uuid else sid[:8]
-    # LIVENESS + RETIREMENT (task #68's own dispatch, wave 16 item 1): an 8-char prefix
-    # is not a strong key — a genuinely dead row (SUSPENDED_AT, this module's own
-    # release_session_mounts sentinel) or a row still naming a RETIRED Agent (never
-    # deleted, constitution #3) can share a sid8 with a real live session, and
-    # compute_heartbeat blindly UPDATEs whatever this rung returns. Same predicate
-    # lane 2's owner-agent check already carries (`o.status='active'`) — never a new
-    # law, just applied here too, plus the dead-row exclusion that lane never needed
-    # (it resolves through a still-current assertion, this rung matches raw rows).
+    # LIVENESS + RETIREMENT: an 8-char prefix is not a strong key: a genuinely dead row
+    # (SUSPENDED_AT, this module's own release_session_mounts sentinel) or a row still
+    # naming a retired Agent (never deleted, heal with compensating events) can share a
+    # sid8 with a real live session, and compute_heartbeat blindly updates whatever this
+    # rung returns. Same predicate lane 2's owner-agent check already carries
+    # (`o.status='active'`), never a new rule, just applied here too, plus the dead-row
+    # exclusion that lane never needed (it resolves through a still-current assertion,
+    # this rung matches raw rows).
     row = await db.fetchrow(
         f"SELECT {cols} FROM agent_mounts m WHERE m.job_dir LIKE '%/jobs/' || $1 "
         "AND m.last_seen IS DISTINCT FROM $2 "
@@ -639,7 +633,7 @@ async def find_session_row(
         "WHERE a.name = 'anchor_sid:' || $1 "
         "ORDER BY a.observed_at DESC LIMIT 1", sid8)
     if owner is None:
-        owner = f"agent:{sid8}"  # lane 3: self-evident — falls through to the same
+        owner = f"agent:{sid8}"  # lane 3: self-evident. Falls through to the same
         # base-lineage query below, which naturally returns None if no such lineage ever
         # mounted (a made-up sid matches nothing real; no extra existence check needed).
     from src.orchestrator.agents import _generation
@@ -655,36 +649,35 @@ _GHOST_GRACE_SECS = 120  # a row pulsed this recently is too new for the ghost r
 
 
 def _normed(cwd: str | None) -> str:
-    """Pure-string path normalization (no IO — safe beside an event loop): body cwds arrive
-    kernel-resolved from /proc, and a symlinked row cwd that misses the cwd witness still
-    matches the PROJECT witness (both labels come from the same .osiris walk), so a living
-    door never hangs on symlink luck."""
+    """Pure-string path normalization (no IO, safe beside an event loop): process cwds
+    arrive kernel-resolved from /proc, and a symlinked row cwd that misses the cwd match
+    still matches the project match (both labels come from the same .osiris walk), so a
+    living row never hangs on symlink luck."""
     return os.path.normpath(cwd) if cwd else ""
 
 
 async def sweep_stale_doors(actions: Actions, *, actor: str) -> int:
-    """THE PILE RULE (operator ruling, 2026-07-17: 'the 20+ doors on some i also consider a
-    bug'): a row is an ADDRESS, and an agent has ONE last-known address — not a pile of
-    corpses back to the first week. SessionEnd deletes a door when it fires; every kill,
-    crash, and reboot skips the hook and leaks its row FOREVER, which is where 23-door seats
-    came from. This sweep is the standing broom: among rows past the liveness window, keep
-    exactly the freshest per agent as its last-known address — and keep even that only for an
-    agent the graph still calls active (a fresh row elsewhere already IS the address; a
-    demoted claimant, a retired seat, or an objectless stranger holds no address at all).
-    Pure SQL to FIND the doomed rows, no OS read — the ghost rule (`sweep_ghost_doors`) is
-    the one that needs eyes.
+    """THE PILE RULE: a row is an address, and an agent has one last-known address, not a
+    pile of stale rows back to the first week (an earlier incident found seats accumulating
+    20+ rows apiece, ruled a bug). SessionEnd deletes a row when it fires; every kill, crash,
+    and reboot skips the hook and leaks its row forever, which is where those piled-up seats
+    came from. This sweep is the standing cleanup: among rows past the liveness window, keep
+    exactly the freshest per agent as its last-known address, and keep even that only for an
+    agent the graph still calls active (a fresh row elsewhere already is the address; a
+    demoted claimant, a retired seat, or an objectless unrecognized identity holds no address
+    at all). Pure SQL to find the doomed rows, no OS read: the ghost rule
+    (`sweep_ghost_doors`) is the one that needs a live process check.
 
-    REVERSIBLE AND AUDITED (thread 45dd4f3c, Thoth DM 2835 — this was a bare bulk DELETE,
-    the same unwitnessed-irreversible defect class `drop_dead_project_mount` had before
-    e7b30db; higher volume here since this fires every 60s in production). Each doomed row
-    is re-fetched `FOR UPDATE` inside its own transaction immediately before it is deleted —
-    that lock is what makes the audit_log snapshot and the delete see the identical row, not
-    two reads racing a third writer — and snapshotted into `audit_log`
-    (action='sweep_stale_doors') via the SAME `_mount_snapshot`/`_MOUNT_COLS` shape
-    `drop_dead_project_mount` uses, undoable through the same `undrop_dead_project_mount`.
-    A row gone by the time its lock is taken (already released some other way) is simply
-    skipped — never counted, never witnessed, since nothing was actually done to it here.
-    Returns rows released."""
+    REVERSIBLE AND AUDITED: this was a bare bulk DELETE, the same unwitnessed-irreversible
+    defect class `drop_dead_project_mount` had before its own fix, higher volume here since
+    this fires every 60s in production. Each doomed row is re-fetched `FOR UPDATE` inside its
+    own transaction immediately before it is deleted, that lock is what makes the audit_log
+    snapshot and the delete see the identical row, not two reads racing a third writer, and
+    snapshotted into `audit_log` (action='sweep_stale_doors') via the same
+    `_mount_snapshot`/`_MOUNT_COLS` shape `drop_dead_project_mount` uses, undoable through the
+    same `undrop_dead_project_mount`. A row gone by the time its lock is taken (already
+    released some other way) is simply skipped, never counted, never recorded, since nothing
+    was actually done to it here. Returns rows released."""
     doomed = await actions.pool.fetch(
         "WITH aged AS ("
         "  SELECT job_dir, agent_id, row_number() OVER ("
@@ -706,7 +699,7 @@ async def sweep_stale_doors(actions: Actions, *, actor: str) -> int:
                 f"SELECT {', '.join(_MOUNT_COLS)} FROM agent_mounts "
                 "WHERE job_dir=$1 FOR UPDATE", d["job_dir"])
             if row is None:
-                continue  # already gone since the scan — nothing here to witness or delete
+                continue  # already gone since the scan, nothing here to record or delete
             await conn.execute(
                 "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3)",
                 "sweep_stale_doors", actor, _mount_snapshot(row))
@@ -718,28 +711,27 @@ async def sweep_stale_doors(actions: Actions, *, actor: str) -> int:
 async def sweep_ghost_doors(
     actions: Actions, *, body_cwds: set[str], body_projects: set[str], actor: str,
 ) -> int:
-    """THE GHOST RULE — the late SessionEnd, automated (queue item 5, ruled a bug by the
-    operator 2026-07-17: 'fleet 5 but there are only 3 agents up'): a terminal kill skips the
-    SessionEnd hook, so the dead tab's row stays 'live' for the full decay window and the
-    panel lies for fifteen minutes. The OS knows better RIGHT NOW: a fresh row whose cwd
-    holds no claude body AND whose project holds none anywhere (the double gate — an office
-    and its governed repo can share a label, and a label quirk must never cost a living
-    session its door) is a ghost, released on the spot.
+    """THE GHOST RULE: the late-SessionEnd problem, automated (ruled a bug after a fleet
+    display once showed 5 agents when only 3 were actually up). A terminal kill skips the
+    SessionEnd hook, so the dead tab's row stays "live" for the full decay window and the
+    panel lies for fifteen minutes. The OS knows better right now: a fresh row whose cwd
+    holds no claude process and whose project holds none anywhere (the double check, since
+    an office and its governed repo can share a label, and a label quirk must never cost a
+    living session its row) is a ghost, released on the spot.
 
     THE CALLER OWNS THE BLINDNESS CHECK: `census.live_bodies_by_cwd()` returning None means
-    'could not look' and this function must simply not be called that tick. Two race guards:
-    a GRACE floor (rows pulsed within the last two minutes are too new to judge — a session
+    "could not look" and this function must simply not be called that tick. Two race guards:
+    a grace floor (rows pulsed within the last two minutes are too new to judge, a session
     born after the /proc scan must never be read as bodyless), and the delete re-checks
     `last_seen` unchanged, so a row re-pulsed after the fetch survives untouched. A killed
-    tab's door thus releases in ~2 minutes instead of decaying for 15.
+    tab's row thus releases in about 2 minutes instead of decaying for 15.
 
-    REVERSIBLE AND AUDITED (thread 45dd4f3c, Thoth DM 2835 — same defect class
-    `drop_dead_project_mount` had before e7b30db, unfixed here until now). The `last_seen`
-    re-check now runs as a `FOR UPDATE` fetch inside the same transaction as the snapshot
-    and the delete — one lock, one witness, one write, so what `audit_log`
-    (action='sweep_ghost_doors') records is provably the row that was actually removed, not
-    a belief about it from a moment earlier. Undoable through `undrop_dead_project_mount`.
-    Returns rows released."""
+    REVERSIBLE AND AUDITED: same defect class `drop_dead_project_mount` had before its own
+    fix, unfixed here until now. The `last_seen` re-check now runs as a `FOR UPDATE` fetch
+    inside the same transaction as the snapshot and the delete: one lock, one record, one
+    write, so what `audit_log` (action='sweep_ghost_doors') records is provably the row that
+    was actually removed, not a belief about it from a moment earlier. Undoable through
+    `undrop_dead_project_mount`. Returns rows released."""
     from src.orchestrator.offices import is_bare_office_root
 
     rows = await actions.pool.fetch(
@@ -750,21 +742,20 @@ async def sweep_ghost_doors(
     released = 0
     for r in rows:
         cwd = _normed(r["cwd"])
-        # THE BARE-CONTAINER EXEMPTION (thread 7558740d, Thoth mail 13351): a live
-        # coordinator tab mounted at the seats container ITSELF (~/.osiris/seats, never
-        # a seat's own office subdirectory) is never released by the ghost rule — traced
-        # against six weeks of audit_log for Thoth's own job_dir/a93f82b4: dozens of
-        # sweeps, every single one at this exact cwd, none at any OTHER cwd Thoth's
-        # lineage ever carried. `_normed`'s own docstring already concedes the cwd
-        # witness can miss (its documented fallback is the PROJECT witness) — but
-        # `live_bodies()`'s own bare-root skip (msg 1888, avoiding a phantom "seats"
-        # project) means that fallback is structurally unreachable for exactly this
-        # population, so a cwd-witness miss here has no safety net at all, unlike every
-        # other row. The ghost rule (fast, census-only release) simply does not apply to
-        # a bare-container cwd; `sweep_stale_doors`'s own pile rule (staleness AND the
+        # THE BARE-CONTAINER EXEMPTION: a live coordinator tab mounted at the seats
+        # container itself (~/.osiris/seats, never a seat's own office subdirectory) is
+        # never released by the ghost rule: traced against six weeks of audit_log for one
+        # seat's own job_dir, dozens of sweeps, every single one at this exact cwd, none
+        # at any other cwd that lineage ever carried. `_normed`'s own docstring already
+        # concedes the cwd match can miss (its documented fallback is the project match),
+        # but `live_bodies()`'s own bare-root skip (avoiding a phantom "seats" project)
+        # means that fallback is structurally unreachable for exactly this population, so
+        # a cwd-match miss here has no safety net at all, unlike every other row. The
+        # ghost rule (fast, census-only release) simply does not apply to a
+        # bare-container cwd; `sweep_stale_doors`'s own pile rule (staleness and the
         # graph's own belief the lineage is still active) is the correct, slower
-        # mechanism for this population — it already protects a fresh row for an agent
-        # the graph still calls active, exactly what a live coordinator tab is.
+        # mechanism for this population: it already protects a fresh row for an agent the
+        # graph still calls active, exactly what a live coordinator tab is.
         if is_bare_office_root(cwd):
             continue
         project = r["project"] or (Path(cwd).name if cwd else "")
@@ -776,7 +767,7 @@ async def sweep_ghost_doors(
                 "WHERE job_dir=$1 AND last_seen IS NOT DISTINCT FROM $2 FOR UPDATE",
                 r["job_dir"], r["last_seen"])
             if row is None:
-                continue  # re-pulsed (or already gone) since the scan — leave it untouched
+                continue  # re-pulsed (or already gone) since the scan, leave it untouched
             await conn.execute(
                 "INSERT INTO audit_log (action, actor, payload) VALUES ($1,$2,$3)",
                 "sweep_ghost_doors", actor, _mount_snapshot(row))
@@ -798,21 +789,20 @@ async def find_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
 
 
 async def borrowed_job_dir_owner(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """Is `agent_id` actually a DIFFERENT agent's own live job_dir slug, borrowed rather
-    than minted (thread b33fa26b/17819e83, Nebbercracker findings ab59c731/a0fd7e5b —
-    the jenny/dustin crossing)? The fingerprint, not a guess: a LIVE `agent_mounts` row
-    exists whose `job_dir` basename is this exact bare id, and whose OWN `agent_id` is a
-    DIFFERENT canonical — proof this string was never minted as an identity of its own,
-    it is borrowed from a real, currently-mounted OTHER mind. Returns that other mind's
-    own canonical (the real owner, for a caller's own error/finding text) or None (not
-    borrowed — a real identity, however sparsely provenanced, or a genuinely dead job_dir
-    nobody currently mounts).
+    """Is `agent_id` actually a different agent's own live job_dir slug, borrowed rather
+    than minted (a past incident where two agents' identities crossed this way)? The
+    fingerprint, not a guess: a live `agent_mounts` row exists whose `job_dir` basename is
+    this exact bare id, and whose own `agent_id` is a different canonical, proof this string
+    was never minted as an identity of its own, it is borrowed from a real, currently-mounted
+    other agent. Returns that other agent's own canonical (the real owner, for a caller's own
+    error/finding text) or None (not borrowed, a real identity, however sparsely
+    provenanced, or a genuinely dead job_dir nobody currently mounts).
 
     Shared by `trigger._trustworthy_fallback_ancestor` (bind-before-spawn's own fallback
-    guard), `seats.rehold_seat` (the third-party correction door — the SAME shape can
-    reach a seat's holds edge through an explicit rehold, not just a launch), and
-    `compositions.seat_holder_census` (the `osiris lint --check seat-holders` report) —
-    one fingerprint, never three independently-drifting copies of the same query."""
+    guard), `seats.rehold_seat` (the third-party correction path, the same shape can reach a
+    seat's holds edge through an explicit rehold, not just a launch), and
+    `compositions.seat_holder_census` (the `osiris lint --check seat-holders` report): one
+    fingerprint, never three independently-drifting copies of the same query."""
     bare = agent_id.removeprefix("agent:")
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT agent_id FROM agent_mounts WHERE job_dir LIKE '%/' || $1 AND agent_id <> $2 "
@@ -820,12 +810,12 @@ async def borrowed_job_dir_owner(pool: asyncpg.Pool, agent_id: str) -> str | Non
 
 
 async def _active_seat_for_lineage_base(pool: asyncpg.Pool, base: str) -> dict[str, Any] | None:
-    """Does `base` (a lineage root, e.g. `agent:ad1a1cb0`) hold an ACTIVE seat right
-    now? Returns `{holder, seat_id, project, cwd}` (the seat's CURRENT generation, its
+    """Does `base` (a lineage root, e.g. `agent:ad1a1cb0`) hold an active seat right
+    now? Returns `{holder, seat_id, project, cwd}` (the seat's current generation, its
     own durable `anchor_cwd`/`house`) or None (no live `holds` link for this base at
-    all — never held a seat, or genuinely released it since). The single query both
+    all, never held a seat, or genuinely released it since). The single query both
     `rescue_seat_holder_mount` and `demote_seatless_mount_if_outranked` share, so the
-    two laws can never independently drift on what "holds a seat" means."""
+    two rules can never independently drift on what "holds a seat" means."""
     row = await pool.fetchrow(
         "SELECT hf.canonical AS holder, ht.canonical AS seat_id "
         "FROM links hl JOIN objects hf ON hf.id=hl.from_id "
@@ -846,33 +836,31 @@ async def _active_seat_for_lineage_base(pool: asyncpg.Pool, base: str) -> dict[s
 
 
 async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> MountRecord | None:
-    """THE FIRST-BREATH SEAT RESCUE (law 1, thread 124732175759, Thoth mail 13096, the
-    Thoth/a93f82b4 specimen): `find_mount`'s own row can vanish for reasons that have
-    NOTHING to do with the lineage dying — a ghost/stale-door sweep (this module's own
+    """THE STARTUP SEAT RESCUE: `find_mount`'s own row can vanish for reasons that have
+    nothing to do with the lineage dying, a ghost/stale-row sweep (this module's own
     `_MOUNT_DROP_ACTIONS`) fires on staleness or a bodyless `/proc` census, never on
-    whether the lineage still HOLDS a seat. Measured live: `sweep_ghost_doors` released
-    Thoth's own job_dir/a93f82b4 row repeatedly across six weeks (2026-08-09 through
-    tonight), every prior time absorbed silently by some OTHER re-attach door — until
-    the one restart where nothing else caught it, and automount fell all the way through
-    to a job_dir-derived stranger identity that happened to already exist in the graph
-    (a July artifact of this exact same chronic gap), minting ITS heir instead of
-    Thoth's.
+    whether the lineage still holds a seat. Measured live in one incident: the ghost sweep
+    released a particular seat's own job_dir row repeatedly across six weeks, every prior
+    time absorbed silently by some other re-attach path, until the one restart where nothing
+    else caught it, and the startup handshake fell all the way through to a job_dir-derived
+    unrecognized identity that happened to already exist in the graph (an artifact of this
+    exact same chronic gap), minting its heir instead of the real seat holder's.
 
-    Every sweep drop is already reversible and audited — the SAME `_mount_snapshot`
-    shape `undrop_dead_project_mount` replays verbatim. Walks this job_dir's own audit
-    history NEWEST FIRST (never just the single most recent entry — law 3a's own
-    `_retire_seatless_mount_claim` can itself be the newest entry, naming the very
-    stranger this door exists to see past) and, for the FIRST entry whose `agent_id`'s
-    lineage still holds an ACTIVE seat right now, re-adopts that lineage's CURRENT
-    generation — never a fresh mint, never the dropped generation itself (a lineage
-    moves on; the seat's PRESENT holder is the fact that matters). Never fires when NO
-    entry in this job_dir's history ever named a seat holder: a real stranger or a real
-    retirement, not the ghost-sweep-over-a-live-holder this exists to catch.
+    Every sweep drop is already reversible and audited: the same `_mount_snapshot` shape
+    `undrop_dead_project_mount` replays verbatim. Walks this job_dir's own audit history
+    newest first (never just the single most recent entry, `_retire_seatless_mount_claim`
+    can itself be the newest entry, naming the very unrecognized identity this rescue exists
+    to see past) and, for the first entry whose `agent_id`'s lineage still holds an active
+    seat right now, re-adopts that lineage's current generation, never a fresh mint, never
+    the dropped generation itself (a lineage moves on; the seat's present holder is the fact
+    that matters). Never fires when no entry in this job_dir's history ever named a seat
+    holder: a real unrecognized session or a real retirement, not the ghost-sweep-over-a-
+    live-holder this exists to catch.
 
-    A synthetic MountRecord, built from the SEAT's own durable `anchor_cwd`/`house`
-    (facts the seat carries regardless of any one mount row's own history) — this never
-    writes anything itself; the caller's own registration path does that, exactly as it
-    would for a genuine `find_mount` hit."""
+    A synthetic MountRecord, built from the seat's own durable `anchor_cwd`/`house` (facts
+    the seat carries regardless of any one mount row's own history): this never writes
+    anything itself; the caller's own registration path does that, exactly as it would for
+    a genuine `find_mount` hit."""
     from src.orchestrator.agents import _generation
 
     rows = await pool.fetch(
@@ -893,15 +881,14 @@ async def rescue_seat_holder_mount(pool: asyncpg.Pool, *, job_dir: str) -> Mount
 async def _retire_seatless_mount_claim(
     pool: asyncpg.Pool, *, job_dir: str, actor: str,
 ) -> None:
-    """THE COMPENSATING HALF OF LAW 3a (thread 124732175759, Thoth mail 13141): once a
-    seat holder is found to outrank a job_dir's own CURRENT (still-present, not merely
-    dropped) row — a seatless stranger that already minted itself once and now owns a
-    live `agent_mounts` row of its own, perpetuating on every later restart exactly as
-    Thoth's own second specimen showed — that row is released the same audited,
-    reversible way every other drop in this module is, so the NEXT restart's
-    `find_mount` stops finding the stranger too. The stranger's own Agent object is
-    left untouched (never deleted, never retired) — only its CLAIM on this job_dir. A
-    row gone by the time its lock is taken (already released some other way) is simply
+    """THE COMPENSATING HALF: once a seat holder is found to outrank a job_dir's own
+    current (still-present, not merely dropped) row, a seatless unrecognized identity that
+    already minted itself once and now owns a live `agent_mounts` row of its own,
+    perpetuating on every later restart exactly as a past incident showed, that row is
+    released the same audited, reversible way every other drop in this module is, so the
+    next restart's `find_mount` stops finding the unrecognized identity too. Its own Agent
+    object is left untouched (never deleted, never retired), only its claim on this job_dir.
+    A row gone by the time its lock is taken (already released some other way) is simply
     skipped, same discipline as `sweep_stale_doors`/`sweep_ghost_doors`."""
     async with pool.acquire() as conn, conn.transaction():
         row = await conn.fetchrow(
@@ -918,31 +905,31 @@ async def _retire_seatless_mount_claim(
 async def demote_seatless_mount_if_outranked(
     pool: asyncpg.Pool, *, job_dir: str, actor: str,
 ) -> MountRecord | None:
-    """LAW 3a (thread 124732175759, Thoth mail 13141): law 1's own rescue only fires
-    when `find_mount` comes back empty — but once a wrongly-minted stranger has ALREADY
-    registered its own `agent_mounts` row for this job_dir (exactly what happens the
-    very next time a wrong mint from law 1's own gap actually lands), `find_mount`
-    keeps finding THAT row forever after, self-reinforcing. This checks whether the
-    job_dir's CURRENT row belongs to a seatless lineage while this job_dir's own audit
-    history names a DIFFERENT lineage that holds an active seat right now — if so, the
-    seat holder wins, and the seatless row's claim is retired (an audited, undoable
-    compensating event; the stranger Agent object itself is never touched — the
-    operator's own `/merge` remains the one door that folds it away for good).
+    """The rescue above only fires when `find_mount` comes back empty, but once a
+    wrongly-minted unrecognized identity has already registered its own `agent_mounts` row
+    for this job_dir (exactly what happens the very next time a wrong mint from that gap
+    actually lands), `find_mount` keeps finding that row forever after, self-reinforcing.
+    This checks whether the job_dir's current row belongs to a seatless lineage while this
+    job_dir's own audit history names a different lineage that holds an active seat right
+    now: if so, the seat holder wins, and the seatless row's claim is retired (an audited,
+    undoable compensating event; the unrecognized identity's Agent object itself is never
+    touched, the operator's own `/merge` remains the one action that folds it away for
+    good).
 
     Returns the seat holder's MountRecord when it outranks the current row, else None
     (either the current row's own lineage genuinely holds a seat, or nothing in this
-    job_dir's history ever claimed one — a real stranger, left exactly as `find_mount`
-    found it)."""
+    job_dir's history ever claimed one, a real unrecognized session, left exactly as
+    `find_mount` found it)."""
     from src.orchestrator.agents import _generation
 
     bound = await find_mount(pool, job_dir=job_dir)
     if bound is None:
         return None
     if await _active_seat_for_lineage_base(pool, _generation(bound.agent_id)[0]) is not None:
-        return None  # the row's own lineage genuinely holds a seat — nothing outranks it
+        return None  # the row's own lineage genuinely holds a seat, nothing outranks it
     rescue = await rescue_seat_holder_mount(pool, job_dir=job_dir)
     if rescue is None:
-        return None  # no seat holder ever claimed this job_dir — a real, seatless stranger
+        return None  # no seat holder ever claimed this job_dir, a real, seatless session
     await _retire_seatless_mount_claim(pool, job_dir=job_dir, actor=actor)
     return rescue
 
@@ -950,28 +937,28 @@ async def demote_seatless_mount_if_outranked(
 async def resolve_dirty_tree_owner(
     pool: asyncpg.Pool, repo_dir: str | None,
 ) -> dict[str, Any] | None:
-    """WHO OWNS an uncommitted hunk at `repo_dir` (thread fe1d91bc, Thoth dispatch 9870/
-    9976/10000 — "map an uncommitted hunk to its owner by the worktree and mount that
-    touched it"). The join nobody had built: `settle.py`'s own `uncommitted_git_work`
-    (the dirty-check) against `agent_mounts.cwd` (no shared function resolved "who is
-    mounted at this cwd" before this — every prior read site did its own ad-hoc inline
-    SELECT). EXACT cwd match only, never fuzzy path containment — a worktree's own root
-    IS a mount's own cwd by this house's own convention (measured live: 60+ worktrees,
-    one per task branch, cwd == the worktree root every time), so a substring/prefix
-    match would risk matching a SIBLING worktree that merely shares a path segment.
+    """WHO OWNS an uncommitted hunk at `repo_dir` (mapping an uncommitted hunk to its owner
+    by the worktree and mount that touched it). The join nobody had built:
+    `settle.py`'s own `uncommitted_git_work` (the dirty-check) against `agent_mounts.cwd` (no
+    shared function resolved "who is mounted at this cwd" before this, every prior read site
+    did its own ad-hoc inline SELECT). Exact cwd match only, never fuzzy path containment: a
+    worktree's own root is a mount's own cwd by this codebase's own convention (measured
+    live: 60+ worktrees, one per task branch, cwd == the worktree root every time), so a
+    substring/prefix match would risk matching a sibling worktree that merely shares a path
+    segment.
 
-    Most-recently-active mount at that exact cwd wins (`ORDER BY last_seen DESC LIMIT 1`)
-    — including a VACATED seat's own stale row, deliberately: this function never
-    decides a mount is "too old to count," it returns `last_seen` so the CALLER can judge
-    staleness itself (a settle() reader is in a much better position to weigh "this mount
-    is 6 hours old" than a blind cutoff baked in here would ever be).
+    Most-recently-active mount at that exact cwd wins (`ORDER BY last_seen DESC LIMIT 1`),
+    including a vacated seat's own stale row, deliberately: this function never decides a
+    mount is "too old to count," it returns `last_seen` so the caller can judge staleness
+    itself (a settle() reader is in a much better position to weigh "this mount is 6 hours
+    old" than a blind cutoff baked in here would ever be).
 
-    Returns None in the two honest "cannot answer" cases: `repo_dir` has no uncommitted
-    work at all (nothing to attribute), or no mount row's cwd matches exactly (never a
-    guess — the caller keeps its OWN disclaimer verbatim, same fail-open law
-    `uncommitted_git_work` itself already holds for `repo_dir` outside a git worktree
-    entirely). Otherwise `{"agent_id", "last_seen"}` — `last_seen` as a live `datetime`,
-    the caller's own concern to format or age-check."""
+    Returns None in the two honest "cannot answer" cases: `repo_dir` has no uncommitted work
+    at all (nothing to attribute), or no mount row's cwd matches exactly (never a guess, the
+    caller keeps its own disclaimer verbatim, same fail-open rule `uncommitted_git_work`
+    itself already holds for `repo_dir` outside a git worktree entirely). Otherwise
+    `{"agent_id", "last_seen"}`, `last_seen` as a live `datetime`, the caller's own concern
+    to format or age-check."""
     from src.orchestrator.settle import uncommitted_git_work
 
     dirty = await uncommitted_git_work(repo_dir)
@@ -991,31 +978,31 @@ LIVENESS_WINDOW_MINUTES = 15
 def freshest_liveness_ts(
     mount_seen: datetime | None, transcript_mtime: datetime | None = None,
 ) -> datetime | None:
-    """The ONE liveness timestamp every reader of fleet identity must agree on (thread
-    7dd09031, 2026-09-12 — the cupid specimen, superseding ruling 70493925's own design).
+    """The one liveness timestamp every reader of fleet identity must agree on (superseding
+    an earlier design after a live specimen exposed its flaw).
 
-    `transcript_mtime` USED TO BE `current_assertions.last_active` — REPLACED, not
-    merely renamed: that property was meant to carry a transcript's own mtime (session-
-    miner's `_stamp_alive`, src/ingest/sessions.py — "a transcript grows when a mind
-    WORKS, whether or not it deigns to speak to Osiris"), but the miner only ever stamps
-    it ONCE, when a transcript is first mined — nothing re-stamps it as the SAME
-    lineage's later generations keep working, so on any lineage the miner touched once
-    and never again, it freezes at whatever date that pass ran and sits there forever,
-    silently correct-shaped (a real ISO timestamp, a real source_id) and silently wrong.
-    Verified live on cupid (agent:7118bf41): `current_assertions.last_active` on the
-    BASE generation read '2026-07-11T23:48:36', source_id='session-miner' — the ONLY
-    last_active row that lineage has ever carried. `max()`-ing a live signal against
-    that is correct in isolation, but the property's mere PRESENCE as an eligible signal
-    is the defect: a live mind reads dead the instant its own mount row goes missing for
-    ANY reason, because the fallback is a two-month-old ghost instead of a live read.
+    `transcript_mtime` used to be `current_assertions.last_active`, replaced, not merely
+    renamed: that property was meant to carry a transcript's own mtime (session-miner's
+    `_stamp_alive`, src/ingest/sessions.py: "a transcript grows when an agent works, whether
+    or not it calls Osiris"), but the miner only ever stamps it once, when a transcript is
+    first mined; nothing re-stamps it as the same lineage's later generations keep working,
+    so on any lineage the miner touched once and never again, it freezes at whatever date
+    that pass ran and sits there forever, silently correct-shaped (a real ISO timestamp, a
+    real source_id) and silently wrong. Verified live on one lineage: `current_assertions.
+    last_active` on the base generation read a date over two months stale, source_id=
+    'session-miner', the only last_active row that lineage had ever carried. `max()`-ing a
+    live signal against that is correct in isolation, but the property's mere presence as an
+    eligible signal is the defect: a live agent reads dead the instant its own mount row goes
+    missing for any reason, because the fallback is a two-month-old stale value instead of a
+    live read.
 
-    `transcript_mtime` is now populated ONLY by a LIVE filesystem stat, at read time
-    (`_lineage_transcript_mtime`, called by `agent_liveness`/`agent_liveness_exact`
-    ONLY when `mount_seen` doesn't already prove liveness — the common case, a fresh
-    mount row, costs nothing extra). This still answers Ra XXXV's own specimen (msg
-    4901: a mind live and working with NO agent_mounts row at all) via the SAME durable
-    `anchor_sid` ledger record_session_anchor already keeps, never a graph property that
-    can go stale forever once written."""
+    `transcript_mtime` is now populated only by a live filesystem stat, at read time
+    (`_lineage_transcript_mtime`, called by `agent_liveness`/`agent_liveness_exact` only when
+    `mount_seen` doesn't already prove liveness, the common case, a fresh mount row, costs
+    nothing extra). This still answers the earlier specimen (an agent live and working with
+    no agent_mounts row at all) via the same durable `anchor_sid` ledger
+    record_session_anchor already keeps, never a graph property that can go stale forever
+    once written."""
     stamps = [t for t in (mount_seen, transcript_mtime) if t is not None]
     return max(stamps) if stamps else None
 
@@ -1026,31 +1013,30 @@ def is_live(ts: datetime | None, *, now: datetime | None = None) -> bool:
     return ts is not None and now - ts < timedelta(minutes=LIVENESS_WINDOW_MINUTES)
 
 
-# REGRESSION FROM w218 (thread 9150aec2, 2026-09-12): the FIRST version of this function
-# did one `root.rglob(f"{sid}.jsonl")` PER session id — a full recursive walk of
-# ~/.claude/projects (7,518 directories measured live) for every candidate sid. A lineage
-# with a large `anchor_sid` ledger (agent:b5f04f84's own base carried 4,478 rows, one
-# generation alone 3,548) turned one liveness check into thousands of tree walks — ~1s
-# each on the box, so a single call could run for the better part of an hour, holding
-# `arq_worker._boot_lock` for its whole run and starving every sibling cron behind it.
-# FIRST FIX: walk the tree ONCE per call regardless of sid count. FOLLOW-UP (same thread,
-# Thoth mail 10204 point 3): a sub-sweep asking about MANY agents in one tick still pays
-# one walk PER AGENT even at that reduced cost — the tree does not change between two
-# liveness checks a few seconds apart, so `_transcript_index` below caches the whole
-# sid->path mapping at module level for `_TRANSCRIPT_INDEX_TTL_SECS`, and every call in
-# that window reuses it: the walk itself now happens at most once per TTL window, not
-# once per call.
+# A PAST PERFORMANCE REGRESSION: the first version of this function did one
+# `root.rglob(f"{sid}.jsonl")` per session id, a full recursive walk of ~/.claude/projects
+# (7,518 directories measured live) for every candidate sid. A lineage with a large
+# `anchor_sid` ledger (one base carried 4,478 rows, one generation alone 3,548) turned one
+# liveness check into thousands of tree walks, about 1s each on the box, so a single call
+# could run for the better part of an hour, holding `arq_worker._boot_lock` for its whole
+# run and starving every sibling cron behind it. First fix: walk the tree once per call
+# regardless of sid count. Follow-up: a sub-sweep asking about many agents in one tick
+# still pays one walk per agent even at that reduced cost, the tree does not change
+# between two liveness checks a few seconds apart, so `_transcript_index` below caches
+# the whole sid->path mapping at module level for `_TRANSCRIPT_INDEX_TTL_SECS`, and every
+# call in that window reuses it: the walk itself now happens at most once per TTL window,
+# not once per call.
 _TRANSCRIPT_INDEX_TTL_SECS = 60.0
 _transcript_index_cache: dict[str, tuple[float, dict[str, Path]]] = {}
 
 
 def _transcript_index(root: Path) -> dict[str, Path]:
-    """sid (file stem) -> path, for every `*.jsonl` under `root` — ONE walk, cached at
-    module level keyed by `root` for `_TRANSCRIPT_INDEX_TTL_SECS`. A stale index only
-    ever costs a liveness read a slightly-out-of-date mtime within the TTL window, never
-    a wrong ANSWER — a transcript that appeared in the last `_TRANSCRIPT_INDEX_TTL_SECS`
-    is found on the NEXT rebuild at worst, and `is_live`'s own 15-minute window easily
-    absorbs a 60s staleness margin."""
+    """sid (file stem) -> path, for every `*.jsonl` under `root`: one walk, cached at
+    module level keyed by `root` for `_TRANSCRIPT_INDEX_TTL_SECS`. A stale index only ever
+    costs a liveness read a slightly-out-of-date mtime within the TTL window, never a wrong
+    answer: a transcript that appeared in the last `_TRANSCRIPT_INDEX_TTL_SECS` is found on
+    the next rebuild at worst, and `is_live`'s own 15-minute window easily absorbs a 60s
+    staleness margin."""
     key = str(root)
     now = time.monotonic()
     cached = _transcript_index_cache.get(key)
@@ -1067,11 +1053,11 @@ def _transcript_index(root: Path) -> dict[str, Path]:
 
 
 def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime | None:
-    """A stat(), nothing more — mirrors liveness.py's `_sessions()` own observation, just
-    scoped to a handful of NAMED session ids instead of a full-tree walk (this only ever
-    runs from the rare fallback branch below, never the hot path). The tree walk itself
-    is `_transcript_index`'s own job (cached, at most once per TTL window) — this only
-    stats the handful of paths the index resolves for the wanted sids."""
+    """A stat(), nothing more: mirrors liveness.py's `_sessions()` own observation, just
+    scoped to a handful of named session ids instead of a full-tree walk (this only ever
+    runs from the rare fallback branch below, never the primary path). The tree walk itself
+    is `_transcript_index`'s own job (cached, at most once per TTL window); this only stats
+    the handful of paths the index resolves for the wanted sids."""
     wanted = {sid for sid in session_ids if sid}
     if not wanted:
         return None
@@ -1091,34 +1077,32 @@ def _freshest_transcript_mtime(root: Path, session_ids: list[str]) -> datetime |
 
 
 # A lineage's `anchor_sid` ledger only ever grows (record_session_anchor never retires a
-# row) — a long-lived lineage can carry thousands (thread 9150aec2: 4,478 on one base,
-# 3,548 on a single generation). Liveness only ever cares whether ANY recent session is
-# still live, so consulting more than a handful of the FRESHEST is pure waste — every
-# extra sid is one more entry `_freshest_transcript_mtime`'s single walk must still find
-# before it can early-exit. Capped, never unbounded, regardless of how large the ledger
-# grows.
+# row): a long-lived lineage can carry thousands (one specimen: 4,478 on one base, 3,548 on
+# a single generation). Liveness only ever cares whether any recent session is still live,
+# so consulting more than a handful of the freshest is pure waste: every extra sid is one
+# more entry `_freshest_transcript_mtime`'s single walk must still find before it can
+# early-exit. Capped, never unbounded, regardless of how large the ledger grows.
 MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK = 25
 
 
 async def _lineage_transcript_mtime(
     pool: asyncpg.Pool, agent_id: str, base: str | None = None,
 ) -> datetime | None:
-    """LIVE FALLBACK for a lineage with no usable `agent_mounts` row (Ra XXXV's own
-    specimen, msg 4901 — a mind live and working, writing to its own transcript, with
-    nothing in the mount registry to say so: a wiped or never-written cache row, not
-    evidence of absence). Reads this lineage's own `anchor_sid:*` ledger
-    (`record_session_anchor` — durable, never swept, "a real session bound here at
-    least once") for candidate session ids, then stats each one's own transcript file
-    directly: the same free, deterministic, always-fresh observation `liveness.py`'s
-    periodic sweep performs, done live and scoped to ONE lineage on demand instead of a
-    full-tree walk on a timer. `base=None` means an EXACT check (no lineage widening) —
-    `agent_liveness_exact`'s own contract; a base widens it the way `agent_liveness`
-    already does for its own mount query.
+    """LIVE FALLBACK for a lineage with no usable `agent_mounts` row (an earlier specimen:
+    an agent live and working, writing to its own transcript, with nothing in the mount
+    registry to say so, a wiped or never-written cache row, not evidence of absence). Reads
+    this lineage's own `anchor_sid:*` ledger (`record_session_anchor`, durable, never swept,
+    "a real session bound here at least once") for candidate session ids, then stats each
+    one's own transcript file directly: the same free, deterministic, always-fresh
+    observation `liveness.py`'s periodic sweep performs, done live and scoped to one lineage
+    on demand instead of a full-tree walk on a timer. `base=None` means an exact check (no
+    lineage widening), `agent_liveness_exact`'s own contract; a base widens it the way
+    `agent_liveness` already does for its own mount query.
 
-    Consults at most `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` sids, the FRESHEST by
-    `observed_at` (thread 9150aec2, the classification_laws_heartbeat regression) — a
-    lineage's ledger only grows, and liveness only needs to know whether ANY recent
-    session is still live, never whether the lineage's very first session ever was."""
+    Consults at most `MAX_ANCHOR_SIDS_FOR_LIVENESS_CHECK` sids, the freshest by
+    `observed_at` (a past performance regression, see above): a lineage's ledger only
+    grows, and liveness only needs to know whether any recent session is still live, never
+    whether the lineage's very first session ever was."""
     from src.config.settings import get_settings
 
     root = get_settings().osiris_transcripts
@@ -1146,17 +1130,17 @@ async def _lineage_transcript_mtime(
 
 
 async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """Is this MIND live right now (for a DM's send receipt)? Lineage-aware — phase 2
-    arriving on Alfred's field evidence (msg 718, 2026-07-19): a mount row is an ADDRESS,
-    and machinery legitimately re-points addresses between generations (the liveness
-    promotion follows the lineage head; greets rewrite agent_id) — so a probe for -iii
-    must not read dead because the row momentarily wears another numeral of the same
-    soul. THE SOUL ANSWERS: `agent_mounts.last_seen`, widened across every generation of
-    the base — no longer blended against `current_assertions.last_active` (thread
-    7dd09031: a stale-forever miner property, see `freshest_liveness_ts`'s own
-    docstring). When that alone doesn't already prove liveness, a LIVE transcript-mtime
-    check (`_lineage_transcript_mtime`) covers the case the property used to (Ra XXXV's
-    own specimen: no mount row, genuinely live) — never paid when a fresh mount row
+    """Is this AGENT live right now (for a message's send result)? Lineage-aware: a mount
+    row is an address, and machinery legitimately re-points addresses between generations
+    (the liveness promotion follows the lineage head; registrations rewrite agent_id), so a
+    probe for one generation must not read dead because the row momentarily wears another
+    generation's numeral of the same lineage. THE LINEAGE ANSWERS: `agent_mounts.last_seen`,
+    widened across every generation of the base, no longer blended against
+    `current_assertions.last_active` (a stale-forever miner property, see
+    `freshest_liveness_ts`'s own docstring). When that alone doesn't already prove liveness,
+    a live transcript-mtime check (`_lineage_transcript_mtime`) covers the case the property
+    used to (an earlier specimen: no mount row, genuinely live), never paid when a fresh
+    mount row
     already settles it. live = within 15 min."""
     from src.orchestrator.agents import _generation
     base = _generation(agent_id)[0]
@@ -1166,16 +1150,16 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     transcript_mtime = (None if is_live(mount_seen)
                         else await _lineage_transcript_mtime(pool, agent_id, base))
     ts = freshest_liveness_ts(mount_seen, transcript_mtime)
-    # `ever_mounted` (Alfred's post-reboot finding 2, msg 7462, thread ee412c7e): distinct
-    # from `live` on purpose, and deliberately NOT keyed on `mount_seen` alone — agent_
-    # mounts is a CACHE (the same distinction msg 7540/7606's tenure fix draws: a durable
-    # DOOR REGISTRY row, but one the sweep (mounts.py's own doomed-row deletion) or a
-    # server reboot can leave with no row at all for a lineage that genuinely mounted and
-    # sent DMs hours earlier). `anchor_sid:*` (record_session_anchor, stamped once per
-    # real session at handshake time, on the ANONYMOUS-canonical case excepted) is never
-    # swept — the durable, permanent proof "a real session bound to this identity at
-    # least once," the same class of signal the tenure fix's graph-assertion leg trusts
-    # over the mount cache for the identical reason.
+    # `ever_mounted`: distinct from `live` on purpose, and deliberately not keyed on
+    # `mount_seen` alone, agent_mounts is a cache (the same distinction an earlier tenure
+    # fix draws: a durable registry row, but one the sweep (mounts.py's own doomed-row
+    # deletion) or a server reboot can leave with no row at all for a lineage that
+    # genuinely mounted and sent messages hours earlier). `anchor_sid:*`
+    # (record_session_anchor, stamped once per real session at handshake time, the
+    # anonymous-canonical case excepted) is never swept, the durable, permanent proof "a
+    # real session bound to this identity at least once," the same class of signal the
+    # tenure fix's graph-assertion leg trusts over the mount cache for the identical
+    # reason.
     ever_mounted = mount_seen is not None or bool(await pool.fetchval(
         "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.type='Agent' AND (o.canonical=$1 OR o.canonical=$2 "
@@ -1186,17 +1170,17 @@ async def agent_liveness(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
 
 
 async def agent_liveness_exact(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """`agent_liveness`'s EXACT-canonical twin — no lineage-base widening at all. Built
-    for `seats.follow_binding`'s own live-sibling guard (msg 7641/7646) and reused by
-    `agents.correct_succession`'s liveness guard (msg 7677/7680's own live specimen,
-    caught mid-batch: `agent_liveness`'s widened check read a purely HISTORICAL ancestor
-    generation as "live" the instant its lineage's CURRENT, unrelated-in-this-context
-    generation had a fresh mount row — exactly the false positive `agent_liveness`'s own
-    docstring warns any caller reading a SPECIFIC generation's identity, not the
-    lineage's, must avoid). Any caller asking "is THIS EXACT id itself active" — not
-    "is this id's lineage active" — wants this, never the widened check. Same live
-    transcript-mtime fallback as `agent_liveness` (thread 7dd09031), EXACT-scoped: only
-    this one canonical's own `anchor_sid:*` ledger, never a sibling generation's."""
+    """`agent_liveness`'s exact-canonical counterpart, no lineage-base widening at all.
+    Built for `seats.follow_binding`'s own live-sibling guard and reused by
+    `agents.correct_succession`'s liveness guard (a live specimen caught mid-batch:
+    `agent_liveness`'s widened check read a purely historical ancestor generation as "live"
+    the instant its lineage's current, unrelated-in-this-context generation had a fresh
+    mount row, exactly the false positive `agent_liveness`'s own docstring warns any caller
+    reading a specific generation's identity, not the lineage's, must avoid). Any caller
+    asking "is this exact id itself active", not "is this id's lineage active", wants this,
+    never the widened check. Same live transcript-mtime fallback as `agent_liveness`,
+    exact-scoped: only this one canonical's own `anchor_sid:*` ledger, never a sibling
+    generation's."""
     mount_seen = await pool.fetchval(
         "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", agent_id)
     transcript_mtime = (None if is_live(mount_seen)
@@ -1215,10 +1199,11 @@ async def project_last_seen(pool: asyncpg.Pool, project: str) -> str | None:
 async def project_prev_seen(
     pool: asyncpg.Pool, project: str | None, *, exclude_job_dir: str
 ) -> datetime | None:
-    """The LINEAGE's last sign of life, excluding the caller's own (just-upserted) row — the
-    while-you-were-away anchor for a FRESH session: a new session id has no past of its own,
-    but its project does, and that past is exactly what it must not wake blind to (a sibling's
-    tab re-opened as a new session and got NO fold while twins had settled its threads)."""
+    """The lineage's last sign of life, excluding the caller's own (just-upserted) row: the
+    while-you-were-away anchor for a fresh session. A new session id has no past of its own,
+    but its project does, and that past is exactly what it must not wake blind to (a
+    sibling's tab reopened as a new session and got no fold-in of updates while a duplicate
+    session had already resolved its threads)."""
     if not project:
         return None
     return await pool.fetchval(  # type: ignore[no-any-return]
@@ -1230,34 +1215,33 @@ async def live_co_agents(
     pool: asyncpg.Pool, *, project: str, exclude_job_dir: str | None = None,
     exclude_lineage_base: str | None = None, within_secs: int = 900,
 ) -> list[dict[str, Any]]:
-    """ONE query for "which OTHER agent_mounts rows are live on this project right now" —
+    """One query for "which OTHER agent_mounts rows are live on this project right now",
     shared by mcp_server.py's `_co_agents` (mount()/orient()'s co-agents block) and
-    handshake.py's `automount()` (the whisper's own first-breath co-agents block), which
-    used to be TWO INDEPENDENT copies of this same query, free to drift from each other
-    (Thoth msg 5772/5741, thread 2c3c2b9a — "two drifting copies of one query is precisely
-    the class _co_agents was built to end" the first time, except automount()'s own copy
-    was apparently never consolidated into it).
+    handshake.py's `automount()` (the startup routine's own co-agents block). These used to
+    be two independent copies of this same query, free to drift from each other: the point
+    of consolidating them into one function is that two drifting copies of one query is
+    precisely the class of bug this was built to end, except automount()'s own copy was
+    apparently never consolidated into it before now.
 
-    CACHE-BASED, CONFESSED, NEVER A GATE: `agent_mounts.last_seen` freshness only — this is
-    never cross-checked against `registry_census`/`is_occupied_by_a_live_body` (the real
-    harness+/proc authority used everywhere this codebase actually REFUSES or MINTS on
-    liveness). Both callers use this purely for AWARENESS ("a sibling might be touching
-    this tree"), never to block anything, so the cheap read is the right one — it just
-    must stop being silently mistaken for a verified fact, the same "cache in both
-    directions" law this house's other liveness fixes already apply.
+    Cache-based, confessed, never a gate: this uses `agent_mounts.last_seen` freshness only,
+    and is never cross-checked against `registry_census`/`is_occupied_by_a_live_body` (the
+    real harness+/proc authority used everywhere this codebase actually refuses or mints on
+    liveness). Both callers use this purely for awareness ("a sibling might be touching this
+    tree"), never to block anything, so the cheap read is the right one; it just must stop
+    being silently mistaken for a verified fact, the same cache-freshness discipline this
+    house's other liveness fixes already apply.
 
-    Returns EVERY matching row, freshest first, with NO built-in cap — the exact gap that
-    silently under-reported a live sibling process to a caller who trusted a truncated
-    top-N (msg 5741, the Seshat specimen: `_co_agents`'s own old `LIMIT 8` combined with
-    this project having more than 8 fresh rows). Each caller picks its own display count
-    from the full list and can therefore say "N more not shown" instead of just dropping
-    them.
+    Returns every matching row, freshest first, with no built-in cap. Without this, a
+    truncated top-N can silently under-report a live sibling process to a caller who trusts
+    it (an earlier version of `_co_agents` had its own `LIMIT 8`, which under-reported on a
+    project with more than 8 fresh rows). Each caller picks its own display count from the
+    full list and can therefore say "N more not shown" instead of just dropping them.
 
     Two different exclusion needs, since the two callers know different things about
-    "myself" at the point they call this: `exclude_job_dir` (automount()'s whisper fires
-    before an agent_id may even be resolved — job_dir is the one thing always known);
-    `exclude_lineage_base` (mount()/orient() know their own resolved agent_id and want to
-    exclude every generation of their OWN lineage, not just their own exact row)."""
+    "myself" at the point they call this: `exclude_job_dir` (automount()'s startup routine
+    fires before an agent_id may even be resolved, so job_dir is the one thing always
+    known); `exclude_lineage_base` (mount()/orient() know their own resolved agent_id and
+    want to exclude every generation of their own lineage, not just their own exact row)."""
     where = ["m.project = $1", "m.last_seen > now() - make_interval(secs => $2)"]
     args: list[Any] = [project, float(within_secs)]
     if exclude_job_dir is not None:
@@ -1279,16 +1263,16 @@ async def live_co_agents(
 async def live_claimed_sids(
     pool: asyncpg.Pool, *, exclude_session_key: str | None, within_secs: int = 900
 ) -> set[str]:
-    """Session handles currently HELD by a live mount on a DIFFERENT client session — the
-    claimed-set the cwd-guess must refuse (two anchorless same-project sessions grabbing the
+    """Session handles currently held by a live mount on a different client session: the
+    claimed set the cwd-guess must refuse (two anchorless same-project sessions grabbing the
     hottest transcript would otherwise merge). Lineage-aware: a minted heir (agent:x-ii)
     claims its base handle x too.
 
-    A SEATED SID IS CLAIMED UNTIL RELEASED (Phase D, ruling 5cef856b): a mount row bound to
-    a Seat stays claimed regardless of pulse — its holder dying must never make its identity
-    GUESSABLE by an anchorless stranger reading the hottest transcript. The liveness window
-    guards the living; the binding guards the seated dead (session_end releases the row, so
-    a deliberately-closed seat frees its sid the honest way)."""
+    A seated session id is claimed until released: a mount row bound to a Seat stays claimed
+    regardless of pulse, since its holder dying must never make its identity guessable by an
+    unrecognized session reading the hottest transcript. The liveness window guards the
+    living; the binding guards the seated dead (session_end releases the row, so a
+    deliberately-closed seat frees its session id the honest way)."""
     rows = await pool.fetch(
         "SELECT agent_id, session_key FROM agent_mounts "
         "WHERE last_seen > now() - make_interval(secs => $1) OR seat_id IS NOT NULL",
@@ -1307,11 +1291,12 @@ async def live_claimed_sids(
 async def live_mount_sid_prefixes(
     pool: asyncpg.Pool, *, within_secs: int = 900,
 ) -> set[str]:
-    """The sid[:8] prefixes of mounts with a LIVE pulse — the transcript heal's
-    do-not-touch set (the job_dir anchor is ~/.claude/jobs/<sid[:8]>, so its basename IS
-    the session prefix). Deliberately pulse-only, unlike `live_claimed_sids`: Phase D's
-    seated-forever claim guards identity GUESSING; the heal needs process-liveness — a
-    seated but CLOSED session is exactly the one whose transcript must stay healable."""
+    """The session-id prefixes (first 8 chars) of mounts with a live pulse: the transcript
+    heal's do-not-touch set (the job_dir anchor is ~/.claude/jobs/<sid[:8]>, so its basename
+    is the session prefix). Deliberately pulse-only, unlike `live_claimed_sids`: the
+    seated-forever claim there guards against identity guessing, while the heal needs
+    process-liveness; a seated but closed session is exactly the one whose transcript must
+    stay healable."""
     rows = await pool.fetch(
         "SELECT job_dir FROM agent_mounts "
         "WHERE last_seen > now() - make_interval(secs => $1)", within_secs)
@@ -1321,18 +1306,17 @@ async def live_mount_sid_prefixes(
 async def fleet_pulse(
     pool: asyncpg.Pool, *, lease_secs: int = 900, live_secs: int = 900
 ) -> str:
-    """One glance line for orient — 'N live · owed X · briefs Y · wakes K/h'. The caller
-    omits the key on any failure (the pulse must never slow or crash orient).
+    """One glance line for orient: 'N live · owed X · briefs Y · wakes K/h'. The caller
+    omits the key on any failure, since the pulse must never slow or crash orient.
 
-    A THIN VIEW over the shared segment authority (surface.py, ruling e9ef7373, thread
-    109b6c48 — the render analog of the write-verb receipt law): `live`/`owed`/
+    A thin view over the shared segment authority in surface.py: `live`/`owed`/
     `briefs_total`/`wakes`/`spend` are the fleet-wide-scoped variants (this line has no
-    project of its own to narrow to — orient() calls it unscoped). ALL thresholds and
+    project of its own to narrow to; orient() calls it unscoped). All thresholds and
     presentation rules live in surface.py now; this function only picks its five segments
     and formats them the way this line has always read.
 
-    ONE DELIBERATE EXCEPTION, disclosed rather than silently unified: this pulse has NEVER
-    gated spend on a threshold — it shows the day's figure whenever spend is metered, full
+    One deliberate exception, disclosed rather than silently unified: this pulse has never
+    gated spend on a threshold, it shows the day's figure whenever spend is metered, full
     stop (unlike the statusline's dark-until-60%-of-cap convention). So this reads
     `seg.spend.data['metered']` directly rather than `seg.spend.show`."""
     from src.orchestrator import surface
@@ -1353,12 +1337,11 @@ async def fleet_pulse(
 async def while_away(
     pool: asyncpg.Pool, project: str | None, agent_id: str, since: datetime | None
 ) -> dict[str, Any] | None:
-    """What happened in this project's NAME between the lineage's last sign of life and now —
-    the anti-face-wearing fold (operator: "the agents have to know, or it falls apart"). A
-    returning agent must not have to guess where it stands: WHO acted as its project (wakes
-    by lane; other agent ids that sent mail wearing its face) and how its CONVERSATIONS moved
-    (per-thread last word + settled state). None when there is no anchor (first mount) or
-    nothing happened — the quiet case stays quiet."""
+    """What happened in this project's name between the lineage's last sign of life and now:
+    a returning agent must not have to guess where it stands. It reports who acted as its
+    project (wakes by lane; other agent ids that sent mail under its name) and how its
+    conversations moved (per-thread last word plus settled state). Returns None when there
+    is no anchor (first mount) or nothing happened; the quiet case stays quiet."""
     if since is None or not project:
         return None
     wakes = await pool.fetch(
@@ -1374,10 +1357,10 @@ async def while_away(
         " read_at IS NOT NULL AS settled "
         "FROM fleet_messages WHERE (to_project=$1 OR from_project=$1) AND created_at > $2 "
         "ORDER BY COALESCE(thread_id, id), created_at DESC LIMIT 8", project, since)
-    # YOUR SPAWNS — children your lineage delegated to (spawned_by → any generation of your
-    # base) since your last sign of life: the parent is TOLD, never surprised (the operator's
-    # spawn-provenance complaint, 2026-07-10). Registered live by the spawn hooks, or by the
-    # miner's disk round — same keying, so they show here either way.
+    # your spawns: children your lineage delegated to (spawned_by -> any generation of your
+    # base) since your last sign of life. The parent is told, never surprised. Registered
+    # live by the spawn hooks, or by the miner's disk round; same keying, so they show here
+    # either way.
     from src.orchestrator.agents import _generation
     base = _generation(agent_id)[0]  # generation-aware: agent:x-xvii → agent:x; uuids intact
     spawns = await pool.fetch(
@@ -1394,10 +1377,10 @@ async def while_away(
         "  AND l.first_seen > $2 ORDER BY l.first_seen DESC LIMIT 8", base, since)
     if not wakes and not wearers and not threads and not spawns:
         return None
-    # THE GHOST-SPAWN LAW (ruling 708a972d): a spawn whose only evidence is the harness's
-    # announcement — no transcript ever materialized, no act ever seen — must not wear the
-    # 'another hand' warning. It gets named (the record forgets nothing) but rendered as the
-    # harness machinery it almost certainly is; the scare is reserved for witnessed hands.
+    # the ghost-spawn rule: a spawn whose only evidence is the harness's announcement, with
+    # no transcript ever materialized and no act ever seen, must not wear the "another hand"
+    # warning. It gets named (the record forgets nothing) but rendered as the harness
+    # machinery it almost certainly is; the warning is reserved for witnessed hands.
     all_ghost = bool(spawns) and not wakes and not wearers and not threads \
         and all(s["witnessed"] == "false" for s in spawns)
     return {
@@ -1425,22 +1408,21 @@ async def while_away(
 
 
 # ── SEAT REBIND ──────────────────────────────────────────────────────────────────────────
-# `path = project = identity` orphaned alfred when the operator moved his folder (ruling
-# dd47c1da) — the fleet's field diagnosis, and the operator is BLOCKED on the cure. A seat's
-# identity, lineage, attribution, and mail all key on its DURABLE PROJECT LABEL (the `project`
-# assertion; house_of reads it) — never on cwd. Moving the folder should be a non-event; today
-# it silently detaches the .osiris pin and strands every durable mount row at the old path.
-# Pilot: house bytebye — alfred's seat, a pure office with no code in it.
+# treating `path = project = identity` orphaned a seat when its folder was moved. A seat's
+# identity, lineage, attribution, and mail all key on its durable project label (the
+# `project` assertion; house_of reads it), never on cwd. Moving the folder should be a
+# non-event; without this fix it silently detaches the .osiris pin and strands every durable
+# mount row at the old path. Piloted on a pure office seat with no code in it.
 
 
 def _write_osiris_file(new_cwd: str, project_label: str) -> str:
-    """Write/refresh `new_cwd/.osiris`, pinning `project_label` — the existing durable
+    """Write/refresh `new_cwd/.osiris`, pinning `project_label`: the existing durable
     mechanism (`agents.read_project_label`) that makes a folder rename stop mattering. Reads
-    ONLY the file already at `new_cwd` (never walks up — a parent repo's `.osiris` is not this
+    only the file already at `new_cwd` (never walks up; a parent repo's `.osiris` is not this
     seat's business). Every top-level scalar key already declared there survives untouched
-    (`model =`, or anything a later fold adds — a rebind must never silently eat a key it
-    doesn't recognize); `project =` is always overwritten to the label being pinned. Honest
-    limit: TOML comments do not survive a rewrite — the parser never sees them."""
+    (`model =`, or anything added later; a rebind must never silently drop a key it doesn't
+    recognize); `project =` is always overwritten to the label being pinned. Honest limit:
+    TOML comments do not survive a rewrite, since the parser never sees them."""
     d = Path(new_cwd)
     d.mkdir(parents=True, exist_ok=True)
     f = d / ".osiris"
@@ -1460,24 +1442,24 @@ def _write_osiris_file(new_cwd: str, project_label: str) -> str:
 
 
 def _harness_slug(cwd: str) -> str:
-    """The harness's transcript-directory name for a cwd. The CURRENT harness (witnessed
-    live, 2026-07-16, v2.1.211: ~/.osiris/seats/thoth → -home-asuramaya--osiris-seats-
-    thoth) replaces BOTH '/' and '.' with '-'; an earlier scheme kept the dot, and one
-    night's ceremonies parked estates under dot-form slugs the new harness cannot see —
-    `_legacy_slug` + `converge_legacy_slug` fold those home."""
+    """The harness's transcript-directory name for a cwd. The current harness (witnessed
+    live, 2026-07-16, v2.1.211: ~/.osiris/seats/<name> → -home-asuramaya--osiris-seats-
+    <name>) replaces both '/' and '.' with '-'; an earlier scheme kept the dot, and some
+    sessions parked directories under dot-form slugs the new harness cannot see.
+    `_legacy_slug` + `converge_legacy_slug` fold those back home."""
     return cwd.replace("/", "-").replace(".", "-")
 
 
 def _legacy_slug(cwd: str) -> str:
-    """The OLD scheme ('/' → '-', dots kept) — read-side only, for convergence."""
+    """The old scheme ('/' → '-', dots kept): read-side only, for convergence."""
     return cwd.replace("/", "-")
 
 
 def converge_legacy_slug(cwd: str, *, projects_root: Path | None = None) -> int:
-    """Fold a cwd's legacy dot-form slug dir into its canonical one (never clobbering) —
-    the split-brain cure: content the ceremonies moved under the old scheme becomes
-    visible to the harness again. Idempotent; returns entries moved; 0 when the schemes
-    agree for this cwd or there is nothing legacy."""
+    """Fold a cwd's legacy dot-form slug dir into its canonical one (never clobbering): the
+    split-brain fix that makes content moved under the old scheme visible to the harness
+    again. Idempotent; returns entries moved; 0 when the schemes agree for this cwd or there
+    is nothing legacy."""
     root = projects_root or (Path.home() / ".claude" / "projects")
     old_name, new_name = _legacy_slug(cwd), _harness_slug(cwd)
     if old_name == new_name:
@@ -1492,9 +1474,9 @@ def converge_legacy_slug(cwd: str, *, projects_root: Path | None = None) -> int:
 
 
 def _merge_dir(old: Path, new: Path) -> tuple[int, int, list[Path]]:
-    """Move every entry old→new, NEVER clobbering (a transcript that exists on both sides
-    stays where it is — losing either would falsify the record); one level of recursion
-    merges subdirectories (the subagents/ tree). Returns (moved, left_behind, landed) —
+    """Move every entry old→new, never clobbering (a transcript that exists on both sides
+    stays where it is; losing either would falsify the record); one level of recursion
+    merges subdirectories (the subagents/ tree). Returns (moved, left_behind, landed).
     `landed` is every .jsonl this merge itself moved, so the caller can re-address exactly
     what it relocated and nothing co-resident."""
     moved = left = 0
@@ -1523,10 +1505,10 @@ _HEAL_QUIET_SECS = 300
 
 
 def _transcript_cwd_probe(path: Path, *, max_lines: int = 50) -> str | None:
-    """The first top-level `cwd` a transcript carries — the field the harness's resume
-    validator reads (witnessed live, thread 39ea074c: /resume refused a moved transcript
-    naming its FIRST recorded cwd, not the slug directory it was listed under). None when
-    the head carries no cwd at all (a summary-only stub, or unreadable)."""
+    """The first top-level `cwd` a transcript carries: the field the harness's resume
+    validator reads (witnessed live: /resume refused a moved transcript naming its first
+    recorded cwd, not the slug directory it was listed under). Returns None when the head
+    carries no cwd at all (a summary-only stub, or unreadable)."""
     try:
         with path.open(encoding="utf-8", errors="replace") as f:
             for _ in range(max_lines):
@@ -1547,13 +1529,13 @@ def _transcript_cwd_probe(path: Path, *, max_lines: int = 50) -> str | None:
 def lineage_cwd_evidence(
     sids: set[str], *, projects_root: Path | None = None,
 ) -> str | None:
-    """Where a lineage's transcripts ACTUALLY live — the anchor authority when the mount
+    """Where a lineage's transcripts actually live: the anchor authority when the mount
     registry holds no row (a lineage older than the registry, or one that only ever
-    registered through per-session whisper rows). Sweeps the projects root for the
-    lineage's sid-prefixed transcripts and returns the freshest one's INTERNAL cwd — the
-    same doctrine as the recollection guard: transcript evidence decides an address,
-    never a remembered or inferred one. None when no sid has a transcript anywhere
-    (a truly bodiless lineage — nothing to carry, and nothing is guessed)."""
+    registered through per-session startup rows). Sweeps the projects root for the
+    lineage's session-id-prefixed transcripts and returns the freshest one's internal cwd,
+    the same rule as the recollection guard: transcript evidence decides an address, never
+    a remembered or inferred one. Returns None when no session id has a transcript anywhere
+    (a lineage with no running process at all: nothing to carry, and nothing is guessed)."""
     root = projects_root or (Path.home() / ".claude" / "projects")
     best: tuple[float, Path] | None = None
     if not root.is_dir():
@@ -1578,21 +1560,21 @@ def _rewrite_transcript_cwd(
     path: Path, new_cwd: str, *, expect: tuple[int, int] | None = None,
 ) -> int:
     """Re-address a transcript: point every line's top-level `cwd` at `new_cwd`, atomically
-    (tmp + rename, so a crash mid-write never leaves a half-file). ONLY the routing field
-    moves — content, trackingPath, and every other byte pass through verbatim: the graph is
-    the history; the transcript's cwd is an ADDRESS, and a moved session's address is
+    (tmp + rename, so a crash mid-write never leaves a half-file). Only the routing field
+    moves; content, trackingPath, and every other byte pass through verbatim. The graph is
+    the history; the transcript's cwd is an address, and a moved session's address is
     wherever it now lives. Returns the number of lines rewritten.
 
-    `expect` = (st_size, st_mtime_ns) from when the CALLER last looked: re-checked at the
+    `expect` = (st_size, st_mtime_ns) from when the caller last looked: re-checked at the
     last instant before the replace, and a file that changed since is left untouched
-    (OSError, tmp removed) — an off-the-rails live pen appending mid-rewrite must lose
-    NOTHING (the torn-write window shrinks from the whole rewrite to one syscall).
+    (OSError, tmp removed). A still-active writer appending mid-rewrite must lose nothing
+    (the torn-write window shrinks from the whole rewrite to one syscall).
 
-    THE MTIME IS PRESERVED (Atlas's blocked door, 2026-07-17): re-addressing is machinery,
-    not life — but a fresh mtime reads as a growing transcript to the liveness observer,
-    which stamped a just-ceremonied seat LIVE and its own office door then refused it as
-    occupied for the decay window. The heartbeat law extends to files: a pulse is earned
-    by words, never granted by a rewrite."""
+    The mtime is preserved: re-addressing is machinery, not activity, but a fresh mtime
+    reads as a growing transcript to the liveness observer, which previously stamped a
+    just-relocated seat live and then refused its own office as occupied for the decay
+    window. The rule that a pulse must be earned, never granted, extends to files: a pulse
+    is earned by words, never granted by a rewrite."""
     tmp = path.with_name("." + path.name + ".heal-tmp")
     rewritten = 0
     try:
@@ -1638,23 +1620,23 @@ def heal_slug_transcripts(
     skip_sid_prefixes: set[str] | frozenset[str] = frozenset(),
     quiet_secs: int = _HEAL_QUIET_SECS,
 ) -> dict[str, Any]:
-    """SELF-HEALING RESUME (the alfred transition test's catch, thread 39ea074c): the
-    harness LISTS a session under whichever slug directory its .jsonl sits in, but
-    validates RESUME against the `cwd` recorded inside its lines — so a transcript moved
-    between slugs (rebind, extraction, any hand) stays listed but refuses to resume
-    ('This conversation is from a different directory'). Runs at every automount: any
-    transcript listed under THIS cwd whose internal address disagrees is re-addressed to
-    point here. Drift converges at the next launch in the directory, however the drift
-    happened — the operator's ruling: part of the system, never a one-time patch.
+    """Self-healing resume (caught during a seat transition test): the harness lists a
+    session under whichever slug directory its .jsonl sits in, but validates resume against
+    the `cwd` recorded inside its lines, so a transcript moved between slugs (rebind,
+    extraction, any hand) stays listed but refuses to resume ('This conversation is from a
+    different directory'). Runs at every automount: any transcript listed under this cwd
+    whose internal address disagrees is re-addressed to point here. Drift converges at the
+    next launch in the directory, however the drift happened: this is part of the system,
+    never a one-time patch.
 
-    GUARDS — a live session's transcript is its harness process's own pen, never write
-    under it: the mounting session itself (`skip_sids`, full session ids) and every sid a
-    live-pulse mount anchors (`skip_sid_prefixes`, the jobs/<sid[:8]> basenames) are
-    skipped; so is anything written within `quiet_secs` (an open tab appends — silence is
-    the seam a heal may use; deferred files converge on a later launch). Fail-soft per
-    file: one unreadable transcript lands in the receipt, never blocks the rest."""
+    Guards: a live session's transcript is its harness process's own file, never write under
+    it. The mounting session itself (`skip_sids`, full session ids) and every session id a
+    live-pulse mount anchors (`skip_sid_prefixes`, the jobs/<sid[:8]> basenames) are skipped;
+    so is anything written within `quiet_secs` (an open tab appends, so silence is the window
+    a heal may use; deferred files converge on a later launch). Fail-soft per file: one
+    unreadable transcript lands in the result, never blocks the rest."""
     root = projects_root or (Path.home() / ".claude" / "projects")
-    # the split-brain cure rides every launch: anything a legacy-scheme slug still holds
+    # the split-brain fix rides every launch: anything a legacy-scheme slug still holds
     # for this cwd folds into the canonical dir before the sweep reads it
     with contextlib.suppress(OSError):
         converge_legacy_slug(cwd, projects_root=root)
@@ -1673,7 +1655,7 @@ def heal_slug_transcripts(
         try:
             probe = _transcript_cwd_probe(entry)
             if probe is None or probe == cwd:
-                continue  # converged (or addressless) — the common case, probe-cheap
+                continue  # converged (or addressless): the common case, probe-cheap
             if sid in skip_sids or any(sid.startswith(p) for p in skip_sid_prefixes if p):
                 skipped_live += 1
                 continue
@@ -1691,12 +1673,12 @@ def heal_slug_transcripts(
     out: dict[str, Any] = {}
     if healed:
         out["healed"] = healed
-        # FULL anchor_sid -> resolved path, beside `healed`'s own 8-char-prefix keys
-        # (thread 6e56cf7e, item 5) — `healed` itself stays exactly as every existing
-        # caller/test already reads it (tests/test_rebind.py's own receipt shape
-        # assertions); a caller that needs to target the soul store's own (harness,
-        # anchor_sid) key — never a prefix — AND the file to re-ingest, reads this
-        # instead, never re-deriving `_harness_slug`'s own path convention a second time.
+        # full anchor session id -> resolved path, beside `healed`'s own 8-char-prefix keys.
+        # `healed` itself stays exactly as every existing caller/test already reads it
+        # (tests/test_rebind.py's own result-shape assertions); a caller that needs to
+        # target the registered-agent store's own (harness, anchor_sid) key, never a prefix,
+        # and the file to re-ingest, reads this instead, never re-deriving `_harness_slug`'s
+        # own path convention a second time.
         out["healed_paths"] = healed_paths
     if skipped_live:
         out["skipped_live"] = skipped_live
@@ -1708,15 +1690,15 @@ def heal_slug_transcripts(
 
 
 def resumed_anchor(job_dir: str, *, jobs_home: Path | None = None) -> str | None:
-    """The durable anchor a BRIDGED RESUME continues — read from the harness's own receipt.
-    The session-picker / daemon-backend resume (ctrl+a) mints a NEW job for the continued
+    """The durable anchor a bridged resume continues: read from the harness's own result.
+    The session-picker / daemon-backend resume (ctrl+a) mints a new job for the continued
     conversation (state.json: sessionId=<new>, resumeSessionId=<old>, backend=daemon) and
-    presents the NEW anchor on every hook-stamped call — while the registry only ever knew
-    the old one, so each per-request re-attach from the resumed tab bounced TERMINAL
-    (witnessed live: alfred presented jobs/ceed2d2e over a registry that knew
-    jobs/838639d1, thread 90f0cb3a). jobs/<sid8>/state.json is the one place the harness
-    records the pair. Returns the RESUMED session's job_dir, or None (not a resume job,
-    or nothing legible — this is a hint, never a verdict)."""
+    presents the new anchor on every hook-stamped call, while the registry only ever knew
+    the old one, so each per-request re-attach from the resumed tab bounced with a terminal
+    error (witnessed live: a session presented a new job directory over a registry that knew
+    the old one). jobs/<sid8>/state.json is the one place the harness records the pair.
+    Returns the resumed session's job_dir, or None (not a resume job, or nothing legible;
+    this is a hint, never a verdict)."""
     p = Path(job_dir)
     home = jobs_home or p.parent
     try:
@@ -1732,14 +1714,14 @@ def resumed_anchor(job_dir: str, *, jobs_home: Path | None = None) -> str | None
 def stale_recollection(
     job_dir: str, declared_cwd: str, row_cwd: str, *, projects_root: Path | None = None,
 ) -> bool:
-    """Is a re-mount's declared cwd a STALE MEMORY of home? A resumed mind re-mounting
-    after a bounce quotes its own conversation history — and an address is exactly what a
-    move makes stale (alfred re-mounted himself at the demolished husk this way, 90f0cb3a).
-    TRANSCRIPT EVIDENCE decides, not the clock: the harness writes a session's transcript
-    under the slug of the directory it actually runs in (and the resume heal re-addresses
-    moved ones), so when the registry row's cwd holds this session's transcript and the
-    declared cwd's slug does not, the declaration is a recollection of a former home —
-    the harness's observation outranks the mind's memory. Conservative: every other
+    """Is a re-mount's declared cwd a stale memory of home? A resumed agent re-mounting
+    after a bounce quotes its own conversation history, and an address is exactly what a
+    move makes stale (one session re-mounted itself at a demolished former directory this
+    way). Transcript evidence decides, not the clock: the harness writes a session's
+    transcript under the slug of the directory it actually runs in (and the resume heal
+    re-addresses moved ones), so when the registry row's cwd holds this session's transcript
+    and the declared cwd's slug does not, the declaration is a recollection of a former
+    home; the harness's observation outranks the agent's memory. Conservative: every other
     combination (both, neither, unreadable) returns False and the declaration stands."""
     root = projects_root or (Path.home() / ".claude" / "projects")
     sid8 = Path(job_dir).name
@@ -1754,7 +1736,7 @@ def stale_recollection(
 
 
 def _readdress(landed: list[Path], new_cwd: str) -> dict[str, Any]:
-    """Re-address the transcripts a move just landed (per-file fail-soft, receipt honest)."""
+    """Re-address the transcripts a move just landed (per-file fail-soft, result honest)."""
     files = lines = 0
     errors: list[str] = []
     for p in landed:
@@ -1780,39 +1762,38 @@ def migrate_harness_metadata(
     old_cwd: str, new_cwd: str, *, projects_root: Path | None = None,
     claude_json: Path | None = None, only_sids: set[str] | None = None,
 ) -> dict[str, Any]:
-    """The CLAUDE-CODE-ADAPTER half of a rebind (operator's directive, 2026-07-15: arbitrary
-    directory moves must be a NON-EVENT — 'the metadata and pointer has to move also'). The
-    harness keys two stores on the ABSOLUTE cwd, and a folder move orphans both:
+    """The Claude Code adapter half of a rebind (arbitrary directory moves must be a
+    non-event: the metadata and pointers have to move too). The harness keys two stores on
+    the absolute cwd, and a folder move orphans both:
 
-      * `~/.claude/projects/<slug>` — the transcripts. Orphaned, they break resume, the
-        whisper's cwd-locate, the fork archaeology, and the miner: the house's whole
-        harness-side memory strands at the dead path. MERGED old→new, never clobbering
-        (both sides of a fracture may hold real sessions — ByeByte did).
-      * `~/.claude.json`'s `projects` map — trust, allowedTools, MCP approvals. RE-KEYED
+      * `~/.claude/projects/<slug>`, the transcripts. Orphaned, they break resume, the
+        startup routine's cwd-locate, the fork archaeology, and the miner: the whole
+        harness-side memory strands at the dead path. Merged old→new, never clobbering
+        (both sides of a fracture may hold real sessions).
+      * `~/.claude.json`'s `projects` map: trust, allowedTools, MCP approvals. Re-keyed
         old→new only when the new path has no entry of its own (never overwrite state the
         new path already earned); written atomically (tmp+rename) because the live harness
         rewrites this file too.
 
-    Best-effort by design: every failure lands in the receipt as a string, never an
-    exception — the graph half of a rebind must not unwind because the harness half
+    Best-effort by design: every failure lands in the result as a string, never an
+    exception, since the graph half of a rebind must not unwind because the harness half
     stumbled. `projects_root`/`claude_json` are test seams.
 
-    `only_sids` is EXTRACTION MODE (the seat-offices ruling, ed5f5ce2): moving a SEAT out
-    of a SHARED cwd (into its Osiris office) must take only that seat's own lineage
-    transcripts — a wholesale slug move would steal the co-resident repo sessions' history
-    and break their resume mid-tab. Top-level entries (files AND directories — the sid dir
-    holds subagents/ + tool-results/, session state as much as the .jsonl) whose name
-    starts with one of the sids move, and the slug's memory/ follows the seat (39ea074c:
-    the auto-memory was the seat's knowledge; an office booting blind defeats the office —
-    a repo slug regrows repo-scoped memory if it ever needs its own); everything else
-    stays; the old dir is NEVER removed (it is still a living project's slug); the
-    ~/.claude.json entry is NOT re-keyed (the old path remains a real working project —
-    the office earns its own entry at first launch).
+    `only_sids` is extraction mode: moving a seat out of a shared cwd (into its Osiris
+    office) must take only that seat's own lineage transcripts; a wholesale slug move would
+    steal the co-resident repo sessions' history and break their resume mid-tab. Top-level
+    entries (files and directories; the session directory holds subagents/ + tool-results/,
+    session state as much as the .jsonl) whose name starts with one of the session ids move,
+    and the slug's memory/ follows the seat (the auto-memory was the seat's knowledge, and
+    an office booting blind defeats the office; a repo slug regrows repo-scoped memory if it
+    ever needs its own); everything else stays; the old dir is never removed (it is still a
+    living project's slug); the ~/.claude.json entry is not re-keyed (the old path remains a
+    real working project; the office earns its own entry at first launch).
 
-    Every transcript EITHER MODE moves gets its per-line `cwd` re-addressed to `new_cwd`
-    (39ea074c: the harness validates resume against that field, so a moved file that keeps
-    its old address stays listed but refuses to resume) — exactly the files this move
-    itself relocated, never a co-resident's."""
+    Every transcript either mode moves gets its per-line `cwd` re-addressed to `new_cwd`
+    (the harness validates resume against that field, so a moved file that keeps its old
+    address stays listed but refuses to resume): exactly the files this move itself
+    relocated, never a co-resident's."""
     out: dict[str, Any] = {}
     root = projects_root or (Path.home() / ".claude" / "projects")
     # both sides converge from any legacy-scheme dir first, so a move reads whole truth
@@ -1895,79 +1876,80 @@ async def rebind_seat(
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
     office_root: Path | None = None,
 ) -> dict[str, Any]:
-    """Move a seat's whole footprint — mount rows, harness metadata, the `.osiris` pin —
-    preserving identity, lineage, attribution, and mail (`dd47c1da` — the fold the operator
-    is blocked on). MINTS NOTHING: no new Agent, no handle or lineage edge is touched here.
+    """Move a seat's whole footprint: mount rows, harness metadata, the `.osiris` pin,
+    preserving identity, lineage, attribution, and mail. Mints nothing: no new Agent, no
+    handle or lineage edge is touched here.
 
-    THE ANCHOR INVARIANT (ruling 23771416, Thoth msg 6563): `anchor_cwd` is IDENTITY, always
-    `<office_root>/<handle>`, DERIVED — never a caller-supplied path. Relocating where a
-    seat's WORK happens is `bind_seat_tree`'s job (`tree_cwd`), not this verb's. Root-caused
-    live: Chad and Jesus each broke their own anchor by calling this verb ON THEMSELVES with
-    their own just-observed cwd (evidence_class=self_declared, source_id = each seat's own
-    live generation — not a daemon, not a stranger) at the exact millisecond their session's
-    cwd moved. The verb was the trap, not a misuse. So `new_cwd` OUTSIDE the office root
-    (`offices._default_office_root()`) moves everything this call still owns — mounts,
-    harness metadata, the pin — but the `anchor_cwd` assertion is SKIPPED, not written; the
-    receipt says so and names `bind_seat_tree` as the verb for a genuine tree move. A
-    `new_cwd` inside the office root (establish_office's own ceremony, always `str(office)`)
-    is unaffected — this is a no-op distinction for every existing correct caller.
+    The anchor invariant: `anchor_cwd` is identity, always `<office_root>/<handle>`,
+    derived, never a caller-supplied path. Relocating where a seat's work happens is
+    `bind_seat_tree`'s job (`tree_cwd`), not this action's. Root-caused live: two seats each
+    broke their own anchor by calling this action on themselves with their own just-observed
+    cwd (evidence_class=self_declared, source_id = each seat's own live generation, not a
+    daemon, not an outside caller) at the exact millisecond their session's cwd moved. The
+    action itself was the trap, not a misuse. So `new_cwd` outside the office root
+    (`offices._default_office_root()`) moves everything this call still owns (mounts,
+    harness metadata, the pin) but the `anchor_cwd` assertion is skipped, not written; the
+    result says so and names `bind_seat_tree` as the action for a genuine tree move. A
+    `new_cwd` inside the office root (establish_office's own setup, always `str(office)`) is
+    unaffected: this is a no-op distinction for every existing correct caller.
 
-    Since the operator's arbitrary-move directive (2026-07-15) this also carries the HARNESS
-    half (`migrate_harness_metadata`): the transcripts directory and the ~/.claude.json
-    project entry follow the move, so `mv` + `rebind_seat` together make a folder move a
-    complete non-event for mounts/harness/mail — graph, mail, attribution, resume, and the
-    whisper's archaeology all keep working from the new path, even when it lands outside the
-    office root and therefore never touches `anchor_cwd`.
+    This also carries the harness half (`migrate_harness_metadata`): the transcripts
+    directory and the ~/.claude.json project entry follow the move, so `mv` + `rebind_seat`
+    together make a folder move a complete non-event for mounts/harness/mail; graph, mail,
+    attribution, resume, and the startup routine's archaeology all keep working from the new
+    path, even when it lands outside the office root and therefore never touches
+    `anchor_cwd`.
 
-    (a) resolve `seat_or_agent` — a claimed name (`resolve_handle`) or a raw agent id (the
-        GRAVE RULE: an explicit id is intent, so a dead or unclaimed seat can still be moved).
-    (b) read the seat's DURABLE project label (`project_of` — pin→charter→lineage works_in,
-        never house; thread c5a91ea1/ruling 68fba2e4). This used to be `house_of`'s raw
-        Agent.project stamp, carried forward VERBATIM — including a fabricated one: a rebind
-        of a Chad/Jesus-shape seat (project=handle at mint) would perpetuate that fabrication
-        into the new location's pin forever, the exact class the ruling closes. `project_of`
-        resolves the seat's REAL project instead (or homeless, a legal answer) rather than
+    (a) resolve `seat_or_agent`: a claimed name (`resolve_handle`) or a raw agent id (an
+        explicit id is intent, so a dead or unclaimed seat can still be moved).
+    (b) read the seat's durable project label (`project_of`: pin→charter→lineage works_in,
+        never house). This used to be `house_of`'s raw Agent.project stamp, carried forward
+        verbatim, including a fabricated one: a rebind of a seat whose project equaled its
+        handle at mint time would perpetuate that fabrication
+        into the new location's pin forever, exactly the class this fix closes. `project_of`
+        resolves the seat's real project instead (or homeless, a legal answer) rather than
         copying whatever the mint-time stamp happened to say.
     (c) write/refresh `new_cwd/.osiris` pinning that label.
-    (d) re-point the WHOLE LINEAGE's durable `agent_mounts` rows (the `cwd` column) at
-        `new_cwd` — not just the live holder's, or an earlier generation's row resurrects at
+    (d) re-point the whole lineage's durable `agent_mounts` rows (the `cwd` column) at
+        `new_cwd`, not just the live holder's, or an earlier generation's row resurrects at
         the old path the instant anything reads it by job_dir.
-    (e) stamp a SELF_DECLARED `anchor_moved` assertion on the Agent — the move is on the
-        record, not only in the filesystem, and in the MOVER'S name (`actor`, the mounted
-        caller): a rebind is a mind's act on another seat, so the record must say whose hand
-        moved it, never pretend the seat moved itself.
+    (e) stamp a self-declared `anchor_moved` assertion on the Agent: the move is on the
+        record, not only in the filesystem, and in the mover's name (`actor`, the mounted
+        caller). A rebind is one agent's act on another seat, so the record must say whose
+        hand moved it, never pretend the seat moved itself.
 
-    THE SEAT-DIRECT PATH (thread 3ae57d36, the GRAVE RULE's other half): a seat nobody has
-    ever claim_name'd resolves to NO agent at all — 'grantprobe' matches neither a claimed
-    handle nor an Agent canonical — so (a)'s existing resolution used to refuse outright, and
-    even when some agent id DID resolve (a dead one-off body with no `holds` link), the seat-
-    anchor write at the end silently no-op'd behind `held_seat`'s graph-link lookup while the
-    receipt still read like success. An explicit SEAT identifier — its own canonical, or its
-    `handle` property — is checked directly whenever agent resolution can't supply one, and a
-    hit there IS the grave rule firing for a seat instead of an agent: (b)-(e) are all agent-
-    lineage concepts (mounts, harness, an `anchor_moved` stamp) with nothing to act on for a
-    seat that was never occupied, so this path writes ONLY `.osiris` + the Seat's own
-    `anchor_cwd`, using the seat's OWN derived house rather than an agent's.
+    The seat-direct path: a seat nobody has ever claim_name'd resolves to no agent at all
+    (an unclaimed handle matches neither a claimed handle nor an Agent canonical), so (a)'s
+    existing resolution used to refuse outright, and even when some agent id did resolve (a
+    dead one-off session with no `holds` link), the seat-anchor write at the end silently
+    no-op'd behind `held_seat`'s graph-link lookup while the result still read like success.
+    An explicit seat identifier (its own canonical, or its `handle` property) is checked
+    directly whenever agent resolution can't supply one, and a hit there covers a seat
+    instead of an agent: (b)-(e) are all agent-lineage concepts (mounts, harness, an
+    `anchor_moved` stamp) with nothing to act on for a seat that was never occupied, so this
+    path writes only `.osiris` + the Seat's own `anchor_cwd`, using the seat's own derived
+    house rather than an agent's.
 
-    Refuses LOUDLY (an error dict, nothing written) when `seat_or_agent` resolves to nobody at
-    all — neither an agent nor a seat — an unknown seat is never a silent no-op.
+    Refuses loudly (an error dict, nothing written) when `seat_or_agent` resolves to nobody
+    at all, neither an agent nor a seat: an unknown seat is never a silent no-op.
 
-    THE LIVENESS GUARD (decision 7fe20cc5, obligation 53424b07): SELF (the caller's own
-    lineage matches the target's) stays exactly as open as before this guard existed —
-    establish_office's own onboarding ceremony depends on this, since its target is
-    definitionally live at that instant. THIRD-PARTY (a different lineage) acting on a
-    target a harness-confirmed live body currently occupies REFUSES by default;
-    `force=True` (requires `because`, same law every repair verb here follows) is the
-    deliberate override. A cold or never-yet-claimed target is unaffected either way —
-    this guard fires ONLY on genuine live occupancy, never on bare seat status."""
+    The liveness guard: self (the caller's own lineage matches the target's) stays exactly
+    as open as before this guard existed, since establish_office's own onboarding step
+    depends on this, its target being definitionally live at that instant. Third-party (a
+    different lineage) acting on a target a harness-confirmed live session currently
+    occupies refuses by default; `force=True` (requires `because`, the same rule every
+    repair action here follows) is the deliberate override. A cold or never-yet-claimed
+    target is unaffected either way: this guard fires only on genuine live occupancy, never
+    on bare seat status."""
     seat_or_agent = (seat_or_agent or "").strip()
     from src.orchestrator.offices import _default_office_root
 
     root = office_root or _default_office_root()
     try:
-        # PurePath only — no .resolve()/stat, this must not touch disk on an async hot path
-        # (ASYNC240). A pure string/segment comparison is exactly what the invariant needs:
-        # anchor_cwd's own correctness is about the DECLARED path, not a symlink-resolved one.
+        # PurePath only, no .resolve()/stat: this must not touch disk on an async primary
+        # code path (ASYNC240). A pure string/segment comparison is exactly what the
+        # invariant needs: anchor_cwd's own correctness is about the declared path, not a
+        # symlink-resolved one.
         anchor_ok = Path(new_cwd) == root or root in Path(new_cwd).parents
     except (OSError, ValueError):
         anchor_ok = False
@@ -1983,8 +1965,8 @@ async def rebind_seat(
 
     agent_id = await resolve_handle(actions, seat_or_agent) if seat_or_agent else None
     if agent_id is None and seat_or_agent:
-        # not a claimed name (or nobody holds it) — a RAW id is its own intent: accept it only
-        # if the Agent object genuinely exists (never invent one; that is mint territory).
+        # not a claimed name (or nobody holds it): a raw id is its own intent, so accept it
+        # only if the Agent object genuinely exists (never invent one; that is mint territory).
         exists = await actions.pool.fetchval(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'",
             seat_or_agent)
@@ -2000,7 +1982,7 @@ async def rebind_seat(
         return {"error": f"no such seat or agent: {seat_or_agent!r} — unknown to the graph; "
                          "a rebind never silently no-ops on a name nobody holds"}
     if agent_id is None:
-        # PURE SEAT PATH: no claimed occupant, so no agent lineage to repoint at all — the
+        # pure seat path: no claimed occupant, so no agent lineage to repoint at all; the
         # seat's own record is the whole ask. direct_seat_id is guaranteed set here (the
         # refusal above already ruled out both being None).
         assert direct_seat_id is not None
@@ -2057,19 +2039,19 @@ async def rebind_seat(
         "UPDATE agent_mounts SET cwd=$2 WHERE agent_id=$1 OR agent_id LIKE $1 || '-%'",
         base, new_cwd)
     rows_updated = int(tag.rsplit(" ", 1)[-1])
-    # A WHOLESALE MOVE MOVES EVERYONE (Werner's catch, 2026-07-16): when the directory
-    # itself has moved or died, EVERY row anchored there is stale, whatever its seat —
-    # re-pointing only the target lineage left co-residents' rows aimed at the grave, and
-    # a housemate's co-agent panel rendered agent:98ab0ae8 as 'working from' the demolished
-    # husk. Extraction never does this: the seat leaves, the co-residents genuinely stay.
+    # a wholesale move moves everyone: when the directory itself has moved or died, every
+    # row anchored there is stale, whatever its seat. Re-pointing only the target lineage
+    # left co-residents' rows aimed at a dead path, and a housemate's co-agent panel
+    # rendered another agent as "working from" the demolished directory. Extraction never
+    # does this: the seat leaves, the co-residents genuinely stay.
     co_repointed = 0
     if not extract and old_cwd and old_cwd != new_cwd:
         tag2 = await actions.pool.execute(
             "UPDATE agent_mounts SET cwd=$2 WHERE cwd=$1", old_cwd, new_cwd)
         co_repointed = int(tag2.rsplit(" ", 1)[-1])
-    # EXTRACTION (the seat-offices ruling, ed5f5ce2): moving a seat out of a SHARED cwd
-    # takes only its own lineage's sessions — sids from the lineage's session assertions
-    # plus its mount-row anchors (either alone can miss a member).
+    # extraction: moving a seat out of a shared cwd takes only its own lineage's sessions,
+    # session ids from the lineage's session assertions plus its mount-row anchors (either
+    # alone can miss a member).
     only_sids: set[str] | None = None
     if extract:
         srows = await actions.pool.fetch(
@@ -2081,27 +2063,26 @@ async def rebind_seat(
             base)
         only_sids = ({str(r["sid"]) for r in srows if r["sid"]}
                      | {Path(r["job_dir"]).name for r in jrows})
-    # A REGISTRY-LESS LINEAGE STILL HAS A HOME (the children's rollout, 2026-07-16): a
-    # seat whose generations all predate the mount registry — or only ever registered as
-    # anonymous whisper rows — reads old_cwd=None here, and the harness half below would
-    # silently skip: an office minted while the whole mind stayed in the old slug (all
-    # five rollout children were this case). The transcripts themselves are the address
-    # authority: derive the anchor from where the lineage's sids actually live.
+    # a registry-less lineage still has a home: a seat whose generations all predate the
+    # mount registry, or only ever registered as anonymous startup rows, reads old_cwd=None
+    # here, and the harness half below would silently skip: an office minted while the
+    # whole agent stayed in the old slug. The transcripts themselves are the address
+    # authority: derive the anchor from where the lineage's session ids actually live.
     old_cwd_evidence = None
     if extract and not old_cwd and only_sids:
         old_cwd = lineage_cwd_evidence(only_sids, projects_root=projects_root)
         if old_cwd:
             old_cwd_evidence = "transcript-location (no mount row for the lineage)"
-    # the HARNESS half — transcripts + the .claude.json project entry follow the move
-    # (best-effort: its failures land in the receipt, never unwind the graph half above)
+    # the harness half: transcripts + the .claude.json project entry follow the move
+    # (best-effort: its failures land in the result, never unwind the graph half above)
     harness = (migrate_harness_metadata(old_cwd, new_cwd, projects_root=projects_root,
                                         claude_json=claude_json, only_sids=only_sids)
                if old_cwd and old_cwd != new_cwd else {})
     now = datetime.now(UTC)
-    # the Seat OBJECT's anchor follows — the daemon summons at the office (5cef856b). A LIVE
-    # `holds` link is the common case, but it is not the only source of truth: `direct_seat_id`
-    # (computed above from `seat_or_agent` itself) covers an agent that resolved fine yet holds
-    # no seat at all — thread 3ae57d36's lying receipt, where this used to just skip in silence.
+    # the Seat object's anchor follows: the daemon launches at the office. A live `holds`
+    # link is the common case, but it is not the only source of truth: `direct_seat_id`
+    # (computed above from `seat_or_agent` itself) covers an agent that resolved fine yet
+    # holds no seat at all, a case where the result used to just skip in silence.
     from src.orchestrator.seats import held_seat
     bound = await held_seat(actions.pool, agent_id)
     seat_to_anchor = bound["seat_id"] if bound else direct_seat_id

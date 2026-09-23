@@ -5,7 +5,7 @@
   "src/config": 2,
   "src/ingest": 134,
   "src/mcp_server.py": 1401,
-  "src/orchestrator": 7076,
+  "src/orchestrator": 6390,
   "src/ui/static": 36,
   "tests": 16834
 }
