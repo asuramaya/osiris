@@ -59,7 +59,7 @@ async def test_walk_in_named_refuses_a_blank_handle(actions: Actions) -> None:
     out = await walk_in_named(
         actions.pool, agent_id="agent:blank0001", handle="   ", wants_office=True)
     assert "error" in out
-    assert "f39a9849" in out["error"]
+    assert "a name is required" in out["error"]
 
 
 async def test_walk_in_named_wants_office_false_skips_the_office(

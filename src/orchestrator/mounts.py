@@ -237,11 +237,11 @@ async def registry_census(
     agent lineage holds a seat, never touches `holds` links or `claim_name`'s own
     arbitration. A caller wanting identity reads the graph (seats.py/agents.py); a caller
     wanting occupancy reads this. Conflating the two is exactly the class of bug the
-    two-body-problem ruling and this codebase's own "never let one answer for the other"
+    duplicate-authority ruling and this codebase's own "never let one answer for the other"
     rule both guard against.
 
     Injectable (`agents_json`/`read_exe`/`read_cwd`) so tests drive this with fakes, same
-    seam discipline as census.py's own pgrep/proc functions: the real defaults (harness
+    test-injection discipline as census.py's own pgrep/proc functions: the real defaults (harness
     subprocess + real /proc) are imported lazily to avoid a module-load-time cycle between
     mounts.py (imported early, by agents.py among others) and trigger.py/census.py
     (themselves importing agents.py). Fails open on a harness read failure: a census that
@@ -280,7 +280,7 @@ async def registry_census(
     except (OSError, TimeoutError, ValueError):
         return {"blind": True, "verified": [], "matched": [], "rowless": [],
                 "pulse_live": pulse_live, "pulse_live_count": len(pulse_live),
-                "note": "the harness registry read failed — cannot census, not empty"}
+                "note": "the harness registry read failed, cannot census, not empty"}
     verified: list[dict[str, Any]] = []
     for r in rows:
         sid = str(r.get("sessionId") or "")
@@ -350,7 +350,7 @@ async def apply_boot_time_fleet_pass(
     census = await census_fn(actions.pool)
     if census.get("blind"):
         return {"blind": True, "refreshed": [], "rowless": [],
-                "note": "the harness registry read failed — cannot census, not empty"}
+                "note": "the harness registry read failed, cannot census, not empty"}
     stamped_at = datetime.now(UTC)
     refreshed: list[dict[str, Any]] = []
     for m in census["matched"]:
@@ -370,9 +370,9 @@ async def apply_boot_time_fleet_pass(
     return {
         "blind": False, "refreshed": refreshed, "rowless": rowless,
         "refreshed_count": len(refreshed), "rowless_count": len(rowless),
-        "note": "REBOOT SURVIVAL, the fleet half — every registry_census-verified body "
+        "note": "REBOOT SURVIVAL, the fleet half: every registry_census-verified process "
                 "already tied to a mount row had its last_seen refreshed and a "
-                "boot_resumed_at property stamped; a body with no mount row at all is "
+                "boot_resumed_at property stamped; a process with no mount row at all is "
                 "named here, not bound (fleet_prune's own unclaimed_body bucket does "
                 "that, on its own cadence).",
     }
@@ -519,16 +519,16 @@ async def undrop_dead_project_mount(
     row = await actions.pool.fetchrow(
         "SELECT action, payload FROM audit_log WHERE id=$1", audit_id)
     if row is None:
-        return {"error": f"no audit_log row #{audit_id} — an undrop never invents one"}
+        return {"error": f"no audit_log row #{audit_id}, an undrop never invents one"}
     if row["action"] not in _MOUNT_DROP_ACTIONS:
         return {"error": f"audit_log #{audit_id} is a {row['action']!r} record, not one of "
-                         f"{sorted(_MOUNT_DROP_ACTIONS)} — nothing to undrop"}
+                         f"{sorted(_MOUNT_DROP_ACTIONS)}, nothing to undrop"}
     snap = row["payload"]
     async with actions.pool.acquire() as conn, conn.transaction():
         occupied = await conn.fetchval(
             "SELECT 1 FROM agent_mounts WHERE job_dir=$1", snap["job_dir"])
         if occupied:
-            return {"error": f"{snap['job_dir']} is already occupied by a live mount — "
+            return {"error": f"{snap['job_dir']} is already occupied by a live mount, "
                              "undrop refuses to overwrite it; the newer row is the truth"}
         cols = ", ".join(_MOUNT_COLS)
         placeholders = ", ".join(f"${i + 1}" for i in range(len(_MOUNT_COLS)))
@@ -1378,8 +1378,8 @@ async def while_away(
     if not wakes and not wearers and not threads and not spawns:
         return None
     # the ghost-spawn rule: a spawn whose only evidence is the harness's announcement, with
-    # no transcript ever materialized and no act ever seen, must not wear the "another hand"
-    # warning. It gets named (the record forgets nothing) but rendered as the harness
+    # no transcript ever materialized and no act ever seen, must not carry the "another
+    # actor" warning. It gets named (the record forgets nothing) but rendered as the harness
     # machinery it almost certainly is; the warning is reserved for witnessed hands.
     all_ghost = bool(spawns) and not wakes and not wearers and not threads \
         and all(s["witnessed"] == "false" for s in spawns)
@@ -1395,15 +1395,15 @@ async def while_away(
         **({"spawns": [
             {"agent": s["canonical"], "type": s["kind"], "model": s["model"],
              "at": s["first_seen"].isoformat(),
-             **({"unwitnessed": "ephemeral harness sidechain — announced but never "
-                                "observed; likely internal, not another hand"}
+             **({"unwitnessed": "ephemeral harness sidechain, announced but never "
+                                "observed; likely internal, not another actor"}
                 if s["witnessed"] == "false" else {})}
             for s in spawns]} if spawns else {}),
-        "note": ("only unwitnessed harness sidechains appeared — announced by the harness, "
+        "note": ("only unwitnessed harness sidechains appeared: announced by the harness, "
                  "but no transcript or act was ever observed; likely internal machinery. "
                  "Nothing else moved in your name." if all_ghost else
-                 "another hand may have worn your face here — read this before assuming you "
-                 "know where you stand; the graph, not your memory, records these turns"),
+                 "another actor may have acted in your name here, read this before assuming "
+                 "you know where you stand; the graph, not your memory, records these turns"),
     }
 
 
@@ -1603,8 +1603,8 @@ def _rewrite_transcript_cwd(
             st = path.stat()
             if (st.st_size, st.st_mtime_ns) != expect:
                 tmp.unlink()
-                raise OSError(f"{path.name} changed while being re-addressed — "
-                              "aborted; the live pen's words are untouched")
+                raise OSError(f"{path.name} changed while being re-addressed, "
+                              "aborted; the live file's contents are untouched")
         os.utime(tmp, ns=(orig_stat.st_atime_ns, orig_stat.st_mtime_ns))
         tmp.replace(path)
     except OSError:
@@ -1777,7 +1777,7 @@ def migrate_harness_metadata(
 
     Best-effort by design: every failure lands in the result as a string, never an
     exception, since the graph half of a rebind must not unwind because the harness half
-    stumbled. `projects_root`/`claude_json` are test seams.
+    stumbled. `projects_root`/`claude_json` are test injection points.
 
     `only_sids` is extraction mode: moving a seat out of a shared cwd (into its Osiris
     office) must take only that seat's own lineage transcripts; a wholesale slug move would
@@ -1803,7 +1803,7 @@ def migrate_harness_metadata(
     old_dir = root / _harness_slug(old_cwd)
     new_dir = root / _harness_slug(new_cwd)
     if only_sids is not None:
-        out["mode"] = "extraction — the shared slug stays; only the seat's own moved"
+        out["mode"] = "extraction: the shared slug stays; only the seat's own moved"
         out["transcripts_moved"] = 0
         try:
             if old_dir.is_dir() and old_dir != new_dir:
@@ -1826,7 +1826,7 @@ def migrate_harness_metadata(
                     mem_old.rename(mem_new)
                     out["memory"] = "moved with the seat"
                 elif mem_old.is_dir():
-                    out["memory"] = "left in place — the destination has its own"
+                    out["memory"] = "left in place, the destination has its own"
                 out["transcripts_moved"] = moved
                 if left:
                     out["transcripts_left_behind"] = left
@@ -1854,7 +1854,7 @@ def migrate_harness_metadata(
             projects = data.get("projects")
             if isinstance(projects, dict) and old_cwd in projects:
                 if new_cwd in projects:
-                    out["project_state"] = ("left in place — the new path already has its "
+                    out["project_state"] = ("left in place, the new path already has its "
                                             "own entry")
                 else:
                     projects[new_cwd] = projects.pop(old_cwd)
@@ -1955,9 +1955,9 @@ async def rebind_seat(
         anchor_ok = False
     anchor_skip_note = (
         None if anchor_ok else
-        f"anchor_cwd left untouched — {new_cwd!r} is outside the office root ({root}); "
+        f"anchor_cwd left untouched, {new_cwd!r} is outside the office root ({root}); "
         "anchor_cwd is identity, always <office_root>/<handle>, never a caller-supplied "
-        "path (ruling 23771416). Mounts/harness metadata still moved to new_cwd below. "
+        "path. Mounts/harness metadata still moved to new_cwd below. "
         "Use bind_seat_tree if this is a work-tree relocation, not an identity one."
     )
     from src.orchestrator.agents import _generation, project_of, resolve_handle
@@ -1979,7 +1979,7 @@ async def rebind_seat(
             "WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))",
             seat_or_agent)
     if agent_id is None and direct_seat_id is None:
-        return {"error": f"no such seat or agent: {seat_or_agent!r} — unknown to the graph; "
+        return {"error": f"no such seat or agent: {seat_or_agent!r}, unknown to the graph; "
                          "a rebind never silently no-ops on a name nobody holds"}
     if agent_id is None:
         # pure seat path: no claimed occupant, so no agent lineage to repoint at all; the
@@ -1988,7 +1988,7 @@ async def rebind_seat(
         assert direct_seat_id is not None
         label = await derive_house(actions.pool, direct_seat_id)
         if not label:
-            return {"error": f"{direct_seat_id} has no derivable house to preserve — nothing "
+            return {"error": f"{direct_seat_id} has no derivable house to preserve, nothing "
                              "to anchor a project label against"}
         osiris_path = _write_osiris_file(new_cwd, label)
         now = datetime.now(UTC)
@@ -1999,7 +1999,7 @@ async def rebind_seat(
                 soid, "anchor_cwd", new_cwd, actor or direct_seat_id, now, _CONF,
                 evidence_class=_EC)
         note = (
-            f"{direct_seat_id}'s anchor moved to {new_cwd} — no claimed agent for "
+            f"{direct_seat_id}'s anchor moved to {new_cwd}, no claimed agent for "
             "this seat, so only the seat's own record was written (nothing to "
             "repoint in agent_mounts/harness for a lineage that never existed)"
             if anchor_ok else anchor_skip_note)
@@ -2009,11 +2009,11 @@ async def rebind_seat(
         }
     label = await project_of(actions.pool, agent_id)
     if not label:
-        return {"error": f"{agent_id} has no durable project label to preserve — it has never "
+        return {"error": f"{agent_id} has no durable project label to preserve, it has never "
                          "been mounted in a project, so there is no anchor to move"}
     base = _generation(agent_id)[0]
     if force and not (because or "").strip():
-        return {"error": "force=True requires because — a forced rebind of a live seat is "
+        return {"error": "force=True requires because, a forced rebind of a live seat is "
                          "not self-justifying"}
     if not force:
         from src.orchestrator.agents import is_occupied_by_a_live_body
@@ -2023,12 +2023,12 @@ async def rebind_seat(
         ):
             actor_base = _generation(actor)[0] if actor else None
             if actor_base != base:
-                return {"error": f"{agent_id} is occupied by a live body right now, and the "
-                                 f"caller ({actor!r}) is not that same lineage — refusing a "
-                                 "THIRD-PARTY rebind of a live seat (decision 7fe20cc5's "
-                                 "guard: self stays open, third-party-on-live refuses by "
-                                 "default). Pass force=True with a because to override — "
-                                 "self-rebind (the caller IS this lineage) never needs this",
+                return {"error": f"{agent_id} is occupied by a live process right now, and the "
+                                 f"caller ({actor!r}) is not that same lineage, refusing a "
+                                 "THIRD-PARTY rebind of a live seat (self stays open, "
+                                 "third-party-on-live refuses by default). Pass force=True "
+                                 "with a because to override, self-rebind (the caller IS "
+                                 "this lineage) never needs this",
                         "occupied": True, "target_lineage": base,
                         "caller_lineage": actor_base}
     old_cwd = await actions.pool.fetchval(
@@ -2106,13 +2106,13 @@ async def rebind_seat(
         **({"co_resident_rows_repointed": co_repointed} if co_repointed else {}),
         **({"harness": harness} if harness else {}),
         "note": (
-            f"{label}'s anchor moved to {new_cwd} — identity, lineage, attribution, and "
+            f"{label}'s anchor moved to {new_cwd}, identity, lineage, attribution, and "
             "mail all key on the label, untouched by this move; the harness metadata "
             "(transcripts, project state) moved with it"
             if anchor_ok else
             f"{label}'s mount/harness footprint moved to {new_cwd}, but its anchor_cwd was "
-            "NOT touched — see anchor_cwd_skipped")
-            + ("" if seat_to_anchor else " — NO SEAT ANCHORED: this agent holds no seat "
+            "NOT touched, see anchor_cwd_skipped")
+            + ("" if seat_to_anchor else ", NO SEAT ANCHORED: this agent holds no seat "
                "and seat_or_agent didn't name one directly either, so the graph still "
                "has no office on record for it"),
     }

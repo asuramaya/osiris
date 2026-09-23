@@ -504,7 +504,7 @@ async def bridged_seat(actions: Actions, *, bridge_session_id: str) -> str | Non
     if len(bases) > 1:
         raise BridgeAmbiguity(
             f"bridge id {bid!r} names {len(bases)} different lineages "
-            f"({', '.join(sorted(bases))}) — refusing to guess the last writer; this "
+            f"({', '.join(sorted(bases))}), refusing to guess the last writer; this "
             "must be resolved by hand (retire_assertion on the stray row), not guessed away")
     base = next(iter(bases))
     gens = [str(r["canonical"]) for r in await actions.pool.fetch(
@@ -580,7 +580,7 @@ async def mechanical_seat_mount(
         # establish_office's own mechanical writes already use. Best-effort: the holder
         # binding above is the identity that matters; a failed tree stamp never undoes it.
         await bind_seat_tree(actions, seat_id=existing["seat_id"], tree_cwd=cwd,
-                             actor="console", because="mechanical seat mount (dae06a32): "
+                             actor="console", because="mechanical seat mount: "
                              "the .osiris pin declared this seat for this tree")
     except Exception:  # noqa: BLE001 - best-effort, see above
         pass
@@ -764,7 +764,7 @@ def _derive_job_dir(session_id: str, *, jobs_home: Path | None = None) -> str | 
     decides: the DSH glob runs FIRST and a hit wins; a miss falls through to the
     claude lane (a claude sid genuinely has no DSH dir).
 
-    None when the id is too short to trust. `jobs_home` is a test seam (Claude lane)."""
+    None when the id is too short to trust. `jobs_home` is a test override (Claude lane)."""
     sid = (session_id or "").strip().lower()
     if len(sid) < 8:
         return None
@@ -1052,7 +1052,7 @@ async def automount(
             # than silently omit the result, same shape as attach/transcripts_healed two
             # blocks below, which already populate an explicit "...FAILED..." value on
             # their own failures.
-            spawn_error = (f"CHILD REGISTRATION FAILED — {str(e)[:200]}; the mount "
+            spawn_error = (f"CHILD REGISTRATION FAILED: {str(e)[:200]}; the mount "
                           "stands, unparented")
         if spawn_child:
             ident.agent_id = spawn_child
@@ -1157,7 +1157,7 @@ async def automount(
                                           job_dir=job_dir, agent_id=ident.agent_id)
             binding = attach.get("attached")
         except Exception as e:  # noqa: BLE001 - fail-open, loud in the payload
-            attach = {"error": f"ATTACH FAILED — {str(e)[:200]}; the mount stands, unbound"}
+            attach = {"error": f"ATTACH FAILED: {str(e)[:200]}; the mount stands, unbound"}
     elif job_dir:
         # THE HAND-RESUME FOLLOWS THE SEAT: no spawner env here, but if this session
         # actively holds a seat, its fresh mount row re-earns the binding from the durable
@@ -1182,10 +1182,10 @@ async def automount(
             mounts.heal_slug_transcripts, cwd, projects_root=root,
             skip_sids={session_id}, skip_sid_prefixes=prefixes)
     except Exception as e:  # noqa: BLE001 - the handshake never dies of a heal
-        heal = {"error": f"TRANSCRIPT HEAL FAILED — {str(e)[:200]}; the mount stands; "
+        heal = {"error": f"TRANSCRIPT HEAL FAILED: {str(e)[:200]}; the mount stands; "
                          "moved sessions may still refuse to resume here"}
-    # THE SOUL STORE FOLLOWS THE HEAL: a rewritten cwd is a real, in-place edit to lines
-    # the soul store may already have chained. This is the only place this store's own
+    # TRANSCRIPT STORE FOLLOWS THE HEAL: a rewritten cwd is a real, in-place edit to lines
+    # SoulStore may already have chained. This is the only place that store's own
     # append-only invariant bends, and only for exactly this sanctioned tool's own edit
     # shape (SoulStore.forget_and_reingest's own docstring names why ingest_path alone can
     # never repair it). Best-effort, fail-open, same posture as the heal call just above
@@ -1484,17 +1484,17 @@ async def automount(
         # SAY IT AT THE MOMENT IT IS ACTIONABLE: a seated agent that governs no repo yet,
         # surfaced on this run, not just at settle()'s terminal check, sometimes many hours
         # and generations too late.
-        **({"charter_missing": "UNDECLARED — call charter(repos=[...]) naming the repos "
+        **({"charter_missing": "UNDECLARED: call charter(repos=[...]) naming the repos "
                                 "you govern before writing anywhere; a house is what a "
                                 "seat GOVERNS, not where it sits"} if charter_missing else {}),
         # a freshly minted heir's steering anchor: the newest succession-owned obligation,
         # resolved by query, not a copied id
         **({"succession": succession} if succession else {}),
-        # the attach ceremony's verdict (None: no spawner-exported seat in this environment)
+        # the attach step's verdict (None: no spawner-exported seat in this environment)
         **({"attach": attach} if attach is not None else {}),
         # the durable binding this session sits in, however it got there (attach or reseed)
         **({"seat_binding": binding} if binding else {}),
-        # the resume heal's receipt (empty = nothing listed here needed re-addressing)
+        # the resume heal's result (empty = nothing listed here needed re-addressing)
         **({"transcripts_healed": heal} if heal else {}),
         # the bridge path's refusal: a bridge id named more than one lineage. This handshake
         # fell through to office_hint rather than guess, and the ambiguity still needs a
@@ -1506,12 +1506,12 @@ async def automount(
         # the office HINT: this cwd is a seat's office and the seat is takeable, but the
         # handshake seats nobody. The session's first action seats it (office_claim).
         **({"office_of": office_hint,
-            "office_note": "this office belongs to a seat with no live occupant — your "
+            "office_note": "this office belongs to a seat with no live occupant; your "
                            "first osiris call (mount) seats you as its next life"}
            if office_hint else {}),
         # the declared child's birth result: denominated under its parent from the first run
         **({"child_of": spawned_by,
-            "child_note": "you are a DECLARED CHILD — registered spawned_by your parent "
+            "child_note": "you are a DECLARED CHILD: registered spawned_by your parent "
                           "at birth (roman.arabic denomination); your writes are your "
                           "own, the seat and its succession are your parent's"}
            if spawn_child else
@@ -1576,9 +1576,9 @@ async def session_end(
     wrongly-killed rows blind the fleet until a human intervenes."""
     if mounts.greeted_within_grace(session_id):
         return {"released": 0, "yielded": True,
-                "note": "a greeting for this session landed within the grace — the end "
-                        "yields to the resume (the sweep reaps the door if the window "
-                        "is truly gone)"}
+                "note": "a greeting for this session landed within the grace period; the "
+                        "end yields to the resume (the census sweep reaps the row if the "
+                        "window is truly gone)"}
     job_dir = job_dir or _derive_job_dir(session_id, jobs_home=jobs_home)
     if job_dir is None:
         return {"released": 0, "note": "session id too short to derive an anchor"}
@@ -1586,7 +1586,7 @@ async def session_end(
     released = await mounts.release_session_mounts(
         actions.pool, job_dir=job_dir, session_id=session_id)
     if released == 0:
-        return {"released": 0, "note": "no durable mount for this session — nothing to release"}
+        return {"released": 0, "note": "no durable mount for this session, nothing to release"}
     return {"agent": row.agent_id if row else None,
             "project": row.project if row else None, "released": released}
 

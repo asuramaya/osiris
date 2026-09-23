@@ -179,7 +179,7 @@ async def test_reconcile_is_idempotent(actions: Actions, tmp_path: Path) -> None
                             dry_run=False, because="test build", session_root=tmp_path)
     second = await reconcile(actions, anchor_sid="fixtureF", root_agent_id=root_agent_id,
                              dry_run=False, because="re-run", session_root=tmp_path)
-    assert [p["action"] for p in second["plan"]] == ["already minted — skip"] * 3
+    assert [p["action"] for p in second["plan"]] == ["already minted, skip"] * 3
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE canonical LIKE $1 AND type='Agent'",
         f"{root_agent_id}%")

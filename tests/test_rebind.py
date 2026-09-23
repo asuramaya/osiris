@@ -599,7 +599,7 @@ def test_extraction_never_clobbers_the_destinations_own_memory(tmp_path: Path) -
     out = migrate_harness_metadata("/w/shared", "/w/office", projects_root=root,
                                    claude_json=tmp_path / "cj.json", only_sids={"dddd"})
 
-    assert out["memory"] == "left in place — the destination has its own"
+    assert out["memory"] == "left in place, the destination has its own"
     assert (new / "memory" / "MEMORY.md").read_text() == "the office's own\n"
     assert (old / "memory" / "MEMORY.md").read_text() == "old\n"
 

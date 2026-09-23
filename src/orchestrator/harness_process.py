@@ -80,7 +80,7 @@ CAPABILITIES = frozenset(
 
 
 def _refuse(adapter_name: str, capability: str, declared: frozenset[str]) -> dict[str, Any]:
-    return {"error": f"adapter {adapter_name!r} does not support {capability!r} — "
+    return {"error": f"adapter {adapter_name!r} does not support {capability!r}, "
                      f"declared: {sorted(declared) or 'none'}"}
 
 
@@ -219,7 +219,7 @@ class ClaudeAdapter:
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             ok = await proc.wait() == 0
         except OSError as exc:
-            return {"error": f"adapter 'claude' stop failed to exec: {exc} — and no pid "
+            return {"error": f"adapter 'claude' stop failed to exec: {exc}, and no pid "
                              "was given for a SIGTERM fallback"}
         if ok:
             await _clear_stale_stopped_record(session_id)
@@ -472,12 +472,12 @@ class CrushAdapter:
         store = SoulStore(pool)
         lines = await store._all_raw_lines("crush", anchor_sid)
         if lines is None:
-            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+            return {"error": f"no soul_lines ingested for {anchor_sid!r}, nothing to "
                              "materialize"}
         rows = [json.loads(line) for line in lines]
         session_id = rows[0]["session_id"] if rows else None
         if not session_id:
-            return {"error": f"{anchor_sid!r}'s stored rows carry no session_id — cannot "
+            return {"error": f"{anchor_sid!r}'s stored rows carry no session_id, cannot "
                              "materialize"}
 
         def _write() -> dict[str, Any]:
@@ -511,8 +511,8 @@ class CrushAdapter:
                 if existing is not None:
                     if not force:
                         conn.close()
-                        return {"error": f"refused — session {session_id!r} already "
-                                         f"exists at {dest} — pass force=True to "
+                        return {"error": f"refused: session {session_id!r} already "
+                                         f"exists at {dest}, pass force=True to "
                                          "overwrite"}
                     conn.execute(
                         "DELETE FROM messages WHERE session_id=?", (session_id,))

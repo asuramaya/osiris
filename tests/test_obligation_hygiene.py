@@ -285,7 +285,7 @@ async def test_quote_summary_names_the_age_and_the_dispute() -> None:
 
     plain = _quote_summary({"summary": "a headline", "summary_age_days": 12,
                             "contested": False})
-    assert plain == "'a headline', unchanged for 12 day(s) — no recorded answer"
+    assert plain == "'a headline', unchanged for 12 day(s), no recorded answer"
     disputed = _quote_summary({"summary": "a false headline", "summary_age_days": 12,
                                "contested": True})
     assert "CONTESTED" in disputed and "unchanged for 12 day(s)" in disputed

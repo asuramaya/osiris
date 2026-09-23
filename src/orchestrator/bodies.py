@@ -23,10 +23,10 @@ last process, so the cgroup cannot be collected out from under it), and fsync-re
 snapshot before exiting. cgroup v2 is still the meter; the reading just happens at the only
 instant the meter is still readable.
 
-RECEIPT-BEFORE-DISSOLVE (matching the discipline used for the hypervisor tier, where the host
-is the meter): `dissolve()` does not return until the receipt is minted and fsync'd. A body
-that is gone before its cost is recorded is spend that cannot be accounted for, which is the
-exact failure this design exists to prevent.
+The receipt is written before dissolve completes (matching the discipline used for the
+hypervisor tier, where the host is the meter): `dissolve()` does not return until the receipt
+is minted and fsync'd. A body that is gone before its cost is recorded is spend that cannot be
+accounted for, which is the exact failure this design exists to prevent.
 """
 from __future__ import annotations
 
@@ -448,7 +448,7 @@ class LocalProvider:
                 await asyncio.to_thread(_read_cgroup_stats, live.cgroup)
                 if live.cgroup is not None else (0.0, 0, 0))
             rc = returncode
-        # RECEIPT-BEFORE-DISSOLVE: minted and fsync'd here, before this call returns, so the
+        # The receipt is minted and fsync'd here, before this call returns, so the
         # caller never observes a "dissolved" body with no receipt on disk.
         receipt = _build_receipt(
             handle=handle, provider="local", kind=live.kind,

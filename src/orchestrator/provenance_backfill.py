@@ -393,8 +393,8 @@ async def backfill_possible_upstream(
     waiting on a call that silently never returns."""
     if not dry_run and not (because or "").strip():
         return {"error": "backfilling historical provenance without a because is an "
-                         "un-audited graph write — cite the ruling/dispatch that "
-                         "authorizes it (thread e332177f, Thoth mail 10440), never silent"}
+                         "unaudited graph write, cite the ruling/dispatch that "
+                         "authorizes it, never silent"}
 
     import time
 
@@ -496,15 +496,15 @@ async def backfill_possible_upstream(
         if receipt_path is None:
             if not any_scanned and too_large_count:
                 reason = (f"every one of the writer's {too_large_count} resolvable "
-                          "transcript(s) exceeds ingest.transcript_scan_max_bytes — "
+                          "transcript(s) exceeds ingest.transcript_scan_max_bytes, "
                           "skipped unopened")
                 skipped.append({"object": cand["canonical"], "writer": writer, "reason": reason})
                 _tag(writer, "too_large")
             else:
-                reason = ("no receipt for this write found in any of the writer's "
-                          f"{len(sids)} indexed transcript(s)")
+                reason = ("no matching result line found for this write in any of the "
+                          f"writer's {len(sids)} indexed transcript(s)")
                 if too_large_count:
-                    reason += (f" ({too_large_count} skipped — over "
+                    reason += (f" ({too_large_count} skipped, over "
                               "ingest.transcript_scan_max_bytes)")
                 skipped.append({"object": cand["canonical"], "writer": writer, "reason": reason})
                 _tag(writer, "no_transcript")

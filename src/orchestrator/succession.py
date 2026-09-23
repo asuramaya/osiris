@@ -20,7 +20,7 @@ duplicated the other's job.
 Kept in its own module rather than inside agents.py deliberately: agents.py was another
 session's active work at the time, and the one succeeded_from hop-step this needs is small
 enough to stand alone rather than force a refactor of code that had just landed.
-One-verb-one-module, matching doors.py/describe.py/recall.py/smoke.py's own precedent."""
+One function per module, matching doors.py/describe.py/recall.py/smoke.py's own precedent."""
 from __future__ import annotations
 
 from typing import Any

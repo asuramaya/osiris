@@ -85,9 +85,9 @@ async def merge(actions: Actions, *, dupe: str, into: str, evidence: str, actor:
     dupe_type, into_type = _merge_type(dupe_s), _merge_type(into_s)
     if dupe_type != into_type:
         return {"error": f"dupe {dupe_s!r} looks like a {dupe_type} and into {into_s!r} "
-                         f"looks like a {into_type} — merge is same-type only; this "
+                         f"looks like a {into_type}; merge is same-type only. This "
                          "cross-type pairing was never reachable through any of the "
-                         "three original fold verbs"}
+                         "three original fold functions"}
     if dupe_type == "Agent":
         return await fold_agent(actions, dupe=dupe_s, into=into_s, evidence=evidence,
                                 actor=actor)
@@ -155,7 +155,7 @@ async def reconcile_merge(actions: Actions, *, dupe: str, into: str, actor: str,
     dupe_type, into_type = _merge_type(dupe_s), _merge_type(into_s)
     if dupe_type != into_type:
         return {"error": f"dupe {dupe_s!r} looks like a {dupe_type} and into {into_s!r} "
-                         f"looks like a {into_type} — reconcile is same-type only"}
+                         f"looks like a {into_type}; reconcile is same-type only"}
     if dupe_type == "Agent":
         return await reconcile_agent_fold(actions, dupe=dupe_s, into=into_s, actor=actor)
     if dupe_type == "Seat":

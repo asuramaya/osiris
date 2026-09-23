@@ -250,7 +250,7 @@ async def test_detect_possibly_stale_seats_reports_empty_old_name_without_raisin
     actions: Actions,
 ) -> None:
     out = await detect_possibly_stale_seats(actions.pool, "")
-    assert out == {"checked": False, "reason": "empty old_name — nothing to match"}
+    assert out == {"checked": False, "reason": "empty old_name, nothing to match"}
 
 
 async def test_detect_possibly_stale_seats_finds_nothing_for_an_unmatched_name(

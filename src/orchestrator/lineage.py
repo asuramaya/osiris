@@ -290,7 +290,7 @@ async def register_swarm(
                 # counts, so there is no result field to carry this on; a warning is the
                 # honest surface until one exists.
                 _log.warning("register_swarm(%s): refusing to mint a SoftwareProject from "
-                            "project=%r — %s", s.agent_id, s.project, exc)
+                            "project=%r: %s", s.agent_id, s.project, exc)
             else:
                 # Resolves by name before minting: a bare create_or_find_object on the
                 # canonical alone would mint a duplicate the instant a project's own name has
@@ -387,7 +387,7 @@ async def register_spawn(
             # id, so there is no result field to carry this on; a warning is the honest
             # surface until one exists.
             _log.warning("register_spawn(%s): refusing to mint a SoftwareProject from "
-                        "project=%r — %s", child, project, exc)
+                        "project=%r: %s", child, project, exc)
         else:
             # Resolves by name before minting, the same fix as register_swarm's own sibling
             # site above, via the same _resolve_repo choke point.
@@ -565,7 +565,7 @@ async def file_subagent(
     parent, _parent_verified = await _resolve_subagent_parent(actions, oid)
     if not parent:
         return {"error": f"{subagent_id} has neither a spawned_by edge nor a session "
-                         "property — cannot attribute to a spawner"}
+                         "property, cannot attribute to a spawner"}
     parent_oid = await actions.create_or_find_object("Agent", parent, actor)
     linked = await _link_once(actions, oid, parent_oid, "spawned_by", now)
 
@@ -602,8 +602,8 @@ async def file_subagent(
     if not live and row["status"] == "active":
         await actions.set_status(
             oid, "historical",
-            f"ephemeral subagent, parent {parent} not live — status follows the spawner "
-            "(ruling 0f76458c)", actor)
+            f"ephemeral subagent, parent {parent} not live: status follows the spawner",
+            actor)
         flipped = True
     return {"subagent": subagent_id, "parent": parent, "spawned_by_linked": linked,
             "named": named, "already_named": already_named, "parent_live": live,
@@ -698,7 +698,7 @@ async def file_subagents(
     if dry_run:
         return {"scope": project or "fleet", "candidates": len(candidates), "counts": counts,
                 "sample": sample, "unattributable_ids": [c["canonical"] for c in unattributable],
-                "note": "DRY-RUN — nothing written; pass dry_run=False to file"}
+                "note": "DRY-RUN, nothing written; pass dry_run=False to file"}
 
     filed = [await file_subagent(actions, subagent_id=c["canonical"], actor=actor,
                                  patronym_ordinal=ordinal_plan.get(c["oid"]))
