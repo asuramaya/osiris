@@ -1012,7 +1012,9 @@ function renderKeyPanelHtml(s) {
   // paragraphs; both now live as steps on the Readiness stepper above, one line
   // each. This table stays, the two paragraphs don't.
   var enrollBtn = (s.present && (s.recovery_paths_enrolled || []).length === 0)
-    ? '<button class="iconbtn" onclick="enrollRecoveryBrowser()">Add a recovery method with a security key</button> '
+    ? '<button class="iconbtn" onclick="enrollRecoveryBrowser()" ' +
+      'title="Or run osiris soul-key enroll-recovery in a terminal.">' +
+      'Add a recovery method with a security key</button> '
     : '';
   var rotating = s.rotation_in_flight
     ? '<div style="margin:8px 0"><span>Key replacement in progress.</span> ' +

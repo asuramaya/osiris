@@ -46,6 +46,22 @@ def _fp(raw_key: bytes) -> str:
     return hashlib.sha256(raw_key).hexdigest()[:16]
 
 
+@pytest.fixture(autouse=True)
+def _redirect_credstore_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """recover_from_browser refuses whenever a key already exists at this machine's
+    own DEFAULT credstore location (soul_crypto._credential_path(resolved,
+    explicit=False), which deliberately IGNORES the caller's own resolved_path and
+    always resolves systemd_credential.user_credstore_encrypted_dir() -- correct
+    production behavior (recovery reseals under THIS box's real default location,
+    not an arbitrary filename), but it means this file's own tests were never
+    actually isolated from the machine running them. Caught live: every test here
+    failed identically on an unmodified tree the moment a real soul key existed in
+    this developer's own ~/.config/credstore.encrypted/ -- a latent gap, not new
+    breakage, that a machine with no soul key yet simply never triggered. Same
+    XDG_CONFIG_HOME redirect test_api.py's own soul-key section already holds."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdgcfg"))
+
+
 # --- issue_recovery_material / POST /soul-key/recovery-material -----------------------
 
 async def test_issue_material_refuses_when_no_key_exists(

@@ -59,7 +59,10 @@ def test_checkboxes_are_excluded_never_get_a_background_swap() -> None:
 def test_key_panel_no_longer_renders_the_recovery_warning_paragraph() -> None:
     body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1600]
     assert "recovery_warning" not in body
-    assert "in a terminal" not in body
+    # the CLI pointer survives as a tooltip on the enroll button (test_soul_key_
+    # recovery_ui.py's own test_cli_pointer_still_stands_alongside_the_new_browser_
+    # button), never again as its own inline warning sentence.
+    assert "⚠" not in body
 
 
 def test_key_panel_still_offers_the_enroll_button_unconditionally() -> None:
