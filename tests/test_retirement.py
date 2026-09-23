@@ -1,7 +1,7 @@
-"""retire_assertion — the cross-source supersede (thread 52911d2a, found diagnosing
-b9aa7326, decision d28d1459): assert_property's own supersession is scoped to the SAME
-source only, so a peer's correction of another agent's bad self-declaration can never
-retire it through the ordinary path — both rows stay simultaneously "current". This is the
+"""retire_assertion: the cross-source supersede. assert_property's own supersession is
+scoped to the SAME source only, so a peer's correction of another agent's bad
+self-declaration can never retire it through the ordinary path, both rows stay
+simultaneously "current". This is the
 guarded orchestrator layer (friendly error dicts, never a bare exception) around
 Actions.supersede_assertion.
 """
@@ -43,7 +43,7 @@ async def test_list_assertions_empty_when_the_property_was_never_asserted(
 
 
 async def test_list_assertions_exposes_the_id_retire_assertion_needs(actions: Actions) -> None:
-    """The exact 382067d9 gap: two CURRENT contradicting values, and retire_assertion's
+    """The exact gap: two CURRENT contradicting values, and retire_assertion's
     superseded_id can only come from somewhere that names the row, not just the value."""
     obj = await actions.create_or_find_object("Agent", "agent:ad1a1cb0-g40-xxiv", "test")
     wrong = await actions.assert_property(
@@ -65,7 +65,7 @@ async def test_list_assertions_exposes_the_id_retire_assertion_needs(actions: Ac
     assert retired["retired"]["id"] == wrong
 
     # retire_assertion always ASSERTS its own new row rather than deleting anything
-    # (append-only) — the wrong VALUE is gone, but a second "58" (the corrector's own
+    # (append-only): the wrong VALUE is gone, but a second "58" (the corrector's own
     # stamp) now sits beside the original one; both current, neither wrong.
     after = await list_assertions(actions, ref="agent:ad1a1cb0-g40-xxiv", name="seat_generation")
     assert {a["value"] for a in after["assertions"]} == {"58"}
@@ -121,7 +121,7 @@ async def test_already_superseded_is_refused_not_double_retired(actions: Actions
 
 
 async def test_the_live_case(actions: Actions) -> None:
-    """The exact acceptance shape (decision d28d1459): a self-declared low value vs a peer's
+    """The exact acceptance shape: a self-declared low value vs a peer's
     correct one, neither superseding the other until retire_assertion runs."""
     obj = await actions.create_or_find_object("Agent", "agent:ad1a1cb0-g40-xxiv", "test")
     wrong = await actions.assert_property(
@@ -131,25 +131,25 @@ async def test_the_live_case(actions: Actions) -> None:
         obj, "seat_generation", "58", "agent:aad6603a-iv", NOW, 0.9,
         evidence_class="self_declared")
     vals = await actions.current_values(obj, "seat_generation")
-    assert {v["value"] for v in vals} == {"2", "58"}  # both current — the live bug shape
+    assert {v["value"] for v in vals} == {"2", "58"}  # both current, the live bug shape
 
     out = await retire_assertion(
         actions, ref="agent:ad1a1cb0-g40-xxiv", name="seat_generation", superseded_id=wrong,
-        value="58", because="operator-approved repair, diagnosis d28d1459",
+        value="58", because="operator-approved repair",
         actor="agent:c38f8f3b-vi")
     assert out["retired"]["value"] == "2"
     assert out["retired"]["id"] == wrong
     assert out["now_current"]["value"] == "58"
-    assert out["because"] == "operator-approved repair, diagnosis d28d1459"
+    assert out["because"] == "operator-approved repair"
 
     vals = await actions.current_values(obj, "seat_generation")
     assert {v["value"] for v in vals} == {"58"}  # only the correct value survives
 
 
 async def test_the_mcp_tool_wraps_the_orchestrator(actions: Actions) -> None:
-    """srv._pool swap (mirrors test_succession.py's own pattern) — proves the ACTUAL MCP
+    """srv._pool swap (mirrors test_succession.py's own pattern): proves the ACTUAL MCP
     tool delegates correctly. No mount context here, so it refuses with the mount-first
-    message rather than a bare crash — the identity gate is exercised, not bypassed."""
+    message rather than a bare crash, the identity gate is exercised, not bypassed."""
     from src import mcp_server as srv
 
     obj = await actions.create_or_find_object("Agent", "agent:mcp-x", "test")
@@ -166,7 +166,7 @@ async def test_the_mcp_tool_wraps_the_orchestrator(actions: Actions) -> None:
     assert "error" in out
 
 
-# ═══ stale_current_flags — the read door (thread 09bde57e, khepri's own live specimen:
+# ═══ stale_current_flags: the read door (a real live specimen where
 # a real supersedes FK exists but is_current was never flipped for the row it excludes) ═══
 
 async def test_stale_current_flags_is_empty_on_a_clean_supersession(actions: Actions) -> None:
@@ -185,15 +185,15 @@ async def test_stale_current_flags_is_empty_on_a_clean_supersession(actions: Act
 async def test_stale_current_flags_surfaces_a_row_whose_flip_never_landed(
     actions: Actions,
 ) -> None:
-    """Reproduces khepri's own live specimen directly: a real `supersedes` FK exists (a raw
+    """Reproduces a real live specimen directly: a real `supersedes` FK exists (a raw
     INSERT bypassing the code path that would have flipped `is_current` in the same
-    transaction — exactly the historical-write shape suspected for pre-fix rows) while the
+    transaction, exactly the historical-write shape suspected for pre-fix rows) while the
     superseded row's own `is_current` stays true. `count` names the TRUE total; `sample`
     carries this exact row with both sides' provenance."""
     obj = await actions.create_or_find_object("Agent", "agent:stale01", "test")
     stale_id = await actions.assert_property(obj, "house", "cultural-infrastructure",
                                              "agent:mistake", NOW, 0.9)
-    # bypass Actions entirely — a raw INSERT with a real supersedes FK but no is_current flip,
+    # bypass Actions entirely: a raw INSERT with a real supersedes FK but no is_current flip,
     # the exact shape a pre-0047-fix write (or any write outside the two flipping call
     # sites) leaves behind
     await actions.pool.execute(
@@ -212,7 +212,7 @@ async def test_stale_current_flags_surfaces_a_row_whose_flip_never_landed(
 async def test_stale_current_flags_count_is_never_capped_by_the_sample_limit(
     actions: Actions,
 ) -> None:
-    """`count` must report the TRUE population size even when `sample` is capped small —
+    """`count` must report the TRUE population size even when `sample` is capped small,
     a caller measuring the live population must never be told a bounded sample's own size
     is the whole truth."""
     obj = await actions.create_or_find_object("Agent", "agent:manystale", "test")
@@ -244,8 +244,8 @@ async def test_the_stale_current_flags_mcp_tool_wraps_the_orchestrator(
     assert "count" in out and "sample" in out
 
 
-# ═══ repair_stale_current_flags — thread 09bde57e piece (d), the backfill for the
-# population stale_current_flags measures (123,914 of 267,305 rows, d8225e71) ═══
+# ═══ repair_stale_current_flags: the backfill for the
+# population stale_current_flags measures (123,914 of 267,305 rows) ═══
 
 
 async def test_repair_dry_run_lists_without_writing(actions: Actions) -> None:
@@ -260,7 +260,7 @@ async def test_repair_dry_run_lists_without_writing(actions: Actions) -> None:
     assert out["dry_run"] is True
     assert stale_id in out["sample_ids"]
     assert out["would_repair"] >= 1
-    # nothing written — the row is still flagged current
+    # nothing written, the row is still flagged current
     assert await actions.pool.fetchval(
         "SELECT is_current FROM assertions WHERE id=$1", stale_id) is True
     assert await actions.pool.fetchval(
@@ -340,7 +340,7 @@ async def test_the_repair_mcp_tool_allows_an_unmounted_dry_run(actions: Actions)
     assert out["dry_run"] is True
 
 
-# --- retire_link (thread badb4040) --------------------------------------------------
+# --- retire_link ----------------------------------------------------------------------
 
 
 async def test_retire_link_requires_because(actions: Actions) -> None:
@@ -385,7 +385,7 @@ async def test_retire_link_no_active_link_refuses_rather_than_silent_success(
 
 async def test_retire_link_deactivates_never_deletes(actions: Actions) -> None:
     """THE LIVE INCIDENT this thread was opened for: a fuzzy-substring resolves= mis-
-    citation minted a spurious `answers` link — this closes it cleanly, event-sourced,
+    citation minted a spurious `answers` link. This closes it cleanly, event-sourced,
     the row still there just no longer current."""
     thread_obj = await actions.create_or_find_object("Thread", "thread:spurious1", "test")
     decision_obj = await actions.create_or_find_object("Decision", "decision:spurious1", "test")
@@ -451,7 +451,7 @@ async def test_retire_link_mcp_tool_refuses_when_unmounted(actions: Actions) -> 
     assert "mount first" in out["error"]
 
 
-# --- retire_bare_object: THE TOOLING GAP (thread 92dde6cc) -----------------------------
+# --- retire_bare_object: THE TOOLING GAP -----------------------------------------------
 
 
 async def test_retire_bare_object_requires_because(actions: Actions) -> None:
@@ -492,7 +492,7 @@ async def test_retire_bare_object_refuses_on_a_live_incoming_link(actions: Actio
 
 
 async def test_retire_bare_object_refuses_on_a_non_layout_assertion(actions: Actions) -> None:
-    """A real property (a name, a summary — anything from a source other than the
+    """A real property (a name, a summary, anything from a source other than the
     layout heartbeat) is genuine evidence of content, not bare junk."""
     oid = await actions.create_or_find_object("Thread", "thread:bare-real-content", "test")
     await actions.assert_property(oid, "name", "a real thread", "test", NOW, 0.9)

@@ -1,4 +1,4 @@
-"""Git-history ingest — Osiris modelling a repository (and, live, itself).
+"""Git-history ingest: Osiris modelling a repository (and, live, itself).
 
 Proves the collector pattern generalizes to a non-OSINT domain: a git history becomes
 SoftwareProject / Commit / Person(dev) objects + authored_by / in_repo / follows links,
@@ -81,9 +81,9 @@ def _toplevel(repo: Path) -> str:
 async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """WAVE 27 COMMITS ATTRIBUTED TO AGENT IDENTITIES (ruling 4cf5e4b3/b8fb26494e0e): a
+    """COMMITS ATTRIBUTED TO AGENT IDENTITIES: a
     commit made while agent:committer-i held the seat gets committed_by=agent:committer-i,
-    even once agent:committer-ii holds it by the time ingest actually runs — the resolver
+    even once agent:committer-ii holds it by the time ingest actually runs. The resolver
     reads the HOLDS LINK'S OWN HISTORY at the commit's own author time, never "whoever
     holds it now"."""
     from datetime import UTC, datetime
@@ -105,7 +105,7 @@ async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
     assert "error" not in bound, bound
 
     # GIT'S OWN COMMIT-DATE PRECISION IS WHOLE SECONDS ONLY (no sub-second component
-    # survives a round trip through GIT_AUTHOR_DATE/%aI) — a commit dated `now()` can
+    # survives a round trip through GIT_AUTHOR_DATE/%aI): a commit dated `now()` can
     # store as a timestamp EARLIER, at full DB precision, than the very bind_holder call
     # that ran moments before it in the same wall-clock second. A real sleep across the
     # second boundary is the honest fix, not a smaller and smaller synthetic offset.
@@ -114,7 +114,7 @@ async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
     await asyncio.sleep(1.1)
     _dated_commit(repo, date=datetime.now(UTC).isoformat(), message="first", content="1")
 
-    # the holder changes BEFORE ingest ever runs — the SECOND commit's own author time
+    # the holder changes BEFORE ingest ever runs: the SECOND commit's own author time
     # sits inside committer-ii's holds window instead, again past the second boundary
     await actions.create_or_find_object("Agent", "agent:committer-ii", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:committer-ii")
@@ -140,7 +140,7 @@ async def test_committed_by_resolves_the_seat_holder_at_the_authors_own_time(
 async def test_committed_by_never_asserted_when_no_seat_is_bound_to_the_worktree(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A bare checkout nobody bound as a seat's tree — never guesses, never mints."""
+    """A bare checkout nobody bound as a seat's tree: never guesses, never mints."""
     repo = tmp_path / "no-seat-proj"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -158,10 +158,10 @@ async def test_committed_by_never_asserted_when_no_seat_is_bound_to_the_worktree
 async def test_committed_by_falls_back_to_the_ingest_actor_when_no_seat_is_bound(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """WAVE 27, piece (1) of the follow-up sequence (Thoth dispatch 11924): a bare
+    """Piece (1) of the follow-up sequence: a bare
     checkout with no seat bound to it at all is a DIFFERENT shape from a seat that IS
     bound but whose holds history doesn't cover the commit's own author time (that one
-    stays a genuine miss, never masked by this fallback) — here there is no seat to ask,
+    stays a genuine miss, never masked by this fallback). Here there is no seat to ask,
     so the caller's own identity (`actor`, when it has one to offer) is the best
     available signal, scoped to commits this run actually touches."""
     repo = tmp_path / "actor-fallback-proj"
@@ -183,7 +183,7 @@ async def test_committed_by_falls_back_to_the_ingest_actor_when_no_seat_is_bound
 async def test_committed_by_worktree_time_wins_over_the_ingest_actor_when_both_apply(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The fallback only ever fires when there is NO seat bound at all — a genuinely
+    """The fallback only ever fires when there is NO seat bound at all: a genuinely
     resolved worktree+time holder always wins over whoever happens to be running this
     particular ingest, even when they differ."""
     from datetime import UTC, datetime
@@ -206,7 +206,7 @@ async def test_committed_by_worktree_time_wins_over_the_ingest_actor_when_both_a
     bound = await bind_seat_tree(actions, seat_id=seat["seat_id"], tree_cwd=toplevel,
                                  actor="agent:actor-loses-holder", because="test")
     assert "error" not in bound, bound
-    # the holds link's own first_seen moves into the past — no real-clock wait needed,
+    # the holds link's own first_seen moves into the past, no real-clock wait needed,
     # this test never asks git to date anything
     await actions.pool.execute(
         "UPDATE links SET first_seen=$1 WHERE from_id="
@@ -223,9 +223,9 @@ async def test_committed_by_worktree_time_wins_over_the_ingest_actor_when_both_a
 async def test_reingest_same_history_does_not_regrow_dev_assertions(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """Ruling 0623995e (thread 2a280e07): a full re-ingest re-walks EVERY commit each time
+    """A full re-ingest re-walks EVERY commit each time
     (`--all --reverse`, no since-cursor), so a dev's name/email used to be re-asserted once
-    per commit, every ingest run, forever — the worst live triple hit 164,149 rows for 3
+    per commit, every ingest run, forever: the worst live triple hit 164,149 rows for 3
     distinct values. Two ingests of the SAME unchanged history must not grow the dev's own
     name/email assertion COUNT (the append-only `assertions` table, not just the
     current-value view)."""
@@ -259,13 +259,12 @@ async def test_reingest_same_history_does_not_regrow_dev_assertions(
 async def test_a_second_author_name_under_a_known_email_lands_as_an_alias_not_a_rewrite(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """GIT IDENTITIES WEARING THE WRONG NAME (thread 0be2f790's own operator-finding
-    follow-up, Thoth DM 10711): THE INGEST GUARD — superseding
+    """GIT IDENTITIES WEARING THE WRONG NAME: THE INGEST GUARD, superseding
     test_reingest_with_a_real_name_change_still_writes, which asserted the OLD, now-
     retired "last commit's author name becomes `name`" policy. That policy is exactly
-    the bug class Thoth traced live: the operator's own git identity's displayed name
+    the bug class traced live: the operator's own git identity's displayed name
     flipping to whichever agent's commit happened to touch it last. `name` is now a
-    pure function of the (stable) canonical itself — a SECOND author name under the
+    pure function of the (stable) canonical itself, a SECOND author name under the
     SAME known email must never rewrite it, no matter how many ingests see that second
     name. It still isn't silently dropped: it rides along as `author_alias`."""
     repo = tmp_path / "proj4"
@@ -306,7 +305,7 @@ async def test_author_aliases_merge_across_runs_instead_of_replacing(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The alias set is additive across separate ingest runs (mirroring `dev_info`'s own
-    within-run accumulation) — a name seen on an earlier run is never lost just because a
+    within-run accumulation). A name seen on an earlier run is never lost just because a
     later run's own commit walk didn't happen to repeat it."""
     repo = tmp_path / "proj4b"
     repo.mkdir()
@@ -346,7 +345,7 @@ async def test_author_aliases_merge_across_runs_instead_of_replacing(
 async def test_repo_name_survives_conventional_commits(actions: Actions, tmp_path: Path) -> None:
     """Regression: the property loop used to reuse `name`, shadowing the repo name, so a repo
     of Conventional Commits returned repo='summary' (the last property key). The node was fine
-    but the return was wrong — and multi-repo ingest leans on that return."""
+    but the return was wrong, and multi-repo ingest leans on that return."""
     repo = tmp_path / "proj2"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -379,9 +378,9 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='authored_by'") == 2
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='in_repo'") == 2
     assert await p.fetchval("SELECT count(*) FROM links WHERE type='follows'") == 1
-    # the source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the
+    # the source-level fix (operator ruling, "fix the
     # sources"): one dev's own name/email is one value for the whole run and across
-    # reruns — 2 commits ingested 4 times total (1 fresh + 3 reruns) must never write
+    # reruns: 2 commits ingested 4 times total (1 fresh + 3 reruns) must never write
     # more than the single genuine name/email row each, not 8.
     dev = await p.fetchval("SELECT id FROM objects WHERE canonical='dev:ada@x.io'")
     assert await p.fetchval(
@@ -393,9 +392,9 @@ async def test_ingest_is_idempotent(actions: Actions, tmp_path: Path) -> None:
 async def test_ingest_walks_every_branch_not_just_head(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread b4297a47/1c8e3907 (ingest registration phase 2, measured constraint 3):
+    """Ingest registration phase 2, measured constraint 3:
     a bare `git log` never sees a commit that lives only on a branch other than the
-    one currently checked out — 17 live worktree-agent-* branches proved this in
+    one currently checked out. 17 live worktree-agent-* branches proved this in
     production. A commit made on a topic branch, HEAD left on main, must still be
     ingested."""
     repo = tmp_path / "multi-branch"
@@ -410,7 +409,7 @@ async def test_ingest_walks_every_branch_not_just_head(
     (repo / "b.txt").write_text("2")
     _git(repo, "add", ".")
     _git(repo, "commit", "-q", "-m", "on topic branch only")
-    _git(repo, "checkout", "-q", "-")  # back to main — HEAD never touches the topic commit
+    _git(repo, "checkout", "-q", "-")  # back to main, HEAD never touches the topic commit
 
     res = await ingest_repo(actions, str(repo))
     assert res["commits"] == 2
@@ -432,7 +431,7 @@ def test_parse_subject_extracts_conventional_commit() -> None:
 
 async def test_commit_carries_type_scope_and_rationale(actions: Actions, tmp_path: Path) -> None:
     """A commit becomes a lightweight DECISION record: its type/scope are groupable and its
-    body is the rationale (why, not just what) — project memory, queryable."""
+    body is the rationale (why, not just what): project memory, queryable."""
     repo = tmp_path / "p2"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -458,9 +457,9 @@ async def test_commit_carries_type_scope_and_rationale(actions: Actions, tmp_pat
 async def test_machine_identity_routes_when_local_part_matches_repo_and_domain_is_machine_shaped(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """MACHINE GIT IDENTITIES ARE NOT PEOPLE (thread 2619f011, ruling edb6b0fc): the live
+    """MACHINE GIT IDENTITIES ARE NOT PEOPLE: the live
     specimen was dev:ballgem@local wrongly typed Person for repo:ballgem's own bootstrap
-    committer — local part == an already-ingested repo's own canonical name AND a
+    committer: local part == an already-ingested repo's own canonical name AND a
     machine-shaped domain ('local'). A fresh ingest must route straight to MachineIdentity,
     never mint the wrong-typed Person at all, and mint a committer_for edge with `since`
     set to the first commit's own date."""
@@ -500,9 +499,9 @@ async def test_machine_identity_bridges_a_pre_existing_wrongly_typed_person_via_
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A Person minted under the OLD, pre-heuristic routing for the same email is never
-    deleted or retyped (objects.type is immutable) — a same_as link (loser -> winner)
+    deleted or retyped (objects.type is immutable): a same_as link (loser -> winner)
     bridges it to the new MachineIdentity instead, exactly the live dev:ballgem@local
-    correction ruling edb6b0fc calls for."""
+    correction the ruling calls for."""
     repo = tmp_path / "ballgem2"
     repo.mkdir()
     env = {**os.environ, "GIT_AUTHOR_NAME": "Bootstrap", "GIT_AUTHOR_EMAIL": "ballgem2@local",
@@ -546,8 +545,8 @@ async def test_declare_machine_identity_refuses_an_unknown_project(actions: Acti
 
 
 async def test_declare_machine_identity_mints_bridges_and_links(actions: Actions) -> None:
-    """THE declare-machine-identity DOOR (ruling edb6b0fc): covers what the ingest
-    heuristic misses — a bot on a real-looking domain the heuristic would never flag as
+    """THE declare-machine-identity DOOR: covers what the ingest
+    heuristic misses: a bot on a real-looking domain the heuristic would never flag as
     machine-shaped. Mints MachineIdentity, bridges a pre-existing wrongly-typed Person via
     same_as (never deleted), and mints committer_for; re-declaring is a no-op."""
     project_id = await actions.create_or_find_object("SoftwareProject", "repo:widget", "test")
@@ -573,7 +572,7 @@ async def test_declare_machine_identity_mints_bridges_and_links(actions: Actions
         "SELECT 1 FROM links WHERE from_id=$1 AND to_id=$2 AND type='committer_for'",
         machine_id, project_id) == 1
 
-    # re-declaring is idempotent — no duplicate links, no error
+    # re-declaring is idempotent: no duplicate links, no error
     out2 = await declare_machine_identity(
         actions, email="ci@widget.io", project="widget", because="repeat", actor="operator")
     assert out2["minted_committer_for"] is False
@@ -587,7 +586,7 @@ async def test_declare_machine_identity_mints_bridges_and_links(actions: Actions
 
 def test_strip_trailers_removes_machine_provenance_keeps_rationale() -> None:
     """The body is memory; the trailers are noise. Strip Co-Authored-By / *-Session / Generated
-    lines (which made 'claude'/'anthropic' the top cross-repo 'concern'), keep the human why —
+    lines (which made 'claude'/'anthropic' the top cross-repo 'concern'), keep the human why,
     and never eat a plain 'Note:'/'Fixes:' line, which is real rationale, not a trailer."""
     body = (
         "we chose a closed op set + a Function hatch\n"

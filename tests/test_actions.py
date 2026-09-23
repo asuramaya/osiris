@@ -15,7 +15,7 @@ async def test_create_or_find_is_idempotent(actions: Actions, case_id: str) -> N
     assert a == b
 
     # exactly one object, one create event, one object_created outbox, one create_object audit
-    # (excluding the session-persistent Type catalog, task #97 — not this test's business)
+    # (excluding the session-persistent Type catalog, task #97, not this test's business)
     assert await actions.pool.fetchval("SELECT count(*) FROM objects WHERE type <> 'Type'") == 1
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM object_events oe "
@@ -64,15 +64,15 @@ async def test_assert_property_supersedes_within_source_but_keeps_set(
 async def test_assert_property_no_ops_a_same_source_same_value_reassertion(
     actions: Actions, case_id: str,
 ) -> None:
-    """The write-side no-op guard (operator ruling on thread 2a280e07, mail 9240): a
+    """The write-side no-op guard (operator ruling): a
     reassertion carrying the SAME value, confidence, and evidence_class from the SAME
-    source as its own current row writes no NEW row — the returned id is the existing
-    row's, unchanged (the id itself is the no-op receipt) — but a genuinely NEWER
+    source as its own current row writes no NEW row. The returned id is the existing
+    row's, unchanged (the id itself is the no-op receipt), but a genuinely NEWER
     observed_at still bumps the existing row's own observed_at in place (last_touched/
-    recency reads must still see it — test_wall's own touch-ranking specimen), never a
+    recency reads must still see it, test_wall's own touch-ranking specimen), never a
     new supersession link. A changed value still writes and supersedes; a different
     source still writes (same-source-only supersession, unaffected by this guard); a
-    changed confidence or evidence_class ALSO still writes even at an unchanged value —
+    changed confidence or evidence_class ALSO still writes even at an unchanged value,
     that combination is real information (test_lap_lint's coin-flip specimen), not noise."""
     obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
     first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
@@ -113,9 +113,9 @@ async def test_assert_property_no_ops_a_same_source_same_value_reassertion(
 async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
     actions: Actions, case_id: str,
 ) -> None:
-    """migration 0047/thread 2a280e07: is_current is the maintained flag current_assertions'
+    """migration 0047: is_current is the maintained flag current_assertions'
     view now reads instead of re-deriving the anti-join on every call. Same-source supersede
-    must flip false on the superseded row only — never the other source's row (#102's own
+    must flip false on the superseded row only, never the other source's row (#102's own
     coexistence rule, unaffected by this being a flag instead of a live NOT EXISTS)."""
     obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
     first = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:rdap", NOW, 0.9)
@@ -129,11 +129,11 @@ async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
     assert rows == {first: False, other_source: True, second: True}
 
 
-# ═══ the is_current invariant (thread 09bde57e, piece c): every write path that sets
+# ═══ the is_current invariant: every write path that sets
 # assertions.supersedes flips the target's is_current=false in the SAME transaction, so no
-# LIVE write can ever leave a fresh stale flag. khepri's own specimen (2696774 supersedes
+# LIVE write can ever leave a fresh stale flag. A historical specimen (2696774 supersedes
 # 2676719, is_current still true on the superseded row) and the 123,914-row population it
-# led to measuring (d8225e71) are BOTH from before this flip discipline existed — a
+# led to measuring are BOTH from before this flip discipline existed, a
 # migration-time backfill-completeness gap, not a hole in the two paths below. This suite
 # proves the two paths hold the invariant live, and that nothing else in the codebase writes
 # `supersedes` without them. ═══
@@ -142,7 +142,7 @@ async def test_assert_property_flips_is_current_on_the_exact_row_it_supersedes(
 async def test_assert_singular_property_supersedes_across_sources(
     actions: Actions, case_id: str,
 ) -> None:
-    """The opt-in cross-source collapse (ruling 1335332e, thread 6361): unlike
+    """The opt-in cross-source collapse (thread 6361): unlike
     assert_property, a singular write retires ANOTHER source's current row too, leaving
     exactly one current value regardless of who wrote it."""
     obj = await actions.create_or_find_object("Thread", "thread:t1", "agent:opener", case_id)
@@ -161,8 +161,8 @@ async def test_assert_singular_property_collapses_every_witness_not_just_one(
     actions: Actions, case_id: str,
 ) -> None:
     """A resolve on a thread with N open witnesses (N boot services corroborating one
-    alarm) must leave exactly one current status afterward, not N-1 — the sub-question
-    Thoth flagged (msg 6408) as the sharpest part of the scoping call."""
+    alarm) must leave exactly one current status afterward, not N-1, the sharpest
+    part of the scoping call."""
     obj = await actions.create_or_find_object("Thread", "thread:t2", "boot:svc-a", case_id)
     a = await actions.assert_property(obj, "status", "open", "boot:svc-a", NOW, 0.9)
     b = await actions.assert_property(obj, "status", "open", "boot:svc-b", NOW, 0.9)
@@ -193,7 +193,7 @@ async def test_assert_singular_property_same_source_still_defers_to_assert_prope
 async def test_assert_property_still_coexists_across_sources_unchanged(
     actions: Actions, case_id: str,
 ) -> None:
-    """The design guard for #102: assert_property itself is UNTOUCHED — multi-source
+    """The design guard for #102: assert_property itself is UNTOUCHED, multi-source
     corroboration (deploy_guard's alarm_schema_drift shape) still coexists unless a caller
     deliberately opts into assert_singular_property."""
     obj = await actions.create_or_find_object("Thread", "thread:t4", "boot:svc-a", case_id)
@@ -206,7 +206,7 @@ async def test_assert_property_still_coexists_across_sources_unchanged(
 
 def test_static_check_only_two_sites_write_the_supersedes_column() -> None:
     """A THIRD insert path into assertions.supersedes, added later without this discipline,
-    is exactly how a fresh stale-flag population gets born again. Grep the whole src tree —
+    is exactly how a fresh stale-flag population gets born again. Grep the whole src tree,
     if this ever finds a third site, the invariant needs a new flip, not a wider allowlist."""
     import pathlib
 
@@ -215,14 +215,14 @@ def test_static_check_only_two_sites_write_the_supersedes_column() -> None:
         src = path.read_text()
         for m in _re.finditer(r"INSERT INTO assertions\b", src):
             # column list may be split across adjacent string literals (line-wrapped
-            # SQL) — look for `supersedes` anywhere before the matching VALUES clause
+            # SQL), look for `supersedes` anywhere before the matching VALUES clause
             window = src[m.start():m.start() + 400]
             values_at = window.find("VALUES")
             column_text = window[:values_at] if values_at != -1 else window
             if _re.search(r"\bsupersedes\b", column_text):
                 sites.append(f"{path}:{src.count(chr(10), 0, m.start()) + 1}")
     assert len(sites) == 2, (
-        f"expected exactly assert_property + supersede_assertion, found {sites!r} — a new "
+        f"expected exactly assert_property + supersede_assertion, found {sites!r}, a new "
         "site must flip is_current in the SAME transaction as its INSERT, per this file's "
         "own two precedents, before it's added to this allowlist")
     assert all(s.startswith("src/actions/core.py:") for s in sites)
@@ -231,8 +231,8 @@ def test_static_check_only_two_sites_write_the_supersedes_column() -> None:
 async def test_contract_assert_property_leaves_zero_stale_flags(
     actions: Actions, case_id: str,
 ) -> None:
-    """End-to-end: after a same-source supersede, stale_current_flags (the thread 09bde57e
-    read door) must report zero for this row — the flip is real, not just is_current itself
+    """End-to-end: after a same-source supersede, stale_current_flags (the retirement
+    read door) must report zero for this row, the flip is real, not just is_current itself
     correct in isolation."""
     from src.orchestrator.retirement import stale_current_flags
 
@@ -250,7 +250,7 @@ async def test_contract_assert_property_leaves_zero_stale_flags(
 async def test_contract_supersede_assertion_leaves_zero_stale_flags(
     actions: Actions, case_id: str,
 ) -> None:
-    """Same contract, the cross-source path (supersede_assertion) — the other of exactly two
+    """Same contract, the cross-source path (supersede_assertion), the other of exactly two
     live writers of assertions.supersedes."""
     from src.orchestrator.retirement import stale_current_flags
 
@@ -268,9 +268,9 @@ async def test_contract_supersede_assertion_leaves_zero_stale_flags(
 async def test_repair_stale_current_flags_heals_a_raw_written_gap(
     actions: Actions, case_id: str,
 ) -> None:
-    """The Actions-layer repair (thread 09bde57e, piece d) against exactly the shape a
+    """The Actions-layer repair against exactly the shape a
     pre-flip-discipline write (or any write outside the two allowlisted sites) leaves
-    behind: a real supersedes FK, is_current never flipped. Batched, idempotent — a second
+    behind: a real supersedes FK, is_current never flipped. Batched, idempotent, a second
     call against an already-clean population repairs nothing."""
     obj = await actions.create_or_find_object("Domain", "stale-repair.com", "analyst:test", case_id)
     stale_id = await actions.assert_property(obj, "registrar", "GoDaddy", "helper:self", NOW, 0.9)
@@ -288,7 +288,7 @@ async def test_repair_stale_current_flags_heals_a_raw_written_gap(
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='repair_stale_current_flags'") == 1
 
-    # idempotent — nothing left to repair on a repeat call
+    # idempotent, nothing left to repair on a repeat call
     again = await actions.repair_stale_current_flags(limit=500, actor="analyst:test")
     assert stale_id not in again
 
@@ -332,7 +332,7 @@ async def test_create_link(actions: Actions, case_id: str) -> None:
 async def test_create_or_find_object_accretes_an_undeclared_type(
     actions: Actions, case_id: str
 ) -> None:
-    """Task #97 workstream 2 — the accretion hook: an undeclared type SELF-DECLARES as a
+    """Task #97 workstream 2: the accretion hook: an undeclared type SELF-DECLARES as a
     stub instead of merely warning. The write always succeeds even in the default
     warn-only runtime mode, and a real Type object materializes for it."""
     from src.ontology.catalog import is_known_object_type, set_strict
@@ -350,7 +350,7 @@ async def test_create_or_find_object_accretes_an_undeclared_type(
 async def test_create_or_find_object_still_raises_in_strict_mode(
     actions: Actions, case_id: str
 ) -> None:
-    """Strict mode ALWAYS wins over accretion — it exists so CI catches a real typo as
+    """Strict mode ALWAYS wins over accretion, it exists so CI catches a real typo as
     a hard failure, and silently minting a stub past that would defeat the point."""
     from src.ontology.catalog import UnknownTypeError, is_known_object_type
 
@@ -442,7 +442,7 @@ async def test_tag_object_is_additive(actions: Actions, case_id: str) -> None:
 
 async def test_find_never_returns_a_corpse(actions: Actions, case_id: str) -> None:
     """THE CORPSE GATE (task #29): a canonical held by a MERGED object resolves to its
-    living head — 2410 in_repo/works_in links landed on merged repo:osiris because
+    living head, 2410 in_repo/works_in links landed on merged repo:osiris because
     find-or-create returned whatever row owned the name, status unread."""
     corpse = await actions.create_or_find_object(
         "SoftwareProject", "repo:corpse-gate", "analyst:test", case_id)
@@ -451,7 +451,7 @@ async def test_find_never_returns_a_corpse(actions: Actions, case_id: str) -> No
     await actions.merge_objects(head, corpse, "one project", "analyst:test", case_id)
     found = await actions.create_or_find_object(
         "SoftwareProject", "repo:corpse-gate", "analyst:test", case_id)
-    assert found == head  # the canonical's owner is merged — the find walks to the head
+    assert found == head  # the canonical's owner is merged, the find walks to the head
 
 
 async def test_unmerge_restores_the_loser(actions: Actions, case_id: str) -> None:
@@ -485,7 +485,7 @@ async def test_unmerge_guards(actions: Actions, case_id: str) -> None:
 async def test_supersede_assertion_retires_a_different_sources_row(
     actions: Actions, case_id: str,
 ) -> None:
-    """The cross-source supersede (thread 52911d2a) — assert_property's own within-source
+    """The cross-source supersede: assert_property's own within-source
     rule leaves two different sources' rows coexisting; supersede_assertion is the one
     legitimate way to retire one of them explicitly, by id."""
     obj = await actions.create_or_find_object("Domain", "corp.com", "analyst:test", case_id)
@@ -505,7 +505,7 @@ async def test_supersede_assertion_retires_a_different_sources_row(
     assert {v["value"] for v in vals} == {"Namecheap"}  # the wrong row is gone from current
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM audit_log WHERE action='supersede_assertion'") == 1
-    # migration 0047/thread 2a280e07: the cross-source retirement flips is_current too,
+    # migration 0047: the cross-source retirement flips is_current too,
     # same discipline as assert_property's own same-source flip
     assert await actions.pool.fetchval(
         "SELECT is_current FROM assertions WHERE id=$1", wrong) is False
@@ -530,6 +530,6 @@ async def test_supersede_assertion_guards(actions: Actions, case_id: str) -> Non
 
     await actions.supersede_assertion(
         obj, "registrar", row_id, "Namecheap", "helper:peer", NOW, 0.9, "correction")
-    with pytest.raises(ActionError):  # already superseded — never twice
+    with pytest.raises(ActionError):  # already superseded, never twice
         await actions.supersede_assertion(
             obj, "registrar", row_id, "MarkMonitor", "helper:another", NOW, 0.9, "twice")

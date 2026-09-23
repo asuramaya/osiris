@@ -1,7 +1,7 @@
-"""Pit Watch Stage B — the pair heartbeat (thread 449bf55d, decision be79f567).
+"""Pit Watch Stage B: the pair heartbeat.
 
-THE AMENDMENT (DM 975, the required one): an addressee with ZERO live session candidates
-must read as NOT MID-TURN and alarm — this is literally the running-but-never-mounted
+THE REQUIRED AMENDMENT: an addressee with ZERO live session candidates
+must read as NOT MID-TURN and alarm. This is literally the running-but-never-mounted
 incident that founded the whole build. test_zero_mount_rows_still_alarms is that case,
 named for it exactly as asked.
 """
@@ -65,10 +65,10 @@ async def test_oldest_stuck_dm_needs_age_past_the_lease(actions: Actions) -> Non
     r = await send_message(actions.pool, from_agent="agent:aaaa0002", from_project="osiris",
                            to_agent="seat:s0000001", body="fresh", grade="ask")
     assert r["dedup"] is False
-    # fresh: younger than any real lease — never stuck
+    # fresh: younger than any real lease, never stuck
     assert await pit_watch._oldest_stuck_dm(
         actions.pool, addressee_seat="seat:s0000001", lease_secs=900) is None
-    # a negative lease treats even a brand-new message as past the line — proves the
+    # a negative lease treats even a brand-new message as past the line: proves the
     # comparison itself is correct without needing to wait a real 900s in a test
     stuck = await pit_watch._oldest_stuck_dm(
         actions.pool, addressee_seat="seat:s0000001", lease_secs=-1)
@@ -92,8 +92,8 @@ async def test_oldest_stuck_dm_ignores_fyi_and_read(actions: Actions) -> None:
 # ═══════════ MID-TURN, INCLUDING THE NO-CANDIDATES CASE ═══════════
 
 async def test_zero_mount_rows_still_alarms(actions: Actions, tmp_path: Path) -> None:
-    """DM 975's required amendment, named exactly as asked: an addressee with NO mount rows
-    at all — this morning's own shape — must read as NOT mid-turn, never as 'unknown, skip'."""
+    """The required amendment, named exactly as asked: an addressee with NO mount rows
+    at all (that morning's own shape) must read as NOT mid-turn, never as 'unknown, skip'."""
     agent = "agent:noonemounted"
     # deliberately no save_mount call: zero candidates is the whole point of this test
     mid_turn = await pit_watch._addressee_mid_turn(
@@ -163,7 +163,7 @@ async def test_escalate_writes_tombstone_and_sends_exactly_one_desk_brief(
     n2 = await actions.pool.fetchval(
         "SELECT count(*) FROM pit_watch_alarms WHERE message_id=2 AND outcome='escalated'")
     assert n2 == 2  # the caller is expected to gate this via _already_escalated; the
-    # primitive itself stays a plain append — proven by _watch_one_direction's own gate below
+    # primitive itself stays a plain append, proven by _watch_one_direction's own gate below
 
 
 # ═══════════ ONE DIRECTION, END TO END ═══════════
@@ -201,7 +201,7 @@ async def test_watch_one_direction_escalates_at_the_threshold(
     third = await _watch()
     assert first == "sighted"
     assert second == "escalated"
-    assert third is None  # already escalated — never fires a third time for this message
+    assert third is None  # already escalated, never fires a third time for this message
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM fleet_messages WHERE to_project='operator' "
         f"AND body LIKE '%message {r['id']}%'")
@@ -268,7 +268,7 @@ async def test_tick_scans_a_pair_both_directions(actions: Actions, tmp_path: Pat
 async def test_tick_never_raises_when_one_pair_is_broken(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """One direction's own failure must never blind the whole tick — matches the file's own
+    """One direction's own failure must never blind the whole tick: matches the file's own
     per-direction try/except contract."""
     worker = await actions.create_or_find_object("Seat", "seat:iiii0001", "test")
     manager = await actions.create_or_find_object("Seat", "seat:jjjj0001", "test")

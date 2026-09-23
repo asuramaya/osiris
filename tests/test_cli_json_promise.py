@@ -1,20 +1,20 @@
-"""THE --json PROMISE, ENFORCED BY RUNNING THE CLI, NOT BY READING IT (Thoth dispatch
-6746, operator's own words: "not a documentation problem... about size and scope").
+"""THE --json PROMISE, ENFORCED BY RUNNING THE CLI, NOT BY READING IT: not a documentation
+problem, but one about size and scope.
 
-test_cli_mcp_parity.py's own gate is a pair of STATIC metadata comparisons — CLI argparse
+test_cli_mcp_parity.py's own gate is a pair of STATIC metadata comparisons: CLI argparse
 structure vs MCP inputSchema, names and param sets only. It never invokes either surface:
 no exit code, no --help text, no --json output is ever parsed by anything in that suite.
 That is the whole, precise reason two live specimens (found by running `osiris --help`
 and every subcommand, not by reading the code) reached the operator through a 4,331-test
 green suite:
 
-  SPECIMEN A: the top-level help's own promise — "Every read verb takes --json" — is
+  SPECIMEN A: the top-level help's own promise, "Every read verb takes --json", is
   FALSE for two of the four verbs in its own displayed "see the fleet" category
   (boot-status, smoke). Not a regression: this was never true, so no diff anyone could
   have reviewed would ever have caught it.
 
   SPECIMEN B: `osiris unmerge --json` silently dropped to a bare stderr print on its own
-  refusal path (fixed alongside this file, cli.py's `cmd_unmerge`) — the ONE command of
+  refusal path (fixed alongside this file, cli.py's `cmd_unmerge`), the ONE command of
   the seven that both register `--json` AND used to short-circuit before ever reaching
   `render.emit`.
 
@@ -27,7 +27,7 @@ Two gates here, matching that shape exactly:
 
   (2) THE FIRST TEST IN THIS SUITE THAT ACTUALLY EXECUTES A CLI COMMAND AND READS STDOUT:
   every command that registers `--json` gets run once, through its own edge (a refusal
-  for a write-shaped verb, a mocked minimal payload for a pure-read one — the SAME
+  for a write-shaped verb, a mocked minimal payload for a pure-read one, the SAME
   edge/mock shapes tests/test_cli.py already uses for these functions, never a live
   daemon, never a real write), and its stdout must round-trip through `json.loads()`.
   Would have caught specimen B immediately.
@@ -65,32 +65,32 @@ READ_VERBS = frozenset({
 })
 
 # Every subcommand that actually registers `--json` today (cross-checked live below,
-# never hand-trusted) — the population gate (2) exercises one edge invocation each for.
+# never hand-trusted). The population gate (2) exercises one edge invocation each for.
 JSON_COMMANDS = frozenset({
     "stop", "fleet", "roster", "backlog", "threads", "inbox", "team", "status", "search",
     "desk", "show", "unmerge", "retention", "boot-status", "smoke", "send", "decide", "thread",
     "proposal", "soul-key", "settings", "lint", "audit", "backfill", "graph-migrate",
     "graph-export",
-    # CLI PARITY, THE NEXT CENSUS GAPS (Thoth mail 10441, thread 163c6832)
+    # CLI PARITY, THE NEXT CENSUS GAPS
     "dossier", "object-events", "succession-chain", "candidates", "composition",
     "retire-assertion", "retire-link", "cite", "citation",
-    # PARITY GAPS, WAVE 27 item 3 (thread 45aff160)
+    # PARITY GAPS, a later batch item
     "backup-settings",
-    # THE BACKUP CLI DOOR, piece 1 (Thoth mail 12809)
+    # THE BACKUP CLI DOOR, piece 1
     "backup-status",
-    # SEAT TREE FABRICATION priority fix (Thoth mail 11759)
+    # SEAT TREE FABRICATION priority fix
     "sweep-seat-trees",
-    # WAVE 27, PARITY GAPS 5/6 (Thoth mail 11752)
+    # PARITY GAPS, another batch item
     "inspect", "practices",
-    # #92, THE ZERO-TOKEN READ HOOK (Thoth mail 11780 item B): fleet_digest had no CLI
-    # door at all until now — needed so the hook has a real subcommand to shell out to.
+    # #92, THE ZERO-TOKEN READ HOOK: fleet_digest had no CLI
+    # door at all until now, needed so the hook has a real subcommand to shell out to.
     "digest",
-    # #93, THE MECHANICAL SETTLE (Thoth mail 11789): settle had no CLI door at all until
-    # now — needed so the PreCompact fallback (stdlib-only, no MCP client) can mint a
+    # #93, THE MECHANICAL SETTLE: settle had no CLI door at all until
+    # now, needed so the PreCompact fallback (stdlib-only, no MCP client) can mint a
     # machine-handoff decision through it.
     "settle",
-    # KEY CUSTODY REWRITTEN's own follow-on, THE OFFLOAD RUNNER (ruling be21384a, Thoth
-    # mail 12813): restic-key mirrors soul-key's own status/init shape; offload-runner
+    # KEY CUSTODY REWRITTEN's own follow-on, THE OFFLOAD RUNNER: restic-key
+    # mirrors soul-key's own status/init shape; offload-runner
     # is the timer's own ExecStart, safe to run by hand.
     "restic-key", "offload-runner",
 })
@@ -116,26 +116,26 @@ def test_read_verbs_still_name_real_commands() -> None:
     for name in READ_VERBS:
         assert name in subparsers, (
             f"{name!r} is declared a read verb in READ_VERBS but no such CLI command "
-            "exists any more — update this set")
+            "exists any more, update this set")
 
 
 def test_every_declared_read_verb_registers_json() -> None:
     """THE GATE THAT WOULD HAVE CAUGHT SPECIMEN A: the CLI's own help says every read
     verb takes --json. Prove it, live, off the same argparse structure the parity gate
-    already trusts — never by reading the help text."""
+    already trusts, never by reading the help text."""
     subparsers = _subparsers()
     missing = sorted(
         name for name in READ_VERBS if not _registers_json(subparsers[name]))
     assert missing == [], (
         "the CLI's own top-level help promises \"Every read verb takes --json\" but "
-        f"these declared read verbs register no such flag: {missing} — either add "
+        f"these declared read verbs register no such flag: {missing}. Either add "
         "--json to each, or narrow the promise in _TOP_LEVEL_HELP to match reality "
-        "(Thoth dispatch 6746, specimen A: a promise that was never true, not a "
+        "(specimen A: a promise that was never true, not a "
         "regression)")
 
 
 def test_the_gate_itself_catches_a_read_verb_with_no_json(monkeypatch: Any) -> None:
-    """PROVE THE MECHANISM before trusting it against the real parser — the same
+    """PROVE THE MECHANISM before trusting it against the real parser, the same
     discipline test_cli_mcp_parity.py's own proof tests hold to."""
     p = argparse.ArgumentParser()
     sub = p.add_subparsers(dest="command")
@@ -151,14 +151,14 @@ def test_the_gate_itself_catches_a_read_verb_with_no_json(monkeypatch: Any) -> N
 # --- GATE 2: execution, one edge per --json command -----------------------------------
 
 def test_json_commands_set_matches_the_parser_live() -> None:
-    """JSON_COMMANDS is a declared population, not a hand-trusted guess — this proves it
+    """JSON_COMMANDS is a declared population, not a hand-trusted guess. This proves it
     against the live parser exactly the way test_cli_mcp_parity's own allowlist checks
     prove theirs: every subcommand that registers --json is in the set, and nothing in
     the set has stopped registering it."""
     subparsers = _subparsers()
     live = frozenset(name for name, sp in subparsers.items() if _registers_json(sp))
     assert live == JSON_COMMANDS, (
-        f"JSON_COMMANDS has drifted from the live parser — live has {sorted(live)}, "
+        f"JSON_COMMANDS has drifted from the live parser, live has {sorted(live)}, "
         f"declared has {sorted(JSON_COMMANDS)}. Update JSON_COMMANDS and add/remove the "
         "matching edge test below.")
 
@@ -176,7 +176,7 @@ async def test_cmd_stop_refusal_emits_json(actions: Actions) -> None:
 
 
 async def test_cmd_unmerge_refusal_emits_json(actions: Actions) -> None:
-    """Specimen B itself, re-proven here as part of the population gate — the dedicated
+    """Specimen B itself, re-proven here as part of the population gate. The dedicated
     regression test lives in test_cli.py (test_cmd_unmerge_refusal_still_emits_json),
     watched fail before cli.py's fix and pass after; this is the enumeration's own copy,
     proving the population as a whole rather than one command in isolation."""
@@ -210,7 +210,7 @@ async def test_cmd_show_refusal_emits_json(monkeypatch: Any) -> None:
     from contextlib import redirect_stdout
 
     async def _no_match(url: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-        return {"error": "no thread/decision matches 'nope' — recall never guesses"}
+        return {"error": "no thread/decision matches 'nope', recall never guesses"}
 
     monkeypatch.setattr("src.orchestrator.mcp_client.call_mcp_tool", _no_match)
     buf = io.StringIO()
@@ -248,7 +248,7 @@ async def test_cmd_send_refusal_emits_json(actions: Actions) -> None:
     assert out == 1
     # THE REFUSAL PATH PRINTS TO STDERR, NOT STDOUT (unlike stop/unmerge's own JSON
     # refusal shape): send_message raises ValueError before any receipt exists to
-    # render — there is nothing to json.loads() on a refusal, only on a real send.
+    # render. There is nothing to json.loads() on a refusal, only on a real send.
     assert buf.getvalue() == ""
 
 
@@ -290,7 +290,7 @@ async def test_cmd_thread_refusal_emits_json(actions: Actions) -> None:
     with redirect_stdout(buf):
         out = await cmd_thread(["no such thread anywhere"], as_json=True, pool=actions.pool)
     assert out == 1
-    # same shape as send's own refusal above — nothing to render on a no-match
+    # same shape as send's own refusal above: nothing to render on a no-match
     assert buf.getvalue() == ""
 
 
@@ -317,7 +317,7 @@ async def test_cmd_boot_status_emits_json(actions: Actions) -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         out = await cmd_boot_status(pool=actions.pool, as_json=True)
-    assert out == 0  # a fresh test DB carries no active seats at all — no gaps
+    assert out == 0  # a fresh test DB carries no active seats at all, no gaps
     printed = json.loads(buf.getvalue())
     assert printed == {"gaps": []}
 

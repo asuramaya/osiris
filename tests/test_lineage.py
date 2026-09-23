@@ -1,8 +1,8 @@
-"""Swarm lineage — the fractal fleet reconstructed from the harness's on-disk record.
+"""Swarm lineage: the fractal fleet reconstructed from the harness's on-disk record.
 
 Proven empirically (spawn experiment): a sub-agent inherits the parent's job_dir, so mounting
 COLLAPSES it into the parent (a Sonnet child records as the Opus parent). These tests drive the
-reconstruction that fixes it — from `subagents/agent-<id>.{jsonl,meta.json}`, with fixtures that
+reconstruction that fixes it, from `subagents/agent-<id>.{jsonl,meta.json}`, with fixtures that
 mirror the REAL layout: model in `{"type":"assistant","message":{"model":…}}`, a spawn as a
 `tool_use` block whose id is the child's `toolUseId`.
 """
@@ -30,7 +30,7 @@ _ROOT = "agent:abc12345"  # first segment of the session uuid = the mounted root
 
 def _assistant(model: str, *tool_use_ids: str) -> str:
     """One assistant transcript line: carries the model, and emits the given tool_use ids
-    (the spawn calls this agent made — how a parent is linked to the children it spawned)."""
+    (the spawn calls this agent made, how a parent is linked to the children it spawned)."""
     content = [{"type": "tool_use", "id": t, "name": "Agent", "input": {}} for t in tool_use_ids]
     content.append({"type": "text", "text": "ok"})
     return json.dumps({"type": "assistant", "message": {"model": model, "content": content}})
@@ -116,7 +116,7 @@ async def test_register_swarm_wires_tree_model_and_authority(
 async def test_register_swarm_resolves_an_existing_project_by_name_not_canonical(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511): the session dir derives a
+    """PROJECT IDENTITY DRIFT (operator ruling): the session dir derives a
     project label ("demo") that must be resolved against an EXISTING project's
     current name, not re-minted under a fresh `repo:demo` canonical when the real
     object already lives under an older, renamed-away canonical."""
@@ -139,7 +139,7 @@ async def test_register_swarm_is_idempotent(actions: Actions, tmp_path: Path) ->
     session = _write_swarm(tmp_path)
     r1 = await register_swarm(actions, session)
     r2 = await register_swarm(actions, session)
-    # re-scan re-processes both agents; but the second run creates NO new edges (idempotent) —
+    # re-scan re-processes both agents; but the second run creates NO new edges (idempotent),
     # the invariant is the graph state, not the per-run counts (which report what CHANGED).
     assert r1["agents"] == r2["agents"] == 2
     assert r1["spawned_by"] == 2 and r2["spawned_by"] == 0
@@ -154,12 +154,12 @@ async def test_register_swarm_is_idempotent(actions: Actions, tmp_path: Path) ->
 async def test_register_swarm_refuses_a_malformed_project_but_still_registers_the_child(
     actions: Actions, tmp_path: Path, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """#139's dispatch, thread db14d8be: register_swarm was register_spawn's unremediated
-    sibling — same disk-scanned, unsanitized `project` signal, same #162-class risk, but
+    """#139's dispatch: register_swarm was register_spawn's unremediated
+    sibling, same disk-scanned, unsanitized `project` signal, same #162-class risk, but
     commit b690393 only touched register_spawn. Fixed with register_spawn's OWN pattern,
     matched exactly (task #107's `_validate_repo_name`, a confession via _log.warning
     rather than a silent skip). A session dir whose cwd-derived project segment contains a
-    space (harness-encoded `-home-x-code-my project`) is malformed by #107's rule — the
+    space (harness-encoded `-home-x-code-my project`) is malformed by #107's rule, the
     child registration and its `project` property must still land; only the SoftwareProject
     mint and works_in edge are refused, aloud."""
     session = tmp_path / "-home-x-code-my project" / "abc12345-5985-491e-9ac2-af94587b18ac"
@@ -189,7 +189,7 @@ async def test_sense_swarms_walks_every_session(actions: Actions, tmp_path: Path
     _write_swarm(tmp_path)  # one session with a subagents/ tree under the projects root
     counts = await sense_swarms(actions, tmp_path)
     assert counts["agents"] == 2
-    # empty on a second pass? no — idempotent re-registration still reports what it saw
+    # empty on a second pass? no, idempotent re-registration still reports what it saw
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:gc%'") == 1
 
@@ -212,7 +212,7 @@ async def test_register_swarm_flags_within_session_subagent_swap(
 ) -> None:
     """Task 4: a sub-agent demoted mid-run (>1 model in its OWN transcript) showed no swap when
     only the LATEST model was stamped. register_swarm now detects the transition and stamps
-    model_swapped — within-session only (a swarm node has no operator-intent to diverge from)."""
+    model_swapped, within-session only (a swarm node has no operator-intent to diverge from)."""
     session = tmp_path / "-home-x-code-demo" / "abc12345-9999-491e-9ac2-af94587b18ab"
     subs = session / "subagents"
     subs.mkdir(parents=True)
@@ -241,7 +241,7 @@ async def test_register_swarm_flags_within_session_subagent_swap(
 async def test_register_swarm_no_false_swap_on_single_model(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """A sub-agent that ran ONE model gets NO model_swapped — no cry-wolf on the swarm."""
+    """A sub-agent that ran ONE model gets NO model_swapped, no cry-wolf on the swarm."""
     await register_swarm(actions, _write_swarm(tmp_path))  # child01 + gc, each a single model
     swapped = await actions.pool.fetchval(
         "SELECT count(*) FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -257,16 +257,16 @@ def _assistant_tool(model: str, tool_name: str) -> str:
 
 
 async def test_backed_by_observation_distinguishes_look_from_hearsay(tmp_path: Path) -> None:
-    """Tier-1 act-detection (ruling 108ff2e8): an agent that ran its OWN tool looked; one whose
+    """Tier-1 act-detection: an agent that ran its OWN tool looked; one whose
     only tool_use is an Agent spawn merely heard a child. The credence rebuttal reads this."""
     session = tmp_path / "-home-x-code-demo" / "abc12345-2222-491e-9ac2-af94587b18ab"
     subs = session / "subagents"
     subs.mkdir(parents=True)
-    # a LOOKER — ran its own Bash (an own-observation act)
+    # a LOOKER, ran its own Bash (an own-observation act)
     (subs / "agent-looker01.meta.json").write_text(json.dumps(
         {"agentType": "x", "description": "d", "toolUseId": "tl", "spawnDepth": 1}))
     (subs / "agent-looker01.jsonl").write_text(_assistant_tool("claude-sonnet-5", "Bash") + "\n")
-    # a HEARSAY agent — its only tool_use is an Agent spawn; it never looked, only heard a child
+    # a HEARSAY agent, its only tool_use is an Agent spawn; it never looked, only heard a child
     (subs / "agent-hears002.meta.json").write_text(json.dumps(
         {"agentType": "x", "description": "d", "toolUseId": "th", "spawnDepth": 1}))
     (subs / "agent-hears002.jsonl").write_text(_assistant("claude-opus-4-8", "tu-x") + "\n")
@@ -277,7 +277,7 @@ async def test_backed_by_observation_distinguishes_look_from_hearsay(tmp_path: P
 
 async def test_sense_swarms_skips_unchanged_trees(actions: Actions, tmp_path: Path) -> None:
     """The mtime watermark (crunch residual): an unchanged subagents/ tree is not re-read on
-    the next pass — real IO at fleet scale — and a touched tree re-registers."""
+    the next pass, real IO at fleet scale, and a touched tree re-registers."""
     import os
     import time as _t
 
@@ -295,16 +295,16 @@ async def test_sense_swarms_skips_unchanged_trees(actions: Actions, tmp_path: Pa
     assert third["skipped_unchanged"] == 0 and third["agents"] > 0
 
 
-# ═══ unwitnessed_spawns — the self-audit (obligation cabfb4b2, Ptah VII's rotten-apple
-# report: three subagents spawned_by his own identity that he never spawned, no transcript
+# ═══ unwitnessed_spawns: the self-audit (obligation, a rotten-apple
+# report: three subagents spawned_by an identity that never spawned them, no transcript
 # ever materializing anywhere on disk for any of them) ═══════════════════════════════════
 
 async def test_unwitnessed_spawns_flags_a_child_with_no_transcript_anywhere(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The Ptah shape: a live spawned_by edge minted via register_spawn (the LIVE path,
+    """The unwitnessed-spawn shape: a live spawned_by edge minted via register_spawn (the LIVE path,
     the same one _actor_for drives), with NO transcript ever appearing on disk for the
-    child — exactly the specimen unwitnessed_spawns exists to surface."""
+    child, exactly the specimen unwitnessed_spawns exists to surface."""
     await actions.create_or_find_object("Agent", "agent:parentxx", "test")
     await register_spawn(actions, "ghost0001", parent_agent="agent:parentxx",
                          project="demo", session="parentxx", witnessed=True)
@@ -317,7 +317,7 @@ async def test_unwitnessed_spawns_flags_a_child_with_no_transcript_anywhere(
 async def test_unwitnessed_spawns_excludes_a_child_with_a_real_transcript_on_disk(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A child register_swarm reconstructed FROM a real transcript never shows up here —
+    """A child register_swarm reconstructed FROM a real transcript never shows up here,
     the on-disk file is exactly the corroboration this audit checks for."""
     await actions.create_or_find_object("Agent", _ROOT, _ROOT)
     await register_swarm(actions, _write_swarm(tmp_path))
@@ -335,7 +335,7 @@ async def test_unwitnessed_spawns_is_empty_for_an_identity_with_no_children(
 async def test_unwitnessed_spawns_ignores_a_retracted_spawned_by_edge(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A live edge only — an unmerge/retraction must not go on flagging a child that is no
+    """A live edge only, an unmerge/retraction must not go on flagging a child that is no
     longer even claimed as this identity's own."""
     await actions.create_or_find_object("Agent", "agent:parentyy", "test")
     await register_spawn(actions, "ghost0002", parent_agent="agent:parentyy",
@@ -380,7 +380,7 @@ async def test_the_mcp_tool_defaults_to_the_callers_own_identity(actions: Action
 async def test_the_mcp_tool_can_audit_a_named_identity_without_being_mounted(
     actions: Actions,
 ) -> None:
-    """A pure read, never gated the way a write would be — the operator's own item (4):
+    """A pure read, never gated the way a write would be, the operator's own item (4):
     checking SOMEONE ELSE'S identity needs no mount of your own."""
     from src import mcp_server as srv
 
