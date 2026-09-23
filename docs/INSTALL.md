@@ -199,36 +199,36 @@ systemctl --user status osiris-mcp osiris-worker
 
 ---
 
-## 8. Initialize the soul key & backup targets (first run only)
+## 8. Initialize the soul key and backup targets (first run only)
 
-Both units already start fine without a key (see [`KEYS.md`](KEYS.md) — a missing key
-degrades to unencrypted writes, it never blocks boot), but do this **before** any real
+Both services already start fine without a key (see [`KEYS.md`](KEYS.md): a missing key
+degrades to unencrypted writes, it never blocks startup), but do this before any real
 transcript data accumulates, so nothing is ever written unencrypted in the meantime. Run
-each step in your own terminal, as the same user the units run as (your own login user, for
-the `--user` unit shape above) — this order matters:
+each step in your own terminal, as the same user the services run as (your own login user,
+for the deployment shape used above). This order matters:
 
 ```bash
-# 1. Mint the soul-store encryption key and restart both units to pick it up
+# 1. Mint the soul-store encryption key and restart both services to pick it up
 osiris soul-key init --restart
 
 # 2. Enroll a FIDO2 Security Key as your recovery path (plug it in first)
 osiris soul-key enroll-recovery
 
-# 3. Mint the restic repository password (a SEPARATE credential — see KEYS.md)
+# 3. Mint the restic repository password (a separate credential, see KEYS.md)
 osiris restic-key init
 
-# 4. Add your offload targets — a local drive, a NAS, or both (see BACKUP.md)
+# 4. Add your offload targets: a local drive, a network drive, or both (see BACKUP.md)
 osiris backup-settings write \
   --offload-add nas --offload-kind restic --offload-target "sftp:nas.local:/backups/osiris" \
   --offload-schedule "*:0/15" --because "first-run offload target"
 
-# 5. Run one offload tick by hand to confirm it actually reaches the target
+# 5. Run one offload attempt by hand to confirm it actually reaches the target
 osiris offload-runner tick
 
 # 6. Prove the offload target genuinely restores, not just that it accepted a backup
 osiris soul-key restore-drill
 ```
 
-`osiris backup-status` and the console's Settings pane (`Ctrl+K` → *Settings*, or the
-header gear) are your ongoing dashboard after this — see [`BACKUP.md`](BACKUP.md) and
-[`REFERENCE.md`](REFERENCE.md#the-consoles-settings-pane).
+`osiris backup-status` and the console's Settings pane, opened from the command palette or
+the header's gear icon, are your ongoing dashboard after this. See
+[`BACKUP.md`](BACKUP.md) and [`REFERENCE.md`](REFERENCE.md#the-consoles-settings-pane).

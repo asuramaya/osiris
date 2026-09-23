@@ -379,44 +379,42 @@ fourth mode straight onto `compositions.run_spec` for an ephemeral, never-saved 
 
 ## `osiris backup-settings <get|write> [--vault-path P] [--timer UNIT=ONCALENDAR]... [--offload-add NAME --offload-kind local|restic --offload-target PATH_OR_URL --offload-schedule ONCALENDAR [--offload-mountpoint P] [--offload-disabled]] [--offload-remove NAME] [--timer-schedules JSON] [--offbox-repositories JSON] [--because R] [--ruling REF]`
 
-The backup config panel's own CLI door — get/write over the vault path, the five
-backup-lane timer schedules, and offload targets, the same functions the
-`backup_settings` MCP tool and the CMD-K panel call. `write` requires `--because`.
+Reads or writes the backup configuration: the vault path, the five backup timer schedules,
+and offload targets. `write` requires `--because`.
 
-`--vault-path` is always-local (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, operator
-ruling be21384a): validated absolute/exists/writable, and refused outright if it
-doesn't resolve onto a mountpoint declared in `/etc/fstab` or a systemd `.mount` unit's
-own `Where=` — the vault must survive a reboot unattended. Sitting on the same block
-device as `/` only warns, never refuses.
+`--vault-path` must always resolve to a location on this machine: validated as absolute,
+existing, and writable, and refused outright if it doesn't resolve onto a mount point
+declared as always-present in the system configuration. The vault must survive a reboot
+unattended. Sitting on the same disk as the system drive only produces a warning, never a
+refusal.
 
-`offload_targets` replaces the deprecated `offbox_repositories` (still readable for one
-release; `get` synthesizes `offload_targets` read-time from old rows when the new field
-was never explicitly set). Each target is `{name, kind: local|restic, path_or_url,
-expected_mountpoint (local only), schedule, enabled}` — a laptop's own intermittent
-targets (a drive only present when docked, a NAS only on Tailscale/LAN), not just a
-URL. `--timer`/`--offload-add`/`--offload-remove` are ergonomic CLI-only flags: they
-read the CURRENT settings first and merge in just the named unit or target, so a
-one-line change doesn't require re-typing the whole field. `--timer-schedules`/
-`--offbox-repositories` (raw JSON, full-replace) remain for scripted bulk writes.
+`offload_targets` replaces an older, deprecated field kept readable for one more release; a
+read fills in `offload_targets` automatically from the old rows when the new field was
+never explicitly set. Each target is `{name, kind: local|restic, path_or_url,
+expected_mountpoint (local only), schedule, enabled}`, describing an intermittent target
+such as a drive only present when docked, or a network drive only reachable on the local
+network, not just a single address. `--timer`/`--offload-add`/`--offload-remove` are
+convenient command-line-only flags: they read the current settings first and merge in just
+the named unit or target, so a one-line change doesn't require re-typing the whole field.
+`--timer-schedules`/`--offbox-repositories` (raw JSON, full replace) remain for scripted
+bulk writes.
 
 ## `osiris backup-status [--vault P] [--backups P] [--json]`
 
-The backup panel's own live health read: timers (schedule + configured-vs-shipped +
-live systemd state), vault dump/base-backup counts, disk headroom, prune-ladder tiers,
-manifest state — the same `backup_status` composition Function the CMD-K panel calls,
-called directly (no MCP tool wraps its own `--vault`/`--backups` path overrides, so
-this is a CLI-side call over the Function, same NO_MCP_EQUIVALENT shape as `lint`/
-`audit` above). `--vault`/`--backups` override the production paths, for a test or a
-non-standard layout.
+A live health check: timer schedules and live service state, vault dump and base-backup
+counts, disk headroom, prune schedule details, and plan status. Called directly rather than
+through the generic composition command, since no other door passes through its own
+`--vault`/`--backups` path overrides. `--vault`/`--backups` override the production paths,
+for a test or a non-standard setup.
 
 ## `osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> [flags]`
 
-THE KEY DOOR (ruling e0b98ff2) — mint, inspect, rotate, or recover the soul-store
-encryption key; also drills an off-box backup's own restorability. Full mechanism,
-custody ladder, every flag, and exact terminal output for each action:
-[`KEYS.md`](KEYS.md#everyday-operation). `status`/`init`/`rotate`/`restore-drill` are
-also exposed over the console's own REST doors (localhost-only); `enroll-recovery`/
-`recover` stay CLI-only by design — no action under this door is ever an MCP tool.
+Mint, inspect, rotate, or recover the soul-store encryption key, and drill an off-box
+backup's own restorability. Full mechanism, custody ladder, every flag, and exact terminal
+output for each action: [`KEYS.md`](KEYS.md#everyday-operation).
+`status`/`init`/`rotate`/`restore-drill` are also exposed over the console's own network
+routes (reachable only from the local machine). `enroll-recovery`/`recover` stay
+command-line only by design: no action here is ever exposed to an automated agent.
 
 ```
 osiris soul-key init
@@ -431,12 +429,11 @@ osiris soul-key restore-drill
 
 ## `osiris restic-key <status|init> [--path P] [--backend host-cred|host+tpm2|file] [--json]`
 
-The offload runner's own credential door (ruling e0b98ff2, "same shape for the restic
-repository password") — a SEPARATE secret from the soul key, protecting the restic
-repository's own encryption rather than the soul store. `status`/`init` only; no
-`rotate`/`enroll-recovery`/`recover` yet (rotating a restic password additionally needs a
-`restic key add`/`remove` pass against the live repository — a deliberate scope cut for
-this first cut). See [`KEYS.md`](KEYS.md#the-restic-password).
+The offload runner's own credential command: a separate secret from the soul key,
+protecting the restic repository's own encryption rather than the soul store.
+`status`/`init` only; no `rotate`/`enroll-recovery`/`recover` yet. Rotating a restic
+password additionally needs a live pass against the repository itself, a deliberate scope
+cut for now. See [`KEYS.md`](KEYS.md#the-restic-password).
 
 ```
 osiris restic-key init
@@ -445,46 +442,41 @@ osiris restic-key status
 
 ## `osiris offload-runner tick [--vault P] [--json]`
 
-Runs one pass of the opportunistic offload runner over every enabled
-`backup.offload_targets` row: an absent `local` target (drive unplugged) is skipped
-silently, a present `local` target or any `restic` target gets a real `restic backup`
-(initializing the repository first if it looks uninitialized). Writes a per-target
-receipt (`last_successful_offload`/`last_attempt_at`/`last_error`) that `osiris
-backup-status` reads back. Meant as `osiris-offload.timer`'s own `ExecStart` (every 15
-minutes) but safe to run by hand any time. Refuses with one clear error, doing nothing
-per-target, if `osiris restic-key init` was never run. See
-[`BACKUP.md`](BACKUP.md#the-opportunistic-offload-runner).
+Runs one pass of the opportunistic offload runner over every enabled offload target: an
+absent `local` target (for example, an unplugged drive) is skipped silently, while a
+present `local` target or any `restic` target gets a real backup attempt (initializing the
+repository first if it looks uninitialized). Writes a per-target result
+(`last_successful_offload`/`last_attempt_at`/`last_error`) that `osiris backup-status`
+reads back. Meant to run automatically every 15 minutes, but safe to run by hand any time.
+Refuses with one clear error, doing nothing per-target, if `osiris restic-key init` was
+never run. See [`BACKUP.md`](BACKUP.md#the-opportunistic-offload-runner).
 
-## `scripts/osiris_prune_ladder.py [--manifest | --apply-if-clear | --apply]` — the retention ladder
+## `scripts/osiris_prune_ladder.py [--manifest | --apply-if-clear | --apply]`: the retention schedule
 
-Not an `osiris` subcommand (no console-script door onto it yet) — a standalone script, run
-by hand or via a weekly timer pair (`deploy/osiris-prune-manifest.{service,timer}`,
-`deploy/osiris-prune-apply.{service,timer}`). Thins the DB dump population in `backups/`
-and the vault, plus the vault's own base backups, WAL archive, and transcript chains,
-GFS-style (every survivor
-inside 48h stays whole; 48h–30d thins to one/day; 30d–1y to one/week; beyond that to
-one/month). **DRY-RUN IS THE DEFAULT** (ruling 39384a87/c53a5fc0) — bare invocation only
-prints what WOULD be removed, `--apply` actually deletes what it just printed, and the
-weekly timer pair instead uses `--manifest` (mails the identical dry-run to the operator's
-desk as a decision brief) then, ~20h later, `--apply-if-clear` (applies only if that brief
-is still un-dimmed — dimming it is the operator's own word, given in advance, that the plan
-should NOT run). This is a distinct mechanism from `osiris retention` (which thins DB
-tables — `outbox`/`audit-log` rows — and has its own independent `--execute` gate); this
+Not an `osiris` subcommand yet: a standalone script, run by hand or by a weekly pair of
+scheduled tasks. Thins the database dump population in `backups/` and the vault, plus the
+vault's own base backups, write-ahead log archive, and transcript chains, using a classic
+thinning pattern: every survivor inside 48 hours stays whole, 48 hours to 30 days thins to
+one per day, 30 days to a year thins to one per week, and beyond that thins to one per
+month. A dry run is always the default: a bare invocation only prints what would be
+removed, `--apply` actually deletes what it just printed, and the weekly pair instead uses
+`--manifest` (mails the identical dry run for review) then, about 20 hours later,
+`--apply-if-clear` (applies only if that plan is still marked current, meaning it was given
+in advance and not since marked stale). This is a distinct mechanism from `osiris
+retention` (which thins database tables and has its own independent `--execute` gate); this
 script only ever touches files on disk.
 
-**Dormant seat transcripts** (thread 13353 item 2 — a re-minted seat can carry a large
-resumable harness transcript sitting under its own scaffolded identity directory,
-`~/.osiris/seats/<handle>/`, that nothing revisits once the seat succeeds and its lineage
-moves on): `--manifest`/`--apply-if-clear` now also group the SAME transcript-cache-prune
-population (dead — no file activity past `--dead-after-days`, default 30 — AND fully
-captured by the soul-store, the identical safety test every other session-cache prune
-already uses) by which seat's own identity directory produced it, naming each dormant
-seat and its total size in the manifest body: `chowder: 3 file(s), 57.2 MB`. This is a
-rollup for the operator's own reading, never a separate deletion path — the underlying
-files apply (or don't) exactly as the flat transcript-cache-prune population already did,
-behind the identical manifest-then-dim gate, never outside it. `--seat-root`/
-`--projects-root` override the real `~/.osiris/seats`/`~/.claude/projects` paths — test
-seams only, never set in production.
+**Dormant seat transcripts.** A re-minted worker seat can carry a large resumable
+transcript sitting under its own identity directory that nothing revisits once the seat's
+successor takes over. `--manifest`/`--apply-if-clear` group the same transcript-cache-prune
+population (dead: no file activity past `--dead-after-days`, default 30, and fully captured
+by the soul store, the identical safety test every other session-cache prune already uses)
+by which seat's own identity directory produced it, naming each dormant seat and its total
+size in the mailed plan, for example `worker-name: 3 file(s), 57.2 MB`. This is a summary
+for review, never a separate deletion path: the underlying files apply, or don't, exactly
+as the flat transcript-cache-prune population already did, behind the identical
+plan-then-mark-stale gate, never outside it. `--seat-root`/`--projects-root` override the
+default seat and transcript directory locations, test-only flags never set in production.
 
 ## `osiris digest [--hours N] [--mark-seen] [--json] [--text]`
 

@@ -10,605 +10,551 @@ class Settings(BaseSettings):
 
     database_url: str = "postgresql://osiris:osiris@127.0.0.1:5432/osiris"
     redis_url: str = "redis://127.0.0.1:6379/0"
-    # Single static operator identity — fills the actor role CF Access would have provided.
+    # Single static operator identity, fills the actor role an SSO layer would provide.
     osiris_actor: str = "analyst:operator"
     osiris_artifact_dir: str = "./artifacts"
     # On-chain ingest. Etherscan v2 is the one base where "keyless" bends: the API
-    # rejects unkeyed calls, but a free key lifts the whole limit. Empty => the ETH
+    # rejects unkeyed calls, but a free key lifts the whole limit. Empty means the ETH
     # connector degrades gracefully (returns an error dict, never crashes a run).
     etherscan_api_key: str = ""
-    # The watch (cron Phase 3): comma-separated query terms to watch for new SEC Form D
-    # filings (e.g. "Neuralink,Anthropic"). Empty => the worker registers no source tick
+    # The watch (cron phase 3): comma-separated query terms to watch for new SEC Form D
+    # filings (e.g. "Neuralink,Anthropic"). Empty means the worker registers no source tick
     # (the watch stays source-agnostic until an operator names a beat).
     osiris_watch_form_d: str = ""
-    # AI extraction (cron Phase 4): the model used by the universal extractor. A
-    # document→entities task is flash-tier; Opus would be wasteful per-filing.
+    # AI extraction (cron phase 4): the model used by the universal extractor. A
+    # document-to-entities task is flash-tier; a larger model would be wasteful per filing.
     osiris_extract_model: str = "claude-haiku-4-5-20251001"
     anthropic_api_key: str = ""
-    # THE DAILY CEILING (src/orchestrator/ceiling.py) — what Osiris may SPEND in a rolling 24h
-    # before every paid producer stops. Until now NOTHING said this, anywhere, and every
-    # catastrophe in this system's life was a spend catastrophe: a miner that walked every
-    # transcript forever, a trigger that minted 463 real Claude sessions on abandoned projects.
-    # The operator's law: "nobody will touch this if it burns."
-    # Osiris's real measured spend, per day, over its whole life: median ~$3.60, peak $11.89.
-    # So $10 is "a busy day and no worse" — it would never have blocked an honest day's work.
-    # 0 = STOPPED (an honest kill switch). < 0 = UNLIMITED (a deliberate choice to run with no net).
+    # The daily spend ceiling (src/orchestrator/ceiling.py): what Osiris may spend in a
+    # rolling 24h window before every paid producer stops. Real measured spend, per day,
+    # over the system's whole life: median ~$3.60, peak $11.89. $10 covers a busy day and
+    # no worse; it would never have blocked an honest day's work.
+    # 0 = stopped (an honest kill switch). Below 0 = unlimited (a deliberate choice to run
+    # with no net).
     osiris_daily_usd: float = 10.0
-    # THE COMMIT MINERS (pulse: mine_threads + mine_decisions) — DARK BY DEFAULT, by the operator's
-    # ruling of 2026-07-14. They INFER that a sentence in a commit body is a durable duty or a
-    # decision, and both failed the licence the rest of the fleet lives under (11.1% and 0%).
-    # They survived every guard we built for one reason: THEY COST NOTHING, so the daily ceiling
-    # could not see them and the miner kill-switch (which names `session-miner`) did not reach the
-    # pulse daemon at all. The charter's line is OBSERVE vs INFER, not paid vs free — being free is
-    # not a licence, it is only the reason nobody was watching. The pulse's OBSERVATIONS (repo
-    # sensing, commit + tree ingest) are unaffected and always run: they cannot be wrong.
+    # The commit miners (pulse: mine_threads + mine_decisions) are dark by default. They
+    # infer that a sentence in a commit body is a durable duty or a decision, and both
+    # failed the quality bar the rest of the fleet lives under. They cost nothing to run,
+    # so the daily ceiling could not see them and a cost-based kill switch did not reach
+    # the pulse daemon at all. The rule is observe versus infer, not paid versus free;
+    # being free is not a license, it is only the reason nobody was watching. The pulse's
+    # observations (repo sensing, commit and tree ingest) are unaffected and always run:
+    # they cannot be wrong.
     osiris_mine_commits: bool = False
-    # Inference providers — the GPU-as-an-API-key abstraction (src/ingest/providers.py).
-    # The engine never runs a GPU; the model is a hosted API (a key), the LOCAL claude CLI
+    # Inference providers, the GPU-as-an-API-key abstraction (src/ingest/providers.py).
+    # The engine never runs a GPU; the model is a hosted API (a key), the local claude CLI
     # (subscription-covered, no key), or a local GPU backend. `osiris_extract_provider`:
-    # 'auto' (the default — prefer the LOCAL claude CLI if installed, else an API key) |
-    # 'claude-cli' (force the installed Claude Code — the core box, no key) | 'anthropic'
-    # (force an API key — satellites/remote with no CLI) | 'none'. So the core box "just
-    # works" keyless off its own Claude, while a satellite uses its key. `osiris_vision_model`
-    # OCRs a scanned page → text before extraction (county notices are scans).
+    # 'auto' (the default, prefer the local claude CLI if installed, else an API key) |
+    # 'claude-cli' (force the installed Claude Code, no key) | 'anthropic' (force an API
+    # key, for satellites/remote with no CLI) | 'none'. So the primary box works keyless
+    # off its own Claude install, while a satellite uses its key. `osiris_vision_model`
+    # OCRs a scanned page to text before extraction (county notices are scans).
     osiris_extract_provider: str = "auto"
     osiris_claude_binary: str = "claude"
-    # THE HARNESS PROCESS ADAPTER (thread e7f173a6, operator ruling 2026-09-08: "it has to be
-    # abstract, dsh, crush, cursor are all options that degrade gracefully until we build
-    # parity on all features") — which harness src/orchestrator/harness_process.py's
-    # ProcessAdapter selects for spawn/resume/reply/list_sessions/stop. Same 'auto' pin-or-
-    # environment shape as osiris_extract_provider above: pydantic-settings already reads
-    # the OSIRIS_HARNESS_ADAPTER env var into this field by name (the operator's own "pin"),
-    # so a caller need only read `settings.osiris_harness_adapter` — 'auto' (default) picks
-    # the first available() adapter in [claude, dsh, crush, cursor] order; naming one forces
-    # it even when unavailable (every door then refuses by name, never silently falls
-    # through to a different adapter than the one named).
+    # The harness process adapter: which harness src/orchestrator/harness_process.py's
+    # ProcessAdapter selects for spawn/resume/reply/list_sessions/stop. Same 'auto'
+    # pin-or-environment shape as osiris_extract_provider above: pydantic-settings already
+    # reads the OSIRIS_HARNESS_ADAPTER env var into this field by name, so a caller need
+    # only read `settings.osiris_harness_adapter`. 'auto' (default) picks the first
+    # available() adapter in [claude, dsh, crush, cursor] order; naming one forces it even
+    # when unavailable (every door then refuses by name, never silently falls through to a
+    # different adapter than the one named).
     osiris_harness_adapter: str = "auto"
     osiris_crush_binary: str = "crush"
-    # THE DSH OPT-IN PROFILE (wave 13 item 1, thread e7f173a6, Thoth's ruling msg 8543):
-    # dsh's own launcher (`dsh --profile <name> [args...]`) forwards everything after its
-    # own flags VERBATIM to whatever profile-specific app boots — it never itself parses
-    # `--resume`, and "headless"/"tui" in its own --help text are illustrative EXAMPLE
-    # profile names, not a guaranteed universal contract (this box's real ~/.dsh/profiles/
-    # carries only "web" — confirmed live, not assumed). EMPTY BY DEFAULT: DshAdapter
-    # keeps refusing spawn/resume by name until an operator who has a real profile
-    # configured for headless task execution names it here — never a hardcoded guess.
-    # `osiris_dsh_profile` names that profile; `osiris_dsh_resume_flag` is the EXACT flag
-    # that profile's own app understands for continuing a session (its value is forwarded
-    # verbatim, never invented — a different profile app may spell this differently, or
-    # not support it at all).
+    # The DSH opt-in profile: dsh's own launcher (`dsh --profile <name> [args...]`)
+    # forwards everything after its own flags verbatim to whatever profile-specific app
+    # boots; it never itself parses `--resume`, and "headless"/"tui" in its own --help
+    # text are illustrative example profile names, not a guaranteed universal contract
+    # (this box's real profiles directory carries only "web", confirmed live, not
+    # assumed). Empty by default: the DSH adapter keeps refusing spawn/resume by name
+    # until an operator who has a real profile configured for headless task execution
+    # names it here, never a hardcoded guess. `osiris_dsh_profile` names that profile;
+    # `osiris_dsh_resume_flag` is the exact flag that profile's own app understands for
+    # continuing a session (its value is forwarded verbatim, never invented; a different
+    # profile app may spell this differently, or not support it at all).
     osiris_dsh_profile: str = ""
     osiris_dsh_resume_flag: str = "--resume"
     osiris_vision_model: str = "claude-haiku-4-5-20251001"
-    # Semantic search (the max-level ruling a0cfcca1). The Claude CLI has no embeddings
-    # endpoint and keyless is a feature, so the embedder is a LOCAL static model
-    # (model2vec — a distilled lookup table: pure CPU, no key, no GPU, ~30MB from HF on
-    # first load). 'auto' = model2vec when importable, else the semantic door stays closed
-    # and search runs its lexical doors only; 'none' forces it closed.
+    # Semantic search. The Claude CLI has no embeddings endpoint and keyless is a feature,
+    # so the embedder is a local static model (model2vec, a distilled lookup table: pure
+    # CPU, no key, no GPU, roughly 30MB from Hugging Face on first load). 'auto' = use
+    # model2vec when importable, else the semantic door stays closed and search runs its
+    # lexical doors only; 'none' forces it closed.
     osiris_embed_provider: str = "auto"
     osiris_embed_model: str = "minishlab/potion-base-8M"
-    # Placeful satellite (cron Phase 6/7): this agent's id + the vantages it provides
-    # (comma-separated). It claims dispatched collection jobs needing one of these.
+    # A remote satellite agent (cron phase 6/7): this agent's id and the vantages it
+    # provides (comma-separated). It claims dispatched collection jobs needing one of
+    # these.
     osiris_satellite_id: str = "satellite:local"
     osiris_satellite_vantages: str = ""
-    # Alert delivery throttle (the 3am-false-alert guard). The durable `alerts` row is
-    # ALWAYS written; only DELIVERY (the side-channel sink) is rate-capped: at most
+    # Alert delivery throttle (the false-alert-at-3am guard). The durable `alerts` row is
+    # always written; only delivery (the side-channel sink) is rate-capped: at most
     # `osiris_alert_max_per_window` deliveries per watch per `osiris_alert_window_secs`,
-    # and never the same (watch,object) twice inside `osiris_alert_cooldown_secs`. Excess
-    # rows are kept + logged (a digest count), never lost.
+    # and never the same (watch, object) pair twice inside `osiris_alert_cooldown_secs`.
+    # Excess rows are kept and logged (a digest count), never lost.
     osiris_alert_max_per_window: int = 20
     osiris_alert_window_secs: int = 3600
     osiris_alert_cooldown_secs: int = 86400
-    # Delivery sink (D2): a watch with a webhook_url POSTs there; else, if OSIRIS_ALERT_EMAIL
-    # is set it emails (needs OSIRIS_SMTP_HOST — absent => recorded-only + warn, never crash);
-    # else the alert is logged. The durable /alerts row is the record regardless.
+    # Delivery sink: a watch with a webhook_url posts there; else, if OSIRIS_ALERT_EMAIL
+    # is set it emails (needs OSIRIS_SMTP_HOST; absent means recorded-only plus a warning,
+    # never a crash); else the alert is logged. The durable alerts row is the record
+    # regardless.
     osiris_alert_email: str = ""
     osiris_smtp_host: str = ""
     osiris_smtp_port: int = 587
     osiris_smtp_user: str = ""
     osiris_smtp_password: str = ""
-    # Worker dead-man's-switch (D3): the worker heartbeats each cron tick; GET /health/worker
-    # reports 'stale' if the last beat is older than this — a silently-dead tripwire becomes
-    # visible instead of an invisible gap.
+    # Worker dead-man's-switch: the worker heartbeats each cron tick; GET /health/worker
+    # reports 'stale' if the last beat is older than this, so a silently-dead worker
+    # becomes visible instead of an invisible gap.
     osiris_worker_heartbeat_stale_secs: int = 120
-    # The developer-persona heartbeat (pulse): comma-separated local repo paths the autonomic
-    # loop senses + re-ingests on each tick. Empty => the pulse watches nothing (no-op).
+    # The developer-persona heartbeat (pulse): comma-separated local repo paths the
+    # autonomic loop senses and re-ingests on each tick. Empty means the pulse watches
+    # nothing (no-op).
     osiris_dev_repos: str = ""
-    # The PERSISTENT MCP server (the fleet floodgate). `stdio` (default) = one server per
-    # session (each agent spawns its own subprocess + pool — fine for one, exhausts PG at
-    # fleet scale: N agents × the pool). `streamable-http` = ONE always-on server on
-    # (host, port) that the whole fleet connects to over HTTP, sharing a SINGLE pool — so
-    # connections stay bounded no matter how many agents link. The systemd `osiris-mcp` unit
-    # runs the http mode; other projects point their .mcp.json at the URL.
+    # The persistent MCP server (the fleet's shared entry point). `stdio` (default) means
+    # one server per session (each agent spawns its own subprocess and pool, fine for
+    # one, exhausts Postgres at fleet scale: N agents times the pool). `streamable-http`
+    # means one always-on server on (host, port) that the whole fleet connects to over
+    # HTTP, sharing a single pool, so connections stay bounded no matter how many agents
+    # link. The systemd `osiris-mcp` unit runs the http mode; other projects point their
+    # .mcp.json at the URL.
     osiris_mcp_transport: str = "stdio"
     osiris_mcp_host: str = "127.0.0.1"
     osiris_mcp_port: int = 8790
-    # THE ONE REAL arq WORKER (decision 8a830336 — 76 spurious "UNREVIEWED BOOT" threads
-    # traced to this): unlike osiris_mcp_transport above, arq_worker.startup() had NO signal
-    # distinguishing the one systemd-managed worker from any ad hoc local `arq` invocation
-    # (a seat running scripts/stranger_test/run.sh's worker line from their own worktree,
-    # inheriting the shared DATABASE_URL) — every such boot confessed truthfully but
-    # uselessly against the real graph. Mirrors osiris_mcp_transport's own non-inferred
-    # shape exactly: "primary" set ONLY in the real osiris-worker.service unit; empty (the
-    # default) everywhere else, including every local/manual/test invocation.
+    # The one real arq worker: unlike osiris_mcp_transport above, arq_worker.startup() had
+    # no signal distinguishing the one systemd-managed worker from any ad hoc local `arq`
+    # invocation (a stray worktree inheriting the shared DATABASE_URL and running the
+    # worker line by hand) -- every such boot confessed truthfully but uselessly against
+    # the real graph. Mirrors osiris_mcp_transport's own non-inferred shape exactly:
+    # "primary" set only in the real osiris-worker.service unit; empty (the default)
+    # everywhere else, including every local, manual, or test invocation.
     osiris_worker_role: str = ""
-    # The shared server's pool: ONE pool for the whole fleet (min_size stays 1 so it's cheap
-    # idle; grows to this under concurrency). 20 << PG max_connections=100, vs the old
-    # per-agent 10 × 56 = 560 that would have exhausted it.
-    # 20 -> 8 (thread 0c03a685, 2026-09-07): the boot-spike measurement's other half — a
-    # shrunken Postgres shared_buffers (9.7 GB -> 3 GB, the same dispatch) makes every idle
-    # backend's ~1 GB RSS cost more relatively, and this daemon's own concurrency never
-    # measured near its old ceiling the way the worker's did (msg 5340 was worker-specific).
+    # The shared server's pool: one pool for the whole fleet (min_size stays 1 so it's
+    # cheap idle; grows to this under concurrency), well under Postgres's max_connections
+    # of 100, versus a much larger old per-agent total that would have exhausted it.
+    # A shrunken Postgres shared_buffers configuration makes every idle backend's memory
+    # cost more relatively, and this daemon's own concurrency never measured near its old
+    # ceiling the way the worker's did, so the pool size was lowered accordingly.
     osiris_mcp_pool_size: int = 8
-    # THE OTHER TWO LONG-RUNNING DAEMONS (task #180 piece 2 (c)): osiris-worker and the
-    # console (src/api/app.py) each called create_pool with no size override, silently
-    # inheriting the bare asyncpg.create_pool default (max_size=10) — unconfigured, not a
-    # deliberate bound. Named separately from osiris_mcp_pool_size (not one shared default)
-    # because the two daemons' own concurrency shapes differ: the worker runs many
-    # concurrent cascade/cron jobs, the console serves read-only HTTP requests one at a time.
-    # 10 -> 16 (msg 5340, the hour-long scale-envelope measurement, 2026-08-18): the ONLY
-    # daemon that peaked near its own ceiling under a real hour of fleet activity — 9 of
-    # 10 connections, 90% — measured via fleet()'s pool_health, not guessed. The other
-    # three daemons stayed comfortably under half their own caps in the same window.
-    # 16 -> 4 (thread 0c03a685, 2026-09-07): the boot-spike measurement found 34 idle
-    # backends fleet-wide, each ~1 GB of Postgres shared-buffer RSS in the task manager —
-    # a real cost this daemon's own pool_size sets independent of whether it ever uses
-    # more than a handful concurrently at boot. Dispatch cited this as a 10->4 cut, which
-    # assumed the PRE-msg-5340 value; the actual prior value was 16, not 10 — surfaced to
-    # Thoth rather than silently reconciled, since the two measurements answer different
-    # questions (peak concurrency under load vs. idle-backend memory at boot) and only the
-    # operator/manager can weigh which one governs. Applied as directed pending that.
+    # The other two long-running daemons: osiris-worker and the console (src/api/app.py)
+    # each called create_pool with no size override, silently inheriting the bare
+    # asyncpg.create_pool default (max_size=10), unconfigured rather than a deliberate
+    # bound. Named separately from osiris_mcp_pool_size (not one shared default) because
+    # the two daemons' own concurrency shapes differ: the worker runs many concurrent
+    # cascade and cron jobs, the console serves read-only HTTP requests one at a time.
+    # The worker pool was raised once after a real hour-long measurement found it was the
+    # only daemon peaking near its own ceiling under load, then lowered again after a
+    # separate boot-spike measurement found many idle backends at boot, each carrying a
+    # real Postgres shared-buffer memory cost independent of peak concurrency. Applied
+    # from the idle-backend measurement pending further review, since the two
+    # measurements answer different questions (peak concurrency under load versus
+    # idle-backend memory at boot).
     osiris_worker_pool_size: int = 4
     osiris_api_pool_size: int = 10
     osiris_manager_pool_size: int = 10
-    # chrome (the read-only HTTP console, src/api/app.py) — a SEPARATE process/port from
-    # osiris-mcp, run via `uvicorn --factory src.api.app:create_app` (deploy/osiris-console.
-    # service). No prior settings field existed for this; it was a bare convention baked into
-    # the uvicorn invocation. The smoke verb (thread bb763977/1849d800, task #63) is the first
-    # caller that needs to know it as configuration rather than hardcoding the port.
+    # The read-only HTTP console (src/api/app.py): a separate process and port from
+    # osiris-mcp, run via `uvicorn --factory src.api.app:create_app` (the
+    # osiris-console.service unit). No prior settings field existed for this; it was a
+    # bare convention baked into the uvicorn invocation before the smoke check needed to
+    # know it as configuration rather than hardcoding the port.
     osiris_console_base_url: str = "http://127.0.0.1:8011"
-    # Session-sensing (the last unsensed source): path to the Claude Code projects root
-    # (usually ~/.claude/projects) whose session transcripts the worker senses on a cron —
-    # distill → redact → extract → DERIVED backfill of decisions/threads/obligations the
-    # session forgot to write back. Empty => off. Forward-only: an unseen transcript starts
-    # at its current end; history is `python -m src.ingest.sessions backfill`'s explicit job.
+    # Session sensing (the last unsensed source): path to the Claude Code projects root
+    # (usually ~/.claude/projects) whose session transcripts the worker senses on a cron:
+    # distill, redact, extract, then a derived backfill of decisions/threads/obligations
+    # the session forgot to write back. Empty means off. Forward-only: an unseen
+    # transcript starts at its current end; history is a separate explicit backfill job.
     osiris_sense_sessions: str = ""
-    # THE ADVERSARY'S SCOPE (task #37): which projects the sensing licence covers — a
-    # comma/space list matched against transcript project-dir slugs by suffix ('pokex',
-    # 'thoth', 'code/pokex'; see src/ingest/scope.py). Empty = every project (the unarmed
-    # default; ships dark — arming it is the operator's hand). Scope DEFERS reading, never
-    # buries it: scoped-out transcripts are never marked swept, so widening the scope later
-    # lets the orphan reaper drain the interim backlog through the normal licensed lanes.
+    # The sensing scope: which projects the sensing license covers, a comma/space list
+    # matched against transcript project-dir slugs by suffix (see src/ingest/scope.py).
+    # Empty means every project (the unarmed default; ships dark, arming it is the
+    # operator's hand). Scope defers reading, never buries it: scoped-out transcripts are
+    # never marked swept, so widening the scope later lets the orphan reaper drain the
+    # interim backlog through the normal licensed lanes.
     osiris_sense_projects: str = ""
-    # THE FIRST MINER (wave 16, decision 4d622aee, operator 2026-09-10: "yes, build and
-    # wire it"): one generic abstention miner, lanes as data. LIVE by the operator's own
-    # explicit choice, not dark like the adversary above — miners stayed off over trust +
-    # infra, and the operator judged both paid down (thread 8dfcd4b1).
+    # The first miner: one generic abstention miner, lanes as data. Live by explicit
+    # operator choice, not dark like the sensing license above; miners had stayed off
+    # over trust and infrastructure concerns, resolved before this was armed.
     osiris_abstention_miner_enabled: bool = True
-    # PER-LANE OFF SWITCH, same shape as osiris_sense_projects' own comma/space list: lane
-    # object-type names (e.g. "Decision,Thread") to silence without touching the others —
-    # a bad lane's own candidate-pool query going wrong must never cost the whole miner.
+    # Per-lane off switch, same shape as osiris_sense_projects' own comma/space list: lane
+    # object-type names (e.g. "Decision,Thread") to silence without touching the others,
+    # so a bad lane's own candidate-pool query going wrong never costs the whole miner.
     osiris_abstention_miner_lanes_off: str = ""
-    # THE FREE OBSERVER, and it has its OWN switch on purpose. The transcripts root, read with a
-    # `stat()` and nothing else: a session that is alive is WRITING TO ITS TRANSCRIPT whether or
-    # not it is talking to us, so liveness is the freshest of (osiris call, transcript write).
-    # DELIBERATELY SEPARATE from osiris_sense_sessions above, which is the ADVERSARY'S licence to
-    # read those same files WITH A MODEL — that costs money and is gated; this costs nothing and
-    # is always right. KILLING THE EXPENSIVE INFERRER MUST NEVER BLIND THE FREE OBSERVER. It is
-    # the whole charter for a background critter: observe for nothing, infer only on a licence —
-    # and never let them share a switch, or one day someone pulls the wrong one.
+    # The free observer, and it has its own switch on purpose. The transcripts root, read
+    # with a `stat()` and nothing else: a session that is alive is writing to its
+    # transcript whether or not it is talking to the graph, so liveness is the freshest of
+    # (osiris call, transcript write). Deliberately separate from osiris_sense_sessions
+    # above, which is the license to read those same files with a model, which costs
+    # money and is gated; this costs nothing and is always right. Killing the expensive
+    # inferrer must never blind the free observer: observe for nothing, infer only on a
+    # license, and never let them share a switch, or one day someone pulls the wrong one.
     osiris_transcripts: str = ""
-    # THE DISK-CENSUS ROOTS (thread 5e37630b): colon-separated dirs the census walks for
-    # git repos the graph has never met — 'exists on disk' becomes a first-class fact.
-    # Rides the OBSERVER's switch (census runs only when osiris_transcripts is set): a
-    # free deterministic disk read, the same class as the transcript sweep. Empty = the
-    # operator's layout.
+    # The disk-census roots: colon-separated directories the census walks for git repos
+    # the graph has never met, so "exists on disk" becomes a first-class fact. Rides the
+    # observer's switch (census runs only when osiris_transcripts is set): a free
+    # deterministic disk read, the same class as the transcript sweep. Empty means the
+    # operator's own layout.
     osiris_census_roots: str = "~/code:~/code/REPOS"
-    # The fleet TRIGGER-hook (mailbox → wake) — OFF by default. When on, the worker (the alarm
-    # clock; never Osiris's own hands) spawns `claude -p` in a recipient project's repo when it
-    # has unread mail, so an agent processes coordination without the operator hand-triggering it.
-    # Recursion (the A↔B ping-pong) is bounded by a per-project rate cap: at most
-    # osiris_trigger_rate_cap wakes per project per osiris_trigger_window_secs — each side of a
-    # loop hits its own cap and halts. The agent_wakes ledger makes the chain visible; the enabled
-    # flag is the kill switch (membrane #6: never silent, never irreversible).
+    # The fleet trigger hook (mailbox to wake): off by default. When on, the worker (an
+    # alarm clock, never Osiris's own hands) spawns `claude -p` in a recipient project's
+    # repo when it has unread mail, so an agent processes coordination without a human
+    # hand-triggering it. Recursion (an A-to-B ping-pong) is bounded by a per-project rate
+    # cap: at most osiris_trigger_rate_cap wakes per project per
+    # osiris_trigger_window_secs; each side of a loop hits its own cap and halts. The
+    # agent_wakes ledger makes the chain visible; the enabled flag is the kill switch
+    # (never silent, never irreversible).
     osiris_trigger_enabled: bool = False
-    # THE RE-ARM SCOPE (the protocol every handoff since XXVII demanded: "turn it on for ONE
-    # project, watched"): comma-separated project allowlist — when non-empty, only the named
-    # projects may be woken; everything else is scoped_out. Empty = all projects (the
-    # pre-scoping behavior). The trigger's own history is 463 mints on projects the operator
-    # had not opened in days; a re-arm after a dark period should NAME ITS SUBJECTS, and this
-    # makes that a setting instead of a promise.
+    # The re-arm scope: comma-separated project allowlist; when non-empty, only the named
+    # projects may be woken, everything else is scoped out. Empty means all projects (the
+    # pre-scoping behavior). The trigger's own history includes hundreds of spawns on
+    # projects that had gone unopened for days, so a re-arm after a dark period should
+    # name its subjects explicitly, and this makes that a setting instead of a promise.
     osiris_trigger_projects: str = ""
-    # 15/hr per PAIR, not 5 (Thoth LIII 2026-07-21): 5 was measured-too-tight — active
-    # manager<->worker collaboration is BURSTY (several knocks in minutes, then quiet), and a
-    # 5/hr pair cap smothered legitimate dispatch (ruling bcaae418's evidence: two capped nudges
-    # in ten minutes on the two most important messages of the day, both rescued by hand; the
-    # fleet then SITS until a human nudges it). A true ping-pong runaway sustains a high rate
-    # INDEFINITELY and is still caught at 15; a human-directed burst fits under it. The cap bounds
-    # a loop, it must not throttle a conversation.
+    # A measured rate cap per pair (raised from an earlier, too-tight value): active
+    # manager-worker collaboration is bursty (several knocks in minutes, then quiet), and
+    # too low a per-pair cap smothered legitimate dispatch, leaving the fleet waiting on a
+    # human nudge. A true ping-pong runaway sustains a high rate indefinitely and is still
+    # caught at this cap; a human-directed burst fits under it. The cap bounds a loop, it
+    # must not throttle a conversation.
     osiris_trigger_rate_cap: int = 15
     osiris_trigger_window_secs: int = 3600
-    # Wake-GRACE (the double-wake guard, obligation c45bb2e3): the cron ticks (60s) faster than a
-    # woken agent can spawn, mount, and lease its inbox (~100s+). In that gap the mail is still
-    # deliverable, so a naive re-tick wakes a SECOND agent for the SAME message. A project woken
-    # within osiris_trigger_grace_secs is skipped as 'wake-grace' (recently woken, still
-    # processing) — distinct from 'rate-capped' (the loop bound); grace/lease expiry re-arm it.
+    # Wake grace (the double-wake guard): the cron ticks faster than a woken agent can
+    # spawn, mount, and lease its inbox. In that gap the mail is still deliverable, so a
+    # naive re-tick wakes a second agent for the same message. A project woken within
+    # osiris_trigger_grace_secs is skipped as recently woken and still processing,
+    # distinct from a rate cap (the loop bound); grace or lease expiry re-arms it.
     osiris_trigger_grace_secs: int = 300
-    # Mail delivery LEASE (at-least-once, decision 56f6a0d6): inbox() leases a message rather
-    # than consuming it; if no ack (or reply) settles it within this window, it REDELIVERS —
-    # a response severed by a server bounce costs a duplicate, never a silent loss.
+    # Mail delivery lease (at-least-once): inbox() leases a message rather than consuming
+    # it; if no ack or reply settles it within this window, it redelivers, so a response
+    # severed by a server bounce costs a duplicate, never a silent loss.
     osiris_mail_lease_secs: int = 900
-    # Resume-not-mint (thread 9f2ddb44): the wake dispatch is deliver → resume → mint. A
-    # transcript larger than this is at the context ceiling — NOT resumable; the wake mints
-    # a fresh twin instead. An owner whose mount is fresher than osiris_owner_live_secs is
-    # LIVE: no wake at all, the mail just sits in its box (the owner's own chrome/orient
-    # shows it — never spawn beside a live owner). CEILING CORRECTED 2026-08-03 (thread
-    # 771366d1, task #135/#136): this used to check raw transcript file size, which
-    # measured the wrong thing — verified live on two real specimens (72MB/103MB
-    # transcripts) that a resume only hydrates the content since the last Claude Code
-    # auto-compaction, 2-3% of the total file. `resumable_tail_bytes`
-    # (src/ingest/sessions.py) now checks that tail, not cumulative lifetime size.
-    #
-    # CEILING CORRECTED AGAIN 2026-09-08 (operator dispatch, the anubis specimen: `osiris
-    # resume anubis` refused with "29.52 MB tail over the 8 MB ceiling" though anubis's own
-    # last recorded context occupancy was under its window — raw JSONL bytes are not
-    # context tokens, and a tail can be dominated by huge tool-output blobs fed to the model
-    # once and never rehydrated by a resume; the harness's own compaction/resume mechanism
-    # restores only the conversational state and compacts again on resume if genuinely too
-    # large). This field's job NARROWED: `resume_verdict`/`_verdict_from_diagnostics`
-    # (src/ingest/sessions.py) no longer treat it as the primary resumability ceiling — the
-    # real ceiling is now the last recorded assistant usage OCCUPANCY against the harness's
-    # own context window (`context_lens.last_usage`/`occupancy`/`window_for`). This field
-    # keeps exactly one job: a CATASTROPHIC-CORRUPTION sanity bound — a tail whose raw size
-    # is so implausibly large that its shape alone suggests something is actually broken,
-    # refused regardless of what the occupancy read says. Raised from 8,000,000 (a tight
-    # resumability ceiling) to 64,000,000 (a loose corruption bound, several times any
-    # verified-live legitimate specimen's tail) to reflect the narrower job.
+    # Resume-not-mint: the wake dispatch order is deliver, then resume, then mint. A
+    # transcript larger than this is at the context ceiling, not resumable, so the wake
+    # mints a fresh session instead. An owner whose mount is fresher than
+    # osiris_owner_live_secs is live: no wake at all, the mail just sits in its box (the
+    # owner's own status view shows it; never spawn beside a live owner). This field's
+    # measurement basis was corrected twice after live testing: it originally checked raw
+    # transcript file size, which measured the wrong thing (a resume only hydrates the
+    # content since the last harness auto-compaction, a small fraction of the total
+    # file), then again after a real specimen showed raw JSONL bytes are not context
+    # tokens and a tail can be dominated by huge tool-output blobs fed to the model once
+    # and never rehydrated by a resume. This field now keeps exactly one job: a
+    # catastrophic-corruption sanity bound, a tail whose raw size is so implausibly large
+    # that its shape alone suggests something is actually broken, refused regardless of
+    # what the primary occupancy check says. The primary resumability ceiling is now the
+    # last recorded assistant usage occupancy against the harness's own context window.
     osiris_resume_ceiling_bytes: int = 64_000_000
-    # THE MINIMUM-TAIL FLOOR, REPLACING THE OLD COMPACTION-COUNT GATE (#156's rebuild,
-    # 2026-08-09 — the operator's own correction, verbatim: "osiris launch should do the
-    # equivalent of `claude --resume [latest transcript] as is` continuity with when it
-    # was closed, closed at exactly the compaction seam is a rare special case." The old
-    # gate asked "has this lineage EVER compacted?" (osiris_resume_max_compactions=0 — any
-    # compaction at all refused). Measured live on sekhmet, 2026-08-09: 12 compactions,
-    # but 1,492 lines / 4.07MB of real work after the LAST one — refused anyway, factually
-    # wrong about her own transcript, not a policy disagreement. A seat that compacts once
-    # and then does fifty more turns closes with its post-compaction context fully intact;
-    # a compaction-COUNT gate excludes exactly the seats worth resuming. The REPLACEMENT
-    # checks `tail_bytes` (the same number the ceiling above already checks) against a
-    # MINIMUM floor instead: a tail at or near zero means the session closed AT the seam
-    # itself — the operator's own "rare special case", genuinely nothing to resume into.
-    # Default picked, not measured the way the old gate's 767-transcript study was — small
-    # enough to pass any transcript with real post-boundary activity (sekhmet's 4.07MB
-    # clears it by four orders of magnitude), large enough to exclude a truly-empty tail. A
-    # one-constant change if evidence says otherwise; raised, not decided, per Thoth's own
-    # instruction on this rebuild.
+    # The minimum-tail floor, replacing an old compaction-count gate. The old gate asked
+    # "has this lineage ever compacted?" (any compaction at all refused). Measured live on
+    # a real transcript: many compactions, but a large amount of real work after the last
+    # one, refused anyway, factually wrong about that transcript, not a policy
+    # disagreement. A session that compacts once and then does many more turns closes with
+    # its post-compaction context fully intact; a compaction-count gate excludes exactly
+    # the sessions worth resuming. The replacement checks the same tail-bytes number the
+    # ceiling above already checks against a minimum floor instead: a tail at or near zero
+    # means the session closed at the compaction seam itself, genuinely nothing to resume
+    # into. Default picked, not measured the way the old gate's larger study was: small
+    # enough to pass any transcript with real post-boundary activity, large enough to
+    # exclude a truly-empty tail. A one-constant change if evidence says otherwise.
     osiris_resume_min_tail_bytes: int = 200
     osiris_owner_live_secs: int = 900
-    # Wake ECONOMICS (operator, 2026-07-08): most wakes are triage-shaped (read, reply,
-    # settle) — pin them to a cheaper model and let the PROMPT escalate real work back to a
-    # full session (obligation + brief instead of grinding it in a haiku). Empty = the CLI's
-    # default model (no --model flag passed).
+    # Wake economics: most wakes are triage-shaped (read, reply, settle), so pin them to a
+    # cheaper model and let the prompt escalate real work back to a full session (an
+    # obligation and a brief instead of grinding it out on a small model). Empty means the
+    # CLI's default model (no --model flag passed).
     osiris_wake_model: str = ""
-    # THE POKE'S IDLE GATE (the wake law, Phase 2): mail routed to a manager-owned window is
-    # TYPED into it as its next turn — but never into a window whose output moved within this
-    # many seconds (a streaming turn, or the echo of the operator typing). A busy window's
-    # mail waits for the next tick; delivery (owner_live) covers the actively-working case.
+    # The poke's idle gate: mail routed to a manager-owned window is typed into it as its
+    # next turn, but never into a window whose output moved within this many seconds (a
+    # streaming turn, or the echo of someone typing). A busy window's mail waits for the
+    # next tick; delivery to a live owner covers the actively-working case.
     osiris_poke_min_idle_secs: int = 600
-    # THE LEASE GATE'S REFUSAL (Alfred's field spec, msg 637 → task #22; thread fd921b7d).
-    # OFF = today's advisory-only birth receipt. ON = a foreign body summoned into a Seat's
-    # charter room while the resident lineage's pulse is live is REFUSED, not warned —
-    # the failure class this kills is UNATTRIBUTED PRESENCE. The build is complete either
-    # way; the flag exists because THE OPERATOR RATIFIES refusal semantics before they can
-    # block anyone's hand (a lease that can block the owner needs the owner's word).
+    # The lease gate's refusal. Off means today's advisory-only birth receipt. On means a
+    # foreign body summoned into a seat's charter room while the resident lineage's pulse
+    # is live is refused, not warned, closing the failure class of unattributed presence.
+    # The build is complete either way; the flag exists because refusal semantics that can
+    # block anyone's hand need an explicit ruling before they arm (a lease that can block
+    # the owner needs the owner's word).
     osiris_lease_refuse: bool = False
-    # THE POKE-ONLY ARM (operator ruling, 2026-07-19: 'arm the poke ... but dont turn on the
-    # miners or critter background agents yet'): when true, the trigger's ladder ends at the
-    # poke — deliver to a live owner, type into an open window, and NOTHING ELSE. No resume,
-    # no mint, no new process on the operator's card, ever. Mail with no live owner and no
-    # open window stays pull-only until the spawning rungs get their own re-arm. This is a
-    # LANE switch, deliberately separate from osiris_trigger_enabled (the ladder's master)
-    # and from the miner's licence — three different levers, three different costs.
+    # The poke-only arm: when true, the trigger's ladder ends at the poke, deliver to a
+    # live owner, type into an open window, and nothing else. No resume, no mint, no new
+    # process, ever. Mail with no live owner and no open window stays pull-only until the
+    # spawning rungs get their own re-arm. This is a lane switch, deliberately separate
+    # from osiris_trigger_enabled (the ladder's master) and from the miner's license:
+    # three different levers, three different costs.
     osiris_trigger_poke_only: bool = False
-    # Wake HANDS (thread ba73c0c8): a triggered `claude -p` is headless — it cannot answer a
-    # permission prompt, so in a repo with no stored approval every mcp__osiris__* call is
-    # silently DENIED: the wake dies blind, its mail never settles, redelivers, re-wakes (the
-    # 76-thread storm of 2026-07-11). The spawner must authorize the hands it asks for:
-    # this comma/space list is passed as --allowedTools. `mcp__osiris` = every tool of the
-    # osiris server and nothing else (a triage wake needs no Bash, no Edit). Empty = old
-    # behavior (rely on the repo's stored approvals).
+    # Wake hands: a triggered `claude -p` is headless, it cannot answer a permission
+    # prompt, so in a repo with no stored approval every mcp__osiris__* call is silently
+    # denied: the wake dies blind, its mail never settles, redelivers, and re-wakes (a
+    # real incident, a storm of dozens of threads from exactly this gap). The spawner must
+    # authorize the hands it asks for: this comma/space list is passed as --allowedTools.
+    # `mcp__osiris` means every tool of the osiris server and nothing else (a triage wake
+    # needs no shell, no file edit). Empty means old behavior (rely on the repo's stored
+    # approvals).
     osiris_wake_allowed_tools: str = "mcp__osiris"
-    # Wake economics (obligation 4e52af7e): the fleet-wide hourly wake ceiling the trigger
-    # reads — the same ledger the chrome displays as 'wakes N/h'. Past 80% of it, only
-    # urgent mail (the operator's word, or mail aged past an hour) wakes; at it, nothing
-    # does until the window slides. 0 = unmetered (the old behavior).
+    # Wake economics: the fleet-wide hourly wake ceiling the trigger reads, the same
+    # ledger the status view displays as wakes per hour. Past 80% of it, only urgent mail
+    # (marked urgent, or mail aged past an hour) wakes; at it, nothing does until the
+    # window slides. 0 means unmetered (the old behavior).
     osiris_wake_hourly_budget: int = 30
-    # THE TOTAL, not a rate. How many times ONE message may wake a project before the trigger
-    # gives up on it forever and escalates to the operator. Every other wake guard is a rate over
-    # a sliding window, so every one of them RESETS — which is how a single unread letter spawned
-    # 79 `claude -p` sessions in 18 hours on an abandoned project (2026-07-12). A retry that has
-    # failed 79 times is not a retry; it is a leak.
+    # The total, not a rate: how many times one message may wake a project before the
+    # trigger gives up on it forever and escalates to a human. Every other wake guard is a
+    # rate over a sliding window, so every one of them resets, which is how a single
+    # unread letter once spawned dozens of sessions in under a day on an abandoned
+    # project. A retry that has failed that many times is not a retry, it is a leak.
     osiris_wake_message_attempts: int = 3
-    # THE BACKGROUND-SESSION ADAPTER (ruling 6c4d0b62): the fleet runs as harness-backgrounded
-    # sessions under one spawner pty — no pty fd to poke, no turn in flight to stop-hook — so
-    # RESUME is the DM lane's primary push: a DM's arrival dispatches immediately (send()
-    # itself dispatches; the worker tick is the backstop that drains queues), never a clock.
-    # This arm is DELIBERATELY SEPARATE from osiris_trigger_poke_only: that switch holds the
-    # BROADCAST spawn rungs (the operator's 2026-07-19 'no critter background agents' word,
-    # which still stands for room mail); this one arms the DM resume the 2026-07-20 adapter
-    # ruling made the push lane. Off = the DM lane is pull-only again.
+    # The background-session adapter: the fleet runs as harness-backgrounded sessions
+    # under one spawner pty, no pty file descriptor to poke, no turn in flight to
+    # stop-hook, so resume is the DM lane's primary push: a DM's arrival dispatches
+    # immediately (send() itself dispatches; the worker tick is the backstop that drains
+    # queues), never a clock. This arm is deliberately separate from
+    # osiris_trigger_poke_only: that switch holds the broadcast spawn rungs; this one arms
+    # the DM resume path. Off means the DM lane is pull-only again.
     osiris_dm_resume: bool = True
-    # MID-TURN, not "recently live": an addressee whose activity is fresher than this is
-    # actually working RIGHT NOW — deliver, don't resume (its own turn's end surfaces the DM).
-    # Distinct from osiris_owner_live_secs (the broadcast lane's 15-min liveness) because for
-    # a backgrounded session "live 10 minutes ago" does NOT mean "perceiving": it idles with
-    # no next turn coming, and mail beside it sits unread forever — the exact silent case the
-    # adapter exists to close.
+    # Mid-turn, not "recently live": an addressee whose activity is fresher than this is
+    # actually working right now, so deliver, don't resume (its own turn's end surfaces
+    # the DM). Distinct from osiris_owner_live_secs (the broadcast lane's longer liveness
+    # window) because for a backgrounded session "live a few minutes ago" does not mean
+    # "perceiving": it idles with no next turn coming, and mail beside it sits unread
+    # forever, the exact silent case this setting exists to close.
     osiris_dm_active_secs: int = 120
-    # The per-seat mail-wake rate brake (anti-spiral wall #4 of 6c4d0b62): at most this many
-    # wakes per ADDRESSEE per hour, on top of per-message dedup, the fleet hourly budget and
-    # the daily dollar ceiling. An A<->B reply ping-pong is legal work until a brake says
-    # otherwise; this is the brake that says it per seat. 0 = unbraked.
+    # The per-seat mail-wake rate brake: at most this many wakes per addressee per hour,
+    # on top of per-message dedup, the fleet hourly budget, and the daily dollar ceiling.
+    # An A-to-B reply ping-pong is legal work until a brake says otherwise; this is the
+    # brake that says it per seat. 0 means unbraked.
     osiris_seat_wake_hourly_cap: int = 6
-    # Model for DM resumes. EMPTY ON PURPOSE (no --model flag): a DM resume continues a REAL
-    # seat's own session — pinning the triage model onto it would be a silent model downgrade
-    # of a working seat (the rug-pull class). The triage/mint lanes keep osiris_wake_model.
+    # Model for DM resumes. Empty on purpose (no --model flag): a DM resume continues a
+    # real seat's own session, so pinning the triage model onto it would be a silent model
+    # downgrade of a working seat. The triage and mint lanes keep osiris_wake_model.
     osiris_dm_resume_model: str = ""
-    # THE DEFAULT FLIP (task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): launch_seat's
-    # default spawn lane is the harness-native substrate (`claude --bg`, _spawn_claude_bg) —
-    # every body it creates is visible in the operator's own `claude agents` list BY
-    # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
-    # around). "pty" keeps the OLD osiris PTY-broker lane alive as an explicit, vendor-neutral
-    # fallback (thread c171a3de) — for an incident, or a harness build that lacks --bg. A
-    # launch_seat caller's own `substrate` argument always wins over this fleet-wide default.
+    # The default spawn lane: launch_seat's default is the harness-native substrate
+    # (`claude --bg`), so every body it creates is visible in the operator's own agent
+    # list by construction. "pty" keeps the old osiris PTY-broker lane alive as an
+    # explicit, vendor-neutral fallback, for an incident, or a harness build that lacks
+    # --bg. A launch_seat caller's own `substrate` argument always wins over this
+    # fleet-wide default.
     osiris_launch_substrate: str = "harness"
-    # CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — OFF by default, the same law as
-    # osiris_trigger_enabled/osiris_pit_watch_enabled: a mechanism that SIGKILLs a live
-    # service earns its own kill switch, never inherits one. When on, `osiris deploy` runs
-    # `src.orchestrator.chaos.chaos_replay` as an additional gate after its own ordinary
-    # graceful restart — see cmd_deploy's own docstring for exactly what it checks.
+    # Crash replay as a gate: off by default, the same law as osiris_trigger_enabled: a
+    # mechanism that kills a live service earns its own kill switch, never inherits one.
+    # When on, `osiris deploy` runs the chaos-replay check as an additional gate after its
+    # own ordinary graceful restart.
     osiris_deploy_chaos_gate: bool = False
-    # THE FULL SUITE ON THE MERGED TREE (task #186, Thoth DM 5637, 2026-08-25). Two live
-    # incidents the same night this was dispatched: a branch's own scoped gate was green,
-    # merged onto main the SAME suite failed 6 tests for a ModuleNotFoundError the branch's
-    # own deletion caused (#187's own followup, commit c3f9f7d); a clean git auto-merge of
-    # two branches both touching capture.py was only PROVEN correct by re-running the suite
-    # on the MERGED result. Neither incident was a daemon-crash-resilience gap —
-    # osiris_deploy_chaos_gate would not have caught either one. gate_hook.py's own pytest
-    # is DELIBERATELY scoped to each commit's own resolved test files (its own docstring: a
-    # full 209s run per commit is unshippable under 4-agent concurrency) — nothing anywhere
-    # runs the full suite against what a merge actually produces. When on, `osiris deploy`
-    # runs the full suite (`pytest -q -n 4`, the same bounded worker cap gate_hook.py's own
-    # scoped runs use, never `-n auto`) against `repo_root` as an additional precondition
-    # gate, before the chaos gate.
+    # The full test suite on the merged tree. Two live incidents drove this: a branch's
+    # own scoped gate was green, but the same suite failed several tests on main for a
+    # missing-module error the branch's own deletion caused; separately, a clean git
+    # auto-merge of two branches touching the same file was only proven correct by
+    # re-running the suite on the merged result. Neither incident was a daemon-crash
+    # gap; the chaos gate would not have caught either one. The commit-time gate's own
+    # pytest run is deliberately scoped to each commit's own resolved test files (a full
+    # run per commit is unshippable under multi-agent concurrency); nothing else runs the
+    # full suite against what a merge actually produces. When on, `osiris deploy` runs the
+    # full suite against the deploy target as an additional precondition gate, before the
+    # chaos gate.
     #
-    # STILL OFF BY DEFAULT (task #197, Thoth DM 5667, 2026-08-26) — NOT the same shape as
-    # osiris_gate_hook_enforce's own later arming (that flag gates a cheap boolean refusal;
-    # this one, on, makes ~159 OTHER cmd_deploy tests in test_cli.py that never inject their
-    # own `full_suite_gate` fake start spawning a REAL nested pytest subprocess apiece —
-    # flipping the source default here is a test-suite-architecture change, not a policy
-    # one, and out of this dispatch's scope. The two -n4 concurrency flakes this gate's own
-    # dry-run surfaced were root-caused and fixed: (1) compositions.py's `select` op carried
-    # no ORDER BY at all, so row order was whatever the query planner's physical scan
-    # happened to produce — usually insertion order on a quiet box, but never guaranteed,
-    # and a shared-container-under-real-load plan legitimately returned rows out of order,
-    # which every downstream group/table op silently inherited as meaningful. Fixed: `ORDER
-    # BY created_at, id`. (2) test_pty_broker.py's poke test shares its 2.0s wait bound with
-    # 16 other call sites in the same file, but does the MOST real PTY round-trip work of
-    # any of them (two sequential waits, the longer of the two payloads) — the same bound
-    # that is generous for its siblings has the least margin here, under host contention
-    # that is normal fleet load, not a hypothetical (this box runs concurrent agent sessions
-    # as a matter of course). Fixed: widened only this call's own bound (5.0s), not the
-    # shared default. Neither was a mechanism this gate itself was ever expected to see —
-    # the gate flagged them running its own baseline suite, which was doing its job. Arming
-    # (env var, at actual deploy time) is the coordinator's own call, not this commit's.
+    # Still off by default: not the same shape as the commit-time gate's own later
+    # arming (that flag gates a cheap boolean refusal; this one, on, makes many
+    # deploy-path tests that never inject their own fake full-suite gate start spawning a
+    # real nested pytest subprocess apiece, a test-suite-architecture change, not a
+    # policy one, and out of scope here). Two concurrency flakes this gate's own dry run
+    # surfaced were root-caused and fixed: a query with no explicit ordering returned rows
+    # in whatever order the query planner's physical scan happened to produce, usually
+    # insertion order on a quiet box but never guaranteed, and a shared-container-under-
+    # real-load plan legitimately returned rows out of order, which every downstream
+    # group or table operation silently inherited as meaningful (fixed with an explicit
+    # ORDER BY); and a PTY-broker test shared its wait bound with many other call sites in
+    # the same file but did the most real round-trip work of any of them, so the shared
+    # bound had the least margin under host contention that is normal fleet load, not a
+    # hypothetical (fixed by widening only that call's own bound, not the shared default).
+    # Neither was a mechanism this gate itself was ever expected to see; it flagged them
+    # running its own baseline suite, which was doing its job. Arming this, at actual
+    # deploy time, is a separate decision from shipping the code.
     osiris_deploy_full_suite_gate: bool = False
-    # THE PAIR HEARTBEAT (Pit Watch Stage B, thread 449bf55d) — OFF by default, the same law
-    # as osiris_trigger_enabled: a mechanism that pages the operator's desk earns its own kill
-    # switch, never inherits one. When on, a tick alarms on any managed_by pair's ask-graded
-    # DM sitting unread past osiris_mail_lease_secs while the addressee is provably not
-    # mid-turn (_turn_fresh_sync); after osiris_pit_watch_escalate_at consecutive sightings,
-    # ONE brief reaches the operator naming the pair and the message, then a tombstone stops
-    # it from ever firing twice on the same message.
+    # The pair heartbeat: off by default, the same law as osiris_trigger_enabled: a
+    # mechanism that pages a human's desk earns its own kill switch, never inherits one.
+    # When on, a tick alarms on any manager-worker pair's ask-graded DM sitting unread
+    # past osiris_mail_lease_secs while the addressee is provably not mid-turn; after
+    # osiris_pit_watch_escalate_at consecutive sightings, one brief reaches the operator's
+    # desk naming the pair and the message, then a tombstone stops it from ever firing
+    # twice on the same message.
     osiris_pit_watch_enabled: bool = False
     osiris_pit_watch_escalate_at: int = 3
-    # THE FLEET RECONCILE REAPER (task #59 phase 2, Thoth's gate DM 2042) — OFF by default,
-    # the same law as osiris_trigger_enabled: a mechanism that WRITES to the graph on a
-    # schedule earns its own kill switch, never inherits one. When on, a tick runs
-    # fleet_reconcile.reconcile_execute(execute=True) — the exact same acting verb reachable
-    # by hand, composing fold_agent/resolve_fold_candidate for the two bulk-act buckets and
-    # a row-scoped mount drop for dead-project residue. leave_for_human rows are never
-    # touched, by construction. Flipping this flag is a SECOND signature on top of a reviewed
-    # diff — the code ships inert; a human decides separately when it may actually act.
+    # The fleet reconcile reaper: off by default, the same law as osiris_trigger_enabled:
+    # a mechanism that writes to the graph on a schedule earns its own kill switch. When
+    # on, a tick runs the reconcile-and-execute verb, the exact same acting verb reachable
+    # by hand, composing the fold and duplicate-resolution primitives for the two bulk-act
+    # buckets, plus a row-scoped mount drop for dead-project residue. Rows a human has
+    # flagged for manual review are never touched, by construction. Flipping this flag is
+    # a second signature on top of a reviewed diff; the code ships inert, a human decides
+    # separately when it may actually act.
     osiris_fleet_reconcile_enabled: bool = False
-    # THE CLOSURE MINER'S CADENCE (Thoth DM 2679, following the deploy that made this
-    # defensible) — OFF by default, the same law as osiris_fleet_reconcile_enabled: a
-    # mechanism that WRITES to the graph on a schedule earns its own kill switch, never
-    # inherits one. When on, a tick runs close_by_commits(dry_run=False) fleet-wide — the
-    # exact same acting verb reachable by hand. Its blast radius is narrower than the
-    # reaper's (only a commit LITERALLY naming a thread's own short id auto-closes;
-    # everything else stays a rot_candidate for a human to confirm) but it still writes
-    # unattended, so it gets the same second signature before it may act.
+    # The closure miner's cadence: off by default, the same law as
+    # osiris_fleet_reconcile_enabled: a mechanism that writes to the graph on a schedule
+    # earns its own kill switch, never inherits one. When on, a tick runs the
+    # commit-driven closure sweep fleet-wide, the exact same acting verb reachable by
+    # hand. Its blast radius is narrower than the reaper's (only a commit literally naming
+    # a thread's own short id auto-closes; everything else stays a candidate for a human
+    # to confirm) but it still writes unattended, so it gets the same second signature
+    # before it may act.
     osiris_closure_miner_enabled: bool = False
-    # THE PHANTOM-HEAL SWEEP'S OWN SWITCH (decision ee012ebc, operator ruling 7d6815bb —
-    # the false-mint class must heal mechanically, never by hand) — same law as the two
-    # above: a mechanism that WRITES to the graph on a schedule earns its own kill switch.
-    # OFF by default. When on, a 15-min tick runs fold_existing_zero_turn_phantoms fleet-
-    # wide — folds only FRESH, never-flagged zero-turn phantoms (the going-forward class
-    # this was built for); a phantom already flagged false_mint but never fully unwound
-    # (an interrupted heal from the older, now-atomic _debounce_roundtrip) is reported via
-    # an obligation, never auto-completed, regardless of this switch.
+    # The phantom-heal sweep's own switch: the false-mint class must heal mechanically,
+    # never by hand, the same law as the two above: a mechanism that writes to the graph
+    # on a schedule earns its own kill switch. Off by default. When on, a periodic tick
+    # folds only fresh, never-flagged zero-turn phantoms (the going-forward class this was
+    # built for); a phantom already flagged but never fully unwound is reported via an
+    # obligation, never auto-completed, regardless of this switch.
     osiris_phantom_heal_enabled: bool = False
-    # THE PHANTOM/FOLD BACKLOG REAP'S OWN SWITCH (dispatch #185 item (e), ruling 696d302c
-    # — "this should not be babysat... it should manage itself", Thoth DM 5464) — same law
-    # as every switch above: a mechanism that WRITES to the graph on a schedule earns its
-    # own kill switch, never inherits one. OFF by default. When on, a 15-min tick runs
-    # phantom_fold_reap.phantom_fold_scheduled_tick fleet-wide — reinstates a false_mint
-    # generation ONLY when registry_census independently confirms a live body beyond the
-    # graph's own claim, and invalidates a duplicate works_in edge ONLY when exactly one
-    # live target is a non-active/non-merged SoftwareProject. parallel-lives and
-    # half-healed phantom threads are counted and surfaced, never acted on — the code's
-    # own standing law (agents.py's `_report_half_healed_phantom`) is unchanged by this.
+    # The phantom/fold backlog reap's own switch: this class of cleanup should manage
+    # itself rather than be babysat, the same law as every switch above: a mechanism that
+    # writes to the graph on a schedule earns its own kill switch, never inherits one. Off
+    # by default. When on, a periodic tick reinstates a false-mint generation only when an
+    # independent census confirms a live body beyond the graph's own claim, and
+    # invalidates a duplicate project-membership edge only when exactly one live target is
+    # a non-active, non-merged project. Parallel-lives and half-healed phantom threads are
+    # counted and surfaced, never acted on; the code's own standing behavior there is
+    # unchanged by this.
     osiris_phantom_fold_reap_enabled: bool = False
-    # THE TREE-INGEST ALARM'S OWN SWITCH (thread 5126, operator ruling df646654/fe8ec7ff:
-    # self-healing over manual bug-chasing) — same law as the switches above: a mechanism
-    # that acts on a schedule earns its own kill switch, never inherits one. OFF by default.
-    # When on, a 15-min tick runs discover_trees fleet-wide and, for each tree its owning
-    # Seat has never been alarmed about in the last 24h, sends that Seat a graded 'ask' —
-    # it never ingests anything itself; ingest_project is the owning seat's own act, always
-    # a deliberate second call. A tree with no governing Seat is reported in the tick's
-    # return value, never mailed to no one.
+    # The tree-ingest alarm's own switch: self-healing over manual bug-chasing, the same
+    # law as the switches above: a mechanism that acts on a schedule earns its own kill
+    # switch, never inherits one. Off by default. When on, a periodic tick discovers trees
+    # fleet-wide and, for each tree its owning seat has never been alarmed about in the
+    # last 24h, sends that seat a graded ask; it never ingests anything itself, ingesting
+    # a project is the owning seat's own act, always a deliberate second call. A tree with
+    # no governing seat is reported in the tick's return value, never mailed to no one.
     osiris_tree_ingest_alarm_enabled: bool = False
-    # THE LANDING AUDIT'S OWN SWITCH (Thoth DM 5544 — the dispatch that found deploy_guard.
-    # landing_audit's ONLY caller, cmd_deploy, had not completed in 5 days, blocked by an
-    # unrelated gate — the surface was correct, its sole trigger was dark) — same law as
-    # the switches above: a mechanism that WRITES to the graph on a schedule earns its own
-    # kill switch, never inherits one. OFF by default. When on, a 15-min tick runs
-    # deploy_guard.landing_audit fleet-wide — mints one obligation per branch unmerged into
-    # main for 48h+ with no open held-work claim naming it, and per graph text whose cited
-    # merge is provably not an ancestor of main. Idempotent on summary text; never blocks a
-    # deploy, never gates anything (landing_audit's own NEVER REFUSES law, unchanged).
+    # The landing audit's own switch: a prior gap found the audit's only caller had not
+    # completed in days, blocked by an unrelated gate, meaning the check itself was
+    # correct but its sole trigger was dark. Same law as the switches above: a mechanism
+    # that writes to the graph on a schedule earns its own kill switch, never inherits
+    # one. Off by default. When on, a periodic tick runs the landing audit fleet-wide,
+    # minting one obligation per branch unmerged into the main line for 48h or more with
+    # no open held-work claim naming it, and per graph text whose cited merge is provably
+    # not an ancestor of the main line. Idempotent on summary text; never blocks a deploy,
+    # never gates anything.
     osiris_landing_audit_enabled: bool = False
-    # THE OBLIGATION HYGIENE NO-REGROW RULE'S OWN SWITCH (dispatch #204 follow-on, decision
-    # a44ab697161a, operator ruling relayed Thoth DM 7161, 2026-09-05): N1=7 idle days -> a
-    # DM nudge to the obligation's own owner (or the operator, when the owner is a project
-    # name or resolves to no live agent); N2=+7 more days of silence past that -> a
-    # STALE-CANDIDATE marker plus a desk brief. NEVER auto-resolved at either stage — this
-    # only nudges and surfaces, it never closes or reclassifies a thread on its own
-    # authority. TRUE BY DEFAULT — a DELIBERATE, NAMED EXCEPTION to every switch above's
-    # dark-by-default convention, per the operator's own explicit instruction ("land it
-    # with the flag ON").
+    # The obligation hygiene no-regrow rule's own switch: after 7 idle days, a nudge goes
+    # to the obligation's own owner (or the operator, when the owner is a project name or
+    # resolves to no live agent); after 7 more days of silence past that, a
+    # stale-candidate marker plus a desk brief follows. Never auto-resolved at either
+    # stage; this only nudges and surfaces, it never closes or reclassifies a thread on
+    # its own authority. True by default, a deliberate, named exception to every switch
+    # above's dark-by-default convention, per explicit operator instruction to ship it on.
     osiris_obligation_hygiene_enabled: bool = True
-    # THE NO-REGROW RULE'S OWN SWITCH (operator's word via Thoth DM 8606/8618,
-    # 2026-09-09): a SEPARATE clock from osiris_obligation_hygiene_enabled above, keyed
-    # off `stale_after` rather than idle-since-last-touch — an open obligation Thread
-    # with no annotate/owner-change/resolution for 21+ days past its own stale_after
-    # reclassifies to kind='task' (never resolved, never a status change), with a
-    # receipt on the owner's mail. OFF by default — no explicit "ship it ON" instruction
-    # accompanied this dispatch, unlike osiris_obligation_hygiene_enabled/osiris_
-    # retention_heartbeat_enabled's own named exceptions above.
-    osiris_no_regrow_enabled: bool = True  # operator 2026-09-09: "make it 7 days, flip it on"
-    # THE RETENTION HEARTBEAT'S OWN SWITCH (wave 12 item 1, operator's word via Thoth DM
-    # 8378: "put outbox_retention and audit_log_retention ... on the heartbeat"): a daily
-    # tick DELETEs (src.orchestrator.retention, execute=True) published outbox rows and
+    # The no-regrow rule's own switch: a separate clock from
+    # osiris_obligation_hygiene_enabled above, keyed off `stale_after` rather than
+    # idle-since-last-touch: an open obligation thread with no annotation, owner change,
+    # or resolution for 21+ days past its own stale_after reclassifies to kind='task'
+    # (never resolved, never a status change), with a receipt on the owner's mail. Off by
+    # default; no explicit "ship it on" instruction accompanied this one, unlike its named
+    # exceptions above.
+    osiris_no_regrow_enabled: bool = True
+    # The retention heartbeat's own switch: a daily tick deletes published outbox rows and
     # audit_log rows older than 90 days, batched, and posts a desk receipt naming both
-    # counts every run. TRUE BY DEFAULT — same named exception as osiris_obligation_
-    # hygiene_enabled above, per the operator's own explicit dispatch asking for this to
-    # run, not merely be built. Measured live 2026-09-08: outbox 803 MB, audit_log 1.2 GB,
-    # neither ever pruned before this.
+    # counts every run. True by default, same named exception as
+    # osiris_obligation_hygiene_enabled above, shipped on by explicit request. Measured
+    # live before this ran: hundreds of megabytes each in the outbox and audit_log
+    # tables, neither ever pruned before this.
     osiris_retention_heartbeat_enabled: bool = True
-    # THE SOUL STORE'S COLD TIER SWITCH (wave 12 item 2, thread 78efd46d, operator ruling
-    # via decision 64ec1905: "memory gets tiers not deletion"): a daily tick folds up to
-    # a bounded batch of sessions untouched (soul_sessions.last_ingested_at) for 30+ days
-    # into one compressed soul_lines_cold row each, deleting their per-line soul_lines
-    # rows — rematerialize/resume/verify_round_trip_sample read through both tiers
-    # transparently. TRUE BY DEFAULT — same named exception as osiris_obligation_
-    # hygiene_enabled above, per the operator's own explicit dispatch asking for this to
-    # run, not merely be built.
+    # The soul store's cold tier switch: memory gets tiers, not deletion. A daily tick
+    # folds up to a bounded batch of sessions untouched for 30+ days into one compressed
+    # cold-tier row each, deleting their per-line hot-tier rows; the read paths (resume,
+    # verify, rematerialize) read through both tiers transparently. True by default, same
+    # named exception as osiris_obligation_hygiene_enabled above, shipped on by explicit
+    # request.
     osiris_soul_cold_tier_enabled: bool = True
-    # THE GATES-ARE-LAW ENFORCEMENT SWITCH (task #131 follow-up, Thoth DM 2890, operator
-    # ruling 4ef68cfe) — same law as osiris_closure_miner_enabled, but the ACTION here is a
-    # REFUSAL not a write: scripts/gate_hook.py always RUNS ruff/mypy/scoped-pytest against a
-    # commit and always PRINTS what it found, whether this is on or off — the switch controls
-    # only whether a failing gate can actually abort a `git commit` in this shared, 4-agent-
-    # concurrent tree. ARMED TRUE (Thoth DM 3003, 2026-08-02) after both blockers cleared: the
-    # retroactive replay against db8e3e9..HEAD (three rounds, the last honestly SKIPPED-free)
-    # and the forward-looking acceptance test on current HEAD (ruling a9813fbc — a real staged
-    # change to a previously-cursed module, plain PASS, no SKIPPED). DELIBERATELY STILL INERT
-    # in the ONLY way that can refuse anyone's commit: `core.hooksPath` is NOT configured to
-    # point at .githooks/, by design (Thoth: "two turns, deliberately separate" — flag on and
-    # OBSERVED with four agents live before the hook path can actually block anybody). Wiring
-    # core.hooksPath is a separate, later act, not this one.
+    # The gates-are-law enforcement switch: same law as osiris_closure_miner_enabled, but
+    # the action here is a refusal, not a write: the commit-time gate script always runs
+    # lint/type/scoped-test checks against a commit and always prints what it found,
+    # whether this is on or off; the switch controls only whether a failing gate can
+    # actually abort a `git commit` in this shared, multi-agent-concurrent tree. Armed
+    # true after both blockers cleared: a retroactive replay across recent history (the
+    # last round honestly skip-free) and a forward-looking acceptance test on a real
+    # staged change to a previously-troublesome module, plain pass, no skips.
+    # Deliberately still inert in the only way that can refuse anyone's commit:
+    # `core.hooksPath` is not configured to point at the shared hooks directory, by
+    # design, so the flag can be on and observed with several agents live before the hook
+    # path can actually block anybody. Wiring `core.hooksPath` is a separate, later act,
+    # not this one.
     osiris_gate_hook_enforce: bool = True
-    # STAGE C, THE TURN-END PRACTICE-VIOLATION AUDIT (`_confess_if_practice_violated`,
-    # measured while it lived in osiris_stophook.py, since ported to stophook_logic.py at
-    # the hook migration, dispatch 5441/5599) — OFF, DELIBERATELY DISARMED, not "not yet armed" like
-    # its siblings above. Five days live (since commit 8c07fec, 2026-07-28), 20 flags fleet-
-    # wide in a single 24h sample, 14 individually verified against the flagging agent's own
-    # turn text — 14/14 FALSE, zero true positives. A graph-wide search for even one
-    # confirmed true-positive catch across Stage C's entire deployment found none: every
-    # prior decision on this mechanism (2eebf8a8, b318a9d3, c04f93f8, a54072cb1b7c) is a
-    # false positive being found and partially patched. Full measurement: decision 54280c72
-    # (Khnum XX). Root cause is not a precision problem (a real signal diluted by noise) — the
-    # topical-overlap gate ("two shared words of length>=4") is not a topic signal at all in a
-    # corpus where nearly every turn says hook/task/practice/check/before; it fires hardest on
-    # the MOST careful engineering prose, an inverse-quality signal (Thoth/Alfred, msg 3059).
-    # SCOPED: this flag governs STAGE C ONLY. Layer 1 (record_decision's own CONTRADICT-vs-
-    # RE-DERIVE write-intercept, commit 6a029d4) and wake-arming are different mechanisms with
-    # different evidence and are UNTOUCHED by this flag. Re-arming this needs a demonstrated
-    # true-positive rate, not another narrow suppressor for a fifth false-positive shape.
+    # Stage C, the turn-end practice-violation audit: off, deliberately disarmed, not "not
+    # yet armed" like its siblings above. Measured live for five days after it shipped: a
+    # double-digit flag count fleet-wide in a single 24h sample, most individually
+    # verified against the flagging agent's own turn text, zero confirmed true positives.
+    # A graph-wide search for even one confirmed true-positive catch across this
+    # mechanism's entire deployment found none. Root cause is not a precision problem (a
+    # real signal diluted by noise); the topical-overlap gate it used is not a topic
+    # signal at all in a corpus where nearly every turn shares a handful of common words,
+    # and it fires hardest on the most careful engineering prose, an inverse-quality
+    # signal. Scoped: this flag governs Stage C only. The write-time contradiction check
+    # and wake-arming are different mechanisms with different evidence and are untouched
+    # by this flag. Re-arming this needs a demonstrated true-positive rate, not another
+    # narrow suppressor for a fifth false-positive shape.
     osiris_stage_c_practice_check_enabled: bool = False
-    # THE FROZEN LANE (wake(), thread 9f566244 / handoff 8f005905) — OFF by default, and this
-    # QUARANTINE LIFTED (ruling 85fba696, operator 2026-07-29, superseding 482c3d0f). This was
-    # dark because the house read the Claude daemon reply lane as a harness-level RCE (decisions
-    # 635911f4, bd256380) and disclosed it. Anthropic reviewed that disclosure and deemed the
-    # behavior INTENDED DESIGN — so the premise of the quarantine is withdrawn and the lane is
-    # sanctioned to use. What the house measured is still TRUE and still matters: an injected
-    # turn is stamped origin.kind='human' by the harness regardless of who actually wrote it,
-    # which is exactly why wake() prefixes its own self-identifying provenance marker (it
-    # refuses to hide behind that label) — keep that discipline, it is attribution honesty, not
-    # a workaround. Still NOT a public API: an undocumented internal of someone else's product,
-    # free to change without notice, which is why the injectable `nudge` seam in
-    # trigger.trigger_mail_tick stays — operational insurance now, not legal cover.
+    # The frozen lane (wake()): off by default, and this quarantine has since been lifted.
+    # This was dark because the earlier read of the harness daemon reply lane treated it
+    # as a harness-level remote-execution risk and disclosed it as such; the harness
+    # vendor reviewed that disclosure and confirmed the behavior was intended design, so
+    # the premise of the quarantine was withdrawn and the lane is sanctioned to use. What
+    # was measured is still true and still matters: an injected turn is stamped as
+    # human-originated by the harness regardless of who actually wrote it, which is
+    # exactly why wake() prefixes its own self-identifying marker, it refuses to hide
+    # behind that label, and that discipline stays, it is attribution honesty, not a
+    # workaround. Still not a public API: an undocumented internal of someone else's
+    # product, free to change without notice, which is why the injectable nudge seam in
+    # the trigger's own tick stays, operational insurance now, not legal cover.
     osiris_wake_enabled: bool = True
-    # The operator's STANDING model choice (the intent). The fable harness silently demotes
-    # fable→opus when it senses danger (ruling f2ae6346); the swap-detector flags an observed
-    # model that diverges from this — the confession backstop the cold-boot ritual can't be.
+    # The standing model choice (the intent). The harness silently demotes the intended
+    # model to a fallback when it senses danger; the swap detector flags an observed model
+    # that diverges from this as the confession backstop a cold boot can't provide on its
+    # own.
     osiris_expected_model: str = "claude-fable-5"
-    # THE AMBIENT SEAM WHISPER (alfred's pitch d80621a7 piece 1): above this context %, every
-    # osiris tool response carries one `context` line; the ALARM tier stays context_lens.
-    # ALARM_PCT (one authority). 0 disables the whisper entirely. Default 45 (was 63, the
-    # operator's 2/3 of 2026-07-21): the thresholds moved to 60/70/85 on 2026-09-07 and the
-    # whisper must sit a tier BELOW the alarm or it never fires as its own tier.
+    # The ambient context-usage notice: above this context percentage, every osiris tool
+    # response carries one context line; the alarm tier stays the single authority for
+    # when action is required. 0 disables the notice entirely. Default 45: the alarm
+    # thresholds moved higher over time, and this notice must sit a tier below the alarm
+    # or it never fires as its own tier.
     osiris_seam_whisper_pct: int = 45
-    # MEMORY DIAGNOSTICS (thread 4746e7f4, operator "why osiris uses so much ram"
-    # 2026-09-06): osiris-mcp oscillates 0.9-2.1 GB under a 2G cgroup cap and swaps every
-    # incarnation, cause unmeasured since the August cap-raise drop-in. `tracemalloc`
-    # itself costs real CPU/memory overhead while tracing — OFF by default, the same law
-    # every other diagnostic/write mechanism in this file follows, so it never runs
-    # silently in production; the operator flips it on for a measurement window only.
-    # THE FIRST VERSION CAUSED A LIVE OUTAGE (same thread, ~23:20Z the same night): an
-    # unbounded tracemalloc(25) trace pinned the event loop, SIGTERM didn't stop it, only
-    # SIGKILL did. `/diag/memory` is now a BOUNDED window on its own (5 frames, a 300s
-    # hard cap, an in-window RSS tripwire, refuses a second concurrent window, refuses to
-    # start over 1.5 GB RSS) — this flag still gates it entirely dark by default, but the
-    # route itself can no longer run away even while the flag is on.
+    # Memory diagnostics: osiris-mcp has been observed oscillating within its memory cap
+    # and swapping on some incarnations, cause unmeasured since the last capacity change.
+    # Python's tracemalloc itself costs real CPU and memory overhead while tracing, off by
+    # default, the same law every other diagnostic or write mechanism in this file
+    # follows, so it never runs silently in production; an operator flips it on for a
+    # measurement window only. The first version of this diagnostic caused a live outage
+    # the same night it shipped: an unbounded trace pinned the event loop and only a hard
+    # kill signal stopped it. The diagnostic route is now a bounded window on its own (a
+    # small frame count, a fixed hard time cap, an in-window memory tripwire, refuses a
+    # second concurrent window, refuses to start over a fixed memory threshold); this flag
+    # still gates it entirely dark by default, but the route itself can no longer run away
+    # even while the flag is on.
     osiris_memory_diag_enabled: bool = False
-    # THE WORKER BOOT SPIKE (thread 0c03a685, 2026-09-07): fifteen run_at_startup crons
-    # used to fire concurrently in the same ~3s window, racing for CPU/memory during the
-    # single costliest moment of the process's life — measured at 2.1 GB RSS + 1.0 GB
-    # swap at 100% CPU ninety seconds after restart. This bounds that window: cron jobs
-    # (arq_worker.watched) serialize one-at-a-time behind a lock for this many seconds
-    # after boot, then run concurrently as normal for the rest of the process's life —
-    # cheap once the burst has passed, since a scheduled tick past this deadline never
-    # touches the lock at all.
+    # The worker boot spike: many run_at_startup cron jobs used to fire concurrently in
+    # the same few-second window, racing for CPU and memory during the single costliest
+    # moment of the process's life, measured at a large memory and swap spike at full CPU
+    # shortly after restart. This bounds that window: cron jobs serialize one at a time
+    # behind a lock for this many seconds after boot, then run concurrently as normal for
+    # the rest of the process's life, cheap once the burst has passed, since a scheduled
+    # tick past this deadline never touches the lock at all.
     osiris_worker_boot_serialize_s: float = 90.0
-    # Ports 8c7100c's bounded-tracemalloc safety rails (5 frames, an RSS tripwire, a hard
-    # duration cap, self-terminating with nobody polling) to the worker's own boot burst,
-    # gated OFF by default for the same reason osiris_memory_diag_enabled is: tracing
-    # costs real overhead even bounded, so it must never run silently. Unlike the mcp
-    # route this has no HTTP surface to poll — it logs the top allocation sites once, at
-    # the end of the window (see arq_worker._boot_memtrace).
+    # Ports the same bounded-tracemalloc safety rails used for the memory diagnostic above
+    # (a small frame count, a memory tripwire, a hard duration cap, self-terminating with
+    # nobody polling) to the worker's own boot burst, gated off by default for the same
+    # reason osiris_memory_diag_enabled is: tracing costs real overhead even bounded, so
+    # it must never run silently. Unlike the console route this has no HTTP surface to
+    # poll; it logs the top allocation sites once, at the end of the window.
     osiris_worker_boot_memtrace_enabled: bool = False
-    # MINER BUDGET KNOBS (THE SETTINGS MENU piece 1, thread f4498ab304e4, Thoth mail
-    # 10040) — promoted off proposals.py's own bare module constants so they can be
-    # registered in the settings registry with effect='next_tick' (propose()/
-    # _throttle_status call get_settings() fresh on every invocation already, so a
-    # write here is genuinely live on the very next miner tick, no restart needed).
-    # Values unchanged from their prior constants — see proposals.py's own docstring
-    # for the full budget-throttle rationale (decision ac892cd9).
+    # Miner budget knobs, promoted off a module's own bare constants so they can be
+    # registered in the settings registry with an effect that takes hold on the next
+    # tick (the proposal logic already calls get_settings() fresh on every invocation, so
+    # a write here is genuinely live on the very next miner tick, no restart needed).
+    # Values unchanged from their prior constants.
     osiris_miner_daily_budget_base: int = 5
     osiris_miner_new_pair_starter_budget: int = 1
     osiris_miner_zero_acceptance_window_days: int = 7
-    # LAYOUT KNOBS (Thoth mail 10609, product law -- every action has a door): the
-    # heartbeat's own per-tick batch size and cron cadence, both previously bare
-    # module constants in graph_layout.py/arq_worker.py. batch_size is effect=
-    # 'next_tick' but genuinely table-driven (graph_layout.layout_batch reads it via
-    # settings_service.current_stored_value, not the env-overlay path, which only
-    # covers effect='immediate' keys); tick_seconds is effect='restart:osiris-worker'
-    # -- arq's cron schedule is a static literal evaluated once at WorkerSettings
-    # class-definition time, so a write here only takes effect on the worker's next
-    # restart, same as every other daemon-literal knob in this house.
+    # Layout knobs (product law: every action has a door): the heartbeat's own per-tick
+    # batch size and cron cadence, both previously bare module constants. batch_size takes
+    # effect on the next tick and is genuinely table-driven (the layout batch job reads it
+    # via the live settings-service path, not the env-overlay path, which only covers
+    # immediate-effect keys); tick_seconds takes effect only on the worker's next restart,
+    # since arq's cron schedule is a static literal evaluated once at worker-settings
+    # class-definition time, same as every other daemon-literal knob in this house.
     osiris_layout_batch_size: int = 1000
     osiris_layout_tick_seconds: int = 300
 

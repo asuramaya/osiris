@@ -142,37 +142,36 @@ The heartbeat's liveness is a **dead-man's-switch computed on read**: `pulse-dig
 a status row that re-derives staleness every time you look, so if the pulse unit dies the digest
 says *heartbeat DEAD since &lt;time&gt;* — the alarm can't die with the daemon that rings it.
 
-## Soul-store encryption (THE KEY DOOR, Thoth mail 9134/12810/12830/12836; KEY CUSTODY
-## REWRITTEN, operator ruling e0b98ff2, 2026-09-22)
+## Soul-store encryption
 
-The soul store (`soul_lines`/`soul_lines_cold` — the byte-exact transcript archive) is
+The soul store, the byte-exact transcript archive (`soul_lines`/`soul_lines_cold`), is
 encrypted at rest by Osiris itself, one tier above host-disk trust, using a key sealed as a
-`systemd-creds` USER credential by default (never a plaintext file unless you explicitly
-choose `--backend file`). Full custody mechanism, every `osiris soul-key`/`osiris
-restic-key` action, the FIDO2 recovery ceremony, and what happens with no key at all: see
-**[`KEYS.md`](KEYS.md)**. First install, in your own terminal as whichever user the units
-run as:
+systemd user credential by default (never a plaintext file unless you explicitly choose
+`--backend file`). The full custody mechanism, every `osiris soul-key`/`osiris restic-key`
+action, the Security Key recovery flow, and what happens with no key at all: see
+[`KEYS.md`](KEYS.md). First install, in your own terminal as whichever user the services run
+as:
 
 ```bash
 osiris soul-key init
 osiris soul-key enroll-recovery
 ```
 
-**The wiring** (already shipped in `deploy/user/osiris-mcp.service`/`osiris-worker.service`
-— `osiris deploy` installs it, nothing to hand-edit): both units carry
-`ImportCredential=soul.key`, which systemd resolves against the standard per-user
-credstore (`~/.config/credstore.encrypted/soul.key`) and decrypts into
-`$CREDENTIALS_DIRECTORY/soul.key` before the process starts — no `systemd-creds`
-subprocess at read time. Deliberately `ImportCredential=`, not `LoadCredentialEncrypted=`:
-the latter would fail the unit's own start outright when the credential doesn't exist yet,
-which recreates a bootstrap deadlock (minting the key normally means running the CLI
-through the already-deployed console, which needs the unit running first).
-`Environment=OSIRIS_SOUL_KEY_FILE=%h/.config/osiris/soul.key` also stays on both units — a
-*logical* path the CLI resolves sidecar files (`.meta.json`, `.recovery.json`, `.legacy`)
-against, not where the sealed key itself lives.
+The wiring is already shipped in `deploy/user/osiris-mcp.service`/`osiris-worker.service`.
+`osiris deploy` installs it; there is nothing to hand-edit. Both services import the sealed
+credential, which systemd resolves against the standard per-user credential store
+(`~/.config/credstore.encrypted/soul.key`) and decrypts before the process starts, with no
+separate decryption step needed at read time. This import tolerates a missing credential at
+service start, unlike an older configuration shape that failed the service's own start
+outright when the credential didn't exist yet. That older shape recreated a bootstrap
+deadlock, since minting the key normally means running the command line through the
+already-deployed console, which needs the service running first.
+`Environment=OSIRIS_SOUL_KEY_FILE=%h/.config/osiris/soul.key` also stays on both services: a
+logical path the command line resolves related files against, not where the sealed key
+itself lives.
 
-A missing key does **not** stop either unit from starting — see KEYS.md's "What happens
-with no key" for the deliberate degraded-not-fatal behavior and the exact warning text.
+A missing key does not stop either service from starting. See KEYS.md's "What happens with
+no key" section for the deliberate behavior and the exact warning text.
 
 ## Full topology as one stack (containers)
 
