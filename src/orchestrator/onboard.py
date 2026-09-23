@@ -1,23 +1,24 @@
-"""onboard — one command to wire a repo (or a whole box) into the Osiris fleet.
+"""onboard: one command to wire a repo (or a whole box) into the Osiris fleet.
 
-Onboarding a repo used to be a hand-ritual: write its `.mcp.json` pointing at the shared MCP
-server, paste a boot-sector stanza into its CLAUDE.md, remember the mount ritual. This turns the
-LOCAL half into one command — `python -m src.orchestrator.onboard <repo> [--statusline]` — that:
+Onboarding a repo used to be a manual, multi-step process: write its `.mcp.json` pointing at
+the shared MCP server, paste a boot-sector stanza into its CLAUDE.md, remember the mount
+sequence. This turns the LOCAL half into one command,
+`python -m src.orchestrator.onboard <repo> [--statusline]`, that:
 
   (a) creates-or-PATCHES `<repo>/.mcp.json`, merging the `osiris` server entry into any existing
       `mcpServers` without clobbering other servers (idempotent; refuses invalid JSON);
   (b) with --statusline, creates-or-patches `<repo>/.claude/settings.json` with the shared
       statusline command (absolute paths at the osiris install), same merge/idempotence rules;
-  (c) prints a checklist — the boot-sector stanza to paste into the repo's CLAUDE.md and the note
+  (c) prints a checklist: the boot-sector stanza to paste into the repo's CLAUDE.md and the note
       to run the `bootstrap` MCP tool if the repo still carries markdown memory to migrate.
 
-LOCAL-ONLY by design — NO DB, NO graph writes. The graph half of onboarding (registering the
+LOCAL-ONLY by design: NO DB, NO graph writes. The graph half of onboarding (registering the
 project, migrating its md memory) happens later, from inside the new agent's first mounted
-session via the `bootstrap` MCP tool. This is Osiris keeping its hands to config files it is
+session via the `bootstrap` MCP tool. This keeps Osiris's hands to config files it is
 explicitly asked to write, and nothing else.
 
 The strongest onboarding is NO per-repo file at all: `--user-scope` PRINTS the `claude mcp add
---scope user …` one-liner (it never edits ~/.claude.json — the `claude` CLI owns that living
+--scope user ...` one-liner (it never edits ~/.claude.json; the `claude` CLI owns that living
 config) so every project on the box mounts osiris by default. The default checklist LEADS with
 that option; the per-repo `.mcp.json` remains for repo-pinned setups and overrides.
 """
@@ -34,10 +35,10 @@ from typing import Any
 
 # The shared, always-on MCP server every fleet agent connects to (deploy/osiris-mcp.service;
 # host/port are src/config/settings.py osiris_mcp_{host,port}). This mirrors THIS repo's own
-# .mcp.json — the exact shape a newly-onboarded repo needs.
+# .mcp.json: the exact shape a newly-onboarded repo needs.
 OSIRIS_MCP_URL = "http://127.0.0.1:8790/mcp"
 _JOB_HEADER = "X-Osiris-Job"
-_JOB_VALUE = "${CLAUDE_JOB_DIR}"  # literal — expanded per-session by Claude Code, not by us
+_JOB_VALUE = "${CLAUDE_JOB_DIR}"  # literal, expanded per-session by Claude Code, not by us
 
 # The box-wide default: one `claude mcp add` registers osiris for EVERY project. The single
 # quotes keep ${CLAUDE_JOB_DIR} literal so each session expands it, not the shell running add.
@@ -48,13 +49,13 @@ _USER_SCOPE_CMD = (
 
 
 class InvalidConfigError(Exception):
-    """A target config file exists but can't be safely merged (invalid JSON / wrong shape) —
-    onboarding REFUSES rather than clobber a file the user (or another tool) is authoring."""
+    """A target config file exists but can't be safely merged (invalid JSON / wrong shape).
+    Onboarding REFUSES rather than clobber a file the user (or another tool) is authoring."""
 
 
 @dataclass(frozen=True)
 class Change:
-    """The outcome of applying one config file, for the printed manifest + tests."""
+    """The outcome of applying one config file, for the printed manifest and tests."""
 
     status: str  # created | patched | unchanged | would-create | would-patch | skipped
     path: Path
@@ -65,22 +66,22 @@ class Change:
 
 
 def _osiris_home() -> Path:
-    """This osiris checkout's root (src/orchestrator/onboard.py → repo root). The statusline
-    command points at THIS install's venv + script — the shared script lives here, not in the
+    """This osiris checkout's root (src/orchestrator/onboard.py -> repo root). The statusline
+    command points at THIS install's venv and script: the shared script lives here, not in the
     onboarded repo (which has no osiris deps of its own)."""
     return Path(__file__).resolve().parents[2]
 
 
 def _server_entry() -> dict[str, Any]:
-    """The `osiris` mcpServers entry — identical in shape to this repo's .mcp.json."""
+    """The `osiris` mcpServers entry, identical in shape to this repo's .mcp.json."""
     return {"type": "http", "url": OSIRIS_MCP_URL, "headers": {_JOB_HEADER: _JOB_VALUE}}
 
 
 def merge_mcp(existing: dict[str, Any] | None) -> tuple[dict[str, Any], bool]:
     """Merge the osiris server into an mcpServers map WITHOUT clobbering other servers.
 
-    Returns (result, changed). Idempotent: an already-correct osiris entry → changed=False and
-    every other server is preserved untouched. Refuses a malformed `mcpServers`."""
+    Returns (result, changed). Idempotent: an already-correct osiris entry gives changed=False
+    and every other server is preserved untouched. Refuses a malformed `mcpServers`."""
     doc: dict[str, Any] = dict(existing) if existing else {}
     raw = doc.get("mcpServers")
     if raw is not None and not isinstance(raw, dict):
@@ -107,7 +108,7 @@ def _merge_hook(
 ) -> bool:
     """Idempotently add ONE command hook under `event` (optionally in a `matcher` group);
     foreign hooks pass untouched. A hook already present under a STALE matcher is retargeted
-    in place (the anchor hook's matcher widened mount→mcp__osiris__.* — appending a second
+    in place (the anchor hook's matcher widened mount->mcp__osiris__.*; appending a second
     group would double-fire it). Returns True when the doc changed."""
     hooks = dict(doc.get("hooks") or {})
     groups: list[Any] = list(hooks.get(event) or [])
@@ -138,30 +139,29 @@ def merge_settings(
     project: str | None = None, settle_gate: bool = False,
 ) -> tuple[dict[str, Any], bool]:
     """Merge the statusLine command and the requested hooks into a settings.json WITHOUT
-    dropping other keys (permissions, env, worktree, …): hook=Stop mail-drain, whisper=
-    SessionStart auto-mount, anchor=PreToolUse anchor-force + spawn-stamp, precompact=the
-    death rite's sweep ring, spawn=SubagentStart/Stop announcements, session_end=release the
-    durable mount row the instant a tab closes (dispatch 5441/5492 — osiris_hook.py has
-    always shipped a `session-end` subcommand and mcp_server.py's own `/session-end` route
-    has always been live; this installer just never had a flag to wire either one, a real
-    gap found while flipping the live settings.json off the retired per-purpose scripts,
-    one of which — osiris_sessionend.py — this closes the last caller of). reads=THE
-    ZERO-TOKEN READ HOOK (#92, Thoth mail 11780 item B): wires UserPromptSubmit ->
-    `osiris_hook.py read`. `project` (optional) is baked into the hook COMMAND itself as a
-    static `OSIRIS_HOOK_PROJECT=<name>` env var (a settings.json is tied to one repo, which
-    mounts one project, by definition — resolved once here rather than guessed per
-    keystroke) so the hook's own `/mail` matcher, which needs a project to peek at, can
-    serve at all; omitted, `/mail` degrades to a clean fall-through, same as any route not
-    yet installed. settle_gate=#93, THE MECHANICAL SETTLE (operator ruling 2026-09-17):
-    wires PreToolUse -> `osiris_hook.py settle-gate` (matcher `.*`, deliberately every
-    tool, not just `mcp__osiris__.*` — the gate must refuse Bash/Read/Edit too, not only
+    dropping other keys (permissions, env, worktree, ...): hook=Stop mail-drain, whisper=
+    SessionStart auto-mount, anchor=PreToolUse anchor-force plus spawn-stamp, precompact=the
+    pre-compaction sweep, spawn=SubagentStart/Stop announcements, session_end=release the
+    durable mount row the instant a tab closes (osiris_hook.py has always shipped a
+    `session-end` subcommand and mcp_server.py's own `/session-end` route has always been
+    live; this installer just never had a flag to wire either one, a real gap found while
+    moving the live settings.json off the retired per-purpose scripts, one of which,
+    osiris_sessionend.py, this closes the last caller of). reads=THE ZERO-TOKEN READ HOOK:
+    wires UserPromptSubmit -> `osiris_hook.py read`. `project` (optional) is baked into the
+    hook COMMAND itself as a static `OSIRIS_HOOK_PROJECT=<name>` env var (a settings.json is
+    tied to one repo, which mounts one project, by definition, so it's resolved once here
+    rather than guessed per keystroke) so the hook's own `/mail` matcher, which needs a
+    project to peek at, can serve at all; omitted, `/mail` degrades to a clean fall-through,
+    same as any route not yet installed. settle_gate=THE MECHANICAL SETTLE (operator ruling
+    2026-09-17): wires PreToolUse -> `osiris_hook.py settle-gate` (matcher `.*`, deliberately
+    every tool, not just `mcp__osiris__.*`: the gate must refuse Bash/Read/Edit too, not only
     osiris calls, to actually be mechanical) AND ALSO wires PreCompact (the same command
-    `precompact=True` wires on its own, which now carries the machine-handoff fallback
-    too) — `settle_gate` implies the PreCompact wiring on its own rather than silently
-    depending on the caller having separately asked for `precompact`, since the gate
-    without the fallback is half the ruling. Returns (result, changed)."""
+    `precompact=True` wires on its own, which now carries the machine-handoff fallback too):
+    `settle_gate` implies the PreCompact wiring on its own rather than silently depending on
+    the caller having separately asked for `precompact`, since the gate without the fallback
+    is half the ruling. Returns (result, changed)."""
     doc: dict[str, Any] = dict(existing) if existing else {}
-    # Unified osiris_hook.py — one script, all lifecycle events.
+    # Unified osiris_hook.py, one script, all lifecycle events.
     # Statusline needs the venv (shares MCP server's warm pool).
     entry = {"type": "command",
              "command": _hook_command(osiris_home, "statusline", venv=True),
@@ -233,12 +233,12 @@ def _load_json_object(path: Path) -> dict[str, Any] | None:
         return None
     text = path.read_text()
     if not text.strip():
-        return None  # an empty file is treated as absent — safe to create fresh
+        return None  # an empty file is treated as absent, safe to create fresh
     try:
         data = json.loads(text)
     except json.JSONDecodeError as e:
         raise InvalidConfigError(
-            f"{path} exists but is not valid JSON ({e}); refusing to overwrite — "
+            f"{path} exists but is not valid JSON ({e}); refusing to overwrite, "
             "fix or remove it, then re-run"
         ) from e
     if not isinstance(data, dict):
@@ -252,8 +252,8 @@ def _apply(
     *,
     dry_run: bool,
 ) -> Change:
-    """Read → merge → write one config file. Writes only when the merge changes something, so a
-    second run is a no-op. `dry_run` computes the outcome but writes nothing."""
+    """Read, merge, then write one config file. Writes only when the merge changes something, so
+    a second run is a no-op. `dry_run` computes the outcome but writes nothing."""
     existing = _load_json_object(path)
     merged, changed = merger(existing)
     verb = "create" if existing is None else "patch"
@@ -268,7 +268,7 @@ def _apply(
 
 # --- the printed checklist ------------------------------------------------------------------
 
-_BOOT_STANZA = """## Osiris — mount FIRST (before anything)
+_BOOT_STANZA = """## Osiris: mount FIRST (before anything)
 This repo is wired into Osiris, the fleet's shared memory graph. On your first action:
 `mount(cwd=<this repo>, job_dir=$CLAUDE_JOB_DIR)` -> `orient()` -> `inbox()`. Then write back
 AS YOU GO -- `record_decision` when a ruling lands, `open_thread`/`resolve_thread` (kind=
@@ -324,11 +324,11 @@ def onboard(
     user_scope: bool = False,
     osiris_home: str | Path | None = None,
 ) -> dict[str, Any]:
-    """Wire `repo` into the fleet, locally. Returns a structured result (the applied Changes +
-    the checklist text). Writes files unless `dry_run`; with `user_scope` it prints the box-wide
-    one-liner instead of writing `.mcp.json`. Raises InvalidConfigError on an unmergeable file.
-    `reads`/`project`: the zero-token read hook (#92). `settle_gate`: THE MECHANICAL SETTLE
-    (#93) — see `merge_settings`'s own docstring for both."""
+    """Wire `repo` into the fleet, locally. Returns a structured result (the applied Changes
+    plus the checklist text). Writes files unless `dry_run`; with `user_scope` it prints the
+    box-wide one-liner instead of writing `.mcp.json`. Raises InvalidConfigError on an
+    unmergeable file. `reads`/`project`: the zero-token read hook. `settle_gate`: THE
+    MECHANICAL SETTLE, see `merge_settings`'s own docstring for both."""
     root = Path(repo).expanduser().resolve()
     if not root.is_dir():
         raise InvalidConfigError(f"{root} is not a directory")
@@ -364,7 +364,7 @@ def onboard(
 def _render(result: dict[str, Any]) -> str:
     lines = [f"onboard {result['root'].name}  ({result['root']})"]
     if result["dry_run"]:
-        lines.append("  [dry-run — no files written]")
+        lines.append("  [dry-run, no files written]")
     for ch in result["changes"]:
         lines.append(f"  {ch.status:>13}  {ch.path}")
     lines.append("")
@@ -375,7 +375,7 @@ def _render(result: dict[str, Any]) -> str:
 def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
     parser = argparse.ArgumentParser(
         prog="python -m src.orchestrator.onboard",
-        description="Wire a repo into the Osiris fleet (local config only — no DB, no graph).",
+        description="Wire a repo into the Osiris fleet (local config only, no DB, no graph).",
     )
     parser.add_argument("repo", help="path to the repo to onboard")
     parser.add_argument("--name", help="project name (defaults to the repo dir name)")
@@ -386,48 +386,48 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
         "--hook",
         action="store_true",
         help="also install the Stop mail-drain hook (the visible tab settles its own mailbox "
-             "at turn-ends) — an OPERATOR consent switch: run this yourself, per repo",
+             "at turn-ends), an OPERATOR consent switch: run this yourself, per repo",
     )
     parser.add_argument(
         "--whisper",
         action="store_true",
-        help="also install the SessionStart whisper (every session wakes up already mounted "
-             "and told about Osiris) — an OPERATOR consent switch (blessing 2026-07-08)",
+        help="also install the SessionStart auto-mount hook (every session starts already "
+             "mounted and knows about Osiris), an OPERATOR consent switch (blessing 2026-07-08)",
     )
     parser.add_argument(
         "--anchor",
         action="store_true",
         help="also install the PreToolUse durable-anchor hook (forces the derived job_dir into "
-             "every mount so identity survives reconnect + co-located agents stay distinct) — "
+             "every mount so identity survives reconnect and co-located agents stay distinct), "
              "an OPERATOR consent switch (blessing 2026-07-08)",
     )
     parser.add_argument(
         "--precompact",
         action="store_true",
-        help="also install the PreCompact death-rite hook (rings the worker's sweep at the "
-             "compaction seam so unrecorded turns are mined before the heir wakes) — an "
-             "OPERATOR consent switch (blessing 2026-07-09, ruling a882b334)",
+        help="also install the PreCompact hook (runs the worker's sweep at compaction time so "
+             "unrecorded turns are captured before the next session starts), an "
+             "OPERATOR consent switch (blessing 2026-07-09)",
     )
     parser.add_argument(
         "--spawn",
         action="store_true",
         help="also install the SubagentStart/Stop spawn announcements (a sub-agent exists in "
-             "the graph, spawned_by its parent, the moment it starts — the parent is told, "
-             "never surprised) — an OPERATOR consent switch (blessing 2026-07-10)",
+             "the graph, spawned_by its parent, the moment it starts, so the parent is told, "
+             "never surprised), an OPERATOR consent switch (blessing 2026-07-10)",
     )
     parser.add_argument(
         "--session-end",
         action="store_true",
         help="also install the SessionEnd hook (releases the durable mount row the instant "
-             "a tab closes, instead of lingering live for last_seen's decay window) — an "
+             "a tab closes, instead of lingering live for last_seen's decay window), an "
              "OPERATOR consent switch (blessing 2026-07-08)",
     )
     parser.add_argument(
         "--reads",
         action="store_true",
         help="also install the UserPromptSubmit zero-token read hook (a matched bare slash "
-             "read like /status renders straight to the screen, never reaches the model) — "
-             "an OPERATOR consent switch (#92, Thoth mail 11780 item B)",
+             "read like /status renders straight to the screen, never reaches the model), "
+             "an OPERATOR consent switch",
     )
     parser.add_argument(
         "--settle-gate",
@@ -435,8 +435,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
         dest="settle_gate",
         help="also install THE MECHANICAL SETTLE (PreToolUse refuses non-osiris tool "
              "calls past context 65%% until a complete settle lands; PreCompact mints a "
-             "machine handoff marker as a last resort) — an OPERATOR consent switch "
-             "(#93, Thoth mail 11789, operator ruling 2026-09-17)",
+             "machine handoff marker as a last resort), an OPERATOR consent switch "
+             "(operator ruling 2026-09-17)",
     )
     parser.add_argument(
         "--user-scope",
@@ -448,8 +448,8 @@ def main(argv: list[str] | None = None) -> int:  # pragma: no cover - CLI glue
     )
     args = parser.parse_args(argv)
     # --name, besides naming the project for the graph half, is now ALSO what --reads bakes
-    # into the read hook's own OSIRIS_HOOK_PROJECT (#92) — the one thing it was accepted-
-    # but-unused for before this.
+    # into the read hook's own OSIRIS_HOOK_PROJECT, the one thing it was accepted-but-unused
+    # for before this.
     try:
         result = onboard(
             args.repo,

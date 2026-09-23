@@ -1,48 +1,46 @@
-"""recall(ref) — the full, untruncated record for a Thread or Decision named by a short id,
-UUID, or summary substring (thread d6ed2f17: the #60-truncation recovery path).
+"""recall(ref): the full, untruncated record for a Thread or Decision named by a short id,
+UUID, or summary substring (the truncation recovery path for orient()'s capped summaries).
 
-orient() caps open_threads/recent_decisions summaries to 160 chars in terse mode
-(task #60) — `recall(ref)` is how an agent gets the WHOLE thing back without re-fetching
-everything via verbose=True or guessing at it via search(). AUTO-DETECTS type: tries Thread
-first, then Decision (Thoth's call, msg 1299) — an agent pasting a short id off orient()
-shouldn't need to know which array it came from. `kind` disambiguates on the rare collision
-(two objects sharing an 8-hex-char UUID prefix) or just skips the extra query.
+orient() caps open_threads/recent_decisions summaries to 160 chars in terse mode;
+`recall(ref)` is how an agent gets the whole thing back without re-fetching everything via
+verbose=True or guessing at it via search(). AUTO-DETECTS type: tries Thread first, then
+Decision, since an agent pasting a short id off orient() shouldn't need to know which array
+it came from. `kind` disambiguates on the rare collision (two objects sharing an 8-hex-char
+UUID prefix) or just skips the extra query.
 
-Composes the SAME resolution ladder resolve_thread/record_decision already use privately
-(`_find_thread`/`_find_decision` in capture.py — UUID -> short-id PREFIX -> summary
-substring) rather than duplicating it or widening `resolve_ref` globally: Thoth's explicit
-call was that prefix-matching everywhere risks ambiguity collisions in existing callers
-never designed for it, so this stays its own small, focused verb.
+Composes the same resolution sequence resolve_thread/record_decision already use privately
+(`_find_thread`/`_find_decision` in capture.py: UUID -> short-id PREFIX -> summary
+substring) rather than duplicating it or widening `resolve_ref` globally: prefix-matching
+everywhere risks ambiguity collisions in existing callers never designed for it, so this
+stays its own small, focused function.
 
-NOTES AND ADDENDA NOW SURFACE HERE (Thoth DM 3278, thread 1f4dcc03: amend_decision's own
-docstring disclosed "recall() never reads it back" as a real, unfixed gap blocking the
-AMEND family's Phase 4 merge). This is THE surface a Decision's or Thread's readers already
-use to get the whole record back — the same reasoning `_fn_practices` already applied for
-amend_practice's amendments (folded into `practices()`, "the ONE live surface every caller
-already uses"), applied here to recall() instead, since that is Decision/Thread's own
-equivalent surface, not a listing composition. annotate_thread's `note:%` rows carried the
-IDENTICAL gap (verified: zero callers of `thread_notes` anywhere outside tests, same as
-`decision_addenda` before this fix) — fixed in the same pass since both live in this same
-function, not a second, separate defect worth leaving half-mended right next to the first.
+NOTES AND ADDENDA NOW SURFACE HERE (amend_decision's own docstring once disclosed "recall()
+never reads it back" as a real, unfixed gap blocking the AMEND family's merge). This is the
+surface a Decision's or Thread's readers already use to get the whole record back, the same
+reasoning `_fn_practices` already applied for amend_practice's amendments (folded into
+`practices()` as the one live surface every caller already uses), applied here to recall()
+instead, since that is Decision/Thread's own equivalent surface, not a listing composition.
+annotate_thread's `note:%` rows carried the identical gap (verified: zero callers of
+`thread_notes` anywhere outside tests, same as `decision_addenda` before this fix), fixed in
+the same pass since both live in this same function, not a second, separate defect worth
+leaving half-mended right next to the first.
 
-BEARS_ON'S OWN READ-BACK (898840dc, Thoth msg 4828): a Thread's `bears_on_from` list is
-every live `answers` edge FROM a Decision INTO it (mint_bears_on's own edge) - decisions
-that speak to this row without having closed it, oldest first. Scoped to recall() only,
-not orient()'s summary view: this is a per-object query, appropriate for the one-thread-
-at-a-time surface, not for a per-session listing that would multiply it by every open
-thread on the board.
+BEARS_ON'S OWN READ-BACK: a Thread's `bears_on_from` list is every live `answers` edge FROM
+a Decision INTO it (mint_bears_on's own edge) - decisions that speak to this row without
+having closed it, oldest first. Scoped to recall() only, not orient()'s summary view: this
+is a per-object query, appropriate for the one-thread-at-a-time surface, not for a
+per-session listing that would multiply it by every open thread on the board.
 
-NARROWS' OWN READ-BACK (thread e05e439d), same reasoning: a Decision's `narrowed_by`
-list is every live `narrows` edge FROM a later Decision INTO it — `mint_narrows` is
-non-burying by construction, so nothing about the bounded decision's own record would
-otherwise show that a later ruling limited it.
+NARROWS' OWN READ-BACK, same reasoning: a Decision's `narrowed_by` list is every live
+`narrows` edge FROM a later Decision INTO it. `mint_narrows` is non-burying by construction,
+so nothing about the bounded decision's own record would otherwise show that a later ruling
+limited it.
 
-THE CORRECTIVE ANALOG'S OWN READ-BACK (5a6b065d, Thoth wave 18 item 2): refute_practice/
-kill_superstition used to write only a plain `refuted_by`/`killed_by` PROPERTY on the
-Practice/Superstition they closed, no reverse-queryable edge at all — a Decision's own
-record had nothing to show for what it fixed. `practices_refuted`/`superstitions_killed`
-are every live edge of the same name FROM a Practice/Superstition INTO this Decision,
-same shape as narrowed_by/bears_on_from."""
+THE CORRECTIVE ANALOG'S OWN READ-BACK: refute_practice/kill_superstition used to write only
+a plain `refuted_by`/`killed_by` PROPERTY on the Practice/Superstition they closed, no
+reverse-queryable edge at all, so a Decision's own record had nothing to show for what it
+fixed. `practices_refuted`/`superstitions_killed` are every live edge of the same name FROM
+a Practice/Superstition INTO this Decision, same shape as narrowed_by/bears_on_from."""
 from __future__ import annotations
 
 import re
@@ -53,9 +51,9 @@ import asyncpg
 
 _KINDS = ("thread", "decision")
 
-# The migrated-board address form (roadmap_migration.py's legacy_task_ref, msg 4429's
-# acceptance test: "after apply, #150 must resolve to the object"). A bare decimal, with
-# or without the leading '#' this reign's own mail always writes it with.
+# The migrated-board address form (roadmap_migration.py's legacy_task_ref; the acceptance
+# test is that after a migration applies, an old task number like "#42" must resolve to
+# the object). A bare decimal, with or without the leading '#' mail always writes it with.
 _LEGACY_TASK_ID_RE = re.compile(r"^#?(\d+)$")
 
 
@@ -63,9 +61,8 @@ async def _find_by_legacy_task_ref(
     pool: asyncpg.Pool, task_id: str,
 ) -> list[tuple[uuid.UUID, str, str | None]]:
     """Every ACTIVE object carrying legacy_task_ref.id == task_id, any store. A bare task
-    number is only unique PER STORE (task_sync.py's own binding rule, proven the hard way
-    this same reign — ruling 50c3ed90) — more than one hit here is a real ambiguity, never
-    resolved by picking the first row."""
+    number is only unique PER STORE (task_sync.py's own binding rule, proven the hard way);
+    more than one hit here is a real ambiguity, never resolved by picking the first row."""
     rows = await pool.fetch(
         "SELECT a.object_id, o.type, a.value ->> 'store' AS store "
         "FROM current_assertions a JOIN objects o ON o.id = a.object_id "
@@ -76,23 +73,23 @@ async def _find_by_legacy_task_ref(
 
 
 async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[str, Any] | None:
-    """Every CURRENT property on one object, winner-per-name, untruncated — None when no
+    """Every CURRENT property on one object, winner-per-name, untruncated: None when no
     ACTIVE object of exactly this type exists at that id. `_find_thread`/`_find_decision`
-    trust an explicit-UUID-shaped ref as intent WITHOUT checking existence (the grave rule,
-    correct for the write verbs they were built for) — this is where recall() actually
-    checks, so a syntactically-valid-but-nonexistent UUID refuses honestly instead of
-    returning an empty shell of nulls.
+    trust an explicit-UUID-shaped ref as intent WITHOUT checking existence (the standing
+    convention, correct for the write functions they were built for); this is where
+    recall() actually checks, so a syntactically-valid-but-nonexistent UUID refuses
+    honestly instead of returning an empty shell of nulls.
 
     `note:%`/`addendum:%` properties are EXCLUDED from the flat per-name dump above and
-    folded back in as `notes`/`addenda` — an ordered, oldest-first list via `thread_notes`/
-    `decision_addenda`, always present (empty list, never an absent key — this house's own
-    law against a bucket collapsing to silence). Left in the flat dump, each one would
-    appear as one more `note:a3f9c012`-shaped key: unordered (SQL sorts by the RANDOM
+    folded back in as `notes`/`addenda`, an ordered, oldest-first list via `thread_notes`/
+    `decision_addenda`, always present (empty list, never an absent key, per this project's
+    own convention against a bucket collapsing to silence). Left in the flat dump, each one
+    would appear as one more `note:a3f9c012`-shaped key: unordered (SQL sorts by the RANDOM
     `_append_property_name` suffix, not time), untimestamped (this query never selects
-    `observed_at`), and undiscoverable unless a reader already knew the prefix to look for —
+    `observed_at`), and undiscoverable unless a reader already knew the prefix to look for,
     functionally unreadable despite being technically present, which is exactly what made
     the original gap easy to miss. `observed_at` is stringified here (`.isoformat()`), not
-    left as asyncpg's raw datetime — this dict crosses the MCP wire as this function's own
+    left as asyncpg's raw datetime, this dict crosses the MCP wire as this function's own
     caller, and every other datetime bound for that trip in this codebase is stringified at
     its own call site (mcp_server.py has no blanket encoder); `thread_notes`/`decision_
     addenda` keep returning real datetimes for their own direct callers (tests, `lap()`),
@@ -113,16 +110,16 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         from src.orchestrator.capture import thread_notes
         notes = await thread_notes(pool, oid)
         record["notes"] = [{**n, "observed_at": n["observed_at"].isoformat()} for n in notes]
-        # THE MEASURER'S MOMENT'S OWN READ-BACK (898840dc/e123b9fa): mint_bears_on() mints
-        # an `answers` edge from a fresh Decision onto exactly the stale row it speaks to,
-        # WITHOUT closing it — but nothing ever read that edge back onto the thread's own
-        # surface, so a reader recalling this row had no way to see "N decisions already
-        # speak to this" and could re-measure something already answered (the exact shape
-        # four of six stale board rows turned out to be, Seshat's own sweep). Live edges
-        # only (valid_until IS NULL) — an unmerge/retraction must not go on citing a row.
-        # SHARED with obligation_hygiene's own nudge (wave 18 item 1, "the stale nudge
-        # quotes it") via `thread_answering_decisions`, batched there — one query here too,
-        # single-object shape, never two copies of the same SQL free to drift.
+        # BEARS_ON'S OWN READ-BACK: mint_bears_on() mints an `answers` edge from a fresh
+        # Decision onto exactly the stale row it speaks to, without closing it, but
+        # nothing ever read that edge back onto the thread's own surface, so a reader
+        # recalling this row had no way to see "N decisions already speak to this" and
+        # could re-measure something already answered (the exact shape most stale board
+        # rows turned out to be in an earlier audit). Live edges only (valid_until IS
+        # NULL): an unmerge/retraction must not go on citing a row. Shared with
+        # obligation_hygiene's own nudge via `thread_answering_decisions`, batched there,
+        # one query here too, single-object shape, never two copies of the same SQL free
+        # to drift.
         from src.orchestrator.capture import thread_answering_decisions
 
         record["bears_on_from"] = (await thread_answering_decisions(pool, [oid])).get(oid, [])
@@ -131,15 +128,14 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         addenda = await decision_addenda(pool, oid)
         record["addenda"] = [{**a, "observed_at": a["observed_at"].isoformat()}
                               for a in addenda]
-        # NARROWS' OWN READ-BACK (thread e05e439d, Soundwave XV's specimen 0c4dc7ce):
-        # `mint_narrows` is non-burying by construction — the bounded decision's own
-        # standing and status are untouched, so nothing about ITS OWN record would ever
-        # show that a later ruling limited it. The edge existing in the links table is
-        # not the fix by itself: a reader who finds this decision and not its bound
-        # inherits an overreaching verdict at full authority, the exact failure this
-        # edge exists to prevent. Same shape Thread's `bears_on_from` already proves.
-        # Live edges only (valid_until IS NULL) — an unmerge/retraction must not go on
-        # citing a bound that no longer holds.
+        # NARROWS' OWN READ-BACK: `mint_narrows` is non-burying by construction, the
+        # bounded decision's own standing and status are untouched, so nothing about its
+        # own record would ever show that a later ruling limited it. The edge existing in
+        # the links table is not the fix by itself: a reader who finds this decision and
+        # not its bound inherits an overreaching verdict at full authority, the exact
+        # failure this edge exists to prevent. Same shape Thread's `bears_on_from` already
+        # proves. Live edges only (valid_until IS NULL): an unmerge/retraction must not go
+        # on citing a bound that no longer holds.
         narrowers = await pool.fetch(
             "SELECT d.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=d.id "
@@ -151,12 +147,12 @@ async def _full_record(pool: asyncpg.Pool, oid: uuid.UUID, otype: str) -> dict[s
         record["narrowed_by"] = [
             {"id": str(r["id"])[:8], "summary": (r["summary"] or "")[:160]}
             for r in narrowers]
-        # THE CORRECTIVE ANALOG'S OWN READ-BACK (5a6b065d, Thoth wave 18 item 2):
-        # refute_practice/kill_superstition used to write only a plain killed_by/
-        # refuted_by PROPERTY on the Practice/Superstition they closed, no reverse-
-        # queryable edge — a Decision's own record had nothing to show for what it
-        # refuted or killed. Same live-edges-only shape as narrowed_by/bears_on_from
-        # (an unmerge/retraction must not go on citing a fix that no longer holds).
+        # THE CORRECTIVE ANALOG'S OWN READ-BACK: refute_practice/kill_superstition used to
+        # write only a plain killed_by/refuted_by PROPERTY on the Practice/Superstition
+        # they closed, no reverse-queryable edge, so a Decision's own record had nothing
+        # to show for what it refuted or killed. Same live-edges-only shape as
+        # narrowed_by/bears_on_from (an unmerge/retraction must not go on citing a fix
+        # that no longer holds).
         refuted = await pool.fetch(
             "SELECT p.id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=p.id "
@@ -199,7 +195,7 @@ async def recall(pool: asyncpg.Pool, ref: str, *, kind: str | None = None) -> di
         if len(hits) > 1:
             stores = sorted({h[2] for h in hits if h[2] is not None})
             return {"error": f"{ref!r} matches legacy_task_ref id={legacy_match.group(1)!r} "
-                             f"in {len(hits)} stores {stores} — a bare task number is only "
+                             f"in {len(hits)} stores {stores}, a bare task number is only "
                              "unique per store; recall never guesses which one you mean"}
         if len(hits) == 1:
             oid, otype, _store = hits[0]
@@ -207,9 +203,9 @@ async def recall(pool: asyncpg.Pool, ref: str, *, kind: str | None = None) -> di
             if rec is not None:
                 return rec
         # zero hits (or a dangling id with no active object): not migrated, or not this
-        # id — fall through to the ordinary ladder unchanged, so "#150" typed before any
-        # migration still resolves via a Thread/Decision that happens to quote it, exactly
-        # as it always has.
+        # id: fall through to the ordinary resolution sequence unchanged, so a task
+        # number like "#42" typed before any migration still resolves via a
+        # Thread/Decision that happens to quote it, exactly as it always has.
 
     tried: list[str] = []
     if kind in (None, "thread"):
@@ -224,5 +220,5 @@ async def recall(pool: asyncpg.Pool, ref: str, *, kind: str | None = None) -> di
         if rec is not None:
             return rec
         tried.append("decision")
-    return {"error": f"no {'/'.join(tried)} matches {ref!r} — recall never guesses; "
+    return {"error": f"no {'/'.join(tried)} matches {ref!r}, recall never guesses; "
                      "try search(query=...) for a broader sweep"}
