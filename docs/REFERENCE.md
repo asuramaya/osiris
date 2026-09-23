@@ -238,7 +238,15 @@ surfaces (MCP + API) read this.
 Data-source licenses (notably OpenSanctions **CC-BY-NC**) are in
 [`../RESPONSIBLE_USE.md`](../RESPONSIBLE_USE.md).
 
-## MCP tools (`src/mcp_server.py`, 18 total)
+## MCP tools: the original OSINT/entity-graph set (18 of the full tool count)
+
+`src/mcp_server.py` has grown well past these 18 since they were first documented
+here: this table covers only the original entity-graph capability set (collect,
+analyze, and the identity-hygiene tools below), not the fleet-coordination tools
+(seat, agent, orient, send, thread, and the rest) that were added later. For the
+full, currently-live tool list, connect any MCP client to the server (its own
+`tools/list` protocol call is always in sync with the code, unlike a hand-maintained
+table) or use the console.
 
 Each accepts a UUID **or** a name. Run: `uv run python -m src.mcp_server` (stdio).
 
