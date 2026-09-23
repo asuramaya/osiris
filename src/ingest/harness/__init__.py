@@ -1,17 +1,17 @@
-"""Harness-agnostic transcript adapters (ruling be741d3e, 2026-07-18).
+"""Harness-agnostic transcript adapters (2026-07-18).
 
-The SEAM between Osiris and whatever CLI the operator is running. Each harness (Claude
-Code, Crush, opencode, codex, …) writes its session record in a different native format
-— JSONL on disk, SQLite, whatever. An adapter normalizes that into the same TurnRow
+The boundary between Osiris and whatever CLI is running. Each harness (Claude
+Code, Crush, opencode, codex, and so on) writes its session record in a different native
+format: JSONL on disk, SQLite, whatever. An adapter normalizes that into the same TurnRow
 stream so the transcript store and every reader above it (identity, swap-detect, cost,
 miner backfill) never touch a format-specific file again.
 
 ADDING A HARNESS: implement HarnessAdapter, register it in the default adapter list
-(see transcript_store.DEFAULT_ADAPTERS). No other change — the store, the readers, the
-swap detector, and the MCP server are harness-agnostic by construction.
+(see transcript_store.DEFAULT_ADAPTERS). No other change is needed: the store, the
+readers, the swap detector, and the MCP server are harness-agnostic by construction.
 
-The harness's own file stays AUTHORITATIVE (the adapter records source_ref per turn);
-the store is a DERIVED index of it, one evidence grade lower — high-stakes verdicts can
+The harness's own file stays authoritative (the adapter records source_ref per turn);
+the store is a derived index of it, one evidence grade lower, so high-stakes verdicts can
 re-probe the source on demand.
 """
 from __future__ import annotations
@@ -47,23 +47,22 @@ class TurnRow:
     is_summary: bool = False
     swap_deliberate: bool | None = None
     source_ref: str | None = None
-    # THE OVERHEAD FACTS (neo's eye, task #34): reminders = system-reminder blocks the
-    # harness injected into this user turn (None = not measured — a harness that doesn't
-    # carry them must never read as zero); is_compaction marks the compact-summary line
-    # itself, distinct from is_summary (which also covers isMeta and so can't COUNT
-    # compactions).
+    # OVERHEAD ACCOUNTING: reminders = system-reminder blocks the harness injected into
+    # this user turn (None = not measured; a harness that doesn't carry them must never
+    # read as zero); is_compaction marks the compact-summary line itself, distinct from
+    # is_summary (which also covers isMeta and so can't count compactions on its own).
     reminders: int | None = None
     is_compaction: bool = False
 
 
 @dataclass(frozen=True)
 class SessionLocator:
-    """Where a harness session LIVES on disk, resolved from cwd + job_dir.
+    """Where a harness session lives on disk, resolved from cwd + job_dir.
 
     anchor_sid is the 8-char handle the rest of the identity system keys on (matches
     _job_id's parse of CLAUDE_JOB_DIR and the session UUID prefix). source_path is the
-    absolute path to the harness's own record (JSONL file, SQLite DB, …) — kept so the
-    store can re-probe the source for high-stakes verdicts without the adapter."""
+    absolute path to the harness's own record (JSONL file, SQLite DB, and so on), kept so
+    the store can re-probe the source for high-stakes verdicts without the adapter."""
 
     anchor_sid: str
     session_id: str
@@ -71,31 +70,32 @@ class SessionLocator:
     source_path: str
     cwd: str | None
     project: str | None
-    # THE CHANNEL TAXONOMY (neo's, kept whole): 'primary' is the operator-visible window;
-    # 'sidechain' a Task-tool subagent's own transcript (agent_type from its meta.json);
-    # 'compaction' the ancestor's separate-file layout, kept for old transcripts. A channel
-    # names its primary via parent_sid; a primary carries neither.
+    # CHANNEL TAXONOMY: 'primary' is the user-visible window; 'sidechain' a Task-tool
+    # subagent's own transcript (agent_type from its meta.json); 'compaction' an earlier
+    # separate-file layout, kept for old transcripts. A channel names its primary via
+    # parent_sid; a primary carries neither.
     channel: str = "primary"
     parent_sid: str | None = None
     agent_type: str | None = None
     # HOW this session was found: True = anchored on the caller's own job/session id (the
     # identity-grade discovery), False = a hottest/newest heuristic (Crush's no-jid fallback).
-    # Identity translates this into its anchor vocabulary — an unanchored locator's reading
-    # must never confess a swap or claim a confident sid (the cry-wolf class).
+    # Identity translates this into its anchor vocabulary: an unanchored locator's reading
+    # must never confess a swap or claim a confident sid, since that would misreport with
+    # false confidence.
     anchored: bool = True
 
 
 @dataclass(frozen=True)
 class ModelReading:
-    """The model-identity reading off a harness session — what resolve_identity consumes.
+    """The model-identity reading off a harness session, what resolve_identity consumes.
 
     current is the latest assistant turn's model (the best in-session answer to 'which
     model am I'). history is the distinct-model sequence (length > 1 = a swap).
-    deliberate means the operator's own model-change command is on the record (a chosen
-    swap, never a sin). method names the harness that produced the reading so the grade
-    is auditable. anchor_sid is the join key back to the store. anchored carries the
-    locator's discovery grade (see SessionLocator.anchored); a raw store read
-    (model_of_session) defaults False — only a discovery can testify to anchoring."""
+    deliberate means the user's own model-change command is on the record (a chosen
+    swap, never an error). method names the harness that produced the reading so the
+    grade is auditable. anchor_sid is the join key back to the store. anchored carries
+    the locator's discovery grade (see SessionLocator.anchored); a raw store read
+    (model_of_session) defaults False, since only a discovery can testify to anchoring."""
 
     current: str | None
     history: tuple[str, ...]
@@ -112,25 +112,25 @@ class HarnessAdapter(Protocol):
     discover(): given a cwd and/or job_dir, find THIS session's record on disk. Returns
     None when this adapter doesn't recognize the session (try the next adapter). read_turns():
     stream turns from the record, optionally skipping already-ingested ones (since_idx).
-    enumerate(): yield every session this harness's OWN discovery surface can currently
-    see (for the miner's backfill — "Osiris eats transcripts" as a periodic sweep, not
-    just mount-time). Adapters that can't enumerate at all (a harness with no on-disk
-    discovery surface) yield nothing.
+    enumerate(): yield every session this harness's own discovery surface can currently
+    see, for the miner's periodic backfill sweep, not just mount-time discovery. Adapters
+    that can't enumerate at all (a harness with no on-disk discovery surface) yield
+    nothing.
 
     THE COMPLETENESS CONTRACT, STATED NOT ASSUMED (found live, 2026-08-24: DshSessionAdapter's
-    enumerate() silently under-counted for months because "yield ALL sessions" read as a
-    promise nothing here ever verified): enumerate() is BEST-EFFORT against whatever
-    on-disk layout the adapter was last written to understand — it is NOT a guarantee that
+    enumerate() silently under-counted for months because "yield all sessions" read as a
+    promise nothing here ever verified): enumerate() is best-effort against whatever
+    on-disk layout the adapter was last written to understand; it is not a guarantee that
     every session the harness has ever run exists in the result. A harness whose storage
     layout drifts (DSH's own move from one .zstd per project slug to nested
-    session-<uuid>/ subdirectories, discovered by walking the SAME code against the SAME
+    session-<uuid>/ subdirectories, discovered by walking the same code against the same
     directory twice in one sitting and getting two different answers) can silently make a
     "complete" enumerate() partial without any code change on Osiris's side at all. Each
-    adapter's own enumerate() docstring states what it actually promises for ITS harness —
-    read that before treating a caller's zero or a caller's N as ground truth; a caller
+    adapter's own enumerate() docstring states what it actually promises for its harness;
+    read that before treating a caller's zero or a caller's N as ground truth. A caller
     that needs a completeness guarantee has none available from this Protocol alone.
 
-    Both discover/read_turns are SYNC — they do disk IO (read a file, open a SQLite DB),
+    Both discover/read_turns are sync: they do disk IO (read a file, open a SQLite DB),
     not network or DB. enumerate() is also sync for the same reason."""
 
     name: str

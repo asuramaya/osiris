@@ -1,15 +1,15 @@
-"""Ingest ClinicalTrials.gov studies — the trials, sites, and investigators.
+"""Ingest ClinicalTrials.gov studies: the trials, sites, and investigators.
 
 The authoritative public record for human trials. For a device sponsor it exposes
 the registered studies, their status (recruiting / terminated, with whyStopped), the
-enrollment, the clinical SITES (the hospitals doing the procedures — a real-estate /
+enrollment, the clinical SITES (the hospitals doing the procedures, a real-estate /
 facility signal), the named INVESTIGATORS (the surgeons), and whether a results
 section (adverse events, including deaths) has been posted yet.
 
 What it does NOT and CANNOT show: adverse events for an INVESTIGATIONAL device are
 reported to the FDA confidentially under the IDE; they do not enter MAUDE or a results
 section until the trial completes and results are posted. That shielding is regulatory,
-not a cover-up — and this ingest is how you watch for the moment it lifts (a trial
+not a cover-up, and this ingest is how you watch for the moment it lifts (a trial
 flips to TERMINATED with a whyStopped, or a results section appears).
 
     uv run python -m src.ingest.clinicaltrials <sponsor name>
@@ -83,7 +83,7 @@ async def ingest_study(
     case_id: uuid.UUID | None = None,
     observed_at: datetime | None = None,
 ) -> dict[str, int]:
-    """Materialize a trial: the ClinicalTrial node + its facts, the sponsor that runs
+    """Materialize a trial: the ClinicalTrial node and its facts, the sponsor that runs
     it, the clinical sites, and the named investigators."""
     ts = observed_at or datetime.now(UTC)
     nct = parsed.get("nct")
@@ -115,7 +115,7 @@ async def ingest_study(
 
     for o in parsed.get("officials") or []:
         # 'overallOfficials' occasionally carries a contact string ("Call 1-877-...")
-        # instead of an investigator — don't mint a junk Person from it.
+        # instead of an investigator, don't mint a junk Person from it.
         if not is_plausible_person_name(o["name"]):
             continue
         person = await actions.create_or_find_object(
@@ -172,14 +172,14 @@ async def fetch_studies(sponsor: str, *, page_size: int = 100) -> list[dict[str,
 
 
 async def expand_facility(actions: Actions, facility: str, *, limit: int = 60) -> dict[str, int]:
-    """Ingest the trials run at a clinical SITE — revealing which other sponsors use it
-    (the foreign-counterparty thread: who else operates at Cleveland Clinic Abu Dhabi).
+    """Ingest the trials run at a clinical SITE, revealing which other sponsors use it
+    (for example, who else operates at Cleveland Clinic Abu Dhabi).
     Other trials at the same facility link to the same site node, so co-tenancy emerges."""
     totals = {"trials": 0, "sites": 0, "investigators": 0, "links": 0}
     needle = facility.lower()
     for study in (await _fetch({"query.locn": facility}))[:limit]:
         parsed = parse_study(study)
-        # keep ONLY the queried facility's site — a multinational trial lists dozens of
+        # keep ONLY the queried facility's site: a multinational trial lists dozens of
         # global sites and we don't want to slurp them all just to record co-tenancy.
         parsed["locations"] = [
             loc for loc in parsed["locations"] if needle in (loc.get("facility") or "").lower()

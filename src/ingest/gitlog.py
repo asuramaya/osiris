@@ -1,11 +1,12 @@
-"""Git-history ingest — Osiris tracking its own genesis (and any repository).
+"""Git-history ingest: Osiris tracking its own genesis (and any repository).
 
 Proof that the engine is a GENERAL substrate, not OSINT-only: a git history is just
-another structured source. The same collector pattern every federator uses — a source →
-graded objects/links through the Actions waist — maps a repo's commits, developers, and
-the history DAG into the entity graph. So Osiris can model its own development, the first
-commit onward. The git log is the authoritative record (facts land AUTHORITATIVE_API),
-and the commit date is the observed-at clock (time-travel the graph by commit).
+another structured source. The same collector pattern every federator uses, a source
+mapped to graded objects/links through the Actions waist, maps a repo's commits,
+developers, and the history DAG into the entity graph. So Osiris can model its own
+development, from the first commit onward. The git log is the authoritative record
+(facts land AUTHORITATIVE_API), and the commit date is the observed-at clock (time-travel
+the graph by commit).
 
   SoftwareProject ──in_repo── Commit ──authored_by── Person(dev)
                               Commit ──follows──────► parent Commit
@@ -34,7 +35,7 @@ from src.parsers.evidence import confidence_for
 _SOURCE = "git"
 _EC = EvidenceClass.AUTHORITATIVE_API.value
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
-# unit-separator delimited fields, record-separated — robust against newlines in subjects.
+# unit-separator delimited fields, record-separated: robust against newlines in subjects.
 # %b (body) carries the rationale: each commit message IS a decision record, so the body is
 # project memory, not noise.
 _FMT = "%H%x1f%an%x1f%ae%x1f%aI%x1f%P%x1f%s%x1f%b%x1e"
@@ -55,17 +56,17 @@ class Commit:
     body: str = ""
 
 
-# Machine trailers git appends to a body — provenance, NOT rationale. The body is memory
+# Machine trailers git appends to a body: provenance, NOT rationale. The body is memory
 # (decision-mining, recall, and cross-repo derivation all read the `rationale` property), and
 # these lines poison it: the Co-Authored-By / *-Session trailers made "claude" / "anthropic" /
-# "noreply" the top cross-repo "concern" in all seven repos. Allow-listed keys only — a plain
+# "noreply" the top cross-repo "concern" in all seven repos. Allow-listed keys only: a plain
 # "Note:" or "Fixes:" body line is never treated as a trailer.
 _TRAILER = re.compile(
     r"^\s*(?:co-authored-by|signed-off-by|[\w-]*-session)\s*:|^\s*🤖?\s*generated with\b", re.I)
 
 
 def strip_trailers(body: str) -> str:
-    """A commit body with its machine trailer lines removed — the human rationale only. Pure."""
+    """A commit body with its machine trailer lines removed, the human rationale only. Pure."""
     return "\n".join(ln for ln in body.splitlines() if not _TRAILER.match(ln)).strip()
 
 
@@ -106,14 +107,13 @@ def _git(path: str, *args: str) -> str:
 def read_commits(path: str, *, limit: int | None = None) -> list[Commit]:
     """Read a repo's history, genesis first. `limit` takes the most-recent N (git -n).
 
-    `--all` (thread b4297a47/1c8e3907, ingest registration phase 2's own measured
-    constraint 3): a bare `git log` walks only the current checked-out branch (HEAD),
-    so a repo with live topic/worktree branches — 17 live worktree-agent-* branches
-    proved it — never gets every commit ingested even when the repo itself IS
-    tracked. Safe to always include: `follows` links are derived from each commit's
-    own parent SHA (`c.parents` below), never from this log's line order, and every
-    object here is find-or-create on sha/canonical — a commit reachable from two
-    branches is ingested once regardless of how many roots `--all` walks it from."""
+    `--all`: a bare `git log` walks only the current checked-out branch (HEAD), so a
+    repo with live topic/worktree branches (17 live worktree-agent-* branches proved it)
+    never gets every commit ingested even when the repo itself IS tracked. Safe to
+    always include: `follows` links are derived from each commit's own parent SHA
+    (`c.parents` below), never from this log's line order, and every object here is
+    find-or-create on sha/canonical, so a commit reachable from two branches is
+    ingested once regardless of how many roots `--all` walks it from."""
     args = ["log", "--all", "--reverse", f"--pretty=format:{_FMT}"]
     if limit:
         args += ["-n", str(limit)]
@@ -125,27 +125,26 @@ def _dev_canonical(c: Commit) -> str:
 
 
 def _identity_name(dev_canonical: str) -> str:
-    """GIT IDENTITIES WEARING THE WRONG NAME (thread 0be2f790's own operator-finding
-    follow-up, Thoth DM 10711, ruling 9d64cb25): a dev: identity's own `name` is
-    derived ONCE from the identity itself — the email local part, literally whatever
-    precedes '@' in the canonical's own `dev:<email>` — never from whichever commit
-    author happened to write it last. Stable by construction: a pure function of the
-    (immutable) canonical, so it never varies run to run regardless of which of the many
-    callers (gitlog's own CLI, pulse's watch loop, tree_ingest's own one-source-id-per-
-    agent-worktree calls, each a DIFFERENT source_id under the SAME shared ingest_repo)
-    triggered this ingest, or what that particular commit's author name string said.
+    """GIT IDENTITIES WEARING THE WRONG NAME: a dev: identity's own `name` is derived
+    ONCE from the identity itself, the email local part, literally whatever precedes '@'
+    in the canonical's own `dev:<email>`, never from whichever commit author happened to
+    write it last. Stable by construction: a pure function of the (immutable) canonical,
+    so it never varies run to run regardless of which of the many callers (gitlog's own
+    CLI, pulse's watch loop, tree_ingest's own one-source-id-per-agent-worktree calls,
+    each a DIFFERENT source_id under the SAME shared ingest_repo) triggered this ingest,
+    or what that particular commit's author name string said.
     A `dev:<name>` canonical with no `@` at all (the `_dev_canonical` fallback for a
-    commit with no author email) has no "local part" to strip — the whole thing is the
+    commit with no author email) has no "local part" to strip: the whole thing is the
     identity, unchanged. A `machine:<email>` canonical (MACHINE GIT IDENTITIES ARE NOT
-    PEOPLE, ruling edb6b0fc) is the same derivation over the same shape — one prefix or
-    the other, never both, so stripping either leaves the identity untouched."""
+    PEOPLE) is the same derivation over the same shape: one prefix or the other, never
+    both, so stripping either leaves the identity untouched."""
     email = dev_canonical.removeprefix("dev:").removeprefix("machine:")
     return email.split("@", 1)[0]
 
 
-# MACHINE GIT IDENTITIES ARE NOT PEOPLE (thread 2619f011, ruling edb6b0fc): a bare local
-# or noreply-style host is the tell — never the local part alone, since a human genuinely
-# named after a repo on a real mail provider must never misroute.
+# MACHINE GIT IDENTITIES ARE NOT PEOPLE: a bare local or noreply-style host is the tell,
+# never the local part alone, since a human genuinely named after a repo on a real mail
+# provider must never misroute.
 _MACHINE_SHAPED_DOMAINS = {"local", "localhost"}
 
 
@@ -159,10 +158,10 @@ def _machine_canonical(email: str) -> str:
 
 
 async def _matching_ingested_project(actions: Actions, local_part: str) -> uuid.UUID | None:
-    """The other half of the heuristic (ruling edb6b0fc): the local part must equal an
-    ALREADY-INGESTED repo's own canonical name, never just any string that happens to
-    look machine-shaped — `dev:ballgem@local` routes to MachineIdentity specifically
-    because repo:ballgem already exists as a SoftwareProject."""
+    """The other half of the heuristic: the local part must equal an ALREADY-INGESTED
+    repo's own canonical name, never just any string that happens to look
+    machine-shaped: `dev:ballgem@local` routes to MachineIdentity specifically because
+    repo:ballgem already exists as a SoftwareProject."""
     return await actions.pool.fetchval(  # type: ignore[no-any-return]
         "SELECT id FROM objects WHERE type='SoftwareProject' AND canonical=$1",
         f"repo:{local_part}")
@@ -171,15 +170,15 @@ async def _matching_ingested_project(actions: Actions, local_part: str) -> uuid.
 async def declare_machine_identity(
     actions: Actions, *, email: str, project: str, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE declare-machine-identity DOOR (ruling edb6b0fc): covers what the ingest
-    heuristic (_matching_ingested_project + _is_machine_shaped_domain) misses — a bot
-    committing from a real-looking domain, or a local part that doesn't happen to match
-    any repo name. Manual, so it demands a written `because`, never silent. Mints/finds
-    the MachineIdentity, bridges any pre-existing dev:<email> Person via same_as (never
+    """THE declare-machine-identity DOOR: covers what the ingest heuristic
+    (_matching_ingested_project + _is_machine_shaped_domain) misses, a bot committing
+    from a real-looking domain, or a local part that doesn't happen to match any repo
+    name. Manual, so it demands a written `because`, never silent. Mints/finds the
+    MachineIdentity, bridges any pre-existing dev:<email> Person via same_as (never
     deleted, never retyped), and mints committer_for with `since` = now (this door has
-    no commit history of its own to date it by, unlike the ingest heuristic's own first-
-    seen date). Idempotent: re-declaring the same (email, project) is a no-op past the
-    first call, same dedup discipline as ingest_repo's own links."""
+    no commit history of its own to date it by, unlike the ingest heuristic's own
+    first-seen date). Idempotent: re-declaring the same (email, project) is a no-op past
+    the first call, same dedup discipline as ingest_repo's own links."""
     if not because.strip():
         return {"error": "declare-machine-identity requires a written `because`"}
     email = email.strip().lower()
@@ -233,11 +232,12 @@ async def declare_machine_identity(
 
 
 async def _seat_holder_at(pool: Any, *, seat_id: str, at: datetime) -> str | None:
-    """Which Agent generation held `seat_id` at time `at` — the seat's own `holds` link
-    history (bind_holder's own convention: the prior holder's link heals by `valid_until`,
-    never deleted, so the full holder history stays walkable), time-windowed. None when no
-    holder's window covers `at` — a commit older than the seat's first holder, or one that
-    falls in a gap nothing bound — never guesses to the nearest one either side."""
+    """Which Agent generation held `seat_id` at time `at`, from the seat's own `holds`
+    link history (bind_holder's own convention: the prior holder's link heals by
+    `valid_until`, never deleted, so the full holder history stays walkable),
+    time-windowed. None when no holder's window covers `at` (a commit older than the
+    seat's first holder, or one that falls in a gap nothing bound); never guesses to the
+    nearest one either side."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id "
@@ -247,7 +247,7 @@ async def _seat_holder_at(pool: Any, *, seat_id: str, at: datetime) -> str | Non
 
 
 async def _worktree_seat(pool: Any, *, worktree_path: str) -> str | None:
-    """The seat bound to this commit's own worktree — `tree_seat_hint` (the same
+    """The seat bound to this commit's own worktree, via `tree_seat_hint` (the same
     mechanical-mount primitive `mount()` already trusts, never a string-guess off the
     directory name), resolved to a single unambiguous Seat id via `seats_by_handle`. None
     when no seat is bound here, or (should never happen for a real `tree_cwd` binding, but
@@ -266,22 +266,21 @@ async def _worktree_seat(pool: Any, *, worktree_path: str) -> str | None:
 async def resolve_committed_by(
     pool: Any, *, worktree_path: str, author_date: datetime,
 ) -> str | None:
-    """WAVE 27 COMMITS ATTRIBUTED TO AGENT IDENTITIES (ruling 4cf5e4b3/b8fb26494e0e,
-    amended by decision 830a6c0a: the Claude-Session trailer is a claude.ai WEB session id,
-    a different namespace from the local job_dir/anchor_sid sids this house's own
-    provenance actually tracks — it resolves nothing on its own). Primary signal, and in
-    this build the ONLY one: `_worktree_seat` crossed with WHICH GENERATION held that seat
-    at the commit's own author time (`_seat_holder_at`, the holds link's own history). None
-    on any miss — never guesses. A per-commit convenience; `ingest_repo` resolves the seat
-    ONCE per run instead (the worktree is fixed for the whole call) and calls
-    `_seat_holder_at` directly per commit.
+    """COMMITS ATTRIBUTED TO AGENT IDENTITIES: the Claude-Session trailer is a claude.ai
+    WEB session id, a different namespace from the local job_dir/anchor_sid sids this
+    house's own provenance actually tracks, so it resolves nothing on its own. Primary
+    signal, and in this build the ONLY one: `_worktree_seat` crossed with WHICH
+    GENERATION held that seat at the commit's own author time (`_seat_holder_at`, the
+    holds link's own history). None on any miss, never guesses. A per-commit
+    convenience; `ingest_repo` resolves the seat ONCE per run instead (the worktree is
+    fixed for the whole call) and calls `_seat_holder_at` directly per commit.
 
-    SCOPED OUT OF THIS BUILD, named rather than rushed in (see the tip that shipped this):
-    the ruling also names an ingest-actor fallback for when no worktree is bound, and
-    Claude-Session-trailer disambiguation for when the worktree-handle signal and the
-    ingest actor disagree (a successor ingesting commits its own ancestor authored, the
-    exact BUG 4 shape). Both need a bounded-scan-of-candidates'-own-transcripts primitive
-    this build does not build — left as a named follow-up rather than a rushed one."""
+    SCOPED OUT OF THIS BUILD, named rather than rushed in: an ingest-actor fallback for
+    when no worktree is bound, and Claude-Session-trailer disambiguation for when the
+    worktree-handle signal and the ingest actor disagree (a successor ingesting commits
+    its own ancestor authored) are both still open. Both need a bounded-scan-of-
+    candidates'-own-transcripts primitive this build does not build, so they are left as
+    a named follow-up rather than a rushed one."""
     seat_id = await _worktree_seat(pool, worktree_path=worktree_path)
     if seat_id is None:
         return None
@@ -295,28 +294,27 @@ async def ingest_repo(
     """Ingest a repository's history into the entity graph. Idempotent (find-or-create
     on the commit sha / dev email), so re-running just adds new commits.
 
-    COMMITTED_BY (WAVE 27, ruling 4cf5e4b3/b8fb26494e0e): each commit's own author time
-    is crossed against `toplevel`'s bound seat (`resolve_committed_by`, resolved ONCE per
-    run since the worktree is fixed for the whole call) to mint an ADDITIONAL committed_by
-    Agent link beside authored_by — never a replacement, never asserted when the resolver
-    can't name a live holder for that exact instant.
+    COMMITTED_BY: each commit's own author time is crossed against `toplevel`'s bound
+    seat (`resolve_committed_by`, resolved ONCE per run since the worktree is fixed for
+    the whole call) to mint an ADDITIONAL committed_by Agent link beside authored_by,
+    never a replacement, never asserted when the resolver can't name a live holder for
+    that exact instant.
 
-    THE INGEST-ACTOR FALLBACK (piece (1) of the same ruling, Thoth dispatch 11924,
-    built after the primary signal and the backfill door): when NO seat is bound to this
-    worktree at all (`committed_by_seat is None` — a bare checkout, or a project nobody
-    has ever `bind_seat_tree`d), `actor` (the identity that CALLED this ingest, when the
-    caller has one to pass — `ingest_project`'s own self-service door does) is the
-    fallback committed_by for every commit THIS RUN newly links `in_repo` — a strictly
-    weaker signal than the worktree+time primary (it names who ran ingest NOW, not who
-    held any seat when the commit was AUTHORED), scoped on purpose to commits actually
-    touched by this call, never applied retroactively to the whole repo's history (the
-    backfill door's own time-windowed resolution stays the only door for that). A seat
-    IS bound but its holds history doesn't cover the commit's own author time is a
-    DIFFERENT, genuine "don't know" shape (the backfill door's `abstained` bucket) —
-    this fallback never masks that one; it only fires when there is no seat to ask at
-    all. `actor=None` (the default — most callers, including the bare CLI/cron path,
-    have no caller identity to offer) leaves this fallback dark, unchanged from before
-    it existed."""
+    THE INGEST-ACTOR FALLBACK, built after the primary signal and the backfill door:
+    when NO seat is bound to this worktree at all (`committed_by_seat is None`, a bare
+    checkout, or a project nobody has ever `bind_seat_tree`d), `actor` (the identity that
+    CALLED this ingest, when the caller has one to pass; `ingest_project`'s own
+    self-service door does) is the fallback committed_by for every commit THIS RUN newly
+    links `in_repo`, a strictly weaker signal than the worktree+time primary (it names
+    who ran ingest NOW, not who held any seat when the commit was AUTHORED), scoped on
+    purpose to commits actually touched by this call, never applied retroactively to the
+    whole repo's history (the backfill door's own time-windowed resolution stays the
+    only door for that). A seat IS bound but its holds history doesn't cover the
+    commit's own author time is a DIFFERENT, genuine "don't know" shape (the backfill
+    door's `abstained` bucket); this fallback never masks that one, it only fires when
+    there is no seat to ask at all. `actor=None` (the default; most callers, including
+    the bare CLI/cron path, have no caller identity to offer) leaves this fallback dark,
+    unchanged from before it existed."""
     toplevel = _git(path, "rev-parse", "--show-toplevel").strip()
     name = Path(toplevel).name
     commits = read_commits(path, limit=limit)
@@ -333,9 +331,10 @@ async def ingest_repo(
 
     # create_link is a plain append, so re-ingesting a repo (the normal way to pick up new
     # commits) would DUPLICATE every structural edge. Objects dedup on canonical, but the
-    # authored_by/in_repo/follows/committer_for/same_as links don't — dedup them so a
-    # re-ingest is truly idempotent. committer_for/same_as (ruling edb6b0fc) join the same
-    # set: a re-ingest must never re-bridge or re-link what a prior run already minted.
+    # authored_by/in_repo/follows/committer_for/same_as links don't, so dedup them here
+    # so a re-ingest is truly idempotent. committer_for/same_as (the machine-identity
+    # routing) join the same set: a re-ingest must never re-bridge or re-link what a
+    # prior run already minted.
     existing = {(r["from_id"], r["to_id"], r["type"]) for r in await actions.pool.fetch(
         "SELECT from_id, to_id, type FROM links "
         "WHERE type IN ('authored_by', 'in_repo', 'follows', 'committer_for', 'same_as', "
@@ -349,10 +348,10 @@ async def ingest_repo(
                                   case_id=case_id, evidence_class=_EC, properties=properties)
         existing.add((frm, to, typ))
 
-    # MACHINE GIT IDENTITIES ARE NOT PEOPLE (ruling edb6b0fc): the (local_part, domain) ->
-    # matched-project lookup is memoized per run — the DB round trip in
-    # _matching_ingested_project only ever fires for a machine-shaped domain (rare), and
-    # every commit from the same author asks the identical question.
+    # MACHINE GIT IDENTITIES ARE NOT PEOPLE: the (local_part, domain) -> matched-project
+    # lookup is memoized per run, since the DB round trip in _matching_ingested_project
+    # only ever fires for a machine-shaped domain (rare), and every commit from the same
+    # author asks the identical question.
     _machine_project_cache: dict[str, uuid.UUID | None] = {}
 
     async def _machine_project_for(email: str) -> uuid.UUID | None:
@@ -364,30 +363,30 @@ async def ingest_repo(
                 actions, local_part)
         return _machine_project_cache[local_part]
 
-    # A DEV'S EMAIL/ALIAS SET IS CHECKED ONCE PER RUN, NOT REASSERTED PER COMMIT (operator
-    # ruling, thread 2a280e07, mail 9240 — "fix the sources"): the naive per-commit assert
-    # reasserted on EVERY commit by the same author, live-measured at 166,786/166,782 rows
-    # for one Person — this repo's own git history is exactly the 8-12-minute-cron source
-    # Thoth's dispatch named. `dev_info` accumulates, per dev canonical, EVERY distinct
-    # author_name actually seen across this run's whole walk (not just the last commit) —
-    # GIT IDENTITIES WEARING THE WRONG NAME (thread 0be2f790's own operator-finding
-    # follow-up, Thoth DM 10711, ruling 9d64cb25) replaced the old "last commit's
-    # author name becomes `name`" policy (which let whichever of many source_id-per-
-    # agent-worktree ingest runs happened to write most recently silently flip a Person's
-    # own displayed name — the operator's own git identity flipping to an agent's name was
-    # exactly this) with a policy that never lets ANY commit author name touch `name` at
-    # all: `_identity_name` derives it once from the (stable) canonical itself, and every
-    # author name actually seen rides along as an `author_alias` instead — never lost,
-    # never mistaken for the identity's own chosen name.
+    # A DEV'S EMAIL/ALIAS SET IS CHECKED ONCE PER RUN, NOT REASSERTED PER COMMIT: fixing
+    # the underlying sources mattered because the naive per-commit assert reasserted on
+    # EVERY commit by the same author, live-measured at 166,786/166,782 rows for one
+    # Person; this repo's own git history is exactly the kind of high-frequency,
+    # short-interval cron source that made that blow up. `dev_info` accumulates, per dev
+    # canonical, EVERY distinct author_name actually seen across this run's whole walk
+    # (not just the last commit). GIT IDENTITIES WEARING THE WRONG NAME replaced the old
+    # "last commit's author name becomes `name`" policy (which let whichever of many
+    # source_id-per-agent-worktree ingest runs happened to write most recently silently
+    # flip a Person's own displayed name, including a real person's own git identity
+    # flipping to an automated identity's name) with a policy that never lets ANY commit
+    # author name touch `name` at all: `_identity_name` derives it once from the (stable)
+    # canonical itself, and every author name actually seen rides along as an
+    # `author_alias` instead, never lost, never mistaken for the identity's own chosen
+    # name.
     dev_info: dict[str, dict[str, Any]] = {}
     for c in commits:
         observed = datetime.fromisoformat(c.date)
         short = c.sha[:12]
 
-        # MACHINE GIT IDENTITIES ARE NOT PEOPLE (ruling edb6b0fc): route to MachineIdentity
-        # at mint time when the heuristic matches, never to Person — objects.type is
-        # immutable, so getting this right at first mint is the only way to avoid a
-        # same_as bridge later. Falls back to the existing Person routing otherwise.
+        # MACHINE GIT IDENTITIES ARE NOT PEOPLE: route to MachineIdentity at mint time
+        # when the heuristic matches, never to Person. objects.type is immutable, so
+        # getting this right at first mint is the only way to avoid a same_as bridge
+        # later. Falls back to the existing Person routing otherwise.
         machine_project_id = (
             await _machine_project_for(c.author_email) if c.author_email else None)
         if machine_project_id is not None:
@@ -411,14 +410,14 @@ async def ingest_repo(
                                       case_id=case_id, evidence_class=_EC)
         # the structure that turns the log into queryable memory: type/scope (groupable) +
         # the rationale body (why, not just what).
-        for prop, value in parse_subject(c.subject).items():  # not `name` — it shadows the repo
+        for prop, value in parse_subject(c.subject).items():  # not `name`, it shadows the repo
             await actions.assert_property(cm, prop, value, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
         rationale = strip_trailers(c.body)
         if rationale:
             await actions.assert_property(cm, "rationale", rationale, source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
-        if not c.parents:  # the first commit — the genesis
+        if not c.parents:  # the first commit, the genesis
             await actions.assert_property(cm, "genesis", "true", source_id, observed, _CONF,
                                           case_id=case_id, evidence_class=_EC)
 
@@ -429,7 +428,7 @@ async def ingest_repo(
             committer = await _seat_holder_at(
                 actions.pool, seat_id=committed_by_seat, at=observed)
         elif actor is not None:
-            committer = actor  # the ingest-actor fallback — no seat bound at all here
+            committer = actor  # the ingest-actor fallback, no seat bound at all here
         if committer is not None:
             agent = await actions.create_or_find_object(
                 "Agent", committer, source_id, case_id)
@@ -450,14 +449,14 @@ async def ingest_repo(
         if current_name != identity_name:
             await actions.assert_property(dev, "name", identity_name, source_id, observed,
                                           _CONF, case_id=case_id, evidence_class=_EC)
-        # GIT IDENTITIES WEARING THE WRONG NAME (Thoth DM 10711, ruling 9d64cb25):
-        # every author_name actually seen for this dev this run, other than the identity-
-        # derived name itself, rides along as `author_alias` — additive across runs (merged
-        # with whatever this SAME source already recorded), never overwritten, never
-        # mistaken for the identity's own chosen name.
+        # GIT IDENTITIES WEARING THE WRONG NAME: every author_name actually seen for this
+        # dev this run, other than the identity-derived name itself, rides along as
+        # `author_alias`, additive across runs (merged with whatever this SAME source
+        # already recorded), never overwritten, never mistaken for the identity's own
+        # chosen name.
         # case-insensitive compare: `identity_name` is always lowercase (`_dev_canonical`
         # lowercases the whole canonical), but a commit author's own display name carries
-        # its natural casing — "Ada" must not count as an alias of "ada" just because the
+        # its natural casing, so "Ada" must not count as an alias of "ada" just because the
         # email-derived identity name is lowercase; "Ada Lovelace" genuinely is a different
         # name and still does.
         seen_aliases = {n for n in info["names"] if n and n.lower() != identity_name}
@@ -482,13 +481,13 @@ async def ingest_repo(
                     dev, "email", author_email, source_id, observed, _CONF,
                     case_id=case_id, evidence_class=_EC)
 
-        # MACHINE GIT IDENTITIES ARE NOT PEOPLE (ruling edb6b0fc): the standing
-        # committer_for edge, `since` = the first commit this identity was seen for this
-        # project THIS run (commits arrive genesis-first, so the first one encountered is
-        # already the earliest — set once, never revised by a later re-ingest that only
-        # ever sees newer history). A Person minted under the old, pre-heuristic routing
-        # for the SAME email is bridged with same_as (loser -> winner), never deleted or
-        # retyped — the object may not exist at all if this identity was always routed
+        # MACHINE GIT IDENTITIES ARE NOT PEOPLE: the standing committer_for edge,
+        # `since` = the first commit this identity was seen for this project THIS run
+        # (commits arrive genesis-first, so the first one encountered is already the
+        # earliest; set once, never revised by a later re-ingest that only ever sees
+        # newer history). A Person minted under the old, pre-heuristic routing for the
+        # SAME email is bridged with same_as (loser -> winner), never deleted or
+        # retyped; the object may not exist at all if this identity was always routed
         # correctly, which is the ordinary case going forward.
         machine_project_id = info.get("machine_project_id")
         if machine_project_id is not None:

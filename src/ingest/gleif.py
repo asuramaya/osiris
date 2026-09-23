@@ -1,13 +1,13 @@
-"""Ingest GLEIF — the global Legal Entity Identifier registry (keyless).
+"""Ingest GLEIF: the global Legal Entity Identifier registry (keyless).
 
 The LEI is the closest thing to a global primary key for legal entities: a single
 20-char code per company, issued under ISO 17442, covering ~2.7M entities worldwide.
 GLEIF's API is open and keyless. Two payoffs for follow-the-money work:
 
-  * a DETERMINISTIC cross-base key — two objects carrying the same `lei` are the same
+  * a DETERMINISTIC cross-base key: two objects carrying the same `lei` are the same
     entity, full stop (no name-normalization guesswork; solves the acronym problem for
     any entity that has an LEI);
-  * ownership STRUCTURE — GLEIF's Level-2 data exposes each entity's direct and
+  * ownership STRUCTURE: GLEIF's Level-2 data exposes each entity's direct and
     ultimate parent, so a subsidiary resolves up to who controls it.
 
 This mints an Organization per LEI (canonical `lei:<LEI>`) with jurisdiction / status /
@@ -62,7 +62,7 @@ async def search_lei(
 ) -> list[dict[str, Any]]:
     """Search GLEIF by legal name and keep the PRECISE matches. GLEIF's name filter is
     fuzzy ('Anthropic' returns ETFs like 'ProShares Ultra Anthropic'), so we post-filter
-    to records whose normalized legal name equals the normalized query — the registry
+    to records whose normalized legal name equals the normalized query: the registry
     entity, not derivatives that merely reference it. Falls back to the single best hit
     if nothing matches exactly."""
     want = normalize_org_name(name)

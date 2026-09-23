@@ -1,11 +1,11 @@
-"""Harris County foreclosure watcher — the broker beat, done right.
+"""Harris County foreclosure watcher, the broker beat, done right.
 
 Texas counties post a Notice of (Substitute) Trustee Sale 21 days before the
 first-Tuesday auction. Harris County publishes them at the County Clerk's portal
 (cclerk.hctx.net/applications/websearch/FRCL_R.aspx). The broker's edge is speed:
 turn a freshly-filed notice into a sourced lead the day it posts.
 
-This is the county last-mile a failed predecessor died on — and the discipline holds:
+This is the county last-mile a failed predecessor died on, and the discipline holds:
 the portal is an ASPX web-form, NOT a clean API, so the LIVE fetch is an HTML/postback
 scrape (`live_fetch`, a documented integration point that a placeful satellite serves;
 it is intentionally not a speculative mass-crawl). The PIPELINE, though, is fully real:
@@ -38,7 +38,7 @@ _FIELDS = (
 def _watch_item(notice: dict[str, Any]) -> WatchItem:
     props: dict[str, Any] = {k: notice.get(k) for k in _FIELDS}
     props["county"] = "Harris"
-    # the human-readable NAME of a property is its address — so the generic card
+    # the human-readable NAME of a property is its address, so the generic card
     # renderer titles the lead by address without knowing what a foreclosure is.
     if notice.get("address"):
         props["name"] = notice["address"]
@@ -76,10 +76,11 @@ def make_harris_foreclosure_watcher(
 
 def make_harris_collector(*, fetch: Any) -> Callable[[Any], Awaitable[list[WatchItem]]]:
     """A satellite Collector over the county portal. It runs AT a vantage with portal
-    access (the placeful last mile — NOT a placeless mass-scrape; the collection-first grave is
-    exactly the thing we don't re-enter). `job.target` carries the cursor (last filed_date);
-    only strictly-newer notices become Property WatchItems, emitted into the CENTRAL graph
-    by the satellite runner. `fetch` is injected (live_fetch in prod, demo_fetch in tests)."""
+    access (the placeful last mile, NOT a placeless mass-scrape; a collection-first design was
+    tried before and abandoned, and this deliberately does not repeat it). `job.target` carries
+    the cursor (last filed_date); only strictly-newer notices become Property WatchItems, emitted
+    into the CENTRAL graph by the satellite runner. `fetch` is injected (live_fetch in prod,
+    demo_fetch in tests)."""
 
     async def collector(job: Any) -> list[WatchItem]:
         cursor = (getattr(job, "target", "") or None)
@@ -93,12 +94,12 @@ def make_harris_collector(*, fetch: Any) -> Callable[[Any], Awaitable[list[Watch
     return collector
 
 
-# --- live fetch: the integration point (HTML/ASPX — satellite-shaped) --------
+# --- live fetch: the integration point (HTML/ASPX, satellite-shaped) --------
 
 async def live_fetch(cursor: str | None) -> list[dict[str, Any]]:  # pragma: no cover
     """Scrape new notices from the County Clerk foreclosure portal. NOT IMPLEMENTED:
     FRCL_R.aspx is an ASPX postback form (search by Document ID / Sale Date / File
-    Date), so this needs an HTML session + result parse — a placeful-satellite job,
+    Date), so this needs an HTML session + result parse: a placeful-satellite job,
     not a clean federation. Wire it here (or as a satellite Collector) when collecting
     live; the rest of the pipeline (parse → grade → lead → alert) is already real."""
     raise NotImplementedError(
@@ -107,7 +108,7 @@ async def live_fetch(cursor: str | None) -> list[dict[str, Any]]:  # pragma: no 
     )
 
 
-# The LIVE collector — registered as a satellite kind. THE WALL: `live_fetch` raises until a
+# The LIVE collector, registered as a satellite kind. THE WALL: `live_fetch` raises until a
 # satellite runs it on a box with portal access (FRCL_R.aspx is an ASPX postback / antibot
 # form). The seam is real and the whole pipeline past it (parse→grade→lead→alert) works; the
 # placeful last mile is the operator's vantage, dispatched as a collection job.
@@ -116,7 +117,7 @@ harris_collector = make_harris_collector(fetch=live_fetch)
 
 # --- DEMO dataset: synthetic notices so the front end can be felt -------------
 # Clearly fictional owners; real Houston ZIPs; first-Tuesday 2026 sale dates. Every
-# row is flagged demo=true and rendered with a DEMO badge — nothing implies a real
+# row is flagged demo=true and rendered with a DEMO badge, nothing implies a real
 # person is in foreclosure.
 SAMPLE_NOTICES: list[dict[str, Any]] = [
     {"doc_id": "DEMO-0001", "address": "18330 Olive Leaf Dr, Houston, TX",

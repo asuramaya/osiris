@@ -1,19 +1,19 @@
-"""Ingest on-chain activity from Etherscan v2 — the follow-the-money blockchain layer.
+"""Ingest on-chain activity from Etherscan v2, the follow-the-money blockchain layer.
 
 Crypto-fraud is half the follow-the-money investigator's beat, and the chain is the
 most authoritative source there is: an immutable public ledger. This turns an EVM
-ADDRESS into a financial picture the same way the other ingests turn a name into one —
+ADDRESS into a financial picture the same way the other ingests turn a name into one:
 counterparties, balance, and contract/token identity, all graded AUTHORITATIVE_API
 (the ledger doesn't lie) and attributed with provenance.
 
 The noise lesson from the footprint crawl applies here too: an active address has
-thousands of transactions, so we do NOT mint a node per tx. We AGGREGATE — accumulate
+thousands of transactions, so we do NOT mint a node per tx. We AGGREGATE: accumulate
 per-counterparty totals (count, value in/out, tokens, first/last seen) and materialize
 only the top-K counterparties as `transacted_with` links carrying the aggregate. That
 is the intelligence primitive: *who does this address move money with, and how much*.
 
-Etherscan v2 is multichain by `chainid` (1 = Ethereum mainnet, 8453 = Base, …); one
-key, one base URL. It is the single place the keyless constraint bends — the API
+Etherscan v2 is multichain by `chainid` (1 = Ethereum mainnet, 8453 = Base, and so on);
+one key, one base URL. It is the single place the keyless constraint bends: the API
 rejects unkeyed calls, so `ETHERSCAN_API_KEY` is required; absent it, this degrades to
 an error dict rather than crashing a run.
 
@@ -39,7 +39,7 @@ from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
 _SOURCE = "etherscan"
-# The chain is ground truth — on-chain facts are as authoritative as an API gets.
+# The chain is ground truth: on-chain facts are as authoritative as an API gets.
 _EC = EvidenceClass.AUTHORITATIVE_API.value
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
 _API = "https://api.etherscan.io/v2/api"
@@ -190,7 +190,7 @@ async def _call(
         if "No transactions found" in msg or "No records found" in msg or result == []:
             return []
         # `message` is a generic "NOTOK"; the actionable detail (bad key, rate limit) is
-        # in `result` — surface it (and back off if it's a rate limit).
+        # in `result`, so surface it (and back off if it's a rate limit).
         detail = result if isinstance(result, str) else ""
         if _is_rate_limit(msg, detail):
             await asyncio.sleep(0.3 * (attempt + 1))
@@ -337,12 +337,12 @@ async def screen_against_sanctions(
     pool: asyncpg.Pool, address_id: uuid.UUID
 ) -> dict[str, Any]:
     """The crawl×base edge for crypto: flag the traced address, or any counterparty,
-    that carries an OpenSanctions provenance — i.e. an OFAC-listed wallet whose
+    that carries an OpenSanctions provenance, i.e. an OFAC-listed wallet whose
     canonical fused with this trace. Answers 'did my subject move money through a
     sanctioned wallet?'.
 
     Fusion here is by CANONICAL alignment (an OFAC wallet and the trace create the
-    SAME object), not by a merge — so a direct per-node provenance check is exact;
+    SAME object), not by a merge, so a direct per-node provenance check is exact;
     no merged_into expansion is needed for this path."""
     rows = await pool.fetch(
         "WITH nodes AS ("

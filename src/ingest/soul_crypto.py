@@ -1,97 +1,95 @@
-"""Soul-store encryption key management (Thoth mail 9134, operator ruling on thread
-773d633a; AMENDED by Thoth DM 9245, wave 17): the LIVE soul store (soul_lines/
+"""Soul-store encryption key management: the live soul store (soul_lines/
 soul_lines_cold) is encrypted at rest by osiris itself, one tier above host-disk trust.
 
 `/etc/osiris/soul.key` (overridable via `OSIRIS_SOUL_KEY_FILE`) is the default, matching
-the SYSTEM-unit deploy shape (`deploy/osiris-worker.service`/`deploy/osiris-mcp.service`,
-`User=osiris`, `EnvironmentFile=/etc/osiris/osiris.env`). THE LIVE DEV BOX RUNS THE OTHER
-SHAPE (Thoth DM 9435, confirmed live 2026-09-11): `deploy/user/osiris-worker.service`/
-`osiris-mcp.service` are systemd --USER units running as the operator's own login user
-(no dedicated service account, no `/opt` tree) — and, critically, carry NO
+the system-unit deploy shape (`deploy/osiris-worker.service`/`deploy/osiris-mcp.service`,
+`User=osiris`, `EnvironmentFile=/etc/osiris/osiris.env`). The live dev box runs a
+different shape, confirmed live on 2026-09-11: `deploy/user/osiris-worker.service`/
+`osiris-mcp.service` are systemd --user units running as the operator's own login user
+(no dedicated service account, no `/opt` tree), and, critically, carry no
 `EnvironmentFile=` at all; every var is set inline via `Environment=` lines in the unit
-file itself, so `OSIRIS_SOUL_KEY_FILE` for THIS shape is set the same way (added directly
+file itself, so `OSIRIS_SOUL_KEY_FILE` for this shape is set the same way (added directly
 to both unit files, not a shared config). `_key_file_path`/`soul_key_init` never assume
-which shape is live — the default path is just a default, and the owner-check below
-never hardcodes a service account name.
+which shape is live: the default path is just a default, and the owner check below never
+hardcodes a service account name.
 
-THE KEY DOOR (Thoth mail 12810, operator's word "keys and backup setup configurable
-from UI or CLI so a user does not need an agent"), defect 1 fixed the SAME day it was
-found live (Thoth mail 12830): `_key_file_path` no longer just falls back to
-`_DEFAULT_KEY_FILE` when `OSIRIS_SOUL_KEY_FILE` is unset — an unprivileged caller (the
-operator's own interactive shell, which never inherits a unit's inline `Environment=`
-lines) resolves the SAME path an INSTALLED --user unit already uses
+Key-path resolution was changed so keys and backup setup can be configured from the UI
+or the CLI without needing an agent to do it. The defect this exposed was fixed the same
+day it was found live: `_key_file_path` no longer just falls back to `_DEFAULT_KEY_FILE`
+when `OSIRIS_SOUL_KEY_FILE` is unset. An unprivileged caller (the operator's own
+interactive shell, which never inherits a unit's inline `Environment=` lines) instead
+resolves the same path an installed --user unit already uses
 (`_installed_user_unit_env_value`, a plain sync read of the real file at
 `~/.config/systemd/user/osiris-mcp.service`), falling back to `$XDG_CONFIG_HOME/osiris/
 soul.key` only on a genuinely fresh box with no deploy yet.
 
-KEY CUSTODY, REWRITTEN (operator ruling e0b98ff2, 2026-09-22, Thoth mail 12836) — THIS
-SUPERSEDES THE ORIGINAL "PRINTED KEY IS THE RECOVERY" LAW ABOVE. Measured live on this
-box (all as the login user, no root): `systemd-creds encrypt --user --with-key=host`
-round-trips without root (a 559-byte blob, bound to this machine's own credential host
-key); `--with-key=tpm2` REFUSES in user scope ("Selected key not available in --uid=
-scoped mode, refusing"); `/dev/tpmrm0` is `tss`-group-only and the operator is not a
-member. So:
+Key custody was rewritten on 2026-09-22, superseding the original design in which a
+printed key was the only recovery path. Measured live on this box (all as the login
+user, no root): `systemd-creds encrypt --user --with-key=host` round-trips without root
+(a 559-byte blob, bound to this machine's own credential host key); `--with-key=tpm2`
+refuses in user scope ("Selected key not available in --uid= scoped mode, refusing");
+`/dev/tpmrm0` is `tss`-group-only and the operator is not a member. So:
 
-  (1) KEY AT REST is now a systemd USER CREDENTIAL, never a plaintext file by default:
-      `soul_key_init` mints the Fernet key in memory and writes ONLY the encrypted
-      blob via `systemd-creds encrypt --user --with-key=host` (upgrading
+  (1) The key at rest is now a systemd user credential, never a plaintext file by
+      default: `soul_key_init` mints the Fernet key in memory and writes only the
+      encrypted blob via `systemd-creds encrypt --user --with-key=host` (upgrading
       automatically to `--with-key=host+tpm2` once `_is_tss_member()` says the
-      operator has joined `tss` — never auto-joins it, only ever PRINTS the one-line
-      `usermod -aG tss <user>` hint). A `.meta.json` sidecar (never secret,
+      operator has joined `tss`; this never auto-joins the group, it only ever prints
+      the one-line `usermod -aG tss <user>` hint). A `.meta.json` sidecar (never secret,
       chmod 0600 anyway) records which backend was used, read back by `soul_key_status`.
-      `backend="file"` stays available as an EXPLICIT, WARNED fallback — the shape
-      this whole module used before this ruling, kept for a box with no systemd-creds
-      at all. THE FIRST KEY MUST COME FROM THE NORMAL CLI (Thoth mail 13065,
-      correcting this original design): the DEFAULT blob location is the per-user
-      encrypted credstore (`_credential_path`, `~/.config/credstore.encrypted/
-      soul.key`), and both units get `ImportCredential=soul.key` (deploy/user/
-      *.service) — NOT `LoadCredentialEncrypted=...:<hard path>`, which failed a
-      unit's own start outright until the key existed, a bootstrap deadlock since
-      minting the key normally means running the CLI through that same
-      already-running unit. `ImportCredential=` tolerates a MISSING entry (confirmed
-      live); when present, systemd decrypts it FOR the process into
-      `$CREDENTIALS_DIRECTORY/soul.key` before it ever starts, so `get_soul_key`
-      reads that directory first (the daemon path, no `systemd-creds` subprocess
-      needed at read time), then the credstore file directly (the CLI path, decrypted
-      on demand via `systemd-creds decrypt --user`), then a legacy plaintext file
-      (the old `backend="file"` shape), in that order.
+      `backend="file"` stays available as an explicit, warned fallback, the shape this
+      whole module used before this change, kept for a box with no systemd-creds at all.
+      The first key must still come from the normal CLI, correcting an issue in the
+      original design: the default blob location is the per-user encrypted credstore
+      (`_credential_path`, `~/.config/credstore.encrypted/soul.key`), and both units get
+      `ImportCredential=soul.key` (deploy/user/*.service), not
+      `LoadCredentialEncrypted=...:<hard path>`, which failed a unit's own start outright
+      until the key existed: a bootstrap deadlock, since minting the key normally means
+      running the CLI through that same already-running unit. `ImportCredential=`
+      tolerates a missing entry (confirmed live); when present, systemd decrypts it for
+      the process into `$CREDENTIALS_DIRECTORY/soul.key` before it ever starts, so
+      `get_soul_key` reads that directory first (the daemon path, no `systemd-creds`
+      subprocess needed at read time), then the credstore file directly (the CLI path,
+      decrypted on demand via `systemd-creds decrypt --user`), then a legacy plaintext
+      file (the old `backend="file"` shape), in that order.
 
-  (2) RECOVERY is now a FIDO2 hmac-secret ("prf") enrollment on the operator's
-      Security Key, not a printed key by default: `soul_key_enroll_recovery` makes a
-      DISCOVERABLE credential with the PRF extension (python-fido2, PIN + touch
-      required), derives a wrapping key from the PRF output at a random salt, wraps
-      the raw Fernet key with it, and writes `<path>.recovery.json` (credential id,
-      salt, wrapped key, a fingerprint of the wrapped key's own plaintext — safe to
-      keep on the NAS and in the vault, since reading it needs the physical key AND
-      its PIN). `soul_key_recover` reverses it (PIN + touch) and re-seals the
-      recovered key under the host credential on a new machine. The OLD printed-key
-      banner survives as an explicit `print_recovery=True` opt-in on `soul_key_init`/
-      `soul_key_rotate_begin` — no longer the default, and no longer the only path.
-      `soul_key_status` reports every recovery path actually enrolled and WARNS when
-      the count is 1 or fewer (losing the sole enrolled path loses the data).
+  (2) Recovery is now a FIDO2 hmac-secret ("prf") enrollment on the operator's Security
+      Key, not a printed key by default: `soul_key_enroll_recovery` makes a discoverable
+      credential with the PRF extension (python-fido2, PIN + touch required), derives a
+      wrapping key from the PRF output at a random salt, wraps the raw Fernet key with
+      it, and writes `<path>.recovery.json` (credential id, salt, wrapped key, a
+      fingerprint of the wrapped key's own plaintext, safe to keep on the NAS and in the
+      vault, since reading it needs the physical key and its PIN). `soul_key_recover`
+      reverses it (PIN + touch) and re-seals the recovered key under the host credential
+      on a new machine. The old printed-key banner survives as an explicit
+      `print_recovery=True` opt-in on `soul_key_init`/`soul_key_rotate_begin`: no longer
+      the default, and no longer the only path. `soul_key_status` reports every recovery
+      path actually enrolled and warns when the count is 1 or fewer (losing the sole
+      enrolled path loses the data).
 
-NO KEYRING BRANCH (amended off the original design posted to 773d633a): the original
-env-override -> OS-keyring -> file ladder mirrored `src.connectors.leases.get_lease_key`,
-but Thoth's own read of this branch (DM 9245) found it non-deterministic under systemd —
-a login session with D-Bus still live would silently mint the key into the OS keyring
-instead of the file, invisible to the file-reading worker, and would re-mint a SECOND
-key (a second disclosure) the next time something hit the file branch instead. Dropped
-entirely: `OSIRIS_SOUL_KEY` env override always wins (tests, emergency operator
-override), then the resolution ladder above, nothing else.
+There is no OS-keyring branch (amended off the original design): the original
+env-override -> OS-keyring -> file ladder mirrored
+`src.connectors.leases.get_lease_key`, but a closer read of that branch found it
+non-deterministic under systemd: a login session with D-Bus still live would silently
+mint the key into the OS keyring instead of the file, invisible to the file-reading
+worker, and would re-mint a second key (a second disclosure) the next time something hit
+the file branch instead. It was dropped entirely: `OSIRIS_SOUL_KEY` env override always
+wins (tests, emergency operator override), then the resolution ladder above, nothing
+else.
 
-`get_soul_key`/`get_soul_fernet` NEVER GENERATE. A missing key is a hard, named refusal
-(`SoulKeyMissing`) — the worker and MCP server both call `get_soul_fernet()` once at
-their own boot (not deferred to first write) so a missing key fails loudly at START,
-naming the exact fix, rather than failing opaquely on whatever request happens to touch
-soul_store first. `soul_key_init`/`soul_key_rotate_begin` are the only two doors that
-ever mint a key, both routing through `_generate_key`; whether either DISCLOSES it as a
+`get_soul_key`/`get_soul_fernet` never generate. A missing key is a hard, named refusal
+(`SoulKeyMissing`); the worker and MCP server both call `get_soul_fernet()` once at their
+own boot (not deferred to first write) so a missing key fails loudly at start, naming the
+exact fix, rather than failing opaquely on whatever request happens to touch soul_store
+first. `soul_key_init`/`soul_key_rotate_begin` are the only two entry points that ever
+mint a key, both routing through `_generate_key`; whether either discloses it as a
 printed recovery secret is the caller's own `print_recovery` choice, never automatic.
 
-`scope` (Thoth DM 9379, no scope growth today): both key functions accept a `scope`
-parameter that the operator is weighing widening later (per-tenant keys, one store
-becoming several) — a seam at this one lookup point rather than every call site, so that
-future change never touches soul_store.py's own encrypt/decrypt call sites. Today there
-is exactly one store and `scope` does not vary the lookup at all.
+`scope`: both key functions accept a `scope` parameter that the operator is weighing
+widening later (per-tenant keys, one store becoming several), a seam at this one lookup
+point rather than every call site, so a future change never touches soul_store.py's own
+encrypt/decrypt call sites. Today there is exactly one store and `scope` does not vary
+the lookup at all.
 """
 from __future__ import annotations
 
@@ -121,15 +119,15 @@ _TSS_GROUP = "tss"  # owns /dev/tpmrm0 on this box; membership gates --with-key=
 
 
 class SoulKeyMissing(RuntimeError):
-    """Raised by `get_soul_key` when no key is configured anywhere this module looks —
-    never a silent auto-generate. The message IS the fix: the exact `soul-key init`
+    """Raised by `get_soul_key` when no key is configured anywhere this module looks,
+    never a silent auto-generate. The message is the fix: the exact `soul-key init`
     invocation to run."""
 
 
 class SoulKeyRecoveryError(RuntimeError):
     """Raised by `soul_key_enroll_recovery`/`soul_key_recover` for a FIDO2-layer
-    failure (no device, wrong PIN, extension unsupported, credential not found) —
-    named separately from `SoulKeyMissing` because the fix is never "run soul-key
+    failure (no device, wrong PIN, extension unsupported, credential not found).
+    Named separately from `SoulKeyMissing` because the fix is never "run soul-key
     init", it's "plug in your Security Key" or similar, and callers (the CLI) print
     a different hint for each."""
 
@@ -138,34 +136,34 @@ _FERNET_TOKEN_PREFIX = b"gAAAA"  # base64 of the fixed Fernet version byte (0x80
 
 
 def is_encrypted(raw: bytes) -> bool:
-    """Legacy-plaintext read fallback (Thoth DM 9194/9245): a Fernet token always begins
-    with this base64 prefix. A `raw_line`/`content_gzip` blob WITHOUT it predates
+    """Legacy-plaintext read fallback: a Fernet token always begins with this base64
+    prefix. A `raw_line`/`content_gzip` blob without it predates
     `encrypt_existing_soul_lines` and is legacy plaintext, verified as such by every
-    soul_store/handshake reader that checks this first — never decrypted, never a
-    spurious InvalidToken. A blob that DOES carry the prefix but fails to decrypt is
-    still a real, named break (wrong or rotated-out key, or corruption) — this only
+    soul_store/handshake reader that checks this first, never decrypted, never a
+    spurious InvalidToken. A blob that does carry the prefix but fails to decrypt is
+    still a real, named break (wrong or rotated-out key, or corruption): this only
     ever widens what counts as 'not encrypted', never what counts as 'a genuine
-    decryption failure'. Retires as a named follow-up once a migration receipt reports
-    zero legacy rows fleet-wide."""
+    decryption failure'. This check can retire as a follow-up once a migration
+    receipt reports zero legacy rows remaining across every deployment."""
     return raw.startswith(_FERNET_TOKEN_PREFIX)
 
 
 def _installed_user_unit_env_value(env_name: str) -> str | None:
-    """THE KEY DOOR, defect 1 (operator's own live hit, Thoth mail 12830): a plain
-    synchronous read of an INSTALLED --user unit's own `Environment=` line for
-    `env_name`, with systemd's `%h` specifier expanded to THIS process's own home
-    directory -- the unit file is real, static text on disk at
-    `~/.config/systemd/user/<name>`, the SAME place `_real_install_user_units`
-    (cli.py) writes it and `unit_install_drift` reads it back for drift-checking.
-    Deliberately no `systemctl --user show` here (settings_service.py's own
-    `_restart_unit_env_value` does that, async, for a value that needs the RUNNING
-    unit's actual resolved environment) -- this module is pool-free and sync by
-    design, and a human running `soul-key init` before either daemon has ever
-    started needs the answer from the INSTALLED FILE, not a live process that may
-    not exist yet. Checks osiris-mcp.service then osiris-worker.service (either
-    carries the same line by construction, one deploy shape); None the moment
-    neither is installed or neither carries the line (a fresh box with no deploy
-    yet, or the system-unit shape, which installs no --user units at all)."""
+    """Resolves an installed --user unit's env value: a plain synchronous read of an
+    installed --user unit's own `Environment=` line for `env_name`, with systemd's
+    `%h` specifier expanded to this process's own home directory. The unit file is
+    real, static text on disk at `~/.config/systemd/user/<name>`, the same place
+    `_real_install_user_units` (cli.py) writes it and `unit_install_drift` reads it
+    back for drift-checking. Deliberately no `systemctl --user show` here
+    (settings_service.py's own `_restart_unit_env_value` does that, async, for a
+    value that needs the running unit's actual resolved environment): this module is
+    pool-free and sync by design, and a human running `soul-key init` before either
+    daemon has ever started needs the answer from the installed file, not a live
+    process that may not exist yet. Checks osiris-mcp.service then
+    osiris-worker.service (either carries the same line by construction, one deploy
+    shape); returns None the moment neither is installed or neither carries the line
+    (a fresh box with no deploy yet, or the system-unit shape, which installs no
+    --user units at all)."""
     unit_dir = Path.home() / ".config" / "systemd" / "user"
     prefix = f"Environment={env_name}="
     for name in ("osiris-mcp.service", "osiris-worker.service"):
@@ -181,23 +179,23 @@ def _installed_user_unit_env_value(env_name: str) -> str | None:
 
 
 def _key_file_path(*, explicit: str | None = None) -> Path:
-    """Resolution ladder (THE KEY DOOR, defect 1): an explicit `--path` always wins;
-    else `OSIRIS_SOUL_KEY_FILE` if the calling process already has it (a running
+    """Resolution ladder for the key path: an explicit `--path` always wins; else
+    `OSIRIS_SOUL_KEY_FILE` if the calling process already has it (a running
     daemon's own env, or an operator who exported it by hand); else, for an
-    UNPRIVILEGED caller, the path an INSTALLED --user unit actually uses
+    unprivileged caller, the path an installed --user unit actually uses
     (`_installed_user_unit_env_value`) so a human running `soul-key init` in a
     plain login shell lands the key exactly where osiris-mcp/osiris-worker will
     look for it, without exporting anything; else `$XDG_CONFIG_HOME/osiris/
     soul.key` (or `~/.config/osiris/soul.key`) for a genuinely fresh unprivileged
-    box with no deploy yet. ROOT never gets the --user-unit or XDG fallback (no
-    natural `~` for a system-unit deploy to land the file at) -- root falls
+    box with no deploy yet. Root never gets the --user-unit or XDG fallback (no
+    natural `~` for a system-unit deploy to land the file at): root falls
     straight through to `_DEFAULT_KEY_FILE` (/etc/osiris/soul.key), matching the
     system-unit shape's own `EnvironmentFile=/etc/osiris/osiris.env` default.
 
-    THIS IS THE LOGICAL KEY NAME, not necessarily a real file on disk any more
-    (KEY CUSTODY REWRITTEN, ruling e0b98ff2): the systemd-creds backend stores the
-    actual secret at `_credential_path(this)` instead; a plaintext file AT this
-    exact path only exists for the explicit `backend="file"` fallback."""
+    This is the logical key name, not necessarily a real file on disk any more
+    since key custody was rewritten: the systemd-creds backend stores the actual
+    secret at `_credential_path(this)` instead; a plaintext file at this exact
+    path only exists for the explicit `backend="file"` fallback."""
     if explicit:
         return Path(explicit).expanduser()
     env = os.environ.get("OSIRIS_SOUL_KEY_FILE")
@@ -214,70 +212,70 @@ def _key_file_path(*, explicit: str | None = None) -> Path:
 
 
 def _credential_path(key_path: Path, *, explicit: bool = False) -> Path:
-    """Where the systemd-creds-encrypted blob actually lives (THE FIRST KEY MUST
-    COME FROM THE NORMAL CLI, Thoth mail 13065): DEFAULT (`explicit=False`,
-    every ordinary caller with no `--path`/`path=` given) — the per-user
-    encrypted credstore directory (`~/.config/credstore.encrypted/soul.key`,
+    """Where the systemd-creds-encrypted blob actually lives, given that the first
+    key must always come from the normal CLI: default (`explicit=False`, every
+    ordinary caller with no `--path`/`path=` given) is the per-user encrypted
+    credstore directory (`~/.config/credstore.encrypted/soul.key`,
     `systemd_credential.user_credstore_encrypted_dir()`), the location `deploy/
     user/*.service`'s own `ImportCredential=soul.key` searches by default and
     tolerates missing (confirmed live: a unit with no matching credstore entry
     starts and finishes cleanly, unlike the old `LoadCredentialEncrypted=soul.
     key:<hard path>` this replaces, which failed the unit outright if the file
-    wasn't there yet). EXPLICIT (`explicit=True`, a caller-given `--path`/
-    `path=`) — the OLD sibling-of-path shape (`<key_path>.cred`), kept as a
+    wasn't there yet). Explicit (`explicit=True`, a caller-given `--path`/
+    `path=`) uses the old sibling-of-path shape (`<key_path>.cred`), kept as a
     documented override for a non-standard layout (a test, a scratch
     directory) that was never going through `ImportCredential=` anyway.
 
-    STRICTLY ONE OR THE OTHER, never both checked — the SAME single-ladder
+    Strictly one or the other, never both checked: the same single-ladder
     discipline `_key_file_path` itself already holds for the logical name.
-    Every caller here threads `explicit=path is not None` off its OWN `path=`
+    Every caller here threads `explicit=path is not None` off its own `path=`
     parameter, so two calls that pass the same `path=` (or both omit it)
     always agree on where the credential lives; mixing an explicit-path init
     with a bare-path status/rotate/get (or the reverse) is a genuine user
-    error this door does not paper over."""
+    error this function does not paper over."""
     if explicit:
         return key_path.with_name(key_path.name + ".cred")
     return systemd_credential.user_credstore_encrypted_dir() / _CRED_NAME
 
 
 def _meta_path(key_path: Path) -> Path:
-    """A small, NEVER-SECRET sidecar (chmod 0600 anyway, out of caution, never out
-    of necessity) recording which backend a credential/file was minted with —
+    """A small, never-secret sidecar (chmod 0600 anyway, out of caution, never out
+    of necessity) recording which backend a credential/file was minted with:
     `systemd-creds`' own blob format doesn't expose which key type sealed it
     without decrypting, so `soul_key_status` reads this back instead of guessing."""
     return key_path.with_name(key_path.name + ".meta.json")
 
 
 def _legacy_key_file_path(path: Path) -> Path:
-    """The sibling file a rotation-in-flight parks the OLD primary key at, alongside
-    `path` — `<name>.legacy` in the same directory, so it inherits the same
+    """The sibling file a rotation-in-flight parks the old primary key at, alongside
+    `path`: `<name>.legacy` in the same directory, so it inherits the same
     permissions/ownership story the primary key file already has. Existence of this
-    file IS "a rotation is in flight", read by `soul_key_status`/`soul_key_rotate_*`
-    rather than a separate flag anywhere. Named after the LOGICAL key name
-    (`_key_file_path`'s own return), never the credential path directly — the
+    file is "a rotation is in flight", read by `soul_key_status`/`soul_key_rotate_*`
+    rather than a separate flag anywhere. Named after the logical key name
+    (`_key_file_path`'s own return), never the credential path directly: the
     caller decides whether the parked bytes are plaintext or systemd-creds
-    ciphertext by the SAME backend the primary carried."""
+    ciphertext by the same backend the primary carried."""
     return path.with_name(path.name + ".legacy")
 
 
 def _recovery_path(key_path: Path) -> Path:
-    """Where a FIDO2 recovery enrollment's own wrapped-key blob lives —
-    `<key_path>.recovery.json`. Safe to keep on the NAS and in the vault (Thoth
-    mail 12836): reading it needs the physical Security Key AND its PIN, the same
-    two factors `soul_key_recover` demands."""
+    """Where a FIDO2 recovery enrollment's own wrapped-key blob lives:
+    `<key_path>.recovery.json`. Safe to keep on the NAS and in the vault: reading
+    it needs the physical Security Key and its PIN, the same two factors
+    `soul_key_recover` demands."""
     return key_path.with_name(key_path.name + ".recovery.json")
 
 
 # `_is_tss_member`/`_systemd_creds_available` (imported above from
-# `src.ingest.systemd_credential`) and the two thin wrappers below are the ONLY
-# systemd-creds surface this module needs — the actual subprocess boundary lives
-# in that shared module now (KEY CUSTODY REWRITTEN's own follow-on, THE OFFLOAD
-# RUNNER, ruling e0b98ff2's "same shape for the restic repository password"),
-# so the soul-store key and the restic password never carry two independently-
+# `src.ingest.systemd_credential`) and the two thin wrappers below are the only
+# systemd-creds surface this module needs: the actual subprocess boundary lives
+# in that shared module now, a follow-on to the key-custody rewrite that gives
+# the restic offload runner the same shape for its own repository password, so
+# the soul-store key and the restic password never carry two independently
 # maintained copies of the exact same systemd-creds invocation. Kept as
 # module-level names (not inlined at each call site) so existing tests that
 # monkeypatch `soul_crypto._is_tss_member`/`soul_crypto._systemd_creds_available`
-# keep working unchanged — patching a module attribute is agnostic to whether
+# keep working unchanged: patching a module attribute is agnostic to whether
 # that attribute is a `def` or an imported alias.
 def _encrypt_with_systemd_creds(plaintext: bytes, *, with_key: str) -> bytes:
     return _shared_encrypt_with_systemd_creds(plaintext, name=_CRED_NAME, with_key=with_key)
@@ -288,15 +286,15 @@ def _decrypt_with_systemd_creds(blob: bytes) -> bytes:
 
 
 def read_key_bytes_at(resolved: Path, *, explicit: bool = False) -> bytes:
-    """The raw Fernet key bytes actually backing the LOGICAL path `resolved`,
-    regardless of backend — the credential at `_credential_path(resolved,
+    """The raw Fernet key bytes actually backing the logical path `resolved`,
+    regardless of backend: the credential at `_credential_path(resolved,
     explicit=explicit)`, decrypted, when it exists; the legacy plaintext file at
     `resolved` itself otherwise. For a caller (`src.orchestrator.soul_key`'s own
-    status census) that already has an EXPLICIT resolved path in hand and needs
-    its real bytes — `get_soul_key()`'s own env-first resolution ladder is the
-    wrong tool here, it ignores any `path=` a caller resolved by hand. `explicit`
+    status census) that already has an explicit resolved path in hand and needs
+    its real bytes, `get_soul_key()`'s own env-first resolution ladder is the
+    wrong tool here: it ignores any `path=` a caller resolved by hand. `explicit`
     must match whatever `path=` the caller's own resolution used to arrive at
-    `resolved` (`path is not None`) — same single-ladder discipline
+    `resolved` (`path is not None`), the same single-ladder discipline
     `_credential_path` itself holds, never both locations checked. Raises
     `FileNotFoundError` if neither exists; callers that already called
     `soul_key_status` first (checking `present`) never hit that."""
@@ -307,11 +305,11 @@ def read_key_bytes_at(resolved: Path, *, explicit: bool = False) -> bytes:
 
 
 def read_legacy_key_bytes(resolved: Path) -> bytes:
-    """The raw Fernet key bytes for a rotation-in-flight's own PARKED old key at
-    `_legacy_key_file_path(resolved)` — UNLIKE the primary key, the legacy blob
-    is stored DIRECTLY at that path (never a further `.cred`-suffixed sibling;
+    """The raw Fernet key bytes for a rotation-in-flight's own parked old key at
+    `_legacy_key_file_path(resolved)`. Unlike the primary key, the legacy blob
+    is stored directly at that path (never a further `.cred`-suffixed sibling;
     `soul_key_rotate_begin` parks whatever bytes the old carrier held, verbatim),
-    so backend is read from `_meta_path` of the LEGACY path itself, written by
+    so backend is read from `_meta_path` of the legacy path itself, written by
     that same rotate_begin call. A `file`-backend rotation writes no legacy meta
     at all (matching `_write_key_for_backend`'s own contract), so its absence
     means "read the bytes as-is, they're already plaintext."""
@@ -333,15 +331,15 @@ def _init_command_hint(path: Path) -> str:
 
 
 def _deploy_note(path: Path) -> str:
-    """THE KEY DOOR, defect 1 (Thoth mail 12830): names the exact next step for
-    whichever deploy shape `path` actually resolved against, and NEVER suggests
-    `sudo osiris ...` — `sudo` strips PATH down to root's own restricted default,
-    which does not include wherever this venv's `osiris` console-script actually
-    lives, so that exact command would fail with 'command not found' regardless of
-    which shape is live. Unchanged by KEY CUSTODY REWRITTEN or THE FIRST KEY MUST
-    COME FROM THE NORMAL CLI: this guidance is identical whether the primary is a
-    systemd-creds credential (wherever `_credential_path` puts it — the credstore
-    by default) or a legacy plaintext file at the LOGICAL path itself."""
+    """Names the exact next step for whichever deploy shape `path` actually
+    resolved against, and never suggests `sudo osiris ...`: `sudo` strips PATH
+    down to root's own restricted default, which does not include wherever this
+    venv's `osiris` console-script actually lives, so that exact command would
+    fail with 'command not found' regardless of which shape is live. Unchanged
+    by the key-custody rewrite or the requirement that the first key come from
+    the normal CLI: this guidance is identical whether the primary is a
+    systemd-creds credential (wherever `_credential_path` puts it, the credstore
+    by default) or a legacy plaintext file at the logical path itself."""
     if os.getuid() == 0:
         if str(path) == _DEFAULT_KEY_FILE:
             return (
@@ -366,21 +364,21 @@ def _deploy_note(path: Path) -> str:
 
 
 def _generate_key() -> bytes:
-    """Mint a fresh Fernet key — NEVER prints it. Every caller decides separately
+    """Mint a fresh Fernet key. Never prints it. Every caller decides separately
     (`print_recovery=`) whether to disclose it as a printed recovery secret; see
-    `_disclose_recovery_secret`. Split from that print (KEY CUSTODY REWRITTEN,
-    ruling e0b98ff2) because the printed banner is no longer automatic — FIDO2
-    enrollment is the DEFAULT recovery path now, not a printed key nobody asked
-    for cluttering a terminal that's about to run `enroll-recovery` right after."""
+    `_disclose_recovery_secret`. Split from that print as part of the key-custody
+    rewrite, because the printed banner is no longer automatic: FIDO2 enrollment
+    is the default recovery path now, not a printed key nobody asked for
+    cluttering a terminal that's about to run `enroll-recovery` right after."""
     return Fernet.generate_key()
 
 
 def _disclose_recovery_secret(key: bytes, where: str) -> None:
-    """Print the MANDATORY-WHEN-CHOSEN offline recovery secret — called only when
-    a caller's own `print_recovery=True` asks for it (KEY CUSTODY REWRITTEN,
-    ruling e0b98ff2; the OLD default-and-only-path banner survives verbatim as
-    this opt-in). A crash between this print and the persist step still leaves
-    the operator holding the only copy that matters, never the reverse."""
+    """Print the mandatory-when-chosen offline recovery secret. Called only when
+    a caller's own `print_recovery=True` asks for it (the old default-and-only-
+    path banner survives verbatim as this opt-in after the key-custody rewrite).
+    A crash between this print and the persist step still leaves the operator
+    holding the only copy that matters, never the reverse."""
     print(
         "osiris soul-store encryption key GENERATED — THIS IS THE ONLY TIME THIS KEY "
         f"PRINTS (persisting to {where}). Copy it now to OFFLINE custody — a password "
@@ -392,24 +390,23 @@ def _disclose_recovery_secret(key: bytes, where: str) -> None:
         flush=True)
 
 
-def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 — the lookup seam, see module docstring
-    """Resolve the PRIMARY Fernet key. NEVER GENERATES — raises `SoulKeyMissing`
+def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 (the lookup seam, see module docstring)
+    """Resolve the primary Fernet key. Never generates; raises `SoulKeyMissing`
     (naming the exact `soul-key init` command) when nothing below resolves.
 
-    ORDER (KEY CUSTODY REWRITTEN, ruling e0b98ff2; THE FIRST KEY MUST COME FROM THE
-    NORMAL CLI, Thoth mail 13065): `OSIRIS_SOUL_KEY` env override (tests, emergency
-    operator override) always wins; else, when running UNDER a unit that declares
-    `ImportCredential=soul.key`, systemd has ALREADY decrypted it for this process
-    into `$CREDENTIALS_DIRECTORY/soul.key` before the process ever started — a
-    plain file read, no `systemd-creds` subprocess at read time, the daemon's own
+    Order, matching the rewritten key-custody design and the requirement that the
+    first key come from the normal CLI: `OSIRIS_SOUL_KEY` env override (tests,
+    emergency operator override) always wins; else, when running under a unit that
+    declares `ImportCredential=soul.key`, systemd has already decrypted it for this
+    process into `$CREDENTIALS_DIRECTORY/soul.key` before the process ever started,
+    a plain file read, no `systemd-creds` subprocess at read time, the daemon's own
     fast path; else, for a caller with no `$CREDENTIALS_DIRECTORY` (the CLI, which
     never runs under `ImportCredential=`), the credstore file (`_credential_path`)
-    if one exists, decrypted ON DEMAND via `systemd-creds decrypt --user`; else a
+    if one exists, decrypted on demand via `systemd-creds decrypt --user`; else a
     legacy plaintext file at the resolved path itself (the explicit `backend="file"`
-    shape `soul_key_init` still
-    supports). An existing key's bytes are read silently, never re-disclosed —
-    only a freshly GENERATED key, and only when its own caller opts into
-    `print_recovery=True`, ever prints."""
+    shape `soul_key_init` still supports). An existing key's bytes are read
+    silently, never re-disclosed; only a freshly generated key, and only when its
+    own caller opts into `print_recovery=True`, ever prints."""
     env = os.environ.get("OSIRIS_SOUL_KEY")
     if env:
         return env.encode()
@@ -429,13 +426,13 @@ def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 — the looku
 
 def get_soul_fernet(scope: str = "default") -> MultiFernet:
     """The encrypt/decrypt object every soul_store write/read site uses. `MultiFernet`
-    over the PRIMARY key (`get_soul_key`, always first — new writes encrypt with this
-    one only) plus any LEGACY keys named in `OSIRIS_SOUL_KEY_LEGACY` (comma-separated
-    Fernet keys, still valid to DECRYPT, never used to encrypt a new write) — the
-    rotation window this exists for: old ciphertext keeps reading while a migration
-    re-encrypts it onto the new primary, so rotation runs as a background pass rather
-    than stop-the-world. `MultiFernet.decrypt` tries each key in order and raises
-    `cryptography.fernet.InvalidToken` only once NONE of them work."""
+    over the primary key (`get_soul_key`, always first: new writes encrypt with this
+    one only) plus any legacy keys named in `OSIRIS_SOUL_KEY_LEGACY` (comma-separated
+    Fernet keys, still valid to decrypt, never used to encrypt a new write). This is
+    the rotation window this exists for: old ciphertext keeps reading while a
+    migration re-encrypts it onto the new primary, so rotation runs as a background
+    pass rather than stop-the-world. `MultiFernet.decrypt` tries each key in order
+    and raises `cryptography.fernet.InvalidToken` only once none of them work."""
     keys = [Fernet(get_soul_key(scope=scope))]
     legacy = os.environ.get("OSIRIS_SOUL_KEY_LEGACY", "")
     keys.extend(Fernet(k.strip().encode()) for k in legacy.split(",") if k.strip())
@@ -444,7 +441,7 @@ def get_soul_fernet(scope: str = "default") -> MultiFernet:
 
 def _resolve_backend(requested: str | None) -> str:
     """`None` (auto, every ordinary caller): `host+tpm2` when `_is_tss_member()`
-    (a stronger binding, offered automatically the moment it's actually usable —
+    (a stronger binding, offered automatically the moment it's actually usable,
     never auto-joining the group to get there), else `host-cred` when
     `_systemd_creds_available()`, else `file` (a non-systemd host, or one too old
     to carry the binary) as the last-resort explicit fallback. An explicit
@@ -462,9 +459,9 @@ def _write_key_for_backend(
     """Writes `key` under `backend`'s own shape, returning `(written_path,
     effective_backend)`. `file` writes the plaintext directly (0600) at
     `resolved`'s own logical name. `host-cred`/`host+tpm2` encrypt via
-    `systemd-creds` into `_credential_path(resolved, explicit=explicit_path)` —
-    the DEFAULT credstore location, or the OLD sibling-of-path shape when a
-    caller-given `--path`/`path=` was in play — and record the backend in
+    `systemd-creds` into `_credential_path(resolved, explicit=explicit_path)`,
+    the default credstore location, or the old sibling-of-path shape when a
+    caller-given `--path`/`path=` was in play, and record the backend in
     `_meta_path(resolved)` (never secret, chmod 0600 anyway) so `soul_key_
     status` can report it back without decrypting anything. The credstore
     directory may not exist yet on a fresh box (`mkdir(parents=True)` covers
@@ -489,35 +486,36 @@ def soul_key_init(
     *, owner: str | None = None, path: str | None = None, backend: str | None = None,
     print_recovery: bool = False,
 ) -> dict[str, Any]:
-    """THE ONLY FIRST-KEY GENERATOR — meant to be run once, by a human, in their
-    own terminal (the CLI door `osiris soul-key init` wraps this unchanged); the
+    """The only first-key generator: meant to be run once, by a human, in their
+    own terminal (the CLI command `osiris soul-key init` wraps this unchanged); the
     worker and MCP server never call this, only `get_soul_fernet`/`get_soul_key`.
 
-    REFUSES IF A KEY ALREADY EXISTS at the target path, under EITHER shape
-    (a systemd-creds `.cred` file or a legacy plaintext file) — idempotent
-    refusal, never a silent re-mint (`osiris soul-key rotate` is the real door
-    for replacing a live key, never overwriting the primary file in place here).
+    Refuses if a key already exists at the target path, under either shape
+    (a systemd-creds `.cred` file or a legacy plaintext file): an idempotent
+    refusal, never a silent re-mint (`osiris soul-key rotate` is the real
+    command for replacing a live key, never overwriting the primary file in
+    place here).
 
-    REFUSES ONLY THE GENUINELY AMBIGUOUS CASE: running as ROOT with no `owner=`
-    given — root has no natural owner to land the file as (Thoth DM 9435: this
-    box's live units are systemd --USER, no dedicated service account at all, so
-    "the service user" is not even a fixed name to assume). Any NON-root caller
+    Refuses only the genuinely ambiguous case: running as root with no `owner=`
+    given. Root has no natural owner to land the file as, since this box's live
+    units are systemd --user, with no dedicated service account at all, so
+    "the service user" is not even a fixed name to assume. Any non-root caller
     proceeds directly, no `owner=` required.
 
-    `backend=` (KEY CUSTODY REWRITTEN, ruling e0b98ff2): None (every ordinary
-    caller) auto-selects via `_resolve_backend` — `host+tpm2` when the operator
+    `backend=`: following the rewritten key-custody design, None (every ordinary
+    caller) auto-selects via `_resolve_backend`: `host+tpm2` when the operator
     has already joined `tss`, else `host-cred`, else `file` on a non-systemd
     host. An explicit `"file"` is the warned escape hatch back to a plaintext key
-    (the shape this whole module used before this ruling).
+    (the shape this whole module used before that rewrite).
 
-    `print_recovery=` (KEY CUSTODY REWRITTEN): the OLD default-and-only banner is
-    now an explicit opt-in — the NEW default recovery path is `soul_key_
-    enroll_recovery` (FIDO2), run as a separate, deliberate second step.
+    `print_recovery=`: the old default-and-only banner is now an explicit
+    opt-in; the new default recovery path is `soul_key_enroll_recovery`
+    (FIDO2), run as a separate, deliberate second step.
 
-    `path=` (THE KEY DOOR, defect 1) overrides `_key_file_path`'s own resolution
-    ladder entirely — the escape hatch for a genuinely unusual layout; every
-    ordinary caller leaves it None and gets the SAME path an installed --user
-    unit already uses, resolved without exporting anything."""
+    `path=` overrides `_key_file_path`'s own resolution ladder entirely: the
+    escape hatch for a genuinely unusual layout. Every ordinary caller leaves
+    it None and gets the same path an installed --user unit already uses,
+    resolved without exporting anything."""
     resolved = _key_file_path(explicit=path)
     if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
         return {"error": f"a key already exists at {resolved} — soul-key init never "
@@ -541,7 +539,7 @@ def soul_key_init(
     chowned = False
     if owner is not None and current_user != owner:
         pw = pwd.getpwnam(owner)
-        # `resolved` and `written_path` are the SAME file for backend="file" --
+        # `resolved` and `written_path` are the same file for backend="file";
         # a set() dedupes before chowning, never chowning one path twice (the
         # exact defect this test's own call-count assertion caught).
         for p in {resolved, written_path, _meta_path(resolved)}:
@@ -563,20 +561,20 @@ def soul_key_init(
 
 
 def soul_key_status(*, path: str | None = None) -> dict[str, Any]:
-    """Facts about the key `_key_file_path` resolves to (THE KEY DOOR; KEY CUSTODY
-    REWRITTEN, ruling e0b98ff2) — NEVER the key bytes themselves, that would
-    defeat the whole point of a status door existing separately from a debug
-    print. `present`, the resolved logical `path`, `backend` ("host-cred" /
+    """Facts about the key `_key_file_path` resolves to, reflecting the rewritten
+    key-custody design. Never the key bytes themselves: that would defeat the
+    whole point of a status function existing separately from a debug print.
+    Returns `present`, the resolved logical `path`, `backend` ("host-cred" /
     "host+tpm2" / "file" / "missing", read from `_meta_path` for a credential or
     inferred "file" for a legacy plaintext key), `created_age_seconds` (of
     whichever file actually carries the secret), `rotation_in_flight` (a
-    `.legacy` sibling exists), and `recovery_paths_enrolled` (a list — "fido2"
+    `.legacy` sibling exists), and `recovery_paths_enrolled` (a list, "fido2"
     when `_recovery_path` exists) with `recovery_warning` set whenever that list
     has 1 or fewer entries (losing the sole enrolled path loses the data).
     Callers who also want the live soul_lines legacy-row census (a DB read this
     pool-free module deliberately never does) compose this with `soul_store.
-    encrypt_existing_soul_lines(pool, dry_run=True)` themselves — `cmd_soul_key`'s
-    own job, not this one's."""
+    encrypt_existing_soul_lines(pool, dry_run=True)` themselves; that's
+    `cmd_soul_key`'s own job, not this one's."""
     import time
 
     resolved = _key_file_path(explicit=path)
@@ -620,27 +618,27 @@ def soul_key_status(*, path: str | None = None) -> dict[str, Any]:
 def soul_key_rotate_begin(
     *, path: str | None = None, print_recovery: bool = False,
 ) -> dict[str, Any]:
-    """Step 1 of 2 (THE KEY DOOR): mints a fresh key, parks the CURRENT primary at
-    `<path>.legacy` (`_legacy_key_file_path` — the SAME shape/backend the old
+    """Step 1 of 2: mints a fresh key, parks the current primary at
+    `<path>.legacy` (`_legacy_key_file_path`, the same shape/backend the old
     primary already carried, plaintext or systemd-creds blob, read back
-    unchanged), and writes the new key under the SAME backend the old one used
-    (never silently upgrading or downgrading a rotation — `soul_key_init` is the
-    door for choosing a backend). IDEMPOTENT AND SAFE TO RE-RUN mid-rotation: if
+    unchanged), and writes the new key under the same backend the old one used
+    (never silently upgrading or downgrading a rotation: `soul_key_init` is the
+    place for choosing a backend). Idempotent and safe to re-run mid-rotation: if
     `.legacy` already exists (a rotation is already in flight), this refuses
-    rather than minting a SECOND new key and stranding the first rotation's own
-    legacy key — `osiris soul-key rotate` re-run with a rotation already in
-    flight is meant to re-drive the RE-WRAP pass (the CLI's own job, via
+    rather than minting a second new key and stranding the first rotation's own
+    legacy key. `osiris soul-key rotate` re-run with a rotation already in
+    flight is meant to re-drive the re-wrap pass (the CLI's own job, via
     `soul_store.rewrap_soul_lines_key`), never mint again.
 
-    REFUSES if no primary key exists yet at all — there is nothing to rotate
-    away from; `soul-key init` is the door for a genuinely first key.
+    Refuses if no primary key exists yet at all: there is nothing to rotate
+    away from; `soul-key init` is the place for a genuinely first key.
 
-    Returns `new_key`/`old_key` (raw bytes, for the CALLER to build the two
-    Fernet objects the re-wrap pass needs — this module stays pool-free, the
+    Returns `new_key`/`old_key` (raw bytes, for the caller to build the two
+    Fernet objects the re-wrap pass needs; this module stays pool-free, the
     DB-touching re-wrap itself lives in soul_store.py) plus `path`/`legacy_path`/
     `backend` and the same `systemd_note` shape `soul_key_init` returns (a
-    rotation changes what's AT the path, never the path itself, so no unit env
-    change is ever needed for the daemons to find the new key — only a RESTART,
+    rotation changes what's at the path, never the path itself, so no unit env
+    change is ever needed for the daemons to find the new key, only a restart,
     named here)."""
     resolved = _key_file_path(explicit=path)
     status = soul_key_status(path=path)
@@ -662,12 +660,12 @@ def soul_key_rotate_begin(
                          "door can rotate (OSIRIS_SOUL_KEY set to a bare value with no "
                          "file behind it?) — rotate that key by hand"}
     # Decoded from `old_carrier_bytes` itself (systemd-creds blob or plaintext,
-    # whichever `old_backend` actually is) -- NOT get_soul_key(), which ignores
+    # whichever `old_backend` actually is), not get_soul_key(), which ignores
     # this function's own `path=`/`explicit=` entirely and would silently
-    # resolve a DIFFERENT key whenever an explicit path is in play (the exact
-    # defect this rotate's own live testing surfaced during this door's build).
-    # The one narrow case this does NOT cover -- OSIRIS_SOUL_KEY set to an env
-    # override that differs from whatever's on disk at `old_carrier` -- is
+    # resolve a different key whenever an explicit path is in play (the exact
+    # defect this rotation's own live testing surfaced while this was being built).
+    # The one narrow case this does not cover, OSIRIS_SOUL_KEY set to an env
+    # override that differs from whatever's on disk at `old_carrier`, is
     # already refused above by the `old_carrier.exists()` guard failing to name
     # a real file to rotate in the first place, on a genuinely bare-env-only setup.
     old_carrier_bytes = old_carrier.read_bytes()
@@ -703,12 +701,12 @@ def soul_key_rotate_begin(
 
 
 def soul_key_rotate_finish(*, path: str | None = None) -> dict[str, Any]:
-    """Step 2 of 2 (THE KEY DOOR): removes the `.legacy` key (and its own meta
-    sidecar, if any) once the caller has already confirmed (via `soul_store.
+    """Step 2 of 2: removes the `.legacy` key (and its own meta sidecar, if any)
+    once the caller has already confirmed (via `soul_store.
     rewrap_soul_lines_key`'s own dry-run receipt) that zero rows remain
-    encrypted under it — this function itself does NOT re-check the row count
+    encrypted under it. This function itself does not re-check the row count
     (pool-free by design, see module docstring); `cmd_soul_key` refuses to call
-    this at all until that receipt is clean. REFUSES if no rotation is in
+    this at all until that receipt is clean. Refuses if no rotation is in
     flight (nothing to finish)."""
     resolved = _key_file_path(explicit=path)
     legacy_path = _legacy_key_file_path(resolved)
@@ -727,24 +725,24 @@ def soul_key_rotate_finish(*, path: str | None = None) -> dict[str, Any]:
     }
 
 
-# --- FIDO2 hmac-secret ("prf") recovery (KEY CUSTODY REWRITTEN, ruling e0b98ff2) --------------
+# --- FIDO2 hmac-secret ("prf") recovery, part of the rewritten key-custody design ---
 #
-# NOT PHYSICALLY VERIFIED BY THE AGENT THAT WROTE THIS (no hands, no eyes on the device):
-# built against python-fido2==2.2.1's own documented Fido2Client/PRF-extension API
-# (confirmed live on this box: a YubiKey Security Key NFC fw 5.4.3 enumerates via
-# `CtapHidDevice.list_devices()`), but the actual touch+PIN ceremony needs the
-# operator's own hands to run once before this is trusted as the primary recovery
-# path -- flagged explicitly in the tip, not silently assumed correct.
+# This has not been physically verified by the agent that wrote it (no hands, no eyes
+# on the device): built against python-fido2==2.2.1's own documented Fido2Client/
+# PRF-extension API (confirmed live on this box: a YubiKey Security Key NFC fw 5.4.3
+# enumerates via `CtapHidDevice.list_devices()`), but the actual touch+PIN interaction
+# needs the operator's own hands to run once before this is trusted as the primary
+# recovery path, flagged explicitly here, not silently assumed correct.
 
-_DEFAULT_RP_ID = "localhost"  # THE KEY DOOR'S OWN RP_ID, CORRECTED (Thoth mail 13006):
+_DEFAULT_RP_ID = "localhost"  # the rp_id was corrected after an earlier mistake:
     # the original `_RP_ID = "osiris.local"` cannot interoperate with a browser
-    # enrollment at all — WebAuthn requires rp_id to equal the page's own origin
+    # enrollment at all. WebAuthn requires rp_id to equal the page's own origin
     # domain, the console is served on localhost:8011, and plain http is a secure
-    # context ONLY for localhost. Now a settings-registry knob (`soul_key.rp_id`,
-    # settings_registry.py, default "localhost" — matches this same fallback) read by
+    # context only for localhost. Now a settings-registry knob (`soul_key.rp_id`,
+    # settings_registry.py, default "localhost", matches this same fallback) read by
     # the CLI (`cmd_soul_key` in cli.py) and threaded down as an explicit `rp_id=`
-    # param; this module-level constant is ONLY the fallback a caller with no pool in
-    # hand (a test, a script) falls back to when it passes no `rp_id=` at all — never
+    # param; this module-level constant is only the fallback a caller with no pool in
+    # hand (a test, a script) falls back to when it passes no `rp_id=` at all, never
     # read from here directly by `soul_key_enroll_recovery`/`soul_key_recover`
     # themselves, which always receive it as a parameter.
 _PRF_SALT_LEN = 32
@@ -752,9 +750,9 @@ _PRF_SALT_LEN = 32
 
 def _find_fido2_device() -> Any | None:
     """The first USB HID FIDO2 device found, or None. A box with more than one
-    plugged in uses the first `CtapHidDevice.list_devices()` yields — a genuinely
+    plugged in uses the first `CtapHidDevice.list_devices()` yields, a genuinely
     rare case (multi-key households); `--device` isn't exposed today, matching
-    Thoth's own scope ("CLI-only for now")."""
+    the current scope of CLI-only support."""
     from fido2.hid import CtapHidDevice
 
     devices = list(CtapHidDevice.list_devices())
@@ -762,10 +760,10 @@ def _find_fido2_device() -> Any | None:
 
 
 def _cli_user_interaction() -> Any:
-    """The CLI's own `fido2.client.UserInteraction` — prints what's needed before
+    """The CLI's own `fido2.client.UserInteraction`: prints what's needed before
     blocking on the physical touch, and reads the PIN from the terminal (never
     logged, never returned in any receipt). Subclasses the real
-    `fido2.client.UserInteraction` at call time (never at import time — this
+    `fido2.client.UserInteraction` at call time (never at import time, since this
     module must import with no `fido2` installed at all, matching soul_crypto's
     own pool-free/dependency-light design everywhere else) so `Fido2Client`'s own
     isinstance/structural checks accept it."""
@@ -794,10 +792,10 @@ def _fido2_client(device: Any, *, rp_id: str) -> Any:
 
 def _hkdf_wrap_key(prf_output: bytes) -> Fernet:
     """Derives a Fernet-compatible wrapping key from a PRF/hmac-secret output via
-    HKDF-SHA256 (RFC 5869) — the PRF output itself is 32 raw bytes, not the
+    HKDF-SHA256 (RFC 5869): the PRF output itself is 32 raw bytes, not the
     base64url-safe 32-byte key Fernet's own constructor requires, so this is
     never used directly. A fixed, public `info` label (no secret in it) is
-    enough: the salt handed to the device is ALREADY random per enrollment
+    enough: the salt handed to the device is already random per enrollment
     (`_PRF_SALT_LEN`), so HKDF's own job here is only the encoding conversion,
     not adding entropy the PRF output didn't already have."""
     import base64
@@ -812,24 +810,24 @@ def _hkdf_wrap_key(prf_output: bytes) -> Fernet:
 def soul_key_enroll_recovery(
     *, path: str | None = None, rp_id: str = _DEFAULT_RP_ID,
 ) -> dict[str, Any]:
-    """Enrolls a NEW discoverable FIDO2 credential on the operator's Security Key
+    """Enrolls a new discoverable FIDO2 credential on the operator's Security Key
     with the PRF extension, derives a wrapping key from its PRF output at a fresh
-    random salt (`_hkdf_wrap_key`), wraps the CURRENT primary key with it, and
-    writes `_recovery_path(resolved)` — credential id, salt, the wrapped key,
+    random salt (`_hkdf_wrap_key`), wraps the current primary key with it, and
+    writes `_recovery_path(resolved)`: credential id, salt, the wrapped key,
     and a sha256 fingerprint of the plaintext key being wrapped (so `soul_key_
     recover` can confirm it unwrapped the right thing before ever touching
     anything, and `soul_key_status` can report backend consistency without
-    decrypting). REFUSES if the key itself doesn't exist yet (`soul-key init`
+    decrypting). Refuses if the key itself doesn't exist yet (`soul-key init`
     first), and if a recovery blob already exists at this path (re-enrolling on
     purpose is `--rotate`'s own job below, sharing this function's core, never a
     silent overwrite here).
 
-    `rp_id` (Thoth mail 13006): the caller's own resolved `soul_key.rp_id`
-    setting value — `cmd_soul_key` (cli.py) reads it live and passes it in; this
-    function's own default (`_DEFAULT_RP_ID`, "localhost") is only what a
-    caller with no pool in hand (a test, a script) falls back to.
+    `rp_id`: the caller's own resolved `soul_key.rp_id` setting value.
+    `cmd_soul_key` (cli.py) reads it live and passes it in; this function's own
+    default (`_DEFAULT_RP_ID`, "localhost") is only what a caller with no pool
+    in hand (a test, a script) falls back to.
 
-    REQUIRES PIN + TOUCH — blocks on physical interaction via
+    Requires PIN and touch: blocks on physical interaction via
     `_CliUserInteraction`; never call this from a non-interactive context (the
     REST layer deliberately never exposes this action, see soul_key.py's own
     docstring)."""
@@ -846,9 +844,9 @@ def soul_key_enroll_recovery(
     device = _find_fido2_device()
     if device is None:
         return {"error": "no FIDO2 security key detected — plug it in and try again"}
-    # read_key_bytes_at, not get_soul_key() -- the latter ignores this function's
+    # read_key_bytes_at, not get_soul_key(): the latter ignores this function's
     # own `path=`/`explicit=` entirely and ignores an explicit path, the same
-    # defect class caught in soul_key_rotate_begin during this door's own build.
+    # defect class caught in soul_key_rotate_begin while this function was built.
     raw_key = read_key_bytes_at(resolved)
     wrapped = _enroll_and_wrap(device, raw_key, rp_id=rp_id)
     if "error" in wrapped:
@@ -859,15 +857,15 @@ def soul_key_enroll_recovery(
 
 
 def _enroll_and_wrap(device: Any, raw_key: bytes, *, rp_id: str) -> dict[str, Any]:
-    """The actual CTAP2 ceremony, split out from `soul_key_enroll_recovery` so
-    tests can inject a fake `device`/monkeypatch `_fido2_client` without also
+    """The actual CTAP2 enrollment flow, split out from `soul_key_enroll_recovery`
+    so tests can inject a fake `device`/monkeypatch `_fido2_client` without also
     faking the filesystem side. Returns `{"blob": {...}, "fingerprint": ...}` on
     success or `{"error": ...}` on any `fido2`-layer failure (never lets a raw
     library exception escape past this module's own boundary). `rp_id` is stamped
-    into the blob (`"rp_id"`) so a later `soul_key_recover` reads back the SAME
+    into the blob (`"rp_id"`) so a later `soul_key_recover` reads back the same
     value this credential was actually enrolled under, regardless of what the
-    live `soul_key.rp_id` setting says by then (Thoth mail 13006 — the setting
-    can change; an already-enrolled credential's own rp_id can't)."""
+    live `soul_key.rp_id` setting says by then: the setting can change, but an
+    already-enrolled credential's own rp_id can't."""
     import base64
     import hashlib
     import os as _os
@@ -922,8 +920,8 @@ def _prf_eval(client: Any, credential_id: bytes, salt: bytes, *, rp_id: str) -> 
     """One `get_assertion` call against `credential_id` with the PRF extension
     evaluated at `salt`, returning the raw PRF output bytes or None if the
     authenticator didn't return one. Shared by enrollment (derive the wrap key
-    right after minting the credential) and recovery (re-derive the SAME wrap
-    key from the SAME credential+salt on a later call — PRF is deterministic:
+    right after minting the credential) and recovery (re-derive the same wrap
+    key from the same credential and salt on a later call: PRF is deterministic,
     same credential, same salt, same output, every time, by the extension's own
     contract)."""
     from fido2.webauthn import (
@@ -949,27 +947,27 @@ def soul_key_recover(
     *, path: str | None = None, backend: str | None = None, rp_id: str = _DEFAULT_RP_ID,
 ) -> dict[str, Any]:
     """Reverses `soul_key_enroll_recovery`: reads `_recovery_path(resolved)`,
-    re-derives the SAME wrapping key via `_prf_eval` on the SAME credential+salt
-    (PIN + touch required again — the physical key is the whole point), unwraps
-    the recovered Fernet key, confirms it against the blob's own recorded
-    `key_fingerprint` (refuses rather than seals a corrupted/tampered recovery),
-    and re-seals it under the HOST credential on THIS machine via `soul_key_
-    init`'s own `_write_key_for_backend` (`backend=` defaults to the same
-    auto-selection `soul_key_init` uses) — the exact "recover on a new machine"
-    story: the recovery blob is portable (safe on the NAS/vault), the host
-    credential it re-seals under is NOT.
+    re-derives the same wrapping key via `_prf_eval` on the same credential and
+    salt (PIN and touch required again, the physical key is the whole point),
+    unwraps the recovered Fernet key, confirms it against the blob's own
+    recorded `key_fingerprint` (refuses rather than seals a corrupted/tampered
+    recovery), and re-seals it under the host credential on this machine via
+    `soul_key_init`'s own `_write_key_for_backend` (`backend=` defaults to the
+    same auto-selection `soul_key_init` uses). This is the exact "recover on a
+    new machine" story: the recovery blob is portable (safe on the NAS/vault),
+    the host credential it re-seals under is not.
 
-    `rp_id` (Thoth mail 13006): the CALLER's own resolved `soul_key.rp_id`
-    setting — used only as a FALLBACK. The blob's own recorded `"rp_id"`
-    (stamped in by `_enroll_and_wrap` at enrollment time) is preferred whenever
-    present: a credential must be addressed by the rp_id it was actually
-    enrolled under, which may differ from whatever the live setting says by
-    recovery time if the operator ever changes it — this door recovers what was
-    actually minted, never what's merely configured today.
+    `rp_id`: the caller's own resolved `soul_key.rp_id` setting, used only as a
+    fallback. The blob's own recorded `"rp_id"` (stamped in by `_enroll_and_wrap`
+    at enrollment time) is preferred whenever present: a credential must be
+    addressed by the rp_id it was actually enrolled under, which may differ
+    from whatever the live setting says by recovery time if the operator ever
+    changes it; this function recovers what was actually minted, never what's
+    merely configured today.
 
-    REFUSES if a key already exists at the target path (this is a RECOVERY door,
-    not a rotation — `soul-key rotate` is the door once you already have a live
-    key and just want a new one)."""
+    Refuses if a key already exists at the target path (this is a recovery
+    function, not a rotation: `soul-key rotate` is the command once you already
+    have a live key and just want a new one)."""
     resolved = _key_file_path(explicit=path)
     if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
         return {"error": f"a key already exists at {resolved} — soul-key recover is "

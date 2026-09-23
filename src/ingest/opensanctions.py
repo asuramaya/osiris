@@ -1,7 +1,7 @@
 """Ingest OpenSanctions (FollowTheMoney) into the graph via Actions.
 
 OpenSanctions publishes an open, keyless, self-hostable entity graph of sanctioned
-parties, PEPs and their relationships in the FollowTheMoney (FtM) format — exactly
+parties, PEPs and their relationships in the FollowTheMoney (FtM) format, exactly
 the kind of pre-normalized public base Osiris should federate rather than crawl.
 This maps a FtM stream into the graph: an entity schema -> object type, its
 properties -> assertions, and relationship-schema entities (Ownership, Directorship,
@@ -54,7 +54,7 @@ _EDGES: dict[str, tuple[str, str, str]] = {
     "Representation": ("agent", "client", "represents"),
     "UnknownLink": ("subject", "object", "linked_to"),
 }
-# inferred object type per relationship endpoint role — lets us stub an endpoint that
+# inferred object type per relationship endpoint role: lets us stub an endpoint that
 # isn't in the slice (its real entity lives elsewhere in the full dataset, keyed by
 # the same id) so the edge still forms and a later ingest can enrich it in place.
 _EDGE_TYPES: dict[str, dict[str, str]] = {
@@ -79,7 +79,7 @@ def _wallet_canonical(addr: str, currency: str | None) -> str:
     """Canonical that ALIGNS with the on-chain tracer (src/ingest/etherscan): an EVM
     address becomes `eth:1:<lower>` regardless of the OFAC currency label (ERC-20
     tokens share Ethereum's address space), so an OFAC-listed wallet and a later
-    Etherscan trace of the same address dedupe into ONE object — for free."""
+    Etherscan trace of the same address dedupe into ONE object, for free."""
     a = addr.strip()
     if _EVM_RE.match(a):
         return f"eth:1:{a.lower()}"

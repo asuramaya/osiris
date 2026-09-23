@@ -1,14 +1,14 @@
-"""Decision mining — the project's WHY, derived from its own commit rationale.
+"""Decision mining: the project's WHY, derived from its own commit rationale.
 
 `gitlog` says it outright: *each commit message IS a decision record*. The thread-miner pulls
-the forward-looking walls ("NEXT:", "THE WALL"); this pulls the backward-looking DECISIONS —
-"we chose X", "X overrides Y", "deliberately NOT Z", "RESET" — into `Decision` objects, so
-"why is it this way?" is a QUERY, not a re-read of 158 commit bodies. The why is the
+the forward-looking work items ("NEXT:", "THE WALL"); this pulls the backward-looking DECISIONS,
+things like "we chose X", "X overrides Y", "deliberately NOT Z", "RESET", into `Decision`
+objects, so "why is it this way?" is a QUERY, not a re-read of 158 commit bodies. The why is the
 least-recoverable memory: the code shows WHAT, the DAG shows WHEN, only the rationale holds WHY.
 
-Mined => graded DERIVED (an inference over prose, like threads — tight markers keep it
-trustworthy). The two harder links — `supersedes` (which earlier decision did this reset
-replace?) and `grounded_by` (which canon principle grounds it?) — are a JUDGMENT, not a regex,
+Mined, so graded DERIVED (an inference over prose, like threads: tight markers keep it
+trustworthy). The two harder links, `supersedes` (which earlier decision did this reset
+replace?) and `grounded_by` (which canon principle grounds it?), are a JUDGMENT, not a regex,
 so they belong to the keyless AI path, not here. This miner does the clean, deterministic part:
 the decision sentence, its kind, and the commit it was decided in.
 """
@@ -33,14 +33,15 @@ _EC = EvidenceClass.DERIVED.value
 _CONF = confidence_for(EvidenceClass.DERIVED)
 
 # Decision markers, ordered most-specific-first; the first that matches names the decision's
-# KIND. Tight + author-intended (the thread-miner's lesson: broad words mine noise). These are
-# the backward-looking "we settled this" flags, complementary to threads' forward-looking ones.
+# KIND. Tight and author-intended (lesson from building the thread-miner: broad words mine
+# noise). These are the backward-looking "we settled this" flags, complementary to threads'
+# forward-looking ones.
 _MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("reset", re.compile(r"\bRESET\b")),
     ("ruling", re.compile(r"\bruling #?\d")),
     # tight: a decision-shaped supersession ("supersedes the…", "overrides DESIGN/the…",
-    # "(open|design) decision #N") — NOT a bare "overrides"/"supersedes" mid-clause, which the
-    # live run showed is usually config/mechanism prose ("subject override", "overrides, tests").
+    # "(open|design) decision #N"), NOT a bare "overrides"/"supersedes" mid-clause, which
+    # testing showed is usually config/mechanism prose ("subject override", "overrides, tests").
     ("override", re.compile(
         r"\b(supersedes? the|overrides? (?:DESIGN|the\b)|(?:open |design )?decision #?\d)", re.I)),
     ("rejection", re.compile(
@@ -50,21 +51,22 @@ _MARKERS: tuple[tuple[str, re.Pattern[str]], ...] = (
     ("decision", re.compile(r"\bDECISION\b")),
 )
 # META noise: a sentence ABOUT decision-mining itself (a commit that builds or TUNES this very
-# feature) — not a decision. The live audit's receipt: "Tightened `override` to decision-shaped
-# phrasings + a lowercase-fragment guard → 11 clean decisions (ruling #3 … appears 5×" was mined
-# as a ruling. Miner-tuning language (markers, guards, "N clean decisions", decision-shaped) is
-# documentation about the miner, same as the thread-miner's `markers` guard.
+# feature), not a decision. A prior audit found that a commit summarizing its own tuning work
+# ("tightened `override` to decision-shaped phrasings plus a lowercase-fragment guard, yielding
+# 11 clean decisions, ruling #3 appears 5 times") was mined as a ruling. Miner-tuning language
+# (markers, guards, "N clean decisions", decision-shaped) is documentation about the miner, same
+# as the thread-miner's `markers` guard.
 _META = re.compile(
     r"\bdecision[- ](?:miner|mining|records?|logs?|objects?|nodes?|types?|shaped|sentences?)\b"
     r"|\bmarkers?\b|\bfragment guard\b|\bclean decisions\b",
     re.I,
 )
-# the ruling number is the durable identity of a ruling — restatements all cite it
+# the ruling number is the durable identity of a ruling: restatements all cite it
 _RULING = re.compile(r"\bruling #?(\d+)", re.I)
 
 
 def extract_decisions(body: str) -> list[tuple[str, str]]:
-    """The (statement, kind) decisions in a commit body — deduped, trimmed. Pure."""
+    """The (statement, kind) decisions in a commit body: deduped, trimmed. Pure."""
     out: list[tuple[str, str]] = []
     seen: set[str] = set()
     flat = re.sub(r"\n(?=\S)", " ", body)          # join soft wraps (commit bodies are wrapped)
@@ -76,7 +78,7 @@ def extract_decisions(body: str) -> list[tuple[str, str]]:
             continue
         if not well_bounded(s):       # unbalanced delimiters = a capture that starts/ends mid-
             continue                  # sentence (`Leon" vs "Daniel Leon") render…`)
-        # markers only count OUTSIDE quotes/backticks; a sentence firing 3+ distinct markers
+        # markers only count OUTSIDE quotes/backticks: a sentence firing 3+ distinct markers
         # is enumerating them (documentation about the miner), not deciding anything
         vis = unquoted(s)
         hits = [(k, m.group(0)) for k, rx in _MARKERS for m in rx.finditer(vis)]
@@ -92,7 +94,7 @@ def extract_decisions(body: str) -> list[tuple[str, str]]:
 
 def _dedup_key(text: str) -> str:
     """The restatement-collapse key. A ruling's identity is its NUMBER ("ruling #3" restated
-    five ways is ONE decision); anything else keys on the punctuation/case-normalized text so
+    five ways is ONE decision); anything else keys on the punctuation/case-normalized text, so
     trivially re-worded repeats collapse while distinct decisions stay distinct."""
     m = _RULING.search(text)
     if m:
@@ -104,7 +106,7 @@ async def mine_decisions(
     actions: Actions, *, source_id: str = _SOURCE, case_id: uuid.UUID | None = None
 ) -> dict[str, Any]:
     """Scan every Commit's rationale, collapse restatements of the same decision (a ruling
-    invoked in five commits is ONE Decision — the earliest, fullest statement wins), mint each
+    invoked in five commits is ONE Decision, the earliest, fullest statement wins), mint each
     keeper (idempotent on a content hash), record its kind, and link it `decided_in` the commit
     it was decided in. A re-mine then RECONCILES: mined Decisions the fresh pass no longer
     produces are archived (event-sourced, reversible). Returns counts."""
@@ -119,7 +121,7 @@ async def mine_decisions(
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS date "
         "FROM objects o WHERE o.type='Commit'"
     )
-    # pass 1 — extract everything, then pick ONE keeper per dedup key: the EARLIEST commit's
+    # pass 1: extract everything, then pick ONE keeper per dedup key: the EARLIEST commit's
     # statement (that's when it was decided; later mentions are echoes), fullest as tiebreak.
     best: dict[str, tuple[datetime, int, str, str, Any]] = {}
     for r in rows:
@@ -132,7 +134,7 @@ async def mine_decisions(
             cand = (observed, -len(text), text, kind, r["id"])
             if key not in best or cand[:2] < best[key][:2]:
                 best[key] = cand
-    # pass 2 — mint the keepers. create_link is a plain append — dedup the decided_in edge
+    # pass 2: mint the keepers. create_link is a plain append, so dedup the decided_in edge
     # so a re-run is idempotent.
     existing = {(r["from_id"], r["to_id"]) for r in
                 await pool.fetch("SELECT from_id, to_id FROM links WHERE type='decided_in'")}

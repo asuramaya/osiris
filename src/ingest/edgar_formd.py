@@ -1,8 +1,8 @@
-"""Ingest SEC EDGAR Form D (private-placement) filings — the buried-but-public layer.
+"""Ingest SEC EDGAR Form D (private-placement) filings: the buried-but-public layer.
 
 The company_tickers loader (edgar.py) only sees PUBLIC companies. But private
 companies that raise capital file **Form D**, which names their executive officers /
-directors, the amount raised, the investor count, and the issuer's address — facts
+directors, the amount raised, the investor count, and the issuer's address, facts
 that are public yet aggregated nowhere. Worse (better, for OSINT): a swarm of feeder
 SPVs file their own Form Ds to repackage access to a hot private company, exposing a
 financing structure no one connects.
@@ -39,7 +39,7 @@ _SOURCE = "edgar"
 _EC = EvidenceClass.AUTHORITATIVE_API.value
 _CONF = confidence_for(EvidenceClass.AUTHORITATIVE_API)
 # a feeder->core 'raises_for' link is INFERRED from the SPV's name referencing the
-# company — real but speculative, so it's graded co-occurrence (a non-expanding leaf).
+# company: real but speculative, so it's graded co-occurrence (a non-expanding leaf).
 _CO = EvidenceClass.CO_OCCURRENCE.value
 _CO_CONF = confidence_for(EvidenceClass.CO_OCCURRENCE)
 
@@ -192,7 +192,7 @@ async def link_feeders(
     case_id: uuid.UUID | None = None,
 ) -> tuple[uuid.UUID | None, int]:
     """Connect the feeder SPVs to the company they fund. The CORE is the issuer whose
-    name normalizes to the search term (and, among ties, raised the most — the company
+    name normalizes to the search term (and, among ties, raised the most, since the company
     out-raises its feeders); every other issuer whose name still references the term is
     an SPV that `raises_for` the core. Name-inferred, so the link is co-occurrence."""
     ts = observed_at or datetime.now(UTC)
@@ -215,7 +215,7 @@ async def link_feeders(
     return core["id"], n
 
 
-# tokens that mark the END of the portfolio-company name in an SPV's title — the
+# tokens that mark the END of the portfolio-company name in an SPV's title: the
 # company a feeder funds is its leading word(s) before the fund/structure boilerplate.
 _STOP_TOKENS = frozenset({
     "spv", "fund", "funds", "series", "llc", "lp", "inc", "corp", "partners", "alternate",
@@ -232,7 +232,7 @@ _MONTHS = frozenset({
 
 def _target_company(spv_name: str) -> str | None:
     """Best-effort: the portfolio company a feeder SPV funds, from its name. Form D does
-    NOT disclose the underlying company, so the SPV title is the only signal — leading
+    NOT disclose the underlying company, so the SPV title is the only signal: leading
     word(s) before the fund/structure/date boilerplate. Heuristic (hence the link it
     feeds is co-occurrence): 'Anthropic SPV2 ... a Series of CGF2021 LLC' -> Anthropic."""
     out: list[str] = []
@@ -262,7 +262,7 @@ async def search_filings(
 ) -> list[dict[str, str]]:
     """EDGAR full-text search (keyless, paginated). With match_issuer the hit's issuer
     name must contain the query (a company's own filings); without it, every filing
-    that MENTIONS the query is returned — the way to pull a repeat player's portfolio."""
+    that MENTIONS the query is returned: the way to pull a repeat player's portfolio."""
     out: list[dict[str, str]] = []
     seen: set[tuple[str, str]] = set()
     # the EFTS search-index endpoint returns ~100 hits per request and rejects a `from`
@@ -356,7 +356,7 @@ async def fetch_form_d(cik: str, accession: str) -> dict[str, Any]:
 
 
 async def aim_form_d(actions: Actions, name: str, *, limit: int = 40) -> dict[str, Any]:
-    """Resolve a name to its Form D filings and ingest each — the private-financing
+    """Resolve a name to its Form D filings and ingest each: the private-financing
     layer of 'aim Osiris at <name>'."""
     filings = await search_form_d(name, limit=limit)
     totals: dict[str, Any] = {"filings": 0, "issuers": 0, "persons": 0, "links": 0, "properties": 0}

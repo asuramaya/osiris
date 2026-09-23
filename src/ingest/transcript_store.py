@@ -1,16 +1,16 @@
-"""The transcript store — a normalized index of per-turn harness records.
+"""The transcript store, a normalized index of per-turn harness records.
 
 Eats TurnRows from any adapter into harness_sessions/harness_turns (SQL sidecar), and
 reads them back as a ModelReading for identity resolution. The HARNESS FILE stays
 authoritative (the adapter records source_ref per turn); the store is a DERIVED
-fast-read layer — one evidence grade lower than direct observation, so high-stakes
+fast-read layer, one evidence grade lower than direct observation, so high-stakes
 verdicts (the swap banner shown to the operator) can re-probe the source on demand.
 
-MOUNT-TIME EAT (Slice 1, completed by Slice 2 — the JSONL-fallback removal, task #29):
+MOUNT-TIME EAT (Slice 1, completed by Slice 2: the JSONL-fallback removal, task #29):
 identity_reading() is called from every identity path (mount, _reattach, the automount
-whisper) before resolve_identity. It tries each adapter in order; the first that
+path) before resolve_identity. It tries each adapter in order; the first that
 discovers a session ingests its turns and returns the model reading. This is the ONLY
-model-observation lane — resolve_identity no longer carries a JSONL probe of its own;
+model-observation lane: resolve_identity no longer carries a JSONL probe of its own;
 non-Claude minds mount RESOLVED and a storeless call resolves no observed model.
 
 MINER-TICK BACKFILL (Slice 3): the miner will call ingest_since() on a schedule to keep
@@ -40,29 +40,29 @@ async def identity_reading(
     pool: asyncpg.Pool, *, cwd: str | None, job_dir: str | None,
     root: Path | None = None, transcript_path: str | None = None,
 ) -> ModelReading | None:
-    """The identity callers' one door to the store — discover_and_ingest, FAIL-OPEN.
+    """The identity callers' one door to the store: discover_and_ingest, FAIL-OPEN.
 
-    mount(), _reattach() and the automount whisper all need the same thing: this
-    session's model reading if the store can produce one, and NO EXCEPTION otherwise —
-    a store failure must never block an identity path (the whisper's own law). Since
-    the JSONL-fallback removal (task #29) this is the ONLY observation lane; None
-    degrades resolve_identity honestly to the caller's self-report.
+    mount(), _reattach() and the automount path all need the same thing: this
+    session's model reading if the store can produce one, and NO EXCEPTION otherwise,
+    since a store failure must never block an identity path. Since the JSONL-fallback
+    removal (task #29) this is the ONLY observation lane; None degrades resolve_identity
+    honestly to the caller's self-report.
 
-    `transcript_path` (thread 7304bfd8) passes a caller-KNOWN location straight through
-    to discover_and_ingest's explicit-path lane — previously captured by mount()'s/
+    `transcript_path` passes a caller-KNOWN location straight through to
+    discover_and_ingest's explicit-path lane, previously captured by mount()'s/
     automount()'s own signature and used only for revisit resolution, never consulted
     here at all."""
     try:
         return await TranscriptStore(pool).discover_and_ingest(
             cwd=cwd, job_dir=job_dir, root=root, transcript_path=transcript_path)
-    except Exception:  # noqa: BLE001 — identity must resolve even with the store down
+    except Exception:  # noqa: BLE001, identity must resolve even with the store down
         return None
 
 
 def _stat(source_path: str) -> tuple[datetime | None, int | None]:
     """The source's freshness witness + on-disk size (one bare stat, kept in a sync
     helper for the blocking-call lint). (None, None) when the source vanished between
-    discovery and here. The size feeds the overhead lens's byte fallback — neo's honest
+    discovery and here. The size feeds the overhead lens's byte fallback, an honest
     proxy for a channel that reports no token usage."""
     try:
         st = Path(source_path).stat()
@@ -130,9 +130,9 @@ _OVERHEAD_SQL = (
 def _overhead_shape(
     primary: list[dict[str, Any]], channels: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    """Pure: neo's session math over per-channel aggregates. Visible = the primary
+    """Pure: the overhead lens's session math over per-channel aggregates. Visible = the primary
     window; hidden = every channel beside it. Multiplier and hidden share come from
-    reported tokens when anything carries usage, on-disk bytes otherwise — the basis is
+    reported tokens when anything carries usage, on-disk bytes otherwise, the basis is
     named, and no companion figure is fabricated for the lane that wasn't measured."""
     def tok(rows: list[dict[str, Any]]) -> dict[str, int]:
         tin = sum(int(r["tin"]) for r in rows)
@@ -189,11 +189,11 @@ class TranscriptStore:
     async def _freshness(
         self, locator: SessionLocator,
     ) -> tuple[bool, int, datetime | None, int | None]:
-        """(skip, since_idx, observed_mtime, observed_bytes) — THE SPEND GATE (the house's
-        oldest law: every catastrophe is a spend catastrophe, and a store must never re-eat
-        what it already holds). skip=True means the source hasn't changed since the last
-        ingest — no read at all, serve the stored rows. Otherwise since_idx resumes after
-        the turns already ingested, and observed_mtime — taken BEFORE the read — becomes
+        """(skip, since_idx, observed_mtime, observed_bytes), THE SPEND GATE: every cost
+        overrun traced back so far has been a spend overrun, so a store must never re-eat
+        what it already holds. skip=True means the source hasn't changed since the last
+        ingest, no read at all, serve the stored rows. Otherwise since_idx resumes after
+        the turns already ingested, and observed_mtime, taken BEFORE the read, becomes
         the new last_ingested_at, so lines appended DURING a read are never skipped by the
         next pass (stamping now() there would swallow them forever)."""
         row = await self.pool.fetchrow(
@@ -218,22 +218,22 @@ class TranscriptStore:
         INCREMENTAL by the spend gate: an unchanged source is never re-read (a stat and a
         row lookup, nothing more), and a changed one is read from the last ingested turn
         on. The reading always comes back from the STORE (full history, however this call's
-        delta landed) — never from the delta alone, which would amnesia the swap history.
+        delta landed), never from the delta alone, which would amnesia the swap history.
 
         `root` overrides the adapters' on-disk search dir (tests inject a tmp root, the
         same override resolve_identity's cwd sid-guess honors). The reading carries the
-        locator's `anchored` grade — identity's whole basis for trusting it.
+        locator's `anchored` grade, identity's whole basis for trusting it.
 
-        `transcript_path` is a CALLER-KNOWN location (thread 7304bfd8: mount()'s and
-        automount()'s own hook-stamped param, previously captured but never consulted
-        here) — tried FIRST via each adapter's own `discover_at`, bypassing the job_dir/
+        `transcript_path` is a CALLER-KNOWN location (mount()'s and automount()'s own
+        hook-stamped param, previously captured but never consulted here), tried FIRST
+        via each adapter's own `discover_at`, bypassing the job_dir/
         cwd SEARCH entirely. This is the fix for the bridge-fork specimen: a background-
         job fork's job_dir-based search can find a stub file or nothing, while the caller
         already has the real path in hand. Falls through to ordinary discovery when no
-        adapter recognizes the path (or none is given) — never a second, competing lane.
+        adapter recognizes the path (or none is given), never a second, competing lane.
 
         Returns the model reading for identity resolution, or None when no adapter
-        recognizes the session — since the JSONL-fallback removal (task #29) there is no
+        recognizes the session, since the JSONL-fallback removal (task #29) there is no
         legacy probe behind this: no reading means no observed model."""
         if transcript_path:
             p = Path(transcript_path)
@@ -243,7 +243,7 @@ class TranscriptStore:
                     continue
                 try:
                     locator = discover_at(p)
-                except Exception:  # noqa: BLE001 — an adapter failure must never block mount
+                except Exception:  # noqa: BLE001, an adapter failure must never block mount
                     continue
                 if locator is not None:
                     reading = await self._ingest_locator(adapter, locator)
@@ -252,7 +252,7 @@ class TranscriptStore:
         for adapter in (adapters or self._default_adapters):
             try:
                 locator = adapter.discover(cwd=cwd, job_dir=job_dir, root=root)
-            except Exception:  # noqa: BLE001 — an adapter failure must never block mount
+            except Exception:  # noqa: BLE001, an adapter failure must never block mount
                 continue
             if locator is None:
                 continue
@@ -266,7 +266,7 @@ class TranscriptStore:
     ) -> ModelReading | None:
         """The shared body behind BOTH discovery lanes above (explicit-path and search):
         freshness-gated ingest, then read the reading back from the store. None means
-        THIS locator yielded nothing (an empty source with no prior rows) — the caller
+        THIS locator yielded nothing (an empty source with no prior rows), the caller
         tries the next adapter/lane, never a hard failure."""
         skip, since, observed, size = await self._freshness(locator)
         if skip:
@@ -278,7 +278,7 @@ class TranscriptStore:
         if turns:
             await self._upsert(locator, turns, observed_at=observed, source_bytes=size)
         elif since == 0:
-            return None  # nothing in the source at all — try the next adapter/lane
+            return None  # nothing in the source at all, try the next adapter/lane
         reading = await self.model_of_session(locator.harness, locator.anchor_sid)
         return replace(reading, anchored=locator.anchored) if reading else None
 
@@ -308,11 +308,11 @@ class TranscriptStore:
     async def last_usage_of_session(
         self, harness: str, anchor_sid: str,
     ) -> dict[str, int | None] | None:
-        """The most recent assistant turn's token usage — for context_lens's chrome glance.
+        """The most recent assistant turn's token usage, for context_lens's chrome glance.
 
         Returns the {input, output, cache_read, cache_write} the harness recorded for the
         latest turn, or None when the store has no usage for this session (a harness that
-        doesn't carry per-turn tokens — Crush — or an unobserved session)."""
+        doesn't carry per-turn tokens, Crush, or an unobserved session)."""
         row = await self.pool.fetchrow(
             "SELECT tokens_in, tokens_out, cache_read, cache_write "
             "FROM harness_turns WHERE harness=$1 AND anchor_sid=$2 "
@@ -333,10 +333,10 @@ class TranscriptStore:
     async def usage_of_session(
         self, harness: str, anchor_sid: str,
     ) -> dict[str, int] | None:
-        """Aggregate token usage across all turns — for wake_cost / cost telemetry.
+        """Aggregate token usage across all turns, for wake_cost / cost telemetry.
 
         Sums tokens across every assistant turn. None when the store has no usage for
-        this session. The harness's own dollars (where available) stay in the source —
+        this session. The harness's own dollars (where available) stay in the source,
         the store records tokens (the fact), not prices (the invention)."""
         row = await self.pool.fetchrow(
             "SELECT COALESCE(SUM(tokens_in), 0) AS input, "
@@ -359,12 +359,12 @@ class TranscriptStore:
     async def overhead_of_session(
         self, harness: str, anchor_sid: str,
     ) -> dict[str, Any] | None:
-        """THE OVERHEAD LENS, per session (neo's eye, task #34): what the harness itself
-        cost this window — the visible primary vs the hidden channels (subagent
+        """THE OVERHEAD LENS, per session (task #34): what the harness itself
+        cost this window, the visible primary vs the hidden channels (subagent
         sidechains, compactions), system-reminder injections, compaction churn, and the
         cache-vs-fresh split that decides the price of all of it.
 
-        Token math is neo's, kept honest: multiplier and hidden share come from
+        Token math is kept honest: multiplier and hidden share come from
         API-reported usage when any channel carries it; the on-disk byte sizes are the
         fallback basis when none does, and no companion figure is ever fabricated.
         None when the store has never eaten this session."""
@@ -393,7 +393,7 @@ class TranscriptStore:
 
     async def overhead_fleet(self, *, top: int = 15) -> dict[str, Any]:
         """THE OVERHEAD LENS, fleet-wide: totals across every eaten session plus the
-        top-N sessions by total tokens — the chrome's /overhead page reads this. Bounded:
+        top-N sessions by total tokens, the chrome's /overhead page reads this. Bounded:
         the top list is capped, the totals are aggregates (land on counts, walk in)."""
         rows = await self.pool.fetch(
             "WITH ta AS (" + _TURN_AGG_SQL + " GROUP BY harness, anchor_sid) "
@@ -469,7 +469,7 @@ class TranscriptStore:
         derived turn rows of sessions whose SOURCE still exists on disk and reset their
         ingest progress, so the next sweep re-eats them with the current extraction.
 
-        The store is a DERIVED index — the harness file is authoritative, so this loses
+        The store is a DERIVED index, the harness file is authoritative, so this loses
         nothing that exists. The guard is the point: a session whose source has VANISHED
         from disk keeps its rows untouched (they are the only record left; dropping them
         would be the wake-meter's unknowable-ghost mistake again). Returns sessions
@@ -497,20 +497,19 @@ class TranscriptStore:
         self, *, adapters: list[HarnessAdapter] | None = None,
         limit_per_adapter: int = 0,
     ) -> dict[str, int]:
-        """The periodic sweep — eat every harness session on disk into the store.
+        """The periodic sweep, eat every harness session on disk into the store.
 
         This is the "Osiris eats transcripts" primitive: the miner's tick calls it, the
         operator's backfill command calls it. Idempotent (ON CONFLICT DO NOTHING on every
         turn). Returns per-adapter counts of sessions + turns ingested.
 
-        `limit_per_adapter` caps each adapter's sweep (0 = unlimited) — a first run over
+        `limit_per_adapter` caps each adapter's sweep (0 = unlimited), a first run over
         a fleet's whole history should not hog the loop. Free work, but bounded.
 
         INCREMENTAL by the spend gate: a session whose source hasn't changed since its
-        last ingest costs one stat + one row lookup and is never re-read — a steady-state
+        last ingest costs one stat + one row lookup and is never re-read, a steady-state
         sweep over a quiet fleet does no file IO at all. Without this, every tick re-ate
-        every transcript on disk in full (the exact miner-walked-everything-forever shape
-        the house was burned by, thread 51000597)."""
+        every transcript on disk in full, an outage this system was once burned by."""
         counts: dict[str, int] = {}
         for adapter in (adapters or self._default_adapters):
             sessions = 0
@@ -525,7 +524,7 @@ class TranscriptStore:
                     await self._upsert(locator, turns, observed_at=observed,
                                        source_bytes=size)
                     sessions += 1
-                except Exception:  # noqa: BLE001 — one bad session must not abort the sweep
+                except Exception:  # noqa: BLE001, one bad session must not abort the sweep
                     continue
                 if limit_per_adapter and sessions >= limit_per_adapter:
                     break
@@ -536,7 +535,7 @@ class TranscriptStore:
         self, locator: SessionLocator, turns: list[TurnRow],
         *, observed_at: datetime | None = None, source_bytes: int | None = None,
     ) -> None:
-        """`observed_at` is the source mtime taken BEFORE the read — stamped as
+        """`observed_at` is the source mtime taken BEFORE the read, stamped as
         last_ingested_at so the freshness gate compares against what was actually read,
         not against a later clock that would hide same-moment appends. `source_bytes`
         rides from the same stat (the overhead lens's byte fallback)."""

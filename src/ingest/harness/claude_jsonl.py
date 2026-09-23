@@ -1,12 +1,12 @@
-"""Claude Code transcript adapter — JSONL on disk under ~/.claude/projects/.
+"""Claude Code transcript adapter: JSONL on disk under ~/.claude/projects/.
 
-This is the EXISTING read path (sessions.py's _model_of / locate_current_transcript /
+This is the existing read path (sessions.py's _model_of / locate_current_transcript /
 model_of_transcript), extracted behind the adapter protocol. The code moves, the reads
-don't change — the same JSONL parsing that has been authoritative since the source-model
-provenance was introduced (ruling 17516660). Slice 2 (the JSONL-fallback removal, task
-#29) landed: every identity caller reads through the store now, and this adapter is the
-ONE place Claude Code transcripts are parsed for identity. sessions.py's functions remain
-for the adapter itself and the non-identity readers (the seam-hand probe, rebind).
+don't change: the same JSONL parsing that has been authoritative since source-model
+provenance was introduced. The JSONL-fallback removal landed since: every identity
+caller reads through the store now, and this adapter is the one place Claude Code
+transcripts are parsed for identity. sessions.py's functions remain for the adapter
+itself and the non-identity readers.
 """
 from __future__ import annotations
 
@@ -23,19 +23,19 @@ from src.ingest.sessions import (
     operator_swapped,
 )
 
-# Re-exported from sessions.py — the per-line model extractor.
+# Re-exported from sessions.py: the per-line model extractor.
 _SYNTHETIC = "<synthetic>"
 
-# THE OVERHEAD EYE (neo's, task #34): a system-reminder is a complete tagged block the
-# harness injected into a user message. Counted per turn at ingest so the store can answer
-# "what does the harness itself cost you" without re-reading a byte.
+# A system-reminder is a complete tagged block the harness injected into a user message.
+# Counted per turn at ingest so the store can answer "what does the harness itself cost
+# you" without re-reading a byte.
 _REMINDER_RE = re.compile(r"<system-reminder>.*?</system-reminder>", re.IGNORECASE | re.DOTALL)
 
 
 def _text_chunks(content: Any) -> Iterator[str]:
     """Every string in a message content tree. The modern harness nests reminder text
-    inside tool_result items' own content lists, so a top-level-only walk (the ancestor's)
-    undercounts — recurse."""
+    inside tool_result items' own content lists, so a top-level-only walk undercounts;
+    recurse instead."""
     if isinstance(content, str):
         yield content
     elif isinstance(content, list):
@@ -131,11 +131,12 @@ class ClaudeJsonlAdapter:
     def discover(
         self, *, cwd: str | None, job_dir: str | None, root: Path | None = None,
     ) -> SessionLocator | None:
-        # anchored_only, MAIN transcript only — two scars, keep both: (1) a job_dir that
-        # matches no transcript must yield NOTHING, never the box-wide-hottest neighbor
-        # (the cry-wolf false swap); (2) never anchor on a hotter subagents/ transcript —
-        # a BACKGROUND child runs while the parent keeps calling, and the parent's writes
-        # got attributed to its hot child (provenance theft, thread 0344e536 / be580da).
+        # anchored_only, MAIN transcript only: two lessons learned the hard way, keep both:
+        # (1) a job_dir that matches no transcript must yield NOTHING, never the
+        # machine-wide-hottest neighbor (a false swap that would misreport reliably); (2)
+        # never anchor on a hotter subagents/ transcript, since a background child runs
+        # while the parent keeps calling, and the parent's writes were once wrongly
+        # attributed to its hot child (a provenance mix-up).
         base = root or (Path.home() / ".claude" / "projects")
         path = locate_current_transcript(base, job_dir, anchored_only=True)
         if path is None:
@@ -156,13 +157,13 @@ class ClaudeJsonlAdapter:
         )
 
     def discover_at(self, path: Path) -> SessionLocator | None:
-        """Build a locator DIRECTLY from a caller-KNOWN path — no job_dir/cwd search at
-        all (thread 7304bfd8). The fix for a background-job fork whose job_dir-based
-        search (discover(), above) can land on a stub/wrong file or find nothing: the
-        caller (mount()'s/automount()'s own `transcript_path` param, hook-stamped) already
-        has the real one. Same stem-parse convention as discover(); cwd/project are left
-        unset (unknown from a bare path alone) — identity only needs the model reading,
-        never these for the explicit-path lane."""
+        """Build a locator directly from a caller-known path, with no job_dir/cwd search at
+        all. The fix for a background-job fork whose job_dir-based search (discover(),
+        above) can land on a stub/wrong file or find nothing: the caller (mount()'s/
+        automount()'s own `transcript_path` param, hook-stamped) already has the real one.
+        Same stem-parse convention as discover(); cwd/project are left unset (unknown from
+        a bare path alone), since identity only needs the model reading, never these, for
+        the explicit-path lane."""
         if not path.is_file():
             return None
         stem = path.stem
@@ -175,15 +176,15 @@ class ClaudeJsonlAdapter:
         )
 
     def enumerate(self, *, root: Path | None = None) -> Iterator[SessionLocator]:
-        """Every Claude Code transcript on disk — the miner's backfill sweep.
+        """Every Claude Code transcript on disk, for the miner's backfill sweep.
 
         Walks ~/.claude/projects/*/*.jsonl. Each parent dir is a project (the cwd with
         slashes dashed); each file is a session. Skips the osiris-extract sidechains
-        (those are the miner's OWN extractions, not real sessions — ingesting them would
-        double-count).
+        (those are the miner's own extractions, not real sessions, so ingesting them
+        would double-count).
 
-        COMPLETENESS (HarnessAdapter's own contract): complete relative to a FLAT,
-        one-file-per-session layout under `base` — Claude Code has not been observed to
+        COMPLETENESS (HarnessAdapter's own contract): complete relative to a flat,
+        one-file-per-session layout under `base`. Claude Code has not been observed to
         nest sessions the way DSH now does, and this walk does not assume it never will;
         it only promises what a flat `iterdir()` can see today."""
         base = (root or (Path.home() / ".claude" / "projects")).expanduser()
@@ -211,15 +212,15 @@ class ClaudeJsonlAdapter:
     def _channels_of(
         self, primary: Path, parent_sid: str, project: str | None,
     ) -> Iterator[SessionLocator]:
-        """The hidden channels beside a primary — <stem>/subagents/agent-*.jsonl, plus
+        """The hidden channels beside a primary: <stem>/subagents/agent-*.jsonl, plus
         <stem>/subagents/workflows/wf_*/agent-*.jsonl (the Workflow tool's fan-outs, a
-        channel shape the ancestor never knew).
+        channel shape earlier versions of this adapter never knew about).
 
         Each subagent writes its own transcript there (first line carries isSidechain;
-        the .meta.json sidecar names the agentType). These are the sessions the operator
-        never sees on screen — the overhead lens exists to price them. anchor_sid is the
-        subagent's own hex id (unique fleet-wide); parent_sid ties it back to the primary
-        it served."""
+        the .meta.json sidecar names the agentType). These are sessions that never show
+        on screen directly, which is why this cost accounting exists: to price them.
+        anchor_sid is the subagent's own hex id (globally unique); parent_sid ties it
+        back to the primary it served."""
         sa_dir = primary.parent / primary.stem / "subagents"
         if not sa_dir.is_dir():
             return
@@ -243,7 +244,7 @@ class ClaudeJsonlAdapter:
             anchor = stem.removeprefix("agent-") or stem
             channel = kind or ("compaction" if "compact" in stem else "sidechain")
             agent_type = None
-            try:  # json.load streams from the file object — never .read_text() (guard)
+            try:  # json.load streams from the file object, never .read_text() (guard)
                 with path.with_suffix(".meta.json").open("r", encoding="utf-8") as f:
                     meta = json.load(f)
                 if isinstance(meta, dict) and isinstance(meta.get("agentType"), str):
@@ -259,10 +260,10 @@ class ClaudeJsonlAdapter:
     def read_turns(
         self, locator: SessionLocator, *, since_idx: int = 0,
     ) -> Iterator[TurnRow]:
-        """STREAMED, never a whole-file read (thread 0c03a685): a 30MB+ transcript used
-        to be materialized as one `str` via `read_text`, then `splitlines()`'d TWICE (once
-        for operator_swapped, once for the main loop) — three full copies alive at once,
-        times however many sessions the boot backfill sweeps in its first pass. Two
+        """Streamed, never a whole-file read: a 30MB+ transcript used to be materialized
+        as one `str` via `read_text`, then `splitlines()`'d twice (once for
+        operator_swapped, once for the main loop), keeping three full copies alive at
+        once, times however many sessions the boot backfill sweeps in its first pass. Two
         line-by-line passes over the same path (the OS page cache makes the second nearly
         free) hold only one line at a time instead."""
         path = Path(locator.source_path)
@@ -294,9 +295,9 @@ class ClaudeJsonlAdapter:
                 model = _model_of_line(d)
                 usage = _usage_of_line(d) if role == "assistant" else {}
                 summary = bool(d.get("isCompactSummary") or d.get("isMeta"))
-                # reminders only on live user turns: a compact summary QUOTES the past, and
+                # reminders only on live user turns: a compact summary quotes the past, and
                 # counting its quoted reminders again after every compaction would inflate
-                # the very churn number the lens exists to measure honestly
+                # the very churn number this accounting exists to measure honestly
                 reminders = (_reminders_of_line(d) if role == "user" and not summary
                              else None)
                 yield TurnRow(

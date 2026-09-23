@@ -1,14 +1,14 @@
-"""DSH transcript adapter — zstd-compressed session JSONL under ~/.dsh/sessions/.
+"""DSH transcript adapter: zstd-compressed session JSONL under ~/.dsh/sessions/.
 
 DeepSeek Harness stores sessions under a directory named after the workspace slug
 (the cwd with `/` folded to `-`, prefixed `--`): `~/.dsh/sessions/<slug>/`. Inside
 the slug dir each session owns its own nested dir named `session-<uuid>` holding
 the zstd-compressed JSONL: `<slug>/session-<uuid>/session.jsonl.zstd` (verified
-live, 2026-08-23 — the adapter originally assumed the zstd file sits directly in
-the slug dir and so never discovered a single real session; the soul store carried
-zero `harness='dsh'` rows). The JSONL contains event-structured lines — a session
-header event (`type: "session"` carrying `id: "session-<uuid>"` and `cwd`), then
-user/assistant messages, tool calls, boundaries, etc.
+live, 2026-08-23: the adapter originally assumed the zstd file sits directly in
+the slug dir and so never discovered a single real session; the transcript store
+carried zero `harness='dsh'` rows as a result). The JSONL contains event-structured
+lines: a session header event (`type: "session"` carrying `id: "session-<uuid>"`
+and `cwd`), then user/assistant messages, tool calls, boundaries, etc.
 
 Model info lives in the `request/header` event (route.config.model) and
 `request/context` event (provider + model fields). Individual assistant messages
@@ -37,7 +37,7 @@ _ZSTD_EXT = ".zstd"
 
 
 def _dsh_sessions() -> Path:
-    """The sessions root, resolved at CALL time — a test's tmp HOME (or a relocated
+    """The sessions root, resolved at call time: a test's tmp HOME (or a relocated
     home) must not be frozen at import. The module constants stay for callers that
     want the import-time default; discovery paths use this."""
     return Path.home() / ".dsh" / "sessions"
@@ -93,12 +93,12 @@ def _session_id_from_dir(slug: str) -> str:
     return m.group(2) if m else slug
 
 
-# The nested per-session dir name — TWO grammars, both real and live-verified
-# (2026-08-23, same finding src/ingest/sessions.py and src/orchestrator/handshake.py's
+# The nested per-session dir name has TWO grammars, both real and live-verified
+# (2026-08-23, the same finding src/ingest/sessions.py and src/orchestrator/handshake.py's
 # own _UUID_RE/_sid8 helpers already account for): depth-0 interactive sessions carry a
 # `session-` prefix, spawned subagent sessions are a bare uuid. A regex that only
 # matched the prefixed form silently dropped every subagent session from `enumerate`/
-# `_session_dirs_in`/`_session_dir_from_job_dir` — found live via
+# `_session_dirs_in`/`_session_dir_from_job_dir`. Found live via
 # test_enumerate_finds_every_session_under_a_slug_with_more_than_one's own two-session
 # fixture (one of each shape), not assumed.
 _SESSION_DIR_RE = re.compile(r"^(?:session-)?[0-9a-f-]{36}$")
@@ -107,8 +107,8 @@ _SESSION_DIR_RE = re.compile(r"^(?:session-)?[0-9a-f-]{36}$")
 def _session_file_in(session_dir: Path) -> Path | None:
     """Find the zstd-compressed JSONL inside one DSH session directory.
 
-    Handles BOTH layouts: the real nested one (`<dir>/session-<uuid>/session.jsonl.zstd`)
-    and a flat `<dir>/session.jsonl.zstd` (the shape this module originally assumed —
+    Handles both layouts: the real nested one (`<dir>/session-<uuid>/session.jsonl.zstd`)
+    and a flat `<dir>/session.jsonl.zstd` (the shape this module originally assumed,
     kept so a layout change never silently blinds the adapter again)."""
     if not session_dir.is_dir():
         return None
@@ -126,7 +126,7 @@ def _session_file_in(session_dir: Path) -> Path | None:
 def _session_dirs_in(slug_dir: Path) -> list[tuple[Path, Path]]:
     """Every (session_dir, zstd_file) pair under a slug dir, newest first.
 
-    A slug dir holds ONE session per nested `session-<uuid>` dir — a workspace can
+    A slug dir holds one session per nested `session-<uuid>` dir. A workspace can
     accumulate many sessions over days, so cwd-based (unanchored) discovery must pick
     the hottest rather than whichever sorted first."""
     if not slug_dir.is_dir():
@@ -137,13 +137,13 @@ def _session_dirs_in(slug_dir: Path) -> list[tuple[Path, Path]]:
             zst = _session_file_in(f)
             if zst is not None:
                 out.append((f, zst))
-    # newest mtime first — same hottest-wins rule as locate_transcript_by_cwd
+    # newest mtime first: same hottest-wins rule as locate_transcript_by_cwd
     out.sort(key=lambda pair: pair[1].stat().st_mtime, reverse=True)
     return out
 
 
 def _session_dir_from_job_dir(job_dir: str | Path | None) -> Path | None:
-    """The DSH session dir a job_dir names, if it is one — `.../.dsh/sessions/
+    """The DSH session dir a job_dir names, if it is one: `.../.dsh/sessions/
     <slug>/session-<uuid>` (or the zstd file inside it, or the file path alone).
     None for anything else (a Claude jobs dir, a wake stub, a foreign path)."""
     if not job_dir:
@@ -176,20 +176,20 @@ def _decompress(path: Path) -> list[str] | None:
 
 
 def _decompress_bytes(path: Path) -> bytes | None:
-    """RAW-BYTE decompress (wave 18 item 1, mail 9541 7b8bb398) — the soul store's own
-    verbatim-ingest law (0052: a real transcript line can carry a literal NUL byte,
-    which `subprocess.run(..., text=True)` + `str.splitlines()` both silently mangle —
-    text mode forces a decode, and `.splitlines()` also splits on far more than `\\n`
+    """RAW-BYTE decompress. This exists for the transcript store's own verbatim-ingest
+    requirement: a real transcript line can carry a literal NUL byte, which
+    `subprocess.run(..., text=True)` + `str.splitlines()` both silently mangle. Text mode
+    forces a decode, and `.splitlines()` also splits on far more than `\\n`
     (`\\r`, `\\v`, `\\x1c`-`\\x1e`, U+2028/U+2029), any of which a JSON string can
-    legally embed). `_decompress` above stays exactly as it is — every existing caller
-    (discovery, `read_turns`) only ever needs text lines and must not change shape —
-    this is a SEPARATE decompress for the one caller (`SoulStore.ingest_dsh_session`)
+    legally embed. `_decompress` above stays exactly as it is: every existing caller
+    (discovery, `read_turns`) only ever needs text lines and must not change shape.
+    This is a separate decompress for the one caller (`SoulStore.ingest_dsh_session`)
     that needs the same byte-exactness claude-code's own `ingest_path` already holds
-    for a direct file read. Returns the full decompressed content as ONE bytes blob
-    (never pre-split — `_split_lines`'s own live-write safety law, at the soul-store
-    layer, decides where the last complete line ends), or None on any failure (missing
-    file, zstd unavailable, a nonzero exit, a timeout) — a skip, never a raised
-    exception, matching `_decompress`'s own tolerance."""
+    for a direct file read. Returns the full decompressed content as one bytes blob
+    (never pre-split, since `_split_lines`'s own live-write safety rule, at the
+    transcript-store layer, decides where the last complete line ends), or None on any
+    failure (missing file, zstd unavailable, a nonzero exit, a timeout): a skip, never a
+    raised exception, matching `_decompress`'s own tolerance."""
     if not path.is_file():
         return None
     zstd_path = shutil.which("zstd")
@@ -234,9 +234,9 @@ class DshSessionAdapter:
     def discover(
         self, *, cwd: str | None, job_dir: str | None, root: Path | None = None,
     ) -> SessionLocator | None:
-        # THE ANCHOR LANE (the mount() tool's DSH door): a job_dir naming a real DSH
-        # session dir is this session's OWN record — anchored, exactly like a Claude
-        # jobs/<sid8> dir. Without it, cwd discovery is a hottest-guess across every
+        # THE ANCHOR LANE (how the mount() tool resolves a DSH session): a job_dir naming
+        # a real DSH session dir is this session's own record, anchored, exactly like a
+        # Claude jobs/<sid8> dir. Without it, cwd discovery is a hottest-guess across every
         # session ever run in that workspace (anchored=False, the same grade the cwd
         # lane has always carried for Claude).
         anchored_dir = _session_dir_from_job_dir(job_dir)
@@ -332,9 +332,9 @@ class DshSessionAdapter:
         )
 
     def enumerate(self, *, root: Path | None = None) -> Iterator[SessionLocator]:
-        """Yield every DSH session on disk (nested and flat layouts alike) —
-        BEST-EFFORT COMPLETE, not guaranteed: a nesting shape this box has never seen
-        would silently drop that slug's sessions, same class of gap that made earlier
+        """Yield every DSH session on disk (nested and flat layouts alike).
+        BEST-EFFORT COMPLETE, not guaranteed: a nesting shape this machine has never seen
+        would silently drop that slug's sessions, the same class of gap that made earlier
         walks under-count in the first place. See HarnessAdapter's own docstring for
         what "complete" means across adapters."""
         sessions_dir = Path(root) if root else _DSH_SESSIONS
@@ -381,7 +381,7 @@ class DshSessionAdapter:
                     model_timeline.append((i, _normalize_model(model)))
 
         # Walk the events and produce TurnRows for user/assistant messages
-        # DSH doesn't number its turns in the event stream — we assign turn_idx
+        # DSH doesn't number its turns in the event stream, so turn_idx is assigned
         # sequentially based on user/assistant message pairs.
         turn_idx = 0
         for i in range(since_idx, len(lines)):
