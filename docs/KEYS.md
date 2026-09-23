@@ -232,8 +232,8 @@ host-cred|host+tpm2|file` applies to `init` only. `--json` prints one compact li
 The console's Settings pane, opened from the command palette or the gear icon in the
 header, has a Key section showing your soul key's live status: whether one is present, its
 storage method, path, age, and recovery paths, with buttons for Init, Rotate, Restore-drill,
-and the two Security Key actions described above. "Enroll recovery (this browser)" only
-appears when a key exists with zero recovery paths enrolled. "Recover (this browser)" only
-appears when no key exists yet. See [REFERENCE.md](REFERENCE.md#the-consoles-settings-pane)
+and the two Security Key actions described above. "Add a recovery method with a security
+key" only appears when a key exists with zero recovery paths enrolled. "Recover using a
+security key" only appears when no key exists yet. See [REFERENCE.md](REFERENCE.md#the-consoles-settings-pane)
 for the full pane layout and every section, and [DEPLOY.md](DEPLOY.md) (the "Soul-store
 encryption" section) for how this custody mechanism fits into the wider deployment picture.

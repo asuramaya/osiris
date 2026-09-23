@@ -3,8 +3,8 @@ the CLI and MCP surfaces call the SAME orchestrator function, never one calling 
 (the house's own CLI/MCP pair convention: cmd_fleet_reconcile/fleet_reconcile.
 reconcile_execute is the template this follows).
 
-Seven structurally distinct repair verbs, no shared logic underneath, only a shared wire
-shape (dry_run default True, idempotent). `BACKFILL_TARGETS` names all seven; `run_backfill`
+Eight structurally distinct repair verbs, no shared logic underneath, only a shared wire
+shape (dry_run default True, idempotent). `BACKFILL_TARGETS` names all eight; `run_backfill`
 dispatches on `target`. This module owns nothing about identity/mounting: `actor` arrives
 already resolved, exactly like every other orchestrator-layer function in this codebase
 (fleet_reconcile.reconcile_execute, charter.charter_for, ...). The MCP tool layer keeps its
@@ -78,7 +78,7 @@ async def run_backfill(
     Dry run is the default for every target; `dry_run=False` requires `because` (except
     `agent_project_links`, which predates that convention: callers that want a stricter
     contract than this function's own must enforce it themselves, e.g. the CLI/UI entry
-    points impose `because` unconditionally at their own layer). All seven idempotent.
+    points impose `because` unconditionally at their own layer). All eight idempotent.
 
     `limit`/`newest_first` are consulted ONLY by `provenance_possible_upstream`; every
     other target ignores them, unchanged."""

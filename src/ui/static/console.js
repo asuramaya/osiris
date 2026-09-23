@@ -849,7 +849,7 @@ async function rotateSecret(key) {
 }
 
 // ── Repairs Panel ──────────────────────────────────────────────────────────
-// The seven backfill repair targets, one dry-run/apply endpoint each, all through POST
+// The eight backfill repair targets, one dry-run/apply endpoint each, all through POST
 // /backfill, which itself calls orchestrator.backfill.run_backfill, the SAME function
 // the MCP tool and the CLI's `osiris backfill` command call. operator_charter's own apply
 // control is DELIBERATELY OMITTED here: its blast radius (fleet-wide operator authority)
@@ -864,6 +864,7 @@ var REPAIRS_TARGETS = [
   { key: 'agent_project_links', hint: 'Move works_in/governs off an off-head Agent onto its living head.' },
   { key: 'closed_by_real_sources', hint: 'Re-point closed_by edges off placeholder Agents onto the real Person/SystemSource, then retire the placeholder.' },
   { key: 'operator_charter', hint: 'Mint governs from person:operator to every active SoftwareProject it doesn’t already cover. Fleet-wide authority scope. Apply is CLI-only: osiris backfill operator_charter --apply --because "..."', cliOnly: true },
+  { key: 'provenance_possible_upstream', hint: 'Backfill possible_upstream provenance edges onto historical Decision/Thread writes made before the live upstream detector existed.' },
 ];
 function renderRepairsPanel() {
   const container = $('result'); showPanel();
@@ -885,7 +886,7 @@ function renderRepairsPanel() {
   }).join('');
   container.innerHTML = '<div style="padding:16px;max-width:900px;margin:0 auto">' +
     '<h2 style="font-size:13px;text-transform:uppercase;letter-spacing:0.5px;color:var(--muted);margin-bottom:4px">Repairs</h2>' +
-    '<div class="o-faint" style="margin-bottom:8px">The seven backfill repair verbs. Dry run always writes nothing.</div>' +
+    '<div class="o-faint" style="margin-bottom:8px">The eight backfill repair verbs. Dry run always writes nothing.</div>' +
     '<table class="ee-table"><thead><tr><th>Target</th><th>What it does</th><th></th><th></th></tr></thead><tbody>' +
     rows + '</tbody></table></div>';
 }
@@ -1963,7 +1964,7 @@ const POWER_TOOLS = [
   { label: 'Go to Browse', hint: 'Entity explorer', cat: 'Navigation', run: () => switchSurface('browse') },
   { label: 'Go to Mailbox', hint: 'Messages', cat: 'Navigation', run: () => switchSurface('mailbox') },
   { label: 'Author composition…', hint: 'Save a new lens', cat: 'Compositions', run: () => authorComposition() },
-  { label: 'Repairs…', hint: 'The seven backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
+  { label: 'Repairs…', hint: 'The eight backfill repair verbs', cat: 'Admin', run: () => renderRepairsPanel() },
   // THE SETTINGS PANE consolidates the three formerly-separate "Key…"/"Offload
   // Targets…"/"Settings…" palette entries into ONE destination: Ctrl+K used to reach
   // Key…, Offload Targets… and Settings… as separate panels, now built as one console

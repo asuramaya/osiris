@@ -2421,7 +2421,7 @@ class SettingsWriteBody(BaseModel):
 
 
 class BackfillBody(BaseModel):
-    """THE REPAIRS PANEL's own body: one of the seven
+    """THE REPAIRS PANEL's own body: one of the eight
     backfill targets, dry-run by default. `dry_run=False` (apply) is refused outright
     for `operator_charter` at the orchestrator layer regardless of `ruling`/authority;
     see `backfill.check_apply_authority`'s own docstring."""
