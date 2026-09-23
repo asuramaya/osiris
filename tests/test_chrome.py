@@ -200,7 +200,7 @@ async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
     html = render_fleet(data)
     # the doors are explained LEANLY (operator, 2026-07-16, third pass: '1 agent' is the
     # invariant, never said; the life is the roman in the name, never repeated)
-    assert "— 2 doors" in html and "1 agent" not in html
+    assert "(2 doors)" in html and "1 agent" not in html
     assert "tab → aaaa0001" in html                # the view door, one short line
     assert "session aaaa0001" in html              # the real door, one short line
 
@@ -303,7 +303,7 @@ async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -
     html = render_fleet(data)
     assert "life 3 of this seat" not in html                # the roman in the name says it
     assert "2 earlier lives · 2 in window:" in html         # the graph's depth, inside the unfold
-    assert "Metra II — " in html                            # an ancestor: name and age, no sermon
+    assert "Metra II: " in html                             # an ancestor: name and age, no sermon
 
 
 async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -> None:

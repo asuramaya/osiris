@@ -219,7 +219,7 @@ def _brief_card(m: dict[str, Any]) -> str:
     ss = m.get("same_story")
     if ss:
         also = ", ".join(f'{_e(a["project"])} ({a["id"]})' for a in ss["also"])
-        subs.append(f'<div class="fold">×{ss["count"]} same story — also: {also}</div>')
+        subs.append(f'<div class="fold">×{ss["count"]} same story, also: {also}</div>')
     tf = m.get("thread_folded")
     if tf:
         subs.append(f'<div class="fold">supersedes {tf["count"]} earlier in this thread '
@@ -234,18 +234,18 @@ def _verbs(t: dict[str, Any], project: str) -> str:
     (owner=<project>), where orient() puts it on that project's wall at its next mount. No
     dispatcher; the graph is the dispatcher."""
     tid = _e(t["id"])
-    hand_to = _e(project) if project and project != "—" else ""
+    hand_to = _e(project) if project and project != "-" else ""
     back = (f'<button data-act="triage" data-verb="assign" data-id="{tid}" '
-            f'data-owner="{hand_to}" data-because="operator: not mine — {hand_to} owns this" '
-            f'title="hand it back to {hand_to} — stays open, stops being yours"'
+            f'data-owner="{hand_to}" data-because="operator: not mine, {hand_to} owns this" '
+            f'title="hand it back to {hand_to}: stays open, stops being yours"'
             f'>not mine</button>' if hand_to else "")
     return (
         f'<span class="verbs">'
         f'<button data-act="triage" data-verb="resolve" data-id="{tid}" '
-        f'data-because="operator: done" title="close it — done">done</button>'
+        f'data-because="operator: done" title="close it: done">done</button>'
         f'{back}'
         f'<button data-act="triage" data-verb="defer" data-id="{tid}" data-days="30" '
-        f'data-because="operator: not now" title="mine, but not now — back in 30 days"'
+        f'data-because="operator: not now" title="mine, but not now: back in 30 days"'
         f'>later</button>'
         f"</span>")
 
@@ -262,7 +262,7 @@ def _counts(desk: dict[str, Any]) -> str:
         f'<div class="counts"><span class="owe{" clear" if not owed else ""}">'
         f"YOU OWE <b>{owed}</b></span>"
         f'<span class="lett">letters <b>{letters}</b> '
-        f'<span class="dim">— no debt attached</span> '
+        f'<span class="dim">(no debt attached)</span> '
         + (_settle(lett_ids, f"clear all {letters}") if lett_ids else "")
         + "</span></div>")
 
@@ -278,7 +278,7 @@ def render_desk(desk: dict[str, Any]) -> str:
     projects = desk.get("by_project") or []
     if projects:
         out.append('<div class="band"><h2>your desk '
-                   '<span class="dim">(one project at a sitting — click to walk in)</span>'
+                   '<span class="dim">(one project at a sitting, click to walk in)</span>'
                    "</h2><table class=\"roster\">")
         for p in projects:
             debts, asks = p.get("debts") or [], p.get("asks") or []
@@ -295,7 +295,7 @@ def render_desk(desk: dict[str, Any]) -> str:
                   "</td></tr>")
         out.append("</table></div>")
     else:
-        out.append('<p class="dim">desk clear — nothing owed, nobody waiting.</p>')
+        out.append('<p class="dim">desk clear, nothing owed, nobody waiting.</p>')
     out.append(_guesses_band(desk))
     out.append(_letters_band(desk))
     out.append(_dimmed_band(desk))
@@ -318,7 +318,7 @@ def _guesses_band(desk: dict[str, Any]) -> str:
             + _verbs(t, t["project"]) + "</div>" for t in guesses]
     return ('<details class="band" id="guesses"><summary class="hdr-fyi">the miner thinks you '
             f'may owe <span class="pill">{len(guesses)}</span> '
-            '<span class="dim">(inferred from overheard talk — nobody asked you; '
+            '<span class="dim">(inferred from overheard talk, nobody asked you; '
             "not counted as debt)</span></summary>" + "".join(rows) + "</details>")
 
 
@@ -328,7 +328,7 @@ def render_desk_project(desk: dict[str, Any], project: str) -> str:
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     back = '<p><a href="/desk">← all projects</a></p>'
     if p is None:
-        return (back + f'<p class="dim">nothing owed to <b>{_e(project)}</b> — '
+        return (back + f'<p class="dim">nothing owed to <b>{_e(project)}</b>: '
                        "cleared, or never was.</p>")
     debts, asks = p.get("debts") or [], p.get("asks") or []
     out = [back, f'<div class="band"><h2><span class="who">{_e(project)}</span> '
@@ -359,7 +359,7 @@ def _letters_band(desk: dict[str, Any]) -> str:
         rows.append(f'<div class="debt">{_brief_card(m)}{_settle(ids)}</div>')
     return ('<details class="band" id="letters"><summary class="hdr-fyi">letters '
             f'<span class="pill">{len(letters)}</span> '
-            '<span class="dim">(reports and eulogies — nothing owed)</span></summary>'
+            '<span class="dim">(reports and eulogies, nothing owed)</span></summary>'
             + "".join(rows) + "</details>")
 
 
@@ -379,7 +379,7 @@ def _dimmed_band(desk: dict[str, Any]) -> str:
                     + _settle([d["id"]]) + "</div>")
     return ('<details class="band" id="dimmedband"><summary class="hdr-fyi">dimmed '
             f'<span class="pill">{len(dimmed)}</span> '
-            '<span class="dim">(an agent called these moot — yours to dismiss)</span>'
+            '<span class="dim">(an agent called these moot, yours to dismiss)</span>'
             "</summary>" + _settle([d["id"] for d in dimmed], f"clear all {len(dimmed)}")
             + "".join(rows) + "</details>")
 
@@ -682,10 +682,10 @@ def _door_label(d: dict[str, Any]) -> str:
     sid = (d.get("job_dir") or "").rsplit("/", 1)[-1] or "?"
     when = _age(d.get("age_secs"))
     if key.startswith("view-of:"):
-        return f"tab → {key.removeprefix('view-of:')} — {when}"
+        return f"tab → {key.removeprefix('view-of:')}: {when}"
     if key.startswith("resume-of:"):
-        return f"resume → {key.removeprefix('resume-of:')} — {when}"
-    return f"session {sid} — {when}"
+        return f"resume → {key.removeprefix('resume-of:')}: {when}"
+    return f"session {sid}: {when}"
 
 
 def _fleet_row(m: dict[str, Any]) -> str:
@@ -700,14 +700,14 @@ def _fleet_row(m: dict[str, Any]) -> str:
     gen = int(m["seat_gen"]) if m.get("seat_gen") else None
     lives_total = (gen - 1) if gen and gen > 1 else len(ancestors)
     if len(doors) > 1 or ancestors:
-        marker = (f' <span class="dim">— {len(doors)} doors</span>'
+        marker = (f' <span class="dim">({len(doors)} doors)</span>'
                   if len(doors) > 1 else "")
         inner = "<br>".join("· " + _e(_door_label(d)) for d in doors)
         if ancestors:
             head_line = (f"{lives_total} earlier li{'ves' if lives_total != 1 else 'fe'} "
                          f"· {len(ancestors)} in window:")
             past = "<br>".join(
-                f'· {_e(str(a["seat"]))} — {_e(_age(a["age_secs"]))}' for a in ancestors)
+                f'· {_e(str(a["seat"]))}: {_e(_age(a["age_secs"]))}' for a in ancestors)
             inner = (inner + "<br>" if inner else "") + _e(head_line) + "<br>" + past
         # a stable id per soul: the poller restores open folds by id, so an unkeyed
         # details element snapped shut on every refresh, which made the page hard to
@@ -751,7 +751,7 @@ def render_fleet(data: dict[str, Any]) -> str:
            # is an awareness signal, not a verified fact, the same rule render_overhead's
            # own "the page says so rather than estimating" caption already follows.
            '<p class="dim">● = touched agent_mounts within 15 min (a cache reading), '
-           "not a harness/proc-verified fact — a fresh row can still be a phantom, and a "
+           "not a harness/proc-verified fact: a fresh row can still be a phantom, and a "
            "stale one can still be a live body the cache hasn't heard from yet.</p>"]
     rows = "".join(_fleet_row(m) for m in named) or (
         '<tr><td class="dim">nothing mounted</td></tr>')
@@ -760,7 +760,7 @@ def render_fleet(data: dict[str, Any]) -> str:
         arows = "".join(_fleet_row(m) for m in anon)
         out.append(
             f'<details id="f-unreconciled"><summary class="dim">{len(anon)} '
-            "unreconciled session(s) — fold proposals wait in the tray</summary>"
+            "unreconciled session(s): fold proposals wait in the tray</summary>"
             f"<table>{arows}</table></details>")
     wrows = "".join(
         f'<tr><td class="ts">{_e(str(w["woke_at"])[:16])}</td>'
@@ -840,6 +840,6 @@ def render_overhead(data: dict[str, Any], telemetry: dict[str, Any] | None = Non
             f'<span class="pill">{t2["sessions"]} sessions · '
             f'{t2["devices"]} device id{"s" if t2["devices"] != 1 else ""}</span></h2>'
             f'<p class="dim">failed-to-send telemetry Claude Code keeps at '
-            f"~/.claude/telemetry — nothing reads or prunes it; this is what it "
-            f"remembers about you{_e(span)}. top events: {tops or '—'}.</p>")
+            f"~/.claude/telemetry: nothing reads or prunes it; this is what it "
+            f"remembers about you{_e(span)}. top events: {tops or '-'}.</p>")
     return "".join(out)

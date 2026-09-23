@@ -430,7 +430,7 @@ async def neighborhoods_of(
 ) -> dict[Any, dict[str, Any]]:
     """The TREE each of these objects hangs from — {object_id: {name, id}} for every object
     with an `in_repo` edge. Objects with no tree are simply absent (the caller decides what
-    rootless fruit means: the desk calls it '—', a bundle gives it its own pile).
+    rootless fruit means: the desk calls it '-', a bundle gives it its own pile).
 
     One query for the whole set. The newest edge wins if an object was re-filed."""
     if not ids:

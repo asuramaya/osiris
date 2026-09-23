@@ -28,13 +28,16 @@ SIX PATTERN CLASSES, matched independently and summed per file:
   - an operator quotation ("operator's word(s)", "operator said")
   - the em dash character (U+2014) -- replaced with a sentence, a comma, or a colon
 
-SURFACES, the same five reader-facing groups ruling 6c510acbd80b names: console UI
-strings (src/ui/static/*.js, *.html), CLI help/receipt/error strings (src/cli.py),
-@mcp.tool docstrings and receipts (src/mcp_server.py), REST route descriptions
-(src/api/app.py), and docs/*.md + README/INSTALL. Reuses test_taxonomy_drift.py's own
-scanning shapes verbatim (AST string-constant walk for .py, block-then-line-comment
-stripping for .js/.html, whole-line scan for .md) -- the same coarse-but-sufficient
-tradeoff, not a perfect classifier, disclosed there and not repeated here.
+SURFACES, the five reader-facing groups ruling 6c510acbd80b names, plus one added since
+(the pages src/api/chrome.py itself renders at /desk, /fleet, /overhead are just as
+reader-facing as the routes app.py describes, so their own string literals joined tier 1
+too): console UI strings (src/ui/static/*.js, *.html), CLI help/receipt/error strings
+(src/cli.py), @mcp.tool docstrings and receipts (src/mcp_server.py), REST route
+descriptions (src/api/app.py), rendered HTML page strings (src/api/chrome.py), and
+docs/*.md + README/INSTALL. Reuses test_taxonomy_drift.py's own scanning shapes verbatim
+(AST string-constant walk for .py, block-then-line-comment stripping for .js/.html,
+whole-line scan for .md) -- the same coarse-but-sufficient tradeoff, not a perfect
+classifier, disclosed there and not repeated here.
 
 TIER 2 (scope widened to the whole codebase, decision a4aa0ba4, amending 1e2ef5c3's own
 code-comment exemption): comments, docstrings, and test names are product code too, not
@@ -115,7 +118,7 @@ def _count_violations(text: str, names_re: re.Pattern[str]) -> int:
     )
 
 
-_PY_SURFACES = ["src/cli.py", "src/mcp_server.py", "src/api/app.py"]
+_PY_SURFACES = ["src/cli.py", "src/mcp_server.py", "src/api/app.py", "src/api/chrome.py"]
 
 
 def _scan_py(relpath: str, names_re: re.Pattern[str]) -> int:
