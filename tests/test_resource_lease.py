@@ -1,6 +1,6 @@
-"""resource_lease — task #103/#119. The bar this module exists to clear (Thoth's brief,
-msg 2252): prove the ATOMICITY, not just the happy path. A test that only checks "the second
-caller sees the holder" would pass on the broken (read-then-write) version too — these tests
+"""resource_lease: task #103/#119. The bar this module exists to clear:
+prove the ATOMICITY, not just the happy path. A test that only checks "the second
+caller sees the holder" would pass on the broken (read-then-write) version too. These tests
 fire real concurrent claims at the real Postgres constraint and assert exactly one winner,
 the same style test_concurrency.py already uses for the kernel's own ON-CONFLICT claims.
 """
@@ -13,22 +13,22 @@ from src.orchestrator import resource_lease as rl
 
 
 async def test_acquire_succeeds_when_free(actions: Actions) -> None:
-    result = await rl.acquire(actions, "src/mcp_server.py", "agent:sekhmet")
+    result = await rl.acquire(actions, "src/mcp_server.py", "agent:one")
     assert result.acquired is True
-    assert result.holder == "agent:sekhmet"
+    assert result.holder == "agent:one"
     assert result.resource_id == "src/mcp_server.py"
 
 
 async def test_second_claim_on_a_held_resource_is_refused_and_surfaced(
     actions: Actions,
 ) -> None:
-    first = await rl.acquire(actions, "docker-daemon", "agent:khnum")
-    second = await rl.acquire(actions, "docker-daemon", "agent:seshat")
+    first = await rl.acquire(actions, "docker-daemon", "agent:two")
+    second = await rl.acquire(actions, "docker-daemon", "agent:three")
     assert first.acquired is True
     assert second.acquired is False
-    # visible-conflict UX (Alfred's #4.3): the SECOND caller learns who actually holds it,
+    # visible-conflict UX: the SECOND caller learns who actually holds it,
     # never a silent duplicate mint.
-    assert second.holder == "agent:khnum"
+    assert second.holder == "agent:two"
     # same resource -> same companion Thread, regardless of who's asking
     assert second.thread_id == first.thread_id
 
@@ -36,22 +36,22 @@ async def test_second_claim_on_a_held_resource_is_refused_and_surfaced(
 async def test_release_then_reacquire_by_a_different_holder_succeeds(
     actions: Actions,
 ) -> None:
-    first = await rl.acquire(actions, "compose-merge", "agent:imhotep")
-    released = await rl.release(actions.pool, "compose-merge", "agent:imhotep")
+    first = await rl.acquire(actions, "compose-merge", "agent:four")
+    released = await rl.release(actions.pool, "compose-merge", "agent:four")
     assert released is True
-    second = await rl.acquire(actions, "compose-merge", "agent:thoth")
+    second = await rl.acquire(actions, "compose-merge", "agent:five")
     assert second.acquired is True
-    assert second.holder == "agent:thoth"
+    assert second.holder == "agent:five"
     assert second.thread_id == first.thread_id  # same ledger, new holder
 
 
 async def test_release_by_a_non_holder_is_refused(actions: Actions) -> None:
-    await rl.acquire(actions, "src/orchestrator/capture.py", "agent:seshat")
-    refused = await rl.release(actions.pool, "src/orchestrator/capture.py", "agent:khnum")
+    await rl.acquire(actions, "src/orchestrator/capture.py", "agent:three")
+    refused = await rl.release(actions.pool, "src/orchestrator/capture.py", "agent:two")
     assert refused is False
-    # the real holder still holds it — a wrong-holder release call is a no-op, not a bug
+    # the real holder still holds it: a wrong-holder release call is a no-op, not a bug
     holder = await rl.current_holder(actions.pool, "src/orchestrator/capture.py")
-    assert holder is not None and holder["holder"] == "agent:seshat"
+    assert holder is not None and holder["holder"] == "agent:three"
 
 
 async def test_release_of_an_unheld_resource_is_refused(actions: Actions) -> None:
@@ -71,8 +71,8 @@ async def _thread_status_and_owner(actions: Actions, thread_id: object) -> tuple
 
 
 async def test_release_resyncs_the_paired_threads_status(actions: Actions) -> None:
-    """NEGATIVE CONTROL (2026-08-03, Thoth's Phase 0 Tier 2 dispatch, msg 3354): before
-    this fix, release() only ever touched the resource_leases SQL table — the paired
+    """NEGATIVE CONTROL: before
+    this fix, release() only ever touched the resource_leases SQL table. The paired
     Thread stayed status='open'/owner=<holder> FOREVER, correct for check_lease (reads the
     table directly) but wrong for every graph-level reader (orient's open_threads, recall,
     briefing, dossier) that only ever sees Thread objects. Confirmed against pre-fix code:
@@ -95,7 +95,7 @@ async def test_release_resyncs_the_paired_threads_status(actions: Actions) -> No
 
 
 async def test_release_then_reacquire_reopens_the_threads_status(actions: Actions) -> None:
-    """A reacquire after release must not leave the Thread permanently 'resolved' either —
+    """A reacquire after release must not leave the Thread permanently 'resolved' either:
     acquire()'s own find-or-create + status='open' stamp already handles this (unchanged),
     this just proves the two fixes compose cleanly across a release/reacquire cycle."""
     first = await rl.acquire(actions, "shared-db", "agent:one")
@@ -120,7 +120,7 @@ async def test_the_same_resource_id_always_resolves_to_the_same_thread(
     actions: Actions,
 ) -> None:
     """The whole point of Q7's fix: EXACT-key lookup, not fuzzy summary similarity. Acquire,
-    release, and reacquire the same resource_id three times over — every call must resolve
+    release, and reacquire the same resource_id three times over. Every call must resolve
     to the identical companion Thread, never a near-duplicate mint."""
     first = await rl.acquire(actions, "src/api/chrome.py", "agent:a")
     await rl.release(actions.pool, "src/api/chrome.py", "agent:a")
@@ -131,7 +131,7 @@ async def test_the_same_resource_id_always_resolves_to_the_same_thread(
 
 
 async def _backdate_acquired_at(actions: Actions, resource_id: str, secs_ago: int = 90) -> None:
-    """Simulate a genuinely stale claim without sleeping in a test — reap_stale's floor
+    """Simulate a genuinely stale claim without sleeping in a test. reap_stale's floor
     (_MIN_REAP_AGE_SECS, 2026-08-03) refuses older_than_secs below 60, so the old trick of
     passing older_than_secs=0 against a lease acquired an instant ago no longer works; the
     lease's own acquired_at has to actually be old."""
@@ -160,8 +160,8 @@ async def test_reaping_frees_the_resource_for_a_fresh_claim(actions: Actions) ->
     assert fresh.holder == "agent:survivor"
 
 
-# --- the floor (2026-08-03, Thoth's Tier 1 dispatch off the silent-authority census,
-# decision 497a066a): older_than_secs used to be fully caller-controlled with no minimum --
+# --- the floor:
+# older_than_secs used to be fully caller-controlled with no minimum --
 # older_than_secs=0 force-released EVERY currently-held lease fleet-wide in one call, no
 # gate required, the parameter itself was the weapon -----------------------------------
 
@@ -263,7 +263,7 @@ async def test_fifty_concurrent_claims_on_one_resource_produce_exactly_one_holde
 ) -> None:
     """The load-bearing test. 50 agents race to acquire the SAME resource_id at once via
     asyncio.gather (real concurrent connections against the real Postgres testcontainer,
-    same style as test_concurrency.py's racing-creators proof). Exactly one must win — not
+    same style as test_concurrency.py's racing-creators proof). Exactly one must win, not
     asserted from the Python-side result list alone, but cross-checked against the table
     the partial unique index actually governs, so a bug that let the APPLICATION layer
     believe the wrong thing while the DB disagreed would still be caught."""
@@ -274,7 +274,7 @@ async def test_fifty_concurrent_claims_on_one_resource_produce_exactly_one_holde
     losers = [r for r in results if not r.acquired]
     assert len(winners) == 1
     assert len(losers) == 49
-    # every loser must report the SAME actual winner — no split-brain, no stale reads
+    # every loser must report the SAME actual winner: no split-brain, no stale reads
     assert {r.holder for r in losers} == {winners[0].holder}
     # cross-checked directly against the table the constraint actually governs
     held_rows = await actions.pool.fetch(
@@ -288,7 +288,7 @@ async def test_concurrent_claims_on_distinct_resources_all_succeed(
     actions: Actions,
 ) -> None:
     """The negative control for the test above: concurrency itself isn't the thing being
-    refused — only a genuine collision on the SAME resource_id is. 30 agents claiming 30
+    refused: only a genuine collision on the SAME resource_id is. 30 agents claiming 30
     DIFFERENT resources at once must all win; nothing here should serialize unrelated
     claims against each other."""
     results = await asyncio.gather(*[
@@ -301,7 +301,7 @@ async def test_concurrent_claims_on_distinct_resources_all_succeed(
 async def test_release_then_fifty_concurrent_reclaims_still_produce_exactly_one_holder(
     actions: Actions,
 ) -> None:
-    """A released resource is genuinely re-contestable — the partial unique index's WHERE
+    """A released resource is genuinely re-contestable: the partial unique index's WHERE
     status='held' clause proven under the same race, not just asserted sequentially."""
     first = await rl.acquire(actions, "recontested-resource", "agent:seed")
     await rl.release(actions.pool, "recontested-resource", "agent:seed")
@@ -316,7 +316,7 @@ async def test_release_then_fifty_concurrent_reclaims_still_produce_exactly_one_
 # --- the MCP tool wrappers (task #103's Q7 fix, exposed to the fleet) --------------------
 # Same pattern test_doors.py's test_the_mcp_tool_wrapper_delegates_to_doors uses: the
 # @mcp.tool()-decorated functions are plain awaitable coroutines, calling module-global
-# _pool_get() internally — swap srv._pool to the test's own actions.pool, restore after.
+# _pool_get() internally: swap srv._pool to the test's own actions.pool, restore after.
 
 async def test_acquire_lease_wrapper_claims_and_defaults_holder_to_the_caller(
     actions: Actions,
@@ -343,21 +343,21 @@ async def test_acquire_lease_wrapper_refusal_names_holder_and_since(
     saved_pool = srv._pool
     srv._pool = actions.pool
     try:
-        first = await srv.acquire_lease("docker-daemon", holder="agent:khnum")
-        second = await srv.acquire_lease("docker-daemon", holder="agent:seshat")
+        first = await srv.acquire_lease("docker-daemon", holder="agent:two")
+        second = await srv.acquire_lease("docker-daemon", holder="agent:three")
     finally:
         srv._pool = saved_pool
     assert first["acquired"] is True
     assert second["acquired"] is False
-    assert second["holder"] == "agent:khnum"
+    assert second["holder"] == "agent:two"
     assert second["held_since"] == first["held_since"]
-    assert "agent:khnum" in second["note"] and second["held_since"] in second["note"]
+    assert "agent:two" in second["note"] and second["held_since"] in second["note"]
 
 
 class _Ctx:
     """Unlike test_charter.py's `_Ctx` (a single shared class-level `session`, fine when a
     test only ever holds one context alive at a time), this test needs TWO distinct
-    connections live at once — so each instance gets its OWN session object, or
+    connections live at once, so each instance gets its OWN session object, or
     `_conn_key`'s `id(ctx.request_context.session)` fallback would collide both onto the
     same key and silently merge two different callers into one."""
 
@@ -374,10 +374,10 @@ class _Ctx:
 async def test_release_lease_wrapper_refuses_a_non_holder_actor(actions: Actions) -> None:
     """NEGATIVE CONTROL, fixed 2026-08-02: release_lease used to take a caller-supplied
     `holder` override and match THAT string against the row, so any caller who knew the
-    real holder's id could free a lease it never held — one call, `holder=<real holder>`,
+    real holder's id could free a lease it never held: one call, `holder=<real holder>`,
     contradicting this tool's own absolute claim. Confirmed against pre-fix code: the OLD
-    version of this exact test acquired as agent:imhotep then released by PASSING
-    holder="agent:imhotep" from an unrelated caller and asserted that succeeded — it was
+    version of this exact test acquired as agent:four then released by PASSING
+    holder="agent:four" from an unrelated caller and asserted that succeeded. It was
     validating the vulnerability, not the property. Now `holder` does not exist as a
     parameter; only the caller's own resolved `actor` is ever checked, established here
     via TWO REAL, DISTINCT mounted identities on the SAME (fake) connection object, never
@@ -385,23 +385,23 @@ async def test_release_lease_wrapper_refuses_a_non_holder_actor(actions: Actions
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
-    ctx_imhotep, ctx_thoth = _Ctx(), _Ctx()
+    ctx_a, ctx_b = _Ctx(), _Ctx()
     saved_pool = srv._pool
     srv._pool = actions.pool
-    srv._agents[srv._conn_key(ctx_imhotep)] = AgentIdentity(
-        agent_id="agent:imhotep", session="imhotep", project="releasetest", model=None,
+    srv._agents[srv._conn_key(ctx_a)] = AgentIdentity(
+        agent_id="agent:four", session="a", project="releasetest", model=None,
         cwd=None)
-    srv._agents[srv._conn_key(ctx_thoth)] = AgentIdentity(
-        agent_id="agent:thoth", session="thoth", project="releasetest", model=None,
+    srv._agents[srv._conn_key(ctx_b)] = AgentIdentity(
+        agent_id="agent:five", session="b", project="releasetest", model=None,
         cwd=None)
     try:
-        await srv.acquire_lease("compose-merge", ctx=ctx_imhotep)
-        wrong = await srv.release_lease("compose-merge", ctx=ctx_thoth)
-        right = await srv.release_lease("compose-merge", ctx=ctx_imhotep)
+        await srv.acquire_lease("compose-merge", ctx=ctx_a)
+        wrong = await srv.release_lease("compose-merge", ctx=ctx_b)
+        right = await srv.release_lease("compose-merge", ctx=ctx_a)
     finally:
         srv._pool = saved_pool
-        srv._agents.pop(srv._conn_key(ctx_imhotep), None)
-        srv._agents.pop(srv._conn_key(ctx_thoth), None)
+        srv._agents.pop(srv._conn_key(ctx_a), None)
+        srv._agents.pop(srv._conn_key(ctx_b), None)
     assert wrong["released"] is False
     assert right["released"] is True
 
@@ -413,13 +413,13 @@ async def test_check_lease_wrapper_is_read_only_and_never_mints(actions: Actions
     srv._pool = actions.pool
     try:
         free = await srv.check_lease("never-touched")
-        await srv.acquire_lease("src/orchestrator/capture.py", holder="agent:seshat")
+        await srv.acquire_lease("src/orchestrator/capture.py", holder="agent:three")
         held = await srv.check_lease("src/orchestrator/capture.py")
     finally:
         srv._pool = saved_pool
     assert free == {"resource_id": "never-touched", "held": False}
-    assert held["held"] is True and held["holder"] == "agent:seshat"
-    # a pure read never claims anything of its own — re-checking a free resource twice
+    assert held["held"] is True and held["holder"] == "agent:three"
+    # a pure read never claims anything of its own: re-checking a free resource twice
     # must never itself become a holder
     assert await rl.current_holder(actions.pool, "never-touched") is None
 
@@ -444,7 +444,7 @@ async def test_reap_stale_leases_wrapper_recovers_an_abandoned_claim(
 async def test_reap_leases_is_scheduled_as_a_cron_job() -> None:
     """The backstop rides a cron every 5 minutes, same shape as reap_stale_runs' own
     wiring for helper_runs (test_sweep_ledger.py's test_reap_stuck_sweeps_is_scheduled is
-    the exact precedent this mirrors) — explicit release_lease stays the norm; this just
+    the exact precedent this mirrors), explicit release_lease stays the norm; this just
     proves the backstop isn't a dangling function nobody ever calls."""
     from src.workers.arq_worker import WorkerSettings
 

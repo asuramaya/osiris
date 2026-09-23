@@ -1,4 +1,4 @@
-"""Fleet tree render — grouped by project, live expanded, history collapsed. Pure."""
+"""Fleet tree render, grouped by project, live expanded, history collapsed. Pure."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -60,7 +60,7 @@ def test_swarm_children_fold_into_a_model_tally() -> None:
 
 
 def test_a_live_descendant_keeps_its_line_open() -> None:
-    # a retired root holding a LIVE sub-agent must not be folded — the live path stays visible
+    # a retired root holding a LIVE sub-agent must not be folded: the live path stays visible
     nodes = {
         "agent:root": _n(ts=T0),  # itself retired
         "agent:kid": _n(parent="agent:root", live=True, ts=T1),
@@ -80,16 +80,16 @@ def test_full_mode_expands_everything_grouped() -> None:
     assert "past sessions" not in tree  # nothing collapsed in full mode
 
 def test_quiet_is_never_called_retired() -> None:
-    """THE GHOSTS (operator, 2026-07-12). The fold line said "N retired sessions", but the fold
-    means nothing more than NOT LIVE — and only 41 of 517 root minds (8%) ever signed a death
+    """THE GHOSTS. The fold line said "N retired sessions", but the fold
+    means nothing more than NOT LIVE, and only 41 of 517 root minds (8%) ever signed a death
     certificate. The tree was awarding the word to the other 92%.
 
     RETIRED IS NOT A SYNONYM FOR QUIET. It is a deliberate, signed close that the wake trigger is
-    bound never to reanimate — a word with teeth. Spending it on minds that merely stopped talking
+    bound never to reanimate: a word with teeth. Spending it on minds that merely stopped talking
     is an inference wearing a declaration's authority, and it is how a graph grows ghosts.
     """
     nodes = {
-        "agent:signed": _n(ts=T1, retired=True),    # called retire() — a real death certificate
+        "agent:signed": _n(ts=T1, retired=True),    # called retire(): a real death certificate
         "agent:quiet1": _n(ts=T0),                  # just... stopped. Nobody signed anything.
         "agent:quiet2": _n(ts=T0),
     }
@@ -100,38 +100,38 @@ def test_quiet_is_never_called_retired() -> None:
 
 def test_a_fleet_that_never_retires_never_says_retired() -> None:
     """The common case, and the one that produced the lie: nobody signed off, so the word does
-    not appear at all. We say what we observed — they went quiet — and no more."""
+    not appear at all. We say what we observed (they went quiet) and no more."""
     tree = render_fleet_tree({"agent:a": _n(ts=T0), "agent:b": _n(ts=T0)})
     assert "○ 2 past sessions" in tree
     assert "retired" not in tree
 
 
 def test_a_claimed_seat_rides_beside_its_id() -> None:
-    """dd47c1da: "fleet() must print claimed names" — wherever the tree renders an id, a
-    CLAIMED seat (dd47c1da) rides beside it; an anonymous agent renders exactly as before."""
+    """fleet() must print claimed names: wherever the tree renders an id, a
+    CLAIMED seat rides beside it; an anonymous agent renders exactly as before."""
     nodes = {
-        "agent:live1": _n(live=True, ts=T1, seat="Ra V"),
-        "agent:live2": _n(live=True, ts=T1),  # anonymous — no seat key changes its render
+        "agent:live1": _n(live=True, ts=T1, seat="Seat A"),
+        "agent:live2": _n(live=True, ts=T1),  # anonymous: no seat key changes its render
     }
     tree = render_fleet_tree(nodes)
-    assert "● agent:live1 (Ra V)  fable-5" in tree
+    assert "● agent:live1 (Seat A)  fable-5" in tree
     assert "● agent:live2  fable-5" in tree  # unchanged: no parenthetical for an anonymous agent
 
 
 def test_a_claimed_seat_names_the_latest_of_a_folded_past() -> None:
-    """The 'latest' pointer on a collapsed past-sessions line is still AN ID — the same rule
+    """The 'latest' pointer on a collapsed past-sessions line is still AN ID: the same rule
     applies: a claimed seat rides beside it."""
     nodes = {
         "agent:old1": _n(ts=T0),
-        "agent:old2": _n(ts=T1, seat="Soundwave XI"),
+        "agent:old2": _n(ts=T1, seat="Seat B"),
     }
     tree = render_fleet_tree(nodes)
-    assert "(latest agent:old2 (Soundwave XI))" in tree
+    assert "(latest agent:old2 (Seat B))" in tree
 
 
 def test_os_bodies_is_additive_and_absent_by_default() -> None:
-    """heinrich's ghost-seat filing (thread 1fe6811c): omitting `os_bodies` (every existing
-    caller, until fleet() is taught to pass it) must render EXACTLY as before — no new text,
+    """A prior ghost-seat filing: omitting `os_bodies` (every existing
+    caller, until fleet() is taught to pass it) must render EXACTLY as before, no new text,
     no behavior change to what `live` means."""
     nodes = {"agent:live1": _n(live=True, ts=T1)}
     assert render_fleet_tree(nodes) == render_fleet_tree(nodes, os_bodies=None)
@@ -140,11 +140,11 @@ def test_os_bodies_is_additive_and_absent_by_default() -> None:
 
 
 def test_os_bodies_rides_beside_the_project_head_and_names_the_gap() -> None:
-    """The graph believes 2 are live in osiris; the OS backs only 1 — the gap IS the ghost
+    """The graph believes 2 are live in osiris; the OS backs only 1: the gap IS the ghost
     (a closed tab mid-decay, or a phantom mount that never backed a real session). sibling-one
-    has a real body backing its one live agent: no ghost note. (thread #174, 2026-08-18: the
+    has a real body backing its one live agent: no ghost note. (2026-08-18: the
     ghost note itself is driven by the explicit PER-IDENTITY `ghost_gap`, never re-derived
-    here as a netted `live_n - bodies` subtraction — that netting is exactly the bug that let
+    here as a netted `live_n - bodies` subtraction: that netting is exactly the bug that let
     a false-live row and a false-dead body cancel silently.)"""
     nodes = {
         "agent:live1": _n(live=True, ts=T1),
@@ -190,14 +190,14 @@ def test_ghost_gap_names_false_live_and_false_dead_without_cancelling() -> None:
 
 
 def test_the_binding_renders_anchored_beside_the_claimed_name() -> None:
-    """Phase B (5cef856b): a mind that actively HOLDS a Seat shows its binding in the tree —
+    """Phase B: a mind that actively HOLDS a Seat shows its binding in the tree:
     the declared identity beside the inferred one; neither claimed nor bound renders bare."""
     from datetime import UTC, datetime
     now = datetime.now(UTC)
     nodes = {
         "agent:b0nd0001": {"model": "claude-fable-5", "project": "osiris", "parent": None,
                            "depth": 0, "ts": now, "live": True, "retired": False,
-                           "seat": "Thoth XXXVIII", "bound": "seat:ab12cd34"},
+                           "seat": "Seat C", "bound": "seat:ab12cd34"},
         "agent:b0nd0002": {"model": "claude-fable-5", "project": "osiris", "parent": None,
                            "depth": 0, "ts": now, "live": True, "retired": False,
                            "seat": None, "bound": "seat:ffee0011"},
@@ -206,17 +206,17 @@ def test_the_binding_renders_anchored_beside_the_claimed_name() -> None:
                            "seat": None, "bound": None},
     }
     tree = render_fleet_tree(nodes)
-    assert "agent:b0nd0001 (Thoth XXXVIII ⚓seat:ab12cd34)" in tree
+    assert "agent:b0nd0001 (Seat C ⚓seat:ab12cd34)" in tree
     assert "agent:b0nd0002 (⚓seat:ffee0011)" in tree
     assert "agent:b0nd0003 " in tree and "agent:b0nd0003 (" not in tree
 
 
-# --- ruling f6b758fc: grouped by the GRAPH project, ordered live-first-then-activity, ----
+# --- grouped by the GRAPH project, ordered live-first-then-activity, --------------------
 # color through cli_render.Paint. ----------------------------------------------------------
 
 def test_resolved_project_groups_by_the_graph_project_not_the_raw_label() -> None:
     """Requirement 1: a session launched from a junk directory ('prototype') still groups
-    under the REAL graph project once something resolved it there — the raw `project` label
+    under the REAL graph project once something resolved it there: the raw `project` label
     never wins once a caller supplies `resolved_project`."""
     nodes = {
         "agent:a": _n(project="prototype", resolved_project="osiris", live=True, ts=T1),
@@ -229,7 +229,7 @@ def test_resolved_project_groups_by_the_graph_project_not_the_raw_label() -> Non
 
 def test_a_question_mark_session_resolves_through_the_pin_before_unfiled() -> None:
     """A `?` session (no raw label AT ALL) must resolve through the SAME `resolved_project`
-    a labelled session does — never special-cased straight into unfiled."""
+    a labelled session does, never special-cased straight into unfiled."""
     nodes = {
         "agent:q": _n(project=None, resolved_project="pinnedproj", live=True, ts=T1),
     }
@@ -240,7 +240,7 @@ def test_a_question_mark_session_resolves_through_the_pin_before_unfiled() -> No
 
 def test_junk_labels_that_never_resolve_collapse_into_one_unfiled_line() -> None:
     """Requirement 1: sessions resolving to NOTHING active collapse into one trailing
-    'unfiled: N sessions in M dirs' line — never their own per-label sections, never
+    'unfiled: N sessions in M dirs' line, never their own per-label sections, never
     silently dropped. M counts DISTINCT raw labels/cwds, not raw session count."""
     nodes = {
         "agent:j1": _n(project="nonexistent-probe", resolved_project=None, ts=T0),
@@ -269,22 +269,22 @@ def test_full_mode_expands_unfiled_into_its_own_raw_label_sections() -> None:
 
 
 def test_a_worktree_session_resolves_through_its_parent_project() -> None:
-    """A session launched from a Worktree resolves to its PARENT project's own name — proven
+    """A session launched from a Worktree resolves to its PARENT project's own name, proven
     at the fleetview layer by whatever `resolved_project` the async resolver (agents.py's
     `resolve_fleet_projects`, tested separately against a real worktree on disk) computed;
     this only proves the render groups on it, not the raw worktree-basename label."""
     nodes = {
-        "agent:wt": _n(project="khnum-fleet-render-by-project", resolved_project="osiris",
+        "agent:wt": _n(project="wt-fleet-render-by-project", resolved_project="osiris",
                        live=True, ts=T1),
     }
     tree = render_fleet_tree(nodes)
     assert "▸ osiris — 1 live · 1 sessions" in tree
-    assert "khnum-fleet-render-by-project" not in tree
+    assert "wt-fleet-render-by-project" not in tree
 
 
 def test_ordering_is_live_first_then_freshest_never_alphabetical() -> None:
     """Requirement 2: 'zzz-quiet' alphabetically precedes 'aaa-live', but a project with a
-    live body must render FIRST regardless — and among two quiet projects, the one with
+    live body must render FIRST regardless, and among two quiet projects, the one with
     fresher activity comes before the staler one."""
     nodes = {
         "agent:live": _n(project="zzz-quiet", resolved_project="zzz-quiet",
@@ -298,8 +298,8 @@ def test_ordering_is_live_first_then_freshest_never_alphabetical() -> None:
 
 
 def test_render_fleet_tree_never_takes_a_paint_parameter() -> None:
-    """Requirement 3, split after a live regression (Thoth msg 8159): render_fleet_tree has
-    exactly one job (build the tree from `nodes`) and always returns plain text — color is
+    """Requirement 3, split after a live regression: render_fleet_tree has
+    exactly one job (build the tree from `nodes`) and always returns plain text: color is
     `paint_fleet_text`'s own separate, purely textual pass over that output, never a second
     tree computation. A `paint=` kwarg here is a TypeError, not a code path."""
     import inspect
@@ -333,8 +333,8 @@ def test_paint_fleet_text_dims_the_unfiled_line_and_colors_the_ghost_note() -> N
     assert colored.splitlines()[1] == "\x1b[2m▸ unfiled: 3 sessions in 2 dirs\x1b[0m"
 
 
-# ── the seam reading (thread dd937122, wave 11): context_pct additive/optional on
-# render_fleet_tree, colored amber/red past the whisper/self-compact thresholds ────────────
+# ── the seam reading: context_pct additive/optional on
+# render_fleet_tree, colored amber/red past the warning/self-compact thresholds ────────────
 
 def test_render_fleet_tree_appends_context_pct_only_for_a_live_node_given_one() -> None:
     nodes = {
@@ -356,7 +356,7 @@ def test_render_fleet_tree_with_no_context_pct_never_appends_anything() -> None:
     assert "%ctx" not in tree
 
 
-# ── the harness signal (thread e7f173a6, wave 13 item 3): harness_caps additive/optional
+# ── the harness signal: harness_caps additive/optional
 # on render_fleet_tree ───────────────────────────────────────────────────────────────────
 
 def test_render_fleet_tree_appends_caps_only_for_a_live_node_given_one() -> None:

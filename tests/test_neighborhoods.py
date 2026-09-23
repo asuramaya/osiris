@@ -1,7 +1,7 @@
-"""Rung 4 — neighborhood consolidation (ruling a0cfcca1).
+"""Rung 4: neighborhood consolidation.
 
-The mechanical pass folds echoes (delegates to consolidate_memory — its own tests hold
-the merge law); these tests hold the SUMMARY pass: one Reference per active repo
+The mechanical pass folds echoes (delegates to consolidate_memory; its own tests hold
+the merge rule); these tests hold the SUMMARY pass: one Reference per active repo
 neighborhood, fingerprint-watermarked so an unchanged neighborhood never costs an LLM
 call, refreshed when the neighborhood moves, metered in llm_usage.
 """
@@ -85,14 +85,14 @@ async def test_thin_neighborhoods_are_not_summarized(actions: Actions) -> None:
 
 
 async def test_consolidate_pass_walks_both_memory_types(actions: Actions) -> None:
-    """The mechanical motion delegates to consolidate_memory for Threads AND Decisions —
+    """The mechanical motion delegates to consolidate_memory for Threads AND Decisions;
     the counters come back namespaced per type."""
     out = await consolidate_pass(actions)
     assert set(out) == {"threads_merged", "threads_for_review",
                         "decisions_merged", "decisions_for_review"}
 
 
-# --- the disk census (thread 5e37630b) --------------------------------------------------
+# --- the disk census -----------------------------------------------------------------
 
 async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
     actions: Actions, tmp_path: Path,
@@ -137,10 +137,10 @@ async def test_census_trees_mints_the_unmodeled_and_paths_the_known(
 async def test_census_trees_own_history_stays_flat_when_another_source_also_asserts(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Ruling 0623995e (thread 2a280e07): disk-census used to compare its own on_disk_path/
-    remote_url against the UNORDERED, UN-LIMITED-consistently `current_assertions` view
-    (`... LIMIT 1` with no `ORDER BY` and no `source_id` filter) rather than its own prior
-    value — when a SECOND source also holds a live current assertion for the same
+    """disk-census used to compare its own on_disk_path/remote_url against the UNORDERED,
+    UN-LIMITED-consistently `current_assertions` view (`... LIMIT 1` with no `ORDER BY`
+    and no `source_id` filter) rather than its own prior value: when a SECOND source also
+    holds a live current assertion for the same
     (object, name), which row that query returns is undefined, so disk-census's own
     unchanged-vs-changed comparison could silently compare against a DIFFERENT source's
     value instead of its own history, re-asserting the identical path on a later walk even
@@ -163,7 +163,7 @@ async def test_census_trees_own_history_stays_flat_when_another_source_also_asse
         "AND source_id='disk-census'", known)
     assert rows_after_first == 1
 
-    # a second source ALSO asserts a value for the same property on the same object —
+    # a second source ALSO asserts a value for the same property on the same object:
     # disk-census's own comparison must stay scoped to its own history, not this one
     other = EvidenceClass.SELF_DECLARED
     await actions.assert_property(
@@ -195,13 +195,13 @@ def _relocate_remote(path: Path, new_url: str) -> None:
 async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """#144 Rule 2 (decision ffc193a4ce07): the census is the ONLY place remote_url is
-    ever written, so the hot mount()-time path never shells out live. A freshly-minted
-    repo gets remote_url alongside on_disk_path; a repo with no configured origin
-    (ballgem's own shape) gets no remote_url assertion at all — absence stays absence,
-    never a persisted null standing in for "checked, found nothing" (60bc15db). A later
-    walk that finds the origin CHANGED (the real /srv/git relocation shape) overwrites it
-    — the cache self-heals on its own next 10-minute cadence, never held stale forever."""
+    """#144 Rule 2: the census is the ONLY place remote_url is ever written, so the
+    always-on mount()-time path never shells out live. A freshly-minted repo gets
+    remote_url alongside on_disk_path; a repo with no configured origin (a real shape
+    seen in practice) gets no remote_url assertion at all, absence stays absence, never
+    a persisted null standing in for "checked, found nothing". A later walk that finds
+    the origin CHANGED (the real /srv/git relocation shape) overwrites it: the cache
+    self-heals on its own next 10-minute cadence, never held stale forever."""
     from src.orchestrator.neighborhoods import census_trees
     _real_git_repo(tmp_path, "withremote", "git@github.com:x/withremote.git")
     _real_git_repo(tmp_path, "noremote", None)
@@ -227,7 +227,7 @@ async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change
     again = await census_trees(actions, roots=[str(tmp_path / "code")])
     assert again["remoted"] == []
 
-    # the origin RELOCATES (the real /srv/git shape) — the next walk catches it
+    # the origin RELOCATES (the real /srv/git shape): the next walk catches it
     _relocate_remote(tmp_path / "code" / "withremote", "git@newhost:x/withremote.git")
     healed = await census_trees(actions, roots=[str(tmp_path / "code")])
     assert healed["remoted"] == ["withremote"]
@@ -240,9 +240,9 @@ async def test_census_trees_captures_remote_url_on_mint_and_self_heals_on_change
 async def test_census_trees_no_ops_when_resolve_repo_keeps_missing_an_existing_object(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Source-level fix (operator ruling, thread 2a280e07, mail 9240 — "fix the sources"):
-    when `_resolve_repo`'s own lookup keeps missing an object that already exists (here,
-    forced via a non-'active' status — the same shape a stray fold/merge produces live),
+    """Source-level fix ("fix the sources"): when `_resolve_repo`'s own lookup keeps
+    missing an object that already exists (here, forced via a non-'active' status, the
+    same shape a stray fold/merge produces live),
     every census sweep fell into the "existing is None" mint branch and used to reassert
     discovered/on_disk_path/remote_url unconditionally, live-measured at 3,140 identical
     rows apiece across seven disk-census objects. A repeat sweep must write nothing new
@@ -266,19 +266,18 @@ async def test_census_trees_no_ops_when_resolve_repo_keeps_missing_an_existing_o
     for prop in ("discovered", "on_disk_path", "remote_url"):
         assert await actions.pool.fetchval(
             "SELECT count(*) FROM assertions WHERE object_id=$1 AND name=$2", obj, prop
-        ) == 1  # unchanged — no reassertion on the repeat sweep
+        ) == 1  # unchanged, no reassertion on the repeat sweep
 
 
 async def test_census_trees_reconnects_a_renamed_directory_by_remote_url(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """CREATE-SHAPE's location half (obligation e5b0ece4, decision fa0eb021, Thoth msg
-    4762): a renamed directory fails the name lookup and, pre-fix, minted a DUPLICATE
-    SoftwareProject rather than reconnecting to the one that already existed. An
-    unambiguous remote_url match now reconnects the EXISTING object — only on_disk_path/
-    remote_url move; name/canonical never change (THE BINDING LINE: this carries LOCATION
-    forward and never RE-DERIVES IDENTITY — that stays rename_project's own deliberate
-    act, 1db1ff41)."""
+    """CREATE-SHAPE's location half: a renamed directory fails the name lookup and,
+    pre-fix, minted a DUPLICATE SoftwareProject rather than reconnecting to the one that
+    already existed. An unambiguous remote_url match now reconnects the EXISTING object,
+    only on_disk_path/remote_url move; name/canonical never change (THE BINDING LINE:
+    this carries LOCATION forward and never RE-DERIVES IDENTITY, that stays
+    rename_project's own deliberate act)."""
     import shutil
 
     from src.orchestrator.neighborhoods import census_trees
@@ -320,10 +319,10 @@ async def test_census_trees_reconnects_a_renamed_directory_by_remote_url(
 async def test_census_trees_refuses_an_ambiguous_remote_url_match(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """More than one active SoftwareProject already carries the SAME remote_url — an
+    """More than one active SoftwareProject already carries the SAME remote_url, an
     un-repointed fork is exactly this shape (the local-git-fork-detection blind spot,
     #144 Rule 2). Refuses per entry rather than guessing which one a renamed directory
-    reconnects to, the same doctrine as fork_project (declared, never inferred)."""
+    reconnects to, the same convention as fork_project (declared, never inferred)."""
     from src.orchestrator.neighborhoods import census_trees
     remote = "git@github.com:x/shared.git"
     a = await actions.create_or_find_object("SoftwareProject", "repo:proj-a", "analyst:test")
@@ -345,10 +344,10 @@ async def test_census_trees_refuses_an_ambiguous_remote_url_match(
 async def test_census_trees_does_not_reconnect_a_live_copy_of_an_existing_checkout(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """GATE (a), Thoth's binding lean (msg 4762): reconnect only once the OLD on_disk_path
-    is confirmed GONE. A second, independent clone of the same remote sitting ALONGSIDE
-    the first — a COPY, not a MOVE — must mint its own object rather than steal the first
-    checkout's identity, even though its remote_url matches."""
+    """GATE (a): reconnect only once the OLD on_disk_path is confirmed GONE. A second,
+    independent clone of the same remote sitting ALONGSIDE the first, a COPY, not a
+    MOVE, must mint its own object rather than steal the first checkout's identity,
+    even though its remote_url matches."""
     from src.orchestrator.neighborhoods import census_trees
     remote = "git@github.com:x/thing.git"
     _real_git_repo(tmp_path, "original", remote)
@@ -370,7 +369,7 @@ def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
     """Task #122's mechanical fix, proven as a negative control both ways. `mirror/venv`
     (depth 2, AT the max_depth=2 cutoff) was already accidentally safe: `depth >= max_depth`
     returns before venv's own children are ever iterated, regardless of the skip list. A
-    bare `venv` ONE LEVEL SHALLOWER (depth 1) has no such protection — pre-fix, the walker
+    bare `venv` ONE LEVEL SHALLOWER (depth 1) has no such protection: pre-fix, the walker
     descends straight into it and finds whatever sits inside; post-fix (_CENSUS_SKIP now
     matches "venv" as well as ".venv"), it does not."""
     from src.orchestrator import neighborhoods
@@ -380,7 +379,7 @@ def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
     (tmp_path / "code" / "mirror" / "venv" / "also-nested" / ".git").mkdir(parents=True)
 
     # PRE-FIX (reproduced directly, not by inference): without "venv" in the skip set, the
-    # shallow venv's own nested repo IS found — the trap, live.
+    # shallow venv's own nested repo IS found, the trap, live.
     without_fix = neighborhoods._CENSUS_SKIP - {"venv"}
     original = neighborhoods._CENSUS_SKIP
     neighborhoods._CENSUS_SKIP = without_fix
@@ -396,21 +395,20 @@ def test_git_dirs_skips_a_bare_venv_one_level_shallower_than_the_depth_cutoff(
     assert not any(p.name == "nested-repo" for p in post_fix)
 
     # the depth-2 mirror/venv case was ALREADY safe before this fix (the accidental
-    # protection Thoth named) and stays safe after it, for a different reason.
+    # protection already noted) and stays safe after it, for a different reason.
     assert not any(p.name == "also-nested" for p in post_fix)
 
 
 async def test_census_trees_refuses_a_malformed_name_and_keeps_walking(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Ruling 1db1ff41 half (a): the mint now runs through `_mint_or_find_repo`, the same
-    validated choke point `link_repo` uses (task #107's `_validate_repo_name`) — this walk
+    """Half (a) of this fix: the mint now runs through `_mint_or_find_repo`, the same
+    validated choke point `link_repo` uses (task #107's `_validate_repo_name`); this walk
     used to mint straight off `create_or_find_object` with no guard at all, which is
-    exactly how the two real "/home/.../ballgem" and "/home/.../REPOS/sutra" duplicates
-    (folded separately, decision 1db1ff41) reached the graph. A directory basename that
-    isn't a well-formed project ref now REFUSES — and costs only that one census entry, per
-    the operator's degrade-per-item ruling on #107's own batch-abort defect: a legitimate
-    sibling repo in the same walk still mints clean."""
+    exactly how two real duplicate directory names (folded separately) reached the graph.
+    A directory basename that isn't a well-formed project ref now REFUSES, and costs
+    only that one census entry, per the degrade-per-item rule on #107's own batch-abort
+    defect: a legitimate sibling repo in the same walk still mints clean."""
     from src.orchestrator.neighborhoods import census_trees
     (tmp_path / "code" / "--hostile" / ".git").mkdir(parents=True)
     (tmp_path / "code" / "legit-repo" / ".git").mkdir(parents=True)
@@ -430,8 +428,8 @@ async def test_census_trees_refuses_a_malformed_name_and_keeps_walking(
 
 
 def _real_repo_with_sibling_worktree(tmp_path: Path, repo_name: str, wt_name: str) -> None:
-    """The ballgem-wt-* shape (census 583e2669): a real worktree living as a SIBLING
-    directory directly under a census root, its OWN `.git` a FILE — never nested under
+    """A real-world shape seen in a live census: a real worktree living as a SIBLING
+    directory directly under a census root, its OWN `.git` a FILE, never nested under
     the parent's own `.claude/worktrees` (which `_git_dirs`'s early-return-on-`.git`
     already keeps unreached, a different and already-safe case)."""
     import subprocess
@@ -451,11 +449,11 @@ def _real_repo_with_sibling_worktree(tmp_path: Path, repo_name: str, wt_name: st
 async def test_census_trees_files_a_sibling_worktree_as_a_worktree_never_a_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 922d920c: a worktree's own `.git` is a FILE, not a directory — the one
-    signal `_git_dirs`'s bare `.exists()` check can't tell apart from a real repo, which
-    is exactly how ballgem-wt-358/359/361/363/nleg were minted as five phantom
-    SoftwareProjects (migration 0062 folds them). Filed as a Worktree of its parent via
-    `worktree_of` instead, carrying its own on_disk_path and checked-out branch — never a
+    """A worktree's own `.git` is a FILE, not a directory: the one signal
+    `_git_dirs`'s bare `.exists()` check can't tell apart from a real repo, which is
+    exactly how a handful of sibling worktree directories were once minted as phantom
+    SoftwareProjects (a later migration folds them). Filed as a Worktree of its parent via
+    `worktree_of` instead, carrying its own on_disk_path and checked-out branch, never a
     second SoftwareProject for the same history."""
     from src.orchestrator.neighborhoods import census_trees
     _real_repo_with_sibling_worktree(tmp_path, "wtcensusparent", "wtcensusparent-branch")
@@ -490,14 +488,14 @@ async def test_census_trees_files_a_sibling_worktree_as_a_worktree_never_a_proje
         tree_row["id"]) == 1
 
 
-# --- the read-back (thread 2309: "I could not have discovered my own zero") -------------
+# --- the read-back ("I could not have discovered my own zero") -----------------------
 
 async def test_discover_trees_includes_a_project_with_no_activity_at_all(
         actions: Actions) -> None:
     """The gap the old version had: a truly fresh project (no Thread/Commit ever filed
-    under it) used to be silently absent from this function's own output — the exact
-    'invisible until someone tells you' defect redmonth named. Every active SoftwareProject
-    is reported now, zero-everything or not."""
+    under it) used to be silently absent from this function's own output, the exact
+    'invisible until someone tells you' defect previously named. Every active
+    SoftwareProject is reported now, zero-everything or not."""
     await actions.create_or_find_object("SoftwareProject", "repo:freshproject", "analyst:test")
     out = await discover_trees(actions.pool, watched=[])
     row = next(r for r in out if r["tree"] == "freshproject")
@@ -509,9 +507,10 @@ async def test_discover_trees_includes_a_project_with_no_activity_at_all(
 
 async def test_discover_trees_reads_the_stored_path_never_guesses_one(
         actions: Actions) -> None:
-    """redmonth's own warning (thread 2309): a directory-name match against a search root
-    is a GUESS, and his mounted cwd is not even a git repository — the real repo lives
-    under a different name entirely. `path` comes ONLY from the stored on_disk_path
+    """A live warning worth heeding: a directory-name match against a search root
+    is a GUESS, and a mounted cwd is not even guaranteed to be a git repository. The
+    real repo can live under a different name entirely. `path` comes ONLY from the
+    stored on_disk_path
     property (census_trees's write, or a future explicit registration); nothing here
     re-derives it from any caller-supplied root, so a wrong guess is structurally
     impossible, not just avoided by convention."""
@@ -528,7 +527,7 @@ async def test_discover_trees_reads_the_stored_path_never_guesses_one(
 
 async def test_discover_trees_names_watched_but_never_ticked(actions: Actions) -> None:
     """A project can be honestly in the watch list and still have zero commits, simply
-    because pulse.py hasn't ticked since it was added — no devhead:<name> watermark yet.
+    because pulse.py hasn't ticked since it was added, no devhead:<name> watermark yet.
     That is a DIFFERENT fact from 'not watched at all' and must read as one."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:justadded", "git")
     await actions.assert_property(proj, "on_disk_path", "/home/x/code/justadded", "disk-census",
@@ -540,12 +539,12 @@ async def test_discover_trees_names_watched_but_never_ticked(actions: Actions) -
     assert row["commits"] == 0
     assert row["last_ingested_at"] is None
     assert row["reason"] == "in the watch list but ingest has never ticked for it yet"
-    assert row["blind"] is False  # watched, just not yet ticked — not the same as blind
+    assert row["blind"] is False  # watched, just not yet ticked, not the same as blind
 
 
 async def test_discover_trees_names_ticked_but_still_empty(actions: Actions) -> None:
     """The rarest, most alarming case: pulse HAS run (a real watermark exists) and STILL
-    found zero commits — the path may no longer point at a real git repo. Distinguishing
+    found zero commits: the path may no longer point at a real git repo. Distinguishing
     this from 'never ticked' is the whole point of reading the watermark's own timestamp,
     not just its presence."""
     proj = await actions.create_or_find_object("SoftwareProject", "repo:emptiedout", "git")

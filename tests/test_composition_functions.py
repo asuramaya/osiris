@@ -1,8 +1,8 @@
-"""P2 of the composer — the opinionated read-models leave the engine as FUNCTIONS.
+"""P2 of the composer: the opinionated read-models leave the engine as FUNCTIONS.
 
 coinvest / subject_report / screen_network are not pure op-trees: their precision lives
 in domain logic the closed ops can't express (merge-aware cluster resolution, a platform-
-degree filter, multi-signal fuzzy matching). That is exactly Palantir's split — a small
+degree filter, multi-signal fuzzy matching). That is exactly Palantir's split, a small
 closed op set PLUS a Function escape hatch. So the eviction keeps every drop of the
 analytics: the logic is registered as a named Function, and a forkable composition merely
 REFERENCES it ({"op":"function","name":...}). The proof each must pass: running the
@@ -58,7 +58,7 @@ async def test_coinvest_function_is_byte_equal(actions: Actions) -> None:
     direct = await coinvestment_ties(actions.pool, neuralink)
     via = await run_composition(actions.pool, "co-investment-ties", neuralink)
     # "rows", not "data" (task #60): a list-of-dicts Function output is reclassified so
-    # group/order/take can reach it — `items` itself is unaffected, still byte-equal.
+    # group/order/take can reach it. `items` itself is unaffected, still byte-equal.
     assert via["kind"] == "rows"
     assert via["items"] == direct           # the precise tie list, unchanged
     assert direct[0]["company"] == "OpenAI"  # and it's the REAL (non-degraded) analytic
@@ -108,8 +108,8 @@ async def test_subject_report_function_is_byte_equal(actions: Actions, case_id: 
 # --- the registry + guards --------------------------------------------------
 
 async def test_function_registry_is_listable(actions: Actions) -> None:
-    # `briefing`/`decisions` are NOT here — they decomposed into op-trees (see the tests below).
-    # `roadmap_open`/`desk_decisions` (ruling c5b184cd, thread d56e7073/#44) ARE here — real
+    # `briefing`/`decisions` are NOT here: they decomposed into op-trees (see the tests below).
+    # `roadmap_open`/`desk_decisions` ARE here: real
     # domain logic (echo-filtering, fleet_messages) neither op-tree nor `group` can express.
     assert list_functions() == ["backup_status", "canon", "census", "closure_health", "coinvest",
                                 "desk_decisions",
@@ -124,7 +124,7 @@ async def test_function_registry_is_listable(actions: Actions) -> None:
 
 
 async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
-    """The eviction proof: `briefing` is no longer a hand-written Function — it's a `sections`
+    """The eviction proof: `briefing` is no longer a hand-written Function, it's a `sections`
     op-tree (select→table per section) the user owns. Same orientation read-model (open threads,
     recent work, self-healed threads), no bespoke SQL. A "briefing" is a PAGE OF COMPOSITIONS."""
     cm = await actions.create_or_find_object("Commit", "commit:aa", "git")
@@ -136,7 +136,7 @@ async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
     await actions.assert_property(th, "summary", "THE WALL: needs portal access", "git-memory",
                                  NOW, 0.4)
     await actions.assert_property(th, "status", "open", "git-memory", NOW, 0.4)
-    # a thread a later commit already closed — must self-heal OUT of the open list and INTO
+    # a thread a later commit already closed: must self-heal OUT of the open list and INTO
     # the resolved section, carrying the provenance of why it was closed.
     done = await actions.create_or_find_object("Thread", "thread:2", "git-memory")
     await actions.assert_property(done, "summary", "NEXT: build the renderer", "git-memory",
@@ -154,7 +154,7 @@ async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
     wall = next(v for k, v in res["items"].items() if "wall" in k)
     recent = next(v for k, v in res["items"].items() if "Recent work" in k)
     healed = next(v for k, v in res["items"].items() if "Resolved" in k)
-    # the open section is the GRADED wall (ruling 923c380f): the untouched kindless thread
+    # the open section is the GRADED wall: the untouched kindless thread
     # counts in the pile, never as a raw row; the resolved one is in neither
     assert wall["totals"]["open"] == 1 and wall["totals"]["pile"] == 1
     assert not any("renderer" in t["summary"] for t in wall["top_of_wall"])
@@ -164,8 +164,8 @@ async def test_briefing_is_a_sections_op_tree(actions: Actions) -> None:
 
 async def test_sections_op_stacks_mixed_body_kinds(actions: Actions) -> None:
     """The `sections` primitive: a page of compositions. Each body is its own op-tree and is
-    packaged the way a top-level composition would be — an `objects` body becomes labelled rows,
-    a `table` body stays rows — so a briefing/dossier is stackable primitives, not coded output."""
+    packaged the way a top-level composition would be: an `objects` body becomes labelled rows,
+    a `table` body stays rows, so a briefing/dossier is stackable primitives, not coded output."""
     d = await actions.create_or_find_object("Decision", "decision:1", "mine")
     await actions.assert_property(d, "summary", "keyless by design", "mine", NOW, 0.85)
     c = await actions.create_or_find_object("Commit", "commit:x", "git")
@@ -185,7 +185,7 @@ async def test_sections_op_stacks_mixed_body_kinds(actions: Actions) -> None:
 
 async def test_rollup_show_original_plucks_a_single_relation(actions: Actions) -> None:
     """`of:"first"` (Notion's show-original): a table rollup over a single relation plucks the
-    related object's value — a property AND an object column (`canonical`). This is the enabler
+    related object's value: a property AND an object column (`canonical`). This is the enabler
     for a decision showing its `decided_in` commit's hash + date without abusing max(). No
     dedicated Function needed: the linked commit is named by a pure op-tree."""
     d = await actions.create_or_find_object("Decision", "decision:keyless", "mine")
@@ -230,11 +230,11 @@ async def _ref(actions: Actions, canon: str, title: str, vendor: str, grounds: s
 
 async def test_canon_retrieves_ranked_sections(actions: Actions) -> None:
     """The keystone: a design query returns the matching canon SECTIONS, ranked, each carrying
-    the module it grounds — what a designer calls BEFORE re-deriving a solved problem."""
+    the module it grounds: what a designer calls BEFORE re-deriving a solved problem."""
     await _ref(actions, "ref:palantir-object-sets", "Object Sets", "palantir",
                "src/orchestrator/compositions.py",
                "# Object Sets\n\nThe closed op vocabulary.\n\n## Operations\nfilter, traverse, "
-               "aggregate; relating two sets is set algebra — never a join.\n\n## Functions\n"
+               "aggregate; relating two sets is set algebra, never a join.\n\n## Functions\n"
                "the escape hatch for anything the ops can't express.")
     await _ref(actions, "ref:notion-uiux", "Calm UI", "notion", "src/ui/static/index.html",
                "# Calm UI\n\nintro.\n\n## Progressive disclosure\nhide complexity until asked.")
@@ -262,7 +262,7 @@ async def test_canon_retrieves_ranked_sections(actions: Actions) -> None:
 
 async def test_canon_recall_is_keyword_ranked_and_project_scoped(actions: Actions) -> None:
     """Bug #1 (sibling-one's first session): the migration's RECALL path. bootstrap ingests project
-    history as ref:<project>-* Reference nodes and promises consult_canon retrieves it — but
+    history as ref:<project>-* Reference nodes and promises consult_canon retrieves it, but
     _fn_canon matched the query as a CONTIGUOUS substring, so a natural multi-keyword query
     returned EMPTY, silently breaking 'history becomes a bounded query'. Now it is keyword-ranked
     and scoped to the caller's history + the shared design canon (no cross-project bleed)."""
@@ -275,7 +275,7 @@ async def test_canon_recall_is_keyword_ranked_and_project_scoped(actions: Action
     # a shared design-canon ref (vendor-tagged → visible to everyone)
     await _ref(actions, "ref:palantir-os", "Object Sets", "palantir", "src/x.py",
                "# Object Sets\n\nthe closed op set, never a generic join.")
-    # ANOTHER project's unvendored history — must be scoped OUT for a sibling-one caller
+    # ANOTHER project's unvendored history: must be scoped OUT for a sibling-one caller
     o = await actions.create_or_find_object("Reference", "ref:osiris-history-base", "ref:osiris")
     for name, val in (("name", "Osiris baseline"),
                       ("body", "## note\nthe osiris baseline displacement metric.")):
@@ -297,7 +297,7 @@ async def test_canon_recall_is_keyword_ranked_and_project_scoped(actions: Action
 
 async def test_canon_ranks_reordered_and_partial_multiword_queries(actions: Actions) -> None:
     """The tokenizer's core guarantee: scoring sums INDEPENDENT per-token hits, so a query
-    matches regardless of token ORDER and with no contiguous phrase — the exact failure (a
+    matches regardless of token ORDER and with no contiguous phrase: the exact failure (a
     whole-string match) that returned empty for natural queries. A reordered query and a
     strict-subset query both recall the section; single-token ranking is unchanged."""
     await _ref(actions, "ref:palantir-object-sets", "Object Sets", "palantir", "src/x.py",
@@ -309,7 +309,7 @@ async def test_canon_ranks_reordered_and_partial_multiword_queries(actions: Acti
                                "args": {"q": "traverse filter algebra"}}, None)
     assert "Object Sets" in {r["reference"] for r in next(iter(reordered["items"].values()))}
 
-    # a strict subset of the tokens still matches — scoring is additive, not all-or-none
+    # a strict subset of the tokens still matches: scoring is additive, not all-or-none
     partial = await run_spec(actions.pool, {"op": "function", "name": "canon",
                              "args": {"q": "algebra traverse"}}, None)
     assert "Object Sets" in {r["reference"] for r in next(iter(partial["items"].values()))}
@@ -331,11 +331,11 @@ async def test_canon_is_subject_free_and_seeded(actions: Actions) -> None:
 
 async def test_reference_catalog_is_subject_free_seeded_and_pool_independent(
         actions: Actions) -> None:
-    """task #111 (thread 26694d10): `reference_catalog` is registered + subject-free, the
-    `reference` view is a default composition, and — the one thing that distinguishes it
-    from every other Function here — its DATA is identical whether or not a real pool/DB
+    """task #111: `reference_catalog` is registered + subject-free, the
+    `reference` view is a default composition, and, the one thing that distinguishes it
+    from every other Function here, its DATA is identical whether or not a real pool/DB
     is behind the call, because it reads schema.py's static manifest, never the graph
-    (msg 2099: never catalog.py's live accretive one)."""
+    (never catalog.py's live accretive one)."""
     from src.ontology.schema import catalog
 
     assert "reference_catalog" in list_functions()
@@ -357,7 +357,7 @@ async def _file(actions: Actions, repo: uuid.UUID, rname: str, path: str, role: 
 
 async def test_family_consistency_audit(actions: Actions) -> None:
     """Block files by ROLE across the family; a role present in some-but-not-all is the
-    inconsistency. Here kast lacks CI that phanspeed has — exactly what an audit should flag."""
+    inconsistency. Here kast lacks CI that phanspeed has: exactly what an audit should flag."""
     a = await actions.create_or_find_object("SoftwareProject", "repo:phanspeed", "git")
     await actions.assert_property(a, "name", "phanspeed", "git", NOW, 0.9)
     b = await actions.create_or_find_object("SoftwareProject", "repo:kast", "git")
@@ -383,7 +383,7 @@ async def test_family_consistency_audit(actions: Actions) -> None:
 
 async def test_family_content_drift(actions: Actions) -> None:
     """Content drift: two repos both HAVE a license (presence-consistent) but of different
-    TYPES — the deeper audit flags it. A shared .gitignore that diverged is flagged too; an
+    TYPES: the deeper audit flags it. A shared .gitignore that diverged is flagged too; an
     identical one is not."""
     a = await actions.create_or_find_object("SoftwareProject", "repo:phanspeed", "git")
     await actions.assert_property(a, "name", "phanspeed", "git", NOW, 0.9)
@@ -431,7 +431,7 @@ async def _repo(actions: Actions, canon: str, name: str, *, commits: int, day0: 
 
 
 async def test_projects_decomposed_to_a_table_op(actions: Actions) -> None:
-    """The first eviction: `projects` is no longer a hardcoded Function — it's a pure `table`
+    """The first eviction: `projects` is no longer a hardcoded Function, it's a pure `table`
     op-tree the user owns (select repos → rollup columns → order). Same rows, no Python. This
     is what 'everything is composed' means: a per-object table with rollup-over-link columns
     (Notion's database+rollups) is now a PRIMITIVE, not bespoke code."""
@@ -450,14 +450,14 @@ async def test_projects_decomposed_to_a_table_op(actions: Actions) -> None:
     assert "projects" not in list_functions()                          # the slop is gone
 
 
-# --- backup_status (Wave 21, thread f04cce36 piece 2 — the config panel's read half) -------
-# There's no graph object to `select` over here (the scope report's own finding) — every
+# --- backup_status (the config panel's read half) -------
+# There's no graph object to `select` over here (the scope report's own finding); every
 # section is a live filesystem/process read, wrapping osiris_prune_ladder.py's/
 # osiris_disk_guard.py's own definitions rather than re-deriving them. `args.vault`/
 # `args.backups` let a test point at a tmp_path instead of the real production paths.
 # `find_clear_manifest` connects via its own hardcoded module-level `DSN`, never the
 # fixture pool (the SAME reason test_prune_ladder_manifest.py's own `_use_test_dsn`
-# exists) — reused here rather than a second monkeypatch convention.
+# exists), reused here rather than a second monkeypatch convention.
 
 @pytest.fixture
 def _use_test_dsn(pg_dsn: str, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -506,7 +506,7 @@ async def test_backup_status_ladder_tiers_read_off_plan_prunes_own_defaults(
                                                  "backups": str(tmp_path / "backups")}}, None)
     ladder = res["items"]["ladder"]
     # the tiers are read via inspect.signature on plan_prune itself, not a hand-copied
-    # second set of numbers — proven here by matching osiris_prune_ladder's own live
+    # second set of numbers: proven here by matching osiris_prune_ladder's own live
     # defaults rather than a magic literal in this test.
     assert ladder["hot_window_hours"] == params["hot_window"].default.total_seconds() / 3600
     assert ladder["daily_window_days"] == params["daily_window"].default.days
@@ -523,17 +523,17 @@ async def test_backup_status_degrades_a_missing_vault_without_blanking_other_sec
                                         "args": {"vault": str(missing),
                                                  "backups": str(tmp_path / "backups")}}, None)
     data = res["items"]
-    # `_scan`'s own convention (osiris_prune_ladder.py) — a missing directory is an empty
+    # `_scan`'s own convention (osiris_prune_ladder.py): a missing directory is an empty
     # population, not an error; `disk` genuinely can't answer (shutil.disk_usage needs the
     # path to exist) and degrades honestly instead.
     assert data["vault"]["dumps"]["count"] == 0
     assert data["vault"]["base_backups"]["count"] == 0
     assert "error" in data["disk"]
-    # every OTHER section still renders — a missing vault dir doesn't blank the panel
+    # every OTHER section still renders: a missing vault dir doesn't blank the panel
     assert len(data["timers"]) == 5
     assert "prune_manifest" in data and "error" not in data["prune_manifest"]
-    # THE OPPORTUNISTIC OFFLOAD RUNNER wired this section up for real (offload_runner.py,
-    # ruling be21384a) — a missing vault degrades `vault`/`disk`, never this section (no
+    # THE OPPORTUNISTIC OFFLOAD RUNNER wired this section up for real (offload_runner.py):
+    # a missing vault degrades `vault`/`disk`, never this section (no
     # dependency between the two: offbox reads settings + a local receipt file, neither
     # touches the vault directory at all).
     assert data["offbox"]["wired"] is True
@@ -546,8 +546,8 @@ async def test_backup_status_timers_carry_their_shipped_schedule(
 ) -> None:
     from src.orchestrator.compositions import _fn_backup_status
 
-    del actions  # triggers catalog seeding only — DSN monkeypatched to the same DB
-    # tmp_path overrides keep this hermetic — the timer schedules themselves come from
+    del actions  # triggers catalog seeding only, DSN monkeypatched to the same DB
+    # tmp_path overrides keep this hermetic: the timer schedules themselves come from
     # the shipped deploy/ files, unrelated to the vault/backups dirs.
     res = await _fn_backup_status(None, None, {"vault": str(tmp_path / "v"),
                                                "backups": str(tmp_path / "b")})
@@ -569,8 +569,8 @@ def test_backup_status_is_subject_free_and_registered() -> None:
 async def test_backup_status_shows_a_configured_schedule_override_distinct_from_live(
     actions: Actions, tmp_path, _use_test_dsn: None,
 ) -> None:
-    """Piece 3 (thread f04cce36): the operator's own written schedule is NOT the same
-    fact as what's actually running — `configured_schedule` stays None until deploy's
+    """The operator's own written schedule is NOT the same
+    fact as what's actually running: `configured_schedule` stays None until deploy's
     own timer-install step regenerates the unit, so a caller can tell "set" from "took
     effect" instead of the two silently blurring together."""
     from src.orchestrator.backup_settings import write_backup_settings
@@ -599,14 +599,14 @@ async def test_backup_status_uses_the_configured_vault_path_when_no_test_overrid
     await write_backup_settings(actions.pool, actor="operator", because="testing",
                                 vault_path=str(configured_vault))
     await seed_default_compositions(actions.pool)
-    # no args.vault override — should fall back to the configured setting, not the
+    # no args.vault override: should fall back to the configured setting, not the
     # real production default
     res = await run_spec(actions.pool, {"op": "function", "name": "backup_status",
                                         "args": {"backups": str(tmp_path / "b")}}, None)
     assert res["items"]["vault"]["dumps"]["count"] == 1
 
 
-# --- upstream_readers (PROVENANCE PIECE 3(b), thread b4477e9e) ----------------------
+# --- upstream_readers (PROVENANCE PIECE 3(b)) ----------------------
 
 def test_upstream_readers_is_registered_and_subject_required() -> None:
     from src.orchestrator.compositions import _SUBJECT_FREE
@@ -617,7 +617,7 @@ def test_upstream_readers_is_registered_and_subject_required() -> None:
 
 async def test_upstream_readers_needs_a_subject(actions: Actions) -> None:
     # the generic subject-required guard (_eval, not in _SUBJECT_FREE) raises before the
-    # Function's own body ever runs — same door every other subject-required Function uses.
+    # Function's own body ever runs: same door every other subject-required Function uses.
     await seed_default_compositions(actions.pool)
     with pytest.raises(ValueError, match="requires a subject"):
         await run_spec(
@@ -625,7 +625,7 @@ async def test_upstream_readers_needs_a_subject(actions: Actions) -> None:
 
 
 async def test_upstream_readers_groups_facts_by_the_writing_object(actions: Actions) -> None:
-    # agent:reader read `upstream` through some door, then wrote two facts to `written` —
+    # agent:reader read `upstream` through some door, then wrote two facts to `written`.
     # stamp_possible_upstream (piece 1) is what mints the edge in real traffic; the test
     # mints it directly to isolate the Function's own read.
     upstream = await actions.create_or_find_object("SoftwareProject", "repo:upstream-src", "test")
@@ -662,9 +662,9 @@ async def test_upstream_readers_empty_when_nothing_points_here(actions: Actions)
 async def test_upstream_readers_reachable_via_the_saved_composition_mirror(
     actions: Actions,
 ) -> None:
-    """The 'REST + MCP mirrors' law, satisfied by the existing generic composition
-    doors (POST /compositions/upstream-readers/run, MCP composition(action='run')) once
-    seeded — both call run_composition, proven here directly."""
+    """The 'REST + MCP mirrors' rule, satisfied by the existing generic composition
+    entry points (POST /compositions/upstream-readers/run, MCP composition(action='run')) once
+    seeded: both call run_composition, proven here directly."""
     upstream = await actions.create_or_find_object("SoftwareProject", "repo:mirror-src", "test")
     written = await actions.create_or_find_object("SoftwareProject", "repo:mirror-written",
                                                    "test")

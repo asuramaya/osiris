@@ -1,24 +1,24 @@
-"""row_action's CLIENT half (thread e5d1eb6d, Thoth msg 1960 build 2) — the server side
-(compositions._table / the `function` op, commit 89df464) has attached `_action:{action,args}`
+"""row_action's CLIENT half: the server side
+(compositions._table / the `function` op) has attached `_action:{action,args}`
 to a row since #44, but osiris.js's table() had no case for it: it rendered as its own
 JSON.stringify'd blob in a column, and live-desk's resolve buttons were broken in production
 because of it. table() must treat `_action` as a CONTROL, never a column, and the click
-delegate must round-trip a row's own args through /act faithfully — including surviving being
+delegate must round-trip a row's own args through /act faithfully, including surviving being
 embedded in an HTML attribute, which is JSON's `"` characters' natural home for corruption.
 
-Also covers the "run:" navigation form (task #90, Thoth msg 1976/2005): an action named
-"run:<function>" must NOT reach /act at all — the click delegate dispatches an `osiris:run`
+Also covers the "run:" navigation form (task #90): an action named
+"run:<function>" must NOT reach /act at all. The click delegate dispatches an `osiris:run`
 DOM event instead, which is this module's entire client-side contract (the page shell,
 index.html, owns actually running the Function and switching the board; untested here, same
 boundary the module itself respects).
 
-And `_actions` (plural, task #91, Thoth msg 1976/2029): a row that affords MORE than one
+And `_actions` (plural, task #91): a row that affords MORE than one
 verb (chrome's /desk: done/not mine/later on one debt) renders N buttons, each round-
-tripping through /act exactly like the singular form — no new mechanism, N of the same one.
+tripping through /act exactly like the singular form, no new mechanism, N of the same one.
 Verified here, with a hand-made spec, BEFORE any real composition is armed with it.
 
 Playwright + the real osiris.js/osiris.css (same harness as test_ui_render.py); /act is
-intercepted via page.route — no backend, no DB, pure client behavior."""
+intercepted via page.route: no backend, no DB, pure client behavior."""
 from __future__ import annotations
 
 import asyncio
@@ -33,7 +33,7 @@ _CSS = (_STATIC / "osiris.css").read_text()
 _JS = (_STATIC / "osiris.js").read_text()
 
 _HARNESS = (
-    # a <base> so fetch('/act') has an origin to resolve against — about:blank (what
+    # a <base> so fetch('/act') has an origin to resolve against. about:blank (what
     # set_content() lands on with no prior navigation) has none, and a bare relative fetch
     # throws "Failed to parse URL" before page.route ever gets a chance to intercept it.
     "<!doctype html><html><head><base href=\"http://osiris.test/\"><style>" + _CSS +
@@ -84,7 +84,7 @@ async def test_action_never_becomes_a_column(chromium_available: bool) -> None:
         result = {"kind": "rows", "spec": {"op": "table"}, "items": ROWS_WITH_ACTION}
         await page.evaluate(_RENDER, result)
 
-        # no header/cell ever shows the control as data — it's a button or it's nothing
+        # no header/cell ever shows the control as data: it's a button or it's nothing
         assert await page.locator('th:has-text("_action")').count() == 0
         assert await page.locator('td:has-text("resolve_thread")').count() == 0
         assert await page.locator("button[data-action]").count() == 2
@@ -119,7 +119,7 @@ async def test_click_posts_to_act_round_trips_args_and_removes_the_row(
             f"document.querySelectorAll('tbody tr').length < {rows_before}")
 
         # the attribute round-trip is the point: JSON.stringify({"ref":"abc12345"}) is built
-        # almost entirely of '"' characters — a naive data-args="${...}" would have truncated
+        # almost entirely of '"' characters. A naive data-args="${...}" would have truncated
         # or corrupted the attribute at the first one, well before it ever reached fetch().
         assert seen["body"] == {"action": "resolve_thread", "args": {"ref": "abc12345"}}
         assert await page.locator("tbody tr").count() == rows_before - 1
@@ -159,10 +159,10 @@ async def test_click_error_response_restores_the_button_and_keeps_the_row(
         await browser.close()
 
 
-# --- "run:" dispatch (task #90, Thoth msg 1976/2005) — a row_action whose action starts with
+# --- "run:" dispatch (task #90): a row_action whose action starts with
 # "run:<function>" is NAVIGATION, not a write: the click delegate must NOT POST it to /act, and
-# must instead dispatch a document-level `osiris:run` CustomEvent carrying {name, args} — the
-# page shell (index.html, untested here — see its own osiris:run listener) is what actually
+# must instead dispatch a document-level `osiris:run` CustomEvent carrying {name, args}. The
+# page shell (index.html, untested here, see its own osiris:run listener) is what actually
 # runs the Function and switches the board. This module has no access to that page state by
 # design, so the event is the entire client-side contract this test can verify.
 
@@ -189,7 +189,7 @@ async def test_run_action_renders_a_generic_label_not_the_raw_action_string(
         btn = page.locator("button[data-action]").first
         assert await btn.get_attribute("data-action") == "run:mail_threads"
         # generic prefix-strip, not the raw "run:mail_threads" string, and not a hardcoded
-        # per-function label either — the module never learns what "mail_threads" means
+        # per-function label either: the module never learns what "mail_threads" means
         assert (await btn.inner_text()).strip() == "mail threads"
         await browser.close()
 
@@ -223,20 +223,20 @@ async def test_run_action_dispatches_an_event_instead_of_posting_to_act(
         await page.locator("button[data-action]").first.click()
         await page.wait_for_function("window.__seen !== null")
 
-        assert posted["hit"] is False  # never reached /act — it's navigation, not a write
+        assert posted["hit"] is False  # never reached /act: it's navigation, not a write
         assert await page.locator("tbody tr").count() == rows_before  # the row is untouched
         seen = await page.evaluate("window.__seen")
-        # `subject: None` (Thoth dispatch 9676/9690, 588148bb piece 4) since this row's own
-        # `_action` carries no `subject` — see this module's own bind_subject tests below.
+        # `subject: None` since this row's own
+        # `_action` carries no `subject`: see this module's own bind_subject tests below.
         assert seen == {"name": "mail_threads", "args": {"box": "neo"}, "subject": None}
         await browser.close()
 
 
-# --- `bind_subject` (Thoth dispatch 9676/9690, 588148bb piece 4) — a "run:" row_action whose
+# --- `bind_subject`: a "run:" row_action whose
 # target is an op-tree (browse), not a Function: the row's own object rides as `_action.
 # subject` instead of `args`, so there's nothing to wrap as run-spec's {"op":"function"}. The
 # osiris:run event must carry it as its own `subject` field, distinct from (and alongside) the
-# always-present `args` (empty here — never both templated args AND a bound subject on one
+# always-present `args` (empty here: never both templated args AND a bound subject on one
 # action, see compositions.py's own `bind_subject` docstring).
 
 ROWS_WITH_BIND_SUBJECT_ACTION = [
@@ -277,7 +277,7 @@ async def test_bind_subject_action_carries_the_rows_own_object_on_the_run_event(
 async def test_a_plain_run_action_with_no_subject_carries_null_not_a_missing_key(
     chromium_available: bool,
 ) -> None:
-    """The existing args-drill form (mail_overview→mail_threads) must be untouched by this —
+    """The existing args-drill form (mail_overview→mail_threads) must be untouched by this:
     no `subject` key on the row's own action still reaches the listener as `subject: null`,
     never `undefined`/absent, so `e.detail.subject || FOCUS` behaves the same as before this
     piece for every row_action that predates bind_subject."""
@@ -303,8 +303,8 @@ async def test_a_plain_run_action_with_no_subject_carries_null_not_a_missing_key
         await browser.close()
 
 
-# --- `_actions` (plural, task #91, Thoth msg 1976/2029) — a row that affords MORE than one
-# verb. Same click delegate, same POST /act per button, no new mechanism — verified with a
+# --- `_actions` (plural, task #91): a row that affords MORE than one
+# verb. Same click delegate, same POST /act per button, no new mechanism: verified with a
 # hand-made spec BEFORE any real composition (chrome's own /desk motivating case) is armed.
 
 ROWS_WITH_ACTIONS = [
@@ -334,7 +334,7 @@ async def test_actions_plural_never_becomes_a_column(chromium_available: bool) -
 
         assert await page.locator('th:has-text("_actions")').count() == 0
         assert await page.locator('td:has-text("resolve_thread")').count() == 0
-        # three buttons, one row — not one button, not three columns
+        # three buttons, one row: not one button, not three columns
         assert await page.locator("button[data-action]").count() == 3
         labels = await page.locator("button[data-action]").all_inner_texts()
         assert labels == ["done", "not mine", "later"]
@@ -363,7 +363,7 @@ async def test_actions_plural_each_button_round_trips_its_own_args(
                                 body=json.dumps({"ok": True}))
 
         await page.route("**/act", _handle)
-        # click "not mine" (the middle button) — its own args, not the first button's
+        # click "not mine" (the middle button): its own args, not the first button's
         await page.locator('button[data-action="assign_thread"]').click()
         await page.wait_for_function("document.querySelectorAll('tbody tr').length === 0")
 
@@ -378,7 +378,7 @@ async def test_actions_plural_each_button_round_trips_its_own_args(
 async def test_actions_plural_one_click_removes_the_whole_row_not_just_its_button(
     chromium_available: bool,
 ) -> None:
-    """A resolved/assigned/deferred debt is gone — its OTHER two buttons must not survive as
+    """A resolved/assigned/deferred debt is gone: its OTHER two buttons must not survive as
     dead controls pointing at a thread that no longer holds the state they described."""
     if not chromium_available:
         pytest.skip("Chromium can't launch on this host")

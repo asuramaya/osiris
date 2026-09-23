@@ -1,8 +1,8 @@
-"""OBLIGATION HYGIENE — the no-regrow rule (dispatch #204 follow-on, operator ruling
-relayed Thoth DM 7161, 2026-09-05): N1=7 idle days -> a DM nudge to the owner; N2=+7 more
-days of silence -> a STALE-CANDIDATE marker + a desk brief, never auto-resolved. Every test
-proves ONE transition boundary or the idempotency law that stops a tick from re-nudging or
-re-classifying a row it already acted on.
+"""OBLIGATION HYGIENE: the no-regrow rule (dated 2026-09-05): N1=7 idle days -> a DM
+nudge to the owner; N2=+7 more days of silence -> a STALE-CANDIDATE marker + a desk
+brief, never auto-resolved. Every test proves ONE transition boundary or the
+idempotency rule that stops a tick from re-nudging or re-classifying a row it already
+acted on.
 """
 from __future__ import annotations
 
@@ -73,8 +73,8 @@ async def test_an_idle_obligation_whose_owner_is_active_elsewhere_is_never_nudge
     actions: Actions,
 ) -> None:
     """BOTH halves of "idle" must hold: an old last_touched is not enough on its own if
-    the owner has made a self_declared write ANYWHERE in the window — the benefit-of-the-
-    doubt half of the operator's own definition."""
+    the owner has made a self_declared write ANYWHERE in the window, the benefit-of-the-
+    doubt half of the idle definition."""
     stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
     t = await _mk_obligation(actions, "hyg-idle-active-owner", owner="agent:hyg-active",
                              touched_at=stale)
@@ -112,7 +112,7 @@ async def test_execute_nudges_and_stamps_a_marker_that_stops_a_re_nudge_same_tic
 
 async def test_a_real_touch_after_a_nudge_resets_the_idle_clock(actions: Actions) -> None:
     """A thread genuinely re-annotated by a mind after its own nudge must never be treated
-    as still-silent — the SAME re-derivation the operator's own idle definition demands."""
+    as still-silent: the SAME re-derivation the idle definition demands."""
     stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
     t = await _mk_obligation(actions, "hyg-reset-clock", owner="agent:hyg-reset",
                              touched_at=stale)
@@ -163,7 +163,7 @@ async def test_stale_candidate_is_never_reclassified_or_re_briefed_twice(
 
 
 async def test_stale_candidate_never_changes_the_thread_status(actions: Actions) -> None:
-    """NEVER AUTO-RESOLVED, exactly as ruled — the thread's own status stays 'open'."""
+    """NEVER AUTO-RESOLVED, exactly as ruled: the thread's own status stays 'open'."""
     stale = NOW - timedelta(days=N1_IDLE_DAYS + N2_SILENCE_DAYS + 3)
     t = await _mk_obligation(actions, "hyg-never-resolved", owner="agent:hyg-nr",
                              touched_at=stale)
@@ -206,8 +206,8 @@ async def test_a_project_name_owner_falls_back_to_the_operator_desk(actions: Act
 async def test_a_project_owned_obligation_is_flagged_and_the_nudge_names_it(
     actions: Actions,
 ) -> None:
-    """thread 3a9d9a5d89fa, Ra XL's measured report: a project-named owner is exactly
-    the population threads() can never show its holder — the row is flagged
+    """From a measured live report: a project-named owner is exactly
+    the population threads() can never show its holder. The row is flagged
     `project_owned` and the nudge body says so explicitly, plainly enough that whoever
     reads it knows to check the bar's `+M project` figure or the project's own thread
     list instead of expecting it under their own threads()."""
@@ -246,14 +246,14 @@ async def test_an_unowned_obligation_nudges_the_operator_desk(actions: Actions) 
     assert _find(out["buckets"]["would_nudge"], t) is not None
 
 
-# ═══ fix (c), Metron's mechanism report (mail 8890/8921/8922): the nudge quotes the
+# ═══ fix (c), from a mechanism report: the nudge quotes the
 # summary with its age, and never as settled fact when a note disputes it ══════════════
 
 async def test_a_contested_obligation_carries_the_marker_and_age_into_the_row(
     actions: Actions,
 ) -> None:
     """The note must postdate the summary (to be contested) while `last_touched` stays
-    idle relative to `now=NOW` (to still land in would_nudge) — `annotate_thread`'s own
+    idle relative to `now=NOW` (to still land in would_nudge). `annotate_thread`'s own
     real wall-clock write can't hit that window in a test keyed on a fixed NOW, so the
     note is asserted directly, dated inside the one valid slice."""
     stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
@@ -291,14 +291,14 @@ async def test_quote_summary_names_the_age_and_the_dispute() -> None:
     assert "CONTESTED" in disputed and "unchanged for 12 day(s)" in disputed
 
 
-# ═══ wave 18 item 1 (thread 898840dc, "the stale nudge quotes it"): a row already
+# ═══ "the stale nudge quotes it": a row already
 # carrying a live `answers` edge (mint_bears_on) gets named in its own nudge, never
-# suppressed — the owner is spared a redundant re-measurement, never spared the nudge
+# suppressed. The owner is spared a redundant re-measurement, never spared the nudge
 # itself ═══
 
 async def test_quote_summary_names_an_already_answered_row() -> None:
-    """Thread 367cfafd (superseding the sim-tiered read): the edge alone decides the
-    wording now — no similarity score involved."""
+    """Superseding the similarity-tiered read: the edge alone decides the
+    wording now, no similarity score involved."""
     from src.orchestrator.obligation_hygiene import _quote_summary
 
     plain = _quote_summary({"summary": "a headline", "summary_age_days": 12,
@@ -313,7 +313,7 @@ async def test_quote_summary_names_an_already_answered_row() -> None:
 
 
 async def test_quote_summary_names_every_answering_decision_plainly() -> None:
-    """Thread 367cfafd: the old strong/weak confidence tiers are gone — every live
+    """The old strong/weak confidence tiers are gone: every live
     `answers` edge is a deliberate act (never a text guess), so every one is named the
     same way, plainly, with no downgrade."""
     from src.orchestrator.obligation_hygiene import _quote_summary
@@ -354,7 +354,7 @@ async def test_hygiene_dry_run_surfaces_an_answering_decision_on_the_nudge(
 async def test_hygiene_dry_run_never_answers_for_a_row_with_no_bears_on_edge(
     actions: Actions,
 ) -> None:
-    """The common case — no answering decision at all — carries an EMPTY list, never
+    """The common case, no answering decision at all, carries an EMPTY list, never
     absent, so `_quote_summary`'s own `.get("answered_by") or []` reads correctly."""
     stale = NOW - timedelta(days=N1_IDLE_DAYS + 1)
     t = await _mk_obligation(actions, "hyg-unanswered-1", owner="agent:hyg-plain-owner",
@@ -403,11 +403,11 @@ async def test_scheduled_tick_acts_when_the_flag_is_on(actions: Actions) -> None
     assert any(r["thread_id"] == str(t) for r in out["nudged"])
 
 
-# ═══ THE OWNER-RESOLUTION LADDER (operator "one more round" 2026-09-05, Thoth DM 7391) ═══
+# ═══ THE OWNER-RESOLUTION LADDER (a second pass, dated 2026-09-05) ═══
 # the first firing sent 128/151 nudges to the desk because owners are project names or dead
-# agents — "that makes the desk the pile." A rung is tried before falling to the desk, never
-# instead of trying. resolve_owner_target is pure/read-only: every test below calls it
-# directly, sending nothing.
+# agents, making the desk a dumping ground for what should route elsewhere. A rung is
+# tried before falling to the desk, never instead of trying. resolve_owner_target is
+# pure/read-only: every test below calls it directly, sending nothing.
 
 async def _repo(actions: Actions, name: str) -> None:
     await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
@@ -439,10 +439,9 @@ async def test_rung0_seat_handle_rung_runs_before_the_project_name_rung(
     actions: Actions,
 ) -> None:
     """A stale SoftwareProject sharing the seat's own spelling must never pre-empt the
-    seat-handle rung — an owner string is a seat before it is a repo (Thoth ruling msg
-    7425, correcting decision 1014b74804da's own diagnosis: 'Thoth'/'seshat'/'imhotep'
-    etc are seat handles, not project names, and the project-name rung used to run
-    first)."""
+    seat-handle rung: an owner string is a seat before it is a repo (correcting an
+    earlier diagnosis: seat handles are not project names, and the project-name rung
+    used to run first)."""
     await _repo(actions, "LadderSeat9")  # a SoftwareProject sharing the seat's own spelling
     await _live_seat(actions, "LadderSeat9", "agent:ladder-seat9-holder")
 
@@ -466,7 +465,7 @@ async def test_rung0_seat_handle_owner_cold_seat_falls_to_the_desk(
     seat = await ensure_seat(actions, house="test", handle="LadderSeat11", source="test")
     await actions.create_or_find_object("Agent", "agent:ladder-seat11-holder", "test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:ladder-seat11-holder")
-    # no save_mount — the holder exists but has never been seen live
+    # no save_mount: the holder exists but has never been seen live
 
     out = await resolve_owner_target(actions.pool, "ladderseat11")
     assert out["channel"] == "desk"
@@ -489,9 +488,9 @@ async def test_rung1_project_name_owner_resolves_to_its_live_seat_head(
 async def test_rung1_governed_project_prefers_the_managing_seat_not_the_managed_one(
     actions: Actions,
 ) -> None:
-    """charter and pin disagree, but the pin-seat is managed_by the charter-seat — the
-    NORMAL, correctly-configured shape (a coordinator governing a repo a worker sits in),
-    not a conflict — and the ladder must nudge the MANAGER, never the managed worker."""
+    """charter and pin disagree, but the pin-seat is managed_by the charter-seat. This is
+    the NORMAL, correctly-configured shape (a coordinator governing a repo a worker sits
+    in), not a conflict, and the ladder must nudge the MANAGER, never the managed worker."""
     import tempfile
     from pathlib import Path
 
@@ -522,7 +521,7 @@ async def test_rung1_shared_house_project_owner_resolves_to_the_house_manager(
     actions: Actions,
 ) -> None:
     """N>2 seats all chartering their own house's home repo is the normal shape, not a
-    conflict (Thoth ruling msg 7425) — the ladder must nudge the house's manager seat."""
+    conflict: the ladder must nudge the house's manager seat."""
     await _repo(actions, "ladderhouse1")
     head = await _live_seat(actions, "LadderHouseHead", "agent:ladderhouse-head",
                             house="ladderhouse1")
@@ -543,9 +542,9 @@ async def test_rung1_shared_house_project_owner_resolves_to_the_house_manager(
 async def test_rung1_conflict_resolves_to_the_manager_regardless_of_via_signal(
     actions: Actions,
 ) -> None:
-    """The mudra shape (operator ruling, decision 2ee59140): one seat matches via BOTH
+    """The dual-match shape: one seat matches via BOTH
     charter and pin, another matches via charter only, but the first is already managed_by
-    the second — roster's own `governed` check never fires here (it requires the CHARTER
+    the second. roster's own `governed` check never fires here (it requires the CHARTER
     seat specifically to manage the PIN seat), yet the ladder must still prefer the
     manager, not fall to a plain 'ambiguous' desk brief."""
     await _repo(actions, "ladderproj7")
@@ -565,8 +564,7 @@ async def test_rung1_conflict_resolves_to_the_manager_regardless_of_via_signal(
 async def test_rung1_peer_pair_conflict_resolves_to_the_live_peer(
     actions: Actions,
 ) -> None:
-    """Two seats peer_of-bonded on a project (rotten-apple: Ptah/Ra; xxit: deckard/metron,
-    operator ruling decision 2ee59140) — never a conflict once peered."""
+    """Two seats peer_of-bonded on a project: never a conflict once peered."""
     await _repo(actions, "ladderproj8")
     live = await _live_seat(actions, "Ladder8Live", "agent:ladder8-live")
     await set_charter(actions, live["seat_id"], ["ladderproj8"], actor="test")
@@ -597,10 +595,10 @@ async def test_rung1_peer_pair_conflict_nudges_both_when_both_are_live(
 async def test_rung1_peer_pair_outranks_an_unrelated_managed_by_edge_on_the_same_pair(
     actions: Actions,
 ) -> None:
-    """The live Ptah/Ra shape: an older, unrelated managed_by edge between the two peered
-    seats (an ordinary org fact, not a statement about THIS repo) must never silently
-    outrank a peer_of bond this exact ruling minted for this exact project — checking
-    manager first would nudge neither seat as a "cold manager" even when a peer is live."""
+    """A live shape seen in practice: an older, unrelated managed_by edge between the two
+    peered seats (an ordinary org fact, not a statement about THIS repo) must never
+    silently outrank a peer_of bond minted for this exact project. Checking manager
+    first would nudge neither seat as a "cold manager" even when a peer is live."""
     await _repo(actions, "ladderproj11")
     live = await _live_seat(actions, "Ladder11Live", "agent:ladder11-live")
     await set_charter(actions, live["seat_id"], ["ladderproj11"], actor="test")
@@ -609,7 +607,7 @@ async def test_rung1_peer_pair_outranks_an_unrelated_managed_by_edge_on_the_same
     await peer_seats(actions, live["seat_id"], other["seat_id"], because="test", actor="test")
     live_oid = await actions.create_or_find_object("Seat", live["seat_id"], "test")
     other_oid = await actions.create_or_find_object("Seat", other["seat_id"], "test")
-    # an ORDINARY managed_by edge on the same pair, unrelated to ladderproj11 — the live
+    # an ORDINARY managed_by edge on the same pair, unrelated to ladderproj11: the live
     # seat is managed_by the cold one, the shape that would make a manager-first check
     # nudge nobody
     await actions.create_link(live_oid, other_oid, "managed_by", "test",
@@ -696,7 +694,7 @@ async def test_rung2_lineage_head_exists_but_is_not_live_falls_to_the_desk(
     await actions.create_or_find_object("Agent", heir_id, "test")
     await actions.assert_property(ancestor, "succeeded_by", heir_id, "test",
                                   datetime.now(UTC), 0.9, evidence_class="self_declared")
-    # no save_mount for the heir — it exists, but nothing has ever seen it live
+    # no save_mount for the heir: it exists, but nothing has ever seen it live
 
     out = await resolve_owner_target(actions.pool, "agent:ladder-anc2")
     assert out["channel"] == "desk"

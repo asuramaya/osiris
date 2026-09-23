@@ -1,4 +1,4 @@
-"""Preflight — the audit that can't be forgotten. The judgments are pure; so are these."""
+"""Preflight, the audit that can't be forgotten. The judgments are pure; so are these."""
 from __future__ import annotations
 
 import subprocess
@@ -62,19 +62,19 @@ def test_healthy_miner_is_green() -> None:
 
 
 def test_absent_miner_telemetry_is_quiet() -> None:
-    """None = the instrument is young or the DB is down — the latter fails elsewhere."""
+    """None = the instrument is young or the DB is down; the latter fails elsewhere."""
     m = _green()
     m["miner"] = None
     assert evaluate(m) == []
 
 
 def test_a_SILENT_adversary_is_not_a_BROKEN_one() -> None:
-    """THE LAW CHANGED WHEN THE CRAWL DIED (ceae1604), and this test guarded the old one.
+    """THE RULE CHANGED WHEN THE CRAWL DIED, and this test guarded the old one.
 
     "Three missed ticks = sensing is down" was TRUE of a cron that walked every transcript every
     ten minutes: silence meant the memory had stopped forming, and this check was right to fail on
     it (the miner once died for ten hours behind a green heartbeat). But the miner is SUMMONED now,
-    at a session's death rite. A quiet hour means NOBODY'S SESSION ENDED — not that anything is
+    at the end of a session. A quiet hour means NOBODY'S SESSION ENDED, not that anything is
     broken. Demanding a tick from a job that no longer ticks would fail this preflight FOREVER, on
     purpose, about nothing.
 
@@ -95,7 +95,7 @@ def test_failing_open_miner_is_named() -> None:
     assert "errored 3 of the last 6 runs" in "\n".join(evaluate(m))
 
 
-# --- the deploy-ordering guard's weekly backstop (thread e6f5556f) --------------------------
+# --- the deploy-ordering guard's weekly backstop ---------------------------------------------
 
 def test_no_schema_drift_key_is_quiet() -> None:
     """collect_schema_drift() returning None (matched, or DB unreachable) is silence, same as
@@ -110,11 +110,11 @@ def test_a_real_schema_drift_is_named_loudly() -> None:
     assert "SCHEMA DRIFT" in fails and "0034" in fails and "alembic upgrade head" in fails
 
 
-# --- obligation a867ae37: the ENOSPC incident's own early-warning -----------------------
+# --- the ENOSPC incident's own early-warning ---------------------------------------------
 
 def test_no_tmp_inode_pct_key_is_quiet() -> None:
     """Absent (statvfs failed, or the field was never collected) is silence, same as every
-    other None-shaped field in this matrix — a genuine 'can't answer' is never a false alarm."""
+    other None-shaped field in this matrix: a genuine 'can't answer' is never a false alarm."""
     assert evaluate(_green()) == []
 
 
@@ -126,8 +126,8 @@ def test_low_tmp_inode_use_is_quiet() -> None:
 
 def test_high_tmp_inode_use_is_named_loudly() -> None:
     """The exact shape of the real incident: /tmp's per-call harness output files fail
-    ENOSPC once inode use hits 100%, silently to anything that isn't shelling out — this
-    is the signal that must fire well before that, per Thoth's own ask (msg 7096)."""
+    ENOSPC once inode use hits 100%, silently to anything that isn't shelling out: this
+    is the signal that must fire well before that."""
     m = _green()
     m["tmp_inode_pct"] = 91.4
     fails = "\n".join(evaluate(m))
@@ -135,14 +135,14 @@ def test_high_tmp_inode_use_is_named_loudly() -> None:
 
 
 def test_tmp_inode_use_right_at_the_alarm_threshold_fires() -> None:
-    """Boundary case: >= the threshold, not only strictly over it — a reading sitting
+    """Boundary case: >= the threshold, not only strictly over it: a reading sitting
     exactly on 80% is exactly the situation this alarm exists to catch, not a near miss."""
     m = _green()
     m["tmp_inode_pct"] = 80.0
     assert any("/tmp inode use" in f for f in evaluate(m))
 
 
-# --- thread 3e96c10e: a dead check must ALARM, never quietly pass as green -------------------
+# --- a dead check must ALARM, never quietly pass as green -------------------------------------
 
 async def _boom() -> None:
     raise ModuleNotFoundError("No module named 'src'")
@@ -154,7 +154,7 @@ async def _down() -> None:
 
 def test_a_broken_check_is_named_not_swallowed() -> None:
     """The canonical failure: an import-time error inside a collector used to be caught by a
-    bare `except Exception` and degrade to a quiet None — preflight then reported "all green"
+    bare `except Exception` and degrade to a quiet None: preflight then reported "all green"
     while the check never actually ran. Now it surfaces as its own named failure."""
     result, broken = _run_check("collect_miner", _boom())
     assert result is None
@@ -166,7 +166,7 @@ def test_a_broken_check_is_named_not_swallowed() -> None:
 
 def test_a_genuinely_unreachable_db_still_degrades_quietly() -> None:
     """The distinction this fix must preserve: the DB actually being down is already reported
-    by the unit/container checks — a collector failing on THAT is not a second, redundant
+    by the unit/container checks: a collector failing on THAT is not a second, redundant
     alarm, so it still degrades to a quiet None exactly as before."""
     result, broken = _run_check("collect_schema_drift", _down())
     assert result is None
@@ -174,7 +174,7 @@ def test_a_genuinely_unreachable_db_still_degrades_quietly() -> None:
 
 
 def test_tmp_inode_pct_reads_a_real_filesystem() -> None:
-    """Proven against the real root filesystem, not a mock — os.statvfs is a thin, portable
+    """Proven against the real root filesystem, not a mock: os.statvfs is a thin, portable
     stdlib call (no `df` subprocess), and this just confirms it returns a plausible
     percentage rather than silently degrading to None on an ordinary, present path."""
     from scripts.osiris_preflight import _tmp_inode_pct
@@ -241,31 +241,31 @@ def test_drill_pitr_is_quiet_when_no_base_backup_exists_yet(
 ) -> None:
     """An environment where item 3 hasn't produced a base backup yet (a fresh checkout,
     a test run, a fleet member that hasn't hit its first weekly timer) is not a
-    failure of THIS check — a real failed restore against an EXISTING base backup is."""
+    failure of THIS check: a real failed restore against an EXISTING base backup is."""
     import scripts.osiris_preflight as preflight
 
     monkeypatch.setattr(preflight, "VAULT_DIR", tmp_path)
     assert preflight.drill_pitr() is None
 
 
-# --- thread 9fac4e0d part 4: never the live cluster -----------------------------------
+# --- never the live cluster -------------------------------------------------------------
 
 def test_drill_container_name_never_collides_with_a_live_fleet_container() -> None:
-    """The regression guard on the module constants themselves — the exact live
+    """The regression guard on the module constants themselves: the exact live
     incident this obligation was named for was a drill-shaped restore that DID
     collide with the live cluster, just under a different database name inside the
     same container, which this guard cannot see; codifying the container-name half
-    at least closes the door this script's own drill could walk through."""
+    at least closes the gap this script's own drill could walk through."""
     from scripts.osiris_preflight import _DRILL_CONTAINER_NAME, CONTAINERS
 
     assert _DRILL_CONTAINER_NAME not in CONTAINERS
 
 
 def test_restore_cmd_uses_pg_restore_for_a_dot_dump_file() -> None:
-    """THE REAL LIVE BUG (found running the drill against a real production dump,
-    thread 9fac4e0d part 4): -Fc custom-format dumps (the vault lane item 1) piped
-    into psql fail — psql expects SQL text, not pg_dump's own binary container
-    format. Only pg_restore reads a .dump file."""
+    """THE REAL LIVE BUG (found running the drill against a real production dump):
+    -Fc custom-format dumps (the vault lane item 1) piped into psql fail: psql
+    expects SQL text, not pg_dump's own binary container format. Only pg_restore
+    reads a .dump file."""
     from scripts.osiris_preflight import _restore_cmd
 
     cmd = _restore_cmd("drillbox", "/vault/osiris-20260908-163007.dump")
@@ -276,7 +276,7 @@ def test_restore_cmd_uses_pg_restore_for_a_dot_dump_file() -> None:
 
 def test_restore_cmd_uses_psql_for_a_legacy_dot_sql_file() -> None:
     """The pre-item-1 legacy extension collect()'s own glob still tolerates during
-    the transition window — genuine SQL text, still needs psql, never pg_restore."""
+    the transition window: genuine SQL text, still needs psql, never pg_restore."""
     from scripts.osiris_preflight import _restore_cmd
 
     cmd = _restore_cmd("drillbox", "/vault/osiris-20260901-000000.sql")
@@ -284,7 +284,7 @@ def test_restore_cmd_uses_psql_for_a_legacy_dot_sql_file() -> None:
     assert "pg_restore" not in cmd
 
 
-# --- thread 78efd46d, the soul store's own coverage guarantee ---------------------------
+# --- the soul store's own coverage guarantee ---------------------------------------------
 
 def test_no_missing_sessions_key_is_quiet() -> None:
     assert evaluate(_green()) == []
@@ -311,7 +311,7 @@ def test_find_missing_sessions_is_a_pure_set_difference() -> None:
     assert find_missing_sessions(disk, stored) == {"ccc"}
 
 
-# --- thread 78efd46d item 2: the soul store's own round-trip proof --------------------
+# --- the soul store's own round-trip proof ---------------------------------------------
 
 def test_no_round_trip_failures_key_is_quiet() -> None:
     assert evaluate(_green()) == []
@@ -367,10 +367,10 @@ def test_format_backlog_weekly_line_names_first_run() -> None:
     from scripts.osiris_preflight import _format_backlog_weekly_line
 
     line = _format_backlog_weekly_line(
-        {"fleet_total": 12, "delta": None, "top_seats": [{"seat": "Thoth", "open": 5}]})
+        {"fleet_total": 12, "delta": None, "top_seats": [{"seat": "TeamA", "open": 5}]})
     assert "12 open obligation(s) fleet-wide" in line
     assert "first run, no prior week to compare" in line
-    assert "Thoth:5" in line
+    assert "TeamA:5" in line
 
 
 def test_format_backlog_weekly_line_signs_a_positive_and_negative_delta() -> None:
@@ -389,7 +389,7 @@ def test_format_backlog_weekly_line_names_no_seats_when_empty() -> None:
     assert "Top seats: none." in line
 
 
-# THE ORPHAN LAWS, item 3 (operator's word wave 15, Thoth DM 8841) ------------------------
+# THE ORPHAN RULES, item 3 --------------------------------------------------------------
 
 def test_orphan_delta_is_none_on_the_first_run() -> None:
     from scripts.osiris_preflight import _orphan_delta
@@ -447,11 +447,11 @@ def test_format_orphan_weekly_line_shows_the_five_biggest_types_only() -> None:
 
 
 def test_format_orphan_weekly_line_names_the_visit_split_on_agent() -> None:
-    """9dc3ce8b, THE DESK LINE: "Agent:N" alone re-introduces the exact fiction the
-    Great Fold's read-side adoption exists to stop — the weekly line must name how many
+    """THE DESK LINE: "Agent:N" alone re-introduces the exact fiction the
+    read-side adoption exists to stop: the weekly line must name how many
     of an Agent bucket's orphans are visit-class doorbell rings, not real minds. Any
     OTHER type carrying no `visit` key (the shape every non-Agent bucket has) is
-    untouched — plain `Type:N`, no parenthetical."""
+    untouched: plain `Type:N`, no parenthetical."""
     from scripts.osiris_preflight import _format_orphan_weekly_line
 
     line = _format_orphan_weekly_line(
@@ -471,8 +471,7 @@ def test_format_orphan_weekly_line_agent_with_no_visits_stays_plain() -> None:
     assert "Agent:5" in line and "visit)" not in line
 
 
-# THE TRACEABILITY BAND, beside the orphan band (Graph-Engineering, operator decision
-# f47d14a7, thread 7f547426, item 3/3) ------------------------------------------------------
+# THE TRACEABILITY BAND, beside the orphan band (item 3/3) --------------------------------
 
 def test_traceability_delta_is_none_on_the_first_run() -> None:
     from scripts.osiris_preflight import _traceability_delta
@@ -523,7 +522,7 @@ def test_format_traceability_weekly_line_shows_the_five_biggest_types_only() -> 
     assert "Type2:2" not in line and "Type1:1" not in line
 
 
-# THE WEEKLY ABSTENTION DIGEST, beside the orphan band (Thoth mail 8960 item 2, msg 9071) ---
+# THE WEEKLY ABSTENTION DIGEST, beside the orphan band --------------------------------------
 
 def test_abstention_delta_is_none_on_the_first_run() -> None:
     from scripts.osiris_preflight import _abstention_delta
@@ -574,8 +573,8 @@ async def _no_transcripts_root(tmp_path: Path) -> int | None:
     from scripts.osiris_preflight import collect_soul_store_coverage
 
     # check_crush=False: CrushSqliteAdapter.enumerate() takes no root at all (it always
-    # walks the REAL ~/.local/share/crush/projects.json + seat offices, wave 13 item 2's
-    # own documented limit) — a dev box with real crush sessions would otherwise make
+    # walks the REAL ~/.local/share/crush/projects.json + seat offices, a documented
+    # limit): a dev box with real crush sessions would otherwise make
     # this "nothing to check" test reach for a real DB connection.
     return await collect_soul_store_coverage(
         root=tmp_path / "does-not-exist", check_crush=False)
@@ -585,7 +584,7 @@ def test_collect_soul_store_coverage_is_quiet_with_no_transcripts_root(
     tmp_path: Path,
 ) -> None:
     """No transcripts root present in this environment (a fresh checkout, a test box) is
-    not a failure of THIS check — nothing to walk, nothing to claim about."""
+    not a failure of THIS check: nothing to walk, nothing to claim about."""
     import asyncio
 
     assert asyncio.run(_no_transcripts_root(tmp_path)) is None
@@ -605,11 +604,11 @@ def test_collect_soul_store_coverage_is_quiet_with_an_empty_transcripts_root(
 
 
 def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) -> None:
-    """The exact repro from thread 3e96c10e: `.venv/bin/python scripts/backfill_thread_arc.py`
-    from the repo root, PYTHONPATH deliberately unset — sys.path[0] is the script's own
+    """The exact repro: `.venv/bin/python scripts/backfill_thread_arc.py`
+    from the repo root, PYTHONPATH deliberately unset: sys.path[0] is the script's own
     directory, never CWD, so its top-level `from src...` imports crashed immediately. `--help`
     exercises exactly that import path (argparse prints usage and exits before any DB touch,
-    so this stays hermetic — no real Postgres needed, unlike osiris_preflight.py's collectors,
+    so this stays hermetic, no real Postgres needed, unlike osiris_preflight.py's collectors,
     which this file's `_run_check` tests above cover without a subprocess)."""
     repo_root = Path(__file__).resolve().parent.parent
     env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path)}  # explicitly no PYTHONPATH
@@ -621,10 +620,10 @@ def test_backfill_bare_invocation_never_raises_module_not_found(tmp_path: Path) 
     assert "usage:" in out.stdout
 
 
-# --- THE MCP SERVER'S OWN LIVENESS ACROSS TIME (thread 007bfd6b, msg 9123 item 4) --------
+# --- THE MCP SERVER'S OWN LIVENESS ACROSS TIME -------------------------------------------
 
 def test_no_mcp_liveness_key_is_quiet() -> None:
-    """Absent (the collector genuinely couldn't run — already reported separately as a
+    """Absent (the collector genuinely couldn't run: already reported separately as a
     broken check) is silence here, same as every other None-shaped field in this matrix."""
     assert evaluate(_green()) == []
 
@@ -637,7 +636,7 @@ def test_mcp_liveness_clean_is_quiet() -> None:
 
 def test_mcp_liveness_first_run_with_no_kills_is_quiet() -> None:
     """delta=None (nothing to compare on the very first run) must never be treated as
-    truthy/alarming — same "None is not 0, but also not a failure" law _backlog_delta's
+    truthy/alarming, same "None is not 0, but also not a failure" rule _backlog_delta's
     own first-run behavior establishes."""
     m = _green()
     m["mcp_liveness"] = {"nrestarts": 3, "nrestarts_delta": None, "kill_events": []}
@@ -655,7 +654,7 @@ def test_mcp_liveness_a_new_restart_is_named_loudly() -> None:
 
 def test_mcp_liveness_a_kill_event_with_no_restart_delta_is_still_named() -> None:
     """systemd can restart faster than the delta gets sampled, or the kill line can land
-    in a window the NRestarts read already rolled past — either symptom alone is real."""
+    in a window the NRestarts read already rolled past: either symptom alone is real."""
     m = _green()
     m["mcp_liveness"] = {"nrestarts": 3, "nrestarts_delta": 0,
                          "kill_events": ["Sep 10 04:12:03 host osiris-mcp[1]: Killed"]}
@@ -691,7 +690,7 @@ def test_format_mcp_liveness_line_signs_a_positive_delta() -> None:
 
 
 def test_mcp_nrestarts_reads_the_real_unit_or_degrades_quietly() -> None:
-    """Live against whatever this box actually has — osiris-mcp exists here (the dev
+    """Live against whatever this box actually has: osiris-mcp exists here (the dev
     instance), but the function must degrade to None rather than raise on a box without
     it (a fresh checkout, CI), same discipline _tmp_inode_pct/_disk_free_pct already hold
     themselves to."""
