@@ -1,39 +1,39 @@
-"""THE CHARTER — a house is what a seat RULES, not where it sits (Phase 1 §4.1, `dd47c1da`).
+"""THE CHARTER: a house is what a seat RULES, not where it sits.
 
 `path = project = identity` is the bug under the whole fold: today a seat's authority over a
-repo is only ever implied by works_in — one project, wherever its folder happens to be right
-now. alfred's charter is six repos; none of them is "the folder he's sitting in this week". A
-CHARTER makes that authority an explicit, first-class fact instead of an inference from cwd,
-so a folder move (§4.1's seat-rebind primitive, `mounts.rebind_seat`) has nothing to orphan.
+repo is only ever implied by works_in, one project, wherever its folder happens to be right
+now. A coordinator's real charter can span several repos; none of them is "the folder it's
+sitting in this week". A CHARTER makes that authority an explicit, first-class fact instead
+of an inference from cwd, so a folder move (the seat-rebind primitive, `mounts.rebind_seat`)
+has nothing to orphan.
 
-RE-KEYED ONTO THE SEAT (operator ruling 1db1ff41, "declared, all roads lead to explicit"):
-`governs` used to originate from whichever AGENT generation happened to declare it — schema.py's
-own docstring said "the repos a SEAT rules" while its from_type said Agent only, so the intent
-and the schema disagreed inside the same declaration (Lane C, decision 1913683e, proven live: a
-charter declared by generation III read back EMPTY for generation IV, since a `governs` link
-does not carry forward across succession the way `holds`/`handle`/`mail` do). Keying on the
-Seat's own durable object id instead — one seat, one link, forever — closes that gap AND
-dissolves `invalidate_link`'s exact-from_id limitation entirely: there is no longer an
-ancestor/successor distinction to trip over, because every generation of a lineage resolves to
-the SAME from_id. It also solves peer-seat divergence for free (deckard/metron, halcyon/ferryman,
-jenny/nebbercracker already have distinct Seat objects) — no house-level charter object needed.
+RE-KEYED ONTO THE SEAT ("declared, all roads lead to explicit"): `governs` used to originate
+from whichever AGENT generation happened to declare it. schema.py's own docstring said "the
+repos a SEAT rules" while its from_type said Agent only, so the intent and the schema
+disagreed inside the same declaration (proven live: a charter declared by one generation read
+back EMPTY for the next, since a `governs` link does not carry forward across succession the
+way `holds`/`handle`/`mail` do). Keying on the Seat's own durable object id instead, one seat,
+one link, forever, closes that gap AND dissolves `invalidate_link`'s exact-from_id limitation
+entirely: there is no longer an ancestor/successor distinction to trip over, because every
+generation of a lineage resolves to the SAME from_id. It also solves peer-seat divergence for
+free (peer seats already have distinct Seat objects), no house-level charter object needed.
 
-`set_charter` declares the WHOLE charter each call — an idempotent statement of "these are the
+`set_charter` declares the WHOLE charter each call: an idempotent statement of "these are the
 repos this seat rules now", not an increment. Repos newly named mint a `governs` link
 (SELF_DECLARED, the seat's own act); repos that drop off are healed by a COMPENSATING EVENT
-(`links.valid_until`, constitution #3 — never DELETE), so a shrinking charter stays a fact the
-graph remembers rather than information destroyed. `charter_of` reads back the currently
-active set. Wave 2 builds charter-scoped briefing aggregation on top of this; this lane only
-makes the charter a fact and makes it VISIBLE (orient()'s one line).
+(`links.valid_until`, never DELETE), so a shrinking charter stays a fact the graph remembers
+rather than information destroyed. `charter_of` reads back the currently active set. A later
+build phase adds charter-scoped briefing aggregation on top of this; this piece only makes the
+charter a fact and makes it VISIBLE (orient()'s one line).
 
-NO PRIMITIVE MAY MINT A REPO OUT OF A SELF-DECLARED STRING ALONE (Thoth's design constraint,
-msg 2402 — atlas's garbled 28-entry charter, `Us`/`apple`/`vector`, came from a MIND typing bad
-fragments, not a splitter; there is none in this codebase). `set_charter` never mints a
+NO PRIMITIVE MAY MINT A REPO OUT OF A SELF-DECLARED STRING ALONE: a previously observed
+garbled charter with meaningless short entries came from an agent typing bad fragments, not
+from any splitter (there is none in this codebase). `set_charter` never mints a
 SoftwareProject: it resolves each requested name through capture.py's own validated
-`_resolve_repo` — the SAME check `#107`'s guard runs, i.e. "does the graph already have
-independent evidence this repo is real" (a prior git ingest, or an earlier legitimate charter
-declaration) — and REFUSES, per-name, whatever it cannot find. A charter is SELF_DECLARED
-evidence; it must never be the first and only witness that a repo exists.
+`_resolve_repo`, the same check a related guard runs elsewhere, i.e. "does the graph already
+have independent evidence this repo is real" (a prior git ingest, or an earlier legitimate
+charter declaration), and REFUSES, per-name, whatever it cannot find. A charter is
+SELF_DECLARED evidence; it must never be the first and only witness that a repo exists.
 """
 
 from __future__ import annotations
@@ -52,10 +52,10 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
 
 async def charter_of(pool: asyncpg.Pool, seat_id: str) -> list[str]:
-    """The repos this SEAT currently governs — the ACTIVE `governs` links (a compensated-away
+    """The repos this SEAT currently governs: the ACTIVE `governs` links (a compensated-away
     grant does not count), plain repo labels (the `repo:` scheme stripped), sorted. Empty for
     the common seat that has never declared a charter (works_in still names its home), and
-    empty forever for a seat that never will — no lineage walk, no LIKE-prefix guess: one
+    empty forever for a seat that never will. No lineage walk, no LIKE-prefix guess: one
     durable object id, matched exactly."""
     rows = await pool.fetch(
         "SELECT p.canonical FROM links l "
@@ -68,11 +68,11 @@ async def charter_of(pool: asyncpg.Pool, seat_id: str) -> list[str]:
 
 
 async def operator_charter_of(pool: asyncpg.Pool, person_id: str) -> list[str]:
-    """Mirrors `charter_of` exactly, joined on a Person object instead of a Seat — an
-    operator's own charter (thread 1d5b9773, "authority by charter"): an operator governs a
+    """Mirrors `charter_of` exactly, joined on a Person object instead of a Seat: an
+    operator's own charter ("authority by charter") means an operator governs a
     set of projects the SAME WAY a coordinator's seat does, via active `governs` links off
     its own durable object id. Empty for a Person that has never been chartered (or never
-    minted at all — a caller passes whatever canonical it has; a miss here just means an
+    minted at all: a caller passes whatever canonical it has; a miss here just means an
     empty charter, not an error)."""
     rows = await pool.fetch(
         "SELECT p.canonical FROM links l "
@@ -87,27 +87,27 @@ async def operator_charter_of(pool: asyncpg.Pool, person_id: str) -> list[str]:
 async def resolve_operator_authority(
     pool: asyncpg.Pool, actor: str, *, project: str | None = None,
 ) -> dict[str, Any]:
-    """THE ONE SHARED RESOLVER (thread 1d5b9773, operator ruling 2026-09-11, "authority by
-    charter") — every reader of `_OPERATOR_ACTORS` that means live AUTHORIZATION (as
-    opposed to an address, or a historical-attribution/name-filter exclusion) goes through
-    this instead of a bare `actor in _OPERATOR_ACTORS` test, so there is exactly one
-    definition of "is this actor the operator, and over what" in the whole codebase.
+    """THE ONE SHARED RESOLVER ("authority by charter"): every reader of `_OPERATOR_ACTORS`
+    that means live AUTHORIZATION (as opposed to an address, or a historical-attribution/
+    name-filter exclusion) goes through this instead of a bare `actor in _OPERATOR_ACTORS`
+    test, so there is exactly one definition of "is this actor the operator, and over what"
+    in the whole codebase.
 
-    `is_operator`: unchanged recognition path — `actor` is a member of `seats._OPERATOR_ACTORS`.
+    `is_operator`: unchanged recognition path: `actor` is a member of `seats._OPERATOR_ACTORS`.
     This function does NOT invent a second way to recognize an operator identity; multiple
     real operators (a Person per tenant) is explicitly OUT OF SCOPE for this piece (see
     `operator_charter_of`, callable directly against any Person id for that later design).
 
-    `person_id`: the resolved `person:operator` object id when `is_operator` — `None` if
+    `person_id`: the resolved `person:operator` object id when `is_operator`, `None` if
     that singleton has never been minted (e.g. `ensure_operator_person` never ran yet), in
     which case there is nothing to check a charter against.
 
     `authorized`: with `project=None` (no project in scope for this check), mirrors
-    `is_operator` exactly — global recognition, the same behavior every one of these call
+    `is_operator` exactly: global recognition, the same behavior every one of these call
     sites already had before this build. With a `project` given (resolved the same tolerant
-    way `_resolve_repo` already does — bare name, `repo:`-prefixed, or canonical), `True`
+    way `_resolve_repo` already does: bare name, `repo:`-prefixed, or canonical), `True`
     only when the resolved operator Person's OWN active `governs` charter covers that
-    project — 'the operator's word' on a project resolves to the operator whose charter
+    project. 'The operator's word' on a project resolves to the operator whose charter
     covers it, never a blanket claim by the bare literal alone."""
     from src.orchestrator.capture import _OPERATOR_PERSON_CANONICAL, _resolve_repo
     from src.orchestrator.seats import _OPERATOR_ACTORS
@@ -133,18 +133,18 @@ async def resolve_operator_authority(
 
 async def is_operator_actor(pool: asyncpg.Pool, actor: str) -> bool:
     """Thin convenience wrapper over `resolve_operator_authority`'s no-project (global
-    recognition) mode — for the many BUCKET B call sites that only ever asked "is this
+    recognition) mode, for the many call sites that only ever asked "is this
     actor the operator", never "over which project", and don't want to unpack a dict for
     that one bit. Behaviorally identical to the old `actor in _OPERATOR_ACTORS` test."""
     return bool((await resolve_operator_authority(pool, actor))["is_operator"])
 
 
 async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, str]]:
-    """`charter_of` plus each governed project's own recorded `on_disk_path` — (repo label,
-    path) pairs, only for projects that HAVE a path on record. The launch commands use this to
-    catch the #199 mint-time fabrication (operator, 2026-09-03, "launch lands the agent in
-    the wrong cwd"): a seat whose `tree_cwd` is the convention-derived ~/code/<handle> — a
-    bare directory holding nothing but a `.osiris` pin — while its charter governs a real
+    """`charter_of` plus each governed project's own recorded `on_disk_path`: (repo label,
+    path) pairs, only for projects that HAVE a path on record. The launch commands use this
+    to catch a previously observed mint-time fabrication ("launch lands the agent in
+    the wrong cwd"): a seat whose `tree_cwd` is the convention-derived ~/code/<handle>, a
+    bare directory holding nothing but a `.osiris` pin, while its charter governs a real
     tree somewhere else. Same active-`governs` query as `charter_of`, one extra join, never
     a second notion of what a seat governs."""
     rows = await pool.fetch(
@@ -161,27 +161,26 @@ async def governed_trees(pool: asyncpg.Pool, seat_id: str) -> list[tuple[str, st
 
 async def project_current_name(pool: asyncpg.Pool, repo_label: str) -> str:
     """A `charter_of`/`governed_trees` entry (a project's CANONICAL, `repo:` stripped)
-    resolved to that project's own CURRENT `name` property — the identity value every
-    "which project" derivation must compare/write (operator ruling b5663511, PROJECT
-    IDENTITY DRIFT, Thoth dispatch 12401): the live specimen was `house_to_project`
-    stamping a seat's own `house` as `repo:xxit`'s bare canonical ("xxit") when the
-    project had since been renamed to "handlingtheloop" — every later "does this seat's
-    stamped project match its charter" comparison then read as a disagreement that
-    wasn't one, and `osiris new`/ingest-time mint entry points that only ever see the CURRENT
-    name (never the frozen-at-mint canonical) minted a fresh stub project instead of
-    finding the real one.
+    resolved to that project's own CURRENT `name` property: the identity value every
+    "which project" derivation must compare/write (PROJECT IDENTITY DRIFT): a live
+    specimen was `house_to_project` stamping a seat's own `house` as a project's bare
+    canonical when the project had since been renamed to something else. Every later
+    "does this seat's stamped project match its charter" comparison then read as a
+    disagreement that wasn't one, and `osiris new`/ingest-time mint entry points that only
+    ever see the CURRENT name (never the frozen-at-mint canonical) minted a fresh stub
+    project instead of finding the real one.
 
-    `charter_of`/`set_charter` themselves stay canonical FOREVER, on purpose (decision
-    5031a74 — that is exactly why a rename never needs to re-point a `governs` edge);
-    this is the READ-TIME resolution a caller applies to one of their own entries when
-    what it needs is what that canonical MEANS today, not the frozen label it happened
-    to mint under. A close cousin of `charter_display_label`'s own `_live_label`
-    resolution, but for COMPARISON/WRITE use (never presentation-only formatting —
-    `charter_display_label` explicitly refuses that role for the opposite reason).
-    Falls back to `repo_label` itself when the project was never named, or the
-    canonical does not resolve to any object at all — never raises; a caller with a
-    genuinely unresolvable label is exactly the population `charter_of` already forces
-    into "no charter"/"ambiguous charter" refusals upstream of this."""
+    `charter_of`/`set_charter` themselves stay canonical FOREVER, on purpose (that is
+    exactly why a rename never needs to re-point a `governs` edge); this is the
+    READ-TIME resolution a caller applies to one of their own entries when what it needs
+    is what that canonical MEANS today, not the frozen label it happened to mint under.
+    A close cousin of `charter_display_label`'s own `_live_label` resolution, but for
+    COMPARISON/WRITE use (never presentation-only formatting: `charter_display_label`
+    explicitly refuses that role for the opposite reason). Falls back to `repo_label`
+    itself when the project was never named, or the canonical does not resolve to any
+    object at all: never raises; a caller with a genuinely unresolvable label is exactly
+    the population `charter_of` already forces into "no charter"/"ambiguous charter"
+    refusals upstream of this."""
     name = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.type='SoftwareProject' AND o.canonical=$1 AND a.name='name' "
@@ -193,9 +192,9 @@ async def project_current_name(pool: asyncpg.Pool, repo_label: str) -> str:
 async def set_charter(
     actions: Actions, seat_id: str, repos: list[str], *, actor: str,
 ) -> dict[str, Any]:
-    """Declare the WHOLE charter — replacing whatever this seat ruled before, never adding to
+    """Declare the WHOLE charter, replacing whatever this seat ruled before, never adding to
     it blind. Self-declared, same evidence grade as claim_name (a seat's own word about its own
-    jurisdiction) — but sourced from the SEAT (`seat_id`), not the calling session, so two
+    jurisdiction), but sourced from the SEAT (`seat_id`), not the calling session, so two
     generations of the same lineage declaring in succession are the same source, never two.
     `actor` is the agent that actually typed this (audit trail only; never the graph edge's
     origin). Repos newly named mint a fresh `governs` link; repos dropped from the list are
@@ -205,34 +204,34 @@ async def set_charter(
 
     Refuses per-name, never wholesale: a name `_resolve_repo` can't find as an already-real
     SoftwareProject (git-ingested, or already named on some other record) lands in `rejected`
-    with why, and the REST of the call still applies — the same "one bad item never sinks the
+    with why, and the REST of the call still applies, the same "one bad item never sinks the
     whole batch" discipline `settle()` already runs. Never mints a SoftwareProject itself.
 
     `seat_id` resolves by canonical, by `handle`, or by raw object id (`_resolve_active_seat`,
-    thread 8673ddb7's own precedent) — a SEVENTH specimen of that exact-canonical-only gap
-    (thread c851c81b, Tantra: `charter_for('Tantra', ...)` read "no such active seat" although
-    her Seat was active and held that literal handle).
+    established precedent elsewhere in this codebase): one specimen of that exact-canonical-only
+    gap: a call like `charter_for('example', ...)` read "no such active seat" although
+    the target Seat was active and held that literal handle.
 
-    RESOLVED BY CANONICAL, NEVER BY THE CALLER'S OWN SPELLING (thread fba386dc, "rename
-    honesty seams"): `_resolve_repo` matches a name against a project's `name` PROPERTY
-    too, not just its canonical (the whole point — a caller should be able to charter a
-    repo by whatever it's currently called). The diff below used to compare the caller's
-    RAW input strings against `charter_of`'s own canonical-derived `current` set — so a
-    seat chartering "Osiris" today and "osiris" (or the project's post-rename display
-    name) tomorrow read as two DIFFERENT repos, invalidating the real grant and minting a
-    twin that itself gets invalidated the call after — never settling, never idempotent,
-    the exact "not idempotent on first application" symptom. Every candidate is resolved
-    to its project's own CANONICAL before the diff, so the comparison is always canonical-
-    vs-canonical, whatever spelling the caller typed.
+    RESOLVED BY CANONICAL, NEVER BY THE CALLER'S OWN SPELLING: `_resolve_repo` matches a
+    name against a project's `name` PROPERTY too, not just its canonical (the whole point:
+    a caller should be able to charter a repo by whatever it's currently called). The diff
+    below used to compare the caller's RAW input strings against `charter_of`'s own
+    canonical-derived `current` set, so a seat chartering a repo by one spelling today and
+    a differently-cased or post-rename display name tomorrow read as two DIFFERENT repos,
+    invalidating the real grant and minting a duplicate that itself gets invalidated the
+    call after: never settling, never idempotent, the exact "not idempotent on first
+    application" symptom. Every candidate is resolved to its project's own CANONICAL
+    before the diff, so the comparison is always canonical-vs-canonical, whatever spelling
+    the caller typed.
 
-    ATOMIC (same thread): the read-diff-write sequence used to be five-plus independent
-    transactions — a crash or a concurrent write between the read and the writes could
-    leave the charter partially applied (the "receipt says added, read says empty" live
-    specimen). The whole sequence — reading the CURRENT charter, then every `create_link`/
-    `invalidate_link` — now runs inside one `actions.atomic()` transaction: all of it lands
-    together or none of it does. The receipt's own `charter` field is READ BACK from the
-    graph after the transaction commits (never the pre-write `wanted` list) — it can never
-    claim a state the graph doesn't actually hold."""
+    ATOMIC: the read-diff-write sequence used to be five-plus independent
+    transactions: a crash or a concurrent write between the read and the writes could
+    leave the charter partially applied (a previously observed "result says added, read
+    says empty" specimen). The whole sequence, reading the CURRENT charter, then every
+    `create_link`/`invalidate_link`, now runs inside one `actions.atomic()` transaction:
+    all of it lands together or none of it does. The result's own `charter` field is READ
+    BACK from the graph after the transaction commits (never the pre-write `wanted`
+    list): it can never claim a state the graph doesn't actually hold."""
     from src.orchestrator.capture import _resolve_repo
     from src.orchestrator.seats import _resolve_active_seat
 
@@ -243,7 +242,7 @@ async def set_charter(
                          "seat, and this one doesn't exist (or isn't active)"}
     seat_oid, seat_id = seat_row["id"], seat_row["canonical"]
     candidates = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
-    # name typed -> (project object id, project's own canonical, bare) — resolved ONCE,
+    # name typed -> (project object id, project's own canonical, bare): resolved ONCE,
     # before the transaction, since `_resolve_repo` itself is a plain read.
     resolved: dict[str, tuple[Any, str]] = {}
     rejected: list[dict[str, str]] = []
@@ -260,7 +259,7 @@ async def set_charter(
 
     async with actions.atomic() as a:
         current = set(await charter_of(a.pool, seat_id))
-        # by CANONICAL now, never the caller's own spelling — a name/case-differing
+        # by CANONICAL now, never the caller's own spelling: a name/case-differing
         # re-declaration of an already-governed repo is the no-op it was always meant to be.
         wanted_by_canon = {canon: proj_id for _name, (proj_id, canon) in resolved.items()}
         wanted = sorted(wanted_by_canon)
@@ -274,8 +273,8 @@ async def set_charter(
             if proj_id is not None:
                 await a.invalidate_link(seat_oid, proj_id, "governs", actor, now)
 
-    # read-back TRUTH, outside the transaction (committed by now) — never the pre-write
-    # `wanted` list, so the receipt can never claim a charter the graph doesn't hold.
+    # read-back TRUTH, outside the transaction (committed by now), never the pre-write
+    # `wanted` list, so the result can never claim a charter the graph doesn't hold.
     settled = await charter_of(actions.pool, seat_id)
     out: dict[str, Any] = {"seat": seat_id, "charter": settled, "added": added,
                            "removed": removed}
@@ -288,56 +287,53 @@ async def charter_for(
     actions: Actions, seat_id: str, repos: list[str], *, because: str, actor: str,
     ruling: str | None = None,
 ) -> dict[str, Any]:
-    """THE MANAGER-INVOKED SIBLING (thread 2446), not a widening of `charter()`: the
-    operator's own model, 2026-07-31 — "a seat with no manager should be able to
-    recharter itself, it has no upstream agent authority, IM THE NODE THAT EVERY AGENT
-    LINKS BACK TO" — makes the rule uniform. A seat may declare its own charter; its
-    manager may declare FOR it; the operator is every seat's ultimate manager, so no seat
-    is ever authority-less. `charter()` stays EXACTLY as it is — self-declaration only,
-    no target param — because that is what makes the STRANGER case work unaided, with no
-    operator in the loop at all (ruling 1db1ff41's own acceptance bar). This is the OTHER
-    half: declaring on behalf of a seat that cannot yet speak for itself (ruling 5's own
-    24 undeclared seats).
+    """THE MANAGER-INVOKED SIBLING, not a widening of `charter()`: the underlying model is
+    that a seat with no manager should be able to recharter itself, since it has no
+    upstream agent authority, and the operator is the node every agent ultimately links
+    back to, so the rule stays uniform. A seat may declare its own charter; its manager
+    may declare FOR it; the operator is every seat's ultimate manager, so no seat is ever
+    authority-less. `charter()` stays EXACTLY as it is: self-declaration only, no target
+    param, because that is what makes an unrecognized-caller case work unaided, with no
+    operator in the loop at all. This is the OTHER half: declaring on behalf of a seat
+    that cannot yet speak for itself.
 
-    GUARD, ENFORCED (not merely a naming convention — rename_seat/set_seat_attended's own
+    GUARD, ENFORCED (not merely a naming convention: rename_seat/set_seat_attended's own
     "manager/operator-invoked" claim is not actually checked in their code; this one
     checks): `actor` must be either an operator actor WHOSE OWN CHARTER COVERS EVERY REPO
-    NAMED IN `repos` (thread 1d5b9773, "authority by charter" — 'the operator's word' on a
-    project resolves to the operator whose charter covers it; a bare `_OPERATOR_ACTORS`
-    sentinel is no longer an unconditional bypass by itself), OR the seat `actor`'s own
-    lineage currently holds must BE the target seat's manager (`manager_of_seat`'s live
-    `managed_by` edge), OR `ruling` names a standing operator ruling that authorizes THIS
-    write (Thoth mail 9382 item 3, 93b25ddc — see `verify_ruling`'s own three-part check:
-    the ref resolves, its kind is 'ruling', and its own text names 'charter_for'). An
-    operator actor whose charter does NOT cover every named repo falls straight through to
-    the manager check below (which will ordinarily refuse too, for the same clean
-    "not authorized" reason a non-operator caller gets — the bypass simply never fires,
-    it does not manufacture a second, differently-worded refusal). Refuses loudly
-    otherwise, naming both who the caller resolved to and who the seat's actual manager is
-    (or that it has none on record) — never a bare permission-denied. A `ruling` that
-    fails any of `verify_ruling`'s checks refuses on THAT error directly — it never
-    silently falls through to the manager check, which would let a caller probe two
-    unrelated authorization paths in one call.
+    NAMED IN `repos` ("authority by charter": 'the operator's word' on a project resolves
+    to the operator whose charter covers it; a bare `_OPERATOR_ACTORS` sentinel is no
+    longer an unconditional bypass by itself), OR the seat `actor`'s own lineage currently
+    holds must BE the target seat's manager (`manager_of_seat`'s live `managed_by` edge),
+    OR `ruling` names a standing operator ruling that authorizes THIS write (see
+    `verify_ruling`'s own three-part check: the ref resolves, its kind is 'ruling', and
+    its own text names 'charter_for'). An operator actor whose charter does NOT cover
+    every named repo falls straight through to the manager check below (which will
+    ordinarily refuse too, for the same clean "not authorized" reason a non-operator
+    caller gets: the bypass simply never fires, it does not manufacture a second,
+    differently-worded refusal). Refuses loudly otherwise, naming both who the caller
+    resolved to and who the seat's actual manager is (or that it has none on record),
+    never a bare permission-denied. A `ruling` that fails any of `verify_ruling`'s checks
+    refuses on THAT error directly: it never silently falls through to the manager check,
+    which would let a caller probe two unrelated authorization paths in one call.
 
     `because` is required, same testimony discipline `rename_seat` runs: declaring a
     charter on someone else's behalf is a deliberate act, not a routine one. Every write
-    stamps `actor` (rebind_seat's own law: a rebind is a mind's act on another seat, so
-    the record must say whose hand moved it — applied identically here); the receipt
+    stamps `actor` (rebind_seat's own rule: a rebind is an agent's act on another seat, so
+    the record must say whose hand moved it, applied identically here); the result
     carries both `because` and who declared it.
 
-    BLIND TO LEGACY AGENT-ORIGIN GOVERNS EDGES, BY CONSTRUCTION (Seshat's blocker 2, live
-    and unresolved: `migrate_charter_to_seat` has not run — Atlas's 27 governs edges
-    still sit on `agent:f84d55be-v` as Agent-origin links while his Seat reads zero).
-    This delegates straight to `set_charter`, which only ever reads/writes governs links
-    FROM a Seat object — it cannot see, heal, or interact with an Agent-origin row at
-    all, so calling `charter_for` on an unmigrated seat is safe from THAT angle: it never
-    touches the legacy rows, never orphans them further. It does NOT solve the reverse
-    risk, named here so nobody finds it by accident rather than fixed (out of scope for
-    this piece): if `migrate_charter_to_seat` runs LATER on a seat `charter_for` already
-    declared for, that function computes its target set purely from the legacy
-    Agent-origin union, with no awareness of a charter already declared post-rekey — it
-    could heal away what `charter_for` just wrote. A real, separate gap in the migration
-    itself, still open."""
+    BLIND TO LEGACY AGENT-ORIGIN GOVERNS EDGES, BY CONSTRUCTION (a known, unresolved
+    blocker: `migrate_charter_to_seat` has not run for some seats, whose governs edges
+    still sit on an old Agent-origin link while their Seat reads zero). This delegates
+    straight to `set_charter`, which only ever reads/writes governs links FROM a Seat
+    object; it cannot see, heal, or interact with an Agent-origin row at all, so calling
+    `charter_for` on an unmigrated seat is safe from THAT angle: it never touches the
+    legacy rows, never orphans them further. It does NOT solve the reverse risk, named
+    here so nobody finds it by accident rather than fixed (out of scope for this piece):
+    if `migrate_charter_to_seat` runs LATER on a seat `charter_for` already declared for,
+    that function computes its target set purely from the legacy Agent-origin union,
+    with no awareness of a charter already declared post-rekey: it could heal away what
+    `charter_for` just wrote. A real, separate gap in the migration itself, still open."""
     from src.orchestrator.seats import _resolve_active_seat, held_seat, manager_of_seat
 
     because = (because or "").strip()
@@ -345,11 +341,11 @@ async def charter_for(
         return {"error": "because is required — a charter declared on another seat's "
                          "behalf is testimony, same discipline rename_seat runs"}
     ruling_id = None
-    # AUTHORITY BY CHARTER (thread 1d5b9773): an operator actor's bypass is no longer
-    # unconditional — it only fires when the resolved operator's OWN charter covers every
+    # AUTHORITY BY CHARTER: an operator actor's bypass is no longer
+    # unconditional, it only fires when the resolved operator's OWN charter covers every
     # repo this call is trying to declare. A repos=[] call (clearing a charter) has no
-    # project to scope against, so it falls back to plain global operator recognition —
-    # the same behavior every other bucket-B site keeps.
+    # project to scope against, so it falls back to plain global operator recognition,
+    # the same behavior every other comparable call site keeps.
     repo_names = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
     if repo_names:
         checks = [await resolve_operator_authority(actions.pool, actor, project=r)
@@ -367,10 +363,10 @@ async def charter_for(
                 return {"error": check["error"]}
             ruling_id = check["ruling_id"]
         else:
-            # RESOLVED FIRST, same as set_charter's own seat_id (the Tantra specimen,
-            # thread c851c81b, one level up): the authorization check used to run
+            # RESOLVED FIRST, same as set_charter's own seat_id (the same specimen
+            # described one level up): the authorization check used to run
             # manager_of_seat against the caller's raw, unresolved spelling of
-            # `seat_id` — a handle never matches manager_of_seat's exact-canonical
+            # `seat_id`. A handle never matches manager_of_seat's exact-canonical
             # lookup, so a real bond read as "no manager on record" purely because of
             # how the target was spelled.
             target_row = await _resolve_active_seat(actions.pool, seat_id)
@@ -404,36 +400,36 @@ async def charter_for(
 async def migrate_charter_to_seat(
     actions: Actions, *, dry_run: bool = True, only_seats: set[str] | None = None,
 ) -> dict[str, Any]:
-    """THE ONE-TIME MIGRATION (ruling 1db1ff41): before this, `governs` originated from
-    whichever Agent generation happened to declare it, and a successor re-declaring couldn't
-    heal an ancestor's grant (`invalidate_link` needs the exact from_id) — so a lineage's
-    EFFECTIVE charter (what orient()/charter()'s lineage-walk showed, 742df26) could silently
-    accumulate repos nobody meant to keep. This walks every ACTIVE Agent-origin `governs` link,
-    resolves each Agent to the Seat its lineage currently holds (`held_seat` — the same
-    lineage-aware resolution orient()/mount() already trust: the presented id, its bare root,
-    or any `-<suffix>` generation), and for each seat re-declares the UNION of everything its
-    lineage ever actively declared as a fresh Seat-origin charter — through `set_charter`
-    itself, the same validated, idempotent write path a live seat would use — then heals every
-    migrated Agent-origin link (compensating event, never deleted).
+    """THE ONE-TIME MIGRATION: before this, `governs` originated from whichever Agent
+    generation happened to declare it, and a successor re-declaring couldn't heal an
+    ancestor's grant (`invalidate_link` needs the exact from_id), so a lineage's
+    EFFECTIVE charter (what orient()/charter()'s lineage-walk showed) could silently
+    accumulate repos nobody meant to keep. This walks every ACTIVE Agent-origin `governs`
+    link, resolves each Agent to the Seat its lineage currently holds (`held_seat`, the
+    same lineage-aware resolution orient()/mount() already trust: the presented id, its
+    bare root, or any `-<suffix>` generation), and for each seat re-declares the UNION of
+    everything its lineage ever actively declared as a fresh Seat-origin charter, through
+    `set_charter` itself, the same validated, idempotent write path a live seat would use,
+    then heals every migrated Agent-origin link (compensating event, never deleted).
 
     DRY-RUN REPORTS THE PLAN AND WRITES NOTHING. Idempotent: a second run finds no active
     Agent-origin `governs` links left (the first pass healed them all) and is a no-op.
 
-    An Agent whose OWN lineage holds no seat right now (never attached/claimed, or reassigned/
-    retired since it declared) is reported in `unresolved`, NEVER guessed — its links are left
-    untouched, a named residual exactly like the propose-and-approve batch (ruling 5) this is
-    NOT: this heals a rekey, it does not clean up what was declared, however it looks.
+    An Agent whose OWN lineage holds no seat right now (never attached/claimed, or
+    reassigned/retired since it declared) is reported in `unresolved`, NEVER guessed: its
+    links are left untouched, a named residual, distinct from a propose-and-approve batch:
+    this heals a rekey, it does not clean up what was declared, however it looks.
 
-    NEVER HEALS AWAY A POST-REKEY CHARTER (charter_for's own docstring named this gap, still
-    open until now): `set_charter` REPLACES a seat's whole charter — anything not in the list
-    passed to it gets invalidated. If a seat already declared its OWN Seat-origin charter (via
-    `charter()`/`charter_for`) before this migration ever ran on it, computing the target set
-    from legacy Agent-origin links ALONE and handing that straight to `set_charter` would heal
-    away the seat's own later, more-authoritative declaration — a live seat's own word,
-    destroyed by a one-time cleanup of dead links it never asked to run again. So each seat's
-    migrated set is the UNION of the legacy Agent-origin repos being healed with whatever
-    `charter_of` already reads back for it right now — additive only, never a replacement of a
-    charter the seat itself already stands behind."""
+    NEVER HEALS AWAY A POST-REKEY CHARTER (charter_for's own docstring named this gap,
+    still open until now): `set_charter` REPLACES a seat's whole charter: anything not in
+    the list passed to it gets invalidated. If a seat already declared its OWN Seat-origin
+    charter (via `charter()`/`charter_for`) before this migration ever ran on it, computing
+    the target set from legacy Agent-origin links ALONE and handing that straight to
+    `set_charter` would heal away the seat's own later, more-authoritative declaration, a
+    live seat's own word, destroyed by a one-time cleanup of dead links it never asked to
+    run again. So each seat's migrated set is the UNION of the legacy Agent-origin repos
+    being healed with whatever `charter_of` already reads back for it right now, additive
+    only, never a replacement of a charter the seat itself already stands behind."""
     from src.orchestrator.seats import held_seat
 
     rows = await actions.pool.fetch(

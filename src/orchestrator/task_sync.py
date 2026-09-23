@@ -1,51 +1,49 @@
-"""The harness tasklist reconciled against the graph — Phase 1, REPORT-ONLY (Thoth DM 2636,
-decisions ab27af61/42f63782, Practice 3262cdc9: "a short id, a handle, a basename, or a
-number is a HINT until you've named what scopes it").
+"""The harness tasklist reconciled against the graph. Phase 1, report-only. A short id, a
+handle, a basename, or a number is a hint until you've named what scopes it.
 
 WHY THIS EXISTS: the graph and a Claude Code harness's own TaskCreate/TaskList/TaskUpdate
-tool disagree about what's open, and nothing has ever compared them (decision af63ea63,
-"three ledgers, none authoritative"). But "the harness tasklist" is not one ledger — it is
-one store PER project/session-launch context (~/.claude/tasks/<uuid>/, 91 of them on one
-box the night this was measured), each numbering its own tasks independently from a low
-integer. Nothing makes a bare id globally unique — the same id "107" named three unrelated
-things across three different stores, verified live (decision 42f63782). So a task's binding
-key is TWO properties, `harness_task_id` + `harness_task_store`, never one.
+tool disagree about what's open, and nothing has ever compared them before (three separate
+ledgers, none authoritative). But "the harness tasklist" is not one ledger: it is one store
+PER project/session-launch context (~/.claude/tasks/<uuid>/, dozens of them measured on one
+host at once), each numbering its own tasks independently from a low integer. Nothing makes
+a bare id globally unique: the same id has been observed naming unrelated tasks across
+different stores. So a task's binding key is TWO properties, `harness_task_id` +
+`harness_task_store`, never one.
 
 THIS MODULE DOES NOT TOUCH ~/.claude/tasks ITSELF. Every store's own `.lock` file is
-evidence it expects tool-mediated writes (TaskCreate/TaskUpdate), not file surgery — reaching
-in directly would be the harness-side twin of "RAW SQL IS A DEFECT REPORT" (decision
-a2cf8405) against a store this house does not own. Every function here takes task data
-already shaped like the harness tool's own JSON ({"id", "subject", "description", "status",
-...}) as plain input — where that data comes from is the CALLER's problem (TaskList/TaskGet
-in production; a clearly-labeled, read-only research driver for a one-off dry run — see
+evidence it expects tool-mediated writes (TaskCreate/TaskUpdate), not file surgery: reaching
+in directly would be the harness-side equivalent of hand-writing queries against a store
+this codebase does not own. Every function here takes task data already shaped like the
+harness tool's own JSON ({"id", "subject", "description", "status", ...}) as plain input;
+where that data comes from is the CALLER's problem (TaskList/TaskGet in production; a
+clearly-labeled, read-only research driver for a one-off dry run, see
 scripts/task_sync_dryrun.py). Keeping the harness IO out of this module is what makes it
 testable without a real store and keeps this module honest about not being the enumeration
-entry point it explicitly recommends never building (decision ab27af61: "no sanctioned
-entry point exists to enumerate all 91 stores... flag it upstream, don't build a workaround").
+entry point it explicitly recommends never building: no sanctioned entry point exists to
+enumerate every store, that gap should be flagged upstream rather than worked around here.
 
-THE BINDING RULE, UNCHANGED FROM PHASE 1c AND cf3dcd79: refuse, never guess. A citation is
-found in a task's own prose (today's only bridge — "Graph thread 5da19aa6, ruling 10f4058b"),
-resolved through the exact same strict ladder every other short-id caller in this house uses
-(`_find_thread`, `require_identifier=True` — no free-text/summary-substring leg, the guess
-this feature exists to refuse). A citation that resolves to more than one Thread (RefAmbiguous
-— now understood per cf3dcd79 to often mean one multi-source-touched object, not two) or to
+THE BINDING RULE, UNCHANGED SINCE EARLY DESIGN: refuse, never guess. A citation is found in
+a task's own prose (today's only bridge, e.g. "Graph thread 5da19aa6, ruling 10f4058b"),
+resolved through the exact same strict ladder every other short-id caller in this codebase
+uses (`_find_thread`, `require_identifier=True`, no free-text/summary-substring leg, the
+guess this feature exists to refuse). A citation that resolves to more than one Thread
+(RefAmbiguous, now understood to often mean one multi-source-touched object, not two) or to
 none is UNRESOLVABLE, reported by its exact string, never silently dropped and never
 silently bound to a best guess.
 
-FIVE BUCKETS, NEVER A BARE COUNT STANDING IN FOR THEM (Thoth's own failure-mode requirement,
-DM 2562/2636): bound / bound_partial (some citations resolved, some didn't — a real, distinct
-state, not folded into either clean bucket) / cited_unresolvable / uncited. The fifth,
-disagreement, and the reverse-direction sixth, thread_side_orphans, are computed by
-`reconcile` once the Thread-side universe is known — see its own docstring.
+FIVE BUCKETS, NEVER A BARE COUNT STANDING IN FOR THEM: bound / bound_partial (some
+citations resolved, some didn't, a real, distinct state, not folded into either clean
+bucket) / cited_unresolvable / uncited. The fifth, disagreement, and the reverse-direction
+sixth, thread_side_orphans, are computed by `reconcile` once the Thread-side universe is
+known, see its own docstring.
 
-THE in_repo TRAP (Thoth DM 2636, the same night, from Khnum's and Seshat's independent
-findings): any thread enumeration scoped through a repo-scoped lens silently excludes every
-Thread with no `in_repo` edge at all — 56 of 2,568 fleet-wide the night this was measured.
-That is the same law as this module's own binding rule, aimed at REACHABILITY instead of
-UNIQUENESS: "what can this query actually reach" is `harness_task_store`'s sibling question
-to "what is this unique within". So `reconcile` takes thread ROWS from
-`thread_closure.enumerate_threads` called UNSCOPED (no `repo=`) — the only way to see
-`has_in_repo=False` rows at all — never a repo-scoped query of its own.
+THE in_repo TRAP: any thread enumeration scoped through a repo-scoped lens silently
+excludes every Thread with no `in_repo` edge at all, dozens found fleet-wide the night this
+was measured. That is the same principle as this module's own binding rule, aimed at
+REACHABILITY instead of UNIQUENESS: "what can this query actually reach" is
+`harness_task_store`'s sibling question to "what is this unique within". So `reconcile`
+takes thread ROWS from `thread_closure.enumerate_threads` called UNSCOPED (no `repo=`), the
+only way to see `has_in_repo=False` rows at all, never a repo-scoped query of its own.
 """
 from __future__ import annotations
 
@@ -60,11 +58,11 @@ from src.actions.core import Actions
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
-# A citation is an 8-hex-char token named near the word "thread"/"threads" in free text —
-# the dominant real shape found in this house's own task descriptions ("Graph thread
+# A citation is an 8-hex-char token named near the word "thread"/"threads" in free text,
+# the dominant real shape found in this codebase's own task descriptions ("Graph thread
 # 5da19aa6, ruling 10f4058b", "Graph threads: a94935ad, f01b3fcc, 588148bb, 00f6a18d").
 # Deliberately NOT matching every bare 8-hex token in a description (a git short sha, an
-# unrelated id) — proximity to the keyword is the only signal cheap enough to trust without
+# unrelated id): proximity to the keyword is the only signal cheap enough to trust without
 # guessing, and getting it wrong in the SAFE direction (missing a real citation, landing it
 # in `uncited`) is the only acceptable failure mode here; the resolution step below is what
 # actually decides correctness, not this regex.
@@ -75,7 +73,7 @@ _CITATION_RE = re.compile(
 
 def parse_thread_citations(description: str) -> list[str]:
     """Pure. Candidate 8-hex Thread short-ids named near "thread(s)" in a harness task's own
-    `description` text, in first-seen order, de-duplicated. Never resolves anything — that
+    `description` text, in first-seen order, de-duplicated. Never resolves anything: that
     is `resolve_task_citations`'s job, against the live graph."""
     out: list[str] = []
     for m in _CITATION_RE.finditer(description or ""):
@@ -90,21 +88,21 @@ async def resolve_task_citations(
     pool: asyncpg.Pool, task: dict[str, Any],
 ) -> dict[str, Any]:
     """One harness task ({"id", "description", ...}, the harness tool's own shape) -> its
-    binding bucket. Never writes — Phase 1 is report-only. Never guesses: an ambiguous or
+    binding bucket. Never writes: Phase 1 is report-only. Never guesses: an ambiguous or
     unmatched citation is named, not dropped and not silently bound.
 
     Returns {"task_id", "bucket", ...}: bucket is one of
-      "uncited"             — no thread-shaped citation found in the description at all.
-      "bound"                — every citation resolved to exactly one Thread each.
+      "uncited"             : no thread-shaped citation found in the description at all.
+      "bound"                : every citation resolved to exactly one Thread each.
                                 carries "thread_ids" (str uuids).
-      "bound_partial"        — at least one citation resolved AND at least one did not; a
+      "bound_partial"        : at least one citation resolved AND at least one did not, a
                                 real, distinct state (this task is not cleanly bindable),
                                 never folded into "bound" or "cited_unresolvable".
                                 carries "thread_ids" (the ones that DID resolve) and
                                 "failed" (the ones that didn't, see below).
-      "cited_unresolvable"   — every citation found failed to resolve to exactly one Thread.
+      "cited_unresolvable"   : every citation found failed to resolve to exactly one Thread.
                                 carries "failed": [{"citation", "why"}], `why` is the exact
-                                RefAmbiguous message or "no Thread matches" — never a bare
+                                RefAmbiguous message or "no Thread matches", never a bare
                                 boolean, so a reader can act on WHY without re-deriving it."""
     from src.orchestrator.capture import RefAmbiguous, _find_thread
 
@@ -136,11 +134,11 @@ async def resolve_task_citations(
 
 def _status_disagrees(task_status: str, thread_property_status: str | None) -> bool:
     """A task's own status and its bound Thread's `property_status` disagree about whether
-    the work is done. Pure boolean, no side — `reconcile` is the one that names WHICH task/
-    thread pair, never resolves the disagreement itself (Thoth: "never resolved here, only
-    flagged" — thread_closure.py's own topology_property_disagreement makes the identical
+    the work is done. Pure boolean, no side effect: `reconcile` is the one that names WHICH
+    task/thread pair, never resolves the disagreement itself: it is only ever flagged, never
+    resolved here. thread_closure.py's own topology_property_disagreement makes the identical
     choice for the edge/property axis; this is that discipline applied to the task/thread
-    axis)."""
+    axis."""
     task_done = task_status == "completed"
     thread_done = thread_property_status == "resolved"
     return task_done != thread_done
@@ -150,18 +148,18 @@ async def reconcile(
     pool: asyncpg.Pool, tasks: list[dict[str, Any]], *, thread_kind_field: str = "task",
 ) -> dict[str, Any]:
     """The full Phase-1 report. `tasks` is a flat list of harness task dicts from however
-    many stores the caller gathered (each SHOULD carry its own `_store` key naming which —
+    many stores the caller gathered (each SHOULD carry its own `_store` key naming which,
     see scripts/task_sync_dryrun.py; not required here, just echoed back per-row if present,
     since this function does not know or care where a task came from, only what it says).
 
     Walks `thread_closure.enumerate_threads` UNSCOPED (no repo=) to build the full active-
-    Thread universe INCLUDING has_in_repo=False rows — the in_repo trap this module's own
+    Thread universe INCLUDING has_in_repo=False rows, the in_repo trap this module's own
     docstring names. Every bound/bound_partial thread_id is cross-checked against that
     universe for its `property_status`, to compute the fifth bucket (disagreement) and the
     sixth, reverse-direction one (thread_side_orphans: Threads already carrying
-    kind=`thread_kind_field` — 'task' by default — that no task in `tasks` bound to).
+    kind=`thread_kind_field`, 'task' by default, that no task in `tasks` bound to).
     Each disagreement row's own `task_status` is looked up by (task_id, store), not task_id
-    alone — the SAME collision hazard the binding step already refuses (a bare id repeats
+    alone, the SAME collision hazard the binding step already refuses (a bare id repeats
     across stores; keying by id alone would let one store's status silently stand in for
     another's). A disagreement row carries `store` whenever its task did.
 
@@ -171,10 +169,10 @@ async def reconcile(
      "counts": {each bucket name: len(...)}}."""
     from src.orchestrator.thread_closure import enumerate_threads
 
-    # Keyed by (task_id, store), NEVER task_id alone — a bare id collides across stores
-    # (this module's own law, Practice 3262cdc9). Keying by id alone here would silently
-    # let one store's task overwrite another's status for disagreement-checking, exactly
-    # the hazard the binding step above already refuses to repeat.
+    # Keyed by (task_id, store), NEVER task_id alone: a bare id collides across stores
+    # (this module's own rule, stated in its docstring). Keying by id alone here would
+    # silently let one store's task overwrite another's status for disagreement-checking,
+    # exactly the hazard the binding step above already refuses to repeat.
     status_by_task_key = {
         (t["id"], t.get("_store")): str(t.get("status") or "") for t in tasks
     }
@@ -191,7 +189,7 @@ async def reconcile(
         if row["bucket"] in ("bound", "bound_partial"):
             bound_thread_ids.update(row["thread_ids"])
 
-    # the full active-Thread universe, UNSCOPED — the only way has_in_repo=False rows are
+    # the full active-Thread universe, UNSCOPED: the only way has_in_repo=False rows are
     # ever visible (the in_repo trap named in this module's docstring)
     thread_status: dict[str, str | None] = {}
     thread_kind: dict[str, str | None] = {}
@@ -249,29 +247,28 @@ async def reconcile(
     }
 
 
-# ── THE WRITE HALF (Thoth DM 2722, authorizing the three-tier design of DM 2687) ─────────
+# ── THE WRITE HALF (the three-tier design authorized for this module) ────────────────────
 #
-# TIER 1 — additive-only correlation facts, never a status. Safe to auto-execute: being
+# TIER 1: additive-only correlation facts, never a status. Safe to auto-execute: being
 # wrong here is inert (nothing consumes this property yet) and self-correcting (a later
-# assertion supersedes it). Property, not a link type (Thoth's ruling, DM 2722: a property
-# is reversible with no schema change; a LinkType is a permanent vocabulary commitment,
-# and the operator's pending `claim`/`supported_by` reshape (22d47acb) may make this a link
-# BY CONSTRUCTION later — promoting a property to a link is cheap, demoting a LinkType is
-# not).
+# assertion supersedes it). Property, not a link type: a property is reversible with no
+# schema change, while a LinkType is a permanent vocabulary commitment, and a pending
+# reshape of related link types may make this a link by construction later, promoting a
+# property to a link is cheap, demoting a LinkType is not.
 #
-# TIER 2 — visibility only, via open_thread (fully reversible: resolve_thread later).
+# TIER 2: visibility only, via open_thread (fully reversible: resolve_thread later).
 # NEVER touches either side's status. Split into a PURE summary-generator (tier2_mints)
-# and a side-effecting executor (mint_tier2_threads) on purpose: Thoth's gate is on SCALE,
-# not distrust — the summaries must be reviewed before they are minted, not after.
-# Disagreement mints are GROUPED BY THREAD, not by citation (Thoth's ruling, DM 2744,
-# after the first live dry run measured 40 disagreement rows landing on only 28 distinct
-# Threads): the obligation names the disputed THING, and the disputed thing is the Thread,
-# not each task that cites it — per-citation mints would have made resolving one real
-# disagreement take as many resolve_thread calls as it has citing tasks.
+# and a side-effecting executor (mint_tier2_threads) on purpose: the gate is on SCALE,
+# not distrust, the summaries must be reviewed before they are minted, not after.
+# Disagreement mints are GROUPED BY THREAD, not by citation, after a live dry run measured
+# dozens of disagreement rows landing on many fewer distinct Threads: the obligation names
+# the disputed THING, and the disputed thing is the Thread, not each task that cites it;
+# per-citation mints would have made resolving one real disagreement take as many
+# resolve_thread calls as it has citing tasks.
 #
 # TIER 3 (never auto-write: no status sync either direction, no auto-closing orphans, no
 # inventing bindings for uncited/cited_unresolvable, nothing written to ~/.claude/tasks, no
-# repo-scoped thread enumeration) needs no code — it is the shape of what these two
+# repo-scoped thread enumeration) needs no code: it is the shape of what these two
 # functions deliberately do NOT do.
 
 _SOURCE = "task_sync"
@@ -279,18 +276,17 @@ _CORRELATION_PROPERTY = "harness_task_citation"
 
 
 def _correlation_source_id(task_id: str, store: str | None) -> str:
-    """Deterministic, per CITING TASK (not shared) — current_assertions resolves one
+    """Deterministic, per CITING TASK (not shared): current_assertions resolves one
     winner per (object, name, SOURCE), so a shared source would let a second task citing
     the same Thread silently overwrite the first task's citation. Per-citation sourcing
     lets N simultaneous citations of one Thread coexist by the graph's own multi-source
-    mechanic instead of fighting it (Thoth, DM 2722: "the part of this design I would
-    defend hardest")."""
+    mechanic instead of fighting it, the part of this design most worth defending."""
     return f"harness:{store}:{task_id}" if store is not None else f"harness:{task_id}"
 
 
 def tier1_targets(report: dict[str, Any]) -> list[dict[str, Any]]:
     """Pure. Every (task_id, store, thread_id) TIER 1 may bind: `bound` rows in full,
-    `bound_partial` rows' RESOLVED half only — their failed citations stay refused, never
+    `bound_partial` rows' RESOLVED half only, their failed citations stay refused, never
     invented (Tier 3). No writes."""
     targets: list[dict[str, Any]] = []
     for row in report["bound"] + report["bound_partial"]:
@@ -305,11 +301,11 @@ async def write_tier1_correlations(
     actions: Actions, report: dict[str, Any], *, observed_at: datetime,
 ) -> list[dict[str, Any]]:
     """Execute TIER 1: one `harness_task_citation` property assertion per target from
-    `tier1_targets`, value {"task_id", "store"}, evidence_class=SELF_DECLARED — the
+    `tier1_targets`, value {"task_id", "store"}, evidence_class=SELF_DECLARED, the
     citation was declared by the task's own author in its own free text; this only
     captures it durably, it does not infer or guess it (an ambiguous or unmatched citation
     already refused upstream, in resolve_task_citations, never reaches this function).
-    Never writes a status. Never touches ~/.claude/tasks. Returns one receipt per write."""
+    Never writes a status. Never touches ~/.claude/tasks. Returns one result per write."""
     conf = confidence_for(EvidenceClass.SELF_DECLARED)
     written: list[dict[str, Any]] = []
     for target in tier1_targets(report):
@@ -326,28 +322,27 @@ async def write_tier1_correlations(
 
 def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
     """Pure. The visibility-thread {"kind", "summary", "rows"} TIER 2 WOULD mint. Executes
-    nothing — see `mint_tier2_threads` for the side-effecting half, deliberately separate
-    (Thoth, DM 2722: dry-run and show the actual summaries before executing; the gate is
-    scale — 53 candidate threads onto a board the operator already called unreadable — not
-    distrust of the design).
+    nothing: see `mint_tier2_threads` for the side-effecting half, deliberately separate so
+    a dry run can show the actual summaries before executing. The gate is scale, dozens of
+    candidate threads onto a board already hard to read, not distrust of the design.
 
     Disagreement rows are GROUPED BY thread_id, one mint per DISPUTED THREAD rather than
-    per citing task (Thoth's ruling, DM 2744, after the first dry run measured 40 rows
-    landing on only 28 distinct Threads): the obligation should name the disputed thing,
-    and the disputed thing is the Thread, not each citation of it — per-citation would
-    have meant resolving one real disagreement (e.g. thread 73fd4eda, cited by 4 different
-    tasks) took 4 separate resolve_thread calls for one truth. Safe to group this way
-    because `reconcile` reads a thread's `property_status` exactly once per thread_id (one
-    shared dict entry), so every disagreement row for the same thread_id already carries
-    the identical thread_property_status — grouping loses no information, only repetition.
+    per citing task, after a first dry run measured many rows landing on a much smaller
+    number of distinct Threads: the obligation should name the disputed thing, and the
+    disputed thing is the Thread, not each citation of it; per-citation would have meant
+    resolving one real disagreement (e.g. a thread cited by several different tasks) took
+    one resolve_thread call per citing task for one truth. Safe to group this way because
+    `reconcile` reads a thread's `property_status` exactly once per thread_id (one shared
+    dict entry), so every disagreement row for the same thread_id already carries the
+    identical thread_property_status, grouping loses no information, only repetition.
     Every citing (task_id, store, task_status) is enumerated inside the one summary.
-    Thread_side_orphans stay 1:1 — no repetition exists there to collapse (each row is
+    Thread_side_orphans stay 1:1, no repetition exists there to collapse (each row is
     already one distinct Thread by construction).
 
     Rerun note: because a disagreement summary now depends on the FULL current set of
     citing tasks for that Thread, a citing set that changes between runs (a new task
     starts citing it, one stops, or any citation's status flips) changes the summary text
-    and therefore mints a NEW Thread on the next run rather than updating the old one —
+    and therefore mints a NEW Thread on the next run rather than updating the old one,
     the same "idempotent on exact text" limitation every open_thread caller already has,
     just newly reachable here because the text is now a function of more than one row.
     Not solved here; flagged rather than silently accepted."""
@@ -390,12 +385,11 @@ async def mint_tier2_threads(
 ) -> list[dict[str, Any]]:
     """Execute TIER 2: one open_thread(kind='obligation', arc='Fleet-Hygiene') per mint
     from `tier2_mints`. DO NOT CALL against production data without the summaries having
-    been reviewed first — see this module's own write-half note and Thoth DM 2722. A rerun
-    with an UNCHANGED citing set is safe: open_thread is idempotent on the exact summary
-    string, so it collapses onto the same Thread instead of duplicating — see
-    `tier2_mints`'s own rerun note for the one case (a citing set that changes between
-    runs) where that idempotency doesn't hold. Returns one {"summary", "thread_id"}
-    receipt per mint."""
+    been reviewed first, see this module's own write-half note above. A rerun with an
+    UNCHANGED citing set is safe: open_thread is idempotent on the exact summary string,
+    so it collapses onto the same Thread instead of duplicating, see `tier2_mints`'s own
+    rerun note for the one case (a citing set that changes between runs) where that
+    idempotency doesn't hold. Returns one {"summary", "thread_id"} result per mint."""
     from src.orchestrator.capture import open_thread
 
     out: list[dict[str, Any]] = []
@@ -407,67 +401,65 @@ async def mint_tier2_threads(
     return out
 
 
-# ── ARCHIVE ELIGIBILITY (Thoth DM 3266/thread e604ae84's item 1, the operator's write-back
-# authorization scoped NARROWLY: "your own session's own store from inside that session",
-# never the enumeration entry point ab27af61 forbade) ────────────────────────────────────
+# ── ARCHIVE ELIGIBILITY (write-back authorization scoped NARROWLY to a session's own store
+# from inside that session, never the enumeration entry point forbidden above) ───────────
 #
-# THIS IS THE PURE HALF ONLY, AND NO EXECUTOR IS RECOMMENDED — not "not yet", RECOMMENDED
-# AGAINST, on evidence gathered after this comment's own earlier draft (decision b1c3e6d5,
-# and the TaskUpdate check below, both post-date it). A task's own store file under
-# ~/.claude/tasks is still never opened by this module, unchanged from the module's
-# original claim above.
+# THIS IS THE PURE HALF ONLY, AND NO EXECUTOR IS RECOMMENDED: not "not yet", RECOMMENDED
+# AGAINST, on evidence gathered after this comment's own earlier draft (the TaskUpdate
+# check below post-dates it). A task's own store file under ~/.claude/tasks is still never
+# opened by this module, unchanged from the module's original claim above.
 #
 # (a) THE SESSION -> STORE MAPPING IS SOLVED, not blocking: a store's directory name under
 # ~/.claude/tasks/ IS the harness's own `session_id` verbatim, a pure string join, verified
-# six independent ways including one live co-agent (decision b1c3e6d5). Do not re-derive
-# this — it was the first thing checked and it is not the reason nothing is built.
+# several independent ways including one live co-agent check. Do not re-derive this: it was
+# the first thing checked and it is not the reason nothing is built.
 #
-# (b) .lock's WRITE-SAFETY STAYS UNVERIFIABLE for a DIRECT file-write executor specifically
-# (decision b1c3e6d5: POSIX flock() is timestamp-invisible to static observation, and a
-# live contention probe has too little statistical power either way — a structural ceiling
-# on the evidence, not a gap in effort).
+# (b) .lock's WRITE-SAFETY STAYS UNVERIFIABLE for a DIRECT file-write executor specifically:
+# POSIX flock() is timestamp-invisible to static observation, and a live contention probe
+# has too little statistical power either way, a structural ceiling on the evidence, not a
+# gap in effort.
 #
-# (c) BUT (b) IS THE WRONG QUESTION, because the sanctioned entry point was never a direct file
-# write — it is the harness's own TaskUpdate tool, the same trust boundary TaskList/TaskGet
-# already cross for reads. Routing through it sidesteps (b) entirely. Checked directly
-# against TaskUpdate's own tool contract (2026-08-03): status is one of pending /
-# in_progress / completed / deleted, and deleted "permanently removes the task" — its own
-# words, not an inference. THERE IS NO ARCHIVE VERB. The only way to make a completed row
-# stop recurring in every injection is to delete it forever; leaving it "completed" is the
-# status quo this whole lane exists to improve on. So the real choice was never "archive
-# vs. leave it" — it is "delete it permanently vs. leave it", and an agent-triggered
-# irreversible deletion of the operator's own task history is a materially bigger
-# authorization question than a graph-side property write, independent of write-safety.
+# (c) BUT (b) IS THE WRONG QUESTION, because the sanctioned entry point was never a direct
+# file write, it is the harness's own TaskUpdate tool, the same trust boundary TaskList/
+# TaskGet already cross for reads. Routing through it sidesteps (b) entirely. Checked
+# directly against TaskUpdate's own tool contract: status is one of pending / in_progress /
+# completed / deleted, and deleted "permanently removes the task", its own words, not an
+# inference. THERE IS NO ARCHIVE VERB. The only way to make a completed row stop recurring
+# in every injection is to delete it forever; leaving it "completed" is the status quo this
+# whole lane exists to improve on. So the real choice was never "archive vs. leave it", it
+# is "delete it permanently vs. leave it", and an agent-triggered irreversible deletion of
+# the operator's own task history is a materially bigger authorization question than a
+# graph-side property write, independent of write-safety.
 #
-# (d) THE MOTIVATING COST IS ALSO SMALLER THAN THE LANE WAS ORIGINALLY SIZED AGAINST:
-# decision 74fad683's own addendum corrected its 98,932-char completed-row estimate — the
-# harness only ever injects `subject`, never `description` — to 12,734 chars, and named
-# the architecture the operator was asking for ("pull descriptions on demand") as already
-# how the harness works. Real, recurring, not zero — but an order of magnitude below what
-# motivated building an executor at all.
+# (d) THE MOTIVATING COST IS ALSO SMALLER THAN THE LANE WAS ORIGINALLY SIZED AGAINST: a
+# later correction to the original completed-row character estimate found the harness only
+# ever injects `subject`, never `description`, cutting the estimate by roughly an order of
+# magnitude, and confirmed that pulling descriptions on demand (the architecture originally
+# requested) is already how the harness works. Real, recurring, not zero, but well below
+# what motivated building an executor at all.
 #
 # NET: no executor is buildable non-destructively today, the destructive one is a bigger
 # ask than this lane was ever authorized for, and the win it would buy is smaller than
 # believed when the lane opened. `archive_eligible_targets` stays as a pure, tested
-# function with no consumer — correct to keep (idle code costs nothing and the underlying
+# function with no consumer, correct to keep (idle code costs nothing and the underlying
 # convergence logic may matter again if the harness ever grows a real archive verb), wrong
 # to wire to anything.
 #
-# THE DISAGREEMENT QUESTION ("which side wins", thread e604ae84's item 2) IS ANSWERED BY
-# REFUSING IT: neither side ever auto-wins here. A task is archive-eligible ONLY where the
-# harness and the graph already fully agree it is done — convergence fires where there is
-# nothing left to converge. Anything still in dispute stays exactly where it is today:
-# Tier 2's report-only obligation mint, never auto-resolved by this module.
+# THE DISAGREEMENT QUESTION ("which side wins") IS ANSWERED BY REFUSING IT: neither side
+# ever auto-wins here. A task is archive-eligible ONLY where the harness and the graph
+# already fully agree it is done: convergence fires where there is nothing left to
+# converge. Anything still in dispute stays exactly where it is today: Tier 2's
+# report-only obligation mint, never auto-resolved by this module.
 #
 # WHY "bound" ONLY, NEVER "bound_partial": a task with even one still-unresolved citation
-# has not been cleanly checked against the whole of what it claims — archiving it because
+# has not been cleanly checked against the whole of what it claims; archiving it because
 # its resolvable half happens to agree would silently discard the still-open half of its
 # own record.
 #
 # WHY EVERY bound thread_id MUST AGREE, NOT ANY: a task citing three threads where two are
-# resolved and one is still open is a task the operator is still working. Agreement must be
-# unanimous across everything the task itself cited, or this is the disagreement bucket
-# wearing a different hat.
+# resolved and one is still open is a task still being worked. Agreement must be unanimous
+# across everything the task itself cited, or this is the disagreement bucket wearing a
+# different hat.
 
 def archive_eligible_targets(
     report: dict[str, Any], tasks: list[dict[str, Any]],
@@ -476,9 +468,9 @@ def archive_eligible_targets(
     `status` is "completed" AND none of its bound thread_ids appear in
     `report["disagreement"]`. Given `_status_disagrees`'s own definition (task_done !=
     thread_done), "completed" plus "not disagreeing" together already IMPLY every one of
-    that task's bound threads carries property_status == "resolved" — no second lookup
+    that task's bound threads carries property_status == "resolved": no second lookup
     against thread state is needed or done here, only against `report` and `tasks`, both
-    already computed by `reconcile`. Keyed by (task_id, store), never task_id alone — the
+    already computed by `reconcile`. Keyed by (task_id, store), never task_id alone, the
     same collision hazard `reconcile` itself already refuses to repeat (a bare id repeats
     across stores; see this module's own docstring). No writes; no filesystem access; the
     rows this returns are eligible for an executor that does not exist yet, not archived
@@ -503,32 +495,32 @@ def archive_eligible_targets(
     return targets
 
 
-# ── WAVE 2 LANE A (thread 5f47e23d, Thoth's dispatch msg 5934): `mint_tier2_threads`'s own
-# obligation Threads — "TASK/THREAD DISAGREEMENT: Thread <8-char> ..." /
-# "THREAD SIDE ORPHAN: Thread <8-char> ..." — cite the disputed Thread in their own summary
-# prose but were minted BEFORE `open_thread` grew its entry-point-side `_mint_prose_citations` call
-# (task #189, decision bb2ddf8a), so the citation was never turned into an edge: decision
-# a55b1014, "a defense that erases its own alarm" — the divergence detector has been firing
-# correctly for weeks, depositing every finding as a zero-live-link orphan nothing surfaces.
+# ── FOLLOW-UP LANE: `mint_tier2_threads`'s own obligation Threads,
+# "TASK/THREAD DISAGREEMENT: Thread <8-char> ..." /
+# "THREAD SIDE ORPHAN: Thread <8-char> ...", cite the disputed Thread in their own summary
+# prose but were minted BEFORE `open_thread` grew its entry-point-side `_mint_prose_citations`
+# call, so the citation was never turned into an edge: a defense that erases its own alarm,
+# the divergence detector has been firing correctly for weeks, depositing every finding as a
+# zero-live-link orphan nothing surfaces.
 #
-# REUSES `parse_thread_citations`, THIS MODULE'S OWN PARSER, NOT A SECOND ONE (Thoth's
-# explicit MUST NOT) — the same regex `resolve_task_citations` already runs against a task's
-# description, run here against task_sync's own generated summary text instead. Measured
-# live (2026-08-28): 41 zero-live-link Threads match the summary shape, all 41 carry exactly
-# one citation, all 41 resolve to exactly one existing Thread via `_find_thread`'s own
-# short-id-prefix leg, zero ambiguous, zero unresolved, zero self-cites — re-measure before
+# REUSES `parse_thread_citations`, THIS MODULE'S OWN PARSER, NOT A SECOND ONE, the same
+# regex `resolve_task_citations` already runs against a task's description, run here
+# against task_sync's own generated summary text instead. Measured live: dozens of
+# zero-live-link Threads match the summary shape, all of them carry exactly one citation,
+# all of them resolve to exactly one existing Thread via `_find_thread`'s own
+# short-id-prefix leg, zero ambiguous, zero unresolved, zero self-cites, re-measure before
 # trusting this comment, the way every prior count in this arc had to be.
 #
-# Mints via `derive_or_abstain` (Lane 0, capture.py) rather than the older
-# `_resolve_cited_object`/`mint_cites` call-time pair `backfill_decided_in` still uses:
-# Thoth's dispatch asked for the newer, durable-abstention discipline here specifically — a
-# candidate count of zero or >1 records WHY on the orphan itself (candidate ids kept), not
-# just a receipt line that vanishes once this call returns. Link type is `cites`
-# (Reference/Decision/Thread -> Reference/Decision/Thread/Practice/Superstition, decision
-# bb2ddf8a's own broadening) — the exact vocabulary this house already uses for "my own
-# prose named that object", `properties={"origin": "derived"}` marking this specific edge as
-# backfilled through the mechanical lookup rather than declared at the citing object's own
-# birth (mint_cites's `origin="prose"` marks that other case).
+# Mints via `derive_or_abstain` (capture.py) rather than the older
+# `_resolve_cited_object`/`mint_cites` call-time pair `backfill_decided_in` still uses,
+# because the newer, durable-abstention discipline is wanted here specifically: a candidate
+# count of zero or more than one records WHY on the orphan itself (candidate ids kept), not
+# just a result line that vanishes once this call returns. Link type is `cites`
+# (Reference/Decision/Thread -> Reference/Decision/Thread/Practice/Superstition, a broadened
+# vocabulary), the exact vocabulary this codebase already uses for "my own prose named that
+# object", `properties={"origin": "derived"}` marking this specific edge as backfilled
+# through the mechanical lookup rather than declared at the citing object's own birth
+# (mint_cites's `origin="prose"` marks that other case).
 _TASK_SYNC_ORPHAN_SQL = (
     "SELECT o.id, o.canonical, "
     " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -553,8 +545,8 @@ async def backfill_task_sync_citation_links(
     mints `cites` (DIRECT_OBSERVATION, `origin=derived`) iff `parse_thread_citations` finds
     exactly one citation AND it resolves to exactly one existing Thread; zero citations, a
     citation naming no Thread, or an ambiguous short-id prefix each abstain durably with a
-    DISTINCT reason (Khnum's precedent: "named nothing" and "named something that doesn't
-    exist" are different facts, never folded into one bucket) and the candidate set kept.
+    DISTINCT reason ("named nothing" and "named something that doesn't exist" are different
+    facts, never folded into one bucket) and the candidate set kept.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     `derive_or_abstain` checks the link doesn't already exist before minting, and a repeat
