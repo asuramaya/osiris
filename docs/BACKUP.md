@@ -208,7 +208,10 @@ Two checks exist, and they check different things:
   repository restores. It runs a full integrity check, then a real restore into a scratch
   directory, then confirms real files landed. A clean integrity check alone is not treated
   as proof a backup restores: only real restored content is. Without `--repo-url`, it drills
-  every configured off-box repository.
+  every configured off-box repository. It resolves the restic password through the same
+  custody ladder the offload runner uses (see "The restic password" above), never from a
+  password left set in the calling shell's own environment; it refuses by name, naming the
+  fix, when no password resolves anywhere along that ladder.
 - **Local restore drill**: run as part of the weekly preflight check (always with the full
   drill enabled), against the newest base backup in the vault. `osiris backup-status`
   currently reports this drill as not yet tied to a persisted result: it does run weekly,

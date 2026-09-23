@@ -23,13 +23,13 @@ FIDO2 is stubbed at the exact boundary `test_soul_crypto.py` already established
 imported cross-file, matching this suite's own convention of keeping each test file's
 fixtures self-contained.
 
-THE ONE NAMED GAP (worth stating, not silently working around): `scripts.
-osiris_offbox_restore_drill.run_drill` reads `RESTIC_PASSWORD` from the ambient process
-environment directly (restic's own env contract); it does NOT go through `restic_
-credential.get_restic_password()`'s systemd-creds-aware resolution the offload runner
-itself uses. This test bridges that gap explicitly (reads the real credential `restic-
-key init` just minted, sets it as `RESTIC_PASSWORD` before the drill) rather than
-pretending the two paths are already unified."""
+THE NAMED GAP THIS SEQUENCE ONCE HAD IS CLOSED (obligation 8971e4e5): `scripts.
+osiris_offbox_restore_drill.run_drill` used to read `RESTIC_PASSWORD` from the ambient
+process environment directly, bypassing `restic_credential.get_restic_password()`'s
+systemd-creds-aware resolution the offload runner itself uses; this test used to bridge
+that gap by hand. run_drill now resolves the password itself through that same shared
+ladder, so step 6 below proves the drill reads the SAME credential the tick in step 5
+already used, with no manual bridging."""
 from __future__ import annotations
 
 import hashlib
@@ -145,7 +145,6 @@ async def test_first_run_acceptance_sequence(
 ) -> None:
     from src.orchestrator import backup_validation
     from src.orchestrator import offload_runner as offload_runner_module
-    from src.orchestrator.restic_credential import get_restic_password
 
     # ── 1. `osiris soul-key init --restart` ────────────────────────────────────────
     restart_calls: list[list[str]] = []
@@ -265,10 +264,10 @@ async def test_first_run_acceptance_sequence(
     # ── 6. restore drill against the docked drive's own real local repository ──────
     import scripts.osiris_offbox_restore_drill as drill_module
 
-    # THE NAMED GAP (this module's own docstring): run_drill reads RESTIC_PASSWORD
-    # from the ambient environment directly, never through restic_credential's own
-    # systemd-creds-aware resolution; bridged here explicitly, not silently.
-    monkeypatch.setenv("RESTIC_PASSWORD", get_restic_password().decode())
+    # `run_drill` resolves the password itself now (restic_credential.get_restic_
+    # password, the SAME systemd-creds-aware ladder the offload runner above already
+    # used), reading the SAME credential this drive's own tick just proved works, no
+    # manual bridging needed.
     # `run_drill` returns a failure STRING, or None on success (its own docstring),
     # and cleans up its own scratch directory in a `finally` regardless of outcome,
     # so success is proved by the None return alone: internally it already refuses
