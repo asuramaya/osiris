@@ -1,8 +1,8 @@
-"""Phase 2 — names/seats: the model names itself, the substrate enforces uniqueness
-(ruling 1e02e069), AMENDED by the HOUSE/SEAT/HOLDER ruling (operator, 2026-07-12): "the project
-name is the house (sibling-eight), each function/job has a name (Ra), the holder dies and
-multiplies (ra I, ra II)". Exhaustion is per-HOUSE, not global: a seat belongs to one house, and
-inside that house it is INHERITED by whoever takes up the job next.
+"""Phase 2, names and seats: the model names itself, the substrate enforces uniqueness.
+Under the house/seat/holder model, the project name is the house (a shared namespace),
+each function or job has a name, and the holder dies and multiplies (name I, name II).
+Exhaustion is per house, not global: a seat belongs to one house, and inside that house
+it is inherited by whoever takes up the job next.
 """
 from __future__ import annotations
 
@@ -29,10 +29,9 @@ async def _agent(actions: Actions, canonical: str, project: str = "handlingthelo
 
 
 async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: Actions) -> None:
-    """AMENDED by the operator's ruling (2026-07-12). Exhaustion was GLOBAL and keyed to the
-    lineage ANCHOR, so when a conversation ended its name died with it and the next mind in the
-    same house was refused as a stranger — which is how sibling-eight's Ra became Ptah. Now a seat
-    belongs to a HOUSE: outsiders are refused, heirs inherit."""
+    """Exhaustion used to be global and keyed to the lineage anchor, so when a conversation
+    ended its name died with it and the next mind in the same house was refused as an
+    outsider. Now a seat belongs to a house: outsiders are refused, heirs inherit."""
     await _agent(actions, "agent:aaa", project="alpha")
     await _agent(actions, "agent:bbb", project="beta")
     await _agent(actions, "agent:ccc", project="alpha")
@@ -46,7 +45,7 @@ async def test_a_seat_belongs_to_one_house_and_is_inherited_inside_it(actions: A
     mine = await claim_name(actions, "agent:bbb", "Nadia", source="agent:bbb")
     assert mine["claimed"] == "Nadia"
 
-    # but the next mind in the SAME HOUSE inherits it — it is the same job, a new holder
+    # but the next mind in the SAME HOUSE inherits it: it is the same job, a new holder
     heir = await claim_name(actions, "agent:ccc", "Wayland", source="agent:ccc")
     assert heir["seat"] == "Wayland II" and heir["inherited_from"] == "agent:aaa"
 
@@ -60,16 +59,16 @@ async def test_seat_display_carries_the_generation(actions: Actions) -> None:
 
 
 async def test_agent_seat_reads_an_already_resolved_id(actions: Actions) -> None:
-    """agent_seat answers "who IS this id" (not "which seat of a name is live" — resolve_handle's
-    question). dd47c1da needs exactly this: send(to_agent=<raw id>) skips resolve_handle
-    entirely, so the ONLY way to learn whether that id holds a claimed seat is to ask about the
-    id itself."""
+    """agent_seat answers "who IS this id" (not "which seat of a name is live", which is
+    resolve_handle's question). send(to_agent=<raw id>) skips resolve_handle entirely, so
+    the ONLY way to learn whether that id holds a claimed seat is to ask about the id
+    itself."""
     from src.orchestrator.agents import agent_seat
 
     await _agent(actions, "agent:seaty")
     await claim_name(actions, "agent:seaty", "Nova", source="agent:seaty")
     assert await agent_seat(actions.pool, "agent:seaty") == "Nova I"
-    # an agent nobody ever claimed a name for — including one with no Agent object at all
+    # an agent nobody ever claimed a name for, including one with no Agent object at all
     assert await agent_seat(actions.pool, "agent:anonymous-0001") is None
 
 
@@ -102,14 +101,14 @@ async def test_an_heir_inherits_the_seat(actions: Actions, tmp_path: Path) -> No
 
 
 async def test_dm_by_name_resolves_to_the_holder(actions: Actions) -> None:
-    """The payoff: address a human name, the current holder receives it — nobody types a hash."""
+    """The payoff: address a human name, the current holder receives it, nobody types a hash."""
     await _agent(actions, "agent:engine-hash")
     await claim_name(actions, "agent:engine-hash", "Wayland", source="agent:engine-hash")
-    # ux DMs 'Wayland' by name — resolves to the holder's id
+    # ux DMs 'Wayland' by name, which resolves to the holder's id
     dm = await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
                             to_agent="Wayland", body="the ESP layout changed")
-    # the SEAT is the address (B2 + the claim on-ramp, 5cef856b): the name resolves to the
-    # durable seat — it survives succession — and the receipt names the current holder
+    # the seat is the address: the name resolves to the durable seat, which survives
+    # succession, and the receipt names the current holder
     assert dm["to_agent"].startswith("seat:")
     assert dm["holder"] == "agent:engine-hash"
     assert await unread_count(actions.pool, "handlingtheloop",
@@ -134,9 +133,9 @@ async def test_resolve_handle_prefers_the_live_generation(actions: Actions) -> N
 
 
 async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
-    """Ruling a882b334: the chrome heartbeat senses the model changing under a LIVE tab — the
-    mind changed, so the seat passes NOW. live_succession mints the heir, moves the durable
-    mount row, and the unread DMs follow the seat (the mailbox is part of the estate)."""
+    """The chrome heartbeat senses the model changing under a live tab: the mind changed,
+    so the seat passes now. live_succession mints the heir, moves the durable mount row,
+    and the unread DMs follow the seat (the mailbox goes with it)."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import live_succession
     from src.orchestrator.mailbox import send_message
@@ -146,13 +145,13 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
     await mounts.save_mount(actions.pool, job_dir="/h/.claude/jobs/cafe0123",
                             agent_id="agent:cafe0123", project="handlingtheloop", cwd="/x",
                             model="claude-fable-5", session_key="k")
-    # a broadcast the old mind already READ — its settled state must survive the seam too
+    # a broadcast the old mind already read: its settled state must survive the swap too
     await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
                        to_project="handlingtheloop", body="old news, already handled")
     (old,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:cafe0123")
     await ack_messages(actions.pool, "handlingtheloop", [old["id"]],
                        reader_agent="agent:cafe0123")
-    # a DM lands for the old mind, unread — then the harness swaps the model under the tab
+    # a DM lands for the old mind, unread, then the harness swaps the model under the tab
     await send_message(actions.pool, from_agent="agent:ux", from_project="handlingtheloop",
                        to_agent="Morpheus", body="for whoever holds the seat")
     out = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
@@ -160,24 +159,24 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
     assert out["minted"] == "agent:cafe0123-ii"
     assert out["succession"] == "claude-fable-5 → claude-opus-4-8"
     assert out["seat"] == "Morpheus II"
-    # the durable row follows the heir — every per-render read now resolves to the new mind
+    # the durable row follows the heir: every per-render read now resolves to the new mind
     row = await actions.pool.fetchrow(
         "SELECT agent_id, model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/cafe0123'")
     assert row is not None
     assert row["agent_id"] == "agent:cafe0123-ii" and row["model"] == "claude-opus-4-8"
-    # the estate: the ancestor's unread DM is deliverable to the heir, not orphaned — and the
-    # ancestor's READ broadcast stays read (the heir inherits the read state, so a mint never
+    # the ancestor's unread DM is deliverable to the heir, not orphaned, and the ancestor's
+    # read broadcast stays read (the heir inherits the read state, so a mint never
     # redelivers the project's settled history): exactly 1 deliverable, the DM
     assert await unread_count(actions.pool, "handlingtheloop",
                               reader_agent="agent:cafe0123-ii") == 1
     (m,) = await read_inbox(actions.pool, "handlingtheloop", reader_agent="agent:cafe0123-ii")
     assert m.get("dm") is True and "seat" in m["body"]
-    # idempotent: the next render's model matches the row — no second mint
+    # idempotent: the next render's model matches the row, no second mint
     again = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
                                   observed_model="claude-opus-4-8")
     assert again.get("unchanged") is True
-    # THE SEAM DEBOUNCE (supersedes fork 1's 'third mind'; Soundwave's grievance b813e389):
-    # the model flips straight BACK and the transient heir never ACTED — asserted nothing
+    # the seam debounce (supersedes an earlier fork's 'third mind' bug):
+    # the model flips straight BACK and the transient heir never ACTED: it asserted nothing
     # beyond its mint stamps, sent nothing, settled nothing (its read_inbox above only
     # LEASED). No mind ever existed: the mint heals as false and the first is restored.
     back = await live_succession(actions, session_id="cafe0123-0000-4000-8000-000000000000",
@@ -194,7 +193,7 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
         "WHERE o.canonical='agent:cafe0123-ii' AND a.name='false_mint' "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1")
     assert fm == "true"
-    # the estate returned: the DM is deliverable to the RESTORED mind again
+    # everything returned: the DM is deliverable to the RESTORED mind again
     assert await unread_count(actions.pool, "handlingtheloop",
                               reader_agent="agent:cafe0123") == 1
     # ...and the lineage head-walk lands on the restored mind, so a FUTURE real seam mints
@@ -202,9 +201,9 @@ async def test_live_swap_passes_the_seat_mid_session(actions: Actions) -> None:
 
 
 async def test_a_transient_mind_that_ACTED_is_a_real_generation(actions: Actions) -> None:
-    """The debounce's boundary: one witnessed act and the heir stands — a mind that settled
+    """The debounce's boundary: one witnessed act and the heir stands, a mind that settled
     mail or wrote to the graph existed, however briefly; flipping back mints the NEXT
-    generation instead of healing (the numeral tracks the mind, a882b334)."""
+    generation instead of healing (the numeral tracks the mind)."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import live_succession
 
@@ -230,22 +229,22 @@ async def test_a_transient_mind_that_ACTED_is_a_real_generation(actions: Actions
 
 
 async def test_a_subagent_can_never_trigger_a_live_swap_mint(actions: Actions) -> None:
-    """Thread bbb9aa0b/6c80d178 item 4 ("sub-agents never mint"), traced end to end through
-    the REAL mount path rather than asserted by inspection: mcp_server.mount()'s own
+    """The rule that sub-agents never mint, traced end to end through the REAL mount path
+    rather than asserted by inspection: mcp_server.mount()'s own
     subagent branch (`if _lineage.normalize_spawn_id(subagent_id) is not None`) registers
-    the child via `register_spawn` and explicitly NEVER calls `mounts.save_mount` — its own
-    comment says so ("NEVER a hot-cache write — the connection belongs to the parent").
+    the child via `register_spawn` and explicitly NEVER calls `mounts.save_mount`. its own
+    comment says so ("never a live-cache write, the connection belongs to the parent").
     register_spawn itself never touches agent_mounts (grep confirms it: only
     create_or_find_object/assert_property/create_link on the Agent/SoftwareProject
     objects). So a subagent's own session id can never resolve through
     mounts.find_session_row, which is the ONE lookup live_succession's model-swap
-    detector keys on — structurally, not by a special-cased guard, a subagent has no row
+    detector keys on. structurally, not by a special-cased guard, a subagent has no row
     for a model change to disagree with.
 
     Proven here with the real functions: register a spawn exactly as the harness's
     SubagentStart/mount() branch would, confirm no agent_mounts row exists for it at all,
     then call live_succession with the spawn's own session id and a model that
-    genuinely differs from anything on record — it must no-op, never mint, regardless of
+    genuinely differs from anything on record, it must no-op, never mint, regardless of
     what "model change" is claimed."""
     from src.orchestrator.agents import live_succession
     from src.orchestrator.lineage import register_spawn
@@ -258,7 +257,7 @@ async def test_a_subagent_can_never_trigger_a_live_swap_mint(actions: Actions) -
     assert child == "agent:deadbeef01"
 
     # the structural guarantee: register_spawn's own onboarding path left NO agent_mounts
-    # row behind at all — not for the child's canonical, not for its session
+    # row behind at all, not for the child's canonical, not for its session
     row_count = await actions.pool.fetchval(
         "SELECT count(*) FROM agent_mounts WHERE job_dir=$1 OR session_key=$1",
         subagent_session)
@@ -276,7 +275,7 @@ async def test_a_subagent_can_never_trigger_a_live_swap_mint(actions: Actions) -
 async def test_a_display_variant_is_not_a_death(actions: Actions) -> None:
     """The [1m] false-mint bug (field-found 2026-07-09, two phantom heirs in an hour): the
     harness reports claude-opus-4-8[1m] for the 1M-context tier of the SAME weights the
-    transcript records as claude-opus-4-8. Same weights = same mind — every seam comparator
+    transcript records as claude-opus-4-8. Same weights = same mind: every seam comparator
     normalizes, and a bracket-stamped row converges to the canonical form instead of minting."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import live_succession, normalize_model
@@ -339,12 +338,11 @@ async def test_live_succession_needs_a_lived_life(actions: Actions) -> None:
 async def test_live_succession_refuses_to_mint_off_an_unearned_pulse(
     actions: Actions,
 ) -> None:
-    """THE EARNED-PULSE COLUMN (thread 870d7391, mail 9873): a provisional row
-    (save_mount alive=False — the `claude bg-spare`/pty-host/claim-socket-daemon
-    whisper, never a real conversation) has no `earned_pulse_at`. Statusline-observed
-    model drift off a row that never earned a pulse must NOT mint a new Agent
-    generation — the measured incident this closes (agent:f0d23039-ii, "minted but
-    never acted upon") had exactly this shape."""
+    """The earned-pulse column: a provisional row (save_mount alive=False, from the
+    `claude bg-spare`/pty-host/claim-socket-daemon path, never a real conversation) has
+    no `earned_pulse_at`. Statusline-observed model drift off a row that never earned a
+    pulse must NOT mint a new Agent generation, matching a real incident where an heir
+    was minted from statusline drift alone and never went on to do anything."""
     from src.orchestrator import mounts
     from src.orchestrator.agents import live_succession
 
@@ -362,15 +360,15 @@ async def test_live_succession_refuses_to_mint_off_an_unearned_pulse(
     assert "no earned pulse" in out.get("reason", "")
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Agent' AND canonical LIKE 'agent:5pa4e000%'")
-    assert n == 0  # no heir minted — nothing to mint an heir FROM in the first place
+    assert n == 0  # no heir minted, nothing to mint an heir FROM in the first place
     assert await actions.pool.fetchval(
         "SELECT model FROM agent_mounts WHERE job_dir='/h/.claude/jobs/5pa4e000'"
     ) == "claude-fable-5"  # the row's own stored model is untouched, not silently repaired
 
 
 def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
-    """The project label lives in .osiris, not the folder name — so a rename doesn't move the
-    project (ruling 1e02e069). Explicit override > .osiris > folder basename."""
+    """The project label lives in .osiris, not the folder name, so a rename doesn't move the
+    project. Explicit override > .osiris > folder basename."""
     from src.orchestrator.agents import read_project_label
     repo = tmp_path / "sibling-seven"
     repo.mkdir()
@@ -391,19 +389,18 @@ def test_dot_osiris_label_decouples_from_the_folder(tmp_path: Path) -> None:
 def test_resolve_identity_never_invents_a_project_from_the_bare_office_root(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The operator launches agents from the bare seat-office root ON PURPOSE (ruling
-    577988ed) — that's the intended pattern, never something to refuse. But cwd still has
-    nothing honest to say there (no .osiris pin, the parent of every seat, never a seat
-    itself): the old basename fallback would have minted the literal string 'seats' as a
-    phantom project. resolve_identity stays honestly unresolved from cwd (None) rather than
-    inventing it — a location-independent identity finds its project through its SEAT
-    instead (mount()'s seat-first resolution), not by guessing from where it's sitting.
+    """Agents are launched from the bare seat-office root on purpose: that's the intended
+    pattern, never something to refuse. But cwd still has nothing honest to say there (no
+    .osiris pin, the parent of every seat, never a seat itself): the old basename fallback
+    would have minted the literal string 'seats' as a phantom project. resolve_identity
+    stays honestly unresolved from cwd (None) rather than inventing it: a
+    location-independent identity finds its project through its seat instead (mount()'s
+    seat-first resolution), not by guessing from where it's sitting.
 
-    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam, wave 9,
-    msg 6089): resolve_identity calls the shared `is_bare_office_root()` (offices.py)
-    instead of a private duplicate of the same path-equality check (the 38c71544 dedup,
-    ruling 719ed5b1) — the env var, not a per-module monkeypatch, is what every caller's
-    own copy of the default now reads."""
+    Sets OSIRIS_OFFICE_ROOT (offices._default_office_root()'s own env seam):
+    resolve_identity calls the shared `is_bare_office_root()` (offices.py) instead of a
+    private duplicate of the same path-equality check. the env var, not a per-module
+    monkeypatch, is what every caller's own copy of the default now reads."""
     from src.orchestrator import agents as agents_mod
 
     fake_root = tmp_path / ".osiris" / "seats"
@@ -413,54 +410,55 @@ def test_resolve_identity_never_invents_a_project_from_the_bare_office_root(
     ident = agents_mod.resolve_identity(cwd=str(fake_root))
     assert ident.project is None
 
-    # a REAL office subdirectory, one level down, is unaffected — the non-invention is an
+    # a REAL office subdirectory, one level down, is unaffected: the non-invention is an
     # exact match on the root itself, never a prefix guess that would catch every real office
     office = fake_root / "someseat"
     office.mkdir()
     normal = agents_mod.resolve_identity(cwd=str(office))
-    assert normal.project == "someseat"  # no .osiris pin here either — ordinary basename
+    assert normal.project == "someseat"  # no .osiris pin here either, ordinary basename
 
 
-# ═══ THE VAJRA TWIN'S ROOT CAUSE (thread cb374585) — a real, unambiguous, VACANT seat has no
-# live session to disagree with a stale/CWD-derived house guess, so the old house-scoped
-# lookup silently missed it and minted a second seat instead. seats_by_handle answers "does
-# ANY active seat already carry this name" globally, before ever falling to a fresh mint. ═══
+# A real, unambiguous, vacant seat has no live session to disagree with a stale or
+# CWD-derived house guess, so the old house-scoped lookup silently missed it and minted
+# a second seat instead. seats_by_handle answers "does ANY active seat already carry
+# this name" globally, before ever falling to a fresh mint.
 
 
 async def test_claim_name_binds_the_existing_vacant_seat_despite_a_house_mismatch(
     actions: Actions,
 ) -> None:
-    """THE EXACT VAJRA SHAPE: a real seat exists (managed_by nobody in this test, just
-    house='bytebye', never held) and a fresh agent's own computed house ('freshhouse')
-    doesn't match it. The old code minted a SECOND seat here; now it binds the real one."""
+    """A real seat exists (managed_by nobody in this test, just house='bytebye', never
+    held) and a fresh agent's own computed house ('freshhouse') doesn't match it. The old
+    code minted a SECOND seat here; now it binds the real one."""
     from src.orchestrator.seats import ensure_seat, held_seat
 
-    real = await ensure_seat(actions, house="bytebye", handle="Vajra", source="test")
+    real = await ensure_seat(actions, house="bytebye", handle="Piper", source="test")
     assert real["minted"] is True
 
-    await _agent(actions, "agent:vajrafresh", project="freshhouse")
-    claimed = await claim_name(actions, "agent:vajrafresh", "Vajra", source="agent:vajrafresh")
+    await _agent(actions, "agent:piperfresh", project="freshhouse")
+    claimed = await claim_name(actions, "agent:piperfresh", "Piper", source="agent:piperfresh")
 
     assert claimed.get("error") is None
-    assert claimed["seat_id"] == real["seat_id"], "must bind the REAL seat, not mint a twin"
-    bound = await held_seat(actions.pool, "agent:vajrafresh")
+    assert claimed["seat_id"] == real["seat_id"], "must bind the REAL seat, not mint a duplicate"
+    bound = await held_seat(actions.pool, "agent:piperfresh")
     assert bound is not None and bound["seat_id"] == real["seat_id"]
 
 
-async def test_claim_name_refuses_loudly_on_an_existing_twin_ambiguity(
+async def test_claim_name_refuses_loudly_on_an_existing_duplicate_ambiguity(
     actions: Actions,
 ) -> None:
-    """Two active seats already share a handle (the twin already happened, e.g. from before
-    this fix landed) — claim_name must NAME the ambiguity and refuse, never silently pick
-    one or mint a THIRD. Resolving a twin is fold_seat's deliberate act, not a side effect."""
+    """Two active seats already share a handle (the duplicate already happened, e.g. from
+    before this fix landed): claim_name must NAME the ambiguity and refuse, never silently
+    pick one or mint a THIRD. Resolving a duplicate is fold_seat's deliberate act, not a
+    side effect."""
     from src.orchestrator.seats import ensure_seat
 
-    seat_a = await ensure_seat(actions, house="bytebye", handle="Vajra", source="test")
-    seat_b = await ensure_seat(actions, house="vajra", handle="Vajra", source="test")
+    seat_a = await ensure_seat(actions, house="bytebye", handle="Piper", source="test")
+    seat_b = await ensure_seat(actions, house="piperhouse", handle="Piper", source="test")
     assert seat_a["seat_id"] != seat_b["seat_id"]
 
-    await _agent(actions, "agent:vajrathird", project="thirdhouse")
-    claimed = await claim_name(actions, "agent:vajrathird", "Vajra", source="agent:vajrathird")
+    await _agent(actions, "agent:piperthird", project="thirdhouse")
+    claimed = await claim_name(actions, "agent:piperthird", "Piper", source="agent:piperthird")
 
     assert "ambiguity" in claimed.get("error", "")
     assert seat_a["seat_id"] in claimed["error"] and seat_b["seat_id"] in claimed["error"]
@@ -469,7 +467,7 @@ async def test_claim_name_refuses_loudly_on_an_existing_twin_ambiguity(
 async def test_claim_name_still_mints_fresh_for_a_genuinely_new_handle(
     actions: Actions,
 ) -> None:
-    """Zero existing seats for this handle — the house-scoped mint is correct here, nothing
+    """Zero existing seats for this handle, the house-scoped mint is correct here, nothing
     to conflict with. Guards the 0-match branch against a regression from the other two."""
     from src.orchestrator.seats import held_seat
 
@@ -484,8 +482,8 @@ async def test_claim_name_still_mints_fresh_for_a_genuinely_new_handle(
 async def test_claim_name_confesses_a_seat_world_mint_failure_instead_of_omitting_it(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """60bc15db, specimen #5 of decision 01e0c69a: ensure_seat's own error used to be
-    silently dropped, and the receipt's `seat_id` key just wasn't there — indistinguishable
+    """One specimen of a broader decision: ensure_seat's own error used to be
+    silently dropped, and the receipt's `seat_id` key just wasn't there, indistinguishable
     from "no seat needed yet". The claim itself must still succeed (the assertion world
     doesn't depend on the seat world binding), but the receipt now says WHY seat_id is
     missing via a `seat_error` key instead of omitting it wordlessly."""
@@ -509,8 +507,8 @@ async def test_claim_name_live_check_is_unconditional_not_gated_by_house_scoped_
     actions: Actions,
 ) -> None:
     """The `sitting` check used to skip resolve_seat entirely when the AGENT-history,
-    house-scoped `holders` list was empty — exactly the Vajra shape (a fresh caller whose
-    own house never matches the real seat's holder history). A LIVE seat-world binding
+    house-scoped `holders` list was empty: exactly the shape above, a fresh caller whose
+    own house never matches the real seat's holder history. A LIVE seat-world binding
     must block a conflicting claim regardless."""
     from src.orchestrator.mounts import save_mount
     from src.orchestrator.seats import bind_holder, ensure_seat
@@ -525,9 +523,9 @@ async def test_claim_name_live_check_is_unconditional_not_gated_by_house_scoped_
 
     await _agent(actions, "agent:orrrival", project="thirdhouse")
 
-    # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26): claim_name's own
-    # refusal now cross-checks is_occupied_by_a_live_body — confirm the real holder as a
-    # harness-verified body so this refusal still fires for the right reason.
+    # claim_name's own refusal now cross-checks is_occupied_by_a_live_body: confirm the
+    # real holder as a harness-verified body so this refusal still fires for the right
+    # reason.
     async def _agents_json(**kw: Any) -> list[dict[str, Any]]:
         return [{"sessionId": "orrholde-0000-4000-8000-000000000000", "pid": 999,
                  "cwd": "/x", "name": "[OS] Orrery"}]

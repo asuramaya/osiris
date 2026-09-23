@@ -1,4 +1,4 @@
-"""Harness-agnostic transcript store (ruling be741d3e).
+"""Harness-agnostic transcript store.
 
 The store is the SEAM: adapters normalize per-harness formats (Claude JSONL, Crush SQLite)
 into TurnRows; the store indexes them; identity resolution reads the model off the store
@@ -102,7 +102,7 @@ def test_claude_adapter_discovers_and_reads(tmp_path: Path) -> None:
 def test_claude_adapter_discover_at_builds_a_locator_from_a_known_path(
     tmp_path: Path,
 ) -> None:
-    """thread 7304bfd8: discover_at bypasses the job_dir/cwd SEARCH entirely — given the
+    """discover_at bypasses the job_dir/cwd search entirely: given the
     path directly, it never touches locate_current_transcript. Proven by putting the
     transcript somewhere discover()'s own search would never find it."""
     sid = "deadbeef"
@@ -111,7 +111,7 @@ def test_claude_adapter_discover_at_builds_a_locator_from_a_known_path(
         [("assistant", "claude-opus-5")],
     )
     adapter = ClaudeJsonlAdapter()
-    # the search-based door finds nothing here — proves the two lanes are independent
+    # the search path finds nothing here, proving the two lanes are independent
     assert adapter.discover(cwd=None, job_dir=None, root=tmp_path / "nowhere") is None
     loc = adapter.discover_at(transcript)
     assert loc is not None
@@ -219,9 +219,8 @@ async def store(actions: Actions) -> TranscriptStore:
 async def test_discover_and_ingest_uses_the_explicit_path_when_the_search_fails(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
-    """THE BRIDGE-FORK SPECIMEN (thread 7304bfd8, Ptah VII's repro): job_dir/cwd search
-    finds nothing (a background-job fork's own transcript search failure), but the
-    caller already knows the real path — the explicit-path lane must resolve the model
+    """A background-job fork can fail the job_dir/cwd search entirely, but the
+    caller already knows the real path: the explicit-path lane must resolve the model
     the search-only lane never could."""
     sid = "cafebabe"
     real = tmp_path / "real" / f"{sid}-session-uuid.jsonl"
@@ -230,7 +229,7 @@ async def test_discover_and_ingest_uses_the_explicit_path_when_the_search_fails(
         {"type": "assistant", "timestamp": datetime(2026, 8, 17, 0, 0, tzinfo=UTC).isoformat(),
          "message": {"model": "claude-opus-5", "usage": {}}},
     ]) + "\n")
-    # the search root has nothing under it — job_dir/cwd search returns None
+    # the search root has nothing under it, so job_dir/cwd search returns None
     search_root = tmp_path / "empty-projects"
     search_root.mkdir()
     reading = await store.discover_and_ingest(
@@ -243,7 +242,7 @@ async def test_discover_and_ingest_uses_the_explicit_path_when_the_search_fails(
 async def test_discover_and_ingest_falls_back_to_search_when_the_path_is_unrecognized(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
-    """A bad/missing explicit path is not a hard failure — ordinary job_dir/cwd search
+    """A bad/missing explicit path is not a hard failure: ordinary job_dir/cwd search
     still runs, exactly as if transcript_path had never been passed."""
     sid = "aabbccdd"
     projects = tmp_path / "projects"
@@ -305,10 +304,10 @@ async def test_store_ingest_is_idempotent(store: TranscriptStore, tmp_path: Path
 # --- resolve_identity wired to the store -------------------------------
 
 def test_an_anchored_store_reading_wears_the_anchor_grade() -> None:
-    """The translation contract (#29): identity's downstream gates (_MODEL_EC, the seam
-    confession) speak the ANCHOR vocabulary, not harness names — an anchored store reading
+    """The translation contract (#29): identity's downstream gates (_MODEL_EC, the swap
+    check) speak the ANCHOR vocabulary, not harness names: an anchored store reading
     is exactly what "job_dir" has always meant there, whatever harness produced it. Without
-    the translation a store reading graded CO_OCCURRENCE and never confessed a swap (the
+    the translation a store reading graded CO_OCCURRENCE and never flagged a swap (the
     under-grade the store-first mount path shipped with, found during the removal)."""
     from src.ingest.harness import ModelReading
     reading = ModelReading(
@@ -338,7 +337,7 @@ def test_an_unanchored_store_reading_grades_as_a_guess() -> None:
         store_reading=reading, root=Path("/nonexistent"),
     )
     assert ident.model == "glm-5.2"          # the model still informs (best-effort)...
-    assert ident.model_method == "cwd"       # ...at the guess grade — never seam-confessing
+    assert ident.model_method == "cwd"       # ...at the guess grade, never flagging a swap
     assert ident.session != "cafef00d"       # the guessed sid is NOT adopted as ours
     assert ident.resolved is False           # and the identity is honestly unresolved
 
@@ -354,10 +353,10 @@ def test_resolve_identity_without_a_reading_is_self_report_only(tmp_path: Path) 
     assert ident.model_method == "self_report"
 
 
-# --- adapter enumerate() — the backfill sweep --------------------------
+# --- adapter enumerate(): the backfill sweep --------------------------
 
 def test_claude_enumerate_yields_all_transcripts(tmp_path: Path) -> None:
-    """enumerate() walks ~/.claude/projects/*/*.jsonl — one locator per session."""
+    """enumerate() walks ~/.claude/projects/*/*.jsonl: one locator per session."""
     projects = tmp_path / "projects"
     _write_claude_transcript(
         projects / "-home-x-code-widget" / "aaaa1111-session.jsonl",
@@ -414,7 +413,7 @@ def test_crush_reads_the_list_shaped_projects_json(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Crush's CURRENT projects.json is a LIST of {path, data_dir} records (field-verified
-    2026-07-19 — the dict lane was silently dead on the live box); both shapes must read."""
+    2026-07-19: the dict lane was silently dead in production); both shapes must read."""
     dd = tmp_path / "p9" / ".crush"
     _write_crush_db(dd / "crush.db", "dddd9999-aaaa-bbbb-cccc-dddddddddddd",
                     [("assistant", "zai", "glm-5.2")])
@@ -492,12 +491,12 @@ async def test_last_usage_of_session_returns_latest_turn(
                 anchor_sid=sid[:8], session_id=sid, harness="crush",
                 source_path=str(db), cwd=str(tmp_path), project="x")
     await store.discover_and_ingest(cwd=str(tmp_path), job_dir=None, adapters=[_FakeCrush()])
-    # Crush has no per-turn tokens — last_usage returns None
+    # Crush has no per-turn tokens: last_usage returns None
     assert await store.last_usage_of_session("crush", sid[:8]) is None
 
 
 async def test_last_usage_of_session_with_tokens(store: TranscriptStore, tmp_path: Path) -> None:
-    """Claude transcripts carry usage — last_usage_of_session surfaces it."""
+    """Claude transcripts carry usage: last_usage_of_session surfaces it."""
     sid = "abcd1234"
     projects = tmp_path / "projects"
     _write_claude_transcript(
@@ -570,7 +569,7 @@ def test_detail_from_usage_builds_full_dict() -> None:
 
 
 def test_detail_from_usage_no_warning_when_assumed() -> None:
-    """The alarm fires only on a KNOWN window — Anubis VII's false eulogy protection."""
+    """The alarm fires only on a KNOWN window, to avoid a false alert."""
     u = {"input": 170000, "cache_read": 0, "cache_creation": 0, "output_last_turn": 0}
     d = detail_from_usage(u, raw_model=None)  # no window_hint → assumed
     assert d["window_assumed"] is True
@@ -578,10 +577,10 @@ def test_detail_from_usage_no_warning_when_assumed() -> None:
     assert "note" in d  # the assumed caveat
 
 
-# --- the spend gate (Thoth XLV's hardening) ----------------------------
+# --- the spend gate ------------------------------------------------------
 
 class _CountingAdapter(ClaudeJsonlAdapter):
-    """A fixed-locator adapter that counts source reads — the spend gate's witness."""
+    """A fixed-locator adapter that counts source reads, to verify the spend gate."""
 
     def __init__(self, locator: SessionLocator) -> None:
         self._loc = locator
@@ -613,7 +612,7 @@ async def test_an_unchanged_source_is_never_reread(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
     """THE SPEND GATE: the second discover_and_ingest costs a stat + a row lookup, zero
-    file reads — and still returns the FULL reading (from the store, never the delta)."""
+    file reads, and still returns the FULL reading (from the store, never the delta)."""
     adapter = _counting_setup(tmp_path)
     r1 = await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
     assert r1 is not None and r1.current == "claude-fable-5"
@@ -627,12 +626,12 @@ async def test_a_changed_source_is_read_from_the_delta_with_full_history(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
     """An appended source re-reads (from since_idx), and the reading keeps the WHOLE model
-    history — the delta alone would amnesia the swap record."""
+    history: the delta alone would lose the swap record."""
     import os
 
     adapter = _counting_setup(tmp_path)
     await store.discover_and_ingest(cwd=None, job_dir=None, adapters=[adapter])
-    p = Path(adapter._loc.source_path)  # noqa: SLF001 — the test owns the fixture
+    p = Path(adapter._loc.source_path)  # noqa: SLF001 (the test owns the fixture)
     _write_claude_transcript(
         p, "eeee5555",
         [("user", None), ("assistant", "claude-fable-5"), ("assistant", "glm-5.2")])
@@ -650,8 +649,8 @@ async def test_a_changed_source_is_read_from_the_delta_with_full_history(
 async def test_backfill_skips_the_unchanged_and_eats_the_changed(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
-    """A steady-state sweep over a quiet fleet does no file IO at all (thread 51000597:
-    the miner-walked-everything-forever shape must never come back)."""
+    """A steady-state sweep over a quiet fleet does no file IO at all: a miner that
+    walks everything on every sweep must never come back."""
     adapter = _counting_setup(tmp_path)
     c1 = await store.backfill(adapters=[adapter])
     assert c1 == {"claude-code": 1}
@@ -661,11 +660,11 @@ async def test_backfill_skips_the_unchanged_and_eats_the_changed(
     assert adapter.reads == 1  # unchanged source: stat only, no read
 
 
-# --- the overhead lens (neo's eye, task #34) ---------------------------
+# --- the overhead lens (task #34) ---------------------------------------
 
 def test_reminders_counted_in_nested_content() -> None:
-    """The modern harness nests reminder text inside tool_result content lists — the
-    counter walks the whole tree (the ancestor's top-level walk undercounted here)."""
+    """The modern harness nests reminder text inside tool_result content lists, so the
+    counter walks the whole tree (an earlier top-level-only walk undercounted here)."""
     from src.ingest.harness.claude_jsonl import _reminders_of_line
     line = {
         "type": "user",
@@ -681,7 +680,7 @@ def test_reminders_counted_in_nested_content() -> None:
 
 
 def test_read_turns_carries_overhead_facts(tmp_path: Path) -> None:
-    """Reminders ride live user turns only (a compact summary QUOTES the past — counting
+    """Reminders ride live user turns only (a compact summary QUOTES the past, so counting
     its reminders again after every compaction would inflate the churn number), and the
     compact-summary line itself is flagged is_compaction."""
     path = tmp_path / "p" / "cafe1234-s.jsonl"
@@ -780,11 +779,11 @@ async def test_overhead_of_session_splits_channels(
     assert oh["basis"] == "tokens"
     assert oh["multiplier"] == 1.3
     assert oh["hidden_pct"] == 21.1
-    # detail is sorted by tokens desc — the workflow fan-out leads
+    # detail is sorted by tokens desc: the workflow fan-out leads
     assert oh["detail"][0]["agent_type"] == "general-purpose"
     assert oh["detail"][0]["tokens"] == 30
     assert oh["detail"][1]["tokens"] == 10
-    # bytes rode in from the ingest stat — the fallback basis is real, not fabricated
+    # bytes rode in from the ingest stat: the fallback basis is real, not fabricated
     assert oh["visible"]["bytes"] > 0 and oh["hidden"]["bytes"] > 0
 
 
@@ -817,7 +816,7 @@ async def test_rederive_resets_and_reeats_with_new_facts(
     store: TranscriptStore, tmp_path: Path,
 ) -> None:
     """rederive() forgets a session's derived rows and the next sweep re-eats them with
-    the current extraction — the post-schema-growth heal. A session whose source has
+    the current extraction: a heal for schema growth. A session whose source has
     vanished keeps its rows (they are the only record left)."""
     projects = tmp_path / "projects"
     _write_channel_fixture(projects)
@@ -833,7 +832,7 @@ async def test_rederive_resets_and_reeats_with_new_facts(
     # simulate the pre-lens era: blank the overhead facts the first eat recorded
     await store.pool.execute(
         "UPDATE harness_turns SET reminders=NULL, is_compaction=false")
-    gone.unlink()  # this session's source vanishes — its rows must survive the reset
+    gone.unlink()  # this session's source vanishes; its rows must survive the reset
     n = await store.rederive("claude-code")
     assert n == 1  # beef0001 reset; dead0002 guarded
     assert await store.pool.fetchval(

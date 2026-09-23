@@ -1,13 +1,13 @@
-"""THE ONBOARDING CLUSTERFUCK — the operator brought up ten agents in one window (2026-07-14)
-and the identity layer burned THIRTEEN GENERATIONS across seven houses (ruling f7a715a1):
-TJMAX V→X in six minutes, Soundwave VI and VII in the same second, Thoth XXX alive for eleven
-minutes and zero acts. Root cause: TWO SEAM OBSERVERS THAT DON'T SHARE A CLOCK — the chrome
-heartbeat compares against the mount row, the mount/whisper path compares against the
-transcript TAIL, and the tail lags a /model until the next assistant turn. Each stamped its
-reading; the other read the stamp as a fresh seam; one deliberate swap cascaded.
+"""ONBOARDING RACE CONDITIONS: bringing up ten agents in one window, in a single session,
+caused the identity layer to mint thirteen generations across seven lineages in minutes,
+several with no real work done in between. Root cause: two seam observers that do not
+share a clock. The chrome heartbeat compares against the mount row, and the mount path
+compares against the transcript tail, and the tail lags a /model change until the next
+assistant turn. Each observer stamped its own reading, then read the other's stamp as a
+fresh seam, so one deliberate model swap cascaded into many mints.
 
-    A SEAM MUST BE DATED BY THE EVIDENCE THAT WITNESSED IT. A stale observation compared
-    against a fresher stamp is an old newspaper arguing with today's — not a death.
+    A seam must be dated by the evidence that witnessed it. A stale observation compared
+    against a fresher stamp is an old newspaper arguing with today's, not a death.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ FABLE, OPUS = "claude-fable-5", "claude-opus-4-8"
 
 
 def _ident(sid: str, model: str, at: datetime | None, project: str = "osiris") -> AgentIdentity:
-    """An ANCHORED identity (model_method='job_dir') — the only grade the seam gate trusts."""
+    """An ANCHORED identity (model_method='job_dir'): the only grade the seam gate trusts."""
     return AgentIdentity(agent_id=f"agent:{sid}", session=sid, project=project, model=model,
                          cwd=None, model_method="job_dir", model_observed_at=at)
 
@@ -53,23 +53,24 @@ async def _register(actions: Actions, sid: str, model: str, at: datetime | None,
 
 async def test_a_STALE_TAIL_is_not_a_seam(actions: Actions) -> None:
     """THE DATING GATE. The register path observed the transcript tail; the tail predated the
-    stamp it disagreed with (a /model had landed, no assistant turn yet). TJMAX VIII and IX —
-    opposite seams, four seconds apart — were both this. An observation loses to a fresher
-    stamp; only fresher evidence may testify to a death."""
+    stamp it disagreed with (a /model had landed, no assistant turn yet). Two real cases hit
+    this: opposite seams, a few seconds apart, were both this shape. An observation loses to
+    a fresher stamp; only fresher evidence may testify to a death."""
     a = await _register(actions, "aaaa0001", OPUS, T0 + timedelta(minutes=5))
     assert a == "agent:aaaa0001"
-    # a STALE read (older than the opus stamp) claiming fable — an old newspaper, not a seam
+    # a STALE read (older than the opus stamp) claiming fable: an old newspaper, not a seam
     b = await _register(actions, "aaaa0001", FABLE, T0 + timedelta(minutes=3))
     assert b == "agent:aaaa0001", "a stale tail minted a generation"
-    # the SAME claim, but witnessed FRESHER than the stamp — a real seam, one mint
+    # the SAME claim, but witnessed FRESHER than the stamp: a real seam, one mint
     c = await _register(actions, "aaaa0001", FABLE, T0 + timedelta(minutes=9))
-    assert c == "agent:aaaa0001-ii", "a fresh anchored disagreement is a death (a882b334)"
+    assert c == "agent:aaaa0001-ii", "a fresh anchored disagreement is a death"
 
 
 async def test_the_debounce_heals_in_the_REGISTER_path_too(actions: Actions) -> None:
     """The debounce lived only in the heartbeat, so a round-trip whose return leg arrived via
-    a MOUNT minted a phantom instead of healing (Soundwave VI). Now: a model seam alone, whose
-    head is an actless model-mint younger than the window, heals whichever observer sees it."""
+    a MOUNT minted a phantom instead of healing, as seen in a real prior incident. Now: a
+    model seam alone, whose head is an actless model-mint younger than the window, heals
+    whichever observer sees it."""
     await _register(actions, "aaaa0002", OPUS, T0)
     heir = await _register(actions, "aaaa0002", FABLE, datetime.now(UTC))
     assert heir == "agent:aaaa0002-ii"
@@ -83,13 +84,13 @@ async def test_the_debounce_heals_in_the_REGISTER_path_too(actions: Actions) -> 
 
 
 async def test_a_COMPACTION_mint_never_debounces(actions: Actions) -> None:
-    """A context death is a death: the weights survive, the memory does not (a882b334). Only
-    MODEL flapping heals via the ROUND-TRIP debounce (_debounce_roundtrip stays gated on
-    minted_because IN ('live-swap','model-succession') — unchanged, still never fires for
+    """A context death is a death: the weights survive, the memory does not. Only MODEL
+    flapping heals via the ROUND-TRIP debounce (_debounce_roundtrip stays gated on
+    minted_because IN ('live-swap','model-succession'), unchanged, still never fires for
     a compaction). A WITNESSED compaction head is never absorbed by anything: this heir
-    does real work (the decision below) before the next seam, so the zero-turn fold (ruling
-    d3531cd8, a distinct mechanism from the round-trip debounce) has nothing to fold either
-    — see test_two_SILENT_compactions_do_fold for what changed."""
+    does real work (the decision below) before the next seam, so the zero-turn fold (a
+    distinct mechanism from the round-trip debounce) has nothing to fold either.
+    See test_two_SILENT_compactions_do_fold for what changed."""
     await _register(actions, "aaaa0003", OPUS, T0)
     heir = await _register(actions, "aaaa0003", OPUS, datetime.now(UTC),
                            mint_reason="compaction")
@@ -101,11 +102,11 @@ async def test_a_COMPACTION_mint_never_debounces(actions: Actions) -> None:
 
 
 async def test_two_SILENT_compactions_do_fold(actions: Actions) -> None:
-    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (ruling d3531cd8): two compactions
-    back-to-back with NO witnessed act between them is exactly the canonical repro's shape
-    (/compact then /model, zero turns between) — the first compaction's heir never lived,
-    so the second compaction mints straight off the ORIGINAL root, reusing its numeral,
-    rather than stacking a third generation on a phantom nobody ever was."""
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS: two compactions back-to-back with NO
+    witnessed act between them is exactly the canonical repro's shape (/compact then /model,
+    zero turns between): the first compaction's heir never lived, so the second compaction
+    mints straight off the ORIGINAL root, reusing its numeral, rather than stacking a third
+    generation on a phantom nobody ever was."""
     await _register(actions, "bbbb0003", OPUS, T0)
     heir = await _register(actions, "bbbb0003", OPUS, datetime.now(UTC),
                            mint_reason="compaction")
@@ -115,20 +116,20 @@ async def test_two_SILENT_compactions_do_fold(actions: Actions) -> None:
     assert again == "agent:bbbb0003-ii", "the silent first heir folds; the numeral is reused"
     # NOT asserted here, and flagged as a known open question rather than papered over: the
     # reused canonical still carries whatever false_mint stamp its FIRST (folded) life left
-    # behind — false_mint is never cleared on reuse, a gap this fold shares with the
+    # behind. false_mint is never cleared on reuse, a gap this fold shares with the
     # pre-existing _debounce_roundtrip heal (same numeral-reuse shape). See the direct
     # _fold_zero_turn_ancestors unit tests for the stamp's own behavior in isolation.
 
 
-# ═══ NOTIFY-AT-SEAM (thread aeae9977) — a compacting worker DMs its own manager, with the
-# daemon's own reachability() evidence inline. Only the silent class (compaction/context-
-# clear); a manager of record must exist; both gates proven with a negative case. ═══════════
+# ═══ NOTIFY-AT-SEAM: a compacting worker DMs its own manager, with the daemon's own
+# reachability() evidence inline. Only the silent class (compaction/context-clear); a
+# manager of record must exist; both gates proven with a negative case. ═══════════════════
 
 
 async def _bind_managed_worker(
     actions: Actions, agent_id: str, *, handle: str, manager_seat: str,
 ) -> str:
-    """claim a seat for `agent_id` and put it under `manager_seat`'s management — the exact
+    """claim a seat for `agent_id` and put it under `manager_seat`'s management: the exact
     managed_by shape notify-at-seam reads. Returns the worker's own seat canonical."""
     a = await actions.create_or_find_object("Agent", agent_id, agent_id)
     await actions.assert_property(a, "project", "osiris", "test", T0, 0.9,
@@ -144,17 +145,17 @@ async def _bind_managed_worker(
 async def test_a_compaction_mint_notifies_the_managed_by_manager(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Ra's clean repro (aeae9977): a compacting worker's manager learned from the HUMAN,
-    not the fleet. The heir now DMs its own manager, and the daemon's own reachability()
-    confirmation rides along inline — not just our say-so. Goes all the way to the manager
-    actually PERCEIVING it (Thoth's review, DM 1216) — a row landing in fleet_messages is
-    not the same claim as a manager's own inbox read surfacing it."""
+    """A clean repro of the underlying bug: a compacting worker's manager learned from the
+    HUMAN, not the fleet. The heir now DMs its own manager, and the daemon's own
+    reachability() confirmation rides along inline, not just our say-so. Goes all the way to
+    the manager actually PERCEIVING it, since a row landing in fleet_messages is not the
+    same claim as a manager's own inbox read surfacing it."""
     from src.ingest.harness import claude_daemon
     from src.orchestrator.mailbox import read_inbox
     from src.orchestrator.seats import bind_holder
 
     ancestor = await _register(actions, "cccc0001", OPUS, T0)
-    seat_id = await _bind_managed_worker(actions, ancestor, handle="Ptah",
+    seat_id = await _bind_managed_worker(actions, ancestor, handle="worker1",
                                          manager_seat="seat:cccc9999")
     await bind_holder(actions, seat_id="seat:cccc9999", agent_id="agent:manager001")
     await save_mount(actions.pool, job_dir="/home/t/.claude/jobs/cccc0001",
@@ -179,10 +180,10 @@ async def test_a_compaction_mint_notifies_the_managed_by_manager(
     assert row["from_agent"] == heir
     assert row["to_agent"] == "seat:cccc9999"
     assert row["grade"] == "fyi"
-    assert "Ptah" in row["body"] and "compaction" in row["body"]
+    assert "worker1" in row["body"] and "compaction" in row["body"]
 
     # THE LOOP CLOSES: the manager's own SEAT-address inbox read surfaces it, not just a
-    # row in the table — the whole point of Ra's bug being about PERCEPTION, not storage.
+    # row in the table. The whole point of the bug being about PERCEPTION, not storage.
     seen = await read_inbox(actions.pool, "osiris", reader_agent="agent:manager001",
                             mark_read=False)
     assert any(m["body"] == row["body"] and m["from"] == heir for m in seen), (
@@ -196,12 +197,12 @@ async def test_a_compaction_mint_is_silent_with_no_manager_of_record(
     actions: Actions,
 ) -> None:
     """The same 'nobody to confess to' shape Stage A's stop-hook already uses: a claimed,
-    bound seat with NO managed_by edge sends nothing — there is no one to notify."""
+    bound seat with NO managed_by edge sends nothing, since there is no one to notify."""
     ancestor = await _register(actions, "cccc0002", OPUS, T0)
     a = await actions.create_or_find_object("Agent", ancestor, ancestor)
     await actions.assert_property(a, "project", "osiris", "test", T0, 0.9,
                                   evidence_class="self_declared")
-    await claim_name(actions, ancestor, "Anubis", source="test")
+    await claim_name(actions, ancestor, "worker2", source="test")
 
     before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
     heir = await _register(actions, "cccc0002", OPUS, datetime.now(UTC),
@@ -214,10 +215,10 @@ async def test_a_compaction_mint_is_silent_with_no_manager_of_record(
 
 async def test_a_model_succession_mint_does_NOT_notify(actions: Actions) -> None:
     """The whitelist is precise on purpose: model-succession and live-swap already surface
-    on the membrane's DANGER map, so a plain anchored model swap — no mint_reason at all —
-    must never fire this, even with a manager of record sitting right there."""
+    on the membrane's DANGER map, so a plain anchored model swap, with no mint_reason at
+    all, must never fire this, even with a manager of record sitting right there."""
     ancestor = await _register(actions, "cccc0003", OPUS, T0)
-    await _bind_managed_worker(actions, ancestor, handle="Sobek",
+    await _bind_managed_worker(actions, ancestor, handle="worker3",
                                manager_seat="seat:cccc8888")
 
     before = await actions.pool.fetchval("SELECT count(*) FROM fleet_messages")
@@ -229,7 +230,7 @@ async def test_a_model_succession_mint_does_NOT_notify(actions: Actions) -> None
 
 
 async def test_TWO_concurrent_heartbeats_mint_ONE_generation(actions: Actions) -> None:
-    """Soundwave VI and VII: identical seam strings, the same second — two heartbeats raced
+    """A real prior incident: identical seam strings, the same second: two heartbeats raced
     the read-compare-mint and STACKED. The mint lock serializes per lineage; the loser
     re-reads inside the lock, sees the winner's write, and concludes no-op."""
     sid = "beef0001"
@@ -248,22 +249,22 @@ async def test_TWO_concurrent_heartbeats_mint_ONE_generation(actions: Actions) -
     assert n == 2, "exactly the ancestor and one heir"
 
 
-# ═══ /succession IDEMPOTENCY (thread 8dc9940c) ═══════════════════════════════════════════
-# Thoth's own live repro: one real fable→opus swap, minted correctly once — then THREE
-# numerals for it (agent:ad1a1cb0-g40-xx → xxi → xxii) because agent_mounts.model kept
-# drifting back to fable between mounts (a separate, still-open root) and every later
+# ═══ /succession IDEMPOTENCY ══════════════════════════════════════════════════════════════
+# A real live repro: one real fable to opus swap, minted correctly once, then THREE
+# numerals for the same lineage (generation xx, then xxi, then xxii) because agent_mounts.model
+# kept drifting back to fable between mounts (a separate, still-open root) and every later
 # heartbeat re-detected the SAME already-completed transition as if it were new. NOT the
 # debounce's case: each intermediate generation genuinely ACTED (sent real mail) before
-# being succeeded, so heal_husks/round-trip debounce correctly refuse to touch them —
-# idempotency on the /succession call site is the only fix that doesn't erase a mind that
+# being succeeded, so heal_husks/round-trip debounce correctly refuse to touch them.
+# Idempotency on the /succession call site is the only fix that doesn't erase a mind that
 # spoke.
 
 
 async def test_idempotent_swap_repeats_without_reminting(actions: Actions) -> None:
     """A real swap mints once; the stored model then drifts back and the next heartbeat
-    re-detects the identical transition. Caught even though the heir ACTED in between
-    (msg-1078-shaped) — this is NOT the unwitnessed-round-trip case the debounce already
-    covers; the idempotency check works independent of whether anyone spoke."""
+    re-detects the identical transition. Caught even though the heir ACTED in between:
+    this is NOT the unwitnessed-round-trip case the debounce already covers; the
+    idempotency check works independent of whether anyone spoke."""
     sid = "1de40001"
     await actions.create_or_find_object("Agent", f"agent:{sid}", "test")
     await save_mount(actions.pool, job_dir=f"/home/t/.claude/jobs/{sid}",
@@ -272,9 +273,9 @@ async def test_idempotent_swap_repeats_without_reminting(actions: Actions) -> No
     first = await live_succession(actions, session_id=sid + "aaaa-bbbb", observed_model=OPUS)
     heir = first["minted"]
     assert heir == f"agent:{sid}-ii"
-    await _acts(actions, heir)  # a REAL act — the old debounce would refuse to heal this
+    await _acts(actions, heir)  # a REAL act: the old debounce would refuse to heal this
     # the drift: agent_mounts.model resets to fable (the reset's own root cause is a
-    # separate, still-open question — this reproduces its OBSERVABLE effect)
+    # separate, still-open question; this reproduces its OBSERVABLE effect)
     await actions.pool.execute(
         "UPDATE agent_mounts SET model=$1 WHERE job_dir=$2",
         FABLE, f"/home/t/.claude/jobs/{sid}")
@@ -295,18 +296,18 @@ async def test_idempotent_swap_repeats_without_reminting(actions: Actions) -> No
 async def test_live_succession_stamps_the_real_session_id_not_a_bg_seat_anchor(
     actions: Actions,
 ) -> None:
-    """The Marquee specimen (Thoth dispatch 6484/6515, decision f5d5473b's gen 12): a
-    `--bg`-launched seat's job_dir is the DURABLE PER-SEAT anchor (`jobs/seat-<hex>`,
-    unchanged across every generation), not a per-session directory — `_job_id(job_dir)`
-    dutifully extracts 'seat-<hex>' from it, which used to win over the heartbeat's own
-    already-validated real session id. Confirmed live: Marquee's graph carried
-    session='seat-bdbe031e' while her real transcript sat, findable, under her own
-    session id's own first 8 chars. The heir's own `session` property must be the real
-    session id, never the seat-anchor string, whatever the job_dir looks like."""
+    """A real confirmed case: a `--bg`-launched seat's job_dir is the DURABLE PER-SEAT
+    anchor (`jobs/seat-<hex>`, unchanged across every generation), not a per-session
+    directory. `_job_id(job_dir)` dutifully extracts 'seat-<hex>' from it, which used to
+    win over the heartbeat's own already-validated real session id. Confirmed live: the
+    agent's graph carried a seat-anchor string as its `session` property while its real
+    transcript sat, findable, under its own session id's own first 8 chars. The heir's own
+    `session` property must be the real session id, never the seat-anchor string, whatever
+    the job_dir looks like."""
     # the agent's own bare canonical shares the real session's sid8 by this house's own
-    # minting convention — find_session_row's lane 3 (self-evident derivation) is how the
-    # real Marquee mount actually resolved, since her job_dir (the durable seat anchor)
-    # never carried her session id at all.
+    # minting convention: find_session_row's lane 3 (self-evident derivation) is how the
+    # real mount in this case actually resolved, since its job_dir (the durable seat anchor)
+    # never carried its session id at all.
     seat_anchor_job_dir = "/home/t/.claude/jobs/seat-abc12345"
     real_session_id = "226a2695-accf-4f18-b422-d4d028f4eb47"
     await actions.create_or_find_object("Agent", "agent:226a2695", "test")
@@ -327,7 +328,7 @@ async def test_a_genuinely_new_target_still_mints_after_an_idempotent_repair(
     actions: Actions,
 ) -> None:
     """The idempotency guard only absorbs a REPEAT of a transition this lineage already
-    recorded — a target it has never reached before is a real seam and mints exactly as
+    recorded. A target it has never reached before is a real seam and mints exactly as
     before, even against the same stale-row drift pattern."""
     sid = "1de40002"
     await actions.create_or_find_object("Agent", f"agent:{sid}", "test")
@@ -347,11 +348,11 @@ async def test_a_genuinely_new_target_still_mints_after_an_idempotent_repair(
 
 
 async def test_idempotency_never_absorbs_a_COMPACTION_head(actions: Actions) -> None:
-    """A compaction mint stamps no model_succession at all — _already_reached has nothing
+    """A compaction mint stamps no model_succession at all: _already_reached has nothing
     to compare against and must never mistake silence for a match. Gives '-ii' a witnessed
-    act first (ruling d3531cd8): without one, this is exactly the zero-turn-fold shape
-    (compaction mint immediately superseded, no acts between) and '-ii' would fold instead
-    of surviving to be the idempotency check's own subject."""
+    act first: without one, this is exactly the zero-turn-fold shape (compaction mint
+    immediately superseded, no acts between) and '-ii' would fold instead of surviving to
+    be the idempotency check's own subject."""
     a = await actions.create_or_find_object("Agent", "agent:1de40003", "test")
     await mint_heir(actions, "agent:1de40003", a, because="compaction", succession=None)
     await record_decision(actions, "1de40003-ii did real work", source="agent:1de40003-ii")
@@ -365,12 +366,12 @@ async def test_idempotency_never_absorbs_a_COMPACTION_head(actions: Actions) -> 
 
 
 async def test_live_succession_folds_a_SILENT_compaction_head(actions: Actions) -> None:
-    """THE CANONICAL REPRO ITSELF (ruling d3531cd8, msg 1398): /compact mints a phantom
-    (zero acts, zero turns), then /model — surfaced to the heartbeat as live_succession —
-    fires before the phantom ever did anything. The live-swap heir must chain onto the
-    ORIGINAL root, not the phantom; without the fix this reads '-iii', chaining a mint onto
-    a mind that never was (see test_idempotency_never_absorbs_a_COMPACTION_head for the
-    same setup WITH a witnessed act, which must still reach '-iii')."""
+    """THE CANONICAL REPRO ITSELF: /compact mints a phantom (zero acts, zero turns), then
+    /model, surfaced to the heartbeat as live_succession, fires before the phantom ever did
+    anything. The live-swap heir must chain onto the ORIGINAL root, not the phantom; without
+    the fix this reads '-iii', chaining a mint onto a mind that never was (see
+    test_idempotency_never_absorbs_a_COMPACTION_head for the same setup WITH a witnessed
+    act, which must still reach '-iii')."""
     a = await actions.create_or_find_object("Agent", "agent:1de40004", "test")
     phantom, _ = await mint_heir(actions, "agent:1de40004", a, because="compaction",
                                  succession=None)
@@ -381,7 +382,7 @@ async def test_live_succession_folds_a_SILENT_compaction_head(actions: Actions) 
 
     out = await live_succession(actions, session_id="1de40004aaaa-bbbb", observed_model=OPUS)
 
-    assert out.get("minted") == "agent:1de40004-ii", "the numeral is reused — the phantom folded"
+    assert out.get("minted") == "agent:1de40004-ii", "the numeral is reused, the phantom folded"
     assert out.get("from") == "agent:1de40004", "chains onto the ROOT, skipping the phantom"
     assert await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -392,30 +393,31 @@ async def test_live_succession_folds_a_SILENT_compaction_head(actions: Actions) 
 async def test_a_promoted_mount_row_FOLLOWS_the_lineage_head(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Ferryman IV read LIVE beside Ferryman V; Anubis XII beside XIII — promotion is by
-    transcript mtime, and mtime knows nothing of succession. Every mind onboarded that night
-    was co-agent-warned about its own ancestor. A promoted row re-points at the head."""
+    """Two real prior cases: an ancestor generation read LIVE beside its own heir, in each
+    case one generation apart. Promotion is by transcript mtime, and mtime knows nothing of
+    succession. Every mind onboarded that night was co-agent-warned about its own ancestor.
+    A promoted row re-points at the head."""
     sid = "cafe0001"
     a = await actions.create_or_find_object("Agent", f"agent:{sid}", "test")
     await mint_heir(actions, f"agent:{sid}", a, because="compaction", succession=None)
-    # a PROVISIONAL seat naming the ANCESTOR (alive=False → no pulse until the disk speaks)
+    # a PROVISIONAL seat naming the ANCESTOR (alive=False, so no pulse until the disk speaks)
     await save_mount(actions.pool, job_dir=f"/home/t/.claude/jobs/{sid}",
                      agent_id=f"agent:{sid}", project="osiris", cwd="/t",
-                     model=OPUS, session_key="whisper:test", alive=False)
+                     model=OPUS, session_key="sid:test", alive=False)
     proj = tmp_path / "proj"
     proj.mkdir()
     (proj / f"{sid}-1111-2222.jsonl").write_text('{"type":"user"}\n')
     assert await observe_liveness(actions.pool, tmp_path) == 1
     row = await actions.pool.fetchrow(
         "SELECT agent_id, last_seen FROM agent_mounts WHERE job_dir LIKE '%' || $1", sid)
-    assert row["last_seen"] is not None, "the transcript moved — the seat earned its pulse"
+    assert row["last_seen"] is not None, "the transcript moved, so the seat earned its pulse"
     assert row["agent_id"] == f"agent:{sid}-ii", \
-        "the row still names a superseded generation — its own descendant reads as a co-agent"
+        "the row still names a superseded generation: its own descendant reads as a co-agent"
 
 
 async def test_a_ghost_spawn_earns_NO_heartbeat(actions: Actions) -> None:
-    """42 of the 44 spawns registered that night were spawn_witnessed=false — announced by
-    the harness, transcript never materialized — and the stop-stamp handed each a last_active
+    """42 of the 44 spawns registered that night were spawn_witnessed=false: announced by
+    the harness, transcript never materialized, and the stop-stamp handed each a last_active
     pulse anyway. A HEARTBEAT MUST BE EARNED BY AN ACT, NEVER GRANTED BY A GREETING."""
     ghost = await register_spawn(actions, "a" + "0" * 16, agent_type="ghost", done=True)
     assert ghost is not None
@@ -432,9 +434,10 @@ async def test_a_ghost_spawn_earns_NO_heartbeat(actions: Actions) -> None:
 
 
 async def test_seat_holders_do_not_count_HEALED_PHANTOMS(actions: Actions) -> None:
-    """TJMAX read X when ~six minds ever acted: seat_holders counted false mints, so a healed
-    phantom still inflated every later numeral, forever. RETIRED real holders still count —
-    they held the seat; filtering them would renumber history."""
+    """A real prior case read a numeral far past the number of minds that ever actually
+    acted: seat_holders counted false mints, so a healed phantom still inflated every later
+    numeral, forever. RETIRED real holders still count: they held the seat, and filtering
+    them would renumber history."""
     now = datetime.now(UTC)
     for i, (canon, phantom) in enumerate(
             [("agent:d00d0001", False), ("agent:d00d0002", True), ("agent:d00d0003", False)]):
@@ -446,7 +449,7 @@ async def test_seat_holders_do_not_count_HEALED_PHANTOMS(actions: Actions) -> No
         if phantom:
             await actions.assert_property(o, "false_mint", "true", "test", now, 0.9,
                                           evidence_class="self_declared")
-        if i == 2:  # a real holder who RETIRED — held the seat, still counts
+        if i == 2:  # a real holder who RETIRED: held the seat, still counts
             await actions.assert_property(o, "retired", "true", "test", now, 0.9,
                                           evidence_class="self_declared")
     holders = await seat_holders(actions.pool, "osiris", "TestSeat")
@@ -454,7 +457,7 @@ async def test_seat_holders_do_not_count_HEALED_PHANTOMS(actions: Actions) -> No
 
 
 async def test_mint_heir_passes_the_HOUSE_with_the_blood(actions: Actions) -> None:
-    """Heartbeat-minted heirs carried a project assertion but no works_in EDGE — invisible to
+    """Heartbeat-minted heirs carried a project assertion but no works_in EDGE, invisible to
     every lens that walks the edge. The heir now inherits both at the mint."""
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", "agent:f00d0001", "test")
@@ -468,11 +471,11 @@ async def test_mint_heir_passes_the_HOUSE_with_the_blood(actions: Actions) -> No
     linked = await actions.pool.fetchval(
         "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='works_in' AND t.canonical='repo:osiris'", heir_oid)
-    assert linked, "the heir has a project but no house — every works_in lens misses it"
+    assert linked, "the heir has a project but no house: every works_in lens misses it"
 
 
 async def _acts(actions: Actions, canonical: str) -> None:
-    """Give an agent a REAL act (an assertion on a foreign domain object) — the thing a husk,
+    """Give an agent a REAL act (an assertion on a foreign domain object): the thing a husk,
     by definition, never did."""
     t = await actions.create_or_find_object("Thread", f"thread:{uuid.uuid4().hex[:12]}",
                                             canonical)
@@ -480,10 +483,10 @@ async def _acts(actions: Actions, canonical: str) -> None:
                                   evidence_class="self_declared")
 
 
-async def test_the_heal_retires_a_MID_CHAIN_husk_and_moves_its_estate(
+async def test_the_heal_retires_a_MID_CHAIN_husk_and_moves_its_holdings(
     actions: Actions,
 ) -> None:
-    """base(real) → ii(husk) → iii(real head): ii heals as false_mint, its unread mail and
+    """base(real) to ii(husk) to iii(real head): ii heals as false_mint, its unread mail and
     mount rows follow iii, and the walk still lands on iii through the healed link."""
     a = await actions.create_or_find_object("Agent", "agent:ea570001", "test")
     _, ii_oid = await mint_heir(actions, "agent:ea570001", a, because="compaction",
@@ -511,9 +514,10 @@ async def test_the_heal_retires_a_MID_CHAIN_husk_and_moves_its_estate(
 
 
 async def test_the_heal_UNWINDS_a_tail_of_husks(actions: Actions) -> None:
-    """7118bf41: the last two generations were both husks, so the lineage HEAD was a corpse —
-    and lineage_head reads succeeded_by, not false_mint. The heal restores the last real mind
-    as head by clearing its forward pointer (a compensating stamp, never a delete)."""
+    """A real prior case: the last two generations were both husks, so the lineage HEAD was a
+    corpse, and lineage_head reads succeeded_by, not false_mint. The heal restores the last
+    real mind as head by clearing its forward pointer (a compensating stamp, never a
+    delete)."""
     a = await actions.create_or_find_object("Agent", "agent:ea570002", "test")
     await _acts(actions, "agent:ea570002")
     _, ii_oid = await mint_heir(actions, "agent:ea570002", a, because="compaction",
@@ -530,7 +534,7 @@ async def test_the_heal_UNWINDS_a_tail_of_husks(actions: Actions) -> None:
 
 async def test_the_heal_REFUSES_a_mind_that_acted(actions: Actions) -> None:
     """The verification is re-derived at heal time, never trusted from the ticket: one real
-    act and the agent is a mind — not ours to erase, whatever the diagnosis said."""
+    act and the agent is a mind, not ours to erase, whatever the diagnosis said."""
     a = await actions.create_or_find_object("Agent", "agent:ea570003", "test")
     await mint_heir(actions, "agent:ea570003", a, because="compaction", succession=None)
     await _acts(actions, "agent:ea570003-ii")

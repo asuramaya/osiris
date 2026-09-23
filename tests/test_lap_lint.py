@@ -1,9 +1,9 @@
-"""rungs 2+3 — the lap lens and the graph lint (campaign 5c57f54d).
+"""Tests for the lap lens and the graph lint.
 
-lap: ONE object's provenance timeline — assertions with their supersession fate, links in
-both directions, kernel events, and the current winning view: how the graph came to
-believe a thing. lint: the graph auditing ITSELF — report-only findings, each check born
-from a lived bug (the impersonation class, coin-flip winners, rotting duties).
+lap: ONE object's provenance timeline: assertions with their supersession fate, links in
+both directions, kernel events, and the current winning view, showing how the graph came to
+believe a thing. lint: the graph auditing itself, report-only findings, each check born
+from a real bug (the impersonation class, coin-flip winners, rotting duties).
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ async def test_lap_shows_how_the_graph_came_to_believe(actions: Actions) -> None
     link = next(e for e in out["timeline"] if e["kind"] == "link-out")
     assert link["link"] == "member_of" and link["other"] == "org:probe"
     ats = [str(e["at"]) for e in out["timeline"]]
-    assert ats == sorted(ats)  # observed order — a timeline, not a bag
+    assert ats == sorted(ats)  # observed order: a timeline, not a bag
     assert out["counts"]["superseded"] == 1
     # the other end sees the same edge, inbound
     other = await _fn(actions, "lap", {"ref": "org:probe"})
@@ -78,12 +78,12 @@ async def test_lap_resolves_names_and_reports_absence(actions: Actions) -> None:
 async def test_resolve_ref_short_id_never_shadows_a_real_canonical_or_name(
     actions: Actions,
 ) -> None:
-    """task #64 (ruling ad19a779) — the short-id leg mirrors capture._find_thread/
+    """The short-id leg mirrors capture._find_thread/
     _find_decision's own convention exactly, widened to any object type: a
     table/Function-sourced row's own "id" column (_col_value's 8-char short-id special
     case) now resolves through dossier()/focus_object(), not just recall(). A ref that
-    ISN'T hex-shaped (a real canonical, a real name) is completely untouched by the new
-    leg — it never even runs the short-id query."""
+    isn't hex-shaped (a real canonical, a real name) is completely untouched by the new
+    leg: it never even runs the short-id query."""
     a = await actions.create_or_find_object("Person", "person:short-a", "t")
     b = await actions.create_or_find_object("Person", "person:short-b", "t")
     assert await resolve_ref(actions.pool, str(a)[:8]) == a
@@ -94,7 +94,7 @@ async def test_resolve_ref_short_id_never_shadows_a_real_canonical_or_name(
 
 
 async def test_lap_caps_honestly(actions: Actions) -> None:
-    """A trimmed timeline SAYS it trimmed — counts hold the true totals (no silent caps)."""
+    """A trimmed timeline SAYS it trimmed: counts hold the true totals (no silent caps)."""
     t = "agent:teller"
     a = await actions.create_or_find_object("Person", "person:busy", t)
     for i in range(6):
@@ -104,7 +104,7 @@ async def test_lap_caps_honestly(actions: Actions) -> None:
     assert len(out["timeline"]) == 2
     assert out["counts"]["assertions"] == 6
     assert "dropped" in out["note"]
-    # the newest survive the trim — the shown tail IS the untrimmed timeline's tail
+    # the newest survive the trim: the shown tail IS the untrimmed timeline's tail
     full = await _fn(actions, "lap", {"ref": "person:busy", "limit": 1000})
     assert "note" not in full and out["timeline"] == full["timeline"][-2:]
 
@@ -114,7 +114,7 @@ async def test_lap_caps_honestly(actions: Actions) -> None:
 
 async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     """Cycles, dangling heir pointers, heirs without ancestry, retired-yet-live, and the
-    healed false mints — the succession invariants of ruling a882b334, as tripwires."""
+    healed false mints: the succession invariants, as tripwires."""
     t = "agent:teller"
     x = await actions.create_or_find_object("Agent", "agent:aaaa0001", t)
     y = await actions.create_or_find_object("Agent", "agent:bbbb0002", t)
@@ -145,22 +145,22 @@ async def test_lint_catches_the_lineage_sins(actions: Actions) -> None:
     assert len(retired) == 1 and retired[0]["subject"] == "agent:ffff0006"
     assert retired[0]["severity"] == "error"
     assert [f["subject"] for f in _by_check(out, "false-mint")] == ["agent:0000dead"]
-    # false_mint but NO mount row — the ordinary healed-phantom case, never this check's own
+    # false_mint but NO mount row: the ordinary healed-phantom case, never this check's own
     assert _by_check(out, "false-mint-live") == []
 
 
 async def test_lint_catches_a_dangling_succeeded_from(actions: Actions) -> None:
-    """DANGLING-SUCCEEDED_FROM (thread 8322bca8, Khnum specimen #3, decision 0e9c4f1d):
-    lineage-dangling above only walks succeeded_by FORWARD — an heir's own succeeded_from
+    """DANGLING-SUCCEEDED_FROM:
+    lineage-dangling above only walks succeeded_by FORWARD: an heir's own succeeded_from
     pointer, naming a canonical no Agent object carries, was never checked in the reverse
     direction. Same failure mode, same fix shape, the other way."""
     t = "agent:teller"
-    # a real, healthy pair — negative control: this must NEVER be flagged
+    # a real, healthy pair: negative control, this must NEVER be flagged
     anc = await actions.create_or_find_object("Agent", "agent:11110001", t)
     heir = await actions.create_or_find_object("Agent", "agent:11110001-ii", t)
     await actions.assert_property(heir, "succeeded_from", "agent:11110001", t, NOW, 0.9,
                                   evidence_class=_SD)
-    # a succeeded_from pointer into the void — no Agent object of ANY status carries it
+    # a succeeded_from pointer into the void: no Agent object of ANY status carries it
     ghost_heir = await actions.create_or_find_object("Agent", "agent:22220002-ii", t)
     await actions.assert_property(ghost_heir, "succeeded_from", "agent:no-such-ancestor",
                                   t, NOW, 0.9, evidence_class=_SD)
@@ -176,13 +176,13 @@ async def test_lint_catches_a_dangling_succeeded_from(actions: Actions) -> None:
 
 
 async def test_lint_catches_succeeded_from_mismatch(actions: Actions) -> None:
-    """Decision 1081a782: every lineage check reads succeeded_by FORWARD only — an heir's
+    """Every lineage check reads succeeded_by FORWARD only: an heir's
     own succeeded_from pointer was never cross-checked against that SAME ancestor's own
     succeeded_by. Three flagged shapes (real disagreement, absent ancestor succeeded_by,
     dangling ancestor canonical) plus one healthy negative control."""
     t = "agent:teller"
     # healthy pair: heir's succeeded_from names the ancestor, ancestor's succeeded_by names
-    # the heir right back — agreement, never flagged.
+    # the heir right back: agreement, never flagged.
     anc_ok = await actions.create_or_find_object("Agent", "agent:mismatch-anc-ok", t)
     heir_ok = await actions.create_or_find_object("Agent", "agent:mismatch-heir-ok", t)
     await actions.assert_property(anc_ok, "succeeded_by", "agent:mismatch-heir-ok", t, NOW,
@@ -220,15 +220,15 @@ async def test_lint_catches_succeeded_from_mismatch(actions: Actions) -> None:
 async def test_lint_flags_a_merged_agent_whose_succeeded_by_is_still_active(
     actions: Actions,
 ) -> None:
-    """THE XXXIX MIS-MERGE SHAPE (thread 16ef8d24, decision 4510e4c6): a merge folds
+    """The mis-merge shape: a merge folds
     `dupe` into `into` (same_as/status='merged'), but `dupe` still carries its own,
     independent, self-declared succeeded_by naming a THIRD object that is genuinely
-    active — the merge and the succession pointer disagree about where `dupe`'s
+    active: the merge and the succession pointer disagree about where `dupe`'s
     identity actually continues. A candidate for unmerge(), never an automatic verdict:
     a clean churn link whose target happens to be active (an intermediate generation
     pointing at a just-repaired ancestor) is exactly as harmless and NOT what this
-    fixture tests — this fixture's `real_successor` is a THIRD object, outside the
-    merge entirely, the live specimen's own shape."""
+    fixture tests. This fixture's `real_successor` is a THIRD object, outside the
+    merge entirely."""
     t = "agent:teller"
     dupe = await actions.create_or_find_object("Agent", "agent:mm5f0001", t)
     into = await actions.create_or_find_object("Agent", "agent:mm5f0002", t)
@@ -248,11 +248,11 @@ async def test_lint_flags_a_merged_agent_whose_succeeded_by_is_still_active(
 async def test_lint_flags_a_false_minted_generation_with_a_live_mount(
     actions: Actions,
 ) -> None:
-    """THE HALCYON RULE (obligation 6b1efacb, 2026-08-18): a generation carrying
+    """A generation carrying
     false_mint=true with a LIVE mount is a DISTINCT, more alarming signal than an ordinary
-    retirement racing a slow mount cleanup — a genuinely live body may be wearing a
+    retirement racing a slow mount cleanup: a genuinely live body may be wearing a
     phantom-folded face. Named separately from `retired-live` so a human reading the
-    report sees the repair door (reinstate_generation) directly, not a generic warning."""
+    report sees the repair path (reinstate_generation) directly, not a generic warning."""
     t = "agent:teller"
     victim = await actions.create_or_find_object("Agent", "agent:b4251601", t)
     await actions.assert_property(victim, "false_mint", True, t, NOW, 0.9, evidence_class=_SD)
@@ -268,9 +268,9 @@ async def test_lint_flags_a_false_minted_generation_with_a_live_mount(
 
 
 async def test_lint_walks_through_a_historical_generation(actions: Actions) -> None:
-    """An archived (historical) heir is ANCESTRY, not absence (task #20, 2026-07-19: four
+    """An archived (historical) heir is ANCESTRY, not absence (a past bug: four
     bases whose -ii heirs had been archived read as 'dangling' for two sessions). The walk
-    must not flag a pointer at a historical object — and must CONTINUE through it, so a
+    must not flag a pointer at a historical object, and must CONTINUE through it, so a
     genuine void pointer deeper in the chain is still found and blamed on its true holder."""
     t = "agent:teller"
     base = await actions.create_or_find_object("Agent", "agent:aaaa1111", t)
@@ -292,7 +292,7 @@ async def test_lint_walks_through_a_historical_generation(actions: Actions) -> N
 
 async def test_lint_surfaces_coin_flip_winners(actions: Actions) -> None:
     """Two sources, same fact, different values, near-tie confidence: the resolver is
-    deciding on recency alone — surfaced as a contradiction, never resolved."""
+    deciding on recency alone, surfaced as a contradiction, never resolved."""
     t = "agent:teller"
     c = await actions.create_or_find_object("Organization", "org:tie", t)
     await actions.assert_property(c, "hq", "Berlin", "agent:one", NOW, 0.9,
@@ -318,15 +318,15 @@ async def test_lint_contradiction_sees_past_a_rank_3_rival_hidden_by_agreeing_to
     actions: Actions,
 ) -> None:
     """The check's mechanism (row_number() hard-joined at rn=1 AND rn=2) only ever compares
-    the TOP TWO ranked rows for an (object, field) pair — rows ranked 3+ are computed and
+    the TOP TWO ranked rows for an (object, field) pair: rows ranked 3+ are computed and
     then discarded, never compared to anything. Proven concretely on repo:bytebye/name: 19
     rival rows sat invisible at rn=3+ because rn=1 and rn=2 happened to already agree on the
     same value. Reproduce the minimal shape: two sources CORROBORATE the winning value (so
     it occupies both rn=1 and rn=2, and the old `w.v IS DISTINCT FROM r.v` check finds them
     equal and stops looking) while a THIRD source disputes it at a confidence within eps of
     the winner. To be precise about which claim this indicts: the RESOLVER's own supersession
-    still correctly serves the corroborated value — that mechanism is not in question. What's
-    wrong is the AUDITOR's completeness claim — it must still see a live, close-confidence
+    still correctly serves the corroborated value, that mechanism is not in question. What's
+    wrong is the AUDITOR's completeness claim: it must still see a live, close-confidence
     rival that the winner's own corroboration happens to be hiding from it."""
     t = "agent:teller"
     c = await actions.create_or_find_object("Organization", "org:tri", t)
@@ -344,8 +344,8 @@ async def test_lint_contradiction_sees_past_a_rank_3_rival_hidden_by_agreeing_to
 
 
 async def test_lint_contradiction_excludes_a_non_active_subject(actions: Actions) -> None:
-    """thread 4a7da43a/12a210ab (reap Stage 1b, 2026-07-28): a merged/historical/archived
-    object's internal coin-flips are history, not live ambiguity — nothing in the read-path
+    """A merged/historical/archived
+    object's internal coin-flips are history, not live ambiguity: nothing in the read-path
     (lineage_head resolves merged_into before ever touching a loser's own properties) ever
     surfaces them. Prove the exclusion is doing real work: the SAME tie flags while active,
     and goes quiet the moment status flips away from active."""
@@ -362,11 +362,11 @@ async def test_lint_contradiction_excludes_a_non_active_subject(actions: Actions
 
 
 async def test_lint_contradiction_excludes_a_healed_debounce_guess(actions: Actions) -> None:
-    """thread 4a7da43a/12a210ab: seam-debounce and husk-heal both write succeeded_by=''
+    """seam-debounce and husk-heal both write succeeded_by=''
     at debounce/heal time as a "no successor seen yet" placeholder; once a real generation
     self-declares succeeded_from back at the predecessor, the guess is permanently stale but
-    never a live dispute — resolver noise from a known automated observer, not a coin-flip a
-    mind needs to referee (walked and verified live against lineage_head: decision c41f74a6).
+    never a live dispute: resolver noise from a known automated observer, not a coin-flip a
+    mind needs to referee (walked and verified live against lineage_head).
     The exclusion is narrow: a genuine tie on succeeded_by from two OTHER real sources still
     flags, and an empty value from a source OTHER than the two known debouncers still flags."""
     t = "agent:teller"
@@ -388,12 +388,12 @@ async def test_lint_contradiction_excludes_a_healed_debounce_guess(actions: Acti
 
 
 async def test_lint_contradiction_excludes_is_handoff_retirement(actions: Actions) -> None:
-    """thread 6027 (Thoth's "504 contradictions are probably one bug" dispatch): is_handoff
+    """is_handoff
     joins the lifecycle family (`status`/`resolved_in`/`resolved_because`) already excluded
-    above — record_decision stamps 'true' at mint, `_retire_stale_handoffs` retires it by
+    above: record_decision stamps 'true' at mint, `_retire_stale_handoffs` retires it by
     asserting 'false' at the SAME fixed confidence later. Measured live: 295/295 real
     findings had the 'false' winner strictly newer than the 'true' rival, zero reverse, zero
-    ties — a designed two-state lifecycle, not a live dispute. Prove the exclusion is narrow:
+    ties: a designed two-state lifecycle, not a live dispute. Prove the exclusion is narrow:
     a genuine tie on some OTHER field for the same object still flags."""
     t = "agent:teller"
     d = await actions.create_or_find_object("Decision", "decision:handoff0001", t)
@@ -411,7 +411,7 @@ async def test_lint_contradiction_excludes_is_handoff_retirement(actions: Action
     assert not any(f["field"] == "is_handoff" for f in con)
     assert any(f["field"] == "summary" and f["subject"] == "decision:handoff0001" for f in con)
     # a real tie on succeeded_by (neither source is a known debouncer, neither value empty)
-    # still flags — the exclusion never widens into "succeeded_by is exempt"
+    # still flags: the exclusion never widens into "succeeded_by is exempt"
     d = await actions.create_or_find_object("Agent", "agent:disputed0003", t)
     await actions.assert_property(d, "succeeded_by", "agent:disputed0003-ii", "agent:one",
                                   NOW, 0.9, evidence_class=_SD)
@@ -420,7 +420,7 @@ async def test_lint_contradiction_excludes_is_handoff_retirement(actions: Action
     out2 = await _fn(actions, "lint", {})
     disputed = _by_check(out2, "contradiction")
     assert any(f["subject"] == "agent:disputed0003" for f in disputed)
-    # an empty rival from an UNKNOWN source is not the debounce/heal case — still flags
+    # an empty rival from an UNKNOWN source is not the debounce/heal case: still flags
     e = await actions.create_or_find_object("Agent", "agent:strayempty0004", t)
     await actions.assert_property(e, "succeeded_by", "", "some-other-source", NOW, 0.6,
                                   evidence_class="direct_observation")
@@ -432,9 +432,9 @@ async def test_lint_contradiction_excludes_is_handoff_retirement(actions: Action
 
 
 async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
-    """The first live run's lesson (23 findings, zero real): open→resolved from another
-    hand is the state machine WORKING — never a contradiction. The one true failure mode —
-    an 'open' NEWER than a different source's 'resolved' — is its own error check."""
+    """The first live run's lesson (23 findings, zero real): open to resolved from another
+    hand is the state machine WORKING, never a contradiction. The one true failure mode,
+    an 'open' NEWER than a different source's 'resolved', is its own error check."""
     t = "agent:teller"
     ok = await actions.create_or_find_object("Thread", "thread:lifecycle", t)
     await actions.assert_property(ok, "status", "open", "agent:opener", NOW, 0.9,
@@ -444,7 +444,7 @@ async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
     out = await _fn(actions, "lint", {})
     assert _by_check(out, "contradiction") == []        # a transition, not a tie
     assert _by_check(out, "status-regression") == []
-    # ...but a REGRESSION — re-opened by recency over a deliberate close — is an error
+    # ...but a REGRESSION, re-opened by recency over a deliberate close, is an error
     bad = await actions.create_or_find_object("Thread", "thread:regressed", t)
     await actions.assert_property(bad, "summary", "the overridden close", t, NOW, 0.9,
                                   evidence_class=_SD)
@@ -469,8 +469,8 @@ async def test_lint_status_lifecycle_is_not_a_war(actions: Actions) -> None:
 
 
 async def test_lint_double_resolution_is_corroboration(actions: Actions) -> None:
-    """Operator ruling 64adf08a (the 94ddca1f adjudication): two hands both closing the
-    same thread — status agrees, only resolved_in/resolved_because differ — is TWO
+    """Two hands both closing the
+    same thread, status agrees, only resolved_in/resolved_because differ, is TWO
     WITNESSES attesting one fact, never a contradiction. Keep both; the lint stays quiet.
     A genuine non-lifecycle tie on the same object still flags."""
     t = "agent:teller"
@@ -490,7 +490,7 @@ async def test_lint_double_resolution_is_corroboration(actions: Actions) -> None
     out = await _fn(actions, "lint", {})
     assert _by_check(out, "contradiction") == []         # corroboration, not a war
     assert _by_check(out, "status-regression") == []     # and no false regression either
-    # the exclusion is the lifecycle FAMILY only — a real tie elsewhere still surfaces
+    # the exclusion is the lifecycle FAMILY only: a real tie elsewhere still surfaces
     await actions.assert_property(th, "owner", "alice", "agent:one", NOW, 0.9,
                                   evidence_class=_SD)
     await actions.assert_property(th, "owner", "bob", "agent:two",
@@ -503,10 +503,10 @@ async def test_lint_double_resolution_is_corroboration(actions: Actions) -> None
 async def test_lint_status_regression_catches_the_never_flipped_shape(
     actions: Actions,
 ) -> None:
-    """Ruling aaf050e4, off ruling 1335332e's own 713 specimens: a thread's WINNING status
+    """Off a real batch of 713 specimens: a thread's WINNING status
     (confidence-then-recency ranked, same discipline as the contradiction check) is 'open',
-    but resolved_because evidence dated AFTER it shows a close actually happened — the flag
-    just never flipped. Never a coin-flip-eps case (64adf08a's own flood): this fires
+    but resolved_because evidence dated AFTER it shows a close actually happened: the flag
+    just never flipped. Never a coin-flip-eps case: this fires
     regardless of confidence distance, because it isn't measuring closeness, it's measuring
     a leak."""
     t = "agent:teller"
@@ -516,7 +516,7 @@ async def test_lint_status_regression_catches_the_never_flipped_shape(
     await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
                                   evidence_class=_SD)
     # the write-path bug's own shape: resolved_because landed, the status='resolved'
-    # sibling write did not (or landed and was lost) — 'open' is still the only, and
+    # sibling write did not (or landed and was lost); 'open' is still the only, and
     # therefore winning, status row.
     await actions.assert_property(th, "resolved_because", "closed in commit deadbeef",
                                   "agent:closer", NOW + timedelta(hours=1), 0.9,
@@ -530,8 +530,8 @@ async def test_lint_status_regression_catches_the_never_flipped_shape(
 async def test_lint_status_regression_never_flipped_stays_silent_on_a_real_reopen(
     actions: Actions,
 ) -> None:
-    """A status assertion AFTER the resolve evidence is a legitimate, on-the-record reopen
-    — never the leak the never-flipped check exists to catch."""
+    """A status assertion AFTER the resolve evidence is a legitimate, on-the-record reopen,
+    never the leak the never-flipped check exists to catch."""
     t = "agent:teller"
     th = await actions.create_or_find_object("Thread", "thread:really-reopened", t)
     await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
@@ -551,7 +551,7 @@ async def test_lint_status_regression_never_flipped_stays_silent_on_an_explanato
 ) -> None:
     """A note added after the resolve evidence (annotate_thread's own append-only shape,
     stamped under a unique note:<hex> property name) is also a legitimate on-the-record
-    account of the reopen — silenced the same as a fresh status assertion would be."""
+    account of the reopen, silenced the same as a fresh status assertion would be."""
     t = "agent:teller"
     th = await actions.create_or_find_object("Thread", "thread:noted-reopen", t)
     await actions.assert_property(th, "status", "open", "agent:opener", NOW, 0.9,
@@ -570,8 +570,8 @@ async def test_lint_status_regression_never_flipped_stays_silent_on_an_explanato
 async def test_lint_status_regression_catches_an_exact_timestamp_tie(
     actions: Actions,
 ) -> None:
-    """Two different sources asserting 'open' and 'resolved' at the IDENTICAL observed_at
-    — the winner-picker's own confidence/recency tiebreak has nothing left to break the tie
+    """Two different sources asserting 'open' and 'resolved' at the IDENTICAL observed_at:
+    the winner-picker's own confidence/recency tiebreak has nothing left to break the tie
     on, so this is reported rather than silently coin-flipped."""
     t = "agent:teller"
     th = await actions.create_or_find_object("Thread", "thread:exact-tie", t)
@@ -589,8 +589,8 @@ async def test_lint_status_regression_catches_an_exact_timestamp_tie(
 async def test_lint_pulse_only_liveness_names_a_fresh_non_claude_agent(
     actions: Actions,
 ) -> None:
-    """Piece 3 (thread 879c97b9, Thoth's guard #3): a non-Claude-harness agent with a
-    fresh mount row is counted — info-grade, a population to stay visible, never a
+    """A non-Claude-harness agent with a
+    fresh mount row is counted: info-grade, a population to stay visible, never a
     defect. A Claude-harness agent (or one never stamped at all) never appears here,
     same disjoint-population law `registry_census`'s own `pulse_live` keeps."""
     t = "agent:teller"
@@ -652,7 +652,7 @@ async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> No
     stale = _by_check(out, "stale-obligation")
     assert len(stale) == 1 and stale[0]["age_days"] >= 29
     assert "rotting duty" in stale[0]["detail"]
-    # every write above was stamped by unregistered agent sources — the ghosts show up
+    # every write above was stamped by unregistered agent sources: the ghosts show up
     ghosts = {f["subject"] for f in _by_check(out, "attribution")}
     assert "agent:teller" in ghosts
     # ...and registering the face clears it
@@ -663,8 +663,8 @@ async def test_lint_orphan_links_stale_duties_and_ghosts(actions: Actions) -> No
 
 async def test_lint_attribution_sees_through_a_relay_annotation(actions: Actions) -> None:
     """A registered writer that suffixes its id with a parenthetical provenance note is
-    NOT an impersonator (task #21, 2026-07-19: 338 of XLIV's relay writes — source_id
-    'agent:... (relaying operator bulk ruling ...)' — read as an unregistered ghost for
+    NOT an impersonator (a past bug: hundreds of one lineage's relay writes, source_id
+    'agent:... (relaying operator bulk ruling ...)', read as an unregistered ghost for
     two sessions). The id is judged; the note rides along. A bare unregistered id still
     flags."""
     t = "agent:teller"
@@ -683,9 +683,9 @@ async def test_lint_attribution_sees_through_a_relay_annotation(actions: Actions
 
 
 async def test_lint_deals_rot_candidates_but_never_resolves(actions: Actions) -> None:
-    """Two witnesses (Metron IV, Soundwave): open threads whose repo's LATER commits share
-    their vocabulary are probably done — the lint deals them as 'confirm?' candidates.
-    Report-only: the thread's status is untouched (758ded94 — testimony, never lint)."""
+    """Open threads whose repo's LATER commits share
+    their vocabulary are probably done: the lint deals them as 'confirm?' candidates.
+    Report-only: the thread's status is untouched (this is testimony, never lint)."""
     from src.orchestrator.capture import open_thread
 
     t = "agent:teller"
@@ -706,17 +706,17 @@ async def test_lint_deals_rot_candidates_but_never_resolves(actions: Actions) ->
     assert len(rot) == 1 and rot[0]["subject"] == str(tid)
     assert "probably resolved, confirm?" in rot[0]["detail"]
     assert "commit:abc123rot" in rot[0]["detail"]
-    # the record is UNTOUCHED — the lint dealt a card, it did not play a verb
+    # the record is UNTOUCHED: the lint dealt a card, it did not play a verb
     st = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 AND name='status' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1", tid)
     assert st == "open"
 
 
-# ═══ check/limit/offset (task #74, thread 12a210ab leg 1) — the 50-row hard cap had no
+# check/limit/offset: the 50-row hard cap had no
 # pagination and no way to isolate one check's full findings without hand-writing this
-# tool's own SQL, the exact pain the reap hit needing all 19 contradiction + 24 false-mint
-# rows.
+# tool's own SQL, the exact pain a real cleanup run hit needing all 19 contradiction + 24
+# false-mint rows.
 
 async def test_lint_check_filter_lists_only_that_checks_findings(actions: Actions) -> None:
     t = "agent:teller"
@@ -735,7 +735,7 @@ async def test_lint_check_filter_lists_only_that_checks_findings(actions: Action
     out = await _fn(actions, "lint", {"check": "contradiction"})
     assert {f["check"] for f in out["findings"]} == {"contradiction"}
     assert len(out["findings"]) == 1
-    # every OTHER check's true total is still reported — just not listed
+    # every OTHER check's true total is still reported, just not listed
     assert out["counts"]["stale-obligation"] >= 1
     assert not any(f["check"] == "stale-obligation" for f in out["findings"])
 
@@ -752,7 +752,7 @@ async def test_lint_check_filter_unknown_check_returns_nothing(actions: Actions)
 
 
 async def test_lint_unfiltered_call_is_unchanged(actions: Actions) -> None:
-    """`check=None` (the default) stays behavior-identical to the pre-existing 50-cap —
+    """`check=None` (the default) stays behavior-identical to the pre-existing 50-cap:
     no regression for every caller that never asked for a check filter."""
     t = "agent:teller"
     for i in range(3):
@@ -790,7 +790,7 @@ async def test_lint_check_filter_paginates_beyond_the_50_cap(actions: Actions) -
 
 
 async def test_lint_orphan_link_check_filter_beyond_its_own_sql_cap(actions: Actions) -> None:
-    """orphan-link's own SQL pre-limits its fetch to _LINT_CAP — unlike every other check,
+    """orphan-link's own SQL pre-limits its fetch to _LINT_CAP, unlike every other check,
     which fetches its FULL row set and only caps at the display layer. Prove the check
     filter actually raises the SQL-level fetch too, not just the display slice."""
     t = "agent:teller"
@@ -811,13 +811,13 @@ async def test_lint_orphan_link_check_filter_beyond_its_own_sql_cap(actions: Act
 async def test_lint_orphan_link_pagination_survives_the_5000_row_hard_cap(
     actions: Actions,
 ) -> None:
-    """Thread 187323d9 / decision 6647fcd5 (Thoth DM 3143), the live specimen: orphan-link's
+    """A real production incident: orphan-link's
     own SQL fetch used to hard-cap at min(offset+limit, 5000) regardless of the real
-    population — so ANY offset at or past ~5000 silently returned an EMPTY findings list
+    population, so ANY offset at or past ~5000 silently returned an EMPTY findings list
     while `note`/`capped` still reported a genuine positive remainder (graph_lint(offset=
     5000) and (offset=10600) both returned [] against a real 10,637-row population, both
     claiming a positive remainder). Blindness rendered as silence, never a refusal.
-    Reproduced with bulk SQL, not a per-row ORM loop — 5000+ rows one at a time is minutes,
+    Reproduced with bulk SQL, not a per-row ORM loop: 5000+ rows one at a time is minutes,
     not seconds."""
     t = "agent:teller"
     corpse = await actions.create_or_find_object("Organization", "org:hugecorpse", t)
@@ -838,17 +838,17 @@ async def test_lint_orphan_link_pagination_survives_the_5000_row_hard_cap(
     remaining = n - 5000 - 5
     assert out["capped"]["orphan-link"] == remaining
     assert out["note"] is not None and str(remaining) in out["note"]
-    # decision 6647fcd5's third defect ("count and listable population disagree") was the
-    # same root cause as the pagination bug above, not an independent one — `counts` and
+    # a related defect ("count and listable population disagree") was the
+    # same root cause as the pagination bug above, not an independent one: `counts` and
     # the fetched population now agree because the fetch reaches the true total either way.
     assert out["counts"]["orphan-link"] == n
 
 
 async def test_lint_counts_carries_a_severity_split(actions: Actions) -> None:
-    """Thread 187323d9's first defect: `counts` alone mixed info-grade metered history
-    (orphan-link) with warn-grade damage (contradiction) in one undifferentiated list — a
-    reader trusting it at face value overstated real debt 54x, live. `severity` (per-check)
-    and `counts_by_severity` (the rollup) fix that without changing `counts`'s own shape —
+    """A prior defect: `counts` alone mixed info-grade metered history
+    (orphan-link) with warn-grade damage (contradiction) in one undifferentiated list, and
+    a reader trusting it at face value overstated real debt 54x, live. `severity` (per-check)
+    and `counts_by_severity` (the rollup) fix that without changing `counts`'s own shape:
     every existing caller reading `counts[check]` as a plain int is unaffected."""
     t = "agent:teller"
     corpse = await actions.create_or_find_object("Organization", "org:sevcorpse", t)
@@ -863,13 +863,13 @@ async def test_lint_counts_carries_a_severity_split(actions: Actions) -> None:
     out = await _fn(actions, "lint", {})
     assert out["severity"]["orphan-link"] == "info"
     assert out["severity"]["contradiction"] == "warn"
-    assert out["counts"]["orphan-link"] == 1  # counts's own shape is unchanged — a plain int
+    assert out["counts"]["orphan-link"] == 1  # counts's own shape is unchanged: a plain int
     assert out["counts_by_severity"]["info"] >= 1
     assert out["counts_by_severity"]["warn"] >= 1
 
 
 async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -> None:
-    """Rule #7 in test form: the lint must not write a single row — a linter that healed
+    """Rule #7 in test form: the lint must not write a single row: a linter that healed
     would be a loop pathology. And silence must be legible: clean checks are NAMED."""
     before = await actions.pool.fetchval("SELECT count(*) FROM assertions")
     out = await _fn(actions, "lint", {})
@@ -886,8 +886,8 @@ async def test_lint_is_report_only_and_a_clean_graph_says_so(actions: Actions) -
 
 
 async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> None:
-    """PHANTOM-TWIN (90f0cb3a's residue): an anonymous, un-spawned, un-seated agent
-    mounted at a Seat's office beside a different holder lineage — the shape a bridged
+    """PHANTOM-TWIN: an anonymous, un-spawned, un-seated agent
+    mounted at a Seat's office beside a different holder lineage, the shape a bridged
     resume mints when its receipts are missing. Flagged, never guessed at: seating is
     deliberate or it is nothing."""
     t = "agent:teller"
@@ -897,7 +897,7 @@ async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> Non
                                   evidence_class=_SD)
     holder = await actions.create_or_find_object("Agent", "agent:ab1e0001", t)
     await actions.create_link(holder, seat, "holds", t, NOW, 0.9, evidence_class=_SD)
-    # the holder's own seated row at the office — never a twin (seat-bound)
+    # the holder's own seated row at the office: never a twin (seat-bound)
     await mounts.save_mount(actions.pool, job_dir="/x/jobs/ab1e0001",
                             agent_id="agent:ab1e0001", project="p", cwd=office,
                             model=None, session_key=None)
@@ -908,7 +908,7 @@ async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> Non
     await mounts.save_mount(actions.pool, job_dir="/x/jobs/facade01",
                             agent_id="agent:facade01", project="p", cwd=office,
                             model=None, session_key="whisper:facade01")
-    # a NAMED agent at the office — a deliberate presence, not a phantom
+    # a NAMED agent at the office: a deliberate presence, not a phantom
     named = await actions.create_or_find_object("Agent", "agent:0c0ffee1", t)
     await actions.assert_property(named, "handle", "Visitor", t, NOW, 0.9,
                                   evidence_class=_SD)
@@ -926,12 +926,12 @@ async def test_lint_flags_the_phantom_twin_at_an_office(actions: Actions) -> Non
 
 
 async def test_lint_flags_a_live_agent_with_duplicate_works_in_edges(actions: Actions) -> None:
-    """DUPLICATE-WORKS-IN (thread 8640a625, John XVII's own specimen): a currently-live
-    agent carrying two simultaneously-live works_in edges — orient() resolves through
+    """DUPLICATE-WORKS-IN: a currently-live
+    agent carrying two simultaneously-live works_in edges: orient() resolves through
     exactly one, so the duplicate can hide a live lineage's own threads/decisions from
     itself. Scoped to LIVE agents only (via agent_mounts, the same liveness window
-    phantom-twin already uses) — a dead generation's own leftover duplicate is thread
-    20af2c95's separate, still-open concern, not this check's."""
+    phantom-twin already uses); a dead generation's own leftover duplicate is a separate,
+    still-open concern, not this check's."""
     t = "agent:teller"
     live = await actions.create_or_find_object("Agent", "agent:dup1live0", t)
     stale = await actions.create_or_find_object("SoftwareProject", "repo:dup1stale", t)
@@ -955,15 +955,15 @@ async def test_lint_does_not_flag_a_dead_generations_duplicate_works_in(
     actions: Actions,
 ) -> None:
     """The historical-noise exclusion: the same duplicate shape on an agent with NO live
-    mount stays silent here — nobody's orient() is resolving through it right now, and
-    that larger pile is thread 20af2c95's own separate concern."""
+    mount stays silent here: nobody's orient() is resolving through it right now, and
+    that larger pile is a separate concern."""
     t = "agent:teller"
     dead = await actions.create_or_find_object("Agent", "agent:dup2dead0", t)
     p1 = await actions.create_or_find_object("SoftwareProject", "repo:dup2p1", t)
     p2 = await actions.create_or_find_object("SoftwareProject", "repo:dup2p2", t)
     await actions.create_link(dead, p1, "works_in", t, NOW, 0.9, evidence_class=_SD)
     await actions.create_link(dead, p2, "works_in", t, NOW, 0.9, evidence_class=_SD)
-    # never mounted at all — no agent_mounts row for this agent
+    # never mounted at all: no agent_mounts row for this agent
 
     out = await _fn(actions, "lint", {})
 
@@ -971,11 +971,11 @@ async def test_lint_does_not_flag_a_dead_generations_duplicate_works_in(
 
 
 async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
-    """PARALLEL-LIVES (thread 4bcd6541, invariant 3 of the guarantee): a generation
-    minted while a DIFFERENT door of its own lineage still pulsed — the predecessor was
+    """PARALLEL-LIVES: a generation
+    minted while a DIFFERENT session of its own lineage was still live: the predecessor was
     not dead. The stamp is written AT the mint (mint_heir; rows are hot state and the
-    pulse is gone by lint time); the lint reads the stamps and testifies. The phantom
-    generations g40-v/vi would each have tripped this within a minute."""
+    liveness is gone by lint time); the lint reads the stamps and testifies. Past false-mint
+    generations would each have tripped this within a minute."""
     t = "agent:teller"
     heir = await actions.create_or_find_object("Agent", "agent:para0001-ii", t)
     await actions.assert_property(heir, "minted_because", "compaction", t, NOW, 0.9,
@@ -984,7 +984,7 @@ async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
                                   NOW, 0.9, evidence_class=_SD)
     await actions.assert_property(heir, "parallel_pulse_door", "a7e60257", t, NOW, 0.9,
                                   evidence_class=_SD)
-    # a CLEAN heir — stamped pulse, no parallel door: a legitimate seam, never flagged
+    # a CLEAN heir: stamped pulse, no parallel-pulse door, a legitimate seam, never flagged
     clean = await actions.create_or_find_object("Agent", "agent:c1ean001-ii", t)
     await actions.assert_property(clean, "minted_because", "compaction", t, NOW, 0.9,
                                   evidence_class=_SD)
@@ -1001,9 +1001,9 @@ async def test_lint_flags_a_parallel_life(actions: Actions) -> None:
 
 
 async def test_lint_flags_a_silent_peer_pair(actions: Actions) -> None:
-    """PEER-SILENT (task #76 item 2, spec e6636c7e): an active peer_of pair with no DM
+    """PEER-SILENT: an active peer_of pair with no direct message
     ever seen between either side's holders is flagged as a proxy for the fiduciary-
-    disclosure duty ("silence is a violation") — testimony, not proof a finding was
+    disclosure duty ("silence is a violation"): testimony, not proof a finding was
     withheld."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
@@ -1027,8 +1027,8 @@ async def test_lint_flags_a_silent_peer_pair(actions: Actions) -> None:
 async def test_lint_does_not_flag_a_peer_pair_that_talked_recently(
     actions: Actions,
 ) -> None:
-    """A DM between the two holders, inside the window, clears the pair — direct contact
-    is the signal this proxy actually measures."""
+    """A direct message between the two holders, inside the window, clears the pair:
+    direct contact is the signal this proxy actually measures."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
     t = "agent:teller"
@@ -1048,7 +1048,7 @@ async def test_lint_does_not_flag_a_peer_pair_that_talked_recently(
 
 
 async def test_lint_flags_a_peer_pair_whose_only_contact_is_stale(actions: Actions) -> None:
-    """Contact that happened, but outside the window, still reads as silence right now —
+    """Contact that happened, but outside the window, still reads as silence right now:
     `stale_days` is the same rolling-window law stale-obligation already applies."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
@@ -1075,7 +1075,7 @@ async def test_lint_peer_silent_counts_seat_addressed_mail_as_contact(
     actions: Actions,
 ) -> None:
     """A DM addressed to the SEAT itself (`to_agent='seat:...'`, holds-resolved to
-    whichever generation is live) still counts as contact — it reaches the same peer
+    whichever generation is live) still counts as contact: it reaches the same peer
     regardless of which generation happens to be holding at read time."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
@@ -1096,7 +1096,7 @@ async def test_lint_peer_silent_counts_seat_addressed_mail_as_contact(
 
 
 async def test_lint_peer_silent_ignores_a_project_broadcast(actions: Actions) -> None:
-    """A broadcast (`to_agent` NULL, `to_project` set) is NOT counted as disclosure —
+    """A broadcast (`to_agent` NULL, `to_project` set) is NOT counted as disclosure:
     neither peer need have actually read it, so crediting it would hide real silence."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
@@ -1120,7 +1120,7 @@ async def test_lint_peer_silent_ignores_a_project_broadcast(actions: Actions) ->
 async def _hold_thread(
     actions: Actions, *, holder: str, held: str, act: str, deadline: datetime,
 ) -> str:
-    """Mirrors hold_action()'s own written shape by hand — this branch predates item 4a's
+    """Mirrors hold_action()'s own written shape by hand: this branch predates that
     merge, so there's no hold_action() import to reuse; the lint check only ever reads the
     property names, never the verb that wrote them."""
     from src.orchestrator.capture import open_thread
@@ -1136,9 +1136,9 @@ async def _hold_thread(
 
 
 async def test_lint_flags_a_hold_past_its_deadline(actions: Actions) -> None:
-    """HELD-PAST-DEADLINE (task #76 item 4b): a mutual HOLD's time-box, expired, with no
-    resolve_thread call yet — the spec's auto-escalation half, surfaced as testimony
-    rather than pushed anywhere, matching Thoth's own ruling (lint, not a daemon)."""
+    """HELD-PAST-DEADLINE: a mutual HOLD's time-box, expired, with no
+    resolve_thread call yet: the spec's auto-escalation half, surfaced as testimony
+    rather than pushed anywhere, matching the ruling that this is a lint, not a daemon."""
     past = NOW - timedelta(hours=1)
     await _hold_thread(actions, holder="seat:hp1aaaaa", held="seat:hp1bbbbb",
                        act="deleting the shared checkout", deadline=past)
@@ -1153,7 +1153,7 @@ async def test_lint_flags_a_hold_past_its_deadline(actions: Actions) -> None:
 
 
 async def test_lint_does_not_flag_a_hold_still_inside_its_window(actions: Actions) -> None:
-    # NOW is a fixed HISTORICAL fake date (this file's own convention) — the deadline
+    # NOW is a fixed HISTORICAL fake date (this file's own convention): the deadline
     # comparison is against the database's real `now()`, so "still inside its window"
     # needs a genuinely future wall-clock timestamp, not NOW + an offset.
     future = datetime.now(UTC) + timedelta(hours=1)
@@ -1168,7 +1168,7 @@ async def test_lint_does_not_flag_a_hold_still_inside_its_window(actions: Action
 async def test_lint_does_not_flag_a_resolved_hold_past_its_deadline(
     actions: Actions,
 ) -> None:
-    """Resolved is not held — the same law every other obligation follows."""
+    """Resolved is not held: the same rule every other obligation follows."""
     from src.orchestrator.capture import resolve_thread
 
     past = NOW - timedelta(hours=1)
@@ -1185,7 +1185,7 @@ async def test_lint_does_not_flag_an_ordinary_obligation_with_no_severity(
     actions: Actions,
 ) -> None:
     """An obligation with no `severity='hold'` at all is a different check's business
-    (stale-obligation) — this one is scoped to holds specifically, never every open
+    (stale-obligation): this one is scoped to holds specifically, never every open
     thread."""
     from src.orchestrator.capture import open_thread
 
@@ -1198,11 +1198,11 @@ async def test_lint_does_not_flag_an_ordinary_obligation_with_no_severity(
 
 
 async def test_lint_flags_a_stale_off_head_link(actions: Actions) -> None:
-    """STALE-OFF-HEAD-LINK (thread 20af2c95, Thoth DM 5341 — recurrence detection): the
+    """STALE-OFF-HEAD-LINK (recurrence detection): the
     write-side fix (mint_heir invalidating a predecessor's works_in onto its heir) landed
     2026-08-04, but nothing watches for the CLASS recurring. An ancestor whose lineage has
     since minted a living heir, yet still carries its own live works_in edge (simulating
-    debt from BEFORE the write-side fix, or a future regression of it), is flagged —
+    debt from BEFORE the write-side fix, or a future regression of it), is flagged:
     backfill_agent_project_links is the repair, this check only counts."""
     t = "agent:teller"
     ancestor = await actions.create_or_find_object("Agent", "agent:staleoh01", t)
@@ -1224,7 +1224,7 @@ async def test_lint_flags_a_stale_off_head_link(actions: Actions) -> None:
 
 
 async def test_lint_does_not_flag_the_living_heads_own_works_in(actions: Actions) -> None:
-    """The living head's OWN works_in edge is exactly the correct, current state — never
+    """The living head's OWN works_in edge is exactly the correct, current state: never
     flagged by the same check that catches its ancestor's stale leftover."""
     t = "agent:teller"
     ancestor = await actions.create_or_find_object("Agent", "agent:staleoh02", t)
@@ -1242,8 +1242,8 @@ async def test_lint_does_not_flag_the_living_heads_own_works_in(actions: Actions
 
 
 async def test_lint_flags_a_stale_current_flag(actions: Actions) -> None:
-    """STALE-CURRENT-FLAG (thread 09bde57e, Thoth DM 5341 — recurrence detection): khepri's
-    own specimen — a real `supersedes` FK exists but `is_current` was never flipped false
+    """STALE-CURRENT-FLAG (recurrence detection): a real
+    `supersedes` FK exists but `is_current` was never flipped false
     on the row it supersedes (a migration-0047 backfill gap), so current_assertions still
     lists the superseded value. repair_stale_current_flags is the batched repair; this
     check only counts."""
@@ -1270,8 +1270,8 @@ async def test_lint_flags_a_stale_current_flag(actions: Actions) -> None:
 
 
 async def test_lint_does_not_flag_a_correctly_flipped_supersession(actions: Actions) -> None:
-    """The ordinary, correct case — the superseded row's own is_current was properly
-    flipped false — must never be flagged; this check is for the ANOMALY only."""
+    """The ordinary, correct case: the superseded row's own is_current was properly
+    flipped false. This must never be flagged; this check is for the ANOMALY only."""
     t = "agent:teller"
     obj = await actions.create_or_find_object("Person", "person:stalecur2", t)
     await actions.assert_property(obj, "name", "old", t, NOW, 0.9, evidence_class=_SD)

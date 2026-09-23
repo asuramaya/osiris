@@ -1,6 +1,6 @@
-"""THE OFFICE CEREMONY (ruling ed5f5ce2) — one act moves a seat into its Osiris-owned home.
-alfred's office was hand-assembled; the rollout to his chartered children is one call per
-seat, and these witness the call.
+"""Establishing an office: one action moves a seat into its Osiris-owned home.
+The first office was hand-assembled by hand; the rollout to chartered children is one
+call per seat, and these tests exercise that call.
 """
 from __future__ import annotations
 
@@ -29,13 +29,12 @@ NOW = datetime.now(UTC)
 
 
 async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None) -> str:
-    """A mounted lineage in a shared repo cwd, optionally named — the pre-office shape.
+    """A mounted lineage in a shared repo cwd, optionally named: the pre-office shape.
 
     Carries a real `works_in` edge alongside the raw `project` assertion (a real mount/
-    register_agent flow always pairs the two) — project_of (agents.py) resolves through
+    register_agent flow always pairs the two). project_of (agents.py) resolves through
     lineage_works_in, never a raw stamp with nothing behind it, so a fixture missing this
-    edge is a fixture lying about how mints actually work (Thoth's own framing, thread
-    19d6bdcb7fa9/c5a91ea1)."""
+    edge would be lying about how mints actually work."""
     agent = "agent:0ff1cee1"
     now = datetime.now(UTC)
     a = await actions.create_or_find_object("Agent", agent, agent)
@@ -54,7 +53,7 @@ async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None)
     Path(shared).mkdir(exist_ok=True)
     await save_mount(actions.pool, job_dir="/jobs/0ff1cee1", agent_id=agent,
                      project="butlerhouse", cwd=shared, model=None, session_key=None)
-    # the seat is QUIET (the ceremony refuses a live one; the refusal test re-warms it)
+    # the seat is QUIET (establish_office refuses a live one; the refusal test re-warms it)
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' WHERE agent_id=$1",
         agent)
@@ -65,7 +64,7 @@ async def _seat_fixture(actions: Actions, tmp_path: Path, *, handle: str | None)
     return agent
 
 
-# ═══ seat_office_target — THE ANCHOR INVARIANT'S OWN ADDRESS (ruling 23771416) ════════
+# ═══ seat_office_target: the anchor invariant's own address ═══════════════════════════
 
 async def test_seat_office_target_derives_office_root_slash_handle(
     actions: Actions, tmp_path: Path,
@@ -116,8 +115,8 @@ async def test_establish_office_the_whole_ceremony(
     assert "not yet seated" in orders                   # unbound lineage: the on-ramp note
     assert "GRADE EVERY DM" in orders                    # every seat born knowing this now
     assert (office / ".osiris").read_text().startswith('project = "butlerhouse"')
-    # THE CHARTER FILE (d80621a7 piece 3): a fresh office gets a live-state scratchpad
-    # beside its standing orders
+    # a fresh office also gets a live-state scratchpad (the charter file) beside its
+    # standing orders
     assert out["charter_file"] == "written"
     charter = (office / "charter.md").read_text()
     assert "Butler's charter" in charter
@@ -132,8 +131,8 @@ async def test_establish_office_the_whole_ceremony(
     row = await actions.pool.fetchval(
         "SELECT cwd FROM agent_mounts WHERE agent_id=$1", agent)
     assert row == str(office)
-    # THE DEED (a2d06410): the ceremony records office ownership in the GRAPH, so the
-    # fourth door still opens after the seat's death takes its mount rows
+    # the deed: establish_office also records office ownership in the graph, so the
+    # office can still be found again after the seat's death takes its mount rows
     assert out["office_deed"] == "filed"
     deed = await actions.pool.fetchval(
         "SELECT d.value #>> '{}' FROM current_assertions d "
@@ -141,8 +140,9 @@ async def test_establish_office_the_whole_ceremony(
         "WHERE d.name='office' AND o2.canonical=$1", agent)
     assert deed == str(office)
 
-    # idempotent: the second ceremony converges, never clobbers the standing orders OR a
-    # hand-edited charter — alfred's stays his, the whole point of the never-overwrite rule
+    # idempotent: the second call converges, never clobbers the standing orders or a
+    # hand-edited charter; a seat's own edits stay in place, the whole point of the
+    # never-overwrite rule
     (office / "charter.md").write_text("# Butler's charter\n\nMY OWN HAND-WRITTEN NOTES.\n")
     again = await establish_office(
         actions, seat_or_agent=agent, actor="agent:test",
@@ -161,8 +161,8 @@ async def test_establish_office_carries_a_declared_charter(
     from src.orchestrator.seats import bind_holder, ensure_seat
 
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")
-    # a charter is the SEAT's (ruling 1db1ff41) — bind a real Seat, same primitive the
-    # daemon's own attach ceremony uses, and pre-mint the repos (set_charter refuses any
+    # a charter belongs to the SEAT, so bind a real Seat, the same primitive the
+    # daemon's own attach flow uses, and pre-mint the repos (set_charter refuses any
     # name the graph has no independent evidence for)
     seat = await ensure_seat(actions, house="butlerhouse", handle="Butler", source="test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent)
@@ -208,11 +208,10 @@ async def test_establish_office_refuses_the_unknown(
 async def test_establish_office_builds_for_a_never_claimed_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 236d3940 (mirroring 3ae57d36's rebind_seat fix): a seat minted by
-    mint_seat/ensure_seat but never claim_name'd by any agent (grantprobe's real shape) used
-    to refuse outright here — agent resolution found nobody, and the ceremony never checked
-    the Seat record directly. Calling by the seat's OWN handle must now build a full office
-    off the seat alone, with no Agent object involved anywhere in this test."""
+    """A seat minted by mint_seat/ensure_seat but never claim_name'd by any agent used
+    to refuse outright here: agent resolution found nobody, and establish_office never
+    checked the Seat record directly. Calling by the seat's OWN handle must now build a
+    full office off the seat alone, with no Agent object involved anywhere in this test."""
     from src.orchestrator.seats import ensure_seat
 
     seat = await ensure_seat(actions, house="anchorhouse", handle="Orphaned", source="test")
@@ -251,10 +250,11 @@ async def test_establish_office_builds_for_a_never_claimed_seat(
 async def test_establish_office_builds_for_a_houseless_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A HOUSE IS OPTIONAL (ruling 860b0306): this ceremony used to refuse outright on a
-    seat with no derivable house at all — "nothing to pin at an office" — the exact shape
-    the ruling exists to end (a seat governing a single repo carries none; nothing in
-    osiris may require one). A never-claimed, never-managed seat with no house declared
+    """A house is optional: establish_office used to refuse outright on a
+    seat with no derivable house at all, treating a bare seat as nothing to pin at an
+    office, which is exactly the shape this test exists to rule out (a seat governing a
+    single repo carries none; nothing in osiris may require one). A never-claimed,
+    never-managed seat with no house declared
     must build a full office anyway, and the compiled orders must never show a bare,
     empty house clause."""
     from src.orchestrator.seats import ensure_seat
@@ -278,16 +278,16 @@ async def test_establish_office_builds_for_a_houseless_seat(
 async def test_establish_office_renders_peer_addendum_when_peered(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """LEGIBILITY leg 2 (ruling d74492ee, spec e6636c7e): a peer_of bond is rendered
-    into the seat's own standing orders — computed LIVE at establish_office's own call
-    time (unlike mintseat.py's fresh-mint scaffold, which never has a peer yet)."""
+    """A peer_of bond is rendered into the seat's own standing orders, computed live
+    at establish_office's own call time (unlike mintseat.py's fresh-mint scaffold,
+    which never has a peer yet)."""
     from src.orchestrator.seats import bind_holder, peer_seats
 
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")
     await bind_holder(actions, seat_id="seat:butlerseat", agent_id=agent, source="test")
     await actions.assert_property(
         await actions.create_or_find_object("Seat", "seat:peerseat9", "test"), "handle",
-        "Halcyon", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
+        "Coworker", "test", datetime.now(UTC), 0.9, evidence_class="self_declared")
     await peer_seats(actions, "seat:butlerseat", "seat:peerseat9", because="the pairing",
                      actor="test")
 
@@ -299,9 +299,9 @@ async def test_establish_office_renders_peer_addendum_when_peered(
     assert out["standing_orders"] == "written"
     orders = (tmp_path / "seats" / "butler" / "CLAUDE.md").read_text()
     assert "## Peer" in orders
-    assert "peered with **Halcyon** (`seat:peerseat9`)" in orders
+    assert "peered with **Coworker** (`seat:peerseat9`)" in orders
     assert "Two-tier decisions" in orders and "Mutual hold" in orders
-    # the surrounding sections are untouched — one blank line on either side, same as
+    # the surrounding sections are untouched: one blank line on either side, same as
     # the unpeered rendering's own spacing
     assert "## How to work from an office" in orders
 
@@ -309,7 +309,7 @@ async def test_establish_office_renders_peer_addendum_when_peered(
 async def test_establish_office_renders_no_peer_addendum_when_unpeered(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A SEATED but unpeered lineage gets none of the addendum — the block is gated on
+    """A SEATED but unpeered lineage gets none of the addendum: the block is gated on
     an actual peer_of edge, not merely on holding a durable seat."""
     from src.orchestrator.seats import bind_holder
 
@@ -330,12 +330,12 @@ async def test_establish_office_refuses_a_live_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The rollout guard: extraction moves the lineage's transcripts, and a running
-    harness appends to its own by path — a live seat (any generation) is never moved.
+    harness appends to its own by path, so a live seat (any generation) is never moved.
 
-    Confirmed via a fake harness census (door census item 4/ninth-specimen fix, Thoth msg
-    5772/5741, thread 2c3c2b9a): a bare fresh mount row is no longer sufficient by
-    itself — _seat_fixture's own job_dir ("/jobs/0ff1cee1") is exactly 8 chars on purpose
-    (registry_census keys agent_mounts.job_dir's basename against sessionId[:8])."""
+    Confirmed via a fake harness census: a bare fresh mount row is no longer sufficient
+    by itself. _seat_fixture's own job_dir ("/jobs/0ff1cee1") is exactly 8 chars on
+    purpose (registry_census keys agent_mounts.job_dir's basename against
+    sessionId[:8])."""
     agent = await _seat_fixture(actions, tmp_path, handle="Butler")
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1", agent)
@@ -358,8 +358,8 @@ async def test_establish_office_refuses_a_live_seat(
 async def test_establish_office_no_longer_refuses_on_a_fresh_but_bodiless_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE ATLAS SHAPE ITSELF: a fresh/refreshing mount row with no harness-confirmed body
-    behind it must not block the ceremony — the exact false refusal this fix closes."""
+    """A fresh/refreshing mount row with no harness-confirmed body
+    behind it must not block establish_office: the exact false refusal this fix closes."""
     agent = await _seat_fixture(actions, tmp_path, handle="Ghostly")
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen=now() WHERE agent_id=$1", agent)
@@ -378,23 +378,22 @@ async def test_establish_office_no_longer_refuses_on_a_fresh_but_bodiless_seat(
 async def test_establish_office_by_seat_canonical_resolves_a_cold_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE OCCUPANCY GAP (Deckard's live run, thread 8833/msg 8835): `resolve_handle` and
-    the direct-Agent-canonical check both only ever match a bare handle string or a
-    literal `agent:<id>` — called with the SEAT's own canonical (Deckard's real shape,
-    seat:51da7e71) for a COLD (claimed, not live right now) holder, neither ever found
-    it, and the ceremony fell to the PURE SEAT PATH claiming "no agent has ever claimed
-    this seat" for a seat that plainly has one — then, because that path recomputes
-    `office` from the SEAT's own handle rather than reusing the office this lineage
-    already established, it also re-"wrote" CLAUDE.md whose mtime/size never actually
-    changed. Fixed: `seat_occupancy` (the SAME `holds`-link resolver identify_agent uses,
-    never a cache column) is checked before falling to the pure-seat path."""
+    """The occupancy gap: `resolve_handle` and the direct-Agent-canonical check both only
+    ever match a bare handle string or a literal `agent:<id>`. Called with the SEAT's own
+    canonical for a COLD (claimed, not live right now) holder, neither one ever found it,
+    and establish_office fell to the PURE SEAT PATH claiming no agent has ever claimed
+    this seat, for a seat that plainly has one. Because that path recomputes `office`
+    from the SEAT's own handle rather than reusing the office this lineage already
+    established, it also re-"wrote" CLAUDE.md whose mtime/size never actually changed.
+    Fixed: `seat_occupancy` (the SAME `holds`-link resolver identify_agent uses, never a
+    cache column) is checked before falling to the pure-seat path."""
     agent = await _seat_fixture(actions, tmp_path, handle="Coldseat")
     from src.orchestrator.seats import bind_holder, ensure_seat
 
     seat = await ensure_seat(actions, house="coldhouse", handle="Coldseat", source="test")
     await bind_holder(actions, seat_id=seat["seat_id"], agent_id=agent)
 
-    # first call, by the AGENT id — establishes the real, on-disk office
+    # first call, by the AGENT id: establishes the real, on-disk office
     first = await establish_office(
         actions, seat_or_agent=agent, actor="agent:test",
         office_root=tmp_path / "seats", projects_root=tmp_path / "projects",
@@ -405,8 +404,8 @@ async def test_establish_office_by_seat_canonical_resolves_a_cold_holder(
     before_mtime = (office / "CLAUDE.md").stat().st_mtime
     before_size = (office / "CLAUDE.md").stat().st_size
 
-    # the seat goes cold (no fresh mount) — then a SECOND call by the SEAT's own
-    # canonical, Deckard's exact call shape
+    # the seat goes cold (no fresh mount), then a SECOND call by the SEAT's own
+    # canonical
     await actions.pool.execute(
         "UPDATE agent_mounts SET last_seen = now() - interval '1 hour' WHERE agent_id=$1",
         agent)
@@ -423,14 +422,14 @@ async def test_establish_office_by_seat_canonical_resolves_a_cold_holder(
     assert (office / "CLAUDE.md").stat().st_size == before_size
 
 
-# ═══ plan_pin_migration (ruling 719ed5b1's five-key schema — DRY RUN, never writes) ═══
+# ═══ plan_pin_migration (the five-key pin schema, DRY RUN, never writes) ═══
 
 async def _seat_with_office(
     actions: Actions, tmp_path: Path, *, seat_id: str, handle: str, house: str | None,
     office_dir: str, tree_dir: str | None = None,
 ) -> None:
     """A Seat object with the facts `roster()`/`derive_house` actually read: handle, an
-    optional own `house` stamp (a HEAD, no managed_by edge — derive_house returns exactly
+    optional own `house` stamp (a HEAD, no managed_by edge: derive_house returns exactly
     this), anchor_cwd, and an optional distinct tree_cwd. Mirrors test_seats.py's own
     bind_seat_tree fixture shape rather than inventing a new one."""
     from datetime import UTC, datetime
@@ -445,7 +444,7 @@ async def _seat_with_office(
         from src.orchestrator.seats import bind_seat_tree
         out = await bind_seat_tree(actions, seat_id=seat_id, tree_cwd=tree_dir,
                                    actor="operator", because="test fixture")
-        assert out.get("error") is None, out  # operator is in _OPERATOR_ACTORS — must succeed
+        assert out.get("error") is None, out  # operator is in _OPERATOR_ACTORS: must succeed
 
 
 async def test_plan_pin_migration_proposes_seat_house_kind_for_a_fresh_office(
@@ -462,7 +461,7 @@ async def test_plan_pin_migration_proposes_seat_house_kind_for_a_fresh_office(
     entry = next(e for e in out["plan"] if e["path"] == str(office))
     assert entry["current"] == {"house": None, "seat": None, "kind": None}
     assert entry["proposed"] == {"seat": "Planalpha", "house": "planhouse", "kind": "office"}
-    assert entry["changes"] == entry["proposed"]  # nothing on disk yet — the whole diff is new
+    assert entry["changes"] == entry["proposed"]  # nothing on disk yet: the whole diff is new
     assert entry["unknown"] == []
     assert not office.joinpath(".osiris").exists(), "plan must never write a file"
 
@@ -470,7 +469,7 @@ async def test_plan_pin_migration_proposes_seat_house_kind_for_a_fresh_office(
 async def test_plan_pin_migration_is_idempotent_against_an_already_correct_pin(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A pin already carrying the right values proposes no changes — the no-churn discipline
+    """A pin already carrying the right values proposes no changes: the no-churn discipline
     every existing writer keeps, proven for the read side too."""
     office = tmp_path / "seats" / "planbeta"
     office.mkdir(parents=True)
@@ -489,7 +488,7 @@ async def test_plan_pin_migration_reports_an_underivable_house_as_a_gap_not_a_gu
 ) -> None:
     """A seat with no own `house` stamp and no manager to derive one from: derive_house
     honestly returns None, and the plan must name that as a gap for `house` while still
-    proposing `seat`/`kind`, which do not depend on it — never silently drop the whole entry,
+    proposing `seat`/`kind`, which do not depend on it: never silently drop the whole entry,
     never guess a house into the gap."""
     office = tmp_path / "seats" / "plangamma"
     office.mkdir(parents=True)
@@ -506,9 +505,9 @@ async def test_plan_pin_migration_reports_an_underivable_house_as_a_gap_not_a_gu
 async def test_plan_pin_migration_skips_a_house_redundant_with_the_seat_own_project(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Ruling 860b0306: a house pin exists only when it names something DIFFERENT from the
+    """A house pin exists only when it names something DIFFERENT from the
     project. A seat whose `house` stamp equals a repo it already charters proposes no `house`
-    key at all — not a gap either, since there is nothing wrong to report."""
+    key at all: not a gap either, since there is nothing wrong to report."""
     await actions.create_or_find_object("SoftwareProject", "repo:planzeta", "test")
     office = tmp_path / "seats" / "planzeta"
     office.mkdir(parents=True)
@@ -522,14 +521,14 @@ async def test_plan_pin_migration_skips_a_house_redundant_with_the_seat_own_proj
     entry = next(e for e in out["plan"] if e["path"] == str(office))
     assert "house" not in entry["proposed"]
     assert not any("house" in u for u in entry["unknown"]), (
-        "redundant-with-project is not a gap — it must stay silent, not surface as one")
+        "redundant-with-project is not a gap: it must stay silent, not surface as one")
 
 
 async def test_plan_pin_migration_never_picks_a_seat_when_two_claim_the_same_path(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Two Seat objects naming the same anchor_cwd (a graph bug, not a legitimate shape):
-    `seat` must never be silently resolved to either one — the whole point of the pin outranking
+    `seat` must never be silently resolved to either one: the whole point of the pin outranking
     inference fails the moment it can confidently state a coin-flip. house/kind still propose
     since both claimants agree on them."""
     office = tmp_path / "seats" / "plandelta"
@@ -543,13 +542,13 @@ async def test_plan_pin_migration_never_picks_a_seat_when_two_claim_the_same_pat
     entry = next(e for e in out["plan"] if e["path"] == str(office))
     assert "seat" not in entry["proposed"]
     assert any("conflicting claims" in u for u in entry["unknown"])
-    assert entry["proposed"]["house"] == "samehouse"  # both claimants agree — still proposed
+    assert entry["proposed"]["house"] == "samehouse"  # both claimants agree: still proposed
 
 
 async def test_plan_pin_migration_infers_worktree_kind_from_path_shape(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """tree_cwd distinct from anchor_cwd: kind is read from PATH SHAPE, not the graph — a
+    """tree_cwd distinct from anchor_cwd: kind is read from PATH SHAPE, not the graph. A
     `.claude/worktrees/` path proposes kind="worktree", never "office" (that's reserved for
     anchor_cwd alone)."""
     office = tmp_path / "seats" / "planepsilon"
@@ -564,10 +563,10 @@ async def test_plan_pin_migration_infers_worktree_kind_from_path_shape(
     assert tree_entry["proposed"]["kind"] == "worktree"
     office_entry = next(e for e in out["plan"] if e["path"] == str(office))
     assert office_entry["proposed"]["kind"] == "office"
-    assert not (tree / ".osiris").exists()      # plan is dry-run only — nothing written
+    assert not (tree / ".osiris").exists()      # plan is dry-run only: nothing written
 
 
-# ═══ write_pin_additions / revert_pin_write (Thoth's three constraints, msg 3929) ═══
+# ═══ write_pin_additions / revert_pin_write (three constraints on pin writes) ═══
 
 def test_write_pin_additions_creates_a_fresh_pin(tmp_path: Path) -> None:
     office = tmp_path / "freshoffice"
@@ -581,7 +580,7 @@ def test_write_pin_additions_creates_a_fresh_pin(tmp_path: Path) -> None:
     assert 'seat = "Fresh"' in text
     assert 'house = "freshhouse"' in text
     assert 'kind = "office"' in text
-    # the backup captures the PRE-write state — no file existed, so it's empty
+    # the backup captures the PRE-write state: no file existed, so it's empty
     assert (office / ".osiris.bak").read_text() == ""
 
 
@@ -589,7 +588,7 @@ def test_write_pin_additions_never_touches_an_existing_key_constraint_1(
     tmp_path: Path,
 ) -> None:
     """Constraint 1, ADDITIVE ONLY: a pin that already says `project = "Like-Us"` keeps
-    saying exactly that — even when the caller's own `proposed` dict disagrees. This proves
+    saying exactly that, even when the caller's own `proposed` dict disagrees. This proves
     the writer refuses to resolve a disagreement by overwriting, not merely that it happens
     not to today."""
     office = tmp_path / "existingoffice"
@@ -599,11 +598,10 @@ def test_write_pin_additions_never_touches_an_existing_key_constraint_1(
     out = write_pin_additions(str(office), {"seat": "Newcomer", "house": "correcthouse",
                                             "kind": "office"})
     assert out["written"] is True
-    assert out["added"] == ["kind", "seat"]           # house was already declared — skipped
+    assert out["added"] == ["kind", "seat"]           # house was already declared: skipped
     assert out["skipped"] == ["house"]
-    # THE WRITE-BOUNDARY HONESTY RULE (decision beb046cfbdf9/42176e16, Alfred's own
-    # scenario, obligation 71f637e8): `skipped` alone cannot say whether "wronghouse" was
-    # already correct or was left wrong on purpose — `discarded` names it explicitly.
+    # THE WRITE-BOUNDARY HONESTY RULE: `skipped` alone cannot say whether "wronghouse" was
+    # already correct or was left wrong on purpose, so `discarded` names it explicitly.
     assert out["discarded"] == {"house": "correcthouse"}
     text = (office / ".osiris").read_text()
     assert 'house = "wronghouse"' in text             # UNTOUCHED, even though it disagrees
@@ -617,8 +615,8 @@ def test_write_pin_additions_is_idempotent_byte_identical_on_second_call(
 ) -> None:
     """Constraint 2, PROVEN BY TEST: two calls with the same `proposed` leave the file
     byte-identical after the second, and the second call reports written=False. A skipped
-    key whose value already MATCHES `proposed` earns no `discarded` entry — a genuine
-    no-op, not a disagreement (decision beb046cfbdf9/42176e16's own discriminator)."""
+    key whose value already MATCHES `proposed` earns no `discarded` entry: a genuine
+    no-op, not a disagreement."""
     office = tmp_path / "idempotentoffice"
     office.mkdir()
     proposed = {"seat": "Twice", "house": "twicehouse", "kind": "office"}
@@ -649,7 +647,7 @@ def test_write_pin_additions_refuses_broken_toml(tmp_path: Path) -> None:
 
 def test_write_pin_additions_appends_after_a_trailing_comment(tmp_path: Path) -> None:
     """A pin with a trailing comment (no newline convention broken) still gets its addition
-    appended cleanly, and the comment survives untouched — proof this never re-serializes the
+    appended cleanly, and the comment survives untouched: proof this never re-serializes the
     whole file through tomllib (which would silently drop it, `_write_osiris_file`'s own
     documented limit)."""
     office = tmp_path / "commentoffice"
@@ -681,7 +679,7 @@ def test_revert_pin_write_restores_the_pre_write_state(tmp_path: Path) -> None:
 
 def test_revert_pin_write_deletes_a_pin_that_did_not_exist_before(tmp_path: Path) -> None:
     """A revert after a write that CREATED the file (empty backup) must delete it, not leave
-    a stray empty `.osiris` behind — true absence restored, not a hollow file."""
+    a stray empty `.osiris` behind: true absence restored, not a hollow file."""
     office = tmp_path / "createdoffice"
     office.mkdir()
 
@@ -693,29 +691,29 @@ def test_revert_pin_write_deletes_a_pin_that_did_not_exist_before(tmp_path: Path
     assert not (office / ".osiris").exists()
 
 
-# ═══ correct_pin_value (task #152's khepri repair — the named exception to additive-only) ═══
+# ═══ correct_pin_value (task #152's repair, the named exception to additive-only) ═══
 
 def test_correct_pin_value_rewrites_an_existing_key(tmp_path: Path) -> None:
     office = tmp_path / "correctoffice"
     office.mkdir()
-    (office / ".osiris").write_text('project = "tony"\nseat = "khepri"\n')
+    (office / ".osiris").write_text('project = "tony"\nseat = "oldseat"\n')
 
     out = correct_pin_value(str(office), "project", "cultural-infrastructure",
-                            reason="task #152: repo:tony was renamed, khepri's pin never followed")
+                            reason="task #152: repo:tony was renamed, oldseat's pin never followed")
     assert out["written"] is True
     assert out["old_value"] == "tony"
     assert out["new_value"] == "cultural-infrastructure"
     text = (office / ".osiris").read_text()
     assert 'project = "cultural-infrastructure"' in text
-    assert 'seat = "khepri"' in text                  # untouched, a different key
+    assert 'seat = "oldseat"' in text                  # untouched, a different key
 
 
 def test_correct_pin_value_refuses_a_missing_key(tmp_path: Path) -> None:
-    """This function corrects an EXISTING declaration only — a missing key is
+    """This function corrects an EXISTING declaration only: a missing key is
     write_pin_additions' job, and blurring the two would blur their audit trails."""
     office = tmp_path / "missingkeyoffice"
     office.mkdir()
-    (office / ".osiris").write_text('seat = "khepri"\n')
+    (office / ".osiris").write_text('seat = "oldseat"\n')
 
     out = correct_pin_value(str(office), "project", "cultural-infrastructure", reason="x")
     assert "error" in out
@@ -724,8 +722,9 @@ def test_correct_pin_value_refuses_a_missing_key(tmp_path: Path) -> None:
 
 
 def test_correct_pin_value_refuses_an_empty_reason(tmp_path: Path) -> None:
-    """A correction with no reason is exactly the silent overwrite 719ed5b1 rules against —
-    this function's entire justification for existing is auditability, so an empty reason
+    """A correction with no reason is exactly the silent overwrite the pin-schema rules
+    forbid: this function's entire justification for existing is auditability, so an
+    empty reason
     is refused outright rather than accepted and hoped-for."""
     office = tmp_path / "noreasonoffice"
     office.mkdir()
@@ -776,28 +775,28 @@ def test_correct_pin_value_preserves_other_lines_and_comments(tmp_path: Path) ->
 
 
 def test_correct_pin_value_none_unsets_the_key_never_a_placeholder(tmp_path: Path) -> None:
-    """#199's mint-layer prerequisite (decision 24e0b761/commit cf201a9): found_seat/
+    """#199's mint-layer prerequisite: found_seat/
     mint_seat already learned a fabricated placeholder is worse than genuine absence at
-    MINT time — this is the same legal target state reachable at CORRECTION time, for a
+    MINT time. This is the same legal target state reachable at CORRECTION time, for a
     seat that was minted before that fix and needs its project pin walked back to unset."""
     office = tmp_path / "unsetoffice"
     office.mkdir()
-    (office / ".osiris").write_text('project = "chad"\nseat = "khepri"\n')
+    (office / ".osiris").write_text('project = "phantomproj"\nseat = "oldseat"\n')
 
     out = correct_pin_value(str(office), "project", None,
-                            reason="#199: chad was a fabricated project, walking it back to unset")
+                            reason="#199: phantomproj was fabricated, walking it back to unset")
     assert out["written"] is True
-    assert out["old_value"] == "chad"
+    assert out["old_value"] == "phantomproj"
     assert out["new_value"] is None
     text = (office / ".osiris").read_text()
     assert "project" not in text          # the LINE is gone, not rewritten to "" or "None"
-    assert 'seat = "khepri"' in text      # untouched, a different key
+    assert 'seat = "oldseat"' in text      # untouched, a different key
 
 
 def test_correct_pin_value_none_is_reversible_via_revert_pin_write(tmp_path: Path) -> None:
     office = tmp_path / "unsetrevertoffice"
     office.mkdir()
-    (office / ".osiris").write_text('project = "chad"\n')
+    (office / ".osiris").write_text('project = "phantomproj"\n')
     original = (office / ".osiris").read_bytes()
 
     correct_pin_value(str(office), "project", None, reason="#199")
@@ -830,9 +829,9 @@ def test_revert_pin_write_refuses_when_no_backup_exists(tmp_path: Path) -> None:
     assert "no backup" in out["error"]
 
 
-# ═══ correct_own_pin_value — the self-scoped MCP door onto correct_pin_value (msg 4761,
-# obligation 114f7ac9): a caller names WHAT to correct, never WHERE — resolved off held_seat,
-# never identity.cwd or a directory-basename guess. ═══
+# ═══ correct_own_pin_value: the self-scoped wrapper around correct_pin_value. A caller names
+# WHAT to correct, never WHERE, resolved off held_seat, never identity.cwd or a
+# directory-basename guess. ═══
 
 async def test_correct_own_pin_value_resolves_the_callers_own_office(
     actions: Actions, tmp_path: Path,
@@ -902,8 +901,8 @@ async def test_correct_own_pin_value_propagates_an_empty_reason_refusal(
     assert (office / ".osiris").read_text() == 'project = "tony"\n'  # nothing written
 
 
-# ═══ THE SECOND COPY (ruling b30e2b38, the Jesus/Godel live specimen): correct_own_pin_
-# value ALSO reaches the seat's own anchor_cwd pin, never a caller-supplied path. ═══
+# ═══ THE SECOND COPY: correct_own_pin_value ALSO reaches the seat's own anchor_cwd pin,
+# never a caller-supplied path. ═══
 
 async def test_correct_own_pin_value_also_corrects_the_anchor_copy(
     actions: Actions, tmp_path: Path,
@@ -913,10 +912,10 @@ async def test_correct_own_pin_value_also_corrects_the_anchor_copy(
     claimed = await claim_name(actions, "agent:cov5anchor", "CovAnchor", source="test")
     office = tmp_path / "covanchor"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     anchor = tmp_path / "REPOS" / "Godel"
     anchor.mkdir(parents=True)
-    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    (anchor / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
 
@@ -969,8 +968,8 @@ async def test_correct_own_pin_value_skips_an_anchor_with_no_pin_of_its_own(
     assert "anchor" not in out
 
 
-# ═══ the THIRD copy — the ~/code/<handle> workspace convention (thread 6483/6504,
-# decision 87457dc1: a real, mint-scaffolded location, not an undeclared scratch dir). ═══
+# ═══ the THIRD copy: the ~/code/<handle> workspace convention, a real, mint-scaffolded
+# location, not an undeclared scratch dir. ═══
 
 async def test_correct_own_pin_value_also_corrects_the_workspace_copy(
     actions: Actions, tmp_path: Path,
@@ -980,10 +979,10 @@ async def test_correct_own_pin_value_also_corrects_the_workspace_copy(
     await claim_name(actions, "agent:cov8work", "CovWork", source="test")
     office = tmp_path / "office" / "covwork"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     workspace = tmp_path / "workspace" / "covwork"
     workspace.mkdir(parents=True)
-    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    (workspace / ".osiris").write_text('project = "Oldproj"\n')
 
     out = await correct_own_pin_value(
         actions.pool, "agent:cov8work", "project", "Godel", reason="third copy",
@@ -997,20 +996,20 @@ async def test_correct_own_pin_value_also_corrects_the_workspace_copy(
 async def test_correct_own_pin_value_corrects_anchor_and_workspace_together(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """All three copies, genuinely distinct — the live jesus/chad shape once the anchor
-    fix alone (b30e2b38) is not enough because anchor_cwd points at the office itself."""
+    """All three copies, genuinely distinct: this shape needs more than the anchor
+    fix alone because anchor_cwd points at the office itself."""
     from src.orchestrator.agents import claim_name
 
     claimed = await claim_name(actions, "agent:cov9three", "CovThree", source="test")
     office = tmp_path / "office" / "covthree"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     anchor = tmp_path / "REPOS" / "Godel3"
     anchor.mkdir(parents=True)
-    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    (anchor / ".osiris").write_text('project = "Oldproj"\n')
     workspace = tmp_path / "workspace" / "covthree"
     workspace.mkdir(parents=True)
-    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    (workspace / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
 
@@ -1024,9 +1023,9 @@ async def test_correct_own_pin_value_corrects_anchor_and_workspace_together(
     assert (workspace / ".osiris").read_text() == 'project = "Godel"\n'
 
 
-# ═══ tree_cwd — Marquee's blind spot (Thoth dispatch relayed 2026-09-05, operator "one
-# more round"): a seat whose real workspace isn't named after its own handle at all was
-# invisible to the third-copy correction no matter how it was called.
+# ═══ tree_cwd: a real live blind spot. A seat whose real workspace isn't named after its
+# own handle at all was invisible to the third-copy correction no matter how it was
+# called.
 
 async def test_correct_own_pin_value_explicit_tree_cwd_overrides_the_handle_guess(
     actions: Actions, tmp_path: Path,
@@ -1036,14 +1035,14 @@ async def test_correct_own_pin_value_explicit_tree_cwd_overrides_the_handle_gues
     await claim_name(actions, "agent:cov11tree", "Cov11tree", source="test")
     office = tmp_path / "office" / "cov11tree"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     real_tree = tmp_path / "dtfb"  # named after a PROJECT, not the seat's own handle
     real_tree.mkdir()
-    (real_tree / ".osiris").write_text('project = "Jesus"\n')
-    guessed = tmp_path / "workspace" / "cov11tree"  # never created — the guess is wrong
+    (real_tree / ".osiris").write_text('project = "Oldproj"\n')
+    guessed = tmp_path / "workspace" / "cov11tree"  # never created: the guess is wrong
 
     out = await correct_own_pin_value(
-        actions.pool, "agent:cov11tree", "project", "Godel", reason="marquee shape",
+        actions.pool, "agent:cov11tree", "project", "Godel", reason="workspace naming differs",
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace",
         tree_cwd=str(real_tree))
     assert out["workspace"]["written"] is True
@@ -1054,7 +1053,7 @@ async def test_correct_own_pin_value_explicit_tree_cwd_overrides_the_handle_gues
 async def test_correct_own_pin_value_reads_the_seats_own_bind_tree_declared_path(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """No explicit tree_cwd given — the correction still reaches the real tree by
+    """No explicit tree_cwd given: the correction still reaches the real tree by
     reading the seat's own bind_seat_tree-declared property, before falling to the
     handle-derived guess."""
     from src.orchestrator.agents import claim_name
@@ -1063,10 +1062,10 @@ async def test_correct_own_pin_value_reads_the_seats_own_bind_tree_declared_path
                                source="test")
     office = tmp_path / "office" / "cov12declared"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     real_tree = tmp_path / "dtfb2"
     real_tree.mkdir()
-    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    (real_tree / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "tree_cwd", str(real_tree), "test", NOW, 0.9)
 
@@ -1085,16 +1084,16 @@ async def test_correct_pin_value_third_party_dry_run_previews_an_explicit_tree_c
     claimed = await claim_name(actions, "agent:tp4tree", "TpFourTree", source="test")
     office = tmp_path / "tpfourtree"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     real_tree = tmp_path / "dtfb3"
     real_tree.mkdir()
-    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    (real_tree / ".osiris").write_text('project = "Oldproj"\n')
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path,
         tree_cwd=str(real_tree))
     assert out["plan"]["workspace"] == {
-        "path": str(real_tree), "old_value": "Jesus", "new_value": "Godel"}
+        "path": str(real_tree), "old_value": "Oldproj", "new_value": "Godel"}
 
 
 async def test_correct_pin_value_third_party_dry_run_reads_the_seats_declared_tree_cwd(
@@ -1106,34 +1105,34 @@ async def test_correct_pin_value_third_party_dry_run_reads_the_seats_declared_tr
                                source="test")
     office = tmp_path / "tpfivedeclared"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     real_tree = tmp_path / "dtfb4"
     real_tree.mkdir()
-    (real_tree / ".osiris").write_text('project = "Jesus"\n')
+    (real_tree / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "tree_cwd", str(real_tree), "test", NOW, 0.9)
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
     assert out["plan"]["workspace"] == {
-        "path": str(real_tree), "old_value": "Jesus", "new_value": "Godel"}
+        "path": str(real_tree), "old_value": "Oldproj", "new_value": "Godel"}
 
 
 async def test_correct_own_pin_value_skips_the_workspace_when_it_equals_the_anchor(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Jesus's own live shape (msg 6374): anchor_cwd WAS rebound to the workspace
-    directory itself — the anchor branch already corrects it, so the workspace branch
+    """A real live shape: anchor_cwd WAS rebound to the workspace
+    directory itself, so the anchor branch already corrects it, and the workspace branch
     must not double-write (and must not error) on the same file."""
     from src.orchestrator.agents import claim_name
 
     claimed = await claim_name(actions, "agent:cov10same", "Cov10same", source="test")
     office = tmp_path / "office" / "cov10same"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     workspace = tmp_path / "workspace" / "cov10same"
     workspace.mkdir(parents=True)
-    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    (workspace / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "anchor_cwd", str(workspace), "test", NOW, 0.9)
 
@@ -1148,9 +1147,9 @@ async def test_correct_own_pin_value_skips_the_workspace_when_it_equals_the_anch
 async def test_correct_own_pin_value_reports_an_already_correct_anchor_honestly(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Jesus's own live specimen (2026-09-04, transition_seat_project acceptance test):
+    """A real live specimen (transition_seat_project acceptance test):
     the OFFICE pin can already be correct while a second/third copy genuinely needed a
-    write, or vice versa — each copy's own `written`/`old_value` must be reported for
+    write, or vice versa. Each copy's own `written`/`old_value` must be reported for
     itself, never collapsed to a blind "no error means corrected" (the bug this test
     guards: a caller whose anchor copy was ALREADY correct used to see `corrected: True`
     regardless, indistinguishable from a real write)."""
@@ -1159,7 +1158,7 @@ async def test_correct_own_pin_value_reports_an_already_correct_anchor_honestly(
     claimed = await claim_name(actions, "agent:cov11honest", "Cov11honest", source="test")
     office = tmp_path / "office" / "cov11honest"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     anchor = tmp_path / "REPOS" / "Godel"
     anchor.mkdir(parents=True)
     (anchor / ".osiris").write_text('project = "Godel"\n')  # already correct
@@ -1194,10 +1193,10 @@ async def test_correct_own_pin_value_skips_a_workspace_with_no_pin_of_its_own(
     assert "workspace" not in out
 
 
-# ═══ correct_pin_value_third_party — the THIRD-PARTY sibling (decision fff496fe22b0's own
-# named gap, thread 4de94895): unlike correct_own_pin_value, the caller and the target are
-# genuinely different identities — a caller names ANY seat by its own canonical, resolved
-# to its holder via seat_occupancy, never the caller's own agent_id. ═══
+# ═══ correct_pin_value_third_party: the THIRD-PARTY sibling. Unlike correct_own_pin_value,
+# the caller and the target are genuinely different identities: a caller names ANY seat by
+# its own canonical, resolved to its holder via seat_occupancy, never the caller's own
+# agent_id. ═══
 
 async def test_correct_pin_value_third_party_dry_run_previews_without_writing(
     actions: Actions, tmp_path: Path,
@@ -1207,22 +1206,22 @@ async def test_correct_pin_value_third_party_dry_run_previews_without_writing(
     claimed = await claim_name(actions, "agent:tp1holder", "TpOne", source="test")
     office = tmp_path / "tpone"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "Godel", office_root=tmp_path)
     assert out["dry_run"] is True
     assert out["plan"]["office"] == {
-        "path": str(office), "old_value": "Jesus", "new_value": "Godel"}
-    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'  # untouched
+        "path": str(office), "old_value": "Oldproj", "new_value": "Godel"}
+    assert (office / ".osiris").read_text() == 'project = "Oldproj"\n'  # untouched
 
 
 async def test_correct_pin_value_third_party_dry_run_plans_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12419 item 5): a
+    """Project identity drift: a
     .osiris that never declared `project` at all must PLAN an add, never read as
-    already-correct — the cascade's own PIN tier (_cascade_governing_seats) checks
+    already-correct. The cascade's own PIN tier (_cascade_governing_seats) checks
     `plan or {} -> "already-correct"` before ever calling the real write, so an
     unplanned missing key would silently skip this seat's rename cascade entirely."""
     from src.orchestrator.agents import claim_name
@@ -1262,15 +1261,15 @@ async def test_correct_pin_value_third_party_dry_run_reports_no_plan_when_alread
 async def test_correct_pin_value_third_party_writes_via_correct_own_pin_value_when_confirmed(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """dry_run=False delegates the real write wholesale to correct_own_pin_value — never
-    a parallel implementation — so the same anchor/workspace sync it already does applies
+    """dry_run=False delegates the real write wholesale to correct_own_pin_value, never
+    a parallel implementation, so the same anchor/workspace sync it already does applies
     here too, just addressed at the seat's own holder instead of the caller."""
     from src.orchestrator.agents import claim_name
 
     claimed = await claim_name(actions, "agent:tp3write", "TpThree", source="test")
     office = tmp_path / "tpthree"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "Godel", reason="task fff496fe22b0",
@@ -1287,20 +1286,20 @@ async def test_correct_pin_value_third_party_refuses_a_write_with_no_reason(
     claimed = await claim_name(actions, "agent:tp4noreas", "TpFour", source="test")
     office = tmp_path / "tpfour"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "Godel", reason="  ",
         dry_run=False, office_root=tmp_path)
     assert "silent overwrite" in out["error"]
-    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'  # nothing written
+    assert (office / ".osiris").read_text() == 'project = "Oldproj"\n'  # nothing written
 
 
 async def test_correct_pin_value_third_party_refuses_a_seat_with_no_holder(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A seat that exists but was never claimed by any agent — vacant furniture, per
-    mint_seat's own law — has no holder correct_own_pin_value could ever resolve through."""
+    """A seat that exists but was never claimed by any agent has no holder
+    correct_own_pin_value could ever resolve through."""
     seat_oid = await actions.create_or_find_object("Seat", "seat:tp5vacant", "test")
     await actions.assert_property(seat_oid, "handle", "TpFive", "test", NOW, 0.9)
 
@@ -1313,14 +1312,14 @@ async def test_correct_pin_value_third_party_targets_a_different_agents_seat(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE ACTUAL THIRD-PARTY PROOF: the calling identity never appears anywhere in this
-    call at all — only the TARGET seat's own canonical does, unlike correct_own_pin_value
+    call at all. Only the TARGET seat's own canonical does, unlike correct_own_pin_value
     which always resolves off whichever agent_id it's handed."""
     from src.orchestrator.agents import claim_name
 
     claimed = await claim_name(actions, "agent:tp6target", "TpSix", source="test")
     office = tmp_path / "tpsix"
     office.mkdir()
-    (office / ".osiris").write_text('project = "vajra"\n')
+    (office / ".osiris").write_text('project = "firstval"\n')
 
     out = await correct_pin_value_third_party(
         actions.pool, claimed["seat_id"], "project", "mudra", reason="phantom pin repair",
@@ -1330,8 +1329,8 @@ async def test_correct_pin_value_third_party_targets_a_different_agents_seat(
     assert (office / ".osiris").read_text() == 'project = "mudra"\n'
 
 
-# ═══ revert_own_pin_write — the self-scoped door onto revert_pin_write (ruling b30e2b38:
-# a seat that followed the rules into a bad pin state had no sanctioned way back out). ═══
+# ═══ revert_own_pin_write: the self-scoped wrapper around revert_pin_write. A seat that
+# followed the rules into a bad pin state had no sanctioned way back out. ═══
 
 async def test_revert_own_pin_write_restores_the_office(
     actions: Actions, tmp_path: Path,
@@ -1367,10 +1366,10 @@ async def test_revert_own_pin_write_also_reverts_the_anchor_copy(
     claimed = await claim_name(actions, "agent:rov3anchor", "RovAnchor", source="test")
     office = tmp_path / "rovanchor"
     office.mkdir()
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     anchor = tmp_path / "REPOS" / "Godel2"
     anchor.mkdir(parents=True)
-    (anchor / ".osiris").write_text('project = "Jesus"\n')
+    (anchor / ".osiris").write_text('project = "Oldproj"\n')
     seat_oid = await actions.create_or_find_object("Seat", claimed["seat_id"], "test")
     await actions.assert_property(seat_oid, "anchor_cwd", str(anchor), "test", NOW, 0.9)
     await correct_own_pin_value(
@@ -1379,15 +1378,15 @@ async def test_revert_own_pin_write_also_reverts_the_anchor_copy(
 
     out = await revert_own_pin_write(actions.pool, "agent:rov3anchor", office_root=tmp_path)
     assert out["office"]["reverted"] is True
-    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert (office / ".osiris").read_text() == 'project = "Oldproj"\n'
     assert out["anchor"]["reverted"] is True
-    assert (anchor / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert (anchor / ".osiris").read_text() == 'project = "Oldproj"\n'
 
 
 async def test_revert_own_pin_write_skips_anchor_with_no_backup(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The office was corrected while no anchor_cwd was on record at all — so the
+    """The office was corrected while no anchor_cwd was on record at all, so the
     correction never reached a second copy, and no backup exists there. A revert must
     never invent one or error on its absence, even once an anchor_cwd shows up later."""
     from src.orchestrator.agents import claim_name
@@ -1398,7 +1397,7 @@ async def test_revert_own_pin_write_skips_anchor_with_no_backup(
     (office / ".osiris").write_text('project = "tony"\n')
     await correct_own_pin_value(
         actions.pool, "agent:rov4noanchor", "project", "cultural-infrastructure",
-        reason="x", office_root=tmp_path)  # no anchor_cwd on record yet — office only
+        reason="x", office_root=tmp_path)  # no anchor_cwd on record yet: office only
     anchor = tmp_path / "some-other-tree"
     anchor.mkdir()
     (anchor / ".osiris").write_text('project = "unrelated"\n')  # never corrected
@@ -1419,10 +1418,10 @@ async def test_revert_own_pin_write_also_reverts_the_workspace_copy(
     await claim_name(actions, "agent:rov5work", "Rov5work", source="test")
     office = tmp_path / "office" / "rov5work"
     office.mkdir(parents=True)
-    (office / ".osiris").write_text('project = "Jesus"\n')
+    (office / ".osiris").write_text('project = "Oldproj"\n')
     workspace = tmp_path / "workspace" / "rov5work"
     workspace.mkdir(parents=True)
-    (workspace / ".osiris").write_text('project = "Jesus"\n')
+    (workspace / ".osiris").write_text('project = "Oldproj"\n')
     await correct_own_pin_value(
         actions.pool, "agent:rov5work", "project", "Godel", reason="third copy",
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
@@ -1431,9 +1430,9 @@ async def test_revert_own_pin_write_also_reverts_the_workspace_copy(
         actions.pool, "agent:rov5work",
         office_root=tmp_path / "office", workspace_root=tmp_path / "workspace")
     assert out["office"]["reverted"] is True
-    assert (office / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert (office / ".osiris").read_text() == 'project = "Oldproj"\n'
     assert out["workspace"]["reverted"] is True
-    assert (workspace / ".osiris").read_text() == 'project = "Jesus"\n'
+    assert (workspace / ".osiris").read_text() == 'project = "Oldproj"\n'
 
 
 async def test_revert_own_pin_write_skips_workspace_with_no_backup(
@@ -1460,10 +1459,10 @@ async def test_revert_own_pin_write_skips_workspace_with_no_backup(
 async def test_correct_own_pin_value_adds_a_genuinely_missing_key(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Operator ruling b5663511, PROJECT IDENTITY DRIFT (Thoth mail 12419 item 5, live
-    specimen: Marquee's own .osiris never declared `project` at all): correct_pin_
+    """Project identity drift, live
+    specimen: a seat's own .osiris never declared `project` at all: correct_pin_
     value's own "only rewrites an EXISTING key" refusal was the WRONG terminal answer
-    here — a pin missing the key entirely is not a disagreement to leave visible, it's
+    here. A pin missing the key entirely is not a disagreement to leave visible, it's
     an absence this door already has standing to fill, via write_pin_additions."""
     from src.orchestrator.agents import claim_name
 
@@ -1483,8 +1482,8 @@ async def test_correct_own_pin_value_adds_a_genuinely_missing_key(
 async def test_correct_own_pin_value_still_refuses_invalid_toml(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The widened door stays narrow everywhere else — invalid TOML is still an outright
-    refusal, never silently "fixed" by appending onto a broken file."""
+    """The widened refusal path stays narrow everywhere else: invalid TOML is still an
+    outright refusal, never silently "fixed" by appending onto a broken file."""
     from src.orchestrator.agents import claim_name
 
     await claim_name(actions, "agent:cov6badtoml", "CovBadToml", source="test")
@@ -1497,11 +1496,11 @@ async def test_correct_own_pin_value_still_refuses_invalid_toml(
     assert "not valid TOML" in out["error"]
 
 
-# ═══ _pin_backup_path (obligation 27ae4f89) — a REPO-side pin's backup must never land
+# ═══ _pin_backup_path: a REPO-side pin's backup must never land
 # inside the tracked git working tree; a SEAT-OFFICE pin's backup is unaffected. ═══
 
 def test_pin_backup_stays_beside_the_file_for_a_plain_office(tmp_path: Path) -> None:
-    """No .git anywhere near the pin (the seat-office case, ruling ed5f5ce2) — unchanged
+    """No .git anywhere near the pin (the seat-office case): unchanged
     behavior, backup lands right next to the pin, same as before this fix."""
     office = tmp_path / "plainoffice"
     office.mkdir()
@@ -1535,7 +1534,7 @@ def test_pin_backup_resolves_a_worktree_gitlink_to_its_own_private_gitdir(
     tmp_path: Path,
 ) -> None:
     """A worktree checkout's `.git` is a FILE (a gitlink: "gitdir: <real path>"), not a
-    directory — the backup must resolve through it to the worktree's own private gitdir,
+    directory. The backup must resolve through it to the worktree's own private gitdir,
     never fail, and never land beside the tracked .osiris file either."""
     real_gitdir = tmp_path / "mainrepo" / ".git" / "worktrees" / "wt1"
     real_gitdir.mkdir(parents=True)
@@ -1556,7 +1555,7 @@ def test_pin_backup_resolves_a_worktree_gitlink_to_its_own_private_gitdir(
     assert (worktree / ".osiris").read_text() == 'project = "tony"\n'
 
 
-# ═══ SELF-HEAL: PIN `project` UNSET IS A VALID STATE (ruling fe8ec7ff, operator df646654)
+# ═══ SELF-HEAL: PIN `project` UNSET IS A VALID STATE.
 # governs + works_in + anchor_cwd must ALL agree before a seat's own mount writes anything;
 # any one absent or disagreeing leaves the pin unset, valid, with a reason. ═══
 
@@ -1584,7 +1583,7 @@ async def test_self_heal_writes_when_all_three_signals_agree(
     office = tmp_path / "heal1"
     office.mkdir()
     real = office / "dealer-to-fb"
-    real.mkdir()  # anchor_cwd's own basename IS the project name — the Marquee shape
+    real.mkdir()  # anchor_cwd's own basename IS the project name
     (real / ".osiris").write_text('model = "claude-sonnet-5"\n')
     await _seat_with_project(
         actions, agent="agent:heal1", handle="Heal1", project="dealer-to-fb",
@@ -1608,7 +1607,7 @@ async def test_self_heal_leaves_unset_when_governs_and_works_in_disagree(
     await _seat_with_project(
         actions, agent="agent:amb2", handle="Amb2", project="dealer-to-fb",
         charter=True, works_in=False)
-    # works_in points somewhere ELSE — the two signals disagree
+    # works_in points somewhere ELSE: the two signals disagree
     agent_oid = await actions.create_or_find_object("Agent", "agent:amb2", "agent:amb2")
     other = await actions.create_or_find_object("SoftwareProject", "repo:some-other-project",
                                                  "test")
@@ -1641,10 +1640,10 @@ async def test_self_heal_is_a_noop_when_project_already_declared(
     assert out == {"state": "n/a"}
 
 
-# ═══ sweep_retired_office — the missing disk half (Thoth's msg 6026/6035 lane).
-# DRY-RUN ONLY this pass: execute stays deliberately unwired until Thoth reviews real
-# dry-run output; the guard is registry_census read TWICE (now, and after a heal-interval
-# wait), never a single instant's read — wave6probe's own lesson. ═══
+# ═══ sweep_retired_office: the missing disk half.
+# DRY-RUN ONLY this pass: execute stays deliberately unwired until the dry-run output is
+# reviewed; the guard is registry_census read TWICE (now, and after a heal-interval
+# wait), never a single instant's read: a real race taught that lesson. ═══
 
 def _sweep_agents_json(rows: list[dict]) -> object:
     async def _f() -> list[dict]:
@@ -1708,7 +1707,7 @@ async def test_sweep_execute_deletes_a_retired_seats_office(
 async def test_sweep_execute_leaves_an_active_seats_office_untouched(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The guard is IDENTICAL in execute mode — a refusal deletes nothing, exactly as
+    """The guard is IDENTICAL in execute mode: a refusal deletes nothing, exactly as
     dry-run would have predicted."""
     from src.orchestrator.seats import ensure_seat
 
@@ -1731,8 +1730,8 @@ async def test_sweep_refuses_no_office_directory(actions: Actions, tmp_path: Pat
 async def test_sweep_would_delete_a_stranger_office_with_no_seat_row_at_all(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The climintworker1/inferredworker1 shape exactly: a real office directory, no
-    matching Seat object at any status — pure test-run filesystem debris."""
+    """A real office directory, no
+    matching Seat object at any status: pure test-run filesystem debris."""
     office = tmp_path / "climintworker1"
     office.mkdir()
     (office / ".osiris").write_text('project = "cliproj1"\n')
@@ -1837,7 +1836,7 @@ async def test_sweep_refuses_a_live_body_at_the_office_right_now(
 async def test_sweep_refuses_a_live_body_that_appears_after_the_heal_wait(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The exact wave6probe race: clean at the first read, a body is live by the second —
+    """A real race: clean at the first read, a body is live by the second,
     the daemon's own auto-respawn window. The guard must catch it on the SECOND read."""
     office = tmp_path / "sweepheal1"
     office.mkdir()
@@ -1876,17 +1875,17 @@ async def test_sweep_refuses_on_a_blind_census_never_reading_silence_as_empty(
 
 
 # ═══ Path containment. Every guard above interrogates THE SEAT; this one interrogates THE
-# PATH, and it is the guard the execute path shipped without (Thoth LXXXIX, wave 8 merge
-# review). `handle` is caller-supplied and lands in a `/` join, so a traversal names a real
+# PATH, and it is the guard the execute path shipped without.
+# `handle` is caller-supplied and lands in a `/` join, so a traversal names a real
 # directory outside the office root that matches no Seat, holds no holder and hosts no live
-# body — clearing all five seat guards on its way to shutil.rmtree. ═══
+# body, clearing all five seat guards on its way to shutil.rmtree. ═══
 
 async def test_sweep_refuses_a_handle_that_traverses_out_of_the_office_root(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The traversal must be refused BEFORE any seat lookup, and the outside directory must
     survive intact. Built so it would really have been deleted without the containment
-    check: no Seat row, no holder, no live body — every other guard passes."""
+    check: no Seat row, no holder, no live body: every other guard passes."""
     root = tmp_path / "seats"
     root.mkdir()
     outside = tmp_path / "notanoffice"
@@ -1906,7 +1905,7 @@ async def test_sweep_refuses_a_traversal_in_dry_run_too(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Dry-run must refuse on the SAME line, not report would-delete over someone else's
-    directory — the two modes stay trustworthy only while dry-run predicts execute exactly."""
+    directory: the two modes stay trustworthy only while dry-run predicts execute exactly."""
     root = tmp_path / "seats"
     root.mkdir()
     outside = tmp_path / "notanoffice"
@@ -1924,7 +1923,7 @@ async def test_sweep_refuses_a_nested_handle_even_inside_the_root(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """An office is a DIRECT child of the root. A nested path stays inside the root and is
-    still not an office — containment alone would admit it, so the check is on the parent."""
+    still not an office: containment alone would admit it, so the check is on the parent."""
     root = tmp_path / "seats"
     (root / "realoffice" / "subdir").mkdir(parents=True)
 
@@ -1953,16 +1952,16 @@ async def test_sweep_still_accepts_an_ordinary_handle(
     assert out["entries"] == [".osiris"]
 
 
-# ═══ sweep_seat_workspace — the OTHER disk half (thread 6272): mint_seat/found_seat
+# ═══ sweep_seat_workspace: the OTHER disk half. mint_seat/found_seat
 # scaffold a workspace (~/code/<handle>/) alongside the office, sweep_retired_office never
-# touched it. Same guard shape, applied to workspace_root instead of office_root — the
+# touched it. Same guard shape, applied to workspace_root instead of office_root. The
 # tests below mirror sweep_retired_office's own coverage, not the full matrix, since the
 # guard bodies are identical and already proven above. ═══
 
 async def test_workspace_sweep_deletes_a_stranger_with_no_seat_row_at_all(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The climintworker1/inferredworker1/deliberato shape: a real workspace directory, no
+    """A real workspace directory, no
     matching Seat object at any status."""
     ws = tmp_path / "climintworker1"
     ws.mkdir()
@@ -2056,7 +2055,7 @@ async def test_workspace_sweep_execute_refuses_without_because(
 
 
 async def test_workspace_sweep_defaults_to_home_code(actions: Actions) -> None:
-    """No `workspace_root` override — resolves against the real Path.home()/'code', the
+    """No `workspace_root` override: resolves against the real Path.home()/'code', the
     documented mint-time default. A handle nobody minted just reports nothing to sweep,
     proving the default resolved somewhere real rather than erroring on its own."""
     out = await sweep_seat_workspace(

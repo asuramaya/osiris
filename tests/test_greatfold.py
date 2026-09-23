@@ -1,9 +1,9 @@
-"""THE GREAT FOLD's machine (greatfold.py) — one-soul-per-seat as evidence-driven code.
+"""Tests for greatfold.py: one soul per seat, enforced as evidence-driven code.
 
 Witnesses: the signature scan reads the append-only transcripts the way the delivery gate
 does; the survey drops quoted ids the graph never registered and flags cross-seat bases;
-the fold is dry-run by default, estate-carrying on execute, and briefs the desk AFTER; the
-doorbell sweep demotes only families with NO tie to the living graph.
+the fold is dry-run by default, makes real changes on execute, and briefs the desk after;
+the doorbell sweep demotes only families with no tie to the living graph.
 """
 from __future__ import annotations
 
@@ -57,19 +57,19 @@ async def _agent(actions: Actions, label: str, *, handle: str | None = None,
 
 
 def test_bare_strips_the_numeral_and_the_case() -> None:
-    assert _bare("Soundwave VIII") == "soundwave"
-    assert _bare("TJMAX") == "tjmax"
-    assert _bare("alfred") == "alfred"
-    assert _bare("Thoth L") == "thoth"
+    assert _bare("Widget VIII") == "widget"
+    assert _bare("ACRONYM") == "acronym"
+    assert _bare("plainname") == "plainname"
+    assert _bare("Handle L") == "handle"
 
 
 def test_signature_scan_returns_ordered_testimony_per_session(tmp_path: Path) -> None:
-    _transcript(tmp_path, "khnum", "sid-old", _SEND.format(agent="agent:aaaa1111"),
+    _transcript(tmp_path, "fenwick", "sid-old", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
-    _transcript(tmp_path, "khnum", "sid-new",
+    _transcript(tmp_path, "fenwick", "sid-new",
                 _WHISPER.format(agent="agent:bbbb2222-ii"),
                 _SEND.format(agent="agent:bbbb2222-ii"))
-    out = signed_matches_sync(tmp_path, "khnum")
+    out = signed_matches_sync(tmp_path, "fenwick")
     assert out == [["agent:aaaa1111"],                       # mtime-ascending file order
                    ["agent:bbbb2222-ii", "agent:bbbb2222-ii"]]
 
@@ -77,48 +77,48 @@ def test_signature_scan_returns_ordered_testimony_per_session(tmp_path: Path) ->
 async def test_survey_takes_each_sessions_own_resident_never_its_quotes(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
     # one session: quotes bbbb2222 mid-file (a census query, a read fixture), quotes an id
-    # the graph never registered LAST — its own resident signature sits between them
-    _transcript(projects, "khnum", "s1",
+    # the graph never registered last. its own resident signature sits between them.
+    _transcript(projects, "fenwick", "s1",
                 _SEND.format(agent="agent:bbbb2222-ii"),
                 _SEND.format(agent="agent:aaaa1111"),
                 _SEND.format(agent="agent:dddd9999"))
     sv = await survey_seats(actions.pool, office_root=offices, projects_root=projects)
-    signed = sv["seats"]["khnum"]["signed"]
+    signed = sv["seats"]["fenwick"]["signed"]
     assert set(signed) == {"agent:aaaa1111"}   # the resident, not the quoted sibling
     assert "agent:dddd9999" not in signed      # an unregistered id is reading material
-    assert sv["seats"]["khnum"]["resident_signed"] == "agent:aaaa1111"
-    assert sv["seats"]["khnum"]["house"] == "riverhouse"
+    assert sv["seats"]["fenwick"]["resident_signed"] == "agent:aaaa1111"
+    assert sv["seats"]["fenwick"]["house"] == "riverhouse"
 
 
 async def test_survey_flags_a_base_resident_in_two_offices(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     _office(offices, "sobek", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
-    _transcript(projects, "khnum", "s1", _SEND.format(agent="agent:aaaa1111"))
+    _transcript(projects, "fenwick", "s1", _SEND.format(agent="agent:aaaa1111"))
     _transcript(projects, "sobek", "s2", _SEND.format(agent="agent:bbbb2222-ii"),
                 _SEND.format(agent="agent:aaaa1111"))
     sv = await survey_seats(actions.pool, office_root=offices, projects_root=projects)
-    assert sv["conflicts"] == {"agent:aaaa1111": ["khnum", "sobek"]}
+    assert sv["conflicts"] == {"agent:aaaa1111": ["fenwick", "sobek"]}
 
 
 async def test_fold_seat_dry_run_names_the_folds_and_writes_nothing(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:aaaa1111-ii")
     await _agent(actions, "agent:bbbb2222-ii")
-    _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111-ii"),
+    _transcript(projects, "fenwick", "s-old", _SEND.format(agent="agent:aaaa1111-ii"),
                 age_secs=3600)
-    _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:bbbb2222-ii"))
-    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+    _transcript(projects, "fenwick", "s-new", _SEND.format(agent="agent:bbbb2222-ii"))
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["living_head"] == "agent:bbbb2222-ii"
     assert [f["label"] for f in out["will_fold"]] == ["agent:aaaa1111",
@@ -130,29 +130,29 @@ async def test_fold_seat_dry_run_names_the_folds_and_writes_nothing(
 async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
-    _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111"),
+    _transcript(projects, "fenwick", "s-old", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
-    _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:bbbb2222-ii"))
-    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
-    # fold — greatfold.fold_seat forwards `actor` unchanged, so the caller must be one
-    out = await fold_seat(actions, handle="khnum", actor="operator", execute=True,
+    _transcript(projects, "fenwick", "s-new", _SEND.format(agent="agent:bbbb2222-ii"))
+    # fold_agent's own gate requires the operator's actor for a real
+    # fold. greatfold.fold_seat forwards `actor` unchanged, so the caller must be one
+    out = await fold_seat(actions, handle="fenwick", actor="operator", execute=True,
                           office_root=offices, projects_root=projects)
     assert [f["folded"] for f in out["folded"]] == ["agent:aaaa1111"]
     assert not out["refused"]
     assert await canonical_agent(actions.pool, "agent:aaaa1111") == "agent:bbbb2222-ii"
     assert out["seat_minted"] and str(out["seat_id"]).startswith("seat:")
     roster = await seat_roster(actions.pool, office_root=offices)
-    assert next(r for r in roster if r["handle"] == "khnum")["seat_id"] == out["seat_id"]
+    assert next(r for r in roster if r["handle"] == "fenwick")["seat_id"] == out["seat_id"]
     brief = await actions.pool.fetchval(
         "SELECT body FROM fleet_messages WHERE to_project='operator' "
         "ORDER BY id DESC LIMIT 1")
-    assert brief and brief.startswith("GREAT FOLD: seat khnum")
+    assert brief and brief.startswith("GREAT FOLD: seat fenwick")
     assert out["briefed"] is not None
     # idempotent: a second run finds nothing left to fold
-    again = await fold_seat(actions, handle="khnum", actor="operator", execute=True,
+    again = await fold_seat(actions, handle="fenwick", actor="operator", execute=True,
                             office_root=offices, projects_root=projects)
     assert not again["will_fold"]
 
@@ -160,40 +160,40 @@ async def test_fold_seat_execute_folds_mints_the_seat_and_briefs_after(
 async def test_seat_roster_reads_house_through_the_canonical_pin_reader(
         actions: Actions, tmp_path: Path) -> None:
     """seat_roster() used to hand-parse `.osiris` itself (a line-split on `project =`) instead
-    of going through agents.py's `_read_osiris_key`/`read_project_label` — a second, independent
-    reader of the same file (the 38c71544 class: two hand-synced copies of one answer, ruling
-    719ed5b1's pin-schema build). Proof, not assertion, that it now delegates: a pin that is
-    valid TOML but never declares `project` (Sekhmet's own OsirisKeyRead design names this the
-    "heinrich shape" — a deliberately-written file answering a different question) must resolve
+    of going through agents.py's `_read_osiris_key`/`read_project_label`, a second, independent
+    reader of the same file (two hand-synced copies of one answer,
+    from an earlier pin-schema build). Proof, not assertion, that it now delegates: a pin that is
+    valid TOML but never declares `project` (the OsirisKeyRead design names this the
+    "heinrich shape", a deliberately-written file answering a different question) must resolve
     `house=None`, the same three-way "found, valid, key absent" state the canonical reader gives
-    every other caller — not a crash, not a guess, and not dependent on line-splitting quirks
+    every other caller, not a crash, not a guess, and not dependent on line-splitting quirks
     (quoting, whitespace) the hand-rolled version was exposed to."""
     offices = tmp_path / "offices"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     unset = offices / "modelonly"
     unset.mkdir(parents=True)
     (unset / ".osiris").write_text('model = "claude-sonnet-5"\n')
 
     roster = await seat_roster(actions.pool, office_root=offices)
     by_handle = {r["handle"]: r for r in roster}
-    assert by_handle["khnum"]["house"] == "riverhouse"
+    assert by_handle["fenwick"]["house"] == "riverhouse"
     assert by_handle["modelonly"]["house"] is None
 
 
 async def test_fold_seat_never_folds_a_cross_seat_base(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     _office(offices, "sobek", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:bbbb2222-ii")
     await _agent(actions, "agent:cccc3333")
-    _transcript(projects, "khnum", "s1", _SEND.format(agent="agent:aaaa1111"),
+    _transcript(projects, "fenwick", "s1", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
-    _transcript(projects, "khnum", "s2", _SEND.format(agent="agent:bbbb2222-ii"))
+    _transcript(projects, "fenwick", "s2", _SEND.format(agent="agent:bbbb2222-ii"))
     _transcript(projects, "sobek", "s3", _SEND.format(agent="agent:cccc3333"),
                 _SEND.format(agent="agent:aaaa1111"))
-    out = await fold_seat(actions, handle="khnum", actor="agent:test", execute=True,
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test", execute=True,
                           office_root=offices, projects_root=projects)
     assert [f["base"] for f in out["flagged"]] == ["agent:aaaa1111"]
     assert not out["folded"]
@@ -203,13 +203,13 @@ async def test_fold_seat_never_folds_a_cross_seat_base(
 async def test_named_testimony_outranks_an_unnamed_newest_session(
         actions: Actions, tmp_path: Path) -> None:
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
-    await _agent(actions, "agent:aaaa1111", handle="Khnum")
+    _office(offices, "fenwick", "riverhouse")
+    await _agent(actions, "agent:aaaa1111", handle="Fenwick")
     await _agent(actions, "agent:bbbb2222")   # the fresh mint that never claimed
-    _transcript(projects, "khnum", "s-named", _SEND.format(agent="agent:aaaa1111"),
+    _transcript(projects, "fenwick", "s-named", _SEND.format(agent="agent:aaaa1111"),
                 age_secs=3600)
-    _transcript(projects, "khnum", "s-doorbell", _SEND.format(agent="agent:bbbb2222"))
-    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+    _transcript(projects, "fenwick", "s-doorbell", _SEND.format(agent="agent:bbbb2222"))
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["resident"] == "agent:aaaa1111"          # the name, not the doorbell
     assert [f["label"] for f in out["will_fold"]] == ["agent:bbbb2222"]
@@ -219,11 +219,11 @@ async def test_fold_seat_by_handle_claim_alone(actions: Actions, tmp_path: Path)
     offices = tmp_path / "offices"
     projects = tmp_path / "projects"
     projects.mkdir()
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     old, new = datetime.now(UTC) - timedelta(days=9), datetime.now(UTC)
-    await _agent(actions, "agent:aaaa1111", handle="Khnum VIII", at=old)
-    await _agent(actions, "agent:bbbb2222-ii", handle="Khnum", at=new)
-    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+    await _agent(actions, "agent:aaaa1111", handle="Fenwick VIII", at=old)
+    await _agent(actions, "agent:bbbb2222-ii", handle="Fenwick", at=new)
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["resident"] == "agent:bbbb2222-ii"  # the newest claim, no transcripts needed
     assert [f["label"] for f in out["will_fold"]] == ["agent:aaaa1111"]
@@ -232,24 +232,24 @@ async def test_fold_seat_by_handle_claim_alone(actions: Actions, tmp_path: Path)
 
 async def test_a_generation_overflow_chain_is_one_family_nothing_to_fold(
         actions: Actions, tmp_path: Path) -> None:
-    """SUPERSEDES the old "-g40 is a rebase into a new lineage" premise (msg 7623): that
-    premise was itself the bug (commit 9cd1054/thread ee412c7e's sibling fix) — `-g40`
+    """SUPERSEDES the old "-g40 is a rebase into a new lineage" premise: that
+    premise was itself the bug. `-g40`
     is generation 40 of the SAME soul, not a different one, and `-g40-ii` is generation
     41 of it, whatever segments sit in between. fold_seat's own family grouping
     (`_generation`'s base) now correctly folds all four labels into ONE family, so there
-    is genuinely nothing external left to fold into the living head — will_fold is
+    is genuinely nothing external left to fold into the living head: will_fold is
     empty, not a list of "ancestors to absorb." The negative control below proves the
     dash-boundary discipline this replaces still holds for a GENUINELY different root."""
     offices, projects = tmp_path / "offices", tmp_path / "projects"
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     await _agent(actions, "agent:aaaa1111")
     await _agent(actions, "agent:aaaa1111-iii")
     await _agent(actions, "agent:aaaa1111-g40")         # the overflow reset, same soul
     await _agent(actions, "agent:aaaa1111-g40-ii")       # generation 41, same soul
-    _transcript(projects, "khnum", "s-old", _SEND.format(agent="agent:aaaa1111-iii"),
+    _transcript(projects, "fenwick", "s-old", _SEND.format(agent="agent:aaaa1111-iii"),
                 age_secs=3600)
-    _transcript(projects, "khnum", "s-new", _SEND.format(agent="agent:aaaa1111-g40-ii"))
-    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+    _transcript(projects, "fenwick", "s-new", _SEND.format(agent="agent:aaaa1111-g40-ii"))
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["living_head"] == "agent:aaaa1111-g40-ii"
     assert out["will_fold"] == []
@@ -257,10 +257,10 @@ async def test_a_generation_overflow_chain_is_one_family_nothing_to_fold(
 
 async def test_a_differently_rooted_agent_sharing_a_string_prefix_is_never_swallowed(
         actions: Actions, tmp_path: Path) -> None:
-    """The negative control Thoth's ruling asked for: an agent whose canonical merely
+    """The negative control the ruling asked for: an agent whose canonical merely
     LIKE-matches a family's SQL sweep pattern (`base || '-%'`) but whose OWN
-    `_generation()` root is itself — "realbogus" is neither a valid roman numeral nor a
-    g<N> overflow marker — must never be swept into that family's fold, whatever a raw
+    `_generation()` root is itself: "realbogus" is neither a valid roman numeral nor a
+    g<N> overflow marker, and must never be swept into that family's fold, whatever a raw
     LIKE query alone would match. fold_seat's own exact-base filter
     (`_generation(row)[0] != base: continue`) is what protects this; this pins it still
     holds under the recursive-unwind `_generation` (modeled on
@@ -269,13 +269,13 @@ async def test_a_differently_rooted_agent_sharing_a_string_prefix_is_never_swall
     offices = tmp_path / "offices"
     projects = tmp_path / "projects"
     projects.mkdir()
-    _office(offices, "khnum", "riverhouse")
+    _office(offices, "fenwick", "riverhouse")
     old, new = datetime.now(UTC) - timedelta(days=9), datetime.now(UTC)
-    await _agent(actions, "agent:aaaa1111", handle="Khnum VIII", at=old)
+    await _agent(actions, "agent:aaaa1111", handle="Fenwick VIII", at=old)
     await _agent(actions, "agent:aaaa1111-iii")
     await _agent(actions, "agent:aaaa1111-realbogus")  # LIKE-matches, but a distinct root
-    await _agent(actions, "agent:bbbb2222-ii", handle="Khnum", at=new)
-    out = await fold_seat(actions, handle="khnum", actor="agent:test",
+    await _agent(actions, "agent:bbbb2222-ii", handle="Fenwick", at=new)
+    out = await fold_seat(actions, handle="fenwick", actor="agent:test",
                           office_root=offices, projects_root=projects)
     assert out["resident"] == "agent:bbbb2222-ii"
     folded = [f["label"] for f in out["will_fold"]]
