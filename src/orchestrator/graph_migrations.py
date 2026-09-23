@@ -1,12 +1,11 @@
-"""DRAWING THE WHOLE GRAPH, THE MIGRATIONS (thread 325ef660, Thoth mail 11407/11423):
-three name-dispatched repair entry points, the SAME dry-run-default/idempotent/compensating-
-event shape `backfill.py` already established for exactly this class of work
-(`BACKFILL_TARGETS`/`run_backfill`) -- a separate registry here (`MIGRATION_TARGETS`/
-`run_migration`), not a new entry in that one, because these three are graph-shape
-repairs feeding the physics layout and the renderer, not the identity/provenance
-backfill's own population. `osiris graph-migrate <name> [--dry-run/--apply]` is the CLI
-command (cli.py) -- named to avoid colliding with the pre-existing `osiris migrate`
-(alembic's env-correct schema tool, unrelated).
+"""GRAPH SHAPE REPAIRS, THE MIGRATIONS: three name-dispatched repair entry points, the
+same dry-run-default/idempotent/compensating-event shape `backfill.py` already
+established for exactly this class of work (`BACKFILL_TARGETS`/`run_backfill`). A
+separate registry here (`MIGRATION_TARGETS`/`run_migration`), not a new entry in that
+one, because these are graph-shape repairs feeding the physics layout and the
+renderer, not the identity/provenance backfill's own population. `osiris graph-migrate
+<name> [--dry-run/--apply]` is the CLI command (cli.py), named to avoid colliding with
+the pre-existing `osiris migrate` (alembic's env-correct schema tool, unrelated).
 
 Each target: `dry_run` defaults True; `dry_run=False` REQUIRES a non-blank `because`
 (the same audit-trail contract every backfill target already holds itself to); every
@@ -35,14 +34,14 @@ MIGRATION_TARGETS = frozenset({
 
 _BIND_BEFORE_SPAWN_PREFIX = "launch_seat: bind-before-spawn"
 
-# THE EVIDENCE GATE (Thoth DM 12215/12245, off the live dry-run finding five real
-# sandwiches — not the ~two the diagnosis anticipated, one spanning six weeks): a
-# phantom's own window longer than this is NOT "near-instant" bookkeeping by any
-# reading, whatever the real holder was doing meanwhile — it cleanly separates the
+# THE EVIDENCE GATE: a live dry run found five real
+# sandwiches, not the roughly two the diagnosis anticipated, one spanning six weeks. A
+# phantom's own window longer than this is not "near-instant" bookkeeping by any
+# reading, whatever the real holder was doing meanwhile. It cleanly separates the
 # four short specimens actually found (9h/40h/12h/8h) from the six-week outlier
 # without needing a per-seat judgment call. One week, not one day, because a real
 # holder's own genuinely idle stretch (a weekend, a short leave) must not itself
-# trip this gate — the SEPARATE in-gap-activity check below is what catches an
+# trip this gate. The separate in-gap-activity check below is what catches an
 # actual vacancy; this constant only catches "this was never a brief blip".
 _NEAR_INSTANT_MAX_SECONDS = 7 * 24 * 3600
 
@@ -56,9 +55,9 @@ async def run_migration(
     pool: asyncpg.Pool, name: str, *, actor: str, dry_run: bool = True,
     because: str | None = None, only_seat: str | None = None,
 ) -> dict[str, Any]:
-    """Dispatch on `name` -- see `MIGRATION_TARGETS` for the full set. `only_seat`
+    """Dispatch on `name`, see `MIGRATION_TARGETS` for the full set. `only_seat`
     (a seat's canonical `seat:<id>` or its bare handle) narrows `holds_sandwich` to
-    one seat -- refused for every other target, since none of them are seat-scoped."""
+    one seat, refused for every other target, since none of them are seat-scoped."""
     if only_seat and name != "holds_sandwich":
         return {"error": f"--only is only supported for holds_sandwich, not {name!r}"}
     actions = Actions(pool)
@@ -95,46 +94,46 @@ async def run_migration(
 async def migrate_repo_seats_fix(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """THE repo:seats BUG (DRAWING THE WHOLE GRAPH, thread 325ef660): `repo:seats` is
+    """THE repo:seats BUG: `repo:seats` is
     a phantom SoftwareProject minted from ~/.osiris/seats, the bare seat-office
-    CONTAINER, never a real project -- the SAME "seats" basename `offices.
-    is_bare_office_root` already guards `seats.resolve_project` against (ruling
-    577988ed), reached here through a different route (git-ingest's own
+    container, never a real project, the same "seats" basename `offices.
+    is_bare_office_root` already guards `seats.resolve_project` against, reached
+    here through a different route (git-ingest's own
     `sessions._repo_from_cwd`, fixed alongside this migration so the derivation
     itself stops producing new damage while this repairs the historical kind).
 
-    Compensating, never a delete: every Agent whose CURRENT `project` assertion
-    reads "seats" is re-stamped to "osiris" (the fleet's own house -- the bare
-    container belongs to no ONE seat, so there is no per-seat house to derive,
-    only the shared fleet root) via `assert_singular_property`, NOT the plain
-    `assert_property` the first cut of this entry point used (Thoth's live finding on
-    the w316 apply, mail 11469): `assert_property`'s own supersession is
-    SAME-SOURCE ONLY, so a re-stamp written by this migration's own actor sat
-    BESIDE the agent's own prior self-declared "seats" row rather than retiring
-    it -- both simultaneously `is_current`, and the stream header (reading
+    Compensating, never a delete: every Agent whose current `project` assertion
+    reads "seats" is re-stamped to "osiris" (the fleet's own shared root; the bare
+    container belongs to no one seat, so there is no per-seat house to derive,
+    only the shared fleet root) via `assert_singular_property`, not the plain
+    `assert_property` the first cut of this entry point used. A live finding on an
+    earlier apply showed `assert_property`'s own supersession is
+    same-source only, so a re-stamp written by this migration's own actor sat
+    beside the agent's own prior self-declared "seats" row rather than retiring
+    it: both simultaneously `is_current`, and the stream header (reading
     whichever `current_assertions` row it finds first, over a set the write
-    path never proved unique -- the exact failure shape the house's own
-    ORDER-BY-without-a-total-tiebreak lesson names) kept filing all 54 agents
+    path never proved unique, the exact failure shape a non-total ORDER BY
+    lesson names) kept filing all 54 agents
     under repo:seats even after the "successful" apply. `assert_singular_property`
-    is the house's OWN blessed entry point for this shape (ruling 1335332e, thread
-    6361): a property that is single-valued per object regardless of who wrote
+    is this codebase's own blessed entry point for this shape: a property that is
+    single-valued per object regardless of who wrote
     the prior value collapses every other current row for (object, "project")
-    down to the one this call mints, cross-source. Every LIVE link INTO
-    repo:seats (any type -- a
-    phantom container's own edges are fixed whatever its status, THOTH'S OWN
-    CORRECTION mail 11448: the original status=='active' gate silently skipped
+    down to the one this call mints, cross-source. Every live link into
+    repo:seats (any type, since a
+    phantom container's own edges are fixed whatever its status; a
+    correction found the original status=='active' gate silently skipped
     the repair the instant the container drifted out of that one status) is
     invalidated and re-minted pointing at repo:osiris instead. Retired via
     `projects.retire_project` (a real status flip, never a raw DELETE) only
-    once every edge off it is moved AND it was not already retired -- calling
-    retire_project on an already-retired object is a wasted, confusing call,
+    once every edge off it is moved and it was not already retired, since
+    calling retire_project on an already-retired object is a wasted, confusing call,
     not a real repair.
 
-    THE 8,609 FIGURE WAS A DIFFERENT MEASUREMENT (Thoth mail 11449): not edges
+    THE 8,609 FIGURE WAS A DIFFERENT MEASUREMENT: not edges
     on repo:seats itself (measured ~95: 57 works_in, 13+5+2 in_repo, 17
     informs, 1 same_as) but edges between the 54 seats-stamped Agents and
-    OTHER osiris objects, counted cross-district by Seshat's own spike after
-    it folded nearby unfiled messages into repo:seats by nearest centroid --
+    other osiris objects, counted cross-district by an earlier spike that
+    folded nearby unfiled messages into repo:seats by nearest centroid,
     an artifact of that fold, not a defect this migration repairs. Reported
     read-only, for the record, unchanged by this migration either way.
 
@@ -162,11 +161,11 @@ async def migrate_repo_seats_fix(
         "JOIN current_assertions a ON a.object_id=o.id "
         "WHERE a.name='project' AND a.value #>> '{}' = 'seats' AND o.type='Agent'")
     agent_ids = [r["id"] for r in agent_rows]
-    # how many CURRENT `project` rows each agent carries right now, any source --
+    # How many current `project` rows each agent carries right now, any source.
     # assert_singular_property collapses every one of them to the single new
-    # "osiris" row it mints, so this count IS the per-agent supersede count
+    # "osiris" row it mints, so this count is the per-agent supersede count
     # (1 in the clean case; >1 if a prior partial/botched apply already left an
-    # extra current row beside the original "seats" one, e.g. the w316 finding).
+    # extra current row beside the original "seats" one, per an earlier finding).
     current_project_counts: dict[uuid.UUID, int] = {}
     if agent_ids:
         count_rows = await pool.fetch(
@@ -174,8 +173,8 @@ async def migrate_repo_seats_fix(
             "WHERE object_id = ANY($1::uuid[]) AND name='project' GROUP BY object_id",
             agent_ids)
         current_project_counts = {r["object_id"]: r["n"] for r in count_rows}
-    # every live link INTO repo:seats, any type -- the container's own status is
-    # never consulted here (Thoth's correction): a phantom's edges are fixed
+    # Every live link into repo:seats, any type; the container's own status is
+    # never consulted here (per an earlier correction): a phantom's edges are fixed
     # whatever state the phantom itself is in.
     edge_rows = await pool.fetch(
         "SELECT l.from_id, l.type, o.type AS from_type "
@@ -183,10 +182,10 @@ async def migrate_repo_seats_fix(
         "WHERE l.to_id=$1 "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seats_id)
     # READ-ONLY, for the record, never written: live links between the 54
-    # seats-stamped agents and any OTHER object already in osiris (in_repo/
-    # works_in to repo:osiris, or a current project assertion of 'osiris') --
-    # these become same-district the moment the agents above are re-stamped
-    # and need no edge rewrite of their own (Thoth mail 11448).
+    # seats-stamped agents and any other object already in osiris (in_repo/
+    # works_in to repo:osiris, or a current project assertion of 'osiris').
+    # These become same-district the moment the agents above are re-stamped
+    # and need no edge rewrite of their own.
     agents_to_osiris_count = 0
     if agent_ids:
         agents_to_osiris_count = await pool.fetchval(
@@ -267,7 +266,7 @@ async def _unfiled_pass(
     pool: asyncpg.Pool, *, already_filed: dict[uuid.UUID, str],
 ) -> dict[str, Any]:
     """One pass of the majority vote, `already_filed` (oid -> project bare name)
-    carrying every object a PRIOR pass in this same run filed -- in a dry run
+    carrying every object a prior pass in this same run filed. In a dry run
     nothing is written, so this is the only way a later pass can see an earlier
     pass's own result; in a real run the DB read below already reflects it, and
     `already_filed` just widens the excluded-from-rescan set for objects this
@@ -321,11 +320,11 @@ async def _unfiled_pass(
                     r["oid"], r["pcanon"].removeprefix("repo:"))
             still_remaining = [n for n in remaining if n not in project_name_by_neighbour]
             if still_remaining:
-                # a neighbour FILED by this same run (a prior pass, real write or
+                # A neighbour filed by this same run (a prior pass, real write or
                 # simulated dry-run) or by an earlier live process: its own current
                 # `project` assertion, resolved against an active SoftwareProject's
-                # bare name -- the fixed-point iteration's own load-bearing step,
-                # since a project ASSERTION alone (no in_repo/works_in link) is
+                # bare name. This is the fixed-point iteration's own load-bearing step,
+                # since a project assertion alone (no in_repo/works_in link) is
                 # exactly the shape this migration itself mints.
                 assertion_rows = await pool.fetch(
                     "SELECT a.object_id AS oid, a.value #>> '{}' AS pname "
@@ -381,45 +380,45 @@ async def _unfiled_pass(
 async def migrate_file_the_unfiled(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """FILE THE UNFILED (DRAWING THE WHOLE GRAPH, thread 325ef660): ~7,300 active,
+    """FILE THE UNFILED: ~7,300 active,
     non-SoftwareProject objects carry neither a `project` assertion nor a live
-    in_repo/works_in link -- the physics layout's own "unfiled fog" (THE LONG EDGES
-    RULING, ruling d9c10467), placed only by neighbour-centroid pull today, never
-    actually filed. Person and Seat objects are EXCLUDED from being filed at all
-    (Thoth mail 11448): a global with heavy structural fan-in (a principal, a seat)
-    is a landmark, not a member of whichever district happens to touch it most --
-    filing one would drag an unrelated fan into a single district.
+    in_repo/works_in link, the physics layout's own "unfiled fog," placed only by
+    neighbour-centroid pull today, never
+    actually filed. Person and Seat objects are excluded from being filed at all:
+    a global with heavy structural fan-in (a principal, a seat)
+    is a landmark, not a member of whichever district happens to touch it most,
+    since filing one would drag an unrelated fan into a single district.
 
     MAJORITY PROJECT OVER DIRECT NEIGHBOURS, ANY LINK TYPE: every live edge touching
-    an unfiled object (either direction, any type -- membership is a vote here, not
-    a spring; THE READING LAYER's structural/semantic split governs the LAYOUT, not
-    this tally) contributes one vote for that neighbour's own project -- itself,
-    when the neighbour IS an active SoftwareProject, else the neighbour's own
+    an unfiled object (either direction, any type; membership is a vote here, not
+    a spring, and the structural/semantic split governs the layout, not
+    this tally) contributes one vote for that neighbour's own project: itself,
+    when the neighbour is an active SoftwareProject, else the neighbour's own
     in_repo/works_in target, else (a neighbour this migration itself already filed,
     this run or an earlier one) its own current `project` assertion. TIE OR EMPTY
-    STAYS UNFILED, AND IS COUNTED, EVERY PASS: a tie between two-or-more top
+    STAYS UNFILED, AND IS COUNTED, EVERY PASS: a tie between two or more top
     projects, or an unfiled object with no neighbour that resolves to any project
-    at all, is left exactly as it was -- never a guess between equally-supported
+    at all, is left exactly as it was, never a guess between equally-supported
     candidates.
 
-    ITERATES TO A FIXED POINT (Thoth mail 11448): a single hop cannot see a
+    ITERATES TO A FIXED POINT: a single hop cannot see a
     project across a whole cluster of mutually-unfiled objects (messages, sub-
-    agents) that only touch a real project through ANOTHER unfiled object -- each
-    pass files what it can, then re-runs the vote over what is STILL unfiled
+    agents) that only touch a real project through another unfiled object, so each
+    pass files what it can, then re-runs the vote over what is still unfiled
     (now able to see the previous pass's own newly-filed neighbours), capped at
     `_MAX_FILING_PASSES` (10) and stopping the moment a pass files nothing new.
-    Receipt carries one entry per pass plus the summed totals.
+    The result carries one entry per pass plus the summed totals.
 
     The winning project asserts as `project` (the bare name, matching every other
     `project` assertion's own shape in this codebase, e.g. `resolve_and_persist_
-    seated_project`'s), source=`graph_migrations` -- the vote tally itself is the
-    evidence, carried in full in this function's own receipt, not a second copy
+    seated_project`'s), source=`graph_migrations`. The vote tally itself is the
+    evidence, carried in full in this function's own result, not a second copy
     embedded in the assertion row.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`.
     Idempotent: a repeat call finds no unfiled objects left that this run actually
     filed (a still-unfiled tie/empty object stays a legitimate candidate for a
-    LATER run, once more links exist to break the tie)."""
+    later run, once more links exist to break the tie)."""
     if not dry_run and not (because or "").strip():
         return {"error": "migrating without a because is an un-audited repair — cite "
                          "the evidence/ruling that authorizes it"}
@@ -466,11 +465,11 @@ async def migrate_file_the_unfiled(
 async def _resolve_ref(
     pool: asyncpg.Pool, value: str | None, *, object_type: str | None = None,
 ) -> uuid.UUID | None:
-    """A stored assertion VALUE (a canonical string, e.g. "agent:xyz"/"seat:xyz", or a
-    raw uuid) resolved to a real, active object id -- exact canonical match first,
+    """A stored assertion value (a canonical string, e.g. "agent:xyz"/"seat:xyz", or a
+    raw uuid) resolved to a real, active object id: exact canonical match first,
     then a raw uuid parse. Never a name/fuzzy lookup: an assertion recorded a specific
     reference at write time, this only confirms it still resolves, it never guesses a
-    NEW one. `object_type`, when given, narrows both attempts to that type."""
+    new one. `object_type`, when given, narrows both attempts to that type."""
     if not value:
         return None
     if object_type:
@@ -509,13 +508,13 @@ async def _mint_links_from_property(
     target_type: str | None = None, dry_run: bool, now: datetime,
 ) -> dict[str, int]:
     """The shared shape behind two of the six ASSERTION LINKS sub-migrations
-    (closed_by/admitted_by) -- the other four (recorded_by, supersedes, owned_by,
+    (closed_by/admitted_by). The other four (recorded_by, supersedes, owned_by,
     vendor_of) each need something this plain shape can't give them, and this
-    reads exactly what IS plain: every `subject_type` object's CURRENT
-    `prop_name` assertion's own VALUE, resolved via `_resolve_ref` (optionally
+    reads exactly what is plain: every `subject_type` object's current
+    `prop_name` assertion's own value, resolved via `_resolve_ref` (optionally
     narrowed to `target_type`), mints `(subject) -[link_type]-> (target)` unless
-    that exact live edge already exists. recorded_by is NOT this shape -- it
-    needs the assertion ROW's own `source_id` (who wrote it), never its value
+    that exact live edge already exists. recorded_by is not this shape: it
+    needs the assertion row's own `source_id` (who wrote it), never its value
     (what it says); supersedes needs a custom from/to normalisation across two
     property names; owned_by needs a second, project-name fallback resolution
     pass this helper doesn't have; vendor_of's value is a
@@ -549,8 +548,8 @@ async def _mint_recorded_by(
     actions: Actions, *, subject_type: str, dry_run: bool, now: datetime,
 ) -> dict[str, int]:
     """recorded_by's own shape, distinct from `_mint_links_from_property`: the target
-    is the assertion ROW's own `source_id` column (WHO wrote the object's current
-    `summary`), never the assertion's `value` (WHAT it says) -- a `source_id` of
+    is the assertion row's own `source_id` column (who wrote the object's current
+    `summary`), never the assertion's `value` (what it says). A `source_id` of
     "agent:xyz" resolved via `_resolve_ref` the same way any other canonical is."""
     pool = actions.pool
     rows = await pool.fetch(
@@ -578,47 +577,47 @@ async def _mint_recorded_by(
 async def migrate_assertion_links(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """ASSERTION LINKS (DRAWING THE WHOLE GRAPH, thread 325ef660): six property-
+    """ASSERTION LINKS: six property-
     pair-to-real-link mints, each idempotent and independently reported (minted /
     skipped_unresolvable / already_present) so a partial resolve rate in one never
     hides behind another's. `recorded_by`/`owned_by`/`admitted_by`/`vendor_of` are
-    STRUCTURAL, `supersedes` SEMANTIC (link_classes.py, this same migration's own
-    tip) -- attribution/membership edges versus a real content claim, the same
+    structural, `supersedes` semantic (link_classes.py), attribution/membership
+    edges versus a real content claim, the same
     split every other type in this codebase already sorts by.
 
-    NOT acknowledges (Thoth mail 11448, "you read it right"): Decision.prior_art_
-    acknowledged's own confirmation ALREADY mints a real edge -- `mint_cites`, via
-    `acknowledge_prior_art`'s own docstring ("PROMOTED FROM A STRING TO A REAL
-    EDGE") -- so a distinct `acknowledges` link would be redundant with an
+    NOT acknowledges: Decision.prior_art_
+    acknowledged's own confirmation already mints a real edge, `mint_cites`, via
+    `acknowledge_prior_art`'s own docstring ("promoted from a string to a real
+    edge"), so a distinct `acknowledges` link would be redundant with an
     existing `cites` edge for the same fact, not a real gap. Dropped entirely,
-    live-confirmed by the first dry run's own 0-minted/110-skipped result.
+    confirmed live by the first dry run's own 0-minted/110-skipped result.
 
-    recorded_by: every active Decision/Thread's CURRENT `summary` assertion's own
+    recorded_by: every active Decision/Thread's current `summary` assertion's own
     `source_id` (the agent that actually wrote it), when that source_id resolves to
     a real Agent.
 
-    supersedes: THE ONE SPECIAL CASE (custom, not the shared helper) -- Decision.
-    supersedes/superseded_by are a PROPERTY PAIR by deliberate design (ruling
-    dd04d7dd, "no link-retraction primitive needed" for the event-sourced property
+    supersedes: the one special case (custom, not the shared helper). Decision.
+    supersedes/superseded_by are a property pair by deliberate design ("no
+    link-retraction primitive needed" for the event-sourced property
     itself); this migration does not change that design or retire the properties,
-    it ADDS a real `supersedes` link alongside them purely so the renderer's path
+    it adds a real `supersedes` link alongside them purely so the renderer's path
     lens (space.js's own PATH_EDGE_TYPES, which already names `supersedes`) has an
-    edge to walk. Both properties read, normalised to ONE outgoing edge per pair
+    edge to walk. Both properties read, normalised to one outgoing edge per pair
     (A supersedes B mints A->B once, whichever property named it) so a pair
     asserted from either side is never double-counted.
 
-    owned_by: Thread.owner -- a Seat/Agent canonical first, else (Thoth mail
-    11448, "the owner law's legacy shape") a bare active SoftwareProject NAME,
+    owned_by: Thread.owner, a Seat/Agent canonical first, else a bare active
+    SoftwareProject name (an older, legacy shape),
     never a canonical/uuid; `minted_as_project` breaks out that second path, and
-    `unresolvable_samples` carries up to 20 raw values still left, so the receipt
+    `unresolvable_samples` carries up to 20 raw values still left, so the result
     names what a skip actually looks like rather than a bare count. closed_by:
-    Thread.resolved_in, WHERE MISSING ONLY -- closed_by is an existing, actively-
+    Thread.resolved_in, where missing only. closed_by is an existing, actively-
     minted link type (`_mint_closed_by` and friends); this only fills the
     historical gap where the property exists but the link never landed, never a
     second edge alongside a real one. admitted_by: Thread.admitted_by. vendor_of:
-    Reference.vendor -- the one genuinely fuzzy resolution here (a free-text
-    vendor NAME, not a canonical/uuid), resolved against an active SoftwareProject's
-    own `repo:<name>` canonical; a vendor string that never names a real project
+    Reference.vendor, the one genuinely fuzzy resolution here (a free-text
+    vendor name, not a canonical/uuid), resolved against an active SoftwareProject's
+    own `repo:<name>` canonical. A vendor string that never names a real project
     abstains, honestly, rather than minting a link to a guess.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`."""
@@ -636,7 +635,7 @@ async def migrate_assertion_links(
     receipt["recorded_by"] = {
         k: recorded_by_d[k] + recorded_by_t[k] for k in recorded_by_d}
 
-    # supersedes -- the one custom case, see the docstring above.
+    # supersedes: the one custom case, see the docstring above.
     pair_rows = await pool.fetch(
         "SELECT o.id AS subject_id, a.name, a.value #>> '{}' AS value "
         "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
@@ -665,11 +664,12 @@ async def migrate_assertion_links(
         "minted": supersedes_minted, "skipped_unresolvable": supersedes_unresolvable,
         "already_present": supersedes_already}
 
-    # owned_by: Thread.owner -- a Seat/Agent canonical first (the generic
-    # resolver), then (Thoth mail 11448, "the owner law's legacy shape") a bare
-    # active SoftwareProject NAME, never a canonical/uuid -- reported separately
+    # owned_by: Thread.owner, a Seat/Agent canonical first (the generic
+    # resolver), then a bare
+    # active SoftwareProject name (an older, legacy shape), never a canonical/uuid,
+    # reported separately
     # (`minted_as_project`) and with a sample of what's still left unresolved so
-    # the receipt names what those values actually look like, not just a count.
+    # the result names what those values actually look like, not just a count.
     owner_rows = await pool.fetch(
         "SELECT o.id AS subject_id, a.value #>> '{}' AS value "
         "FROM objects o JOIN current_assertions a ON a.object_id=o.id "
@@ -713,7 +713,7 @@ async def migrate_assertion_links(
         actions, subject_type="Thread", prop_name="admitted_by", link_type="admitted_by",
         target_type="Agent", dry_run=dry_run, now=now)
 
-    # vendor_of -- the one fuzzy resolution: a free-text vendor NAME against an
+    # vendor_of: the one fuzzy resolution, a free-text vendor name against an
     # active SoftwareProject's own repo:<name> canonical, never a raw uuid parse
     # (a vendor string is never one).
     vendor_rows = await pool.fetch(
@@ -747,26 +747,26 @@ async def migrate_assertion_links(
 async def migrate_owned_by_second_pass(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """OWNED_BY SECOND PASS (WAVE 26, PROVENANCE RESIDUE, Thoth mail 11535): the 847
+    """OWNED_BY SECOND PASS: the 847
     Thread.owner values `migrate_assertion_links`'s own owned_by sub-migration left
     unresolvable are shapes neither of its two resolution paths (a Seat/Agent
-    canonical, or a bare active SoftwareProject name) can reach -- the literal word
+    canonical, or a bare active SoftwareProject name) can reach: the literal word
     "operator" (the human desk, minted as a Person under `principal:analyst:operator`
     by every `register_agent` call, never a canonical the generic resolver would try),
-    a raw SEAT CANONICAL ("seat:34f4e5fa" -- live, active, Thoth's own catch on the
-    first apply's `unresolvable_samples`, mail 11567: this function's OWN first cut
+    a raw seat canonical (e.g. "seat:34f4e5fa", live, active, caught on the
+    first apply's `unresolvable_samples`; this function's own first cut
     never actually re-tried the plain canonical resolve its own docstring claimed it
-    did, only "operator" and a bare handle -- a real gap between the doc and the
-    code, not a data problem), and a BARE seat handle ("seshat", no `seat:` prefix,
-    never resolved by a plain canonical/uuid lookup) -- the last resolved via
-    `seats.seat_by_handle`, the house's own name->Seat lookup (the same shape `team`'s
-    own `--seat` argument already resolves through), then the ordinary canonical
-    resolve on the Seat it names.
+    did, only "operator" and a bare handle, a real gap between the doc and the
+    code, not a data problem), and a bare seat handle (no `seat:` prefix,
+    never resolved by a plain canonical/uuid lookup), the last resolved via
+    `seats.seat_by_handle`, this codebase's own name-to-Seat lookup (the same shape
+    `team`'s own `--seat` argument already resolves through), then the ordinary
+    canonical resolve on the Seat it names.
 
     ITS OWN MIGRATION TARGET, not folded back into `migrate_assertion_links`'s owned_by
     sub-migration: the first pass's own two resolution paths are unchanged and still
     correct for what they cover; this only adds the fallback paths the live
-    `unresolvable_samples` actually showed -- so a value that already resolved under
+    `unresolvable_samples` actually showed, so a value that already resolved under
     the first pass is simply `already_present` here (owned_by is idempotent,
     `_link_exists` checked before every mint, same as every other sub-migration in
     this module).
@@ -833,29 +833,29 @@ async def migrate_owned_by_second_pass(
 async def migrate_file_the_residual(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """FILE THE RESIDUAL (WAVE 26, PROVENANCE RESIDUE, Thoth mail 11535): 1,280 objects
+    """FILE THE RESIDUAL: 1,280 objects
     stayed unfiled after `migrate_file_the_unfiled`'s own neighbour-majority vote,
-    mostly Message objects -- the top live ribbons off the unfiled fog are osiris<->
-    unfiled `broadcast_to` (800) and `addressed_to` (638), a rate the GENERIC any-link-
+    mostly Message objects. The top live ribbons off the unfiled fog are osiris-to-
+    unfiled `broadcast_to` (800) and `addressed_to` (638), a rate the generic any-link-
     type vote can't clear cleanly: a Message's own `sent_by`/`addressed_to` agents
-    routinely sit in DIFFERENT projects (a cross-project DM), so the generic vote ties
-    and gives up exactly where a Message-SPECIFIC priority rule would not.
+    routinely sit in different projects (a cross-project DM), so the generic vote ties
+    and gives up exactly where a message-specific priority rule would not.
 
     MESSAGE-ONLY, ITS OWN RULE, NOT A SECOND GENERIC PASS: a `broadcast_to` link names
-    the project directly (the SoftwareProject IS the target, its own bare name wins
-    outright, no vote needed) and wins first, whenever present -- a message broadcast
+    the project directly (the SoftwareProject is the target, its own bare name wins
+    outright, no vote needed) and wins first, whenever present, so a message broadcast
     to a project is never miscounted as a tie against its own sender's project. Absent
-    that, every `sent_by`/`addressed_to` AGENT's own current `project` assertion is
+    that, every `sent_by`/`addressed_to` agent's own current `project` assertion is
     tallied; a single distinct project among them files the message, more than one
     distinct project is a genuine tie (a real cross-project DM) and stays unfiled,
-    counted, same "never guess between equally-supported candidates" law
+    counted, the same "never guess between equally-supported candidates" rule
     `migrate_file_the_unfiled` already holds itself to. An object with neither shape
     (no broadcast_to, no sent_by/addressed_to agent with a resolvable project) is
     empty, also unfiled, also counted.
 
     SCOPE DELIBERATELY NARROW: only `type='Message'` objects currently unfiled (no
-    `project` assertion, no live in_repo/works_in link) -- the residual's OTHER
-    members (non-Message) have no comparable rule stated for this wave and are left
+    `project` assertion, no live in_repo/works_in link). The residual's other
+    members (non-Message) have no comparable rule stated for this pass and are left
     exactly as `migrate_file_the_unfiled` already reported them, not silently guessed
     at here.
 
@@ -940,9 +940,9 @@ async def migrate_file_the_residual(
 async def migrate_commits_to_agents(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """COMMITS ATTRIBUTED TO AGENT IDENTITIES, THE BACKFILL ENTRY POINT (WAVE 27, ruling
-    4cf5e4b3/b8fb26494e0e, Thoth dispatch 11924): commit f14f47aa taught `ingest_repo`
-    to mint `committed_by` going forward; every Commit it minted BEFORE that landed has
+    """COMMITS ATTRIBUTED TO AGENT IDENTITIES, THE BACKFILL ENTRY POINT: an earlier
+    commit taught `ingest_repo`
+    to mint `committed_by` going forward; every Commit it minted before that landed has
     none. Same resolution as the going-forward path, applied retroactively: the
     Commit's own `in_repo` SoftwareProject's registered `on_disk_path` names the
     worktree (`_worktree_seat`/`tree_seat_hint` resolves the bound seat from it, never a
@@ -950,17 +950,17 @@ async def migrate_commits_to_agents(
     `authored_date` (`_seat_holder_at`, the holds link's own time-windowed history).
     Never guesses.
 
-    THREE RECEIPT BUCKETS, Thoth's own naming (dispatch 11924): `minted_by_worktree_time`
-    (this pass's own resolution — the only kind it mints); `sharpened_by_trailer`
-    (RESERVED, always 0 here — the Claude-Session-trailer disambiguation step is its own
+    THREE RESULT BUCKETS: `minted_by_worktree_time`
+    (this pass's own resolution, the only kind it mints); `sharpened_by_trailer`
+    (reserved, always 0 here; the session-trailer disambiguation step is its own
     scoped follow-up, built only if `abstained` below turns out big enough to warrant
-    it, per Thoth's own sequencing); `abstained` (no committed_by minted, cause named
+    it); `abstained` (no committed_by minted, cause named
     per reason: no registered on_disk_path for the commit's repo, no seat bound to that
-    path, or no holder's window covers the commit's own author time — a small sample of
-    each, for a human to spot-check).
+    path, or no holder's window covers the commit's own author time, with a small
+    sample of each, for a human to spot-check).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
-    a repeat call only ever considers Commits still missing committed_by — a real write
+    a repeat call only ever considers Commits still missing committed_by; a real write
     here can never re-mint or duplicate."""
     if not dry_run and not (because or "").strip():
         return {"error": "migrating without a because is an un-audited repair — cite "
@@ -1046,25 +1046,25 @@ async def migrate_commits_to_agents(
 async def migrate_house_to_project(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """THE Seat.house REPAIR (Thoth mail 12000, implements 70c001ec, "ONE TAXONOMY"):
-    fleet-wide backfill for every active Seat whose stamped `house` is null,
-    fabricated, or simply out of step with what its own charter actually governs —
+    """THE Seat.house REPAIR: fleet-wide backfill for every active Seat whose stamped
+    `house` is null,
+    fabricated, or simply out of step with what its own charter actually governs,
     the same sweep shape `sweep_seat_trees` already established for `tree_cwd`, one
-    property over. REUSES `seats.resync_seat_project` for every real write (the SAME
+    property over. Reuses `seats.resync_seat_project` for every real write (the same
     re-derive-from-charter entry point the CLI's own `resync-seat-project` calls), never a
     second implementation.
 
-    A seat's project is DERIVED, never a second value: this migration only ever
-    touches a seat whose charter governs EXACTLY ONE project, and stamps that.
+    A seat's project is derived, never a second value: this migration only ever
+    touches a seat whose charter governs exactly one project, and stamps that.
     Every other shape is reported, never guessed: no charter at all (`refused_why:
     "no charter"`), a charter governing more than one project (`refused_why:
-    "ambiguous charter"`), a seat whose stamped house ALREADY matches its charter's
-    own single governed project (skipped, not listed — nothing to repair), or a
-    seat whose stamped house is NON-NULL and disagrees with the charter's own
+    "ambiguous charter"`), a seat whose stamped house already matches its charter's
+    own single governed project (skipped, not listed, nothing to repair), or a
+    seat whose stamped house is non-null and disagrees with the charter's own
     single governed project (`refused_why: "stamped house disagrees with charter:
-    <old> vs <new>"` — the house anchor's own carve-out, w347: a real value already
+    <old> vs <new>"`, a deliberate carve-out: a real value already
     on the seat is a fact this entry point has no standing to overwrite; only a null house
-    is repaired here, a disagreement goes to the operator's own hand).
+    is repaired here, a disagreement goes to a human to resolve).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`.
     Idempotent: a repeat call finds every already-repaired seat's house matching its
@@ -1093,13 +1093,13 @@ async def migrate_house_to_project(
                 "refused_why": "no charter" if not governed else "ambiguous charter",
             })
             continue
-        # THE CURRENT NAME, NEVER THE CANONICAL (operator ruling b5663511, PROJECT
-        # IDENTITY DRIFT — the live specimen: repo:xxit renamed to "handlingtheloop",
-        # this comparison reading governed[0]'s bare canonical "xxit" made an already-
-        # correct "handlingtheloop" stamp look like a disagreement that never existed).
+        # THE CURRENT NAME, NEVER THE CANONICAL: a live specimen showed a project
+        # renamed after its canonical was minted; comparing against
+        # governed[0]'s bare canonical made an already-
+        # correct stamp look like a disagreement that never existed.
         new_project = await project_current_name(pool, governed[0])
         if house == new_project:
-            continue  # already correct -- nothing to repair
+            continue  # already correct, nothing to repair
         if house is not None:
             entries.append({
                 "seat": seat_id, "old_house": house, "new_project": None,
@@ -1131,63 +1131,63 @@ async def migrate_holds_sandwich(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
     only_seat: str | None = None,
 ) -> dict[str, Any]:
-    """THE HOLDS-SANDWICH REPAIR (WAVE 27/28 boundary, Thoth dispatch 12079/12190,
-    off Sekhmet's own commits_to_agents diagnosis): `_bind_before_spawn` used to mint a
+    """THE HOLDS-SANDWICH REPAIR, found while diagnosing commits_to_agents:
+    `_bind_before_spawn` used to mint a
     fresh, real generation and move the seat's `holds` link onto it purely as pre-spawn
     bookkeeping (agents.py's `mint_heir` now takes `bind_seat=False` for that one call
-    site, the going-forward fix, commit alongside this one) — every holds history
+    site, the going-forward fix, committed alongside this one). Every holds history
     minted before that fix can carry a real generation's own continuous tenure split
     into two rows with a near-instant `launch_seat: bind-before-spawn`-minted phantom
     sandwiched between them. The holds link is the fact of record for "who held this
-    seat at time T" — wrong data regardless of how few readers ever asked that exact
+    seat at time T," wrong data regardless of how few readers ever asked that exact
     question.
 
-    A SANDWICH: three CONSECUTIVE holds rows on one seat (ordered by `first_seen`)
+    A SANDWICH: three consecutive holds rows on one seat (ordered by `first_seen`)
     where the middle row's holder carries a `minted_because` starting with
-    "launch_seat: bind-before-spawn" and the first and third rows' holder is the SAME
-    agent — never a bare "the gap belongs to the nearest neighbour" guess (that would
+    "launch_seat: bind-before-spawn" and the first and third rows' holder is the same
+    agent. Never a bare "the gap belongs to the nearest neighbour" guess (that would
     also swallow a genuine vacancy after a real vacate_dead_seat); this recognizes only
     the one diagnosed, precisely-named shape.
 
     REPAIR, COMPENSATING, NEVER A DELETE: `invalidate_link`'s own entry point only ever closes
-    a CURRENTLY-open link (`WHERE valid_until IS NULL`), so it cannot touch these three
-    rows — every one of them is already closed, historical, by the time this migration
+    a currently-open link (`WHERE valid_until IS NULL`), so it cannot touch these three
+    rows, since every one of them is already closed, historical, by the time this migration
     ever runs. This is the one shape in this file that reaches past that entry point on
-    purpose: it extends the FIRST row's own `valid_until` forward to the THIRD row's own
+    purpose: it extends the first row's own `valid_until` forward to the third row's own
     `valid_until` (re-opening the real holder's continuous tenure across the whole
     sandwich) and closes the phantom middle row and the now-redundant third row down to
-    zero width at their own `first_seen` — retired, never deleted, every original row
+    zero width at their own `first_seen`, retired, never deleted. Every original row
     stays exactly where it was written, in whose name, and why; only the recorded
     interval each one covers changes.
 
-    THE EVIDENCE GATE (Thoth DM 12215/12245, off the live dry-run's own finding: five
-    real sandwiches, not the ~two the diagnosis anticipated, one spanning six weeks —
-    a bridge across that much time risks laundering a genuine vacancy into continuous
-    tenure). Every sandwich found now carries, in the receipt, TWO DISTINCT windows —
-    conflating them was this gate's own first bug (Thoth DM 12288, w352's live probe: a
-    real specimen on Thoth's own seat had a 174ms phantom immediately followed by a
-    further ~43-MINUTE stretch with NO holds row at all before the real holder's next
+    THE EVIDENCE GATE: a live dry run found five
+    real sandwiches, not the roughly two the diagnosis anticipated, one spanning six weeks,
+    and a bridge across that much time risks laundering a genuine vacancy into continuous
+    tenure. Every sandwich found now carries, in the result, two distinct windows.
+    Conflating them was this gate's own first bug, caught by a later live probe: a
+    real specimen on one seat had a 174ms phantom immediately followed by a
+    further ~43-minute stretch with no holds row at all before the real holder's next
     row began, so gap evidence checked against the phantom's own window alone found
     nothing even though the 19 commits from the original diagnosis sat inside that wider
-    stretch):
-      - `phantom_window`/`phantom_duration_seconds` — the middle row's OWN tenure
+    stretch:
+      - `phantom_window`/`phantom_duration_seconds`: the middle row's own tenure
         (`w2.first_seen` -> `w2.valid_until`), how long the bind-before-spawn mint sat
         there before something superseded it. Gates on `_NEAR_INSTANT_MAX_SECONDS`.
-      - `gap_evidence` — activity from the real holder (the shared `w1`/`w3` agent id:
+      - `gap_evidence`: activity from the real holder (the shared `w1`/`w3` agent id:
         messages sent, commits committed_by them, Decisions/Threads they authored)
-        timestamped ANYWHERE BETWEEN THE TWO REAL-HOLDER ROWS (`w1.valid_until` ->
-        `w3.first_seen`) — which is NOT always the same interval as the phantom's own
+        timestamped anywhere between the two real-holder rows (`w1.valid_until` ->
+        `w3.first_seen`), which is not always the same interval as the phantom's own
         window, since the holds chain's rows need not be back-to-back. This is the span
-        Thoth's own DM literally names: "between the two rows".
-    A sandwich is REFUSED (reported, never written, even under `--apply`) when either
+        described literally as "between the two rows."
+    A sandwich is refused (reported, never written, even under `--apply`) when either
     gate fails: zero gap evidence ("vacancy, not a cut"), or a phantom window longer
     than `_NEAR_INSTANT_MAX_SECONDS` (not a brief blip by any reading, whatever the
     evidence says). `only_seat` (a seat's `seat:<id>` or its bare handle) narrows the
-    whole scan to one seat — refused with an `error` receipt if it does not resolve to
+    whole scan to one seat, refused with an `error` result if it does not resolve to
     exactly one active seat.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`, and writes
-    only the sandwiches that PASS both gates — a refused sandwich stays listed, with
+    only the sandwiches that pass both gates; a refused sandwich stays listed, with
     `refused_why`, on every call, applied or not. Idempotent: a repeat call finds no
     sandwich left among the ones it wrote (the middle and third rows read zero-width,
     never matching the three-consecutive-rows shape again)."""
@@ -1230,9 +1230,9 @@ async def migrate_holds_sandwich(
             w1, w2, w3 = windows[i], windows[i + 1], windows[i + 2]
             phantom = (w2["minted_because"] or "").startswith(_BIND_BEFORE_SPAWN_PREFIX)
             # IDEMPOTENCY: a repaired sandwich's own middle/third rows read zero-width
-            # (valid_until == first_seen) — a live, real window never does (`create_link`
+            # (valid_until == first_seen). A live, real window never does (`create_link`
             # always mints valid_until IS NULL, later closed to a real, later instant by
-            # a real event) — so a zero-width row here means this exact sandwich was
+            # a real event), so a zero-width row here means this exact sandwich was
             # already repaired, never a fresh match on the very rows this migration wrote.
             already_repaired = (w2["valid_until"] == w2["first_seen"]
                                 or w3["valid_until"] == w3["first_seen"])
@@ -1244,21 +1244,21 @@ async def migrate_holds_sandwich(
                               w3["valid_until"].isoformat() if w3["valid_until"] else None],
                     "_w1_id": w1["id"], "_w2_id": w2["id"], "_w3_id": w3["id"],
                     "_w3_valid_until": w3["valid_until"],
-                    # PHANTOM WINDOW: the bookkeeping row's own tenure -- how long the
+                    # PHANTOM WINDOW: the bookkeeping row's own tenure, how long the
                     # bind-before-spawn mint sat there before something superseded it.
                     "_phantom_start": w2["first_seen"], "_phantom_end": w2["valid_until"],
-                    # THE REAL GAP: between the two REAL-HOLDER rows, not the phantom's
-                    # own window -- these are NOT always the same instant. The holds
+                    # THE REAL GAP: between the two real-holder rows, not the phantom's
+                    # own window; these are not always the same instant. The holds
                     # chain's own rows are consecutive by construction (this migration's
                     # query), but w2.valid_until need not equal w3.first_seen: a live
-                    # specimen (Thoth's own seat, DM 12288) showed a phantom lasting
-                    # 174ms immediately followed by a further ~43-MINUTE stretch with NO
+                    # specimen showed a phantom lasting
+                    # 174ms immediately followed by a further ~43-minute stretch with no
                     # holds row at all before the real holder's next row begins. Evidence
-                    # of activity belongs to THIS wider span -- "between the two rows" is
+                    # of activity belongs to this wider span; "between the two rows" is
                     # literally w1's end to w3's start, whatever sits in between.
                     "_gap_start": w1["valid_until"], "_gap_end": w3["first_seen"],
                 })
-                i += 3  # the whole sandwich is consumed — never re-match its own pieces
+                i += 3  # the whole sandwich is consumed, never re-match its own pieces
             else:
                 i += 1
 
@@ -1293,7 +1293,7 @@ async def migrate_holds_sandwich(
                 "UPDATE links SET valid_until=first_seen WHERE id=$1", s["_w3_id"])
             s["applied"] = True
 
-    for s in sandwiches:  # internal row ids are an implementation detail, never in the receipt
+    for s in sandwiches:  # internal row ids are an implementation detail, never in the result
         s.setdefault("applied", False)
         for key in ("_w1_id", "_w2_id", "_w3_id", "_w3_valid_until"):
             del s[key]
@@ -1309,15 +1309,15 @@ async def migrate_holds_sandwich(
 async def _gap_activity(
     pool: asyncpg.Pool, *, agent: str, start: datetime, end: datetime | None,
 ) -> dict[str, Any]:
-    """Evidence the `agent` (a canonical `agent:<id>`) was actively doing something —
-    a message sent, a commit committed_by them, a Decision/Thread they authored —
-    timestamped in `[start, end)`. `end=None` (an open holds row — should not occur
+    """Evidence the `agent` (a canonical `agent:<id>`) was actively doing something:
+    a message sent, a commit committed_by them, a Decision/Thread they authored,
+    timestamped in `[start, end)`. `end=None` (an open holds row, which should not occur
     for an already-closed phantom middle row, but a real caller never crashes on it)
     reads as "no upper bound". Uses `created_at` (server-assigned at write time, never
     backdatable by the writer) for messages/Decisions/Threads, and the `committed_by`
     link's own `first_seen` (the commit's real author date, from git, not this
-    migration's clock) for commits — never `observed_at`, which a source can honestly
-    claim for a past instant and so proves nothing about when the WORK happened."""
+    migration's clock) for commits, never `observed_at`, which a source can honestly
+    claim for a past instant and so proves nothing about when the work happened."""
     end_clause = "AND ts < $3" if end is not None else ""
     args: list[Any] = [agent, start] + ([end] if end is not None else [])
     row = await pool.fetchrow(
@@ -1345,29 +1345,29 @@ async def _gap_activity(
 async def migrate_project_name_singular(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """THE PROJECT-NAME COLLAPSE (operator ruling b5663511, PROJECT IDENTITY DRIFT,
-    Thoth dispatch 12401): a SoftwareProject's `name` is a SINGULAR fact — exactly one
-    current value, ever — but `assert_property`'s own same-source-only supersession
-    (ruling 1335332e) lets a genuine rename sit BESIDE every prior self-declared/
+    """THE PROJECT-NAME COLLAPSE: a SoftwareProject's `name` is a singular fact, exactly one
+    current value, ever, but `assert_property`'s own same-source-only supersession
+    lets a genuine rename sit beside every prior self-declared/
     disk-census/ingest-sourced name rather than retiring them, so a project can carry
-    many simultaneously-current names at once. The live specimen: repo:bytebye reads
-    27 competing current `name` assertions (bytebye/ByeByte/byebyte) from six different
-    sources (decision 3adc0f0b) — `dossier`/`triage` already MARK this as "contradicted"
-    (the general #102 rule), but marking is not resolving, and every "which project"
-    derivation this same ruling's other fixes (`project_current_name`, charter.py) now
+    many simultaneously-current names at once. A live specimen: one project's canonical
+    read
+    27 competing current `name` assertions (three variant spellings) from six different
+    sources. `dossier`/`triage` already mark this as "contradicted"
+    (a general rule), but marking is not resolving, and every "which project"
+    derivation other related fixes (`project_current_name`, charter.py) now
     depend on needs exactly one answer to read back.
 
-    THE WINNER: highest confidence, ties broken by most recent `observed_at` — the
-    SAME `ORDER BY a.confidence DESC, a.observed_at DESC` every other "current winning
+    THE WINNER: highest confidence, ties broken by most recent `observed_at`, the
+    same `ORDER BY a.confidence DESC, a.observed_at DESC` every other "current winning
     value" reader in this codebase already uses (charter_of, governed_trees, the seat-
     facts readers). `rename_project`'s own writes are confidence 0.95, deliberately
     above every ordinary evidence-class ceiling (SELF_DECLARED's own 0.9 is the highest
-    ordinary tier) — a live human-directed rename always outranks a stale disk-census
+    ordinary tier), so a live human-directed rename always outranks a stale disk-census
     or ingest-sourced guess without needing a second, source-string-based special case.
 
-    COMPENSATING, VIA `assert_singular_property` (cross-source collapse, ruling
-    1335332e's own intended route for exactly this shape): every losing current
-    assertion is superseded, none deleted — the full history of every name this
+    COMPENSATING, VIA `assert_singular_property` (cross-source collapse, the intended
+    route for exactly this shape): every losing current
+    assertion is superseded, none deleted. The full history of every name this
     project ever carried, and who claimed it, stays in the assertion log forever.
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:

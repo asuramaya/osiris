@@ -11,8 +11,8 @@
   "src/cli.py": 79,
   "src/mcp_server.py": 42,
   "src/orchestrator/graph_layout.py": 31,
-  "src/orchestrator/graph_migrations.py": 25,
+  "src/orchestrator/graph_migrations.py": 20,
   "src/orchestrator/graph_physics.py": 42,
-  "src/orchestrator/graph_stream.py": 2,
+  "src/orchestrator/graph_stream.py": 1,
   "src/orchestrator/textrender.py": 10
 }

@@ -1,43 +1,42 @@
-"""MINT_SEAT — the org chart trickles (task #50, ruling cabc28f5).
+"""MINT_SEAT: an organization's structure grows by extension.
 
-A Fable-class coordinator seat (Thoth, Ra, alfred) extends itself with SPECIALIST WORKER
-seats — one act: `ensure_seat` (the durable role) + the office scaffold (a directory, an
-`.osiris` pin carrying project AND model, standing orders + a charter.md from `offices.py`'s
-own template family, and an osiris-tool permission grant (d0a815ad/86ead89e) so a spawned
-body can approve its own MCP calls without a human in the loop — never re-derived, never
-duplicated) + an `intended_model` stamp (workers default Sonnet, ruling f6f6174d) +
-`managed_by` (the org chart's first real link type — Seat-to-Seat, the minting seat becomes
-manager of record).
+A coordinator seat extends itself with specialist worker seats: one action, `ensure_seat`
+(the durable role) plus the office scaffold (a directory, an `.osiris` pin carrying project
+and model, standing orders plus a charter.md from `offices.py`'s own template family, and an
+osiris-tool permission grant so a spawned session can approve its own MCP calls without a
+human in the loop, never re-derived, never duplicated) plus an `intended_model` stamp
+(workers default to Sonnet) plus `managed_by` (the org chart's first real link type, Seat-to-
+Seat: the minting seat becomes manager of record).
 
 IDEMPOTENT, and idempotent two different ways depending on what already exists:
-  * the WORKER handle is brand new (no exact match, no near-miss) → mint the Seat,
+  * the WORKER handle is brand new (no exact match, no near-miss): mint the Seat,
     scaffold a fresh office, stamp the model, link managed_by. Every piece is new.
-  * the WORKER handle already names a living Seat EXACTLY (Tantra, minted by the
-    operator's own hand before this verb existed) → ADOPT: no new Seat, the office
-    scaffold runs FILL-MISSING-ONLY (an occupied office is the seat's own hand-
-    maintained home — the same never-clobber law CLAUDE.md and charter.md already run
-    on, now also closing a HOLLOW shell's gaps: Tantra's real office was an
-    operator-made dir with no pin, no orders at all), only the missing pieces get
-    asserted (an unset intended_model, a missing managed_by edge). Calling it again
-    once everything is already true is a pure no-op.
+  * the WORKER handle already names a living Seat EXACTLY (minted by hand before this
+    action existed): ADOPT: no new Seat, the office scaffold runs FILL-MISSING-ONLY (an
+    occupied office is the seat's own hand-maintained home, the same never-clobber rule
+    CLAUDE.md and charter.md already run on, now also closing a HOLLOW shell's gaps: a
+    genuine hand-made office could be a directory with no pin, no orders at all), only
+    the missing pieces get asserted (an unset intended_model, a missing managed_by edge).
+    Calling it again once everything is already true is a pure no-op.
 
-GUARDRAILS (the ruling's own, all refused LOUD, never silently swallowed):
-  * PERSON COLLISION — this graph is shared with an entity-resolution product line; a
+GUARDRAILS (all refused loudly, never silently swallowed):
+  * PERSON COLLISION: this graph is shared with an entity-resolution product line; a
     worker handle that coincides with a real Person record must never be confused with
     one. Structurally impossible by construction (every seat lookup here filters on
-    `type='Seat'`, so a Person is invisible to it) — the explicit check below exists
+    `type='Seat'`, so a Person is invisible to it): the explicit check below exists
     ONLY to make the refusal a NAMED error instead of a silent 'seat not found'.
-  * THE NEAR-MISS TWIN (ruling 7cffda8f, Alfred's field pilot) — a handle that
-    NORMALIZES to the same name as a living seat (casefold, strip a trailing
-    generation marker, strip punctuation: 'Tantra' vs the real 'tantra 1') but does not
-    exact-match it refuses instead of silently minting a second identity wearing a
-    near-stranger's face. `adopt=True` states the intent explicitly (no match refuses,
-    never falls through to fresh); `force=True` is the only route past the refusal.
-  * CROSS-HOUSE MINTING — a manager mints workers in its OWN house by default (no house
-    param = inherit the manager's); crossing to a DIFFERENT house needs the operator's
-    own hand (an `actor` naming the operator), never a seat's unilateral reach into a
-    house it does not own. Scoped to FRESH minting only — adopting an already-existing
-    worker (Tantra) is not a house crossing, it is recognizing what already exists.
+  * THE NEAR-MISS DUPLICATE: a handle that NORMALIZES to the same name as a living seat
+    (casefold, strip a trailing generation marker, strip punctuation: e.g. 'Example' vs
+    the real 'example 1') but does not exact-match it refuses instead of silently
+    minting a second identity wearing a near-match's face. `adopt=True` states the
+    intent explicitly (no match refuses, never falls through to fresh); `force=True` is
+    the only route past the refusal.
+  * CROSS-HOUSE MINTING: a manager mints workers in its OWN house by default (no house
+    param means inherit the manager's); crossing to a DIFFERENT house needs the
+    operator's own hand (an `actor` naming the operator), never a seat's unilateral
+    reach into a house it does not own. Scoped to FRESH minting only: adopting an
+    already-existing worker is not a house crossing, it is recognizing what already
+    exists.
 """
 from __future__ import annotations
 
@@ -70,27 +69,27 @@ from src.parsers.evidence import confidence_for
 _EC = EvidenceClass.SELF_DECLARED.value
 _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 
-DEFAULT_WORKER_MODEL = "claude-sonnet-5"  # ruling f6f6174d: Sonnet is the worker default
+DEFAULT_WORKER_MODEL = "claude-sonnet-5"  # Sonnet is the worker default
 
-# THE PERMISSION GRANT (d0a815ad/86ead89e, blessed by the operator "blessed, definitely",
-# 2026-07-22): a spawned body starts, the office scaffold fires, and dies verbatim on "I need
-# to grant permission for the Osiris tools to proceed" — a print-mode/autonomous session
-# cannot approve its own MCP calls, so it can never mount(), so launch() can never produce a
-# body. Alfred's own field test (vajra) tried writing exactly this file as an AGENT and was
-# correctly classifier-refused (privilege-shaped). Scaffolding it HERE instead — server-side,
-# inside the one authorized act that already writes .osiris/CLAUDE.md/charter.md — is not
-# classifier-fenced the same way: no agent is deciding to grant itself anything, the MCP
-# server is doing file I/O on behalf of an already-validated mint_seat call. Content verbatim
-# Alfred's own tested string — never invent unvalidated JSON.
+# THE PERMISSION GRANT: a spawned session starts, the office scaffold fires, and dies
+# verbatim on "I need to grant permission for the Osiris tools to proceed" - a
+# print-mode/autonomous session cannot approve its own MCP calls, so it can never mount(),
+# so launch() can never produce a session. A prior field test that tried writing exactly
+# this file as an agent action was correctly classifier-refused (privilege-shaped).
+# Scaffolding it HERE instead, server-side, inside the one authorized action that already
+# writes .osiris/CLAUDE.md/charter.md, is not classifier-fenced the same way: no agent is
+# deciding to grant itself anything, the MCP server is doing file I/O on behalf of an
+# already-validated mint_seat call. Content is a verbatim tested string, never invented
+# unvalidated JSON.
 _PERMISSION_GRANT = json.dumps({"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}},
                                indent=2) + "\n"
 
 
 async def _resolve_seat_ref(pool: Any, ref: str) -> str | None:
-    """A Seat by its own canonical (`seat:xxxxxxxx`) or by handle — case-insensitive,
-    unique across houses (claim_name's global-namespace law), and crucially NEVER a
+    """A Seat by its own canonical (`seat:xxxxxxxx`) or by handle, case-insensitive,
+    unique across houses (claim_name's global-namespace rule), and crucially never a
     holder requirement (unlike seats.binding_of_handle, built for 'who currently sits
-    here') — mint_seat resolves the ROLE, not who is presently in it. Only ever matches
+    here'): mint_seat resolves the ROLE, not who is presently in it. Only ever matches
     `type='Seat'`: a same-named Person elsewhere in this shared graph cannot collide with
     this query by construction."""
     ref = (ref or "").strip()
@@ -110,7 +109,7 @@ async def _resolve_seat_ref(pool: Any, ref: str) -> str | None:
 
 
 async def _person_collision(pool: Any, handle: str) -> str | None:
-    """The Person object's canonical if `handle` names one, case-insensitive — the NAMED
+    """The Person object's canonical if `handle` names one, case-insensitive: the NAMED
     refusal this guards (structurally, no Seat query ever finds a Person; this exists so
     the caller hears WHY, not just 'not found')."""
     return await pool.fetchval(  # type: ignore[no-any-return]
@@ -121,20 +120,20 @@ async def _person_collision(pool: Any, handle: str) -> str | None:
         "LIMIT 1", handle)
 
 
-# THE NEAR-MISS GUARD (Alfred's field pilot, ruling 7cffda8f): Tantra's real claimed
-# handle is 'tantra 1' — a bare 'Tantra' fresh-mint request NEVER exact-matches it, and
-# the fresh path used to fire on any non-match, so it would have silently minted a twin
-# in his house and called it success. Identity deserves MORE conservatism than
-# open_thread's own near-dup dedup, not less: a false near-miss refusal costs a retry; a
-# missed one mints a twin wearing a stranger's face.
+# THE NEAR-MISS GUARD: a seat's real claimed handle could be 'example 1' - a bare
+# 'Example' fresh-mint request NEVER exact-matches it, and the fresh path used to fire on
+# any non-match, so it would have silently minted a duplicate in that house and called it
+# success. Identity deserves MORE conservatism than open_thread's own near-duplicate
+# dedup, not less: a false near-miss refusal costs a retry; a missed one mints a
+# duplicate wearing an unrelated seat's face.
 _GEN_SUFFIX_RE = re.compile(r"[\s._-]+(?:" + _GEN_SUFFIX_ALTERNATION + r"|\d+)$")
 _PUNCT_RE = re.compile(r"[^a-z0-9]+")
 
 
 def _normalize_handle(handle: str) -> str:
-    """Casefold, strip a trailing generation marker (a roman numeral or plain digit —
-    'Tantra II', 'tantra 1', 'Tantra-2' all strip to 'tantra'), then strip whatever
-    punctuation/whitespace remains. Pure — the guard's whole comparison key."""
+    """Casefold, strip a trailing generation marker (a roman numeral or plain digit, e.g.
+    'Example II', 'example 1', 'Example-2' all strip to 'example'), then strip whatever
+    punctuation/whitespace remains. Pure: the guard's whole comparison key."""
     s = handle.strip().casefold()
     s = _GEN_SUFFIX_RE.sub("", s)
     return _PUNCT_RE.sub("", s)
@@ -142,7 +141,7 @@ def _normalize_handle(handle: str) -> str:
 
 async def _near_miss(pool: Any, handle: str) -> str | None:
     """A LIVING Seat whose handle normalizes the same as `handle` (but isn't reached by
-    _resolve_seat_ref's own exact/case-insensitive match — the caller already checked
+    _resolve_seat_ref's own exact/case-insensitive match, since the caller already checked
     that), or None. Scans the active roster; the fleet's seat count is small enough that
     a full scan beats a fragile SQL normalization of the same regex."""
     target = _normalize_handle(handle)
@@ -164,29 +163,27 @@ async def _scaffold_office(
     actions: Actions, *, handle: str, house: str, project: str | None, intended_model: str,
     office_root: Path, seat_id: str, manager_seat_id: str | None,
 ) -> dict[str, Any]:
-    """A worker's office — dir + `.osiris` (project AND model, assignment 3's own gap
-    for pre-existing seats closed at birth for a new one; `project` falsy writes NO
-    `project =` line at all — genuinely unset, never a fabricated placeholder, see
-    found_seat's own docstring for the full law) + CLAUDE.md + charter.md + the
-    osiris-tool permission grant (d0a815ad/86ead89e — the one human act launch() needs,
-    spent here instead of at every future interactive walk-in), CLAUDE.md now compiled
-    by THE BOOT COMPILER (thread 4951d818) rather than a frozen template string.
-    FILL-MISSING-ONLY, every file its own exists-guard: a fresh mint's office cannot yet
-    exist to collide with, and an ADOPTED seat's office (Alfred's field pilot, ruling
-    7cffda8f — Tantra's real shell was an operator-made dir with no pin, no orders, a
+    """A worker's office: directory plus `.osiris` (project AND model, a gap for
+    pre-existing seats closed at birth for a new one; `project` falsy writes NO
+    `project =` line at all, genuinely unset, never a fabricated placeholder, see
+    found_seat's own docstring for the full rule) plus CLAUDE.md plus charter.md plus the
+    osiris-tool permission grant (the one human act launch() needs, spent here instead of
+    at every future interactive walk-in), CLAUDE.md now compiled by THE BOOT COMPILER
+    rather than a frozen template string. FILL-MISSING-ONLY, every file its own
+    exists-guard: a fresh mint's office cannot yet exist to collide with, and an ADOPTED
+    seat's office (a shell that was a hand-made directory with no pin, no orders, a
     HOLLOW adoption otherwise) gets exactly its missing pieces filled, nothing present
     ever touched. `manager_seat_id` is passed explicitly (role is explicit too) rather
-    than derived live — the caller's own `managed_by` link, when there is one, isn't
+    than derived live: the caller's own `managed_by` link, when there is one, isn't
     created until AFTER this call returns, so a live derive here would read a brand-new
     worker as a manager-less 'coordinator'.
 
-    `manager_seat_id=None` scaffolds a SELF-MANAGED seat instead (dispatch 3685/3688,
-    `osiris new` — Ooblek's own real shape: a seat with no `managed_by` edge at all,
-    never a flag, the absence itself). Role becomes 'coordinator' (the only template
-    `derive_role` would ever assign a manager-less seat live, so this matches what a
-    later `reissue_office` would derive anyway) and the charter prompt drops the
-    worker-specific "GOVERNS, not where it sits" framing for language that doesn't
-    presuppose an org chart above this seat."""
+    `manager_seat_id=None` scaffolds a SELF-MANAGED seat instead (the `osiris new` shape:
+    a seat with no `managed_by` edge at all, never a flag, the absence itself). Role
+    becomes 'coordinator' (the only template `derive_role` would ever assign a
+    manager-less seat live, so this matches what a later `reissue_office` would derive
+    anyway) and the charter prompt drops the worker-specific "GOVERNS, not where it sits"
+    framing for language that doesn't presuppose an org chart above this seat."""
     office = office_root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     pin = office / ".osiris"
@@ -253,15 +250,15 @@ async def mint_seat(
     office_root: Path | None = None, actor: str | None = None,
     adopt: bool = False, force: bool = False,
 ) -> dict[str, Any]:
-    """The whole ceremony, one receipt. `manager` is the minting seat — its own handle or
+    """The whole procedure, one result. `manager` is the minting seat, its own handle or
     seat_id (whichever the caller knows about itself). `handle` is the worker's name.
     Refuses loudly on an unknown manager, a Person-handle collision, a NEAR-MISS handle
-    (ruling 7cffda8f — a living seat whose handle normalizes the same, e.g. 'Tantra' vs
-    'tantra 1'), or an unauthorized house crossing. Idempotent: minted once, adopted
-    forever after. `adopt=True` states the caller's intent explicitly — no match REFUSES
-    instead of silently falling through to a fresh mint (the caller said adopt; minting
-    would be the lie). `force=True` is the only route past a near-miss refusal, for the
-    rare case a distinct seat genuinely belongs beside a similarly-named one."""
+    (a living seat whose handle normalizes the same, e.g. 'Example' vs 'example 1'), or
+    an unauthorized house crossing. Idempotent: minted once, adopted forever after.
+    `adopt=True` states the caller's intent explicitly: no match REFUSES instead of
+    silently falling through to a fresh mint (the caller said adopt; minting would be
+    the lie). `force=True` is the only route past a near-miss refusal, for the rare case
+    a distinct seat genuinely belongs beside a similarly-named one."""
     actor = actor or "ceremony:mint-seat"
     manager_seat_id = await _resolve_seat_ref(actions.pool, manager)
     if manager_seat_id is None:
@@ -286,20 +283,20 @@ async def mint_seat(
     office_path = root / handle.lower()
     existing_seat_id = await _resolve_seat_ref(actions.pool, handle)
     if existing_seat_id is not None:
-        # THE ADOPT PATH (Tantra's shape): no new identity, no house crossing to refuse —
-        # recognizing what already exists is not the same act as minting fresh
+        # THE ADOPT PATH: no new identity, no house crossing to refuse. Recognizing what
+        # already exists is not the same act as minting fresh.
         worker_seat_id = existing_seat_id
-        # A LIVE SEAT IS NEVER ADOPTED (found live 2026-08-02, decision 2993b4e4): this
-        # branch's own office scaffold + anchor_cwd backfill below writes the exact same
-        # effect establish_office's own rollout guard (offices.py:262-278) refuses for a
-        # live seat — until this check, this path did it unguarded, for ANY handle that
-        # already resolves to a living Seat, including one whose session is running right
-        # now. Gated with seat_occupancy — already imported, already this function's own
-        # end-of-receipt authority for the identical question (below) — rather than a
-        # second hand-rolled copy of establish_office's SQL. establish_office's own inline
-        # check is a SEPARATE, still-separate implementation of this same question; this
-        # is a named, not silent, duplication left for a follow-up unification, not a
-        # third copy invented here.
+        # A LIVE SEAT IS NEVER ADOPTED: this branch's own office scaffold plus
+        # anchor_cwd backfill below writes the exact same effect establish_office's own
+        # rollout guard refuses for a live seat. Until this check, this path did it
+        # unguarded, for ANY handle that already resolves to a living Seat, including
+        # one whose session is running right now. Gated with seat_occupancy, already
+        # imported, already this function's own end-of-result authority for the
+        # identical question (below), rather than a second hand-rolled copy of
+        # establish_office's SQL. establish_office's own inline check is a SEPARATE,
+        # still-separate implementation of this same question; this is a named, not
+        # silent, duplication left for a follow-up unification, not a third copy
+        # invented here.
         occ = await seat_occupancy(actions.pool, worker_seat_id)
         if occ["state"] == "occupied":
             return {"error": f"cannot adopt {handle!r} ({worker_seat_id}) — it is LIVE "
@@ -329,11 +326,10 @@ async def mint_seat(
             return {"error": f"cross-house mint refused: {manager!r} (house "
                              f"{manager_house!r}) may not mint a seat in house {house!r} — "
                              "only the operator's own hand crosses a house boundary"}
-        # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d,
-        # msg 7059's own follow-on ruling): the SAME defect found_seat had — two seats
-        # minted under the same manager/actor sharing that actor's own id as their
+        # LINEAGE IS PER SEAT, NOT PER ACTOR: the SAME defect found_seat had, where two
+        # seats minted under the same manager/actor share that actor's own id as their
         # `handle` assertion source, which _seat_lineage_ancestor later trusts as each
-        # seat's founding lineage — measured live at production scale for mint_seat: 17
+        # seat's founding lineage. Measured live at production scale for mint_seat: 17
         # real managed seats all share their minting manager's own agent id this way,
         # all resolving to that manager's CURRENT lineage head today. `handle` is
         # globally unique (claim_name enforces it), so prefixing it can never collide
@@ -353,22 +349,23 @@ async def mint_seat(
                 _founder_obj, "founded_by", actor, actor, now, _CONF,
                 evidence_class=_EC)
 
-    # THE OFFICE SCAFFOLD (assignment 3's templates): a fresh mint always scaffolds; an
-    # ADOPTED seat scaffolds FILL-MISSING-ONLY (ruling 7cffda8f — an operator-made shell
-    # with no pin/orders is a hollow adoption otherwise). Every write inside is its own
-    # exists-guard, so running it here unconditionally is always safe.
+    # THE OFFICE SCAFFOLD: a fresh mint always scaffolds; an ADOPTED seat scaffolds
+    # FILL-MISSING-ONLY (a hand-made shell with no pin/orders is a hollow adoption
+    # otherwise). Every write inside is its own exists-guard, so running it here
+    # unconditionally is always safe.
     #
     # `project or worker_house` IS DELIBERATE, NOT found_seat's fabrication one call
-    # over (the operator's own "jesus"/"chad" defect, decision 24e0b761): a MANAGED
-    # worker with no explicit project inherits its MANAGER's own already-real, already-
-    # declared house — house(seat) IS the manager's own project by this house's own
-    # convention (derive_house's docstring: "Alfred's 'alfred', Thoth's 'osiris'"), never
-    # text invented from the WORKER's own brand-new handle. Only the FINAL tail changed:
-    # `or ""` used to write a literal empty-string `project = ""` when even worker_house
-    # was absent — an empty string is itself a fabricated placeholder (it reads as "no
-    # project, decided," not "not yet decided"), so that tail is now `or None`, letting
-    # `_scaffold_office` omit the line entirely and leaving the pin genuinely unset,
-    # exactly like found_seat's own fix.
+    # over (a previously observed defect where a missing project silently fabricated
+    # a placeholder project from the handle): a MANAGED worker with no explicit project
+    # inherits its MANAGER's own already-real, already-declared house: house(seat) IS
+    # the manager's own project by this house's own convention (derive_house's
+    # docstring gives examples such as a coordinator seat's house matching its own
+    # project name), never text invented from the WORKER's own brand-new handle. Only
+    # the FINAL tail changed: `or ""` used to write a literal empty-string
+    # `project = ""` when even worker_house was absent: an empty string is itself a
+    # fabricated placeholder (it reads as "no project, decided," not "not yet decided"),
+    # so that tail is now `or None`, letting `_scaffold_office` omit the line entirely
+    # and leaving the pin genuinely unset, exactly like found_seat's own fix.
     office_result: dict[str, Any] | None = None
     if existing_seat_id is not None or seat_minted:
         office_result = await _scaffold_office(
@@ -384,9 +381,9 @@ async def mint_seat(
                                       now, _CONF, evidence_class=_EC)
         stamped_model = True
     if not worker_facts.get("anchor_cwd"):
-        # FILL-MISSING-ONLY, same law as intended_model above — an ADOPTED seat (Tantra's
-        # shape) never had ensure_seat mint its anchor_cwd, so a hollow shell still needs it
-        # backfilled here or launch() can never find its office (trigger.py's own refusal).
+        # FILL-MISSING-ONLY, same rule as intended_model above: an ADOPTED seat never had
+        # ensure_seat mint its anchor_cwd, so a hollow shell still needs it backfilled
+        # here or launch() can never find its office (trigger.py's own refusal).
         await actions.assert_property(worker_obj, "anchor_cwd", str(office_path), actor,
                                       now, _CONF, evidence_class=_EC)
 
@@ -400,21 +397,21 @@ async def mint_seat(
                                   evidence_class=_EC)
         linked_now = True
 
-    # THE RECEIPT COMPLETES THE LIFECYCLE (occupancy piece A, 9f566244) — mint_seat only
-    # ever finished HALF of it: a seat, an office, a manager edge, and silence about
-    # whether a BODY exists yet. Now the receipt states occupancy plainly and names whose
-    # hand the next step needs, the same treatment every half-finished ceremony in this
-    # house owes its caller (Ra's day this would have saved: minting told him nothing
-    # about VACANT vs OCCUPIED, so he found out only by asking again later).
+    # THE RESULT COMPLETES THE LIFECYCLE: mint_seat only ever finished HALF of it,
+    # a seat, an office, a manager edge, and silence about whether a session exists yet.
+    # Now the result states occupancy plainly and names whose hand the next step needs,
+    # the same treatment every half-finished procedure in this house owes its caller
+    # (a previously observed case this would have saved: minting told the caller nothing
+    # about VACANT vs OCCUPIED, so they found out only by asking again later).
     occ = await seat_occupancy(actions.pool, worker_seat_id)
-    # TWO AUDIENCES, TWO VERBS (thread bc11a2d3/msg 6262, the operator's own real
-    # transcript: this exact `launch(target=...)` clause, printed one line above the
-    # CORRECT `osiris launch <handle>`, is not runnable in a terminal). This receipt has
-    # two real callers — an MCP-tool-calling agent (mint_seat itself, for whom
+    # TWO AUDIENCES, TWO STRINGS (from an earlier transcript: this exact
+    # `launch(target=...)` clause, printed one line above the CORRECT
+    # `osiris launch <handle>`, is not runnable in a terminal). This result has two real
+    # callers: an MCP-tool-calling agent (mint_seat itself, for whom
     # `launch(target=...)` is the actual callable syntax) and the CLI's own
     # `cmd_mint_seat` (a human at a terminal, for whom it never was). One string cannot
     # be correct for both, so this is two strings, not a rewording: `next_step` keeps its
-    # MCP-native form unchanged; `next_step_cli` is the terminal-appropriate twin.
+    # MCP-native form unchanged; `next_step_cli` is the terminal-appropriate counterpart.
     next_step = {
         "vacant": "no session has ever attached — furniture until a body sits in it; "
                  f"launch(target={handle!r}) to body it, or start a session in the "
@@ -431,12 +428,11 @@ async def mint_seat(
                "next mount; no outside hand needed",
     }[occ["state"]]
 
-    # TASK #157 PIECE 1 (operator's own words "fix the slop"): a fresh mint can never yet
-    # have a charter (charter() needs the Seat object this call just minted); an ADOPTED
-    # seat may already carry one. Either way the receipt now SAYS SO — establish_office's
-    # own honest text, one call over, reused verbatim (_CHARTER_UNDECLARED) rather than a
-    # second string invented here, exactly the "if it picks, it is wrong" discipline this
-    # arc has run on all night.
+    # CHARTER VISIBILITY IN THE RESULT: a fresh mint can never yet have a charter
+    # (charter() needs the Seat object this call just minted); an ADOPTED seat may
+    # already carry one. Either way the result now SAYS SO, reusing establish_office's
+    # own honest text verbatim (_CHARTER_UNDECLARED) rather than a second string
+    # invented here.
     repos = await charter_of(actions.pool, worker_seat_id)
 
     return {
@@ -459,72 +455,69 @@ async def found_seat(
     intended_model: str = DEFAULT_WORKER_MODEL,
     office_root: Path | None = None, actor: str,
 ) -> dict[str, Any]:
-    """ONE ACT, no ceremony (dispatch 3685/3688, the operator's own "too much witchcraft
-    to spawn a project... I'll remember 'osiris new' boom"): found a SELF-MANAGED seat —
-    Ooblek's own real shape, a Seat with NO `managed_by` edge at all, never a flag, the
-    absence itself (read off Ooblek's own dossier before building this, not assumed:
-    seat:e9db6202 was self-claimed, then given an office, then — hours later, live —
-    self-declared its own `governs` edge; no minting agent, no manager, ever). Composes
-    the SAME primitives `mint_seat` does (`ensure_seat` + `_scaffold_office`, with
-    `manager_seat_id=None`) plus `bind_seat_tree` for the CODE workspace — deliberately
-    distinct from the seat's own identity office (offices.py's own ruling ed5f5ce2:
-    "agents sit at ~/.osiris/seats/<handle>/, code stays in the repos they GOVERN").
+    """ONE ACTION, no elaborate setup: found a SELF-MANAGED seat, the shape a seat takes
+    when it was self-claimed, then given an office, then self-declared its own `governs`
+    edge later while live, with no minting agent and no manager, ever (a Seat with NO
+    `managed_by` edge at all, never a flag, the absence itself). Composes the SAME
+    primitives `mint_seat` does (`ensure_seat` plus `_scaffold_office`, with
+    `manager_seat_id=None`) plus `bind_seat_tree` for the CODE workspace, deliberately
+    distinct from the seat's own identity office (agents sit in their own durable home
+    directory; code stays in the repos they GOVERN).
 
     `path` defaults to `~/code/<handle>` (this repo's own convention) and is created if
-    absent — osiris never assumes a git repo already exists there (a project needs none;
-    resolution reads a `.osiris` pin or a bare folder name, never git — proven, not
-    assumed: `~/.osiris/seats/ooblek` is not a repo and carries `project = "stopslop"`
-    fine). Neither `.osiris` pin (the workspace's own, and the office's own) is ever
-    overwritten if already present — fill-missing-only, the same law every office write
-    in this codebase holds.
+    absent: osiris never assumes a git repo already exists there (a project needs none;
+    resolution reads a `.osiris` pin or a bare folder name, never git, proven, not
+    assumed, by real examples of a seat's identity office that is not itself a repo but
+    still carries a real project pin). Neither `.osiris` pin (the workspace's own, and
+    the office's own) is ever overwritten if already present: fill-missing-only, the
+    same rule every office write in this codebase holds.
 
-    NO SEPARATE house DECLARATION (Thoth mail 12000, implements 70c001ec, "ONE
-    TAXONOMY"): a self-managed seat's own Seat.house property is ALWAYS `project`'s own
-    value — never a second, independently-given value that could disagree with it.
-    `mint_seat`'s own org-chart path already held this law one field over (`house or
-    manager_house` — a managed worker inherits its real manager's real project, never
-    invents one, never takes a second value either); this closes the direct-mint twin
-    of that same law by removing the second flag rather than merely deferring to it.
-    Older ruling 68fba2e4 item B/thread ef0e94d5 ("a direct mint with no --house stays
-    homeless") is superseded here in the same direction it was already pointing: house
+    NO SEPARATE house DECLARATION: a self-managed seat's own Seat.house property is
+    ALWAYS `project`'s own value, never a second, independently-given value that could
+    disagree with it. `mint_seat`'s own org-chart path already held this rule one field
+    over (`house or manager_house`: a managed worker inherits its real manager's real
+    project, never invents one, never takes a second value either); this closes the
+    direct-mint counterpart of that same rule by removing the second flag rather than
+    merely deferring to it. An earlier design where "a direct mint with no --house stays
+    homeless" is superseded here in the same direction it was already pointing: house
     never diverges from project, so no --house flag survives to disagree with `project`
-    below in the first place — this entry point used to write `house=handle` unconditionally
-    before that fix, which is precisely how Chad/Jesus/Lilguy/atlas ended up with a
-    Seat.house indistinguishable from a deliberately-chosen one by any test except
-    "does it equal the handle" (decision 68fba2e4's own measurement); the fix here is
-    the same "never fabricate from the handle" law, just enforced by construction now.
+    below in the first place. This entry point used to write `house=handle`
+    unconditionally before that fix, which is precisely how several seats ended up with
+    a Seat.house indistinguishable from a deliberately-chosen one by any test except
+    "does it equal the handle"; the fix here is the same "never fabricate from the
+    handle" rule, just enforced by construction now.
 
-    `project`, WHEN OMITTED, IS LEFT GENUINELY UNSET — never fabricated from `handle`
-    (the operator, live, 2026-09-02: "the thing cannot handle 'no project' — it falsely
-    creates a jesus project and a chad project when really they are working somewhere
-    else"; measured population: 8 confirmed/strong specimens fleet-wide, decision
-    24e0b761). NEITHER pin gets a `project =` line written when `project` is falsy —
-    this is THE EIGHTH MINT ENTRY POINT (Thoth's own naming): #139's inventory of six
-    graph-layer mint entry points (bootstrap_project, ingest_files, _mint_or_find_repo,
-    _resolve_or_mint_project, register_swarm, register_spawn, plus create_project)
-    closed the class correctly FOR THAT LAYER — every one of those either derives from
-    real disk truth or requires deliberate, validated caller text. This function writes
-    PLAIN PIN FILES upstream of all of them, so none of those guards could ever see it.
-    An absent line is not silence: ruling df646654/fe8ec7ff already made "project unset"
-    a first-class, self-healing state at the PIN-READ layer (mount/orient tolerate it,
-    and self-heal a genuinely unset pin from the graph the moment governs+works_in+
-    anchor_cwd unambiguously agree) — that machinery could never engage while this entry
-    point kept writing a fabricated placeholder into a pin that would then never again read as
-    unset. Confirmed downstream-clean by reading, not assumed: neither establish_office
-    nor rebind_seat ever writes a project line into either pin, so this fix cannot be
-    silently undone by a later office ceremony.
+    `project`, WHEN OMITTED, IS LEFT GENUINELY UNSET, never fabricated from `handle`
+    (a previously observed defect: the system could not handle "no project", and it
+    falsely created placeholder projects named after the handle when the seat was really
+    working somewhere else; measured population: 8 confirmed/strong specimens
+    fleet-wide). NEITHER pin gets a `project =` line written when `project` is falsy.
+    This is one of several mint entry points: an earlier inventory of graph-layer mint
+    entry points (bootstrap_project, ingest_files, and other repo/project minting
+    helpers) closed the fabrication class correctly FOR THAT LAYER: every one of those
+    either derives from real disk truth or requires deliberate, validated caller text.
+    This function writes PLAIN PIN FILES upstream of all of them, so none of those
+    guards could ever see it. An absent line is not silence: an earlier fix already made
+    "project unset" a first-class, self-healing state at the PIN-READ layer (mount/orient
+    tolerate it, and self-heal a genuinely unset pin from the graph the moment
+    governs+works_in+anchor_cwd unambiguously agree); that machinery could never engage
+    while this entry point kept writing a fabricated placeholder into a pin that would
+    then never again read as unset. Confirmed downstream-clean by reading, not assumed:
+    neither establish_office nor rebind_seat ever writes a project line into either pin,
+    so this fix cannot be silently undone by a later office procedure.
 
-    DOES NOT eagerly create a `governs` edge — inventing one on an unlaunched mind's
+    DOES NOT eagerly create a `governs` edge: inventing one on an unlaunched agent's
     behalf would be exactly the kind of fact this call has no standing to assert. The
     scaffolded CLAUDE.md's own charter_block already tells a fresh, self-managed seat to
     `charter(repos=[...])` naming its own project as its first act, once it is actually
-    live to say so in its own voice — matching Ooblek's own real bootstrap order exactly.
+    live to say so in its own voice, matching the real self-managed bootstrap order
+    exactly.
 
     IDEMPOTENT: a handle that already names a living, ALREADY self-managed seat converges
     (fills in whatever's missing, mints nothing new). A handle that names a living MANAGED
-    seat (a real `managed_by` edge already out) REFUSES — this call founds independence,
-    it does not strip an existing manager. A near-miss handle (Tantra-vs-'tantra 1' shape,
-    ruling 7cffda8f) refuses the same way `mint_seat`'s own fresh path does."""
+    seat (a real `managed_by` edge already out) REFUSES: this call founds independence,
+    it does not strip an existing manager. A near-miss handle (the 'Example' vs
+    'example 1' shape) refuses the same way `mint_seat`'s own fresh path does."""
     from src.orchestrator.seats import manager_of_seat
 
     handle = (handle or "").strip()
@@ -538,23 +531,22 @@ async def found_seat(
     root = office_root or _default_office_root()
     office_path = root / handle.lower()
     project_name = (project or "").strip() or None
-    # NO SEPARATE house DECLARATION (Thoth mail 12000, implements 70c001ec, "ONE
-    # TAXONOMY"): a self-managed seat has no manager to derive its own project from
-    # (mint_seat's own worker path uses `house or manager_house`; there is no
-    # manager_house here at all), so the one remaining source of truth is this same
-    # call's own --project — never a second, independently-given value that could
+    # NO SEPARATE house DECLARATION: a self-managed seat has no manager to derive its own
+    # project from (mint_seat's own worker path uses `house or manager_house`; there is
+    # no manager_house here at all), so the one remaining source of truth is this same
+    # call's own --project, never a second, independently-given value that could
     # disagree with it.
     house_name = project_name
     # Path.home() alone, never `.expanduser()` (ASYNC240, this codebase's own ruff gate,
     # flags that specific method inside an async def; a shell has already expanded a
-    # literal `~` in `path` by the time argv reaches this call anyway — this only
+    # literal `~` in `path` by the time argv reaches this call anyway, this only
     # defensively handles a caller that passed one through unexpanded, e.g. a test).
-    # THE SEAT TREE FABRICATION FIX (operator-flagged via Nebbercracker DM 11747, Thoth
-    # mail 11759): an omitted `path` used to fall back to `~/code/<handle>` unconditionally
-    # — the exact same fabrication-from-handle disease `house`/`project` were already
-    # cured of one call up (see this function's own docstring), just never applied to the
-    # tree. `workspace` stays `None` here when omitted; resolved below, once the seat is
-    # known, from its own real charter rather than guessed from its name.
+    # THE SEAT TREE FABRICATION FIX: an omitted `path` used to fall back to
+    # `~/code/<handle>` unconditionally, the exact same fabrication-from-handle defect
+    # `house`/`project` were already cured of one call up (see this function's own
+    # docstring), just never applied to the tree. `workspace` stays `None` here when
+    # omitted; resolved below, once the seat is known, from its own real charter rather
+    # than guessed from its name.
     if path and (path == "~" or path.startswith("~/")):
         workspace: Path | None = Path.home() / path[2:]
     elif path:
@@ -580,17 +572,16 @@ async def found_seat(
             return {"error": f"near-miss twin refused: living seat {near!r} normalizes to "
                              f"the same name as {handle!r} — pass the exact handle {near!r} "
                              "to work with it, or choose a distinct one"}
-        # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation
-        # e6ac651d, seats.py's own _FOUNDER_SOURCE_PREFIX docstring): the handle
-        # assertion's source is what _seat_lineage_ancestor later trusts as this
-        # seat's own founding lineage — `actor` is who ran `osiris new`, and two
-        # DIFFERENT seats founded under the SAME --actor used to share that source,
-        # so the second seat's first launch silently inherited the first seat's own
-        # live generation. `handle` is globally unique (claim_name enforces it), so
-        # prefixing it makes a source no other seat can ever carry — this always
-        # resolves to "no ancestor yet", the fresh `agent:seat-<id>` root every
-        # never-launched seat is supposed to get, regardless of how many other seats
-        # this same actor has founded before or since.
+        # LINEAGE IS PER SEAT, NOT PER ACTOR (see seats.py's own _FOUNDER_SOURCE_PREFIX
+        # docstring): the handle assertion's source is what _seat_lineage_ancestor later
+        # trusts as this seat's own founding lineage. `actor` is who ran `osiris new`,
+        # and two DIFFERENT seats founded under the SAME --actor used to share that
+        # source, so the second seat's first launch silently inherited the first seat's
+        # own live generation. `handle` is globally unique (claim_name enforces it), so
+        # prefixing it makes a source no other seat can ever carry: this always resolves
+        # to "no ancestor yet", the fresh `agent:seat-<id>` root every never-launched
+        # seat is supposed to get, regardless of how many other seats this same actor
+        # has founded before or since.
         seat_result = await ensure_seat(
             actions, house=house_name, handle=handle,
             source=f"{_FOUNDER_SOURCE_PREFIX}{handle}", anchor_cwd=str(office_path))
@@ -608,16 +599,16 @@ async def found_seat(
 
     tree_derivation = "explicit"
     if workspace is None:
-        # THE REPAIR HALF (Thoth mail 11759): an omitted path on a CONVERGENCE (an
-        # already-founded seat, `existing_seat_id` above) checks the seat's own real
-        # charter first — `governed_trees` returns only projects this seat actively
-        # governs AND that carry a recorded on_disk_path, so an unambiguous single
-        # real git tree there is genuinely this seat's own code home, never a guess.
-        # A brand-new seat has no charter yet (it self-charters live, on its own
-        # first turn, per this function's own docstring) and a seat with zero or
-        # more than one real governed tree has nothing unambiguous to derive — both
-        # cases leave `workspace` unset, same "never fabricate, leave genuinely
-        # unset" law this function already holds for house/project.
+        # THE REPAIR HALF: an omitted path on a CONVERGENCE (an already-founded seat,
+        # `existing_seat_id` above) checks the seat's own real charter first:
+        # `governed_trees` returns only projects this seat actively governs AND that
+        # carry a recorded on_disk_path, so an unambiguous single real git tree there is
+        # genuinely this seat's own code home, never a guess. A brand-new seat has no
+        # charter yet (it self-charters live, on its own first turn, per this function's
+        # own docstring) and a seat with zero or more than one real governed tree has
+        # nothing unambiguous to derive: both cases leave `workspace` unset, same "never
+        # fabricate, leave genuinely unset" rule this function already holds for
+        # house/project.
         from src.orchestrator.charter import governed_trees
         from src.orchestrator.trigger import _is_git_tree, _tree_exists
 
@@ -659,10 +650,10 @@ async def found_seat(
         stamped_model = True
 
     occ = await seat_occupancy(actions.pool, worker_seat_id)
-    # CLI-ONLY, NO MCP CALLER (unlike mint_seat's own twin above): found_seat is never
-    # exposed as an MCP tool, so this text only ever reaches a human terminal via
-    # cmd_new — no `launch(target=...)` MCP-syntax clause belongs here at all (thread
-    # bc11a2d3/msg 6262: it was copy-pasted from mint_seat's own, wrong audience).
+    # CLI-ONLY, NO MCP CALLER (unlike mint_seat's own counterpart above): found_seat is
+    # never exposed as an MCP tool, so this text only ever reaches a human terminal via
+    # cmd_new. No `launch(target=...)` MCP-syntax clause belongs here at all (an earlier
+    # version of this text was copy-pasted from mint_seat's own, wrong audience).
     next_step = {
         "vacant": "no session has ever attached — furniture until a body sits in it; run "
                  f"`osiris launch {handle}` to body it",
