@@ -109,7 +109,7 @@ async def test_establish_office_the_whole_ceremony(
     assert out["house"] == "butlerhouse"
     assert out["standing_orders"] == "written"
     orders = (office / "CLAUDE.md").read_text()
-    assert "Butler — seat office" in orders
+    assert "Butler - seat office" in orders
     assert "house **butlerhouse**" in orders
     assert "never formally declared" in orders          # no governs links yet: instruct
     assert "not yet seated" in orders                   # unbound lineage: the on-ramp note

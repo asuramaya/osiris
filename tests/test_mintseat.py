@@ -60,7 +60,7 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     pin = (office / ".osiris").read_text()
     assert 'project = "osiris"' in pin and 'model = "claude-sonnet-5"' in pin
     orders = (office / "CLAUDE.md").read_text()
-    assert "Rook — seat office" in orders and "not yet seated" in orders
+    assert "Rook - seat office" in orders and "not yet seated" in orders
     assert "GRADE EVERY DM" in orders  # every minted worker is born knowing the convention
     charter = (office / "charter.md").read_text()
     assert "Rook's charter" in charter and "OFFLOAD TARGET" in charter
@@ -262,7 +262,7 @@ async def test_hollow_adoption_fills_the_empty_office(
     assert out["office"]["permission_grant"] == "written"
     office = offices / "bramble"
     assert 'project = "sutrahouse"' in (office / ".osiris").read_text()
-    assert "Bramble — seat office" in (office / "CLAUDE.md").read_text()
+    assert "Bramble - seat office" in (office / "CLAUDE.md").read_text()
     assert "Bramble's charter" in (office / "charter.md").read_text()
     grant = json.loads((office / ".claude" / "settings.local.json").read_text())
     assert grant == {"permissions": {"allow": ["mcp__osiris", "mcp__osiris__*"]}}

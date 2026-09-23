@@ -52,8 +52,13 @@ def _office_header_re(handle: str) -> re.Pattern[str]:
     CASE-INSENSITIVE: observed hand-written office headers capitalize the handle (e.g.
     "# SeatName - seat office") while the compiled header below it uses the seat's own
     lowercase handle property, the same string, cosmetically different, and a
-    case-sensitive match would miss the very header this exists to find."""
-    return re.compile(rf"^# {re.escape(handle)} — seat office\s*$",
+    case-sensitive match would miss the very header this exists to find.
+
+    DASH-FORM-INSENSITIVE: house_law.md's line 1 now renders a plain hyphen, but every
+    office already on disk was compiled before that change and still carries an em
+    dash. Both forms match here so an existing office is never mistaken for a foreign
+    hand-written one just because it predates the template edit."""
+    return re.compile(rf"^# {re.escape(handle)} [-—] seat office\s*$",
                       re.MULTILINE | re.IGNORECASE)
 
 _ROLE_SURFACES = {"worker", "coordinator"}

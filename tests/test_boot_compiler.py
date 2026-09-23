@@ -555,7 +555,37 @@ async def test_reissue_adopt_replaces_a_pre_existing_office_header_never_duplica
 
     assert out["changed"] is True
     after = (office / "CLAUDE.md").read_text()
-    assert after.count("# OldOfficeSeat — seat office") == 1
+    assert after.count("# OldOfficeSeat - seat office") == 1
+    assert "<!-- osiris:compiled:begin v=" in after
+
+
+async def test_reissue_adopt_recognizes_the_new_hyphen_form_header_too(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """house_law.md's line 1 now renders a hyphen, not an em dash; a hand-written or
+    already-compiled office in that new shape must be recognized exactly like the
+    legacy em-dash shape above, not treated as genuinely foreign content."""
+    worker = await ensure_seat(actions, house="hyphenofficehouse", handle="HyphenOfficeSeat",
+                               source="test")
+    seat_id = worker["seat_id"]
+    worker_obj = await actions.create_or_find_object("Seat", seat_id, "test")
+    office = tmp_path / "hyphenoffice" / "hyphenofficeseat"
+    office.mkdir(parents=True)
+    await actions.assert_property(worker_obj, "anchor_cwd", str(office), "test",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    old_office_text = (
+        "# HyphenOfficeSeat - seat office\n\n"
+        "## Your charter\n"
+        "Your charter was never formally declared — it lives only in prose. First "
+        "act: `charter(repos=[...])`.\n")
+    (office / "CLAUDE.md").write_text(old_office_text)
+
+    out = await reissue_office(actions, seat_id=seat_id, because="adopting hyphen office",
+                               actor="agent:test", adopt=True)
+
+    assert out["changed"] is True
+    after = (office / "CLAUDE.md").read_text()
+    assert after.count("# HyphenOfficeSeat - seat office") == 1
     assert "<!-- osiris:compiled:begin v=" in after
 
 
@@ -582,7 +612,7 @@ async def test_reissue_adopt_self_heals_an_already_duplicated_office(
 
     assert out["changed"] is True
     after = (office / "CLAUDE.md").read_text()
-    assert after.count("# DupOfficeSeat — seat office") == 1
+    assert after.count("# DupOfficeSeat - seat office") == 1
 
 
 async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
@@ -624,7 +654,7 @@ async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
 
     assert out["changed"] is True
     after = (office / "CLAUDE.md").read_text()
-    assert after.lower().count("# nebtestseat — seat office") == 1
+    assert after.lower().count("# nebtestseat - seat office") == 1
     assert after.count("<!-- osiris:compiled:begin") == 1
     assert after.count("<!-- osiris:compiled:end") == 1
 
@@ -662,7 +692,7 @@ async def test_stacked_header_sweep_heals_a_stacked_office_through_the_door(
     healed_handles = {h["seat"] for h in out["healed"]}
     assert "stackedseat" in healed_handles
     after = (office / "CLAUDE.md").read_text()
-    assert after.lower().count("# stackedseat — seat office") == 1
+    assert after.lower().count("# stackedseat - seat office") == 1
 
 
 async def test_stacked_header_sweep_leaves_a_clean_office_untouched(
