@@ -1,9 +1,9 @@
 """Static-source guards for console.js routes that have no browser test coverage.
 
 tagIt() posted to /objects/:id/tag instead of the real /objects/:id/tags route, was fixed once
-on a branch (khnum-land-console, 1867a5c), then silently lost when a legitimate full rewrite
-(9e2226b) superseded that branch without carrying the one-line fix forward — untested, so
-nothing caught it live again for three days (thread 98344adb). This file exists so the same
+on a branch, then silently lost when a legitimate full rewrite
+superseded that branch without carrying the one-line fix forward: untested, so
+nothing caught it live again for three days. This file exists so the same
 route can't regress invisibly a second time.
 """
 from __future__ import annotations
@@ -19,11 +19,11 @@ def test_tag_it_posts_to_the_real_tags_route() -> None:
     assert "/objects/' + id + '/tag'" not in _JS
 
 
-# #92's tail (Thoth dispatch 9257 piece 1): the Mailbox surface used to fetch /pulse, which
+# #92's tail: the Mailbox surface used to fetch /pulse, which
 # never carried a `messages` array (src/api/app.py's pulse_route returns
-# {line, live, owed, briefs, wakes, spend} only) — renderMailbox() always rendered a false
+# {line, live, owed, briefs, wakes, spend} only), so renderMailbox() always rendered a false
 # "no JSON mail-list route exists yet" wall. Ported onto the REAL mail read: the "mail" saved
-# composition (MAIL_OVERVIEW, compositions.py — chrome.mail_overview's own fold-aware room/soul
+# composition (MAIL_OVERVIEW, compositions.py, chrome.mail_overview's own fold-aware room/soul
 # read), run through the same generic Osiris.renderResult() pipeline every other composition
 # surface uses, with each row's "run:mail_threads" drill-in (test_row_action_ui.py's own
 # documented gap: "the page shell, index.html, owns actually running the Function... untested
@@ -55,9 +55,9 @@ def test_mailbox_listens_for_the_osiris_run_navigation_event_scoped_to_its_own_s
     assert "runMailboxComposition(e.detail.name, e.detail.args || {});" in listener
 
 
-# THE COMPOSER SHELL (Thoth dispatch 9257 piece 2, thread 588148bb): "pick a room, run/author/
-# fork compositions" — CMD-K's runTool() used to POST /compositions/{name}/run and dump the raw
-# JSON into a <pre>, never reaching osiris.js's generic renderer (P4, commit 9c5e923) that piece
+# THE COMPOSER SHELL: pick a room, run/author/
+# fork compositions. CMD-K's runTool() used to POST /compositions/{name}/run and dump the raw
+# JSON into a <pre>, never reaching osiris.js's generic renderer that piece
 # 1 finally wired up for the mailbox. Every saved composition now renders through the same
 # Osiris.renderResult() pipeline, room-scoped listing feeds the palette (PICK), a raw-spec save
 # flow reaches /compositions (AUTHOR), and forking a running composition's own spec under a new
@@ -86,9 +86,9 @@ def test_shell_listens_for_osiris_run_scoped_away_from_the_mailbox_surface() -> 
     assert len(hits) == 2  # renderMailbox's own listener (piece 1) + this general one
     shell_listener = _JS[hits[1]:hits[1] + 700]
     assert "if (ACTIVE_SURFACE === 'mailbox') return;" in shell_listener
-    # `bind_subject` (Thoth dispatch 9676/9690, 588148bb piece 4): a row_action whose target
+    # `bind_subject`: a row_action whose target
     # is an op-tree, not a Function (browse), carries the row's own object as an `_action.
-    # subject` — the listener must prefer it over the currently-focused node (FOCUS is
+    # subject`, the listener must prefer it over the currently-focused node (FOCUS is
     # unrelated to which row was clicked), never fall back to FOCUS when a real subject rode
     # along on the event.
     assert ("runComposition(e.detail.name, e.detail.args || {}, "
@@ -104,7 +104,7 @@ def test_author_composition_opens_an_inline_form_not_a_browser_prompt() -> None:
 def test_author_composition_previews_before_saving() -> None:
     body = _JS.split(
         "async function submitAuthorComposition()", 1)[1].split("\nasync function ", 1)[0]
-    # the preview call comes before the save call — a bad spec must never reach the DB
+    # the preview call comes before the save call: a bad spec must never reach the DB
     preview_at = body.index("'/compositions/run-spec'")
     save_at = body.index("JSON.stringify({ name: name, spec: spec })")
     assert preview_at < save_at
@@ -124,9 +124,9 @@ def test_fork_composition_saves_the_on_screen_spec_under_a_new_name() -> None:
 
 
 def test_load_compositions_is_never_room_scoped() -> None:
-    """?ROOM= RESIDUE RETIRED (thread 96f09d48, decision 31717ca7, Thoth DM 10792/12807):
-    "end to end" turned out to mean the still-live ?room= READ filter too, not just the
-    mint/list doors retired earlier this wave — switchRoom itself was already gone; now
+    """?ROOM= RESIDUE RETIRED: end to end turned out to mean the still-live ?room= READ
+    filter too, not just the
+    mint/list surfaces retired earlier: switchRoom itself was already gone; now
     loadCompositions()'s own room-conditional query string, and the ROOM constant it read,
     are gone too. An unscoped fetch, unconditionally, same as the retired ternary's own
     always-falsy branch already produced."""
@@ -136,8 +136,7 @@ def test_load_compositions_is_never_room_scoped() -> None:
     assert "loadCompositions()" in _JS.split("Osiris.loadSchema().then", 1)[1][:300]
 
 
-# ROOM RETIREMENT (thread 96f09d48, decision 31717ca7, Thoth DM 10792): the operator's own
-# word — "scope really died and made itself obsolete... gotta remove that too." The
+# ROOM RETIREMENT: room-based scoping had died and become obsolete, so it was removed too. The
 # workspace pill, its dropdown, and every function that only existed to drive them are
 # gone; the header repo selector (#repo-pill) is now the one scoping lever.
 
@@ -172,8 +171,8 @@ def test_palette_has_an_author_composition_entry() -> None:
     assert "run: () => authorComposition()" in _JS
 
 
-# THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d): pick a live seat
-# (/pane/live), watch its transcript stream live (/pane/{agent_id}/stream, SSE) — no writes,
+# THE READ-ONLY PANE: pick a live seat
+# (/pane/live), watch its transcript stream live (/pane/{agent_id}/stream, SSE); no writes,
 # no spawn.
 
 
@@ -194,9 +193,9 @@ def test_pane_stream_error_events_close_the_connection_rather_than_looping_forev
     assert "closePaneStream();" in body
 
 
-# THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3): a turn typed in the pane posts
-# through /pane/{agent}/reply — a one-shot turn against the seat's own session, never a
-# new spawn (piece 3's own dispatch line: "spawn only through launch's admission").
+# THE REPLY ROUTE: a turn typed in the pane posts
+# through /pane/{agent}/reply, a one-shot turn against the seat's own session, never a
+# new spawn (spawn only goes through launch's own admission).
 
 
 def test_send_pane_reply_posts_to_the_reply_route_for_the_open_agent() -> None:
@@ -216,17 +215,16 @@ def test_palette_search_includes_saved_compositions_in_both_search_paths() -> No
     assert "OMNI_ITEMS = toolHits.concat(compHits, graphHits, agentHits).slice(0, 16);" in _JS
 
 
-# THE CONSOLE CHROME CLEANUP (thread 0be2f790's own operator-finding follow-up, Thoth DM
-# 10731 piece 1): the left-nav "Projects" surface — redundant with the header's own repo
-# selector, per the operator's own word — is retired: no nav item, no bespoke
+# THE CONSOLE CHROME CLEANUP: the left-nav "Projects" surface, redundant with the header's own
+# repo selector, is retired: no nav item, no bespoke
 # renderProjects()/status-toggle chrome. The "projects" saved composition itself is
 # UNTOUCHED and stays reachable exactly like every other saved composition (the omnibox,
-# or the CLI/MCP composition-run door) — only the surface wrapper around it is gone.
+# or the CLI/MCP composition-run route), only the surface wrapper around it is gone.
 # Superseding test_projects_no_longer_fetches_the_hardcoded_route/
 # test_projects_hand_rolled_row_renderer_is_gone/
 # test_projects_renders_through_the_generic_composer_pipeline/
 # test_projects_status_toggle_still_narrows_client_side_over_every_status, which all
-# asserted on renderProjects()'s own body — meaningless once that function is gone.
+# asserted on renderProjects()'s own body, meaningless once that function is gone.
 
 
 def test_projects_nav_item_is_gone() -> None:
@@ -243,7 +241,7 @@ def test_projects_surface_chrome_is_gone_from_console_js() -> None:
 
 
 def test_projects_composition_still_runs_through_the_generic_omnibox_path() -> None:
-    # the underlying data access is untouched — SAVED_COMPOSITIONS (loaded by
+    # the underlying data access is untouched: SAVED_COMPOSITIONS (loaded by
     # loadCompositions(), the omnibox's own source list) still resolves a "projects" hit
     # to the SAME generic runTool()/runComposition() pipeline every other saved
     # composition uses, never a route this cleanup would have orphaned.
@@ -251,16 +249,16 @@ def test_projects_composition_still_runs_through_the_generic_omnibox_path() -> N
 
 
 def test_projects_array_and_its_loader_survive_for_the_repo_pill() -> None:
-    # loadProjects()/PROJECTS stay — the repo-scope pill (renderRepoDropdown) depends on
+    # loadProjects()/PROJECTS stay: the repo-scope pill (renderRepoDropdown) depends on
     # them, even though the left-nav Projects SURFACE that also used to read from a
     # similarly-named endpoint is gone.
     assert "async function loadProjects()" in _JS
     assert "PROJECTS = await fetch('/objects?type=SoftwareProject')" in _JS
 
 
-# THE BROWSE SWAP (Thoth dispatch 9838/9855, 588148bb): the entity set's own load used to
+# THE BROWSE SWAP: the entity set's own load used to
 # GET /objects directly; it now runs an ephemeral {"op":"select","scope":{...}} op-tree
-# through /compositions/run-spec — the SAME `scope` opt-in (and, since it's the same
+# through /compositions/run-spec, the SAME `scope` opt-in (and, since it's the same
 # extraction, the same list_objects_scoped SQL) /objects itself calls. Type pills/search/
 # sort stay client-side residue, same discipline the Projects swap used.
 
@@ -288,10 +286,10 @@ def test_browse_load_more_reuses_the_exact_same_helper_as_the_initial_load() -> 
     assert "runBrowseSelect({ created_at: last.created_at, id: last.id })" in body
 
 
-# THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up, Thoth DM
-# 10711): the type-filter pill bar and the omnibox's status:/free-text portion now drive
-# browseScope() server-side, instead of only re-filtering whatever page was already loaded —
-# the fix for the operator paging through 26,351 of 30,290 rows to find 5 matches.
+# THE TABLE FILTER QUERY SHAPE: the type-filter pill bar and the omnibox's status:/free-text
+# portion now drive
+# browseScope() server-side, instead of only re-filtering whatever page was already loaded,
+# the fix for a real user paging through 26,351 of 30,290 rows to find 5 matches.
 
 
 def test_browse_scope_carries_the_selected_types_and_parsed_search() -> None:
@@ -328,9 +326,9 @@ def test_browse_bridges_composition_items_onto_the_shape_rendering_already_expec
     assert "status: it.status" in body and "created_at: it.created_at" in body
 
 
-# THE BACKUP CONFIG PANEL RETIREMENT (THE SETTINGS MENU piece 3, thread 7eb26f68, Thoth's
-# GO mail 10084): the small dedicated view Wave 21 built (thread f04cce36 piece 3b) is
-# gone — its 3 fields (vault_path, one schedule per timer, offbox_repositories) now render
+# THE BACKUP CONFIG PANEL RETIREMENT (THE SETTINGS MENU piece 3): the small dedicated view
+# built earlier is
+# gone; its 3 fields (vault_path, one schedule per timer, offbox_repositories) now render
 # as ordinary registry entries in the generic Settings panel below, grouped under one
 # "backup" section by the same key-prefix grouping every other group already uses.
 
@@ -341,25 +339,25 @@ def test_backup_panel_is_fully_retired_from_console_js() -> None:
     assert "saveBackupVaultPath" not in _JS
     assert "saveBackupTimerSchedules" not in _JS
     assert "'Backup settings…'" not in _JS
-    # the RETIRED panel's own dedicated fetch call is gone -- but the door itself
+    # the RETIRED panel's own dedicated fetch call is gone, but the route itself
     # (GET /backup-settings) didn't move (backup_settings.py's own module docstring:
-    # "storage moved, the door didn't"), and a later, genuinely different caller
-    # legitimately reuses it: the Offload Targets panel (Thoth mail 12811/12814/12985,
-    # tests/test_key_offload_panels.py). This blanket string ban would collide with
+    # "storage moved, the route didn't"), and a later, genuinely different caller
+    # legitimately reuses it: the Offload Targets panel
+    # (tests/test_key_offload_panels.py). This blanket string ban would collide with
     # that legitimate reuse, so it narrows to the one retired call site's own shape.
     assert "async function renderBackupPanel(" not in _JS
 
 
-# THE SETTINGS MENU (ruling be1b2e47, thread 7eb26f68 pieces 2+3): a generic view over
-# settings(action='list')/GET /settings — one renderer per field type, never a hand-
+# THE SETTINGS MENU: a generic view over
+# settings(action='list')/GET /settings, one renderer per field type, never a hand-
 # built form per knob. Reached via CMD-K.
 
 
 def test_settings_panel_reads_the_settings_list_route() -> None:
-    # THE SETTINGS PANE (Thoth mail 13350) moved the shared fetch into
+    # THE SETTINGS PANE moved the shared fetch into
     # renderSettingsInto(containerId); renderSettingsPanel is now a one-line
     # standalone-container wrapper around it (still reachable, no longer its own
-    # palette row — see test_settings_panel_has_a_palette_entry_not_a_nav_tab below).
+    # palette row, see test_settings_panel_has_a_palette_entry_not_a_nav_tab below).
     body = _JS.split("async function renderSettingsInto(containerId)", 1)[1].split(
         "\nasync function ", 1)[0]
     assert "fetch('/settings')" in body
@@ -367,7 +365,7 @@ def test_settings_panel_reads_the_settings_list_route() -> None:
 
 def test_settings_panel_has_a_palette_entry_not_a_nav_tab() -> None:
     # the three old standalone rows (Key…/Offload Targets…/Settings…) consolidated
-    # into ONE "Settings" entry over THE SETTINGS PANE (Thoth mail 13350).
+    # into ONE "Settings" entry over THE SETTINGS PANE.
     assert "'Settings…'" not in _JS
     assert "label: 'Settings'," in _JS
     assert "run: () => renderSettingsPane()" in _JS
@@ -383,8 +381,8 @@ def test_settings_panel_covers_every_registry_field_type() -> None:
 
 
 def test_settings_panel_path_and_schedule_round_trip_an_empty_box_to_null() -> None:
-    """THE SETTINGS MENU piece 3 (thread 7eb26f68): clearing a path/schedule input and
-    saving must send null — the only way to un-set a real infra path or timer override
+    """THE SETTINGS MENU piece 3: clearing a path/schedule input and
+    saving must send null, the only way to un-set a real infra path or timer override
     back to the shipped default, same UX the retired backup panel had."""
     body = _JS.split("function settingsFieldValue(item)", 1)[1].split(
         "\nasync function ", 1)[0]
@@ -398,9 +396,9 @@ def test_settings_panel_secret_ref_never_gets_a_save_button() -> None:
 
 
 def test_settings_panel_secret_ref_gets_a_replace_button_instead() -> None:
-    """PRODUCT VOICE (ruling 1e2ef5c3): the secret_ref cell's own action is a Replace
+    """PRODUCT VOICE: the secret_ref cell's own action is a Replace
     button, gated on an inline confirm checkbox (settingsUpdateButtonState) plus its
-    own inline password <input> (settingsFieldInput's own secret_ref branch) --
+    own inline password <input> (settingsFieldInput's own secret_ref branch):
     never a browser confirm()/prompt() dialog, never saveSetting's own value-reading
     path."""
     body = _JS.split("function settingsActionCell(it)", 1)[1][:900]
@@ -414,16 +412,16 @@ def test_rotate_secret_function_exists_and_never_reads_settingsfieldvalue() -> N
         "\nasync function ", 1)[0]
     assert "settingsFieldValue" not in body  # reads the inline <input> directly instead
     assert "fetch('/settings'" in body
-    # PRODUCT VOICE: no browser dialog -- gated on the inline confirm checkbox instead,
-    # unconditional (never keyed off item.consequence, same law the old confirm() held).
+    # PRODUCT VOICE: no browser dialog, gated on the inline confirm checkbox instead,
+    # unconditional (never keyed off item.consequence, same rule the old confirm() held).
     assert "confirm(" not in body
     assert "$('setting-confirm-' + key)" in body
     assert "!confirmEl || !confirmEl.checked" in body
 
 
 def test_settings_panel_shows_a_live_value_only_when_the_backend_sends_one() -> None:
-    """Thread c5ba8681 (Imhotep's own follow-up, not yet built): a future non-null
-    `live` field just appears beside `value` — no UI change needed when it arrives."""
+    """A planned follow-up, not yet built: a future non-null
+    `live` field just appears beside `value`, no UI change needed when it arrives."""
     body = _JS.split("function renderSettingsPanelHtml(items)", 1)[1].split(
         "\nfunction ", 1)[0]
     assert "it.live !== undefined && it.live !== null" in body
@@ -453,7 +451,7 @@ def test_settings_panel_saves_post_to_the_settings_route() -> None:
     assert "fetch('/settings'" in body
 
 
-# ── Repairs panel (thread c89a9873, wave 22, ruling 7be61879) ──────────────────────────
+# ── Repairs panel ──────────────────────────
 
 def test_repairs_panel_has_a_palette_entry() -> None:
     assert "'Repairs…'" in _JS
@@ -472,7 +470,7 @@ def test_repairs_panel_lists_all_seven_targets() -> None:
 
 
 def test_repairs_panel_operator_charter_has_no_apply_control() -> None:
-    """The one target excluded from UI apply (thread c89a9873's own scope note) —
+    """The one target excluded from UI apply, by design:
     structurally no button, not merely hidden behind a confirm."""
     body = _JS.split("function renderRepairsPanel()", 1)[1].split(
         "\nasync function dryRunRepair", 1)[0]
@@ -511,11 +509,10 @@ def test_settings_panel_shows_structured_per_field_errors_inline() -> None:
     assert "errEl.textContent = res.error" in body
 
 
-# THE ATLAS REMOVAL (Thoth dispatch 9563, 588148bb): "atlas is terrible, it's like browse
-# in graph mode but worse and uglier, I don't think it should exist at all" — the operator's
-# own word. The sigma.js/graphology full-graph surface is gone; its useful backend
+# THE ATLAS REMOVAL: the atlas view was redundant with browse in graph mode, and worse to use,
+# so it was cut. The sigma.js/graphology full-graph surface is gone; its useful backend
 # (/graph/supernodes, /graph/clusters, the heartbeat layout) folds into browse's own graph
-# mode as a separate piece — the removal is frontend-only, backend untouched here.
+# mode as a separate piece: the removal is frontend-only, backend untouched here.
 
 
 def test_atlas_surface_is_gone_from_console_js() -> None:

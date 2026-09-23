@@ -1,37 +1,37 @@
-"""THE DEADLOCK FIX, item 4 (mail 9658): an unbounded wait is how a single hung test
-becomes a 2.5-hour xdist controller hang nobody notices for a workday (the seshat
-specimen — futex_do_wait forever, zero worker processes visible). pytest-timeout and
+"""THE DEADLOCK FIX, item 4: an unbounded wait is how a single hung test
+becomes a 2.5-hour xdist controller hang nobody notices for a workday. In one observed
+case, futex_do_wait forever, zero worker processes visible. pytest-timeout and
 the conftest.py session watchdog (see pyproject.toml `[tool.pytest.ini_options]` and
 `tests/conftest.py`'s `_watchdog_loop`) catch a hang from the OUTSIDE; this catches the
 shape that CAUSES one, from the inside, before it ships.
 
 Four call shapes this scans src/ and tests/ for, each with NO enclosing timeout by
-construction (the caller must supply one — none of these default to bounded):
+construction (the caller must supply one; none of these default to bounded):
 
-  - `Thread.join()` — blocks forever with no `timeout=` and no positional arg.
-  - bare `asyncio.wait(...)` (not `asyncio.wait_for`) with no `timeout=` kwarg — the
-    exact footgun the asyncio docs themselves warn about; `wait_for` is the fix, not a
+  - `Thread.join()`: blocks forever with no `timeout=` and no positional arg.
+  - bare `asyncio.wait(...)` (not `asyncio.wait_for`) with no `timeout=` kwarg. This is
+    the exact footgun the asyncio docs themselves warn about; `wait_for` is the fix, not a
     kwarg on `wait` itself, so any un-marked bare call here is presumed wrong.
   - `subprocess.run(...)`/`<proc>.communicate(...)` with no `timeout=` kwarg.
   - `socket.socket(...)` construction with no `.settimeout(...)` call anywhere in the
     same enclosing function.
 
 TWO ESCAPE HATCHES, never a third: a call already bounded is invisible to this scan (the
-common case — the fix IS adding `timeout=`); a call that is genuinely safe unbounded
+common case; the fix IS adding `timeout=`); a call that is genuinely safe unbounded
 (bind-only socket setup, a subprocess wrapping something that provably returns in
 milliseconds) gets an inline `# unbounded-wait-ok: <reason>` comment on the call's own
-line — the reason is unchecked prose, but its PRESENCE is enforced, so a marker can never
+line. The reason is unchecked prose, but its PRESENCE is enforced, so a marker can never
 be silently blanket-copied without at least typing something.
 
 `subprocess.run`/`.communicate` is the one shape with real pre-existing volume (182
 sites at this test's own birth, overwhelmingly short git/gh CLI wrapper calls with no
-history of ever hanging — the operator's own complaint was specifically pytest/xdist,
-not these) — hand-marking 182 individual lines would be pure noise with no signal ratio.
-Same ratchet shape `test_render_hygiene.py`'s `_ALLOWLIST` already uses: a per-file
-EXACT count (not a ceiling — drift in EITHER direction fails, so a file that quietly
-gains OR loses one of these call sites must touch this baseline, on purpose). Thread.join
-and bare asyncio.wait start at a hard zero (nothing currently needs the ratchet) — any
-NEW one refuses outright, no grandfather to hide behind.
+history of ever hanging; the original complaint that motivated this scan was specifically
+about pytest/xdist, not these), so hand-marking 182 individual lines would be pure noise
+with no signal ratio. Same ratchet shape `test_render_hygiene.py`'s `_ALLOWLIST` already
+uses: a per-file EXACT count (not a ceiling; drift in EITHER direction fails, so a file
+that quietly gains OR loses one of these call sites must touch this baseline, on purpose).
+Thread.join and bare asyncio.wait start at a hard zero (nothing currently needs the
+ratchet); any NEW one refuses outright, no grandfather to hide behind.
 """
 from __future__ import annotations
 
@@ -45,119 +45,50 @@ _SELF = Path(__file__).resolve()
 
 _MARKER_RE = re.compile(r"#\s*unbounded-wait-ok\b")
 
-# THE RATCHET (same law as test_render_hygiene.py's _ALLOWLIST, msg 1914): the count
+# THE RATCHET (same shape as test_render_hygiene.py's _ALLOWLIST): the count
 # must match EXACTLY. If you fixed one (added timeout=), lower it. If you added a new
-# call site that's genuinely unbounded-by-necessity, either mark it inline (preferred —
+# call site that's genuinely unbounded-by-necessity, either mark it inline (preferred:
 # names the actual reason at the actual line) or raise this by exactly the number you
 # added, with a comment saying why here rather than at 182 call sites.
-# src/cli.py: 67 -> 68 (2026-09-11, Khnum, WAVE 21 item 1, encryption rebase onto
-# f22e404): the new `osiris soul-key-init` dispatch line adds one more
-# `asyncio.run(cmd_soul_key_init(...))` to main()'s own dispatch table, same shape as
-# every sibling `asyncio.run(cmd_x(...))` line already absorbed into this baseline —
-# this scanner's `name in ("run", "communicate")` match is subprocess-import-gated but
-# not subprocess-CALLEE-gated, so it counts asyncio.run alongside subprocess.run; no
-# genuine unbounded subprocess call was added here.
+#
+# Almost every increase to src/cli.py's count below has come from the same
+# false-positive class, not a genuine new unbounded wait: this scanner's
+# `name in ("run", "communicate")` match is subprocess-import-gated but not
+# subprocess-CALLEE-gated, so any new `asyncio.run(cmd_X(...))` dispatch line added to
+# main()'s dispatch table gets counted right alongside real subprocess.run calls,
+# because cli.py imports subprocess elsewhere in the file. Each new CLI subcommand adds
+# one (or more) such lines and this baseline has simply absorbed them over time.
+#
+# A couple of entries are different: they cover a call that IS genuinely bounded via
+# `asyncio.wait_for(proc.communicate(), timeout=...)`, but the scanner's AST check only
+# looks at `communicate()`'s own kwargs, never the wrapping `wait_for`'s, so a
+# wait_for-wrapped call always reads as "unmarked" here even though it has a real
+# timeout. The sibling `proc.communicate()` call on the associated timeout-handling
+# branch (draining an already-killed process, near-instant) is inline-marked instead;
+# both are safe, the wait_for-wrapped one just isn't textually markable without hiding
+# the real timeout value.
 _SUBPROCESS_BASELINE: dict[str, int] = {
-    # 67 -> 68 (2026-09-12, Imhotep, thread f4498ab304e4, THE SETTINGS MENU piece 1):
-    # one new `asyncio.run(cmd_settings(...))` dispatch line for the new `settings`
-    # subcommand — the scanner's own coarse `name in ("run", "communicate")` proxy
-    # (module docstring: "a coarse but sufficient proxy") matches `asyncio.run` the
-    # same as `subprocess.run` whenever the file imports `subprocess` at all, which
-    # cli.py's giant `if args.command == ...: return asyncio.run(cmd_X(...))` dispatch
-    # chain already does at every one of its ~65 existing entries — not a genuine new
-    # unbounded subprocess wait, the same false-positive class the whole baseline for
-    # this file already is.
-    # 68 -> 70 (2026-09-12, Khnum, WAVE 22 item 2, mail 10109): two new dispatch lines,
-    # `asyncio.run(cmd_lint(...))` and `asyncio.run(cmd_audit(...))`, same false-positive
-    # class as the comment above — not genuine new unbounded subprocess calls.
-    # 70 -> 71 (2026-09-12, Sekhmet, WAVE 22 backfill CLI door, thread c89a9873): one new
-    # dispatch line, `asyncio.run(cmd_backfill(...))`, same false-positive class as both
-    # comments above — not a genuine new unbounded subprocess call.
-    #
-    # 71 -> 72 (2026-09-12, Seshat, WAVE 22, ruling 7be61879, thread 40d6eef3, rebased
-    # onto Sekhmet's own raise above — sum of all three, not a replacement of any):
-    # `_rendered_user_unit_contents`'s own `await asyncio.wait_for(proc.communicate(),
-    # timeout=10.0)` IS genuinely bounded (a real 10s timeout, matching
-    # compositions.py's own `_backup_timer_live_state` — `asyncio.wait_for(proc.
-    # communicate(), timeout=5.0)`, baselined the same way) — the scanner's own AST
-    # check looks at the `communicate()` call's OWN kwargs, never the wrapping
-    # `wait_for`'s, so a wait_for-wrapped call always reads as "unmarked" here. The
-    # sibling `proc.communicate()` on the timeout branch (draining an already-killed
-    # process, genuinely near-instant) IS inline-marked instead — both are safe,
-    # this one just isn't textually markable without hiding the real timeout.
-    # 72 -> 81 (2026-09-14, Imhotep, CLI PARITY THE NEXT CENSUS GAPS, Thoth mail 10441,
-    # thread 163c6832): nine new `asyncio.run(cmd_X(...))` dispatch lines (dossier,
-    # object-events, succession-chain, candidates, composition, retire-assertion,
-    # retire-link, cite, citation) — the identical false-positive class every entry
-    # above already names, not genuine new unbounded subprocess calls.
-    # 81 -> 82 (2026-09-14, Khnum, NAVIGABLE SPACE THE SERVER piece B, thread
-    # b6cb1d7c0b36, rebased onto Imhotep's own raise above — sum of both, not a
-    # replacement): one new dispatch line, `asyncio.run(cmd_graph_export(...))`, same
-    # false-positive class as every comment above — not a genuine new unbounded
-    # subprocess call.
-    # 82 -> 83 (2026-09-14, Khnum, THE MIGRATION DOOR, Thoth mail 10609): one new
-    # dispatch line, `asyncio.run(cmd_layout(...))`, same false-positive class as
-    # every comment above — not a genuine new unbounded subprocess call.
-    # 83 -> 84 (2026-09-15, Khnum, thread 92dde6cc): one new dispatch line,
-    # `asyncio.run(cmd_retire_object(...))`, same false-positive class as every
-    # comment above — not a genuine new unbounded subprocess call.
-    # 84 -> 85 (2026-09-15, Imhotep, thread 2619f011, ruling edb6b0fc): one new
-    # dispatch line, `asyncio.run(cmd_declare_machine_identity(...))`, same
-    # false-positive class as every comment above — not a genuine new unbounded
-    # subprocess call.
-    # 85 -> 86 (2026-09-17, Imhotep, WAVE 27 PARITY GAPS, Thoth mail 11751): one new
-    # dispatch line, `asyncio.run(cmd_backup_settings(...))`, same false-positive
-    # class as every comment above — not a genuine new unbounded subprocess call.
-    # 86 -> 87 (2026-09-17, Imhotep, #92 THE ZERO-TOKEN READ HOOK, Thoth mail 11780
-    # item B): one new dispatch line, `asyncio.run(cmd_digest(...))`, same
-    # false-positive class as every comment above — not a genuine new unbounded
-    # subprocess call.
-    # 87 -> 88 (2026-09-22, Imhotep, THE BACKUP CLI DOOR, Thoth mail 12809): one new
-    # dispatch line, `asyncio.run(cmd_backup_status(...))`, same false-positive class
-    # as every comment above — not a genuine new unbounded subprocess call.
-    # 88 -> 89 (2026-09-22, Imhotep, THE DEPLOY SNAPSHOT, thread e29b260c, Thoth mail
-    # 12947): `_real_update_deploy_snapshot`'s own `await asyncio.wait_for(proc.
-    # communicate(), timeout=300)` IS genuinely bounded (a real 300s ceiling — uv sync
-    # against a fresh worktree can take a while, a git worktree add/checkout alone is
-    # seconds), same shape as `_rendered_user_unit_contents`'s own precedent (72 -> 81
-    # baseline comment above): the scanner's own AST check looks at `communicate()`'s
-    # OWN kwargs, never the wrapping `wait_for`'s, so a wait_for-wrapped call always
-    # reads as unmarked here. The sibling `proc.communicate()` on the timeout branch
-    # (draining an already-killed process, genuinely near-instant) IS inline-marked
-    # instead, same as that precedent's own sibling — both are safe, this one just
-    # isn't textually markable without hiding the real timeout.
-    # 89 -> 90 (2026-09-22, Khnum, KEY CUSTODY REWRITTEN, ruling e0b98ff2, rebased onto
-    # Imhotep's own raise above — sum of both, not a replacement): one new dispatch
-    # line, `asyncio.run(cmd_soul_key(...))`, same false-positive class as every
-    # comment above — not a genuine new unbounded subprocess call.
-    # 90 -> 92 (2026-09-22, Khnum, THE OFFLOAD RUNNER, ruling be21384a): two new
-    # dispatch lines, `asyncio.run(cmd_restic_key(...))` and `asyncio.run(cmd_
-    # offload_runner(...))`, same false-positive class as every comment above — not
-    # genuine new unbounded subprocess calls.
     "src/cli.py": 92,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
-    # 3 -> 5 (2026-09-15, Sekhmet, d2501552, blocking-transcript-read guard fix): two new
-    # `asyncio.run(...)` call sites — `asyncio.run(current_model(root=r))` in the CLI's
-    # own `whoami` branch (current_model made async, off-loop) and `asyncio.run(asyncio.
-    # to_thread(sys.stdin.read))` in the `sweep` branch's hook-JSON read (also wrapped for
-    # the same guard) — the identical false-positive class every comment above already
-    # names: the scanner's own coarse `name in ("run", "communicate")` proxy matches
-    # `asyncio.run` the same as `subprocess.run` whenever the file imports `subprocess`
-    # at all (sessions.py's own real one, line ~892), not a genuine new unbounded
-    # subprocess wait.
+    # src/ingest/sessions.py's count includes two `asyncio.run(...)` call sites added
+    # for a blocking-transcript-read guard fix: one in the CLI's `whoami` branch
+    # (current_model made async, off-loop) and one in the `sweep` branch's hook-JSON
+    # read (also wrapped for the same guard). Same false-positive class as above: the
+    # scanner's coarse `name in ("run", "communicate")` proxy matches `asyncio.run` the
+    # same as `subprocess.run` whenever the file imports `subprocess` at all (this file
+    # has one real subprocess call), not a genuine new unbounded subprocess wait.
     "src/ingest/sessions.py": 5,
     "src/orchestrator/deploy_guard.py": 3,
     "src/orchestrator/pulse.py": 3,
     "tests/conftest.py": 2,
     "tests/test_blob_content_sweep.py": 2,
     "tests/test_bodies.py": 1,
-    # 1 -> 2 (2026-09-13, Khnum, REBOOT SURVIVAL units half, thread 194eac83): one new
-    # `_asyncio.run(probe())` in test_port_open_probe_false_on_a_closed_port — the same
-    # false-positive class as the cli.py dispatch-line comments above (the scanner's
-    # `name in ("run", "communicate")` matches asyncio.run's attribute name regardless
-    # of the callee); probe() itself wraps its TCP connect in `asyncio.wait_for(...,
-    # timeout=2.0)`, so this is not a genuine unbounded wait.
+    # tests/test_cli.py's count includes one `asyncio.run(probe())` call in
+    # test_port_open_probe_false_on_a_closed_port; same false-positive class as above
+    # (the scanner matches asyncio.run's attribute name regardless of the callee).
+    # probe() itself wraps its TCP connect in `asyncio.wait_for(..., timeout=2.0)`, so
+    # this is not a genuine unbounded wait.
     "tests/test_cli.py": 2,
     "tests/test_commands_status.py": 4,
     "tests/test_compose_drift.py": 3,
@@ -205,7 +136,7 @@ def _has_timeout_kwarg(call: ast.Call) -> bool:
 
 
 def _marked(lines: list[str], lineno: int) -> bool:
-    """The marker comment on the call's OWN line, or the line directly above it — a
+    """The marker comment on the call's OWN line, or the line directly above it. A
     same-line comment often doesn't fit inside the 100-char line-length gate, so a
     standalone comment line right before the call is accepted too."""
     if _MARKER_RE.search(lines[lineno - 1]):
@@ -237,7 +168,7 @@ def _scan(path: Path) -> tuple[list[tuple[int, str]], int]:
     subprocess_unmarked = 0
 
     # socket ctor sites: gather all, then check each enclosing function's body for any
-    # .settimeout( call anywhere in it (a coarse but sufficient proxy — a function that
+    # .settimeout( call anywhere in it (a coarse but sufficient proxy: a function that
     # binds and later sets a timeout on the same handle passes; one that never does, in
     # any function in the file, is flagged at the ctor site itself).
     settimeout_lines: set[int] = set()
@@ -269,7 +200,7 @@ def _scan(path: Path) -> tuple[list[tuple[int, str]], int]:
             if _marked(lines, node.lineno):
                 continue
             # any settimeout() anywhere later in the same file, on or after this line,
-            # is accepted as covering it — coarse on purpose (see docstring above); a
+            # is accepted as covering it, coarse on purpose (see docstring above); a
             # file with NO settimeout call at all can never pass this way.
             if not any(ln >= node.lineno for ln in settimeout_lines):
                 violations.append((node.lineno, "socket.socket() with no settimeout() "
@@ -288,7 +219,7 @@ def test_no_new_unbounded_waits_outside_the_ratchet() -> None:
             violations, subprocess_unmarked = _scan(path)
             rel = str(path.relative_to(ROOT))
             for lineno, why in violations:
-                zero_baseline.append(f"{rel}:{lineno}: {why} — fix it, or mark the line "
+                zero_baseline.append(f"{rel}:{lineno}: {why}, fix it, or mark the line "
                                      "`# unbounded-wait-ok: <reason>`")
             if subprocess_unmarked:
                 subprocess_actual[rel] = subprocess_unmarked
@@ -302,7 +233,7 @@ def test_no_new_unbounded_waits_outside_the_ratchet() -> None:
             direction = "gained" if actual > expected else "fixed/removed"
             mismatches.append(
                 f"{rel}: {direction} unmarked subprocess.run/communicate call(s) without "
-                f"timeout= — ratchet says {expected}, found {actual}. If you fixed one, "
+                f"timeout=, ratchet says {expected}, found {actual}. If you fixed one, "
                 "lower _SUBPROCESS_BASELINE to match. If you added a genuinely necessary "
                 "one, mark it `# unbounded-wait-ok: <reason>` at the call site (preferred) "
                 "or raise the baseline by exactly the delta, with a reason.")

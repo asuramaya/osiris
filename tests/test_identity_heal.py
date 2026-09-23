@@ -1,7 +1,7 @@
-"""Seat-identity self-healing (fe8ec7ff mechanism 3, operator ruling df646654: self-healing
-over manual cleanup). #157's own diagnosed population — henry, alfred, redmonth, khepri
-(decision 4fdd419e) — used as fixtures here: the exact shapes that used to need an
-operator-authorized retire_assertion call per row now heal through one self-service call.
+"""Seat-identity self-healing: automatic reconciliation is preferred over manual cleanup.
+The fixtures below reuse a set of previously diagnosed contradiction shapes: the exact
+shapes that used to need a manually authorized retire_assertion call per row now heal
+through one self-service call.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ async def _seat_with_house(
     return seat
 
 
-# ═══ heal_contradicting_property — the mechanism itself ═══════════════════════════════
+# heal_contradicting_property: the mechanism itself
 
 async def test_heal_does_nothing_on_zero_or_one_current_rows(actions: Actions) -> None:
     seat = await actions.create_or_find_object("Seat", "seat:hc1empty", "test")
@@ -55,7 +55,7 @@ async def test_heal_does_nothing_on_zero_or_one_current_rows(actions: Actions) -
 
 async def test_heal_leaves_genuine_multi_source_corroboration_alone(actions: Actions) -> None:
     """Two DIFFERENT sources agreeing on the SAME value is corroboration, never a
-    contradiction — #102's agreement marks, never touched here."""
+    contradiction: agreement marks stay untouched here."""
     seat = await actions.create_or_find_object("Seat", "seat:hc2agree", "test")
     await actions.assert_property(seat, "house", "osiris", "agent:a", NOW - timedelta(days=2),
                                   0.9, evidence_class=_SD)
@@ -68,21 +68,21 @@ async def test_heal_leaves_genuine_multi_source_corroboration_alone(actions: Act
 
 
 async def test_heal_retires_a_genuinely_contradicting_older_row(actions: Actions) -> None:
-    """The henry/alfred/redmonth shape (decision 4fdd419e): one founding value, one
-    newer winning value from a different source, never retired before this."""
+    """One founding value, one newer winning value from a different source, never
+    retired before this."""
     seat = await _seat_with_house(
-        actions, "seat:hc3henry", founding="henry", founding_source="console",
+        actions, "seat:hc3henry", founding="oldhouse", founding_source="console",
         founding_age_days=13, winning="shellbiz", winning_source="agent:miner")
     out = await heal_contradicting_property(
         actions, object_id=seat, name="house", actor="test-heal")
     assert out["healed"] is True
     assert out["winner"] == "shellbiz"
     assert len(out["superseded"]) == 1
-    assert out["superseded"][0]["value"] == "henry"
+    assert out["superseded"][0]["value"] == "oldhouse"
     assert out["superseded"][0]["source"] == "console"
     # verify by re-query: every current row left AGREES (retire_assertion mints its own
-    # new row restating the winner rather than deleting anything — event-sourced, never
-    # DELETE — so the row COUNT does not collapse to one, but the VALUE set does)
+    # new row restating the winner rather than deleting anything, event-sourced, never
+    # DELETE, so the row COUNT does not collapse to one, but the VALUE set does)
     rows = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 AND name='house'",
         seat)
@@ -92,30 +92,29 @@ async def test_heal_retires_a_genuinely_contradicting_older_row(actions: Actions
 async def test_heal_is_idempotent_a_second_call_finds_nothing_left(actions: Actions) -> None:
     seat = await _seat_with_house(
         actions, "seat:hc4idem0", founding="bytebye", founding_source="agent:ad1a1cb0-g40",
-        founding_age_days=33, winning="alfred", winning_source="agent:d5c671c1")
+        founding_age_days=33, winning="newhouse", winning_source="agent:d5c671c1")
     first = await heal_contradicting_property(
         actions, object_id=seat, name="house", actor="test-heal")
     assert first["healed"] is True
     second = await heal_contradicting_property(
         actions, object_id=seat, name="house", actor="test-heal")
     assert second["healed"] is False
-    # the original winner row and the self-heal's own restating row now both agree —
-    # "already agrees", not "nothing to reconcile" (that's the 0-or-1-row case)
+    # the original winner row and the self-heal's own restating row now both agree,
+    # so this is "already agrees", not "nothing to reconcile" (the 0-or-1-row case)
     assert second["reason"] == "every current row already agrees"
 
 
-async def test_heal_the_khepri_shape_a_revert_that_never_retired_the_mistake(
+async def test_heal_a_revert_that_never_retired_the_mistake(
     actions: Actions,
 ) -> None:
-    """Khepri's own real specimen (decision 4fdd419e): THREE live rows — a correct founding
-    value, a same-day mistake, and a same-day revert that asserted the correct value again
-    but never actually retired the mistake row at the DB level. (The real specimen's mistake
-    and revert shared one source; assert_property's own same-source supersession would
-    already retire a same-source chain like that, so this fixture uses a distinct corrective
-    source instead — the shape this mechanism actually exists to close is the CROSS-source
-    residue, same as every other #157 row.) The founding value and the revert AGREE (both
-    "tony") — only the mistake row ("cultural-infrastructure") is a genuine contradiction
-    and must be the only one healed."""
+    """THREE live rows: a correct founding value, a same-day mistake, and a same-day
+    revert that asserted the correct value again but never actually retired the mistake
+    row at the DB level. (When a mistake and its revert share one source, assert_property's
+    own same-source supersession would already retire a same-source chain like that, so
+    this fixture uses a distinct corrective source instead: the shape this mechanism
+    actually exists to close is the CROSS-source residue.) The founding value and the
+    revert AGREE (both "tony"), so only the mistake row ("cultural-infrastructure") is a
+    genuine contradiction and must be the only one healed."""
     seat = await actions.create_or_find_object("Seat", "seat:hc5khepr", "test")
     await actions.assert_property(seat, "house", "tony", "agent:founder",
                                   NOW - timedelta(days=28), 0.9, evidence_class=_SD)
@@ -136,8 +135,8 @@ async def test_heal_the_khepri_shape_a_revert_that_never_retired_the_mistake(
 
 
 async def test_heal_is_reversible_via_the_retired_assertions_own_id(actions: Actions) -> None:
-    """The ruling's own requirement: 'recorded as a reversible event with the loser's
-    assertion id, so it unwinds' — the retired id is real and points at a real row."""
+    """The requirement this proves: a heal must be recorded as a reversible event with
+    the loser's assertion id, so the retired id is real and points at a real row."""
     seat = await _seat_with_house(
         actions, "seat:hc6revrs", founding="redmonth", founding_source="agent:x",
         founding_age_days=22, winning="ballgem", winning_source="agent:y")
@@ -148,7 +147,7 @@ async def test_heal_is_reversible_via_the_retired_assertions_own_id(actions: Act
         "SELECT supersedes, value #>> '{}' AS v FROM assertions WHERE id=$1", lost_id)
     assert row["v"] == "redmonth"
     # retire_assertion's own new row (minted by the heal, restating the winner) names
-    # `lost_id` as its supersedes target — the unwind path a future un-heal would walk
+    # `lost_id` as its supersedes target: the unwind path a future un-heal would walk
     superseding_row = await actions.pool.fetchrow(
         "SELECT id, supersedes FROM assertions WHERE supersedes=$1", lost_id)
     assert superseding_row is not None
@@ -158,19 +157,19 @@ async def test_heal_is_reversible_via_the_retired_assertions_own_id(actions: Act
 async def test_heal_reports_healed_false_when_the_only_write_actually_failed(
     actions: Actions, monkeypatch,
 ) -> None:
-    """RECEIPT HONESTY (khepri's own live specimen, #157's fourth row): current_assertions
-    can list a row as current while a real `supersedes` FK already excludes it (an is_current
-    backfill gap, a DIFFERENT and deeper defect than this mechanism repairs) — retire_
-    assertion correctly REFUSES it ("already superseded"), and `healed` must read False over
-    a batch where every attempted write actually failed, never True over a receipt that is
-    all errors. A success-shaped response inviting a caller to skip the one field that says
-    otherwise is exactly the class of bug correct_house's own `was` field exists to prevent."""
+    """RECEIPT HONESTY: current_assertions can list a row as current while a real
+    `supersedes` FK already excludes it (an is_current backfill gap, a DIFFERENT and
+    deeper defect than this mechanism repairs). retire_assertion correctly REFUSES it
+    ("already superseded"), and `healed` must read False over a batch where every
+    attempted write actually failed, never True over a receipt that is all errors. A
+    success-shaped response inviting a caller to skip the one field that says otherwise
+    is exactly the class of bug correct_house's own `was` field exists to prevent."""
     seat = await _seat_with_house(
         actions, "seat:hc7reterr", founding="old", founding_source="agent:a",
         founding_age_days=3, winning="new", winning_source="agent:b")
 
     async def _always_refuses(actions, **kw):
-        return {"error": "assertion is already superseded — nothing to retire"}
+        return {"error": "assertion is already superseded, nothing to retire"}
 
     monkeypatch.setattr(
         "src.orchestrator.identity_heal.retire_assertion", _always_refuses)
@@ -182,11 +181,11 @@ async def test_heal_reports_healed_false_when_the_only_write_actually_failed(
 
 
 async def test_heal_never_touches_a_non_identity_property(actions: Actions) -> None:
-    """#102's agreement marks stay for everything that is not seat identity — this
+    """Agreement marks stay for everything that is not seat identity: this
     mechanism is scoped to 'house'/'project' ONLY, never generalised. Calling it with any
     other property name must not silently start healing that property too; the caller
     (reconcile_seat_identity) simply never invokes it for anything else, and a direct call
-    on an unrelated property still runs the SAME mechanical rule — the scoping lives in
+    on an unrelated property still runs the SAME mechanical rule. The scoping lives in
     WHO CALLS this, not in a property allowlist inside it, so this pins the boundary from
     the other direction: reconcile_seat_identity never touches a contradiction on a
     property outside its own two names."""
@@ -201,15 +200,14 @@ async def test_heal_never_touches_a_non_identity_property(actions: Actions) -> N
     out = await reconcile_seat_identity(
         actions, seat_id="seat:hc7noniden", agent_id=None, actor="test-heal")
     assert out["healed"]["house"]["healed"] is False  # only one house row, nothing to do
-    # the contradicting intended_model rows are UNTOUCHED — still two current rows
+    # the contradicting intended_model rows are UNTOUCHED, still two current rows
     rows = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
         "AND name='intended_model'", seat)
     assert len(rows) == 2
 
 
-# ═══ detect_possibly_stale_seats — fold/rename's own detection-only nudge (Thoth dispatch
-# 6484/6493, the dtfb specimen f5d5473b) ═══════════════════════════════════════════════
+# detect_possibly_stale_seats: fold/rename's own detection-only nudge
 
 async def test_detect_possibly_stale_seats_finds_a_house_hit(actions: Actions) -> None:
     seat = await actions.create_or_find_object("Seat", "seat:dsdealer1", "test")
@@ -238,7 +236,7 @@ async def test_detect_possibly_stale_seats_never_substring_matches_anchor_cwd(
     actions: Actions,
 ) -> None:
     """A raw substring match would flag a totally unrelated seat whose path merely
-    CONTAINS the old name as a prefix segment — this checks the path's own BASENAME,
+    CONTAINS the old name as a prefix segment. This checks the path's own BASENAME,
     never a substring, precisely to avoid that."""
     seat = await actions.create_or_find_object("Seat", "seat:dsdealer3", "test")
     await actions.assert_property(
@@ -283,7 +281,7 @@ async def test_detect_possibly_stale_seats_the_note_always_names_the_pin_blind_s
     assert ".osiris pin file is NOT checked" in out["note"]
 
 
-# ═══ reconcile_seat_identity — the self-service verb ═══════════════════════════════════
+# reconcile_seat_identity: the self-service verb
 
 async def test_reconcile_seat_identity_heals_house_and_project_in_one_call(
     actions: Actions,
@@ -323,7 +321,7 @@ async def test_reconcile_seat_identity_refuses_an_unknown_seat(actions: Actions)
     assert "no active seat matches" in out["error"]
 
 
-# ═══ write-time wiring (fe8ec7ff mechanism 3a) — correct_house/resync_seat_house_third_party
+# write-time wiring: correct_house/resync_seat_house_third_party
 # already pinned in test_seats.py; this covers correct_agent_house's own cross-source case,
 # which none of that file's existing fixtures exercise (they only overwrite the SAME source).
 
@@ -346,7 +344,7 @@ async def test_correct_agent_house_heals_a_cross_source_contradiction_at_write_t
     assert {r["v"] for r in rows} == {"osiris"}  # the stale cross-source row was healed
 
 
-# ═══ the MCP tool wrapper — self-scoped, like correct_house ═══════════════════════════
+# the MCP tool wrapper: self-scoped, like correct_house
 
 async def test_the_mcp_tool_wrapper_resolves_the_callers_own_seat_and_agent(
     actions: Actions,
@@ -397,7 +395,7 @@ async def test_the_mcp_tool_wrapper_refuses_an_unmounted_caller(actions: Actions
     assert "mount first" in out["error"]
 
 
-# ═══ reconcile_seat_identity_third_party — decision f78b41c8's own gap: #157's four rows
+# reconcile_seat_identity_third_party: handles rows that
 # belong to OTHER seats, unreachable by the self-service verb. Mirrors resync_seat_house_
 # third_party's own precedent exactly (not self-scoped, `because` mandatory).
 
@@ -408,7 +406,7 @@ async def test_third_party_refuses_an_empty_because(actions: Actions) -> None:
     out = await reconcile_seat_identity_third_party(
         actions, seat_id="seat:tp1noreas", agent_id=None, because="   ", actor="coordinator")
     assert "silent overwrite" in out["error"]
-    # nothing touched — the contradiction survives untouched
+    # nothing touched: the contradiction survives untouched
     rows = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 AND name='house'",
         seat)
@@ -440,7 +438,7 @@ async def test_third_party_reason_lands_in_the_retired_assertions_own_because_te
     row = await actions.pool.fetchrow("SELECT * FROM assertions WHERE id=$1", lost_id)
     assert row is not None  # sanity: the loser row itself still exists, event-sourced
     # `because` rides into the audit trail (supersede_assertion's own _audit call), not a
-    # column on assertions — the reason text is there, attributed to the coordinator
+    # column on assertions: the reason text is there, attributed to the coordinator
     audit = await actions.pool.fetchrow(
         "SELECT payload, actor FROM audit_log WHERE action='supersede_assertion' "
         "AND payload->>'superseded_id' = $1 ORDER BY id DESC LIMIT 1", str(lost_id))
@@ -457,9 +455,9 @@ async def test_third_party_refuses_an_unknown_seat(actions: Actions) -> None:
 async def test_contract_self_service_and_third_party_produce_identical_graph_writes(
     actions: Actions,
 ) -> None:
-    """The dispatch's own acceptance criteria: self-service and third-party heal the SAME
-    row identically — same winner, same superseded set, same resulting current_assertions
-    state — the only difference is the `because` text riding into the audit trail."""
+    """Self-service and third-party must heal the SAME row identically: same winner, same
+    superseded set, same resulting current_assertions state. The only difference is the
+    `because` text riding into the audit trail."""
     seat_a = await _seat_with_house(
         actions, "seat:cc1self0", founding="old", founding_source="agent:a",
         founding_age_days=5, winning="new", winning_source="agent:b")
@@ -531,7 +529,7 @@ async def test_the_third_party_mcp_tool_refuses_an_unmounted_caller(actions: Act
     assert "mount first" in out["error"]
 
 
-# ═══ heal_seat_anchor — THE ANCHOR INVARIANT (ruling 23771416) ════════════════════════
+# heal_seat_anchor: the anchor invariant
 
 async def _seat_with_handle_and_anchors(
     actions: Actions, seat_id: str, handle: str, *anchors: tuple[str, str, datetime],
@@ -576,13 +574,13 @@ async def test_heal_seat_anchor_reports_already_correct(actions: Actions, tmp_pa
 
 
 async def test_heal_seat_anchor_dry_run_does_not_write(actions: Actions, tmp_path) -> None:
-    (tmp_path / "jesus").mkdir()
-    target = str(tmp_path / "jesus")
+    (tmp_path / "dryrun1").mkdir()
+    target = str(tmp_path / "dryrun1")
     await _seat_with_handle_and_anchors(
-        actions, "seat:dryjesus", "Jesus",
+        actions, "seat:dryrun1", "DryRun1",
         (target, "console", NOW - timedelta(days=30)),
         ("/home/asuramaya/code/REPOS/Godel", "agent:selfrebind", NOW - timedelta(days=1)))
-    out = await heal_seat_anchor(actions, seat_id="seat:dryjesus", actor="agent:test",
+    out = await heal_seat_anchor(actions, seat_id="seat:dryrun1", actor="agent:test",
                                  office_root=tmp_path, dry_run=True)
     assert out["dry_run"] is True
     assert out["target"] == target
@@ -590,20 +588,20 @@ async def test_heal_seat_anchor_dry_run_does_not_write(actions: Actions, tmp_pat
     rows = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v FROM current_assertions WHERE object_id=$1 "
         "AND name='anchor_cwd'", await actions.pool.fetchval(
-            "SELECT id FROM objects WHERE canonical='seat:dryjesus'"))
+            "SELECT id FROM objects WHERE canonical='seat:dryrun1'"))
     assert {r["v"] for r in rows} == {target, "/home/asuramaya/code/REPOS/Godel"}
 
 
 async def test_heal_seat_anchor_apply_retracts_the_rogue_value(
     actions: Actions, tmp_path,
 ) -> None:
-    (tmp_path / "chad").mkdir()
-    target = str(tmp_path / "chad")
+    (tmp_path / "applied1").mkdir()
+    target = str(tmp_path / "applied1")
     seat = await _seat_with_handle_and_anchors(
-        actions, "seat:applychad", "Chad",
+        actions, "seat:applied1", "Applied1",
         (target, "console", NOW - timedelta(days=30)),
         ("/home/asuramaya/code/cdking", "agent:selfrebind", NOW - timedelta(days=1)))
-    out = await heal_seat_anchor(actions, seat_id="seat:applychad", actor="agent:test",
+    out = await heal_seat_anchor(actions, seat_id="seat:applied1", actor="agent:test",
                                  office_root=tmp_path, dry_run=False)
     assert out["healed"] is True
     rows = await actions.pool.fetch(
@@ -615,16 +613,16 @@ async def test_heal_seat_anchor_apply_retracts_the_rogue_value(
 async def test_heal_seat_anchor_apply_writes_when_no_office_anchor_exists(
     actions: Actions, tmp_path,
 ) -> None:
-    """Marquee's own shape: TWO rogue anchors, no office anchor at all — this call both
+    """TWO rogue anchors, no office anchor at all: this call both
     WRITES the office anchor and retracts both strays, in the one assert_singular_property
     call."""
-    (tmp_path / "marquee").mkdir()
-    target = str(tmp_path / "marquee")
+    (tmp_path / "applied2").mkdir()
+    target = str(tmp_path / "applied2")
     seat = await _seat_with_handle_and_anchors(
-        actions, "seat:applymarquee", "Marquee",
+        actions, "seat:applied2", "Applied2",
         ("/home/asuramaya/code/dealer-to-fb", "agent:a", NOW - timedelta(days=20)),
         ("/home/asuramaya/code/dtfb", "agent:b", NOW - timedelta(days=1)))
-    out = await heal_seat_anchor(actions, seat_id="seat:applymarquee", actor="agent:test",
+    out = await heal_seat_anchor(actions, seat_id="seat:applied2", actor="agent:test",
                                  office_root=tmp_path, dry_run=False)
     assert out["healed"] is True
     rows = await actions.pool.fetch(
@@ -636,30 +634,30 @@ async def test_heal_seat_anchor_apply_writes_when_no_office_anchor_exists(
 async def test_heal_seat_anchor_third_party_requires_a_reason(
     actions: Actions, tmp_path,
 ) -> None:
-    (tmp_path / "henry").mkdir()
-    target = str(tmp_path / "henry")
+    (tmp_path / "tpanchor1").mkdir()
+    target = str(tmp_path / "tpanchor1")
     await _seat_with_handle_and_anchors(
-        actions, "seat:tphenry", "Henry",
+        actions, "seat:tpanchor1", "TpAnchor1",
         (target, "console", NOW - timedelta(days=30)),
         ("/home/asuramaya/code/shellbiz", "agent:selfrebind", NOW - timedelta(days=1)))
     refused = await heal_seat_anchor_third_party(
-        actions, seat_id="seat:tphenry", because="", actor="agent:coordinator",
+        actions, seat_id="seat:tpanchor1", because="", actor="agent:coordinator",
         office_root=tmp_path)
     assert "error" in refused
     out = await heal_seat_anchor_third_party(
-        actions, seat_id="seat:tphenry", because="anchor invariant sweep",
+        actions, seat_id="seat:tpanchor1", because="anchor invariant sweep",
         actor="agent:coordinator", office_root=tmp_path, dry_run=False)
     assert out["healed"] is True
 
 
-# ═══ THE MCP-LAYER CONSOLIDATION (task #199 lane 2, thread 6778) — heal_seat_anchor and
+# THE MCP-LAYER CONSOLIDATION: heal_seat_anchor and
 # heal_seat_anchor_third_party used to be two separately-implemented @mcp.tool() wrappers
 # around this same orchestrator function; now one shared helper (_heal_seat_anchor_impl)
 # backs both, and the third-party name is a hidden, deprecated alias (dropped from
 # list_tools(), still fully callable). WATCHED FAIL BEFORE THIS CHANGE: on the pre-
 # consolidation code, `srv.heal_seat_anchor(seat_id=..., because=...)` raised
-# TypeError(unexpected keyword argument 'seat_id') — the self-scoped tool took no such
-# param at all. ════════════════════════════════════════════════════════════════════════
+# TypeError(unexpected keyword argument 'seat_id'): the self-scoped tool took no such
+# param at all.
 
 class _McpCtx:
     class request_context:  # noqa: N801
@@ -670,7 +668,7 @@ class _McpCtx:
 async def test_consolidated_heal_seat_anchor_self_path_still_resolves_the_callers_own_seat(
     actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """seat_id=None (the default) must still heal the CALLER'S OWN held seat — the
+    """seat_id=None (the default) must still heal the CALLER'S OWN held seat: the
     self-service path the old self-scoped tool alone used to cover."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -706,7 +704,7 @@ async def test_consolidated_heal_seat_anchor_self_path_still_resolves_the_caller
 async def test_consolidated_heal_seat_anchor_third_party_path_requires_a_reason(
     actions: Actions, tmp_path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """seat_id=<explicit seat> is the third-party path — because is REQUIRED, same law
+    """seat_id=<explicit seat> is the third-party path: because is REQUIRED, the same rule
     the old, separately-named heal_seat_anchor_third_party tool enforced."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -743,7 +741,7 @@ async def test_the_deprecated_third_party_name_still_works_and_shares_the_same_b
 ) -> None:
     """heal_seat_anchor_third_party is retired from listing but MUST still be callable by
     name (a live or sleeping caller whose standing orders name it must not break at its
-    next turn) — and must produce the IDENTICAL receipt shape the consolidated tool does,
+    next turn), and must produce the IDENTICAL receipt shape the consolidated tool does,
     proving it shares _heal_seat_anchor_impl rather than a second implementation."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -779,21 +777,19 @@ async def test_deprecated_tools_are_hidden_from_list_but_still_in_call_registry(
     """THE MECHANISM ITSELF: a tool registered with meta={"deprecated": True} must not
     appear in what a model's own tool list shows (the surface shrink), while remaining
     fully present in the manager's own registry call_tool resolves against (the
-    backward-compat guarantee) — verified against the REAL server, not a stand-in, for
-    every retirement task #199 lane 2/6788's wave has landed so far.
+    backward-compat guarantee), verified against the REAL server, not a stand-in, for
+    every retirement landed so far.
 
     heal_seat_anchor and reconcile_seat_identity moved from `survivors` to `retired`
-    here (#202 SEAT DISPATCHER, operator ruling f9182ad7, Thoth dispatch 7039): both
-    were the task #199 lane 2 consolidation's own surviving self/third-party doors, now
+    here: both were a prior consolidation's own surviving self/third-party doors, now
     THEMSELVES folded into seat(action='heal_anchor'/'reconcile_identity') and hidden a
-    second time — the mechanism this test proves is unchanged, only which names
+    second time. The mechanism this test proves is unchanged, only which names
     currently sit on which side of it.
 
-    fork_project and ingest_project ALSO moved from `survivors` to `retired` (#202
-    PROJECT DISPATCHER, Thoth dispatch 7095): both fold into project(action='fork'/
-    'unfork'/'ingest') and are hidden the same way — no survivors remain from this
-    test's original population; kept as an empty set rather than deleted so a THIRD
-    dispatcher's own fold has an obvious place to add its own moved names."""
+    fork_project and ingest_project ALSO moved from `survivors` to `retired`: both fold
+    into project(action='fork'/'unfork'/'ingest') and are hidden the same way, so no
+    survivors remain from this test's original population; kept as an empty set rather
+    than deleted so a further fold has an obvious place to add its own moved names."""
     from src import mcp_server as srv
 
     listed = {t.name for t in await srv.mcp.list_tools()}
@@ -812,7 +808,7 @@ async def test_consolidated_reconcile_seat_identity_third_party_shape_and_deprec
     actions: Actions, tmp_path,
 ) -> None:
     """seat_id=<explicit seat> is the third-party path; the old name still works and
-    shares the same body (task #199 lane 2, thread 6778/6788)."""
+    shares the same body."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -847,7 +843,7 @@ async def test_consolidated_reconcile_seat_identity_third_party_shape_and_deprec
         srv._agents.pop(key, None)
 
 
-# ═══ detect_anchor_invariant_violations — THE DETECTOR (piece 1, msg 6546) ════════════
+# detect_anchor_invariant_violations: the detector
 
 async def test_detector_flags_a_single_outside_root_anchor_without_multi_row(
     actions: Actions,

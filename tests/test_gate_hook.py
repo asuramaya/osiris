@@ -1,5 +1,5 @@
-"""gate_hook's touched-file -> test-file resolution — the piece that keeps a per-commit gate
-cheap enough to survive contact (Sekhmet's #112 finding: full-suite is 209s under real
+"""gate_hook's touched-file -> test-file resolution: the piece that keeps a per-commit gate
+cheap enough to survive contact (a real finding from task #112: full-suite is 209s under real
 concurrency). Pure, IO-only via tmp_path, no git and no subprocess."""
 from __future__ import annotations
 
@@ -66,9 +66,9 @@ def test_finds_a_package_level_import_of_the_leaf_name(tmp_path: Path) -> None:
 
 
 def test_a_bare_word_in_a_string_literal_is_not_an_import(tmp_path: Path) -> None:
-    """Thoth DM 2948's live catch: test_mailbox.py imported an UNRELATED name from the same
+    """A real live catch: test_mailbox.py imported an UNRELATED name from the same
     package (mounts, not smoke) and separately contained the bare word "smoke" only inside a
-    prose string — the old substring-plus-word-boundary heuristic conflated the two into a
+    prose string, and the old substring-plus-word-boundary heuristic conflated the two into a
     false match. Same shape reproduced here, must NOT resolve."""
     _write(tmp_path, "src/orchestrator/smoke.py")
     _write(tmp_path, "src/orchestrator/mounts.py")
@@ -124,8 +124,8 @@ def test_missing_tests_dir_returns_empty_not_a_crash(tmp_path: Path) -> None:
 # --- _module_imports: what a test file actually imports from one specific module -------------
 
 def test_module_imports_finds_names_inside_function_bodies(tmp_path: Path) -> None:
-    """Real example, msg 2941: `from src import mcp_server as srv` lives inside a test
-    function body, not at module level — the ORIGINAL name is what's collected, not `srv`."""
+    """A real example: `from src import mcp_server as srv` lives inside a test
+    function body, not at module level, so the ORIGINAL name is what's collected, not `srv`."""
     f = tmp_path / "t.py"
     f.write_text("def test_x():\n    from src.orchestrator.mounts import save_mount as sm\n"
                   "    sm()\n")
@@ -144,10 +144,10 @@ def test_module_imports_unparseable_file_returns_empty_not_a_crash(tmp_path: Pat
     assert _module_imports(f, "src.orchestrator.mounts") == set()
 
 
-# --- classify_test_files: direct vs fixture-only, Khnum's mounts.py refinement (msg 2941) -----
+# --- classify_test_files: direct vs fixture-only, an empirical mounts.py refinement -----
 
-def test_classify_reproduces_khnums_mounts_split(tmp_path: Path) -> None:
-    """3 files import ONLY `save_mount` (fixture-only, per his own empirical finding); 1 file
+def test_classify_reproduces_the_mounts_split(tmp_path: Path) -> None:
+    """3 files import ONLY `save_mount` (fixture-only, per empirical testing); 1 file
     also imports `rebind_seat` (a real function under test) and must be DIRECT."""
     _write(tmp_path, "src/orchestrator/mounts.py")
     for name in ("x1", "x2", "x3"):
@@ -167,7 +167,7 @@ def test_classify_a_touched_test_file_is_always_direct(tmp_path: Path) -> None:
 
 
 def test_classify_with_no_split_needed_everything_is_direct(tmp_path: Path) -> None:
-    """No hub-module effect at all (every candidate imports something unique) — nothing
+    """No hub-module effect at all (every candidate imports something unique): nothing
     should land in fixture_only just because a split MECHANISM exists."""
     _write(tmp_path, "src/orchestrator/widget.py")
     _write(tmp_path, "tests/test_widget.py",
@@ -177,7 +177,7 @@ def test_classify_with_no_split_needed_everything_is_direct(tmp_path: Path) -> N
     assert fixture_only == set()
 
 
-# --- run_gates: the fanout cap applies ONLY to the fixture-only tier (msg 2941) ----------------
+# --- run_gates: the fanout cap applies ONLY to the fixture-only tier ----------------
 
 def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: Any) -> None:
     monkeypatch.setattr(gate_hook, "_PYTEST_FANOUT_CAP", 2)
@@ -202,7 +202,7 @@ def test_run_gates_caps_only_the_fixture_only_tier(tmp_path: Path, monkeypatch: 
     results = run_gates(tmp_path, ["src/pkg/hub.py"])
     ok, msg = results["pytest"]
     assert ok is True
-    assert msg.startswith("SKIPPED")  # never a plain "ok" — Thoth DM 2957
+    assert msg.startswith("SKIPPED")  # never a plain "ok"
     assert "ran 1 clean" in msg
     assert "omitted 3 fixture-only files" in msg
     assert _status_word(ok, msg) == "SKIPPED"
@@ -230,7 +230,7 @@ def test_run_gates_all_fixture_only_and_over_cap_skips_pytest_entirely(
     results = run_gates(tmp_path, ["src/pkg/hub.py"])
     ok, msg = results["pytest"]
     assert ok is True
-    assert msg.startswith("SKIPPED")  # never "no resolvable test files touched" —
+    assert msg.startswith("SKIPPED")  # never "no resolvable test files touched"
     assert "nothing ran" in msg       # that phrase means there was genuinely nothing to run,
     assert "omitted 2 fixture-only files" in msg  # this is an omission, a different thing
     assert _status_word(ok, msg) == "SKIPPED"
@@ -241,7 +241,7 @@ def test_run_gates_genuinely_nothing_to_test_is_a_plain_ok(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
     """The one case that's honestly a plain pass: nothing was omitted because nothing was
-    ever relevant in the first place — must not be confused with a capped skip."""
+    ever relevant in the first place, must not be confused with a capped skip."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     results = run_gates(tmp_path, ["docs/DEPLOY.md"])
     ok, msg = results["pytest"]
@@ -259,8 +259,8 @@ def test_run_gates_reports_no_resolvable_tests_distinctly(tmp_path: Path, monkey
 def test_run_gates_pytest_invocation_passes_the_xdist_cap(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """msg 2919: this gate can fire from multiple concurrent agents' commits at once, so it
-    must never inherit an uncapped `-n auto` — it passes its own fixed, small `-n` always."""
+    """This gate can fire from multiple concurrent agents' commits at once, so it
+    must never inherit an uncapped `-n auto`: it passes its own fixed, small `-n` always."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     tests_dir = tmp_path / "tests"
     tests_dir.mkdir()
@@ -287,9 +287,9 @@ def test_run_gates_pytest_invocation_passes_the_xdist_cap(
 def test_run_gates_always_includes_a_static_scanner_that_exists(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """THE gate_hook CORRELATION GAP (thread 01c08600, Thoth DM 11536, WAVE 26 item 3):
+    """THE gate_hook CORRELATION GAP: a real bug catch:
     a repo-wide static scanner never gets pulled in by ordinary import-based
-    correlation no matter what changed — it must run on every commit regardless."""
+    correlation no matter what changed, so it must run on every commit regardless."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     monkeypatch.setattr(
         gate_hook, "_ALWAYS_INCLUDED_STATIC_SCANNERS", frozenset({"tests/test_scanner.py"}))
@@ -372,7 +372,7 @@ def test_precommit_nothing_staged_is_a_clean_noop(monkeypatch: Any) -> None:
     assert cmd_precommit(enforce=True) == 0
 
 
-# --- _status_word / timeout-vs-failure (Thoth DM 2948) ----------------------------------------
+# --- _status_word / timeout-vs-failure ----------------------------------------
 
 def test_status_word_distinguishes_timeout_from_failure() -> None:
     assert _status_word(True, "") == "ok"
@@ -381,12 +381,12 @@ def test_status_word_distinguishes_timeout_from_failure() -> None:
 
 
 def test_status_word_never_folds_a_skip_into_a_plain_ok() -> None:
-    """Thoth DM 2957: the first two retroactive audits reported "17/18 pass" as real when a
+    """A real retroactive audit finding: the first two runs reported "17/18 pass" as real when a
     flat cap silently skipped pytest for hub-module commits and the skip path returned
-    ok=True — indistinguishable from a genuine pass. "SKIPPED" must be its own word."""
-    assert _status_word(True, "SKIPPED — nothing ran; omitted 12 fixture-only files") \
+    ok=True, indistinguishable from a genuine pass. "SKIPPED" must be its own word."""
+    assert _status_word(True, "SKIPPED, nothing ran; omitted 12 fixture-only files") \
         == "SKIPPED"
-    assert _status_word(True, "SKIPPED (partial) — ran 3 clean, omitted 9 files") == "SKIPPED"
+    assert _status_word(True, "SKIPPED (partial), ran 3 clean, omitted 9 files") == "SKIPPED"
 
 
 def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
@@ -407,12 +407,12 @@ def test_run_gates_pytest_timeout_is_reported_distinctly_from_a_failure(
     assert _status_word(ok, msg) == "TIMEOUT"
 
 
-# --- run_gates: the f1f8ad62 tolerance remedy — retry-once-on-timeout, never blindness --------
+# --- run_gates: the tolerance remedy: retry-once-on-timeout, never blindness --------
 
 def test_run_gates_retries_once_on_timeout_and_reports_it_distinctly(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """A single timeout is not proof of a real problem (f1f8ad62, ruling f61cad1b) — but a
+    """A single timeout is not proof of a real problem, but a
     pass that only happened on retry must NEVER read the same as a clean first-try "ok"."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     _write(tmp_path, "tests/test_a.py")
@@ -443,7 +443,7 @@ def test_run_gates_retries_once_on_timeout_and_reports_it_distinctly(
 def test_run_gates_timing_out_twice_still_refuses_unconditionally(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """The retry is a SINGLE extra chance, not infinite tolerance — two timeouts in a row is
+    """The retry is a SINGLE extra chance, not infinite tolerance: two timeouts in a row is
     a stronger signal than one and must still refuse (never becomes blindness)."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     _write(tmp_path, "tests/test_a.py")
@@ -463,8 +463,8 @@ def test_run_gates_timing_out_twice_still_refuses_unconditionally(
     assert _status_word(ok, msg) == "TIMEOUT"
 
 
-# --- the instrument fix (Thoth's ruling, mail 9017): scale the timeout with load ---------
-# --- wave 19 item 4 (mail 9794/9816): scale it with the scoped file-set's own size too ---
+# --- the instrument fix: scale the timeout with load ---------
+# --- scale it with the scoped file-set's own size too ---
 
 def test_load_scaled_pytest_timeout_stays_at_base_under_the_threshold() -> None:
     # n_files=0 isolates the load factor -- whatever this host's real load is, either
@@ -485,7 +485,7 @@ def test_load_scaled_pytest_timeout_scales_up_over_the_threshold(monkeypatch: An
 
 
 def test_load_scaled_pytest_timeout_caps_the_scale_factor(monkeypatch: Any) -> None:
-    """A hang is still a hang eventually -- tolerance, not blindness, same law the
+    """A hang is still a hang eventually: tolerance, not blindness, same rule the
     retry-once mechanism already holds one layer up."""
     monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (400.0, 300.0, 200.0))
     timeout, load1, _files_scale = gate_hook._load_scaled_pytest_timeout(0)
@@ -541,7 +541,7 @@ def test_load_and_files_scale_combine_multiplicatively(monkeypatch: Any) -> None
 
 
 def test_combined_scale_never_exceeds_the_absolute_cap(monkeypatch: Any) -> None:
-    """The fleet's own hand-run last-resort convention (`timeout 1500`, mail 9649) is
+    """The fleet's own hand-run last-resort convention (`timeout 1500`) is
     the outer bound even under BOTH factors maxed at once."""
     monkeypatch.setattr(gate_hook.os, "getloadavg", lambda: (400.0, 300.0, 200.0))
     timeout, _load1, _files_scale = gate_hook._load_scaled_pytest_timeout(
@@ -598,7 +598,7 @@ def test_run_gates_timeout_receipt_names_the_load_that_caused_the_scale(
 def test_run_gates_a_retry_that_reveals_a_real_failure_is_not_swallowed(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """The retry exists ONLY for a timeout — if the second attempt runs to completion but
+    """The retry exists ONLY for a timeout: if the second attempt runs to completion but
     fails for real, that is a genuine FAILED, never quietly treated as tolerated."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     _write(tmp_path, "tests/test_a.py")
@@ -627,16 +627,16 @@ def test_run_gates_a_retry_that_reveals_a_real_failure_is_not_swallowed(
 
 def test_status_word_never_folds_a_retried_pass_into_a_plain_ok() -> None:
     assert _status_word(
-        True, "PASSED ON RETRY — timed out after 180s on the first attempt, then passed "
+        True, "PASSED ON RETRY, timed out after 180s on the first attempt, then passed "
         "clean on an immediate second attempt") == "PASSED-ON-RETRY"
 
 
-# --- _report: a skip is UNVERIFIED, never folded into plain PASS (Thoth DM 2957) --------------
+# --- _report: a skip is UNVERIFIED, never folded into plain PASS --------------
 
 def test_report_marks_a_skip_as_unverified_not_pass(capsys: Any) -> None:
     results = {
         "ruff": (True, ""), "mypy": (True, ""),
-        "pytest": (True, "SKIPPED — nothing ran; omitted 5 fixture-only files"),
+        "pytest": (True, "SKIPPED, nothing ran; omitted 5 fixture-only files"),
     }
     all_ok = gate_hook._report("test", results)
     out = capsys.readouterr().out
@@ -660,7 +660,7 @@ def test_report_a_genuine_clean_run_says_plain_pass(capsys: Any) -> None:
 def test_report_marks_a_retried_pass_distinctly_not_a_plain_pass(capsys: Any) -> None:
     results = {
         "ruff": (True, ""), "mypy": (True, ""),
-        "pytest": (True, "PASSED ON RETRY — timed out after 180s on the first attempt, "
+        "pytest": (True, "PASSED ON RETRY, timed out after 180s on the first attempt, "
                           "then passed clean on an immediate second attempt\n1 passed"),
     }
     all_ok = gate_hook._report("test", results)
@@ -671,17 +671,17 @@ def test_report_marks_a_retried_pass_distinctly_not_a_plain_pass(capsys: Any) ->
     assert "pytest: PASSED-ON-RETRY" in out
 
 
-# --- obligation a3c71bf5: the omitted-file list must survive the printed tail -----------------
-# Filed while verifying b9045c3 (Thoth msg 3281): the omitted-files summary is the FIRST line
+# --- the omitted-file list must survive the printed tail -----------------
+# Found while verifying a related fix: the omitted-files summary is the FIRST line
 # of a SKIPPED detail, but a real pytest run underneath it can be long, and `[-15:]` takes the
-# LAST 15 lines of the WHOLE blob -- the summary line silently scrolls out. The headline still
+# LAST 15 lines of the WHOLE blob, so the summary line silently scrolls out. The headline still
 # reads "SKIPPED (partial)" (honest), but a reader has no way to learn WHICH files were
-# skipped (not actionable) -- #117's own shape one layer down from where it was last caught.
+# skipped (not actionable): #117's own shape one layer down from where it was last caught.
 
 def test_report_skip_summary_survives_a_long_pytest_tail(capsys: Any) -> None:
     body = "\n".join(f"noise line {i}" for i in range(40))
     detail = (
-        "SKIPPED (partial) — ran 3 clean, omitted 5 fixture-only files (hub-module fan-out, "
+        "SKIPPED (partial), ran 3 clean, omitted 5 fixture-only files (hub-module fan-out, "
         f"over cap 12): [a_test.py b_test.py c_test.py d_test.py e_test.py]\n{body}"
     )
     results = {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, detail)}
@@ -694,7 +694,7 @@ def test_report_skip_summary_survives_a_long_pytest_tail(capsys: Any) -> None:
 def test_report_skip_with_no_body_still_shows_the_summary(capsys: Any) -> None:
     results = {
         "ruff": (True, ""), "mypy": (True, ""),
-        "pytest": (True, "SKIPPED — nothing ran; omitted 3 fixture-only files: [a.py b.py c.py]"),
+        "pytest": (True, "SKIPPED, nothing ran; omitted 3 fixture-only files: [a.py b.py c.py]"),
     }
     gate_hook._report("test", results)
     out = capsys.readouterr().out
@@ -707,13 +707,13 @@ def test_report_says_so_explicitly_when_the_omitted_list_is_too_long_to_show_in_
 ) -> None:
     many_files = " ".join(f"file_{i}.py" for i in range(400))
     detail = (
-        f"SKIPPED — nothing ran; omitted 400 fixture-only files (hub-module fan-out, over "
+        f"SKIPPED, nothing ran; omitted 400 fixture-only files (hub-module fan-out, over "
         f"cap 12): [{many_files}]"
     )
     results = {"ruff": (True, ""), "mypy": (True, ""), "pytest": (True, detail)}
     gate_hook._report("test", results)
     out = capsys.readouterr().out
-    # "could not show" must never render as "nothing to show" (Khnum's census_blind rule) --
+    # "could not show" must never render as "nothing to show" (the census_blind rule):
     # a truncation must say so explicitly, not just silently cut the line short.
     assert "file_0.py" in out  # still shows what it can, from the front
     assert "TRUNCATED" in out or "elided" in out
@@ -729,7 +729,7 @@ def test_report_a_real_failure_keeps_its_existing_tail_only_behavior(capsys: Any
     assert "line 0" not in out  # unchanged: a real failure still only gets the last 15 lines
 
 
-# --- #117 piece (b): the derivation-trace nudge (decision d0ab1b0b, routed msg 2984) ----------
+# --- #117 piece (b): the derivation-trace nudge ----------
 
 def test_added_line_ranges_parses_a_single_hunk(tmp_path: Path, monkeypatch: Any) -> None:
     diff = "@@ -0,0 +1,3 @@\n+def f():\n+    return {}\n+\n"
@@ -905,10 +905,10 @@ def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
     assert "gate_hook: REFUSED" in out
 
 
-# --- the stage-race TOCTOU guard (Thoth DM 3005/3012, thread 3005) -----------------------------
-# NOT a #117 shape-3 cure (decision 96463307 found no general mechanical path for that) --
-# a narrower, separately-motivated mechanism for Practice 81cab2f4/decision b1863e56's own
-# documented hazard: a concurrent `git add` landing between a staged-diff check and the commit
+# --- the stage-race TOCTOU guard -----------------------------
+# NOT a #117 shape-3 cure (found no general mechanical path for that): a
+# narrower, separately-motivated mechanism for a documented hazard: a concurrent `git add`
+# landing between a staged-diff check and the commit
 # that follows it. Reproduced live in a throwaway repo before this was built: git does not hold
 # the index lock across a pre-commit hook's own execution, so the hazard extends across the
 # ENTIRE gate run, not just an agent's own instant diff-then-commit gap.
@@ -916,7 +916,7 @@ def test_derivation_trace_question_never_changes_the_verdict_on_a_failing_gate(
 def test_staged_diff_digest_changes_with_content_not_just_file_list(
     tmp_path: Any, monkeypatch: Any,
 ) -> None:
-    """Practice 81cab2f4's own point: `--stat`/file names alone would miss a same-file
+    """The central point: `--stat`/file names alone would miss a same-file
     content race. The digest must be sensitive to the diff BODY."""
     calls = iter(["diff --cached v1", "diff --cached v1", "diff --cached v2"])
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, next(calls)))
@@ -977,7 +977,7 @@ def test_precommit_a_stage_race_takes_priority_even_when_gates_all_passed(
     monkeypatch: Any, capsys: Any,
 ) -> None:
     """A race means the gate results above are not evidence about the tree that would
-    actually commit -- a coincidental all-clean gate run must not paper over that."""
+    actually commit, a coincidental all-clean gate run must not paper over that."""
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
         gate_hook, "run_gates",
@@ -993,9 +993,9 @@ def test_precommit_a_stage_race_takes_priority_even_when_gates_all_passed(
 def test_precommit_race_refusal_reads_differently_from_a_gate_failure_refusal(
     monkeypatch: Any, capsys: Any,
 ) -> None:
-    """THE VOCABULARY-DISTINCTNESS REQUIREMENT (Thoth DM 3012: 'must distinguish "the index
-    moved" from "the commit failed" in its own words'). Two REFUSED commits for two different
-    reasons must never render the identical sentence -- the same disjointness discipline as
+    """THE VOCABULARY-DISTINCTNESS REQUIREMENT: must distinguish "the index
+    moved" from "the commit failed" in its own words. Two REFUSED commits for two different
+    reasons must never render the identical sentence, the same disjointness discipline as
     tests/test_receipt_vocabulary.py, applied to this mechanism's own two refusal reasons."""
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
 
@@ -1038,12 +1038,12 @@ def test_precommit_no_race_is_unaffected_when_digest_is_stable(
 
 
 def test_venv_bin_tracks_the_running_interpreter_not_repo_root(tmp_path: Path) -> None:
-    """The exact worktree bug (thread 64c6b197): a worktree has no materialized `.venv` --
+    """A real worktree bug: a worktree has no materialized `.venv`,
     `.gitignore` excludes it, so `git worktree add` never copies one. If VENV_BIN were still
     `REPO_ROOT / ".venv" / "bin"` (derived from `__file__`, i.e. wherever this module's own
     copy happens to live), running gate_hook.py from a tree with no .venv at all would
-    resolve to a nonexistent path. It must instead track `sys.executable` -- the venv that
-    actually launched the process -- regardless of where the module file itself sits."""
+    resolve to a nonexistent path. It must instead track `sys.executable`, the venv that
+    actually launched the process, regardless of where the module file itself sits."""
     import shutil
     import subprocess
     import sys as real_sys
@@ -1064,7 +1064,7 @@ def test_venv_bin_tracks_the_running_interpreter_not_repo_root(tmp_path: Path) -
 
 
 def test_venv_bin_does_not_resolve_past_a_symlinked_interpreter(tmp_path: Path) -> None:
-    """Caught live by the worktree acceptance test (thread 64c6b197): this repo's `.venv` is
+    """Caught live by the worktree acceptance test: this repo's `.venv` is
     uv-managed, and `.venv/bin/python` is a symlink STRAIGHT to the shared uv toolchain
     (`~/.local/share/uv/python/.../bin/python3.12`), not a copy. `Path(sys.executable)
     .resolve()` follows that symlink past the venv boundary entirely, landing in a directory
@@ -1088,9 +1088,9 @@ def test_venv_bin_does_not_resolve_past_a_symlinked_interpreter(tmp_path: Path) 
     assert proc.stdout.strip() == str(fake_venv_bin)
 
 
-# --- thread 1a0f91bb: the ratchet-lag standing-law fork, DECIDED (the gate tolerates the
+# --- the ratchet-lag standing fork, DECIDED (the gate tolerates the
 # split rather than demanding the ratchet move in the same commit as a merge) and ENCODED,
-# not documented around. Dispatch 5399 LEG 1. ------------------------------------------------
+# not documented around. ------------------------------------------------
 
 def _git(repo: Path, *args: str) -> None:
     import subprocess
@@ -1132,7 +1132,7 @@ def test_is_merge_context_true_mid_merge_before_the_merge_commit_lands(
     tmp_path: Path,
 ) -> None:
     """MERGE_HEAD exists from the moment a conflict-free `git merge` starts until the merge
-    commit itself is made — this is the LIVE pre-commit path's own signal (the commit hasn't
+    commit itself is made: this is the LIVE pre-commit path's own signal (the commit hasn't
     happened yet, so there is no parent count to read from HEAD)."""
     repo = tmp_path / "r"
     _init_repo(repo)
@@ -1153,8 +1153,8 @@ def test_pytest_sole_failure_is_ratchet_ceiling_true_for_an_exact_solo_match() -
 
 
 def test_pytest_sole_failure_is_ratchet_ceiling_false_when_anything_else_also_fails() -> None:
-    """#133's own real specimens (a74ce7a/ff72377): a merge that ALSO broke something else
-    must still refuse — never a blanket pass-through for merge commits generally."""
+    """#133's own real specimens: a merge that ALSO broke something else
+    must still refuse, never a blanket pass-through for merge commits generally."""
     out = (
         f"FAILED {_RATCHET_TEST_NODEID} - AssertionError: ...\n"
         "FAILED tests/test_mounts.py::test_something_unrelated - AssertionError: ...\n"
@@ -1169,7 +1169,7 @@ def test_pytest_sole_failure_is_ratchet_ceiling_false_for_a_different_solo_failu
 
 
 def test_status_word_names_ratchet_debt_distinctly_never_a_plain_ok() -> None:
-    assert _status_word(True, "RATCHET-DEBT — merge commit exceeds the ceiling") \
+    assert _status_word(True, "RATCHET-DEBT, merge commit exceeds the ceiling") \
         == "RATCHET-DEBT"
 
 
@@ -1201,7 +1201,7 @@ def test_run_gates_ratchet_ceiling_solo_failure_on_a_merge_is_debt_not_failed(
 def test_run_gates_ratchet_ceiling_solo_failure_on_a_non_merge_commit_still_fails(
     tmp_path: Path, monkeypatch: Any,
 ) -> None:
-    """The same exact pytest output, but NOT a merge commit — a real, ordinary regression
+    """The same exact pytest output, but NOT a merge commit: a real, ordinary regression
     (the growth the commit itself caused) and must still refuse."""
     monkeypatch.setattr(gate_hook, "_run", lambda cmd, cwd: (True, ""))
     monkeypatch.setattr(gate_hook, "_is_merge_context", lambda repo_root: False)
@@ -1227,7 +1227,7 @@ def test_run_gates_ratchet_ceiling_solo_failure_on_a_non_merge_commit_still_fail
 def test_report_marks_ratchet_debt_as_pass_but_names_it_distinctly(capsys: Any) -> None:
     results = {
         "ruff": (True, ""), "mypy": (True, ""),
-        "pytest": (True, "RATCHET-DEBT — merge commit exceeds the ceiling\n1 failed, 5 passed"),
+        "pytest": (True, "RATCHET-DEBT, merge commit exceeds the ceiling\n1 failed, 5 passed"),
     }
     all_ok = gate_hook._report("test", results)
     out = capsys.readouterr().out
@@ -1236,7 +1236,7 @@ def test_report_marks_ratchet_debt_as_pass_but_names_it_distinctly(capsys: Any) 
     assert "pytest: RATCHET-DEBT" in out
 
 
-# --- main(): the escape hatch (dispatch 5399) — an internal bug in this diagnostic's own
+# --- main(): the escape hatch: an internal bug in this diagnostic's own
 # code fails OPEN, never blocks a commit --------------------------------------------------
 
 def test_main_fails_open_on_an_internal_error_in_precommit(
@@ -1263,7 +1263,7 @@ def test_main_fails_open_on_an_internal_error_in_audit(monkeypatch: Any, capsys:
 
 
 def test_main_a_real_gate_failure_still_refuses_normally(monkeypatch: Any) -> None:
-    """The escape hatch must never swallow a GENUINE gate failure — only an unhandled
+    """The escape hatch must never swallow a GENUINE gate failure: only an unhandled
     exception inside the diagnostic's own code reaches the fail-open branch."""
     monkeypatch.setattr(gate_hook, "changed_files_staged", lambda root=None: ["a.py"])
     monkeypatch.setattr(
@@ -1276,8 +1276,8 @@ def test_main_a_real_gate_failure_still_refuses_normally(monkeypatch: Any) -> No
     assert gate_hook.main([]) == 1
 
 
-# ═══════════ THE SHADOWED-IMPORT LINT (dispatch 5441 LEG 4, ruling 2f7e1588) ══════════
-# The discriminator is EXECUTION ORDER, never mere shadow presence — a fleet-wide audit
+# ═══════════ THE SHADOWED-IMPORT LINT ══════════
+# The discriminator is EXECUTION ORDER, never mere shadow presence: a fleet-wide audit
 # found 19 candidate shadows and exactly ONE real bug (mailbox.py's send_message: a nested
 # `_stamp_threads` closure read `datetime`/`UTC` before a redundant later local import of
 # the same names ran, an UnboundLocalError/NameError on every real call). This lint is
@@ -1376,8 +1376,8 @@ def test_shadow_before_use_violations_catches_the_mailbox_shape(tmp_path: Path) 
 
 
 def test_shadow_before_use_violations_silent_on_a_harmless_shadow(tmp_path: Path) -> None:
-    """A local import that is NEVER read before its own line — the common, harmless shape
-    (18 of the audit's own 19 candidates) — must not be flagged, even with a nested
+    """A local import that is NEVER read before its own line: the common, harmless shape
+    (18 of the audit's own 19 candidates), must not be flagged, even with a nested
     function present, even when the SAME name is shadowed."""
     src = (
         "import os\n\n"
@@ -1396,7 +1396,7 @@ def test_shadow_before_use_violations_silent_on_a_harmless_shadow(tmp_path: Path
 def test_shadow_before_use_violations_ignores_a_name_never_imported_at_module_level(
     tmp_path: Path,
 ) -> None:
-    """A purely-local import with no module-level twin is not a SHADOW at all — never in
+    """A purely-local import with no module-level counterpart is not a SHADOW at all, never in
     scope for this lint, however it's used."""
     src = "def f():\n    import json\n    return json.dumps({})\n"
     (tmp_path / "nomodulelevel.py").write_text(src)

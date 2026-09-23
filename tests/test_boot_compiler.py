@@ -1,4 +1,4 @@
-"""THE BOOT COMPILER (thread 4951d818, task #53) — standing orders as a compiled
+"""THE BOOT COMPILER: standing orders as a compiled
 artifact. Pure marker/version logic first, then the four sources against a real graph,
 then reissue_office's three acceptance tests: a fresh compiled mint carries the ordered
 checklist, a reissue on a hand-mutated seat preserves everything outside the managed
@@ -139,7 +139,7 @@ async def test_derive_role_worker_vs_coordinator(actions: Actions) -> None:
 
 
 async def test_armed_practices_caps_at_top_n_by_confirmed(actions: Actions) -> None:
-    # a pool of distinct decisions to witness with — witnesses is idempotent per
+    # a pool of distinct decisions to witness with: witnesses is idempotent per
     # (practice, evidence) pair, so distinguishing confirmed counts needs distinct
     # evidence objects, not repeated calls against the same one
     evidence = [await record_decision(actions, f"boot-compiler cap-test witness {i}")
@@ -174,7 +174,7 @@ async def test_armed_practices_excludes_refuted_and_filters_by_role_surface(
     await record_practice(actions, "boot compiler coordinator-only lesson",
                           surface="coordinator")
     await record_practice(actions, "boot compiler worker-only lesson", surface="worker")
-    # a domain-tagged practice (BlindSpot vocabulary, NOT a role) — must arm for both
+    # a domain-tagged practice (BlindSpot vocabulary, NOT a role): must arm for both
     await record_practice(actions, "boot compiler deploy domain lesson", surface="deploy")
 
     worker_armed = await _armed_practices(actions.pool, "worker", limit=20)
@@ -193,8 +193,8 @@ async def test_armed_practices_excludes_refuted_and_filters_by_role_surface(
 
 
 async def test_armed_practices_surfaces_latest_amendment(actions: Actions) -> None:
-    # thread bd28a41f: a self-corrected practice's `statement` never changes (amend_
-    # practice's own idempotency-key law) — its amendment must still reach the render.
+    # a self-corrected practice's `statement` never changes (amend_
+    # practice's own idempotency-key law); its amendment must still reach the render.
     d = await record_decision(actions, "boot-compiler amendment-surface witness")
     unamended = await record_practice(actions, "boot compiler lesson with no amendment")
     amended = await record_practice(actions, "boot compiler lesson later corrected")
@@ -263,7 +263,7 @@ async def test_compile_managed_body_worker_has_gates_coordinator_does_not(
     assert "The desk pattern" in coord_body
 
 
-# ═══ "## Your team" (thread 613cda0a): promote writes the bond down, this writes it up ═══
+# ═══ "## Your team": promote writes the bond down, this writes it up ═══
 
 
 async def test_compile_managed_body_coordinator_names_its_team_by_handle_and_project(
@@ -314,9 +314,9 @@ async def test_compile_managed_body_coordinator_with_no_team_has_no_team_section
 async def test_fresh_mint_carries_the_ordered_first_breath_checklist(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE WAKE CONTRACT (a891c152) as the compiler's acceptance test: a fresh compiled
+    """THE WAKE CONTRACT as the compiler's acceptance test: a fresh compiled
     mint still guides a new mind through mount -> claim_name -> orient() -> report, the
-    exact ordered-checklist form ruling 90babd6e proved matters."""
+    exact ordered-checklist form a past incident proved matters."""
     await ensure_seat(actions, house="wakehouse", handle="WakeBoss", source="test")
     out = await mint_seat(actions, manager="WakeBoss", handle="WakeWorker",
                           office_root=tmp_path / "seats", actor="agent:test")
@@ -337,7 +337,7 @@ async def test_fresh_mint_carries_the_ordered_first_breath_checklist(
 async def test_fresh_mint_writes_agents_md_identical_to_claude_md(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """thread f37aaf1b piece 2: a fresh scaffold writes AGENTS.md (Crush's own default
+    """A fresh scaffold writes AGENTS.md (Crush's own default
     per-project context file, https://raw.githubusercontent.com/charmbracelet/crush/
     v0.85.0/README.md "### Initialization") alongside CLAUDE.md, same wrapped content,
     so a Crush session in this same office gets the identical compiled standing orders."""
@@ -355,7 +355,7 @@ async def test_fresh_mint_writes_agents_md_identical_to_claude_md(
 async def test_scaffold_never_overwrites_a_pre_existing_file_on_either_side(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """AGENTS.md's own existence is checked INDEPENDENTLY of CLAUDE.md's — a hand-grown
+    """AGENTS.md's own existence is checked INDEPENDENTLY of CLAUDE.md's. A hand-grown
     AGENTS.md (a real `crush init` run's own output, say) is left in place exactly as a
     hand-grown CLAUDE.md already is, and vice versa."""
     await ensure_seat(actions, house="vnhouse2", handle="VnBoss2", source="test")
@@ -384,7 +384,7 @@ def test_scaffold_boot_file_writes_only_when_absent(tmp_path: Path) -> None:
 async def test_reissue_recompiles_agents_md_identically_to_claude_md(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """reissue_office's own recompile mirrors into AGENTS.md too — same content, same
+    """reissue_office's own recompile mirrors into AGENTS.md too: same content, same
     marker-safety discipline, a hand-written span outside AGENTS.md's own markers
     survives exactly as CLAUDE.md's already does."""
     await ensure_seat(actions, house="vnhouse3", handle="VnBoss3", source="test")
@@ -425,7 +425,7 @@ async def test_mirror_agents_md_reports_a_soft_error_never_raises_on_malformed_m
     tmp_path: Path,
 ) -> None:
     """A malformed pre-existing AGENTS.md must never block the caller's own successful
-    CLAUDE.md reissue — reported inline, softly, never raised."""
+    CLAUDE.md reissue: reported inline, softly, never raised."""
     office = tmp_path / "office"
     office.mkdir()
     (office / "AGENTS.md").write_text("<!-- osiris:compiled:begin v=rogue -->\nstray\n")
@@ -439,9 +439,9 @@ async def test_reissue_preserves_hand_written_content_outside_the_managed_sectio
     actions: Actions, tmp_path: Path,
 ) -> None:
     """THE NEVER-CLOBBER BOUNDARY's real test: a seat that organically accumulated
-    hand-composed content post-mint (Khnum's own "WHY YOU EXIST" narrative is the real
+    hand-composed content post-mint (a "WHY YOU EXIST" narrative added by hand is the real
     precedent) keeps that content byte-for-byte across a reissue, while a live fact that
-    changed AFTER mint (a peer bond — the exact gap decision e9e7cac5 named) now reaches
+    changed AFTER mint (a peer bond, the exact gap a past fix named) now reaches
     the file for the first time."""
     await ensure_seat(actions, house="reissuehouse", handle="ReissueBoss", source="test")
     minted = await mint_seat(actions, manager="ReissueBoss", handle="ReissueWorker",
@@ -474,7 +474,7 @@ async def test_reissue_preserves_hand_written_content_outside_the_managed_sectio
 async def test_reissue_refuses_loudly_naming_the_seat_when_markers_are_mangled(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """THE REFUSAL IS THE BOUNDARY'S REAL TEETH (Thoth's added requirement, msg 1819):
+    """THE REFUSAL IS THE BOUNDARY'S REAL TEETH:
     a hand-edit that duplicates a marker must never be silently guessed past, re-wrapped,
     or have a second section appended beside it."""
     await ensure_seat(actions, house="mangledhouse", handle="MangledBoss", source="test")
@@ -491,7 +491,7 @@ async def test_reissue_refuses_loudly_naming_the_seat_when_markers_are_mangled(
     assert "MangledWorker" in out["error"]
     assert seat_id in out["error"]
     assert "2 BEGIN markers" in out["error"]
-    assert orders_path.read_text() == mangled  # untouched — no guess, no rewrap
+    assert orders_path.read_text() == mangled  # untouched, no guess, no rewrap
 
 
 async def test_reissue_adopt_appends_a_managed_section_to_a_legacy_office(
@@ -530,11 +530,11 @@ async def test_reissue_adopt_appends_a_managed_section_to_a_legacy_office(
 async def test_reissue_adopt_replaces_a_pre_existing_office_header_never_duplicates_it(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thread 49169c2f, nebbercracker's own live specimen (116 lines, two headers) and
-    jenny's (137): the OLD office already begins with the compiler's own header line
-    (hand-written before the marker convention existed, or a prior adopt whose markers
-    were later stripped by hand) — adopt must REPLACE that old, unmarked section, never
-    append a fresh one below it. One header, ever."""
+    """Real live specimens observed in production (one 116 lines with two headers,
+    another 137 lines the same way): the OLD office already begins with the compiler's own
+    header line (hand-written before the marker convention existed, or a prior adopt whose
+    markers were later stripped by hand). adopt must REPLACE that old, unmarked section,
+    never append a fresh one below it. One header, ever."""
     worker = await ensure_seat(actions, house="oldofficehouse", handle="OldOfficeSeat",
                                source="test")
     seat_id = worker["seat_id"]
@@ -563,7 +563,7 @@ async def test_reissue_adopt_self_heals_an_already_duplicated_office(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The office is ALREADY in the exact broken state (two headers, no markers, the
-    live nebbercracker/jenny shape) — adopt must collapse it to one header, not three."""
+    same live shape seen in production). adopt must collapse it to one header, not three."""
     worker = await ensure_seat(actions, house="dupofficehouse", handle="DupOfficeSeat",
                                source="test")
     seat_id = worker["seat_id"]
@@ -588,12 +588,12 @@ async def test_reissue_adopt_self_heals_an_already_duplicated_office(
 async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """The REAL live shape (thread 49169c2f, Thoth's ruling msg 8113), not a simplified
+    """The REAL live shape observed in production, not a simplified
     stand-in: well-formed markers ALREADY exist (from a historical adopt, back when
     adopt still blindly appended), and a duplicate hand-written header sits BEFORE
-    them, case-mismatched from the compiled one below it ("# Nebbercracker" vs
-    "# nebbercracker"). This is exactly why the header match must be case-insensitive
-    AND why adopt must be allowed to proceed even though markers already exist —
+    them, case-mismatched from the compiled one below it ("# Nebtestseat" vs
+    "# nebtestseat"). This is exactly why the header match must be case-insensitive
+    AND why adopt must be allowed to proceed even though markers already exist,
     provided the duplicate it finds sits strictly before the marker span."""
     worker = await ensure_seat(actions, house="realshapehouse", handle="nebtestseat",
                                source="test")
@@ -629,15 +629,15 @@ async def test_reissue_adopt_self_heals_nebbercrackers_exact_live_shape(
     assert after.count("<!-- osiris:compiled:end") == 1
 
 
-# ═══════════ sweep_stacked_office_headers (thread 658c2152 / 07ca68ca) ═══════════
+# ═══════════ sweep_stacked_office_headers ═══════════
 
 
 async def test_stacked_header_sweep_heals_a_stacked_office_through_the_door(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The mechanical sub-sweep finds the SAME shape reissue_office(adopt=True) already
-    self-heals by hand (thread 658c2152's own population), heals it through that exact
-    door, and reports the seat in `healed` — never a second copy of the healing logic."""
+    self-heals by hand, heals it through that exact
+    code path, and reports the seat in `healed`, never a second copy of the healing logic."""
     worker = await ensure_seat(actions, house="stackedhouse", handle="stackedseat",
                                source="test")
     seat_id = worker["seat_id"]
@@ -669,7 +669,7 @@ async def test_stacked_header_sweep_leaves_a_clean_office_untouched(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A seat whose office was compiled cleanly (no leading duplicate header) is counted
-    `clean`, not `healed` — the sweep must never touch what isn't broken."""
+    `clean`, not `healed`. The sweep must never touch what isn't broken."""
     worker = await ensure_seat(actions, house="cleanhouse", handle="cleanseat",
                                source="test")
     seat_id = worker["seat_id"]
@@ -700,7 +700,7 @@ async def test_reissue_adopt_still_appends_when_no_office_shaped_header_exists(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Genuinely foreign hand-written content (no line shaped like this compiler's own
-    header, at all) must still be preserved and appended below — nothing here resembles
+    header, at all) must still be preserved and appended below. Nothing here resembles
     a managed section, so nothing is safe to replace. Same behavior the pre-existing
     `test_reissue_adopt_appends_a_managed_section_to_a_legacy_office` already proves;
     this specimen just names the boundary explicitly against the new header check."""
@@ -736,16 +736,16 @@ async def test_reissue_requires_because_and_refuses_an_unknown_seat(
     assert "error" in unknown and "no such seat" in unknown["error"]
 
 
-# ═══════════ THE ROLLOUT CHECK (thread 0e5bae06, #84) — names, never counts ═══════════
+# ═══════════ THE ROLLOUT CHECK: names, never counts ═══════════
 
 async def test_boot_rollout_gaps_names_each_of_the_five_reasons_distinctly(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """The check's whole point: a seat missing its section for FIVE different reasons must
-    never collapse into one count, because only `never_compiled` is what adopt=True fixes —
-    the others each need a completely different act (a hand fix, establish_office, a plain
-    reissue_office, or the anchor_cwd bug thread 7a9c3c46 already tracks)."""
-    # compiled: not a gap — BOTH CLAUDE.md and its AGENTS.md mirror already exist.
+    never collapse into one count, because only `never_compiled` is what adopt=True fixes.
+    The others each need a completely different act (a hand fix, establish_office, a plain
+    reissue_office, or a separately tracked anchor_cwd bug)."""
+    # compiled: not a gap. BOTH CLAUDE.md and its AGENTS.md mirror already exist.
     compiled = await ensure_seat(actions, house="rollouthouse", handle="RolloutCompiled",
                                  anchor_cwd=str(tmp_path / "compiled"), source="test")
     (tmp_path / "compiled").mkdir()
@@ -774,7 +774,7 @@ async def test_boot_rollout_gaps_names_each_of_the_five_reasons_distinctly(
     no_office = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoOffice",
                                   source="test")
 
-    # no_agents_md: CLAUDE.md is fine (compiled, well-formed) — AGENTS.md was simply never
+    # no_agents_md: CLAUDE.md is fine (compiled, well-formed). AGENTS.md was simply never
     # written, the pre-vendor-neutral-mirror population.
     no_agents = await ensure_seat(actions, house="rollouthouse", handle="RolloutNoAgents",
                                   anchor_cwd=str(tmp_path / "noagents"), source="test")
@@ -806,16 +806,16 @@ async def test_boot_rollout_gaps_silent_when_every_active_seat_is_compiled(
 
 def test_boot_rollout_gap_notes_names_the_seat_the_house_and_the_fix() -> None:
     notes = boot_rollout_gap_notes([
-        {"seat_id": "seat:aaa", "handle": "Atlas", "house": "atlas", "reason": "never_compiled"},
+        {"seat_id": "seat:aaa", "handle": "Anders", "house": "anders", "reason": "never_compiled"},
         {"seat_id": "seat:bbb", "handle": "Bort", "house": "", "reason": "no_office"},
     ])
     assert len(notes) == 2
-    assert "Atlas (atlas)" in notes[0] and "reissue_office(adopt=True)" in notes[0]
+    assert "Anders (anders)" in notes[0] and "reissue_office(adopt=True)" in notes[0]
     assert "Bort (no house)" in notes[1] and "not an adopt target" in notes[1]
 
 
 def test_boot_rollout_gap_notes_no_agents_md_gets_its_own_wording() -> None:
-    """Distinct from every other reason's phrasing — CLAUDE.md's own section is fine here,
+    """Distinct from every other reason's phrasing. CLAUDE.md's own section is fine here,
     so the note must never claim the seat 'has no compiled section' (false), and the fix
     is a plain reissue, not an adopt=True (no marker damage to self-heal)."""
     notes = boot_rollout_gap_notes([
@@ -833,7 +833,7 @@ def test_boot_rollout_gap_notes_silent_on_an_empty_list() -> None:
     assert boot_rollout_gap_notes([]) == []
 
 
-# ═══ THE DRIFT CHECK (thread f37aaf1b, v1.1 follow-up piece 1) ══════════════════════════
+# ═══ THE DRIFT CHECK ══════════════════════════
 
 
 async def test_boot_drift_gaps_flags_a_seat_stamped_with_an_older_version(
@@ -869,7 +869,7 @@ async def test_boot_drift_gaps_silent_when_no_testimony_at_all(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """No `boot_compiled_version` yet (never reissued since this property started being
-    written, or still mid-rollout) is boot_rollout_gaps' own population — NOT a drift
+    written, or still mid-rollout) is boot_rollout_gaps' own population, NOT a drift
     gap, kept distinct rather than double-counted under a fix that wouldn't address it."""
     seat = await ensure_seat(actions, house="drifthouse", handle="NeverReissued",
                              anchor_cwd=str(tmp_path / "never_reissued"), source="test")
@@ -889,7 +889,7 @@ async def test_boot_drift_nudge_sweep_opens_an_obligation_naming_the_fix(
     out = await apply_boot_drift_nudge_sweep(actions, actor="agent:test")
     assert out["nudged"] == [seat["seat_id"]]
     assert out["errors"] == []
-    # canonical is a summary hash, not seat-addressable — find via owner instead
+    # canonical is a summary hash, not seat-addressable: find via owner instead
     row = await actions.pool.fetchrow(
         "SELECT ca.object_id FROM current_assertions ca "
         "WHERE ca.name='owner' AND ca.value #>> '{}' = $1", seat["seat_id"])
@@ -904,7 +904,7 @@ async def test_boot_drift_nudge_sweep_is_idempotent_on_repeat_ticks(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """open_thread's own summary-hash dedup means a second sweep over the SAME
-    (stamped, current) pair mints nothing new — the natural no-repeat-nudge behavior,
+    (stamped, current) pair mints nothing new: the natural no-repeat-nudge behavior,
     no separate 'already nudged' marker needed."""
     seat = await ensure_seat(actions, house="drifthouse", handle="Nudgetwice",
                              anchor_cwd=str(tmp_path / "nudgetwice"), source="test")
@@ -930,20 +930,20 @@ async def test_boot_drift_nudge_sweep_silent_when_nothing_is_stale(
     assert out == {"gaps": 0, "nudged": [], "errors": []}
 
 
-# ═══ THE CHARTER RENDERS TRUE AFTER A REISSUE (thread fba386dc item 4) ══════════════════
+# ═══ THE CHARTER RENDERS TRUE AFTER A REISSUE ══════════════════
 
 async def test_reissue_renders_the_real_charter_never_never_formally_declared(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Deckard/Metron's own specimen: a chartered seat's office text read 'Your charter
+    """A real live specimen: a chartered seat's office text read 'Your charter
     was never formally declared' after a reissue. `compile_managed_body`'s own
-    `charter_block` is a live `charter_of()` read at reissue time (never cached) — this
-    is downstream of set_charter's own atomicity fix (fba386dc item 3): the SAME
-    declared-by-display-name-then-re-declared shape item 3's own regression test proves
+    `charter_block` is a live `charter_of()` read at reissue time (never cached). This
+    is downstream of set_charter's own atomicity fix: the SAME
+    declared-by-display-name-then-re-declared shape that fix's own regression test proves
     (a real charter, wiped by a second declaration under the old code's raw-string diff)
     must still render its real governance after a reissue, not the never-declared
-    fallback. A single plain-canonical declaration alone never reproduces the old bug —
-    confirmed empirically against pre-item-3-fix code before writing this specimen."""
+    fallback. A single plain-canonical declaration alone never reproduces the old bug,
+    confirmed empirically against the pre-fix code before writing this specimen."""
     from src.orchestrator.charter import set_charter
     from src.parsers.base import EvidenceClass
 
@@ -967,7 +967,7 @@ async def test_reissue_renders_the_real_charter_never_never_formally_declared(
     assert out["changed"] is True
     after = orders_path.read_text()
     assert "never formally declared" not in after
-    # mail 8788: the office line now shows the project's live NAME with its canonical
+    # the office line now shows the project's live NAME with its canonical
     # beside it, resolved at render time, never the bare canonical alone.
     assert "You govern: `ReissueCharterProjDisplay (repo:reissue-charter-proj)`." in after
 
@@ -975,10 +975,10 @@ async def test_reissue_renders_the_real_charter_never_never_formally_declared(
 async def test_reissue_office_govern_line_shows_the_name_beside_the_canonical_deckards_shape(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """Thoth's mail 8788, the presentation half of the 5031a74 finding: charter_of and
-    set_charter are correct to operate in canonical space forever — that's WHY a rename
-    can never need to touch a governs edge — but a human reads offices, not canonicals,
-    and Deckard's own office line 18 read "You govern: `xxit`" even after a real
+    """The presentation half of a real finding: charter_of and
+    set_charter are correct to operate in canonical space forever (that's WHY a rename
+    can never need to touch a governs edge), but a human reads offices, not canonicals,
+    and a real office line was observed to read "You govern: `xxit`" even after a real
     reissue post-rename. Resolved LIVE at render time so a rename shows through without
     any cascade touching the charter itself."""
     from src.orchestrator.charter import set_charter
@@ -994,7 +994,7 @@ async def test_reissue_office_govern_line_shows_the_name_beside_the_canonical_de
 
     await set_charter(actions, seat_id, ["xxit"], actor="agent:test")
     out = await reissue_office(actions, seat_id=seat_id,
-                               because="test: Deckard's live shape", actor="agent:test")
+                               because="test: real observed office line shape", actor="agent:test")
     assert out["changed"] is True
     after = orders_path.read_text()
     assert "You govern: `handlingtheloop (repo:xxit)`." in after
@@ -1029,7 +1029,7 @@ async def test_migrate_identity_moves_real_hand_written_content(
 ) -> None:
     seat_id, orders_path, charter_path = await _mint_tree_bound(
         actions, tmp_path, handle="MigrateWorker", boss_handle="MigrateBoss")
-    narrative = ("# MigrateWorker — WHY YOU EXIST\nThis seat was minted for a very "
+    narrative = ("# MigrateWorker: WHY YOU EXIST\nThis seat was minted for a very "
                 "specific reason, hand-written long ago.\n\n")
     orders_path.write_text(narrative + orders_path.read_text())
     charter_before = charter_path.read_text()
@@ -1134,7 +1134,7 @@ async def test_migrate_identity_whitespace_only_hand_written_span_is_a_no_op(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """A freshly-minted, tree-bound office has NOTHING hand-written above the compiled
-    markers yet (mint_seat writes the wrapped section alone) — the exact 'nothing worth
+    markers yet (mint_seat writes the wrapped section alone): the exact 'nothing worth
     migrating' case."""
     seat_id, orders_path, charter_path = await _mint_tree_bound(
         actions, tmp_path, handle="EmptySpanWorker", boss_handle="EmptySpanBoss")
@@ -1154,7 +1154,7 @@ async def test_reissue_office_wires_the_migration_automatically(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """`seat(action='reissue_office')` on a tree-bound seat performs the migration as
-    part of the SAME call — no separate migrate step required."""
+    part of the SAME call, no separate migrate step required."""
     seat_id, orders_path, charter_path = await _mint_tree_bound(
         actions, tmp_path, handle="WiredWorker", boss_handle="WiredBoss")
     orders_path.write_text("# hand-written identity\nWired-in prose.\n\n"

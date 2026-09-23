@@ -1,5 +1,5 @@
-"""The retention ladder (vault lane, ruling 39384a87/c53a5fc0 item 2) — pure logic only,
-dry-run report and I/O are the CLI's own thin shell, exercised separately."""
+"""The retention ladder: pure logic only. Dry-run reporting and I/O stay in the CLI's
+own thin shell, exercised separately."""
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
@@ -28,7 +28,7 @@ def _f(path: str, hours_ago: float) -> DumpFile:
 
 
 def test_everything_inside_48h_survives_whole() -> None:
-    files = [_f(f"h{i}", i * 6) for i in range(8)]  # 0h, 6h, 12h, ..., 42h — all < 48h
+    files = [_f(f"h{i}", i * 6) for i in range(8)]  # 0h, 6h, 12h, ..., 42h, all under 48h
     plan = plan_prune(files, now=NOW)
     assert {f.path for f in plan["keep"]} == {f.path for f in files}
     assert plan["remove"] == []
@@ -36,7 +36,7 @@ def test_everything_inside_48h_survives_whole() -> None:
 
 def test_daily_tier_keeps_one_per_calendar_day() -> None:
     # three dumps on the SAME calendar day (2026-09-05), all past the 48h hot window
-    # (NOW is 2026-09-08 12:00) and inside the 30d daily window — only the newest of the
+    # (NOW is 2026-09-08 12:00) and inside the 30d daily window, only the newest of the
     # three must survive.
     files = [
         DumpFile("morning", datetime(2026, 9, 5, 6, tzinfo=UTC)),
@@ -60,7 +60,7 @@ def test_weekly_tier_keeps_one_per_calendar_week() -> None:
     plan = plan_prune([early, later], now=NOW)
     assert {f.path for f in plan["keep"]} == {"later"}
 
-    # a THIRD dump the following ISO week (2026-W03) is a different bucket — survives
+    # a THIRD dump the following ISO week (2026-W03) is a different bucket, survives
     # independently
     next_week = DumpFile("next_week", datetime(2026, 1, 12, tzinfo=UTC))
     plan2 = plan_prune([early, later, next_week], now=NOW)
@@ -68,7 +68,7 @@ def test_weekly_tier_keeps_one_per_calendar_week() -> None:
 
 
 def test_monthly_tier_keeps_one_per_calendar_month_forever() -> None:
-    # two dumps well over a year apart, different months — both survive (one per month,
+    # two dumps well over a year apart, different months, both survive (one per month,
     # no upper bound on age)
     files = [_f("ancient", 800 * 24), _f("prehistoric", 1500 * 24)]
     plan = plan_prune(files, now=NOW)
@@ -85,10 +85,10 @@ def test_monthly_tier_thins_two_dumps_in_the_same_month() -> None:
 def test_a_realistic_mixed_population_across_all_four_tiers() -> None:
     files = [
         _f("hot1", 1), _f("hot2", 47),  # hot (< 48h): both survive
-        # daily (48h-30d): same calendar day 2026-09-05 — newest of the pair survives
+        # daily (48h-30d): same calendar day 2026-09-05, newest of the pair survives
         DumpFile("day_old", datetime(2026, 9, 5, 6, tzinfo=UTC)),
         DumpFile("day_old_dup", datetime(2026, 9, 5, 20, tzinfo=UTC)),
-        # weekly (30d-1y): same ISO week 2026-W23 — newest of the pair survives
+        # weekly (30d-1y): same ISO week 2026-W23, newest of the pair survives
         DumpFile("week_old", datetime(2026, 6, 1, tzinfo=UTC)),
         DumpFile("week_old_dup", datetime(2026, 6, 3, tzinfo=UTC)),
         # monthly (>1y): alone in its month, survives
@@ -113,16 +113,15 @@ def test_keep_and_remove_partition_the_input_with_no_overlap() -> None:
 # ── the CLI's own safety property: dry-run is the default, --apply is required ──────────
 
 def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
-    """The operator's own word (ruling 39384a87/c53a5fc0): 'do not delete anything until
-    I relay the operator's word on that list' — the default invocation must be a pure
-    report, whatever it finds."""
+    """Nothing gets deleted until a human has reviewed the removal list: the default
+    invocation must be a pure report, whatever it finds."""
     from scripts.osiris_prune_ladder import main
 
     backups = tmp_path / "backups"
     vault = tmp_path / "vault"
     backups.mkdir()
     vault.mkdir()
-    # TWO dumps in the same ancient calendar month — a lone old dump is legitimately kept
+    # TWO dumps in the same ancient calendar month: a lone old dump is legitimately kept
     # forever (one-per-month survivor); pruning only happens when a bucket has a
     # DUPLICATE to thin, so the elder of this pair is what the plan would remove.
     elder = backups / "osiris-20200101-000000.dump"
@@ -133,7 +132,7 @@ def test_cli_without_apply_never_deletes_anything(tmp_path, capsys) -> None:
     rc = main(["--backups", str(backups), "--vault", str(vault)])
 
     assert rc == 0
-    assert elder.exists() and younger.exists(), "no --apply flag given — nothing may be deleted"
+    assert elder.exists() and younger.exists(), "no --apply flag given, nothing may be deleted"
     out = capsys.readouterr().out
     assert "DRY RUN ONLY" in out
     assert "REMOVE  " + str(elder) in out
@@ -152,7 +151,7 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     younger = backups / "osiris-20200115-000000.dump"
     younger.write_bytes(b"x" * 100)
     # the CLI's own `main()` uses the REAL wall clock (never the test module's fixed
-    # NOW) — name this one after it directly so it lands in the hot (< 48h) window
+    # NOW), so name this one after it directly to land it in the hot (< 48h) window
     real_now = datetime.now(UTC)
     fresh = backups / f"osiris-{real_now.strftime('%Y%m%d-%H%M%S')}.dump"
     fresh.write_bytes(b"y" * 100)
@@ -165,7 +164,7 @@ def test_cli_with_apply_deletes_exactly_the_planned_removals(tmp_path, capsys) -
     assert fresh.exists(), "a hot-window survivor must never be touched"
 
 
-# ── transcript CHAIN pruning (Thoth msg 8211): whole weekly chains, never a tarball out
+# ── transcript CHAIN pruning: whole weekly chains, never a tarball out
 # of the middle of one ─────────────────────────────────────────────────────────────────
 
 def _chain(week_key: str, week_start: datetime, n_files: int = 3) -> TranscriptChain:
@@ -195,9 +194,9 @@ def test_older_chains_thin_to_one_per_calendar_month() -> None:
 
 
 def test_a_removed_chain_carries_every_one_of_its_own_files() -> None:
-    """The whole-chain guarantee: removing a chain must never leave a partial one —
-    every file that chain owns comes back in the removal, together. A LONE old chain
-    survives forever (the one-per-month rule) — two chains in the SAME month are needed
+    """The whole-chain guarantee: removing a chain must never leave a partial one.
+    Every file that chain owns comes back in the removal, together. A LONE old chain
+    survives forever (the one-per-month rule); two chains in the SAME month are needed
     for the elder to actually be thinned."""
     old_elder = _chain("2024-W02", datetime(2024, 1, 8, tzinfo=UTC), n_files=5)
     old_younger = _chain("2024-W03", datetime(2024, 1, 15, tzinfo=UTC))
@@ -215,7 +214,7 @@ def test_cli_reports_transcript_chains_separately_from_dump_files(tmp_path, caps
     vault = tmp_path / "vault"
     backups.mkdir()
     vault.mkdir()
-    # 6 weekly chains, all in the same ancient month (Jan 2024) — every one of them falls
+    # 6 weekly chains, all in the same ancient month (Jan 2024), every one of them falls
     # outside the keep_recent=4 window, so the whole set thins to just its own newest
     # survivor, guaranteeing at least one REMOVE CHAIN line.
     for i in range(6):
@@ -246,10 +245,10 @@ def test_scan_parses_the_basebackup_filenames_own_timestamp(tmp_path) -> None:
 def test_scan_never_counts_the_repo_bundle_as_a_dump(tmp_path) -> None:
     """osiris_backup.sh writes osiris-repo.bundle straight into the SAME vault
     directory _scan's own default `osiris-*` glob matches, and rewrites it every
-    6-hourly run — its mtime is therefore ALWAYS the freshest thing there. Before this
+    6-hourly run, so its mtime is therefore ALWAYS the freshest thing there. Before this
     guard, the mtime fallback let it win `max(dumps, key=lambda f: f.when)` in
     osiris_disk_guard.py's own main(), silently substituting a ~10MB bundle for a real
-    ~2.7GB dump as "the last dump" (found live, 2026-09-09, Thoth mail 8525 item 2)."""
+    ~2.7GB dump as the last dump (a real bug found in production, 2026-09-09)."""
     from scripts.osiris_prune_ladder import _scan
 
     real_dump = tmp_path / "osiris-20260908-163007.dump"
@@ -267,7 +266,7 @@ def test_scan_never_counts_the_repo_bundle_as_a_dump(tmp_path) -> None:
 
 def test_scan_still_falls_back_to_mtime_for_a_real_dump_shaped_stray(tmp_path) -> None:
     """The fallback isn't removed for genuine dump-shaped files, only narrowed away
-    from unrelated ones — a .dump file with a name _NAME_RE doesn't parse still gets a
+    from unrelated ones: a .dump file with a name _NAME_RE doesn't parse still gets a
     real answer via mtime, same as before this guard."""
     from scripts.osiris_prune_ladder import _scan
 
@@ -289,7 +288,7 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     backups.mkdir()
     vault.mkdir()
     basebackups.mkdir()
-    # two ancient same-month basebackups — the elder should be removable
+    # two ancient same-month basebackups, the elder should be removable
     (basebackups / "osiris-basebackup-20240108-000000.tar.gz").write_bytes(b"x" * 10)
     (basebackups / "osiris-basebackup-20240115-000000.tar.gz").write_bytes(b"x" * 10)
 
@@ -302,7 +301,7 @@ def test_cli_reports_and_prunes_basebackups_as_their_own_population(
     assert "osiris-basebackup-20240115-000000.tar.gz" not in out  # the survivor, not listed
 
 
-# --- thread 9fac4e0d part 2: WAL retention -----------------------------------------------
+# --- WAL retention -----------------------------------------------
 
 def _w(path: str, hours_ago: float) -> WalSegment:
     return WalSegment(path, NOW - timedelta(hours=hours_ago))
@@ -317,7 +316,7 @@ def test_wal_segments_older_than_the_oldest_kept_backup_are_removed() -> None:
 
 
 def test_a_segment_exactly_at_the_anchor_is_kept_not_removed() -> None:
-    """>= the anchor, not only strictly after it — the base backup's own moment is
+    """>= the anchor, not only strictly after it: the base backup's own moment is
     still needed for a restore starting exactly there."""
     anchor = NOW - timedelta(hours=50)
     at_anchor = _w("at_anchor", hours_ago=50)
@@ -327,7 +326,7 @@ def test_a_segment_exactly_at_the_anchor_is_kept_not_removed() -> None:
 
 
 def test_no_kept_backup_at_all_keeps_every_segment() -> None:
-    """Nothing to anchor a retention point to — refusing to guess is safer than
+    """Nothing to anchor a retention point to: refusing to guess is safer than
     deleting WAL that might still be needed for the very next backup taken."""
     segs = [_w("a", 100), _w("b", 5)]
     plan = plan_prune_wal(segs, oldest_kept_backup_when=None)
@@ -346,7 +345,7 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     vault.mkdir()
     basebackups.mkdir()
     wal_dir.mkdir()
-    # one recent base backup — its own timestamp becomes the WAL retention anchor
+    # one recent base backup, its own timestamp becomes the WAL retention anchor
     (basebackups / "osiris-basebackup-20260908-000000.tar.gz").write_bytes(b"x" * 10)
     # a WAL segment older than the backup: removable
     old_seg = wal_dir / "000000010000000000000001"
@@ -367,7 +366,7 @@ def test_wal_retention_end_to_end_via_the_cli(tmp_path, capsys) -> None:  # noqa
     assert "000000010000000000000002" not in out
 
 
-# ── legacy transcript tarballs (Thoth mail 8441 item 2): pre-week-key files that
+# ── legacy transcript tarballs: pre-week-key files that
 # _scan_transcript_chains never recognized, removed in full, no ladder ─────────────────
 
 def test_plan_prune_legacy_tarballs_removes_everything_given() -> None:
@@ -406,21 +405,21 @@ def test_cli_reports_and_prunes_legacy_tarballs_as_their_own_population(
     out = capsys.readouterr().out
     assert "vault/legacy-transcripts" in out
     assert str(stray) in out
-    assert stray.exists(), "no --apply flag given — nothing may be deleted"
+    assert stray.exists(), "no --apply flag given, nothing may be deleted"
 
     rc = main(["--backups", str(backups), "--vault", str(vault), "--apply"])
     assert rc == 0
     assert not stray.exists(), "--apply must actually remove the legacy tarball"
 
 
-# --- dormant seat transcripts (Thoth mail 13353 item 2) -------------------------------------
+# --- dormant seat transcripts -------------------------------------
 
 def test_seat_handles_lists_office_subdirectories(tmp_path) -> None:  # noqa: ANN001
     office_root = tmp_path / "seats"
-    (office_root / "chowder").mkdir(parents=True)
-    (office_root / "thoth").mkdir()
+    (office_root / "acorn").mkdir(parents=True)
+    (office_root / "birch").mkdir()
     (office_root / "not-a-dir.txt").write_text("stray file, never a handle")
-    assert _seat_handles(office_root) == ["chowder", "thoth"]
+    assert _seat_handles(office_root) == ["acorn", "birch"]
 
 
 def test_seat_handles_empty_when_office_root_is_missing(tmp_path) -> None:  # noqa: ANN001
@@ -432,8 +431,8 @@ def test_seat_transcript_dir_agrees_with_the_harness_own_slug_convention(tmp_pat
 
     office_root = tmp_path / "seats"
     projects_root = tmp_path / "projects"
-    d = _seat_transcript_dir("chowder", office_root=office_root, projects_root=projects_root)
-    expected_cwd = str(office_root / "chowder")
+    d = _seat_transcript_dir("acorn", office_root=office_root, projects_root=projects_root)
+    expected_cwd = str(office_root / "acorn")
     assert d == projects_root / _harness_slug(expected_cwd)
 
 
@@ -442,19 +441,19 @@ def test_attribute_sessions_to_seats_groups_only_matching_office_directories(
 ) -> None:
     office_root = tmp_path / "seats"
     projects_root = tmp_path / "projects"
-    (office_root / "chowder").mkdir(parents=True)
-    chowder_dir = _seat_transcript_dir(
-        "chowder", office_root=office_root, projects_root=projects_root)
+    (office_root / "acorn").mkdir(parents=True)
+    acorn_dir = _seat_transcript_dir(
+        "acorn", office_root=office_root, projects_root=projects_root)
     other_project_dir = projects_root / "-some-unrelated-project"
     sessions = [
-        SessionRow("sid-a", str(chowder_dir / "a.jsonl"), NOW, NOW),
-        SessionRow("sid-b", str(chowder_dir / "b.jsonl"), NOW, NOW),
+        SessionRow("sid-a", str(acorn_dir / "a.jsonl"), NOW, NOW),
+        SessionRow("sid-b", str(acorn_dir / "b.jsonl"), NOW, NOW),
         SessionRow("sid-c", str(other_project_dir / "c.jsonl"), NOW, NOW),
     ]
     groups = attribute_sessions_to_seats(
         sessions, office_root=office_root, projects_root=projects_root)
-    assert set(groups) == {"chowder"}
-    assert {s.anchor_sid for s in groups["chowder"]} == {"sid-a", "sid-b"}
+    assert set(groups) == {"acorn"}
+    assert {s.anchor_sid for s in groups["acorn"]} == {"sid-a", "sid-b"}
 
 
 def test_attribute_sessions_to_seats_is_empty_with_no_seat_offices_at_all(
@@ -471,21 +470,21 @@ def test_cli_manifest_names_dormant_seat_transcripts_with_sizes(
     tmp_path, capsys, monkeypatch,  # noqa: ANN001
 ) -> None:
     """End to end through the actual CLI entrypoint's --seat-root/--projects-root test
-    seams (never the real ~/.osiris/seats or ~/.claude/projects) — proves the manifest text
+    seams (never the real ~/.osiris/seats or ~/.claude/projects): proves the manifest text
     itself names the seat, the file count, and a real byte-derived size, not just that the
     pure helper functions above compose correctly in isolation."""
     import scripts.osiris_prune_ladder as ladder
 
     office_root = tmp_path / "seats"
     projects_root = tmp_path / "projects"
-    (office_root / "chowder").mkdir(parents=True)
-    chowder_dir = _seat_transcript_dir(
-        "chowder", office_root=office_root, projects_root=projects_root)
-    chowder_dir.mkdir(parents=True)
-    (chowder_dir / "session-1.jsonl").write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
+    (office_root / "acorn").mkdir(parents=True)
+    acorn_dir = _seat_transcript_dir(
+        "acorn", office_root=office_root, projects_root=projects_root)
+    acorn_dir.mkdir(parents=True)
+    (acorn_dir / "session-1.jsonl").write_bytes(b"x" * (2 * 1024 * 1024))  # 2 MB
 
     async def _fake_collect_session_prune_plan(*, dead_after_days: int = 30):  # noqa: ANN001, ANN202, ARG001
-        return [SessionRow("sid-chowder", str(chowder_dir / "session-1.jsonl"), NOW, NOW)]
+        return [SessionRow("sid-acorn", str(acorn_dir / "session-1.jsonl"), NOW, NOW)]
 
     async def _fake_mail_manifest(*args, **kwargs) -> int:  # noqa: ANN002, ANN003
         # captures the body the real function would have mailed, without a live DB
@@ -503,4 +502,4 @@ def test_cli_manifest_names_dormant_seat_transcripts_with_sizes(
     assert rc == 0
     body = _fake_mail_manifest.body  # type: ignore[attr-defined]
     assert "dormant seat transcripts" in body
-    assert "chowder: 1 file(s), 2.0 MB" in body
+    assert "acorn: 1 file(s), 2.0 MB" in body

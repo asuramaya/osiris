@@ -1,12 +1,13 @@
-"""THE FORK — one mind, a new session id, and a transcript that swears it was born this morning.
+"""THE FORK: one mind, a new session id, and a transcript that swears it was born this morning.
 
 `claude --fork-session --resume` continues a conversation under a BRAND-NEW session id and
 rewrites `sessionId` on every copied record, so the fork is structurally indistinguishable from
-a newborn. SessionStart fires, the whisper posts, automount seats it: ONE MIND, TWO SEATS.
+a newborn. SessionStart fires, the session-start hook posts, automount seats it: one mind,
+two seats.
 
-Field evidence, and it is exquisite: Anubis XII (heinrich, msg 424) was FORCED TO FORK HIMSELF to
-file the bug report, because his real seat's mail bounced as an impostor's. He described the twin
-perfectly, from inside it, without knowing that was its name.
+Field evidence, and it is exquisite: one operator was FORCED TO FORK THEIR OWN SESSION to
+file a real bug report, because their real seat's mail bounced as an impostor's. They described the
+fork's mechanism perfectly, from inside it, without knowing that was its name.
 
 The join is a record uuid: a copy rewrites session ids but PRESERVES record uuids, so a session
 whose FIRST record uuid was EMITTED BY another session is a fork of it. Free, on disk, and it
@@ -58,17 +59,17 @@ async def test_a_MENTION_is_not_AUTHORSHIP(actions: Actions, tmp_path: Path) -> 
     """THE BUG I ALMOST SHIPPED, IN THE FILE THAT CURES IT.
 
     The first cut scanned raw BYTES: "does this transcript contain that uuid?" But a transcript
-    is full of text that is not its own — tool outputs, pasted files, greps of OTHER transcripts.
+    is full of text that is not its own: tool outputs, pasted files, greps of OTHER transcripts.
     The very session that wrote this module had another agent's record uuids sitting in its own
     scrollback, because it had gone and looked at them. A substring hit would have made THE
     READER the parent of the session it READ.
 
-    That is an inference wearing the authority of a declaration — the named disease of this
-    codebase — and a byte scan commits it silently, in the one place where being wrong re-seats
-    a living mind onto a stranger.
+    That is an inference wearing the authority of a declaration, a known failure mode of this
+    codebase, and a byte scan commits it silently, in the one place where being wrong re-seats
+    a living mind onto someone else entirely.
 
-    So the test is structural: a record whose OWN `uuid` field is the key. Merely quoting it —
-    in a tool result, in a file, in prose — proves nothing and must count for nothing.
+    So the test is structural: a record whose OWN `uuid` field is the key. Merely quoting it,
+    in a tool result, in a file, in prose, proves nothing and must count for nothing.
     """
     _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1"), _turn("u2")])
     # a BYSTANDER that merely read the parent's transcript and printed a uuid into its own log
@@ -80,14 +81,14 @@ async def test_a_MENTION_is_not_AUTHORSHIP(actions: Actions, tmp_path: Path) -> 
 
     got = await resolve_parent(actions.pool, fork, root=tmp_path)
     assert got == "aaaaaaaa", "the parent EMITTED u1"
-    assert got != "cccccccc", "the bystander merely QUOTED u1 — reading is not authorship"
+    assert got != "cccccccc", "the bystander merely QUOTED u1, reading is not authorship"
 
 
 async def test_a_session_that_is_NOBODYS_CHILD_is_left_alone(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """A true original must not be re-parented onto anyone. Being wrong HERE would hand a
-    stranger's whole identity — its mail, its seat, its succession — to a newborn."""
+    """A true original must not be re-parented onto anyone. Being wrong HERE would hand
+    someone else's whole identity, their mail, their seat, their succession, to a newborn."""
     _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
     solo = _write(tmp_path, "-repo", "dddddddd", [_turn("q1"), _turn("q2")])
     assert await resolve_parent(actions.pool, solo, root=tmp_path) is None
@@ -96,10 +97,10 @@ async def test_a_session_that_is_NOBODYS_CHILD_is_left_alone(
 async def test_a_fork_adopts_the_nearest_ancestor_THAT_HAS_A_SEAT(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """NOT the transcript's root — the nearest ancestor the GRAPH already knows.
+    """NOT the transcript's root: the nearest ancestor the GRAPH already knows.
 
-    A root is a fact about a FILE; a seat is a fact about the GRAPH. Thoth's chain roots at a
-    session id the fleet has never heard of, while the fleet has known that mind as
+    A root is a fact about a FILE; a seat is a fact about the GRAPH. One seat's real chain roots
+    at a session id the fleet has never heard of, while the fleet has known that mind as
     `agent:ad1a1cb0` for nine generations. Deriving an id from the root would invent a THIRD
     identity while curing a second one.
     """
@@ -117,9 +118,9 @@ async def test_forks_CHAIN_and_every_link_lands_on_the_one_seat(
     """A→B→C: a resumed session gets resumed again (15 of 36 in the field had more than one
     ancestor). Every generation is the SAME MIND and must land on the same seat, so the walk
     climbs past an unseated ancestor instead of stopping at it."""
-    _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1"), _turn("u2")])       # A — the seat
-    _write(tmp_path, "-repo", "bbbbbbbb", [_turn("u2"), _turn("u3")])       # B — unseated
-    c = _write(tmp_path, "-repo", "cccccccc", [_turn("u3"), _turn("u4")])   # C — unseated
+    _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1"), _turn("u2")])       # A: the seat
+    _write(tmp_path, "-repo", "bbbbbbbb", [_turn("u2"), _turn("u3")])       # B: unseated
+    c = _write(tmp_path, "-repo", "cccccccc", [_turn("u3"), _turn("u4")])   # C: unseated
     await _seat(actions, "aaaaaaaa", "agent:aaaaaaaa-iii")
 
     assert await seat_of_fork(actions.pool, c, root=tmp_path) == "agent:aaaaaaaa-iii"
@@ -128,8 +129,8 @@ async def test_forks_CHAIN_and_every_link_lands_on_the_one_seat(
 async def test_a_fork_that_CROSSED_PROJECTS_is_still_found(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """2 of 57 field pairs cross project dirs (the operator `cd`s into a subrepo and resumes).
-    Scoping the search to the session's own dir would have been tidy, cheap, and WRONG TWICE —
+    """2 of 57 field pairs cross project dirs (a user `cd`s into a subrepo and resumes).
+    Scoping the search to the session's own dir would have been tidy, cheap, and WRONG TWICE,
     and a lineage engine that silently loses 2 lineages in 57 is not a lineage engine."""
     _write(tmp_path, "-code", "aaaaaaaa", [_turn("u1"), _turn("u2")])
     fork = _write(tmp_path, "-code-subrepo", "bbbbbbbb", [_turn("u2"), _turn("u3")])
@@ -143,7 +144,7 @@ async def test_a_SPARE_with_no_records_is_not_anybodys_child(
 ) -> None:
     """`claude bg-spare` / pty-host fires SessionStart with a real id and cwd but never holds a
     conversation (the live one: 1 line, zero turns). It has no first record uuid, so it joins to
-    nothing — and must never be handed a living agent's seat by accident."""
+    nothing, and must never be handed a living agent's seat by accident."""
     _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
     spare = _write(tmp_path, "-repo", "eeeeeeee", [{"type": "summary", "sessionId": "eeeeeeee"}])
     assert await resolve_parent(actions.pool, spare, root=tmp_path) is None
@@ -154,7 +155,7 @@ async def test_the_answer_is_memoized_and_NEVER_RESCANNED(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """NOT THE CRAWL COMING BACK. The crawl re-read every transcript forever, on a clock. A
-    session's ancestry is IMMUTABLE, so it is resolved once, at birth, and cached — including
+    session's ancestry is IMMUTABLE, so it is resolved once, at birth, and cached, including
     the negative answer, which is a real ANSWER ("we looked; nobody's child"), not a gap to be
     re-dug on every mount. That distinction is exactly how a cheap check turns back into a crawl.
     """
@@ -164,7 +165,7 @@ async def test_the_answer_is_memoized_and_NEVER_RESCANNED(
     assert await actions.pool.fetchval(
         "SELECT cursor FROM watermarks WHERE key=$1", fork_key("bbbbbbbb")) == "aaaaaaaa"
 
-    # the parent's transcript is DELETED — a re-scan would now find nothing and lose the lineage
+    # the parent's transcript is DELETED, so a re-scan would now find nothing and lose the lineage
     next(iter((tmp_path / "-repo").glob("aaaaaaaa*.jsonl"))).unlink()
     assert await resolve_parent(actions.pool, fork, root=tmp_path) == "aaaaaaaa", "it re-scanned"
 
@@ -178,11 +179,11 @@ async def test_the_answer_is_memoized_and_NEVER_RESCANNED(
 async def test_an_undetermined_first_uuid_is_never_cached_as_a_negative(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """60bc15db specimen 4 (decision 01e0c69a): a session whose transcript is not yet
-    flushed (first_uuid can't even determine its own join key — plausible at the exact
+    """A real observed shape: a session whose transcript is not yet
+    flushed (first_uuid can't even determine its own join key, plausible at the exact
     moment SessionStart fires) is NOT the same fact as a real search that ran to
     completion and found nobody. Caching the first as if it were the second would freeze
-    a transient condition into a permanent "nobody's child" — precisely the twin-seat
+    a transient condition into a permanent "nobody's child", precisely the double-seat
     mistake this module exists to prevent. Proven by writing the real content only AFTER
     the first call: the retry must still find the true parent, unlike the sibling test
     above where a genuine negative stays cached even after its evidence is deleted."""
@@ -210,12 +211,12 @@ async def test_a_CYCLE_cannot_spin_the_walk(actions: Actions, tmp_path: Path) ->
 
 
 def test_find_is_anchored_not_a_substring_match(tmp_path: Path) -> None:
-    """Thoth dispatch 6715: the old `glob(f"*/{sid}*.jsonl")` matched `sid` ANYWHERE in the
-    filename — a file whose stem merely CONTAINS the target sid, not just one that starts
+    """A real observed bug: the old `glob(f"*/{sid}*.jsonl")` matched `sid` ANYWHERE in the
+    filename, so a file whose stem merely CONTAINS the target sid, not just one that starts
     with it, would wrongly match. `_find` must return the genuine stem-prefix match and
     never a look-alike."""
     real = _write(tmp_path, "-repo", "aaaaaaaa", [_turn("u1")])
-    # a look-alike: "aaaaaaaa" appears as a SUBSTRING, but the stem does not START with it —
+    # a look-alike: "aaaaaaaa" appears as a SUBSTRING, but the stem does not START with it,
     # the old bare-substring glob would have matched this one too (whichever sorts first).
     _write(tmp_path, "-repo", "zzzz-aaaaaaaa", [_turn("u9")])
 
@@ -229,7 +230,7 @@ def test_find_returns_none_for_an_unknown_sid(tmp_path: Path) -> None:
 
 def test_find_never_resolves_into_the_extractors_own_scratch_tree(tmp_path: Path) -> None:
     """The old glob's own guard, preserved: an ancestor's transcript must never resolve
-    into `-osiris-extract`, the instrument's own self-reading scratch tree — even though
+    into `-osiris-extract`, the instrument's own self-reading scratch tree, even though
     `locate_current_transcript` itself carries no such exclusion."""
     _write(tmp_path, "-repo-osiris-extract", "aaaaaaaa", [_turn("u1")])
     assert _find(tmp_path, "aaaaaaaa") is None

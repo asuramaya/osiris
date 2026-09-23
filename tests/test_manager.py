@@ -1,8 +1,8 @@
-"""osiris-manager — the sacred proc's control socket, re-adoption, and the scream.
+"""osiris-manager: the daemon's control socket, re-adoption, and the health alert.
 
 Never real systemd or DBus in a unit test: `_make_runner` fakes the ONE `ProcessRunner` seam
 this daemon and `bodies.LocalProvider` share (mirrors `tests/test_bodies.py`'s `_fake_runner`),
-and the watchdog's `probe`/`notify` are pure injected callables — `watchdog_tick` is tested with
+and the watchdog's `probe`/`notify` are pure injected callables. `watchdog_tick` is tested with
 neither Postgres, Redis, nor a running Manager anywhere nearby. The one test that DOES touch a
 real graph (`test_default_probe_reads_a_real_postgres_and_redis`) uses the testcontainers
 fixtures every other suite in this repo already relies on, never mocks.
@@ -26,26 +26,27 @@ requires_pty = pytest.mark.skipif(
 
 @pytest.fixture(autouse=True)
 async def _seed_catalog_for_raw_pool_tests(pg_dsn: str) -> None:
-    """THE ALONE-VS-SUITE DEFECT (thread 7bde8729): every raw-pool test in this file builds
+    """THE ALONE-VS-SUITE DEFECT: every raw-pool test in this file builds
     its own `Actions(await create_pool(pg_dsn))` directly rather than depending on
-    conftest.py's shared `actions` fixture — the ONLY thing that seeds the ontology catalog
-    (Type rows for Seat/Agent/..., schema.py's own declared list) on a worker's first use.
-    Measured, not assumed (census over every test file that builds its own pool at all —
-    grep for `create_pool(` across tests/: exactly three, this one plus test_live_db_guard.py
-    and test_db_pool.py, both confirmed to pass standalone since neither ever calls
-    check_object_type at all): this file is the ONLY specimen, so the narrow fix here is
-    correctly scoped, not a guess ahead of an unmeasured population.
+    conftest.py's shared `actions` fixture, which is the ONLY thing that seeds the ontology
+    catalog (Type rows for Seat/Agent/..., schema.py's own declared list) on a worker's first
+    use. Measured, not assumed: a census over every test file that builds its own pool at all,
+    grepping for `create_pool(` across tests/, found exactly three: this one, plus
+    test_live_db_guard.py and test_db_pool.py, both confirmed to pass standalone since neither
+    ever calls check_object_type at all. This file is the ONLY specimen, so the narrow fix here
+    is correctly scoped, not a guess ahead of an unmeasured population.
 
     Run this file ALONE (no other test's `actions` fixture having run first in this
     worker), 3 of 27 tests genuinely failed with `UnknownTypeError: undeclared object type
-    'Seat'` (two directly, one one layer down — the daemon's own `_op_pty_spawn` raising
+    'Seat'` (two directly, one one layer down: the daemon's own `_op_pty_spawn` raising
     inside `_handle_client`, surfacing to its test as a JSONDecodeError on the empty
-    response) — exactly the shape scripts/gate_hook.py's selective gate is exposed to: any
-    worker whose changed files select ONLY test_manager.py, with nothing else in the fanout
-    that happens to touch `actions` first, gets refused at commit for a defect that isn't
-    theirs. Seeded here instead — same cheap existence check the `actions` fixture itself
-    uses, so after the real first run this is one fast indexed read, not a re-seed — so this
-    file's own correctness never depends on collection order with the rest of the suite."""
+    response). That is exactly the shape scripts/gate_hook.py's selective gate is exposed to:
+    any worker whose changed files select ONLY test_manager.py, with nothing else in the
+    fanout that happens to touch `actions` first, gets refused at commit for a defect that
+    isn't theirs. Seeded here instead, using the same cheap existence check the `actions`
+    fixture itself uses, so after the real first run this is one fast indexed read, not a
+    re-seed, and this file's own correctness never depends on collection order with the rest
+    of the suite."""
     from src.actions.core import Actions
     from src.db.pool import create_pool
     from src.ontology.catalog import is_known_object_type, seed_catalog
@@ -62,7 +63,7 @@ async def _seed_catalog_for_raw_pool_tests(pg_dsn: str) -> None:
 
 class _FakeProc:
     """A stand-in for the tail of `asyncio.subprocess.Process` the daemon actually touches
-    (`.communicate()`, `.wait()`, `.returncode`) — same idiom as test_bodies.py's
+    (`.communicate()`, `.wait()`, `.returncode`); same idiom as test_bodies.py's
     `_FakeCompletedProc`."""
 
     def __init__(self, out: bytes = b"", returncode: int = 0) -> None:
@@ -82,7 +83,7 @@ def _make_runner(
 ) -> Any:
     """Answers every subprocess call this daemon can make: `list-units` (canned JSON),
     `show -p ControlGroup` (a fixture cgroup dir), `stop` (always succeeds), `is-active`
-    (canned state), `notify-send` (always "succeeds" — the scream tests exercise the notifier
+    (canned state), `notify-send` (always "succeeds"; the alert tests exercise the notifier
     directly, never through this runner)."""
     calls: list[list[str]] = []
 
@@ -136,7 +137,7 @@ async def _connect(path: Path) -> _Client:
 
 
 async def _await_marker(session: Any, needle: bytes) -> None:
-    """Waits for `needle` in a broker session's stream (or its replay) — the same
+    """Waits for `needle` in a broker session's stream (or its replay); the same
     observable-state discipline as `test_pty_broker._await_in_ring`: never a sleep."""
     replay, queue = session.attach()
     try:
@@ -157,7 +158,7 @@ async def _attach(
     path: Path, name: str, *, rows: int = 24, cols: int = 80,
 ) -> tuple[asyncio.StreamReader, asyncio.StreamWriter, dict[str, Any]]:
     """Opens a FRESH connection (pty_attach is a one-shot switch, never shared with the JSON
-    control connection that requested it — see `daemon._op_pty_attach`), sends the request, and
+    control connection that requested it; see `daemon._op_pty_attach`), sends the request, and
     returns the still-open (reader, writer) plus the one JSON ack line the daemon answers with
     before handing the connection to the framed stream."""
     reader, writer = await asyncio.open_unix_connection(path=str(path))
@@ -169,7 +170,7 @@ async def _attach(
 
 
 async def _read_frames_until(reader: asyncio.StreamReader, needle: bytes) -> bytes:
-    """Reads framed 'O' output until `needle` shows up — bounded by the CALLER's own
+    """Reads framed 'O' output until `needle` shows up; bounded by the CALLER's own
     `asyncio.timeout`, same discipline as `test_pty_broker.py`'s `_read_output_until`: an
     event-driven wait on the next frame, never a sleep, never a fixed delay."""
     buf = bytearray()
@@ -203,8 +204,8 @@ async def test_status_bodies_dissolve_round_trip(tmp_path: Path) -> None:
     manager = Manager(
         socket_path=tmp_path / "m.sock", receipts_dir=receipts,
         # cgroup_root=Path("/"): the fake runner hands back the fixture dir's own ABSOLUTE
-        # path as the "ControlGroup" value, same trick test_bodies.py's `_fake_runner` uses —
-        # joined onto "/" it resolves to exactly that path instead of nesting under a real
+        # path as the "ControlGroup" value, same trick test_bodies.py's `_fake_runner` uses.
+        # Joined onto "/" it resolves to exactly that path instead of nesting under a real
         # /sys/fs/cgroup that doesn't exist in the fixture.
         cgroup_root=Path("/"),
         runner=_make_runner(units_json=units, cgroup_dir=cgroup, is_active="inactive"))
@@ -243,7 +244,7 @@ async def test_status_bodies_dissolve_round_trip(tmp_path: Path) -> None:
     finally:
         await manager.close()
 
-    # THE ONE MUTATING OP IN v1 goes through LocalProvider — receipted, exactly Phase 0's lane.
+    # THE ONE MUTATING OP IN v1 goes through LocalProvider, receipted, exactly Phase 0's lane.
     receipt = json.loads((receipts / "h1.json").read_text())
     assert receipt["handle"] == "h1"
     assert receipt["provider"] == "local"
@@ -341,7 +342,7 @@ async def test_a_unit_with_an_existing_receipt_is_reaped_not_readopted(tmp_path:
 async def test_unparseable_list_units_output_degrades_to_an_empty_registry(
     tmp_path: Path,
 ) -> None:
-    """A systemctl hiccup at boot must never crash the daemon — an empty registry (nothing
+    """A systemctl hiccup at boot must never crash the daemon: an empty registry (nothing
     adopted this run) is the honest, safe degradation."""
     manager = Manager(
         socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
@@ -418,7 +419,7 @@ async def test_watchdog_screams_on_the_very_first_tick_if_already_down() -> None
 
 async def test_status_reports_the_last_scream(tmp_path: Path) -> None:
     """`{"op": "status"}` surfaces the watchdog's memory (`self._scream`), not a fresh probe.
-    Exercised directly against `_op_status()` — a live watchdog task would race a manual
+    Exercised directly against `_op_status()`, because a live watchdog task would race a manual
     `_scream` mutation the instant it next ticks, which is exactly the kind of flake this
     daemon's real behavior (state driven ONLY by `watchdog_tick`) should never have; the
     round-trip test above already proves the socket wiring end to end."""
@@ -464,10 +465,10 @@ async def test_default_probe_reports_down_when_postgres_is_unreachable(
     from src.db.redis import create_redis
 
     # A pool pointed at a port nothing listens on: min_size=0 so construction itself
-    # never blocks — the failure surfaces inside the probe's own bounded timeout, not here.
+    # never blocks; the failure surfaces inside the probe's own bounded timeout, not here.
     from tests.conftest import unreachable_dsn_allowed
 
-    with unreachable_dsn_allowed():  # LIVE-DB GUARD (9b9ba394): port 1 is a dead target
+    with unreachable_dsn_allowed():  # LIVE-DB GUARD: port 1 is a dead target
         pool = await asyncpg.create_pool(
             dsn="postgresql://osiris:osiris@127.0.0.1:1/osiris", min_size=0, max_size=1)
     assert pool is not None
@@ -486,11 +487,11 @@ async def test_default_probe_reports_down_when_postgres_is_unreachable(
 
 # --- the PTY broker wired into the daemon's control socket (§4.5, tmux-with-a-graph) ---
 #
-# No fakes here — a real Manager, a real PtyBroker, real ptys/children (mirrors
+# No fakes here: a real Manager, a real PtyBroker, real ptys/children (mirrors
 # test_pty_broker.py's own discipline: the whole point is proving a raw fd behaves like a
 # terminal end to end over THIS daemon's socket, which a fake subprocess cannot prove).
-# Synchronization is always on OBSERVABLE STATE — a marker the child itself echoes, or
-# `attach_count` read directly off the broker's own session object — never a sleep, never a
+# Synchronization is always on OBSERVABLE STATE: a marker the child itself echoes, or
+# `attach_count` read directly off the broker's own session object, never a sleep, never a
 # race against how fast a shell happens to start.
 
 
@@ -509,7 +510,7 @@ async def test_pty_spawn_then_list_shows_it_and_rejects_a_name_collision(
                 {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
             assert spawned == {"spawned": "s1"}
 
-            # a name collision errors LOUDLY — never a silent replace of the live session.
+            # a name collision errors LOUDLY: never a silent replace of the live session.
             collided = await client.send(
                 {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
             assert "error" in collided
@@ -535,11 +536,11 @@ async def test_pty_spawn_then_list_shows_it_and_rejects_a_name_collision(
 async def test_pty_spawn_reaps_a_dead_registration_instead_of_refusing(
     tmp_path: Path,
 ) -> None:
-    """finding #8 (mint-lane wave, task #68): 'a PTY session named [OS] imhotep already
-    exists' after the body was killed OUTSIDE pty_close (the ordinary case — a session dies
-    on its own, or the operator kills the process directly) — the roster's own liveness
-    already reports it dead, so refusing a same-name respawn forever was the bug. The daemon
-    op must reap the corpse and spawn fresh."""
+    """Regression: a PTY session name could get stuck reporting 'already exists' after the
+    body was killed OUTSIDE pty_close (the ordinary case: a session dies on its own, or
+    someone kills the process directly). The roster's own liveness already reports it dead,
+    so refusing a same-name respawn forever was the bug. The daemon op must reap the corpse
+    and spawn fresh."""
     manager = Manager(
         socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
         runner=_make_runner())
@@ -559,7 +560,7 @@ async def test_pty_spawn_reaps_a_dead_registration_instead_of_refusing(
 
             respawned = await client.send(
                 {"op": "pty_spawn", "name": "s1", "argv": ["sh", "-c", "cat"]})
-            assert respawned == {"spawned": "s1"}  # no error — the corpse was reaped
+            assert respawned == {"spawned": "s1"}  # no error: the corpse was reaped
             assert manager._broker.get("s1") is not dead
             assert (await client.send({"op": "pty_list"}))["sessions"][0]["alive"] is True
         finally:
@@ -570,11 +571,11 @@ async def test_pty_spawn_reaps_a_dead_registration_instead_of_refusing(
 
 @requires_pty
 async def test_pty_poke_types_a_turn_with_idle_gate_and_dedup(tmp_path: Path) -> None:
-    """THE WAKE LAW's op (Stage A+C of the wake arc): pty_poke types one message into the
-    EXISTING window. Policy lives at the daemon — `min_idle_secs` refuses a busy window
-    ('busy': true, so the trigger falls through its ladder instead of typing into someone's
-    sentence), `dedup` makes one mail-cause poke at most once per window, and the window's
-    metadata (job_dir, recorded at spawn) is what the trigger routes by."""
+    """pty_poke types one message into the EXISTING window. Policy lives at the daemon:
+    `min_idle_secs` refuses a busy window ('busy': true, so the caller falls back to its
+    next option instead of typing into someone's sentence), `dedup` makes one mail-cause
+    poke at most once per window, and the window's metadata (job_dir, recorded at spawn) is
+    what the caller routes by."""
     manager = Manager(
         socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
         runner=_make_runner())
@@ -590,11 +591,11 @@ async def test_pty_poke_types_a_turn_with_idle_gate_and_dedup(tmp_path: Path) ->
             assert session is not None
             await _await_marker(session, b"ready")
 
-            # the window's metadata rides pty_list — the trigger's routing table
+            # the window's metadata rides pty_list: the caller's routing table
             listed = await client.send({"op": "pty_list"})
             assert listed["sessions"][0]["job_dir"] == "/x/jobs/beefcafe"
 
-            # a window that just printed is BUSY under a strict idle gate — refused, flagged
+            # a window that just printed is BUSY under a strict idle gate: refused, flagged
             busy = await client.send(
                 {"op": "pty_poke", "name": "w1", "text": "hold on", "min_idle_secs": 3600})
             assert busy.get("busy") is True and "error" in busy
@@ -701,8 +702,8 @@ async def test_two_attachments_to_one_session_both_receive_output(tmp_path: Path
                 assert ack1 == {"attached": "a2"}
                 assert ack2 == {"attached": "a2"}
                 # both replays are guaranteed to carry "readymark": the ring holds it from the
-                # moment it was first observed, and ring writes happen before any fan-out —
-                # no race against how fast the shell started (see the section banner above).
+                # moment it was first observed, and ring writes happen before any fan-out,
+                # so there's no race against how fast the shell started (see the banner above).
                 async with asyncio.timeout(5.0):
                     await _read_frames_until(reader1, b"readymark")
                 async with asyncio.timeout(5.0):
@@ -755,8 +756,8 @@ async def test_pty_close_reaps_the_child_and_a_second_close_errors_loudly(
             assert manager._broker.get("a3") is None  # reaped out of the registry
             assert session.returncode is not None  # the child was actually terminated
 
-            # unknown name (already closed): errors loudly, never a silent no-op — same
-            # discipline BUILD item 1 asks of every named-session op on this socket.
+            # unknown name (already closed): errors loudly, never a silent no-op, the same
+            # discipline every named-session op on this socket follows.
             second_close = await client.send({"op": "pty_close", "name": "a3"})
             assert "error" in second_close
         finally:
@@ -790,11 +791,11 @@ async def test_pty_attach_to_an_unknown_name_errors_and_leaves_the_connection_us
         await manager.close()
 
 
-# --- identity at birth (§4.2, ruling 5cef856b): pty_spawn naming a seat ---
+# --- identity at birth (§4.2): pty_spawn naming a seat ---
 
 
 async def test_pty_spawn_with_seat_refuses_without_graph_access(tmp_path: Path) -> None:
-    """A body summoned for a seat that cannot be minted must not be born unbound — a daemon
+    """A body summoned for a seat that cannot be minted must not be born unbound: a daemon
     with no pool refuses BEFORE any fd or child exists, and a malformed seat is refused the
     same way."""
     manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
@@ -823,10 +824,11 @@ async def test_pty_spawn_with_seat_refuses_without_graph_access(tmp_path: Path) 
 async def test_pty_spawn_with_seat_exports_identity_at_birth(
     pg_dsn: str, tmp_path: Path,
 ) -> None:
-    """The ceremony's daemon half (§4.2): a spawn naming a seat gets the Seat minted in the
+    """The daemon half of §4.2: a spawn naming a seat gets the Seat minted in the
     graph and OSIRIS_SEAT_ID + a ONE-TIME token exported into the child's environment before
-    its first breath — witnessed here by the child echoing both back through its own pty,
-    and by the token row sitting minted-but-unused (the whisper, not the daemon, spends it)."""
+    it starts, witnessed here by the child echoing both back through its own pty,
+    and by the token row sitting minted-but-unused (the client session, not the daemon,
+    spends it)."""
     from src.db.pool import create_pool
 
     pool = await create_pool(pg_dsn)
@@ -868,12 +870,12 @@ async def test_pty_spawn_with_seat_exports_identity_at_birth(
 async def test_the_lease_gate_refuses_foreign_bodies_when_ratified(
     pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """THE LEASE GATE (Alfred's field spec, msg 637 → task #22), armed via
-    OSIRIS_LEASE_REFUSE: (1) a foreign body summoned into a Seat's charter room while the
-    resident lineage's pulse is live is REFUSED before birth; (2) the resident seat's own
-    child passes (lineage-shared); (3) an expired pulse releases the lease (no handoff
-    verb — the pulse IS the claim); (4) lease_override=true passes and the receipt carries
-    the logged override; (5) unratified (default), the same spawn only warns."""
+    """THE LEASE GATE, armed via OSIRIS_LEASE_REFUSE: (1) a foreign body summoned into a
+    Seat's charter room while the resident lineage's pulse is live is REFUSED before birth;
+    (2) the resident seat's own child passes (lineage-shared); (3) an expired pulse releases
+    the lease (no handoff verb, the pulse IS the claim); (4) lease_override=true passes and
+    the receipt carries the logged override; (5) unratified (default), the same spawn only
+    warns."""
     from src.actions.core import Actions
     from src.db.pool import create_pool
     from src.orchestrator.mounts import save_mount
@@ -885,10 +887,10 @@ async def test_the_lease_gate_refuses_foreign_bodies_when_ratified(
                       pool=pool, runner=_make_runner())
     await manager.start()
     try:
-        office = tmp_path / "office-alfred"
+        office = tmp_path / "office-warden"
         office.mkdir()
         actions = Actions(pool)
-        seated = await ensure_seat(actions, house=None, handle="Alfred",
+        seated = await ensure_seat(actions, house=None, handle="Warden",
                                    anchor_cwd=str(office), source="test")
         holder = await actions.create_or_find_object("Agent", "agent:a1fred01-ii", "test")
         assert holder is not None
@@ -898,7 +900,7 @@ async def test_the_lease_gate_refuses_foreign_bodies_when_ratified(
             "WHERE o.canonical='agent:a1fred01-ii' AND s.canonical=$1",
             seated["seat_id"])
         await save_mount(pool, job_dir="/x/jobs/a1fred01", agent_id="agent:a1fred01-ii",
-                         project="alfred", cwd=str(office), model=None, session_key=None)
+                         project="warden", cwd=str(office), model=None, session_key=None)
         client = await _connect(tmp_path / "m.sock")
         try:
             # (1) a foreign, seatless body: refused before any child exists
@@ -941,15 +943,12 @@ async def test_the_lease_gate_refuses_foreign_bodies_when_ratified(
 async def test_the_lease_gate_arms_live_off_the_settings_table(
     pg_dsn: str, tmp_path: Path,
 ) -> None:
-    """MANAGER OVERLAY (SECRETS ROTATE ACT + MANAGER OVERLAY, thread f4498ab304e4's own
-    follow-up, Thoth mail 10441): `daemon.lease_refuse.enabled` now arms/disarms the
-    SAME gate via `settings_with_overlay(self._pool)`, no env var and no manager
-    restart — the exact gap the wake-ladder's own registry comment named as a
-    follow-up ("a bigger, riskier first step than this pass's own scope"). Deliberately
-    NOT `monkeypatch.setenv("OSIRIS_LEASE_REFUSE", ...)` (that's the pre-existing,
-    still-working env path, proven by
-    test_the_lease_gate_refuses_foreign_bodies_when_ratified above) — this test's own
-    job is proving the NEW table-driven path works on its own, unarmed by env."""
+    """MANAGER OVERLAY: `daemon.lease_refuse.enabled` now arms/disarms the SAME gate via
+    `settings_with_overlay(self._pool)`, no env var and no manager restart required.
+    Deliberately NOT `monkeypatch.setenv("OSIRIS_LEASE_REFUSE", ...)` (that's the
+    pre-existing, still-working env path, proven by
+    test_the_lease_gate_refuses_foreign_bodies_when_ratified above); this test's own job is
+    proving the NEW table-driven path works on its own, unarmed by env."""
     from src.actions.core import Actions
     from src.db.pool import create_pool
     from src.orchestrator.mounts import save_mount
@@ -1010,8 +1009,8 @@ async def test_the_lease_gate_arms_live_off_the_settings_table(
 async def test_the_lease_is_lineage_shared_for_the_residents_own_child(
     pg_dsn: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """(2) of the spec: a spawn that NAMES the resident seat is the lineage's own child —
-    the lease never refuses its holder's house."""
+    """(2) of the spec: a spawn that NAMES the resident seat is the lineage's own child,
+    so the lease never refuses its holder's house."""
     from src.actions.core import Actions
     from src.db.pool import create_pool
     from src.orchestrator.mounts import save_mount
@@ -1023,10 +1022,10 @@ async def test_the_lease_is_lineage_shared_for_the_residents_own_child(
                       pool=pool, runner=_make_runner())
     await manager.start()
     try:
-        office = tmp_path / "office-maat"
+        office = tmp_path / "office-ledger"
         office.mkdir()
         actions = Actions(pool)
-        seated = await ensure_seat(actions, house=None, handle="Maat",
+        seated = await ensure_seat(actions, house=None, handle="Ledger",
                                    anchor_cwd=str(office), source="test")
         await actions.create_or_find_object("Agent", "agent:0maat001", "test")
         await pool.execute(
@@ -1034,13 +1033,13 @@ async def test_the_lease_is_lineage_shared_for_the_residents_own_child(
             "SELECT o.id, s.id, 'holds', 'test', now(), 0.9 FROM objects o, objects s "
             "WHERE o.canonical='agent:0maat001' AND s.canonical=$1", seated["seat_id"])
         await save_mount(pool, job_dir="/x/jobs/0maat001", agent_id="agent:0maat001",
-                         project="maat", cwd=str(office), model=None, session_key=None)
+                         project="ledger", cwd=str(office), model=None, session_key=None)
         client = await _connect(tmp_path / "m.sock")
         try:
-            out = await client.send({"op": "pty_spawn", "name": "maat-child",
+            out = await client.send({"op": "pty_spawn", "name": "ledger-child",
                                      "argv": ["sh", "-c", "cat"], "cwd": str(office),
-                                     "seat": {"handle": "Maat"}})
-            assert out.get("spawned") == "maat-child", out
+                                     "seat": {"handle": "Ledger"}})
+            assert out.get("spawned") == "ledger-child", out
             assert "lease_override_logged" not in out   # its own room needs no override
         finally:
             await client.close()
@@ -1053,11 +1052,11 @@ async def test_the_lease_is_lineage_shared_for_the_residents_own_child(
 async def test_pty_spawn_warns_when_the_room_is_already_held(
     pg_dsn: str, tmp_path: Path,
 ) -> None:
-    """THE ROOM-BUSY ADVISORY (wake arc Stage E, alfred's spawn-lease gate — the advisory
-    half): a body spawned into a cwd where a LIVE session already works is told so in its
-    birth receipt, and the spawn PROCEEDS — warn, never refuse (the refusal semantics wait
-    on the room owner's field spec; an operator spawning over their own window is
-    legitimate). A quiet room's receipt carries no advisory."""
+    """THE ROOM-BUSY ADVISORY half of the spawn-lease gate: a body spawned into a cwd where
+    a LIVE session already works is told so in its birth receipt, and the spawn PROCEEDS
+    (warn, never refuse; the refusal semantics wait on the room owner's own gate, and
+    spawning over your own window is legitimate). A quiet room's receipt carries no
+    advisory."""
     from src.db.pool import create_pool
     from src.orchestrator.mounts import save_mount
 
@@ -1095,7 +1094,7 @@ async def test_pty_spawn_warns_when_the_room_is_already_held(
 @requires_pty
 async def test_pty_spawn_moves_the_child_into_its_own_scope(tmp_path: Path) -> None:
     """Every PTY child is ADOPTED into its own transient scope right after birth
-    (StartTransientUnit with PIDs= via busctl) — the spawn/wait/kill topology untouched,
+    (StartTransientUnit with PIDs= via busctl); the spawn/wait/kill topology is untouched,
     only the cgroup membership changes. The busctl call carries the child's REAL pid and
     the envelope (MemoryMax + IOWeight)."""
     runner = _make_runner()
@@ -1124,9 +1123,8 @@ async def test_pty_spawn_moves_the_child_into_its_own_scope(tmp_path: Path) -> N
 
 @requires_pty
 async def test_pty_spawn_refuses_a_child_it_cannot_bound(tmp_path: Path) -> None:
-    """The strict half: a child whose scope adoption fails is CLOSED and the spawn refused —
-    under the sacred proc a child is born bounded or not at all, never left as a limb of
-    the daemon's own slice."""
+    """The strict half: a child whose scope adoption fails is CLOSED and the spawn refused.
+    A child is born bounded or not at all, never left as a limb of the daemon's own slice."""
     manager = Manager(socket_path=tmp_path / "m.sock", receipts_dir=tmp_path / "receipts",
                       runner=_make_runner(busctl_rc=1))
     await manager.start()
