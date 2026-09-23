@@ -1,5 +1,5 @@
 """deploy_status — THE SETTINGS PANE's own BOX section (Thoth mail 13350, piece 5):
-"deploy snapshot sha vs deployed.sha" had no read door at all before this. Two facts,
+"deploy snapshot sha vs deployed.sha" had no read entry point at all before this. Two facts,
 both read live off the filesystem, never fabricated:
 
   running_sha        the git sha THIS repo checkout (wherever the API process's own

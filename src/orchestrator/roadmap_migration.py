@@ -158,7 +158,7 @@ async def apply_migration(
     attempted, 17 successful-looking receipts, zero landed, caught only by re-counting.
     After each open_thread call this function re-reads that thread's OWN current `arc`
     property directly; if it doesn't match what was requested (the dedup-discard signature),
-    it re-applies the arc through `reclassify_thread` (the merged backfill door, msg 4408)
+    it re-applies the arc through `reclassify_thread` (the merged backfill entry point, msg 4408)
     instead of trusting the first call's return value.
 
     Returns one row per plan entry: {"task_id", "target": "Decision"|"Thread", "id",

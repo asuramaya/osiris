@@ -1,10 +1,10 @@
-"""backup_settings — thin door over the generalized settings registry (THE SETTINGS MENU
+"""backup_settings — thin API over the generalized settings registry (THE SETTINGS MENU
 piece 3, thread 7eb26f68, Thoth's GO mail 10084/10094) folding the write half Wave 21
 built (thread f04cce36 piece 3b) into `src/config/settings_registry.py`'s own SettingSpecs,
 so this domain gets the SAME validation/authority/effect machinery every other knob does
 instead of a parallel bespoke implementation.
 
-STORAGE MOVED, THE DOOR DIDN'T: `get_backup_settings`/`write_backup_settings` keep their
+STORAGE MOVED, THE API DIDN'T: `get_backup_settings`/`write_backup_settings` keep their
 exact outward shapes (dict in, dict out) — the MCP `backup_settings` tool, the
 `/backup-settings` REST routes, `compositions.py`'s `backup_status` Function, and
 `scripts/render_units.py` (WAVE 22 generalized this from `render_backup_timers.py`, its
@@ -79,7 +79,7 @@ def _synthesize_offload_targets_from_offbox(
 async def _target_presence(target: dict[str, Any]) -> dict[str, Any] | None:
     """Per-target `present now` (Thoth mail 12812: `backup-settings get`/`backup-status`
     both show this). 'local' → the real live-mount check (`check_local_target_presence`,
-    findmnt); 'restic' → None, deliberately — reachability is a network fact this door
+    findmnt); 'restic' → None, deliberately — reachability is a network fact this entry point
     never checks (Thoth's own repeated instruction), so there is no honest yes/no to
     give here at all, only a shape verdict at write time."""
     if target.get("kind") != "local":
@@ -125,12 +125,12 @@ async def write_backup_settings(
     pool: asyncpg.Pool, *, actor: str, because: str, ruling: str | None = None,
     **fields: Any,
 ) -> dict[str, Any]:
-    """THE WRITE DOOR — unchanged outward shape, now a thin fan-out over
+    """THE WRITE PATH — unchanged outward shape, now a thin fan-out over
     `settings_service.write_setting` (one call per changed key), which carries the exact
-    authority/because/validation contract this door used to implement by hand:
+    authority/because/validation contract this write path used to implement by hand:
     `spec.authority='operator_or_ruling'`, `spec.write_name='backup_settings'`,
     `spec.requires_because=True` on every `backup.*` spec — the same 2-branch shape this
-    door always had (the operator's own hand, or a ruling that names it), generalized
+    write path always had (the operator's own hand, or a ruling that names it), generalized
     rather than reinvented. `timer_schedules` stays a FULL-REPLACE field, same as
     before: any unit missing from the given dict is explicitly cleared (written as
     `None`), not left alone — "clearing an input and saving drops that override" holds

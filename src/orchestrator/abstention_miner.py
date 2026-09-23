@@ -79,7 +79,7 @@ _LANES: tuple[_Lane, ...] = (
 
 async def _next_lane_index(pool: asyncpg.Pool) -> int:
     """Round-robin state, persisted in the generic cursor store (watermarks table, the
-    SAME door digest.py's own operator watermark uses) — never in-process memory, since
+    SAME call digest.py's own operator watermark uses) — never in-process memory, since
     a tick can run from any process and must pick up where the last one left off."""
     raw = await get_cursor(pool, _CURSOR_KEY)
     idx = int(raw) if raw and raw.isdigit() else 0
@@ -215,7 +215,7 @@ async def abstention_miner_tick(actions: Actions) -> dict[str, Any]:
 
     Reads `settings_with_overlay` (THE SETTINGS MENU piece 1, thread f4498ab304e4),
     not bare `get_settings()` — `miner.abstention.enabled` is registered with
-    `effect='immediate'`, so a write through the settings door takes hold on the very
+    `effect='immediate'`, so a write through the settings entry point takes hold on the very
     next tick, no restart needed."""
     from src.orchestrator.settings_service import settings_with_overlay
 

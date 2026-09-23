@@ -98,7 +98,7 @@ same tip since all three ship together here):
      that can genuinely lack a name (an anonymous swarm session that never
      `claim_name`'d). Fixed per the ruling's own rule: lineage handle + generation
      when the Agent's OWN lineage currently holds a Seat (`seats.held_seat`, the same
-     door orient()/mount() use), else -- THE AGENT IDENTITY FIX (operator ruling,
+     path orient()/mount() use), else -- THE AGENT IDENTITY FIX (operator ruling,
      grounds 9163b1c7): "<Patronym> <ROMAN> · <model short>" from the `patronym`
      assertion, the canonical's own generation suffix, and a short-formed
      `source_model`, a trailing " ⌊ sub" marker for a sidechain fork

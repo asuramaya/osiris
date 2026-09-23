@@ -43,7 +43,7 @@ async def transition_seat_project(
     `dry_run=True` (default) returns the PLAN — which of invalidate/pin/charter
     actually differ from the target state — without writing anything. `dry_run=False`
     requires `because` and executes each planned step against the SAME functions
-    their own MCP/CLI doors already wrap, in order: a step already matching the
+    their own MCP/CLI commands already wrap, in order: a step already matching the
     target state is skipped, not re-run as a no-op write. Every precondition is
     checked before the FIRST write (same ATOMIC-OR-REFUSED discipline
     `normalize_project_casing` uses) — a partial result past that point can only come

@@ -1,4 +1,4 @@
-"""THE BROWSER RECOVERY MATERIAL DOOR (Thoth mail 13002, THE KEY PANEL piece 2) — the
+"""THE BROWSER RECOVERY MATERIAL ROUTE (Thoth mail 13002, THE KEY PANEL piece 2) — the
 one new server-side surface piece 2 needs: a single-use, 60-second-expiry handout of
 the current primary soul key's raw bytes, so a browser page can wrap them client-side
 via WebAuthn PRF (RP id `osiris.local`, HKDF-SHA256 with `info=b"osiris-soul-key-
@@ -24,7 +24,7 @@ write consumes it, and dead on its own after 60 seconds even if nothing ever con
 it. State lives in one process-local module variable, matching the console's own
 "operator-only, localhost-only, one process" trust model every other `/soul-key/*`
 route already holds (no token beyond this one, no session — the same implicit law
-app.py's own KEY DOOR comment states for status/init/rotate/restore-drill).
+app.py's own KEY API comment states for status/init/rotate/restore-drill).
 
 RECOVERY (the reverse direction — a lost key, present recovery.json, no live key on
 this box): the wrapped blob itself is not secret (reading it needs the physical

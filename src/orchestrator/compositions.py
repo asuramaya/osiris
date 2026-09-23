@@ -244,7 +244,7 @@ def _fuse_ranked(
 ) -> list[dict[str, Any]]:
     """Reciprocal-rank fusion of the lexical and semantic hit lists. Scale-free (an FTS
     rank product and a cosine share no axis; their POSITIONS do). One row per object: a
-    hit found by both doors keeps the lexical row (its snippet is a real headline) and is
+    hit found by both routes keeps the lexical row (its snippet is a real headline) and is
     marked via='both'. Pure, so the fusion policy is trivially testable."""
     scores: dict[str, float] = {}
     meta: dict[str, dict[str, Any]] = {}
@@ -263,7 +263,7 @@ def _fuse_ranked(
     return out
 
 
-# python-side grade weights for the semantic door (the SQL door uses _GRADE_W, same table)
+# python-side grade weights for the semantic route (the SQL route uses _GRADE_W, same table)
 _GRADE_W_PY = {"self_declared": 1.0, "authoritative_api": 0.95, "corroborated": 0.9,
                "direct_observation": 0.8, "derived": 0.5}
 
@@ -382,15 +382,15 @@ def _is_id_token(word: str) -> bool:
 
 
 async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """search v2: ONE engine, FOUR doors, one fused
+    """search v2: ONE engine, FOUR routes, one fused
     answer. Lexical resolution order: strict FTS (websearch AND) -> OR-relaxation (any-term bags) ->
-    TRIGRAM (pg_trgm word_similarity: every query word must fuzzily appear, the typo door).
-    Beside it, the SEMANTIC door: local static embeddings (semantics.py) cosine over the
-    vector index, so meaning matches where words don't. Doors fuse by reciprocal rank
+    TRIGRAM (pg_trgm word_similarity: every query word must fuzzily appear, the typo route).
+    Beside it, the SEMANTIC route: local static embeddings (semantics.py) cosine over the
+    vector index, so meaning matches where words don't. Routes fuse by reciprocal rank
     (positions, not incomparable scores); grade x recency weight both sides. A deliberate
-    ruling outranks a mined echo at equal relevance in EVERY door. Every hit carries
+    ruling outranks a mined echo at equal relevance in EVERY route. Every hit carries
     TESTIMONY (field, source, grade, when, snippet, via) and every call lands in search_log
-    with which doors answered (relaxed / fuzzy / semantic), the quality telemetry this
+    with which routes answered (relaxed / fuzzy / semantic), the quality telemetry this
     engine is judged by."""
     q = str(args.get("q", "")).strip()[:300]  # a 50KB paste is not a query
     limit = max(1, min(int(args.get("limit") or 15), 50))  # a negative limit is a PG error
@@ -403,7 +403,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
     caller = str(args.get("caller") or "") or _ACL_CALLER.get()
     if not q:
         return {"hits": [], "note": "pass q — words, phrases, or \"quoted phrases\""}
-    # THE ID DOOR: a hex TOKEN is a RULING/THREAD ID,
+    # THE ID ROUTE: a hex TOKEN is a RULING/THREAD ID,
     # not vocabulary. A caller may quote it as the OBJECT's uuid prefix (dd27f61f...) or as
     # its CANONICAL short hash (thread:23423ff856ab, the typical quoting habit),
     # alone or embedded in a longer query ('dd27f61f succession torch'). Look it up by
@@ -432,7 +432,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
                      "when": r["observed_at"].isoformat()} if r["source_id"] else {}),
                  "rank": 1.0, "via": "id"}
                 for r in idrows]
-            # the id door is still a read lens: knowing a reflection's id is not a key
+            # the id route is still a read lens: knowing a reflection's id is not a key
             id_hits = await _hide_foreign_reflections(pool, id_hits, caller)
     if len(words) == 1 and id_hits:
         # the WHOLE query is one id token: answer directly, the legacy shape unchanged.
@@ -478,9 +478,9 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         "FROM top, tq ORDER BY top.rank DESC")
     rows = await pool.fetch(_SQL, q, limit)
     relaxed = fuzzy = False
-    # explicit syntax (quotes, OR, minus) means the asker KNEW the language: no door
+    # explicit syntax (quotes, OR, minus) means the asker KNEW the language: no route
     # behind this one may second-guess it (the OR-relaxation's law, inherited by trigram)
-    # (`words` was already split off `q` by the id door above; q is unchanged since)
+    # (`words` was already split off `q` by the id route above; q is unchanged since)
     plain_bag = ('"' not in q and " or " not in q.lower()
                  and not any(w.startswith("-") for w in words))  # a leading '-' is NOT
     # syntax; an inner hyphen (hands-free, a-sibling) is just a word
@@ -500,11 +500,11 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
             rows = await pool.fetch(_RELAX_SQL, [w.lower() for w in words], or_q, limit)
             relaxed = bool(rows)
     if not rows and plain_bag:
-        # THE TRIGRAM DOOR: a misspelled word survives no tsquery,
+        # THE TRIGRAM ROUTE: a misspelled word survives no tsquery,
         # 'compositon' matches nothing lexically forever. word_similarity is strict-AND
         # with typo tolerance: EVERY query word must fuzzily appear somewhere in the text.
         # Last lexical rung: full-scan word_similarity is fine at this corpus size and
-        # only runs when both exact doors missed.
+        # only runs when both exact routes missed.
         trgm_words = [w.lower() for w in re.findall(r"[a-z0-9][a-z0-9-]{2,}", q.lower())]
         if trgm_words:
             rows = await pool.fetch(_TRGM_SQL, trgm_words, limit)
@@ -516,7 +516,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
          "rank": round(float(r["rank"]), 6), "via": "fuzzy" if fuzzy else "lexical"}
         for r in rows
     ]
-    # THE SEMANTIC DOOR runs beside the lexical resolution order, never instead of it: meaning
+    # THE SEMANTIC ROUTE runs beside the lexical resolution order, never instead of it: meaning
     # matches where words don't ('model downgrade' -> the warm-swap rulings). Closed (no
     # embedder / empty index / any error) it contributes nothing and costs nothing.
     sem_hits = await _semantic_hits(pool, q, limit)
@@ -527,7 +527,7 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
         seen_ids = {h["id"] for h in id_hits}
         hits = id_hits + [h for h in hits if h["id"] not in seen_ids]
         hits = hits[:limit]
-    # the house boundary: every door's rows converge here, one filter covers
+    # the house boundary: every route's rows converge here, one filter covers
     # strict, relaxed, trigram and semantic alike (id_hits were already filtered when
     # computed, so re-filtering here is a no-op for them and real work for the rest)
     hits = await _hide_foreign_reflections(pool, hits, caller)
@@ -643,11 +643,11 @@ async def _fn_search(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
 # THE RARITY-WEIGHTED RELAXATION: the ANY-term retry's rank is the sum
 # of ln(N/df) over the query words each candidate matches. df is computed against the same
-# corpus the door searches, in the same statement (the corpus CTE materializes once, and
+# corpus the route searches, in the same statement (the corpus CTE materializes once, and
 # this leg only runs when strict-AND found nothing). Stopwords parse to empty tsqueries
 # and drop out; a word present in EVERY document scores ln(1)=0 by construction. The
 # snippet still headlines with the OR query, and grade x recency weigh exactly as the
-# strict door does.
+# strict route does.
 #
 # `n AS MATERIALIZED` IS LOAD-BEARING (measured, not stylistic): `n` is a single-row count
 # referenced only inside SubPlan 3's per-candidate rank calc, so PG's once-referenced-CTE
@@ -702,9 +702,9 @@ _TRGM_SQL = (
 
 
 async def _semantic_hits(pool: asyncpg.Pool, q: str, limit: int) -> list[dict[str, Any]]:
-    """The semantic door's hit list, testimony included: cosine candidates hydrated with
+    """The semantic route's hit list, testimony included: cosine candidates hydrated with
     the winner assertion behind each (object, field), ordered cos x grade x recency,
-    the same epistemics as the SQL doors, applied python-side. [] when the door is closed."""
+    the same epistemics as the SQL routes, applied python-side. [] when the route is closed."""
     from src.orchestrator import semantics
 
     embedder = semantics.resolve_embedder()
@@ -1291,7 +1291,7 @@ async def resolve_ref(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
     # resolve_seat's un-seated-lineage fallback and confidently resolve a dossier/focus_
     # object lookup to some OTHER, older, unmarked generation. Falls through to the
     # generic name-matching legs below rather than refusing outright, this resolver has
-    # other real legs left to try, unlike a pure address-resolution door.
+    # other real legs left to try, unlike a pure address-resolution route.
     if await seat_holder_ineligible(pool, ref) is None:
         seat = await resolve_seat(Actions(pool), ref)
         if seat.get("agent"):
@@ -1543,7 +1543,7 @@ EDGELESS_CLOSURE_CEILING = 949
 
 
 async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str, Any]) -> Any:
-    """THE SMALLEST DOOR: a small, growable set of read-only
+    """THE SMALLEST ENTRY POINT: a small, growable set of read-only
     population counts the standing tooling had no verb for; three obligations were stuck
     on a direct-DB-script workaround (a real house-law violation: raw SQL against the
     kernel is a defect report, never a shortcut) purely because nothing on the MCP surface
@@ -1558,12 +1558,12 @@ async def _fn_census(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[s
 
     kind='cohort': an adoption instrument's own cohort-aged
     connectivity figures. Delegates to `adoption_meter` rather than
-    re-deriving its SQL a second time; this door exists so a session with no direct DB
+    re-deriving its SQL a second time; this entry point exists so a session with no direct DB
     access can still read it, not to replace the module that computes it.
 
     NOT the monsterhouse tree walk: that obligation needs an actual ingest
     pass (close_by_commits against a live git tree), not a population count, a
-    genuinely different shape of work this door does not attempt to cover."""
+    genuinely different shape of work this entry point does not attempt to cover."""
     kind = args.get("kind")
     if kind == "seat_property_contradictions":
         rows = await pool.fetch(
@@ -1665,7 +1665,7 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
     stub sitting beside the real, already-referenced object under a DIFFERENT canonical
     (repo:xxit/repo:bytebye) that had simply been renamed since the stub minted. This
     census is for what already happened before this ruling's other fixes landed:
-    a fold, not a migration door, is the intended repair (merge_project onto the live
+    a fold, not a migration entry point, is the intended repair (merge_project onto the live
     survivor), so this only ever flags, never writes.
 
     NAME NOT SINGULAR: an active SoftwareProject carrying more than one
@@ -1745,7 +1745,7 @@ async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
     BORROWED: the holder id is actually a DIFFERENT agent's own live job_dir slug
     (`mounts.borrowed_job_dir_owner`, the same fingerprint `_bind_before_spawn`'s
     fallback guard and `rehold_seat`'s own new guard already refuse at write time; this
-    census is what catches an edge that reached this shape through some OTHER door,
+    census is what catches an edge that reached this shape through some OTHER route,
     written before either guard existed or through one this fix doesn't yet cover).
 
     UNPROVENANCED: the holder carries no real identity story of its own, never
@@ -1991,12 +1991,13 @@ async def grounds_law_measure(pool: asyncpg.Pool, *, days: int = 30) -> dict[str
     inside the window would silently drop an earlier write that still happened), scoped by
     `created_at` (wall-clock write time) over the last `days`.
 
-    "BY DOOR": assertions carry no per-write door column; door/channel instrumentation
-    (`READ_DOORS`/`stamp_read`) is wired only for reads, at the MCP dispatch layer. The one
-    channel-shaped signal that DOES exist per-write is the writer's own `source_id` prefix
+    "BY ENTRY POINT": assertions carry no per-write entry-point column; entry-point/channel
+    instrumentation (`READ_DOORS`/`stamp_read`) is wired only for reads, at the MCP dispatch layer.
+    The one channel-shaped signal that DOES exist per-write is the writer's own `source_id` prefix
     (`agent:`/`analyst:`/`miner:`/...), following the "provenance BY
-    CHANNEL, not by text" principle, so that prefix stands in for "door" here. `by_writer` is exact;
-    `by_channel` is this substitution, named so a reader can tell the two apart."""
+    CHANNEL, not by text" principle, so that prefix stands in for "entry point" here.
+    `by_writer` is exact; `by_channel` is this substitution, named so a reader can tell
+    the two apart."""
     since = f"now() - interval '{int(days)} days'"
     pop = await pool.fetch(
         f"SELECT a.id, a.object_id, a.source_id, a.created_at FROM assertions a "
@@ -2099,7 +2100,7 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
     pulse, never a census-verified body;
     named so the population riding the weaker signal stays visible, never a defect),
     PARALLEL-LIVES (a
-    generation minted while a different door of its own lineage held a live pulse, the
+    generation minted while a different entry point of its own lineage held a live pulse, the
     predecessor was not dead; reads the parallel_pulse_door stamp mint_heir writes at
     the mint), DUPLICATE-WORKS-IN (a currently-LIVE agent carrying more
     than one simultaneously-live works_in edge, orient() itself never resolves project
@@ -3040,9 +3041,9 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
             for r in stale_links])
 
         # STALE-CURRENT-FLAG (recurrence detection): the SAME anomaly `stale_current_flags`'s
-        # own read door surfaces (an assertion still carrying `is_current=true` though a real
+        # own read route surfaces (an assertion still carrying `is_current=true` though a real
         # `supersedes` FK already points at it from another row), folded into the standing
-        # lint wall so a future session finds this without knowing to call that door by name.
+        # lint wall so a future session finds this without knowing to call that route by name.
         # NOT a live write-path bug (verified: both of assert_property's supersession paths,
         # actions/core.py:265-269 same-source and :346-349 cross-source, flip
         # `is_current=false` on the superseded row in the SAME transaction as the write,
@@ -5103,7 +5104,7 @@ async def _fn_backup_status(
     re-deriving it, `_compute_plans`/`find_clear_manifest` are osiris_prune_ladder.py's
     own scan-and-plan step (the same one --manifest/--apply-if-clear run), `has_room` is
     osiris_disk_guard.py's own margin check, so a panel reading this can never drift
-    from what the timers actually do. Read-only, no writes, the write door is its own
+    from what the timers actually do. Read-only, no writes, the write path is its own
     piece.
 
     Each section degrades independently ({"error": ...}, `_fn_fleet_live_agents`'s own
@@ -5209,7 +5210,7 @@ async def _fn_backup_status(
     # `offload_runner.offload_receipts()`'s own local receipt file
     # (last_successful_offload/last_attempt_at/last_error per target name), a live
     # filesystem read, same as every other section of this Function, never a
-    # settings-door write. `offbox_repositories` stays for one release
+    # settings write. `offbox_repositories` stays for one release
     # (backup_settings.py's own deprecation note) but is no longer this section's
     # primary field.
     try:
@@ -7015,7 +7016,7 @@ FLEET_STRIP: dict[str, Any] = {
 }
 
 
-# The census door's two fixed-args saved compositions: a new named tool was the wrong
+# The census entry point's two fixed-args saved compositions: a new named tool was the wrong
 # shape, the direction is fewer tools, and `census` was already a composition Function.
 # Two separate saved compositions, one per `kind`, rather than one composition taking a
 # variable arg, the exact same wall mail_threads hit above (a Function that reads `args.X`
@@ -7068,7 +7069,7 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # the fleet strip's migration pilot: not "fleet" (taken: every agent the graph knows,
     # unranked). No subject needed.
     "fleet-strip": FLEET_STRIP,
-    # The smallest door, folded: population counts three obligations were stuck without.
+    # The smallest entry point, folded: population counts three obligations were stuck without.
     # No subject needed, one kind fixed each (see
     # CENSUS_SEAT_PROPERTY_CONTRADICTIONS/CENSUS_COHORT's own comment for why two
     # compositions, not one taking a variable arg).
@@ -7103,8 +7104,8 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     "who-is-this": {"op": "function", "name": "subject_report"},
     # The upstream-centric read: subject = any object a read-set could point at (Message,
     # URL, or ordinary object). REST/MCP mirrors are the existing generic composition
-    # doors (POST /compositions/upstream-readers/run,
-    # composition(action='run', name='upstream-readers')), no bespoke door pair needed.
+    # routes (POST /compositions/upstream-readers/run,
+    # composition(action='run', name='upstream-readers')), no bespoke route pair needed.
     "upstream-readers": {"op": "function", "name": "upstream_readers"},
     "screen-financing-network": {"op": "function", "name": "screen_network"},
     # the dedicated canon view: the project's design memory (Palantir/Notion + own docs),
@@ -7141,7 +7142,7 @@ DEFAULT_COMPOSITIONS: dict[str, dict[str, Any]] = {
     # op-tree the user owns. `select` the repos -> `table` with rollup columns (Notion
     # database+rollups) -> `order` by last-touched. This is what "everything is composed"
     # means in practice.
-    # This was the enumeration door already, but `name` alone isn't addressable (no
+    # This was the enumeration entry point already, but `name` alone isn't addressable (no
     # canonical/id to act on) and gave no way to tell a real repo from the
     # zero-commit/zero-file registry noise, `canonical` and `on_disk_path` are both plain
     # object columns / assertion properties already, so this is wiring, not construction

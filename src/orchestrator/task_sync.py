@@ -20,8 +20,8 @@ already shaped like the harness tool's own JSON ({"id", "subject", "description"
 in production; a clearly-labeled, read-only research driver for a one-off dry run — see
 scripts/task_sync_dryrun.py). Keeping the harness IO out of this module is what makes it
 testable without a real store and keeps this module honest about not being the enumeration
-door it explicitly recommends never building (decision ab27af61: "no sanctioned door exists
-to enumerate all 91 stores... flag it upstream, don't build a workaround").
+entry point it explicitly recommends never building (decision ab27af61: "no sanctioned
+entry point exists to enumerate all 91 stores... flag it upstream, don't build a workaround").
 
 THE BINDING RULE, UNCHANGED FROM PHASE 1c AND cf3dcd79: refuse, never guess. A citation is
 found in a task's own prose (today's only bridge — "Graph thread 5da19aa6, ruling 10f4058b"),
@@ -409,7 +409,7 @@ async def mint_tier2_threads(
 
 # ── ARCHIVE ELIGIBILITY (Thoth DM 3266/thread e604ae84's item 1, the operator's write-back
 # authorization scoped NARROWLY: "your own session's own store from inside that session",
-# never the enumeration door ab27af61 forbade) ───────────────────────────────────────────
+# never the enumeration entry point ab27af61 forbade) ────────────────────────────────────
 #
 # THIS IS THE PURE HALF ONLY, AND NO EXECUTOR IS RECOMMENDED — not "not yet", RECOMMENDED
 # AGAINST, on evidence gathered after this comment's own earlier draft (decision b1c3e6d5,
@@ -427,7 +427,7 @@ async def mint_tier2_threads(
 # live contention probe has too little statistical power either way — a structural ceiling
 # on the evidence, not a gap in effort).
 #
-# (c) BUT (b) IS THE WRONG QUESTION, because the sanctioned door was never a direct file
+# (c) BUT (b) IS THE WRONG QUESTION, because the sanctioned entry point was never a direct file
 # write — it is the harness's own TaskUpdate tool, the same trust boundary TaskList/TaskGet
 # already cross for reads. Routing through it sidesteps (b) entirely. Checked directly
 # against TaskUpdate's own tool contract (2026-08-03): status is one of pending /
@@ -506,7 +506,7 @@ def archive_eligible_targets(
 # ── WAVE 2 LANE A (thread 5f47e23d, Thoth's dispatch msg 5934): `mint_tier2_threads`'s own
 # obligation Threads — "TASK/THREAD DISAGREEMENT: Thread <8-char> ..." /
 # "THREAD SIDE ORPHAN: Thread <8-char> ..." — cite the disputed Thread in their own summary
-# prose but were minted BEFORE `open_thread` grew its door-side `_mint_prose_citations` call
+# prose but were minted BEFORE `open_thread` grew its entry-point-side `_mint_prose_citations` call
 # (task #189, decision bb2ddf8a), so the citation was never turned into an edge: decision
 # a55b1014, "a defense that erases its own alarm" — the divergence detector has been firing
 # correctly for weeks, depositing every finding as a zero-live-link orphan nothing surfaces.
@@ -520,7 +520,7 @@ def archive_eligible_targets(
 # trusting this comment, the way every prior count in this arc had to be.
 #
 # Mints via `derive_or_abstain` (Lane 0, capture.py) rather than the older
-# `_resolve_cited_object`/`mint_cites` door-time pair `backfill_decided_in` still uses:
+# `_resolve_cited_object`/`mint_cites` call-time pair `backfill_decided_in` still uses:
 # Thoth's dispatch asked for the newer, durable-abstention discipline here specifically — a
 # candidate count of zero or >1 records WHY on the orphan itself (candidate ids kept), not
 # just a receipt line that vanishes once this call returns. Link type is `cites`

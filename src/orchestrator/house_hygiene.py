@@ -15,7 +15,7 @@ head's own authoritative declaration") whose current `house` assertion is non-em
 equals one of its own `charter_of` (governed project) names, case-insensitive -- the exact
 `_is_ghost_house` predicate, reused verbatim rather than re-derived.
 
-RETIRE, NEVER DELETE: `retire_assertion` (the sanctioned cross-source supersede door, thread
+RETIRE, NEVER DELETE: `retire_assertion` (the sanctioned cross-source supersede entry point, thread
 52911d2a) supersedes the ghost `house` row with an empty string -- falsy under every existing
 `if house:` read in this codebase (derive_house, _own_house_stamp's callers), the same
 "empty" derive_house already treats a ghost as, now durable instead of read-time-patched. A
@@ -66,7 +66,7 @@ async def apply_ghost_house_sweep(
     actions: Actions, *, actor: str = MIGRATION_SOURCE,
 ) -> dict[str, Any]:
     """Applies `plan_ghost_house_sweep`'s plan through the sanctioned `retire_assertion`
-    door -- never a hand-written supersede. A row that clears this sweep's own population
+    call -- never a hand-written supersede. A row that clears this sweep's own population
     query but still fails there is reported, not raised, so one stale row never sinks the
     whole sweep."""
     from src.orchestrator.retirement import retire_assertion

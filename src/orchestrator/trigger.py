@@ -2944,7 +2944,7 @@ async def _explicit_window_tag(pool: asyncpg.Pool, label: str) -> str | None:
 
 
 async def _house_tag(pool: asyncpg.Pool, house: str | None, project: str | None = None) -> str:
-    """The window's [TAG] prefix, used in the front-door naming convention (e.g. "[OS] handle").
+    """The window's [TAG] prefix, used in the primary naming convention (e.g. "[OS] handle").
     An explicit `window_tag` assertion on the resolving SoftwareProject wins when one exists
     (set via `project(action='set_tag')`, an explicitly declared code, e.g. "MH" for
     monsterhouse instead of the derived "MO"); otherwise a simple short code (osiris to OS)
@@ -3161,7 +3161,7 @@ async def _bind_before_spawn(
     # other unverified read. In a real specimen, one seat resolved `current_holder` to an
     # id that was actually another agent's own harness session, with zero real provenance
     # of its own (no minted_because, no handle, no succeeded_from: never actually minted
-    # through any door, just a bare string an occupancy misread handed back), and this
+    # through any entry point, just a bare string an occupancy misread handed back), and this
     # function faithfully bound the seat to it, with no mint_heir call even reached
     # (mint_heir mints the heir, never asserts anything on the ancestor it inherits from).
     # `_seat_lineage_ancestor` itself stays trusted: it resolves the seat's own
@@ -4275,7 +4275,7 @@ async def resume_seat(
     managed_by gate and seat/occupancy facts as launch_seat (`_launch_target_setup`, the
     one shared shell), then walks the seat's own lineage for a resumable session and
     either continues it or refuses. It never falls through to a fresh mint: minting on
-    this door is `launch_seat`'s job alone, never resume's.
+    this entry point is `launch_seat`'s job alone, never resume's.
 
     Walks the lineage (`_lineage_resume_candidate`, not the plain agent_mounts-keyed
     `_agent_resumable`/`wakeable_identity` that dispatch_dm's DM lane uses). A
@@ -4595,7 +4595,7 @@ async def stop_seat(
     launch/fold/reanimation/send() reads the real OS state, so the instant this
     process actually exits, that authority sees it gone. A later wake() or launch()
     boots a fresh successor with no separate "unstop" step to remember: one occupancy
-    authority for every door, never a second notion of it.
+    authority for every entry point, never a second notion of it.
 
     Downward-only, mirroring launch_seat's own authority (a manager stops a seat it
     manages): a worker may never stop its own manager's body. `target=None` is always
@@ -4665,12 +4665,12 @@ async def stop_seat(
         # The operator's own hand: downward-only exists to stop agents reaching
         # sideways or upward at each other. The human at a terminal is not a peer in
         # that chart, they are above all of it, and `osiris launch` has had a
-        # terminal door while stop had none, so a body could be started from the
+        # terminal command while stop had none, so a body could be started from the
         # shell and never ended from it. That asymmetry is the defect this fixes.
         #
         # Nothing else is relaxed: the seat must resolve, it must have a real holder,
         # and the body must be /proc-confirmed by the same registry_census every
-        # other door reads. This skips one check, the managed_by edge, and says so in
+        # other entry point reads. This skips one check, the managed_by edge, and says so in
         # the receipt (`authority: "operator"`), because an authority that is not
         # visible in the record is indistinguishable from a missing check.
         assert target is not None

@@ -366,11 +366,11 @@ _TOOL_STATS_BLIND_SPOTS = (
     "— confirmed live for at least bind_seat_tree, bootstrap, establish_office, "
     "heal_seat_anchor_third_party, rematerialize, stop, unmerge. A zero reading on any "
     "of these is not evidence of disuse, it can be AFFIRMATIVELY MISLEADING: unmerge "
-    "reads 0 here while its CLI door is real, live traffic — the exact live proof that "
+    "reads 0 here while its CLI entry point is real, live traffic — the exact live proof that "
     "cost a consolidation lane its first wrong deletion candidate",
     "FOUR MORE SEAT-DISPATCHER ALIASES, SAME CLI-BYPASS SHAPE (alias-decay second read, "
     "2026-09-08, decision 23b6dbc1): heal_seat_transcript, reconcile_seat_identity, "
-    "rename_seat, set_seat_attended each have their own cmd_* door in src/cli.py "
+    "rename_seat, set_seat_attended each have their own cmd_* entry point in src/cli.py "
     "(cmd_heal_seat_transcript/cmd_reconcile_seat_identity/cmd_rename_seat/"
     "cmd_set_seat_attended) calling the orchestrator function directly — none of these "
     "four were in this list before this read, so retired_alias_traffic's "
@@ -383,11 +383,11 @@ _TOOL_STATS_BLIND_SPOTS = (
 # THE STALL WATCHDOG (thread 0be2f790, THE OSIRIS-MCP MAIN-THREAD STALL, Thoth mail
 # 10625, PRIORITY): the 2026-09-14 incident had no stack trace at all when it happened —
 # py-spy needs ptrace scope 1 (not set), and nothing in this module registered a signal
-# handler to dump frames on demand. Two independent, complementary doors, never one:
+# handler to dump frames on demand. Two independent, complementary mechanisms, never one:
 #
 #   1. faulthandler.register(SIGUSR1, all_threads=True) below (module scope, always on,
 #      zero runtime cost until signaled) — `kill -USR1 <pid>` dumps every thread's Python
-#      stack to stderr (systemd's own journal) on demand, the operator's own manual door.
+#      stack to stderr (systemd's own journal) on demand, the operator's own manual trigger.
 #
 #   2. This watchdog: BoundedMCP.call_tool (the one seam every tool call already passes
 #      through, bounding + stats) now registers an IN-FLIGHT entry per call and a
@@ -412,7 +412,7 @@ _watchdog_task: asyncio.Task[None] | None = None
 def _log_all_thread_stacks(log: Any, *, reason: str) -> None:
     """Every live thread's own Python stack, formatted and logged in one shot — the
     exact dump SIGUSR1 (faulthandler) also produces, reused here so the automatic and
-    manual doors report identically."""
+    manual triggers report identically."""
     frames = sys._current_frames()
     parts = [f"{reason} — {len(frames)} live thread(s):"]
     for thread_id, frame in frames.items():
@@ -1372,7 +1372,7 @@ async def _stamp_read_ids(
     pool: asyncpg.Pool, ident: AgentIdentity | None, door: str, object_ids: list[Any],
 ) -> None:
     """PROVENANCE PIECE 1 (thread da545039f2ba): log this session's read-set at the
-    door, for every real object id a read tool is about to hand back. A no-op when
+    call, for every real object id a read tool is about to hand back. A no-op when
     nobody is mounted (`ident is None`) — an unattributed read has no session for a
     later write to be dependent ON. Never lets a stamping failure break the read tool
     it rides along on (the same fails-open discipline this codebase already applies to
@@ -2027,11 +2027,11 @@ async def handoff_briefing(
 # and made itself obsolete"). The underlying orchestrator.compositions.create_room/
 # list_rooms functions and the `rooms` table itself are UNTOUCHED here — migration
 # 0070_room_retirement's own law is "REVERSIBLE, NOT A DELETE... the `rooms` table itself
-# is NOT dropped, it stays as read-only history" — this pass removes the MCP doors that
-# could mint or list rooms going forward, matching the console/CLI surfaces that already
+# is NOT dropped, it stays as read-only history" — this pass removes the MCP entry points
+# that could mint or list rooms going forward, matching the console/CLI surfaces that already
 # stopped exposing them. A SEPARATE, LATER FOLLOW-UP (Thoth dispatch 12310, same wave)
 # removed the composition() dispatcher's own `room` save-time parameter and the /rooms
-# REST routes (src/api/app.py) — the door that could SCOPE a composition to a room at
+# REST routes (src/api/app.py) — the route that could SCOPE a composition to a room at
 # save time, a different surface from this one. `resolve_room`/`save_composition`'s own
 # `room_id` parameter in orchestrator.compositions are likewise untouched by either pass;
 # `save_composition` already falls back to the 'engineer' room by name on a create with
@@ -3304,7 +3304,7 @@ async def retire(reason: str = "", acknowledge_leftovers: bool = False,
 # ============================================================================================
 # SEAT DISPATCHER (task #202, operator ruling f9182ad7, Thoth dispatch 7039, migration plan
 # decision 620bdb32 + amendment): the first object-type dispatcher under the new surface-shape
-# rule. 22 standalone tools dissolve into this one door's actions; launch/resume/wake/
+# rule. 22 standalone tools dissolve into this one tool's actions; launch/resume/wake/
 # wake_preflight stay named (hot ten / lifecycle siblings) AND also become seat actions,
 # unchanged bodies, no alias-decay for those four since they are not retiring.
 #
@@ -5547,7 +5547,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     seats = await fleet_occupancy(pool)
     # WHISPER HEALTH (task #179): recent whisper/session-end/precompact/stophook alarm
     # counts, read off the SAME blind-spot channel every other unverifiable-from-here gap
-    # uses (task #34) — a session mounting via fleet() sees at a glance whether the door
+    # uses (task #34) — a session mounting via fleet() sees at a glance whether the path
     # it just walked through has been failing. Best-effort, same fail-open shape as
     # os_bodies: a probe failure here must never break fleet() itself.
     try:
@@ -5609,7 +5609,7 @@ async def fleet(full: bool = False) -> dict[str, Any]:
     # THE SEAM READING (thread dd937122, wave 11): each LIVE node's own context_pct, the
     # SAME batched-by-canonical query _co_agents already runs for the mount/orient briefing
     # (winning_props's own confidence DESC, observed_at DESC per agent) — never a second
-    # copy of that shape. Best-effort, same fail-open law as every other probe on this door.
+    # copy of that shape. Best-effort, same fail-open law as every other probe on this route.
     context_pct: dict[str, int] = {}
     try:
         live_canonicals = [c for c, n in nodes.items() if n["live"]]
@@ -5983,7 +5983,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
     # after (6a1dd99 fallout, Thoth DM 5442 leg 1a): since 6a1dd99 graphs every sent
     # message as its own searchable Message object, searching AFTER the write let this
     # call's own just-written body — a verbatim, single-field, perfect self-match —
-    # satisfy search()'s strict-AND lexical door trivially, which short-circuits the
+    # satisfy search()'s strict-AND lexical gate trivially, which short-circuits the
     # OR-relaxation ladder that is the actual mechanism finding a DIFFERENTLY-worded
     # standing decision (record_decision's own prior-art call structurally avoids this
     # because its query spans summary+rationale while the graph stores them as separate
@@ -6015,7 +6015,7 @@ async def send(body: str, to: str | None = None, to_agent: str | None = None,
                                       "failed, so this message won't show up in search()/"
                                       "prior-art/orient() until a later repair recovers it"}
            if res.get("graphed") is False else {}),
-        # THE SEND DOOR ADDRESSING GUARD (thread f4209591): a leading vocative or @handle
+        # THE SEND COMMAND ADDRESSING GUARD (thread f4209591): a leading vocative or @handle
         # in `body` that resolved through binding_of_handle's own authoritative Seat check —
         # named here whether it agreed with the addressed room or (see the ValueError path
         # above, which never reaches this receipt at all) disagreed with it.
@@ -6315,11 +6315,11 @@ async def inbox(project: str | None = None, peek: bool = False,
     ident = await _ident_for(ctx, session_anchor)
     pool = await _pool_get()
     # MAIL IS UNSURFACEABLE (9dc3ce8b/c56f3d94): as_seat switches to a completely
-    # separate, READ-ONLY door — a coordinator reading ANOTHER seat's received DMs
+    # separate, READ-ONLY route — a coordinator reading ANOTHER seat's received DMs
     # (including already-settled ones, `include_settled=True` by default: the point is
     # auditing what happened, not queuing new work). Never leases, never accepts `ack`
-    # (a read-only door has nothing to settle) — checked BEFORE the ordinary own-mail
-    # path's own `project` requirement below, since this door needs no mounted project
+    # (a read-only route has nothing to settle) — checked BEFORE the ordinary own-mail
+    # path's own `project` requirement below, since this route needs no mounted project
     # of the CALLER's own at all (it reads by seat/charter, not by project default).
     if as_seat is not None:
         if ack:
@@ -6774,9 +6774,9 @@ async def _dispatch_backfill(
     target: str, dry_run: bool, because: str | None, only_bases: list[str] | None,
     ctx: Context | None, *, limit: int | None = None, newest_first: bool = False,
 ) -> dict[str, Any]:
-    """The mount-gate every MCP backfill door shares (this tool, plus the four
+    """The mount-gate every MCP backfill entry point shares (this tool, plus the four
     deprecated single-target wrappers below it) — resolves the calling identity, then
-    delegates to `run_backfill`, the SAME function the CLI's `osiris backfill` door
+    delegates to `run_backfill`, the SAME function the CLI's `osiris backfill` command
     calls directly (thread c89a9873, wave 22). Never a second dispatch table.
 
     `limit`/`newest_first` (thread e332177f) pass straight through — `run_backfill`
@@ -6831,10 +6831,10 @@ async def backfill(
     if target not in BACKFILL_TARGETS:
         return {"error": f"unknown target {target!r}", "valid_targets": sorted(BACKFILL_TARGETS)}
     if target == "provenance_possible_upstream":
-        # THE STALL's own fix (thread 0be2f790): never inline on this door again — see
-        # `_enqueue_provenance_backfill`'s own docstring. The CLI door still calls
+        # THE STALL's own fix (thread 0be2f790): never inline on this entry point again — see
+        # `_enqueue_provenance_backfill`'s own docstring. The CLI command still calls
         # `run_backfill` in-process (`cmd_backfill` in src/cli.py) — it IS its own
-        # process, so this door's own starvation risk does not apply there.
+        # process, so this entry point's own starvation risk does not apply there.
         return await _enqueue_provenance_backfill(dry_run, because, limit, newest_first, ctx)
     return await _dispatch_backfill(target, dry_run, because, only_bases, ctx,
                                     limit=limit, newest_first=newest_first)
@@ -7105,13 +7105,13 @@ async def uningested_trees(only_gaps: bool = True) -> dict[str, Any]:
 
 
 # THE PROJECT OBJECT-TYPE DISPATCHER (task #202, operator ruling f9182ad7, Thoth
-# dispatch 7095) — third object-type dispatcher (after seat, composition), one door
+# dispatch 7095) — third object-type dispatcher (after seat, composition), one entry point
 # over SoftwareProject lifecycle. 8 standalone tools fold in: create_project,
 # ingest_project (self/third-party ingest already unified beneath it — see
 # _ingest_project_impl below, unchanged), rename_project, fork_project
 # (action='fork'/'unfork', its own pre-existing `direction` param), retire_project
 # (already a hidden alias forwarding to retire_object(kind='project') before this fold —
-# repointed here, same underlying _retire_object_impl call, the same dual-door
+# repointed here, same underlying _retire_object_impl call, the same dual-route
 # precedent seat(action='retire') already established for kind='seat'; retire_object
 # itself stays live, kind='agent' still has no dispatcher), project_identity_evidence
 # (read-only, kept alongside rename/fork since its whole purpose is informing those two
@@ -7190,7 +7190,7 @@ async def _project_impl(
     (create_project, ingest_project, rename_project, fork_project, unfork_project,
     retire_project, project_identity_evidence, assert_project_property — 8 names, one
     more than "7" counts because retire_project was already a hidden alias forwarding
-    to retire_object(kind='project') before this fold; both doors now reach the
+    to retire_object(kind='project') before this fold; both routes now reach the
     identical _retire_object_impl call) — one code path, many names. Every branch's
     body below is copied verbatim from what was that alias's own top-level function
     (task #202, Thoth dispatch 7095).
@@ -7507,7 +7507,7 @@ async def _retire_object_impl(
     """Shared body behind `retire_object` and its three hidden single-purpose aliases
     (retire_seat/retire_project/retire_agent) — one code path, five names now
     (kind='object' added for thread 92dde6cc, no alias of its own — the generic
-    door needed no deprecated single-purpose predecessor to fold). Each of the
+    entry point needed no deprecated single-purpose predecessor to fold). Each of the
     first three kinds below is copied verbatim from what was that alias's own
     top-level function body before the fold. Deliberately does NOT cover
     self-scoped `retire()` (no target param, different auth shape entirely) or
@@ -7621,7 +7621,7 @@ async def retire_project(project: str, because: str,
                          ctx: Context | None = None) -> dict[str, Any]:
     """Deprecated: hidden alias, still callable. Forwards to
     project(action='retire'), the same underlying call that retire_object(kind=
-    'project') also reaches, the same dual-door pattern that seat(action='retire') already
+    'project') also reaches, the same dual-route pattern that seat(action='retire') already
     uses for kind='seat'."""
     return await _retire_object_impl(
         "project", project, because=because, override_live=False, ctx=ctx)
@@ -7960,7 +7960,7 @@ async def transition_seat_project(
 # scoped naming), correct_agent_house (third-party house/generation correction, already
 # a hidden zero-traffic tool — this repoints its own use_instead, costs nothing further
 # on the live count), retire_agent (already a hidden alias of retire_object(kind=
-# 'agent') — repointed here too, same dual-door precedent seat/project(action='retire')
+# 'agent') — repointed here too, same dual-route precedent seat/project(action='retire')
 # established), fleet_reconcile (the bulk fleet reaper, no target), file_subagent
 # (single-target hand-filing), file_subagents (bulk sweep, dry_run).
 #
@@ -8051,7 +8051,7 @@ _AGENT_ACTION_PARAMS: dict[str, tuple[list[str], list[str]]] = {
     "retire_governs": (["agent_id", "repos", "because"], ["agent_id", "repos", "because"]),
     # `project` doubles as the STALE project to drop (the same shared-slot convention
     # `correct_house`'s own `project` already uses above) — third-party, unlike
-    # seat(action='invalidate_works_in')'s self-scoped door, which auto-fills agent_id
+    # seat(action='invalidate_works_in')'s self-scoped call, which auto-fills agent_id
     # from the caller and never exposes it as a parameter at all.
     "invalidate_works_in": (["agent_id", "project", "because"],
                             ["agent_id", "project", "because"]),
@@ -8070,7 +8070,7 @@ async def _agent_impl(
     """Shared body behind `agent` and its 5 hidden single-purpose aliases (claim_name,
     correct_agent_house, retire_agent, file_subagent, file_subagents — 6 names, one
     more than "5" counts because retire_agent was already a hidden alias forwarding to
-    retire_object(kind='agent') before this fold; both doors now reach the identical
+    retire_object(kind='agent') before this fold; both routes now reach the identical
     _retire_object_impl call) — one code path, many names. Every branch's body below is
     copied verbatim from what was that alias's own top-level function (task #202,
     Thoth dispatch 7162).
@@ -8182,7 +8182,7 @@ async def _agent_impl(
         if agent_id == ident.agent_id:
             return {"error": "agent_id names your own mounted identity — use "
                              "seat(action='invalidate_works_in') for that, the self-"
-                             "scoped door; this one is for a THIRD-PARTY agent"}
+                             "scoped call; this one is for a THIRD-PARTY agent"}
         from src.orchestrator.agents import invalidate_works_in as _invalidate_works_in
         return await _invalidate_works_in(Actions(await _pool_get()), agent_id, project,
                                           because=because, actor=ident.agent_id)
@@ -8827,7 +8827,7 @@ async def bootstrap(cwd: str, ctx: Context | None = None) -> dict[str, Any]:
 # own fix (Model2VecEmbedder's bounded, sticky load) closes the specific hang that was
 # actually measured live; this is the outer, whole-call bound as defense in depth — any
 # OTHER slow step in the fused search pipeline (DB contention under fleet load, a lexical
-# door with no supporting index) gets the same honest, fast fail-open instead of riding
+# query path with no supporting index) gets the same honest, fast fail-open instead of riding
 # out an external 300s timeout with no diagnosis.
 _PRIOR_ART_SEARCH_TIMEOUT_S = 15.0
 
@@ -8946,7 +8946,7 @@ _NAG_CATALOG: dict[str, str] = {
 _SEAT_MANUAL: dict[str, str] = {
     "new": (
         "new <handle> [path] [--project P]: create a self-managed seat, a fresh code "
-        "workspace plus identity, with no manager, ever. `found_seat` has no MCP door, "
+        "workspace plus identity, with no manager, ever. `found_seat` has no MCP entry point, "
         "so this shells out to `osiris new` verbatim (the same approach `launch` "
         "uses; do not reimplement it here). Refuse rather than guess: `osiris new` "
         "itself still defaults `project` to `handle` when `--project` is omitted, and "
@@ -9046,9 +9046,9 @@ _SEAT_MANUAL: dict[str, str] = {
         "correct-agent-project <agent> [--project] [--seat-generation]: fix an "
         "already-incorrect agent's own project or seat_generation stamps, for a "
         "third party (unlike `correct-house`, which is self-scoped and has no "
-        "console door for that reason). Composes `correct_agent_house` (hidden from "
+        "console entry point for that reason). Composes `correct_agent_house` (hidden from "
         "`list_tools()` since it was retired with no measured traffic at the time, "
-        "but still fully callable as a deprecated alias). Has a CLI door: `osiris "
+        "but still fully callable as a deprecated alias). Has a CLI command: `osiris "
         "correct-agent-project <agent> [--project P] [--seat-generation N]` "
         "(`correct-agent-house` still works this release as a deprecated alias, "
         "kept as one consistent naming scheme). `<agent>` accepts a claimed handle "
@@ -9058,7 +9058,7 @@ _SEAT_MANUAL: dict[str, str] = {
         "agent identity for a third party, distinct from `retire` (which ends a "
         "seat's role; this ends one agent identity, any target; `actor` records who "
         "is attributed with the action, not who is authorized to take it). Composes "
-        "the `retire_agent` MCP tool. No CLI door yet (declared but not built). "
+        "the `retire_agent` MCP tool. No CLI command yet (declared but not built). "
         "Always releases the target's held seat and mount rows on success; refuses "
         "clearly on a target seen active within the last 15 minutes unless "
         "`--override-live`."),
@@ -9066,12 +9066,12 @@ _SEAT_MANUAL: dict[str, str] = {
         "heal-seat-transcript <handle> <source_paths...> --because [--apply]: "
         "splice a seat's session, fragmented across multiple project slugs by a "
         "mid-session working-directory move, back into one file at its own office "
-        "slug. Composes the `heal_seat_transcript` MCP tool. No CLI door yet "
+        "slug. Composes the `heal_seat_transcript` MCP tool. No CLI command yet "
         "(declared but not built; this was the original case that this whole "
         "safeguard exists to prevent recurring). `source_paths` are the original "
         "fragments, in chain order (oldest first). `dry_run` defaults true "
         "(`--apply` to write). Never touches a Seat row, anchor_cwd, or any source "
-        "transcript; that's `heal-anchor`'s job, a different door. "
+        "transcript; that's `heal-anchor`'s job, a different route. "
         "(`reconcile-merge` and `fleet-reconcile`, two related repair tools, are "
         "deliberately not composed under /seat: the first belongs to a "
         "merge/unmerge context this file doesn't own, the second acts fleet-wide, "
@@ -9346,7 +9346,7 @@ async def record_decision(
         bears_on_receipt.append({"ref": ref, "matched": "true", "id": str(bid)[:8],
                                  "summary": bsumm or ""})
     actor = await _actor_for(ctx, subagent_id, subagent_type)
-    # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), THEN LANE 3
+    # ONE CALL MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-call fix), THEN LANE 3
     # (thread 79e785d1), NOW THE SHARED LADDER (thread 6c262aee, #151's law): both rungs
     # — the generation-scoped mount default and the lineage-wide widen — live in
     # capture.resolve_repo_default so record_decision and open_thread never carry two
@@ -9463,7 +9463,7 @@ async def record_decision(
         # both failed to name a single project — genuinely nothing (lineage_candidates
         # empty) or a real disagreement (2+ candidates, never broken by recency/generation
         # count). capture.record_lineage_abstain wraps derive_or_abstain (Lane 0) the same
-        # way for every caller, so the receipt shape stays identical across doors.
+        # way for every caller, so the receipt shape stays identical across tools.
         out["lineage_repo_derivation"] = await capture.record_lineage_abstain(
             pool, d, actor, lineage_candidates, lineage_projects)
     # CONTENT-LANDED, MEASURED NOT INFERRED (task #149, thread 20145def): a READ-BACK, not
@@ -10095,7 +10095,7 @@ async def ingest_reference(
     for c in cites or []:
         rid = await _resolve(pool, c)
         (cids.append(rid) if rid is not None else missing.append(c))
-    # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+    # ONE CALL MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-call fix), NOW THE
     # SAME SHARED LADDER record_decision/open_thread climb (thread 6c262aee, #151's law):
     # generation-scoped mount default, then the lineage-wide widen when that finds nothing.
     ident = await _ident_for(ctx)
@@ -10317,7 +10317,7 @@ async def open_thread(
     # operator dispatch 2026-09-07 wave 3, ruling on the held question recorded the
     # same day): a census before this wave found 242 open threads, 94 kindless and 87
     # owned by a bare handle in four casings — no refusal anywhere let it accumulate.
-    # Scoped to THIS tool (the door an agent actually calls), never capture.open_thread
+    # Scoped to THIS tool (the entry point an agent actually calls), never capture.open_thread
     # itself — internal callers (settle(), fleet_reconcile.py, the miner's own
     # _emit_thread) have their own, already-correct conventions and would break for no
     # reason under a blanket refusal one layer down.
@@ -10458,7 +10458,7 @@ async def open_thread(
     # PRIOR-ART SURFACING (obligation 8f59b64f, Thoth XC/msg 6120 — open_thread was the one
     # write verb of the three (record_decision, send, open_thread) with no semantic prior-
     # art check at all: #86's own borrowing went one way, open_thread's twin-check ported TO
-    # record_decision, never back). Same shared engine both those doors already call
+    # record_decision, never back). Same shared engine both those tools already call
     # (_surface_prior_art, fail-open/15s-bound) — surfacing only, never a refusal, and no
     # ack_prior_art/polarity machinery: open_thread has no confirms=/refutes=/rediscovers=
     # of its own to route an acknowledgement through, unlike record_decision. Deliberately
@@ -10672,7 +10672,7 @@ async def _thread_action_impl(
         assert isinstance(ref, str)
         assert kind is not None
         # THE WRITE-TIME CLASSIFICATION LAWS (thread b5ae6773) — same two checks
-        # open_thread runs, since reclassify is the OTHER live door onto a thread's
+        # open_thread runs, since reclassify is the OTHER live route onto a thread's
         # kind/owner. Adopting a miner echo as an obligation (reclassify's own
         # documented use) is still a MIND's act — refused only when nothing is mounted.
         if kind == "obligation" and actor == "session":
@@ -10797,7 +10797,7 @@ async def _proposal_action_impl(
     proposal_ref: str | None = None, reason: str | None = None,
 ) -> dict[str, Any]:
     """The proposal() MCP tool's own body, factored out so `osiris proposal` (the CLI
-    door) calls the SAME implementation rather than a second copy that could drift —
+    command) calls the SAME implementation rather than a second copy that could drift —
     the identical shape `_thread_action_impl` already holds for `thread(action=...)`."""
     from src.orchestrator.proposals import accept as _accept
     from src.orchestrator.proposals import propose as _propose
@@ -11420,7 +11420,7 @@ async def ack_handoff(
     if row["is_handoff"] != "true" and not await is_live_handoff(pool, oid):
         # #cd101070: an object with NO is_handoff property at all can still be a LIVE
         # handoff via the legacy prose fallback (nearest_handoff_ancestor/get_status's
-        # own HANDOFF_LIVE_PREDICATE_SQL) -- checked here too so the ack door recognizes
+        # own HANDOFF_LIVE_PREDICATE_SQL) -- checked here too so the ack command recognizes
         # exactly what the pointer surfaced, never refusing a real pending handoff just
         # because it predates the structured property.
         return {"error": f"{str(oid)[:8]} is already acknowledged or is not a handoff"}
@@ -11531,7 +11531,7 @@ async def settle(
         is_handoff = bool(item.pop("is_handoff", False))
         summary = item.pop("summary")
         resolves_arg = item.get("resolves")
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+        # ONE CALL MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-call fix), NOW THE
         # SAME SHARED LADDER record_decision/open_thread/ingest_reference's own wrappers
         # climb (thread 6c262aee, #151's law): this bulk loop calls capture directly and
         # bypassed the identity default entirely — resolve_repo_default is the ONE place
@@ -11577,7 +11577,7 @@ async def settle(
         summary = item.pop("summary")
         thread_kind = item.pop("kind", None)
         thread_owner = item.pop("owner", None)
-        # ONE DOOR MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-door fix), NOW THE
+        # ONE CALL MISSING ITS SIBLING'S DEFAULT (msg 5703/5720, orphan-call fix), NOW THE
         # SAME SHARED LADDER (thread 6c262aee, #151's law): this bulk loop calls capture
         # directly and bypassed the identity default entirely (unlike the owner default,
         # which DOES live in capture.open_thread and so already applied here for free) —
@@ -11635,8 +11635,8 @@ async def settle(
         elif _rd["lineage_attempted"]:
             thread_entry["lineage_repo_derivation"] = await capture.record_lineage_abstain(
                 pool, tid, actor, _rd["lineage_candidates"], _rd["lineage_projects"])
-        # settle()'s own threads_open is the SECOND live door onto capture.open_thread
-        # (#5546 item 3, Thoth msg 5605 — "one door, two callers, same shape"): the
+        # settle()'s own threads_open is the SECOND live entry point onto capture.open_thread
+        # (#5546 item 3, Thoth msg 5605 — "one call path, two callers, same shape"): the
         # DEFAULT-NEVER-REFUSE behavior for kind='obligation' lives once, in
         # capture.open_thread itself, so this caller inherits it for free — but the
         # receipt still has to name it here too, same as the mcp_server.open_thread tool.
@@ -12061,14 +12061,14 @@ async def automount_route(request: Any) -> Any:
             # THE BRIDGE (task #68 binding leg): CLAUDE_CODE_BRIDGE_SESSION_ID, carried by
             # the whisper from a background-job fork's own environment
             bridge_session_id=(str(body.get("bridge_session_id") or "") or None),
-            # THE EXPLICIT ANCHOR (the DSH bridge's door): the plugin knows its own
+            # THE EXPLICIT ANCHOR (the DSH bridge's entry point): the plugin knows its own
             # session dir (~/.dsh/sessions/<slug>/session-<uuid>) and states it — no
             # derivation guessing. Claude's whisper still omits it and derives as before.
             job_dir=_sane_job_dir(str(body.get("job_dir") or "")) or None)
         # a mint rode this whisper (compact/clear): the ancestor's connection outlives it —
         # purge the dead mind from the hot cache so no tool call answers as it again
         _evict_stale_minds(out.get("minted"))
-        # THE RENDERED WHISPER (the DSH bridge's door): a harness plugin cannot run the
+        # THE RENDERED WHISPER (the DSH bridge's entry point): a harness plugin cannot run the
         # python hook script, so it asks the SERVER to render the payload's whisper
         # paragraph — ONE renderer (scripts/osiris_hook.render_whisper, the same function
         # the Claude hook prints from — retired from osiris_whisper.py at the hook
@@ -12560,7 +12560,7 @@ async def diag_memory_route(request: Any) -> Any:
 async def _boot_check() -> None:
     """THE DEPLOY-ORDERING GUARD (thread e6f5556f): LOUD ALARM, never a refusal — see
     deploy_guard's own module docstring for why. Scoped to the PERSISTENT streamable-http
-    server only (the systemd `osiris-mcp` unit, the fleet's one shared door) — not the
+    server only (the systemd `osiris-mcp` unit, the fleet's one shared entry point) — not the
     per-session stdio subprocess every mount spins up, which isn't a "deploy" in the sense
     this guard exists for. Wrapped defensively on top of check_schema_drift's own internal
     fail-open: nothing here may ever block or delay serving."""
@@ -12638,7 +12638,7 @@ async def _boot_check() -> None:
 
 memprofile.maybe_start()  # inert unless OSIRIS_PROFILE_MEMORY is set — thread e6fd3772
 
-# THE MANUAL STALL DOOR (thread 0be2f790, THE OSIRIS-MCP MAIN-THREAD STALL, Thoth mail
+# THE MANUAL STALL TRIGGER (thread 0be2f790, THE OSIRIS-MCP MAIN-THREAD STALL, Thoth mail
 # 10625): `kill -USR1 <osiris-mcp pid>` dumps every thread's Python stack to stderr (the
 # systemd journal) on demand — zero runtime cost until signaled, complementing (never
 # replacing) the automatic watchdog above, which fires unprompted but only past

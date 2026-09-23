@@ -9,7 +9,7 @@ last-successful-offload per target to a local receipt file — `compositions.py`
 own `_fn_backup_status` (`offbox_section`) reads this back directly, the same
 "live filesystem read, never a DB write" pattern every other section of that
 Function already holds, rather than routing per-tick telemetry through
-`backup.offload_targets`'s own settings-authority door (that door is `operator_or_
+`backup.offload_targets`'s own settings-authority route (that route is `operator_or_
 ruling` + `requires_because` — correctly heavy for a HUMAN reconfiguring a target,
 wrong for an unattended timer's own routine write).
 
@@ -21,7 +21,7 @@ file, never a CLI argument (visible via `ps`), matching `osiris_offbox_backup.sh
 own long-standing rule.
 
 PRESENCE: 'local' targets use `backup_validation.check_local_target_presence`
-(findmnt against `expected_mountpoint`) exactly as the read-only settings door
+(findmnt against `expected_mountpoint`) exactly as the read-only settings route
 already does. 'restic' targets (the NAS, over sftp) have no local mountpoint to
 check — presence there means "an attempt to reach it, bounded by a real timeout,
 either succeeds or doesn't"; a reachability failure is treated identically to an
@@ -78,7 +78,7 @@ def _write_receipt(name: str, receipt: dict[str, Any]) -> None:
 
 
 def offload_receipts() -> dict[str, Any]:
-    """Public read door for `compositions._fn_backup_status`'s own `offbox_section`
+    """Public read entry point for `compositions._fn_backup_status`'s own `offbox_section`
     — never writes, mirrors `_read_receipts` under a name that doesn't look
     private to an external caller."""
     return _read_receipts()

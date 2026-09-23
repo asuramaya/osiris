@@ -151,7 +151,7 @@ def merge_settings(
     static `OSIRIS_HOOK_PROJECT=<name>` env var (a settings.json is tied to one repo, which
     mounts one project, by definition — resolved once here rather than guessed per
     keystroke) so the hook's own `/mail` matcher, which needs a project to peek at, can
-    serve at all; omitted, `/mail` degrades to a clean fall-through, same as any door not
+    serve at all; omitted, `/mail` degrades to a clean fall-through, same as any route not
     yet installed. settle_gate=#93, THE MECHANICAL SETTLE (operator ruling 2026-09-17):
     wires PreToolUse -> `osiris_hook.py settle-gate` (matcher `.*`, deliberately every
     tool, not just `mcp__osiris__.*` — the gate must refuse Bash/Read/Edit too, not only

@@ -18,7 +18,7 @@ population-wide snapshot median cannot tell "born yesterday, correctly not yet c
 from "born in June, never cited by anyone" — those are opposite conditions the old metric
 reported identically, and at ~20 new Decisions/day the always-young, legitimately-uncited
 population dominates the snapshot forever. median_links was never going to move off 1
-regardless of whether declaration-at-the-door was actually working.
+regardless of whether declaration-at-creation was actually working.
 
 COHORT-AGED CONNECTIVITY replaces it: objects are bucketed by BIRTH WEEK
 (`date_trunc('week', created_at)`), and each cohort's own live link count is measured at

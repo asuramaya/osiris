@@ -694,7 +694,7 @@ async def reconcile_project_fold(
 
     THE INVERSE PRECONDITION of fold_project, on purpose, so the two verbs' refusal
     conditions never overlap and a caller can never reach the merge event through this
-    door: fold_project REQUIRES status=='active' on both sides and refuses a merged
+    entry point: fold_project REQUIRES status=='active' on both sides and refuses a merged
     dupe; reconcile REQUIRES dupe.status=='merged' AND dupe's own `merged_into`
     pointing at exactly `into` (refuses to redirect a dupe merged into some OTHER
     object — never guesses which pair a caller means).
@@ -1041,7 +1041,7 @@ async def normalize_project_casing(
     """THE COMPOSITION operator ruling d02f2cdd asked for (thread 3ed5b3d2) — the
     TWIN-COLLAPSE shape specifically: two SoftwareProject objects already exist under
     case-variant canonicals (RAMstein/ramstein, bytebye/byebyte), one populated, one an
-    empty phantom (agent_count 0). NOT A SIXTH DOOR: every real write here is
+    empty phantom (agent_count 0). NOT A SIXTH WRITE PATH: every real write here is
     `fold_project` (already moves the exact edge set Alfred enumerated —
     `_PROJECT_ESTATE_LINK_TYPES` = in_repo/works_in/governs/informs, read from its own
     code, not assumed from its docstring), `rename_project` (the display-name fix, same

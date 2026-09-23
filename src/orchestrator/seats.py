@@ -3,8 +3,8 @@
 The bug class this cures is structural: the durable identity key used to be
 `agent:<session-id>`, a fact about a conversation, the most ephemeral object in the
 system. Everything that matters (seat, house, charter, mail) was layered on top of that
-key as assertions, reconstructed by inference at every door (whisper, mount,
-re-attach, heartbeat). Every inference door could mint a new identity, and
+key as assertions, reconstructed by inference at every entry point (whisper, mount,
+re-attach, heartbeat). Every inference entry point could mint a new identity, and
 patching each one individually (mint-lock, debounce, null-seam gate, dating gate, fork
 archaeology, claimed-sid guard, the binding rule) kept defending the same underlying
 wound. The fix is to stop inferring identity at all: a Seat is minted once as
@@ -59,7 +59,7 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 _LIVE_SECS = 900
 
 # Not an authorization boundary, and cannot be one: any agent that can run a shell can
-# present any of these strings to a CLI door or by importing this module directly. The
+# present any of these strings to a CLI command or by importing this module directly. The
 # check is plain string equality; nothing behind it verifies who is actually calling.
 # What these sentinels do buy is deliberateness and attribution: a caller must know and
 # deliberately type one of them, and the crossing's own audit stamp (mintseat.py's
@@ -329,7 +329,7 @@ async def held_seat_exact(pool: asyncpg.Pool, agent_id: str) -> str | None:
 async def seat_by_handle(pool: asyncpg.Pool, handle: str) -> dict[str, Any] | None:
     """A bare handle to its Seat, by name alone (case-insensitive exact match), no
     liveness or holder involved: `held_seat`'s own counterpart for the case an agent id
-    is not what the caller has. Built for the `team` console door's own `--seat`
+    is not what the caller has. Built for the `team` console command's own `--seat`
     argument: a terminal has no mounted identity of its own to resolve team()'s
     self-scoped contract, so it names the manager by handle instead and this resolves it
     directly, the same "resolve then call the shared logic" shape cmd_stop's own operator
@@ -1471,7 +1471,7 @@ async def team_roster(
     pool: asyncpg.Pool, manager_seat_id: str, *, manager_house: str | None = None,
 ) -> list[dict[str, Any]]:
     """The `team` MCP tool's own core query, pulled out of mcp_server.py so the console
-    door's own seat-argument path (a direct-DB console command, same shape as
+    command's own seat-argument path (a direct-DB console command, same shape as
     cmd_stop/cmd_correct_pin_value: it resolves a handle to a seat and calls the same
     logic, never a second copy) can call it without going through team()'s own
     deliberately self-scoped MCP contract. Every seat `managed_by` `manager_seat_id`:
@@ -2037,7 +2037,7 @@ async def bind_seat_tree(
     # seat carried both a fabricated console-sourced path (from mint) and a real,
     # manually-corrected path from a later fix, and the real one silently never won.
     # tree_cwd is single-valued per seat regardless of who wrote it last;
-    # assert_singular_property is this codebase's own door for exactly this shape,
+    # assert_singular_property is this codebase's own entry point for exactly this shape,
     # collapsing every other current row, not just this source's own.
     await actions.assert_singular_property(
         row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC), _CONF,
@@ -2075,7 +2075,7 @@ async def sweep_seat_trees(
 
     A previously found collapse gap: the original read here was `ORDER BY ... LIMIT 1`,
     so a seat carrying two simultaneously-current tree_cwd rows (the exact disease this
-    whole door exists to fix) was skipped whenever the LIMIT-1 read happened to
+    whole entry point exists to fix) was skipped whenever the LIMIT-1 read happened to
     surface the real one first, leaving its fabricated or duplicate sibling row current
     forever. Two real specimens: a real row sitting beside a fabricated console row, and
     the same real value asserted twice by two different sources. Fixed by reading every
@@ -2226,18 +2226,18 @@ async def rehold_seat(
     actions: Actions, *, seat_id: str, agent_id: str, because: str, actor: str,
     override_live: bool = False, dry_run: bool = False,
 ) -> dict[str, Any]:
-    """The third-party re-hold door: the specimen that forced this was a compaction
+    """The third-party re-hold entry point: the specimen that forced this was a compaction
     successor losing its own seat's binding to a wrongly-grafted sibling generation,
     with no sanctioned MCP verb able to put it back (`bind_holder` is a raw internal
     primitive, never exposed, and `reconcile_identity`'s third-party path only heals
     house/project property contradictions, never the `holds` link itself). This is that
-    door: refuses when the seat's current holder is live (`seat_occupancy`, the same
+    entry point: refuses when the seat's current holder is live (`seat_occupancy`, the same
     authority every other occupancy read in this codebase shares) and from a different
     lineage than `agent_id`, the exact shape a careless rehold could silently steal a
     seat out from under a genuinely different, still-working mind, unless
     `override_live=True` names that as a deliberate act (renamed from the bare
     `override` this shipped with, so the same word is used across every hold-move
-    door's receipt/guard family; the MCP surface already spoke it this way, only the
+    entry point's receipt/guard family; the MCP surface already spoke it this way, only the
     internal parameter lagged). `because` is required, same law as every other
     third-party correction in this codebase (a correction with no stated reason is the
     silent overwrite this rules against, not a fix).
@@ -2271,7 +2271,7 @@ async def rehold_seat(
     if agent_row is None:
         return {"error": f"no such agent: {agent_id!r}"}
     # NEVER REHOLD ONTO A BORROWED JOB_DIR (thread b33fa26b/17819e83, jenny/dustin
-    # Never rehold onto a borrowed job_dir: the exact door that kept re-corrupting a
+    # Never rehold onto a borrowed job_dir: the exact route that kept re-corrupting a
     # seat's binding after an equivalent guard shipped for _bind_before_spawn. A caller
     # (human or script) explicitly reholding a seat onto whatever the newest live
     # session in a project happens to be, not realizing that session's own
@@ -2510,7 +2510,7 @@ async def pause_seat_or_agent(
     actions: Actions, *, who: str, paused: bool, reason: str = "", actor: str,
 ) -> dict[str, Any]:
     """The pause write, extracted: used to be inlined in the MCP dispatcher's
-    `seat(action='pause')` branch, unreachable for a console/CLI door to wire without
+    `seat(action='pause')` branch, unreachable for a console/CLI command to wire without
     duplicating the resolution order. Same resolution as always: `seat:<id>` confirmed
     living, `agent:<id>` resolved through its lineage's own living head to whichever seat
     it holds (falling back to the head itself when unseated), or a bare name resolved
@@ -2669,7 +2669,7 @@ async def follow_binding(
     by checking this against the lineage's own known holds. No separate `override_live`
     here: this fires automatically inside mint_heir's own succession hook, with no
     operator present to supply one, so the guard stays unconditional by design, unlike
-    rehold_seat's deliberate third-party door.
+    rehold_seat's deliberate third-party entry point.
 
     Lineage-wide, not ancestor-only: churn can leave the active holds link on a folded
     sibling rather than the direct ancestor, so a mint from the living head could find
@@ -2818,7 +2818,7 @@ async def resync_seat_house_third_party(
     (`""`), the same sentinel `derive_house`/`_own_house_stamp` already treat as "no
     house" (a genuinely empty derived house is treated like "no seat yet"): every
     existing reader already does a truthy check, not an `is None` check, so this is not
-    a new state to teach anything, only a new door to reach the state through. The
+    a new state to teach anything, only a new route to reach the state through. The
     receipt always reports `None`, never `""`, for a clean external contract.
 
     `still_contradicted` (the same fourth-edge-case fix as `correct_house`): names any
@@ -2875,9 +2875,9 @@ async def resync_seat_house_third_party(
 async def resync_seat_project(
     actions: Actions, seat_id: str, *, source: str, reason: str,
 ) -> dict[str, Any]:
-    """One repair door, not two: collapses `correct_house` (self-scoped, head only) and
+    """One repair entry point, not two: collapses `correct_house` (self-scoped, head only) and
     `resync_seat_house_third_party` (third-party, took an arbitrary declared value)
-    into a single door that re-derives a seat's own stamped house/project property from
+    into a single entry point that re-derives a seat's own stamped house/project property from
     its own charter. A seat's project is never a second, independently-declared value,
     so there is nothing left here to self-scope or to hand a caller-chosen value: works
     for any seat, on a stated reason, same third-party discipline
@@ -2887,7 +2887,7 @@ async def resync_seat_project(
     writes the same `house` property derive_house already reads for a head seat's own
     stamp. The house-anchor/ghost-clause boundary-crossing logic that protects against a
     repeat of a past cross-seat annexation never changes shape; it just keeps reading
-    whatever this door writes, exactly as it read whatever
+    whatever this entry point writes, exactly as it read whatever
     correct_house/resync_seat_house_third_party used to write.
 
     Refuses on: an empty reason (a correction with no stated reason is exactly the

@@ -1,11 +1,11 @@
 """DRAWING THE WHOLE GRAPH, THE MIGRATIONS (thread 325ef660, Thoth mail 11407/11423):
-three name-dispatched repair doors, the SAME dry-run-default/idempotent/compensating-
+three name-dispatched repair entry points, the SAME dry-run-default/idempotent/compensating-
 event shape `backfill.py` already established for exactly this class of work
 (`BACKFILL_TARGETS`/`run_backfill`) -- a separate registry here (`MIGRATION_TARGETS`/
 `run_migration`), not a new entry in that one, because these three are graph-shape
 repairs feeding the physics layout and the renderer, not the identity/provenance
 backfill's own population. `osiris graph-migrate <name> [--dry-run/--apply]` is the CLI
-door (cli.py) -- named to avoid colliding with the pre-existing `osiris migrate`
+command (cli.py) -- named to avoid colliding with the pre-existing `osiris migrate`
 (alembic's env-correct schema tool, unrelated).
 
 Each target: `dry_run` defaults True; `dry_run=False` REQUIRES a non-blank `because`
@@ -99,7 +99,7 @@ async def migrate_repo_seats_fix(
     a phantom SoftwareProject minted from ~/.osiris/seats, the bare seat-office
     CONTAINER, never a real project -- the SAME "seats" basename `offices.
     is_bare_office_root` already guards `seats.resolve_project` against (ruling
-    577988ed), reached here through a different door (git-ingest's own
+    577988ed), reached here through a different route (git-ingest's own
     `sessions._repo_from_cwd`, fixed alongside this migration so the derivation
     itself stops producing new damage while this repairs the historical kind).
 
@@ -107,7 +107,7 @@ async def migrate_repo_seats_fix(
     reads "seats" is re-stamped to "osiris" (the fleet's own house -- the bare
     container belongs to no ONE seat, so there is no per-seat house to derive,
     only the shared fleet root) via `assert_singular_property`, NOT the plain
-    `assert_property` the first cut of this door used (Thoth's live finding on
+    `assert_property` the first cut of this entry point used (Thoth's live finding on
     the w316 apply, mail 11469): `assert_property`'s own supersession is
     SAME-SOURCE ONLY, so a re-stamp written by this migration's own actor sat
     BESIDE the agent's own prior self-declared "seats" row rather than retiring
@@ -116,7 +116,7 @@ async def migrate_repo_seats_fix(
     path never proved unique -- the exact failure shape the house's own
     ORDER-BY-without-a-total-tiebreak lesson names) kept filing all 54 agents
     under repo:seats even after the "successful" apply. `assert_singular_property`
-    is the house's OWN blessed door for this shape (ruling 1335332e, thread
+    is the house's OWN blessed entry point for this shape (ruling 1335332e, thread
     6361): a property that is single-valued per object regardless of who wrote
     the prior value collapses every other current row for (object, "project")
     down to the one this call mints, cross-source. Every LIVE link INTO
@@ -940,7 +940,7 @@ async def migrate_file_the_residual(
 async def migrate_commits_to_agents(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """COMMITS ATTRIBUTED TO AGENT IDENTITIES, THE BACKFILL DOOR (WAVE 27, ruling
+    """COMMITS ATTRIBUTED TO AGENT IDENTITIES, THE BACKFILL ENTRY POINT (WAVE 27, ruling
     4cf5e4b3/b8fb26494e0e, Thoth dispatch 11924): commit f14f47aa taught `ingest_repo`
     to mint `committed_by` going forward; every Commit it minted BEFORE that landed has
     none. Same resolution as the going-forward path, applied retroactively: the
@@ -1051,7 +1051,7 @@ async def migrate_house_to_project(
     fabricated, or simply out of step with what its own charter actually governs —
     the same sweep shape `sweep_seat_trees` already established for `tree_cwd`, one
     property over. REUSES `seats.resync_seat_project` for every real write (the SAME
-    re-derive-from-charter door the CLI's own `resync-seat-project` calls), never a
+    re-derive-from-charter entry point the CLI's own `resync-seat-project` calls), never a
     second implementation.
 
     A seat's project is DERIVED, never a second value: this migration only ever
@@ -1063,7 +1063,7 @@ async def migrate_house_to_project(
     seat whose stamped house is NON-NULL and disagrees with the charter's own
     single governed project (`refused_why: "stamped house disagrees with charter:
     <old> vs <new>"` — the house anchor's own carve-out, w347: a real value already
-    on the seat is a fact this door has no standing to overwrite; only a null house
+    on the seat is a fact this entry point has no standing to overwrite; only a null house
     is repaired here, a disagreement goes to the operator's own hand).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`.
@@ -1149,10 +1149,10 @@ async def migrate_holds_sandwich(
     also swallow a genuine vacancy after a real vacate_dead_seat); this recognizes only
     the one diagnosed, precisely-named shape.
 
-    REPAIR, COMPENSATING, NEVER A DELETE: `invalidate_link`'s own door only ever closes
+    REPAIR, COMPENSATING, NEVER A DELETE: `invalidate_link`'s own entry point only ever closes
     a CURRENTLY-open link (`WHERE valid_until IS NULL`), so it cannot touch these three
     rows — every one of them is already closed, historical, by the time this migration
-    ever runs. This is the one shape in this file that reaches past that door on
+    ever runs. This is the one shape in this file that reaches past that entry point on
     purpose: it extends the FIRST row's own `valid_until` forward to the THIRD row's own
     `valid_until` (re-opening the real holder's continuous tenure across the whole
     sandwich) and closes the phantom middle row and the now-redundant third row down to
@@ -1366,7 +1366,7 @@ async def migrate_project_name_singular(
     or ingest-sourced guess without needing a second, source-string-based special case.
 
     COMPENSATING, VIA `assert_singular_property` (cross-source collapse, ruling
-    1335332e's own intended door for exactly this shape): every losing current
+    1335332e's own intended route for exactly this shape): every losing current
     assertion is superseded, none deleted — the full history of every name this
     project ever carried, and who claimed it, stays in the assertion log forever.
 

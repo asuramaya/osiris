@@ -1,6 +1,6 @@
 """The semantic layer — local static embeddings behind a seam, cosine over a cached matrix.
 
-Search's lexical doors (FTS, OR-relaxation, trigram) match WORDS; this layer matches
+Search's lexical routes (FTS, OR-relaxation, trigram) match WORDS; this layer matches
 MEANING — "model downgrade" finds the warm-swap rulings that never say "downgrade". The
 operator's ruling (a0cfcca1) un-parked embeddings; the constraint that shaped this design:
 the box's inference is the local Claude CLI, which has NO embeddings endpoint, and keyless
@@ -15,11 +15,11 @@ fingerprint moves. Backfill is incremental by construction: each row carries the
 the text it embedded; unchanged text is never re-embedded (the watermark discipline).
 
 Degradation is graceful and HONEST: no model on disk / import failure → embedder() is
-None → fn_search runs its lexical doors only and says nothing false. A THIRD failure mode
+None → fn_search runs its lexical routes only and says nothing false. A THIRD failure mode
 (task #149): the first load can HANG rather than error — StaticModel.from_pretrained()
 reaching HF's CDN with no local cache — which no try/except ever catches, since a hang
 never raises. Model2VecEmbedder bounds that load with a timeout and latches the failure
-(never re-attempted mid-process), so this door closes within seconds instead of the
+(never re-attempted mid-process), so this route closes within seconds instead of the
 caller waiting out an external 300s timeout with no diagnosis. Tests inject a fake via
 `set_embedder_for_tests` — CI never downloads a model.
 """
@@ -34,7 +34,7 @@ import asyncpg
 
 from src.config.settings import get_settings
 
-# the searchable fields — mirrors fn_search's lexical door, so the two doors index the
+# the searchable fields — mirrors fn_search's lexical route, so the two routes index the
 # same rooms (a body lands via Reference ingest; first 2k chars carry a section's gist)
 _FIELDS = ("name", "summary", "rationale", "body")
 _MAX_CHARS = 2000
@@ -55,7 +55,7 @@ _LOAD_TIMEOUT_S = 8.0  # a ~30MB local model loads in low single digits on a hea
 # timeouts, thread 9f08b027) — StaticModel.from_pretrained() reaches out to HF's CDN for
 # the actual weight files, and that fetch can hang with NO exception raised at all
 # (measured live: it exceeded 120s with zero output past the file-listing step). Every
-# existing "fail closed" guard in this module and in fn_search's semantic door
+# existing "fail closed" guard in this module and in fn_search's semantic route
 # (semantic_candidates's own `except Exception: return []`) only helps once something
 # actually RAISES — a hang is silence, not an error, and silence was never caught. This is
 # the class ruling 60bc15db names: a mechanism that cannot tell "no" from "I don't know
@@ -138,7 +138,7 @@ def set_embedder_for_tests(client: EmbedClient | None) -> None:
 
 
 def resolve_embedder() -> EmbedClient | None:
-    """The configured embedder, or None (semantic door closed, lexical doors unaffected).
+    """The configured embedder, or None (semantic route closed, lexical routes unaffected).
     Resolution is cached — a missing model is discovered once, not per search."""
     global _resolved
     if _override is not None:
@@ -271,9 +271,9 @@ async def semantic_candidates(
     pool: asyncpg.Pool, embedder: EmbedClient, q: str, *, k: int = 30,
     floor: float = 0.35,
 ) -> list[dict[str, Any]]:
-    """Top-k (object_id, field, cosine) for a query — the semantic door's raw candidates.
+    """Top-k (object_id, field, cosine) for a query — the semantic route's raw candidates.
     `floor` keeps garbage out: below it a nearest neighbor is noise wearing a rank. Errors
-    degrade to [] — the lexical doors must never pay for a semantic failure."""
+    degrade to [] — the lexical routes must never pay for a semantic failure."""
     import numpy as np
 
     try:
@@ -290,5 +290,5 @@ async def semantic_candidates(
         order = np.argsort(-sims)[:k]
         return [{"object_id": ids[i], "field": fields[i], "cos": float(sims[i])}
                 for i in order if float(sims[i]) >= floor]
-    except Exception:  # noqa: BLE001 — the semantic door fails closed, never loudly
+    except Exception:  # noqa: BLE001 — the semantic route fails closed, never loudly
         return []

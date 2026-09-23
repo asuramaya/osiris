@@ -1,4 +1,4 @@
-"""soul_key — THE KEY DOOR's own orchestration layer (Thoth mail 12810/12830, wave 17):
+"""soul_key — THE KEY API's own orchestration layer (Thoth mail 12810/12830, wave 17):
 composes `src.ingest.soul_crypto` (pool-free, filesystem-only key primitives) with
 `src.ingest.soul_store` (the DB-touching legacy-row census and rewrap pass) and
 `scripts.osiris_offbox_restore_drill` into the three dict-in/dict-out functions BOTH
@@ -7,7 +7,7 @@ routes (src/api/app.py) call — never one wrapping the other, the same split ev
 domain in this house already holds (backup_settings.py, settings_service.py).
 
 status/rotate/restore-drill all need Postgres; init stays pool-free (a thin pass-through
-to `soul_crypto.soul_key_init`, kept here only so callers have one door to import from).
+to `soul_crypto.soul_key_init`, kept here only so callers have one entry point to import from).
 """
 from __future__ import annotations
 
@@ -23,10 +23,10 @@ async def soul_key_status(pool: asyncpg.Pool, *, path: str | None = None) -> dic
     resolved key path rather than whatever the caller process's own env/default
     would resolve to (`soul_store.encrypt_existing_soul_lines`'s own `fernet=`
     seam) — the exact defect a hand-run `--path` census surfaced during this
-    door's own build. NEVER the key bytes.
+    route's own build. NEVER the key bytes.
 
     `rp_id` (Thoth mail 13006): the live `soul_key.rp_id` setting, surfaced here
-    so Seshat's console reads it off this SAME door (GET /soul-key/status)
+    so Seshat's console reads it off this SAME route (GET /soul-key/status)
     instead of hard-coding a second copy — a future browser-based WebAuthn PRF
     enrollment needs the exact value the CLI's own `enroll-recovery` used."""
     from src.ingest import soul_crypto
@@ -79,7 +79,7 @@ async def soul_key_rotate(
         # read_key_bytes_at/read_legacy_key_bytes decode EITHER backend
         # (systemd-creds or legacy plaintext) -- a raw .read_bytes() here would
         # hand MultiFernet an still-encrypted systemd-creds blob instead of the
-        # actual key, the exact defect this census surfaced during this door's
+        # actual key, the exact defect this census surfaced during this route's
         # own build. noqa: ASYNC240 -- tiny key files/subprocess, negligible.
         new_fernet = Fernet(soul_crypto.read_key_bytes_at(  # noqa: ASYNC240
             resolved, explicit=path is not None))
