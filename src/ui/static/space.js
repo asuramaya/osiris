@@ -1,31 +1,28 @@
-// NAVIGABLE SPACE, THE RENDERER — piece 2, THE VIEW (thread 71c4ca0d, Thoth DM 10436,
-// operator rulings f832c3a4/0a3d6719), now INTEGRATED (decision "NAVIGABLE SPACE,
-// INTEGRATION SHAPE", mail 10550): mounted inside /ui/'s own browse stage in place of the
-// old #cy cytoscape container, not a separate page. The operator's own repeated corrections
-// settled the interaction shape, twice: (1) zoom is LOOKING only, never a data-tier switch —
-// navigation is a CLICK; (2) a click doesn't change what's loaded either — "more like click
-// to highlight" — every positioned object is drawn AT ONCE (matching 0a3d6719's own original
-// wording, "an engine that can handle all objects at once"), and a click only lights the
-// clicked object's focus, dims everything else, and opens the inspector. There is no
-// tier concept in this file.
+// NAVIGABLE SPACE, THE RENDERER: the entity-graph view, mounted inside /ui/'s own browse
+// stage in place of the old #cy cytoscape container, not a separate page. The interaction
+// shape settles on two rules: (1) zoom is LOOKING only, never a data-tier switch; navigation
+// is a CLICK; (2) a click doesn't change what's loaded either, it works more like clicking to
+// highlight; every positioned object is drawn at once (an engine that can handle all objects
+// at once), and a click only lights the clicked object's focus, dims everything else, and
+// opens the inspector. There is no tier concept in this file.
 //
-// Labels: the operator caught a real lag bug — DOM label positions were only recomputed on
-// a debounce, so they visibly fell behind the WebGL scene during a drag. Fixed by splitting
-// "which nodes are labeled" (nearest-N, genuinely expensive, stays debounced) from "where do
-// the ALREADY-CHOSEN labels sit on screen" (cheap — one Vector3.project() per label, no
-// resort), which now runs every render frame, not just after panning/zooming settles.
+// Labels: DOM label positions used to be recomputed only on a debounce, so they visibly fell
+// behind the WebGL scene during a drag. Fixed by splitting "which nodes are labeled"
+// (nearest-N, genuinely expensive, stays debounced) from "where do the already-chosen labels
+// sit on screen" (cheap, one Vector3.project() per label, no resort), which now runs every
+// render frame, not just after panning/zooming settles.
 //
-// Data source: Khnum's GET /graph/stream (thread b6cb1d7c0b36, wire format frozen by DM
-// 10439/10449/10451) — one binary snapshot, decoded client-side (decodeSnapshot below),
-// no more client-side tiling/pagination. GET /graph/stream/deltas SSE-polls the outbox for
-// incremental moves/retirements after the initial snapshot lands (op:'moved'|'retired').
-// Positions and collision avoidance (rings) are entirely Khnum's layout heartbeat's own —
-// this module reads x/y as given and never relaxes them client-side.
+// Data source: GET /graph/stream (wire format frozen), one binary snapshot, decoded
+// client-side (decodeSnapshot below), no client-side tiling/pagination. GET /graph/stream/
+// deltas SSE-polls the outbox for incremental moves/retirements after the initial snapshot
+// lands (op:'moved'|'retired'). Positions and collision avoidance (rings) come entirely from
+// the server's own layout heartbeat; this module reads x/y as given and never relaxes them
+// client-side.
 //
-// KNOWN GAP (flagged to Khnum, DM 10554/10555, not blocking): the wire header's `types`/
-// `projects` arrays resolve node type_code/project_code, but edge_type_code has no matching
-// name array yet — edge color-coding below hashes the raw int until that lands, then swaps
-// to real relationship names with no shape change on this side.
+// KNOWN GAP (not blocking): the wire header's `types`/`projects` arrays resolve node
+// type_code/project_code, but edge_type_code has no matching name array yet; edge
+// color-coding below hashes the raw int until that lands, then swaps to real relationship
+// names with no shape change on this side.
 //
 // Mounts via initSpace(container) rather than running as a page-load IIFE, so console.js
 // (the live /ui/ shell) can own the container lifecycle; space.html keeps working as a
@@ -33,9 +30,9 @@
 
 import * as THREE from "./vendor/three.module.js";
 
-// colour-code an edge by its relationship type — a stable hash-to-hue, since no link-type
+// colour-code an edge by its relationship type: a stable hash-to-hue, since no link-type
 // palette exists server-side yet (only /schema's own object_types carry colours). Falls back
-// to hashing the raw edge_type_code int until Khnum's edge_types name array lands.
+// to hashing the raw edge_type_code int until the server's own edge_types name array lands.
 const _edgeColorCache = new Map();
 function colorForEdgeType(type) {
   const key = String(type);
@@ -48,25 +45,24 @@ function colorForEdgeType(type) {
   return c;
 }
 
-// THE READING LAYER, part A: EDGE CLASSES (ruling c5953bb1, Thoth DM 10596). Structural
-// edges are pure containment/membership (an object belongs to a repo, an agent operates in
-// a project, a seat holds a mind) — real, but not what a reader is tracing when they ask
-// "how did we get here"; their degree dwarfs everything else (repo:osiris alone: 20,352).
-// Semantic edges are the actual provenance/evidence trail (possible_upstream, cites,
-// derived_from, spawned_by, succeeded_from, supersedes, resolves, grounded_by, and the
-// rest) — what "focus really focusing" (the operator's own words) needs to walk and show.
+// THE READING LAYER, part A: EDGE CLASSES. Structural edges are pure containment/membership
+// (an object belongs to a repo, an agent operates in a project, a seat holds a mind): real,
+// but not what a reader is tracing when they ask "how did we get here"; their degree dwarfs
+// everything else (repo:osiris alone: 20,352). Semantic edges are the actual provenance/
+// evidence trail (possible_upstream, cites, derived_from, spawned_by, succeeded_from,
+// supersedes, resolves, grounded_by, and the rest): what a real focus walk needs to trace
+// and show.
 //
-// DEFAULT, picked and noted here per Thoth's own instruction not to park on visual choices
-// (thread 71c4ca0d carries this note too): every link type in src/ontology/schema.py whose
-// own docstring reads as "X belongs to / operates in / is a member or officer of Y" is
-// structural; everything else defaults to semantic (the safer default — an edge that's
-// actually structural but misclassified just draws a bit more clutter; one that's actually
-// meaningful but misclassified as structural would go invisible, the worse failure).
-// THE WIRE EDGE CLASSES FIX (Thoth mail 11291): this table is a FALLBACK now, used only
-// for a type the header's own `link_type_class` (fetchStreamSnapshot's own edgeClassByType)
-// doesn't carry a value for -- not the primary source any more. A stale earlier version of
-// this fallback logic read a field (`edge_classes`) the wire never actually sent, so it ran
-// unconditionally; kept here in case a future snapshot genuinely omits the header key.
+// DEFAULT: every link type in src/ontology/schema.py whose own docstring reads as "X belongs
+// to / operates in / is a member or officer of Y" is structural; everything else defaults to
+// semantic (the safer default: an edge that's actually structural but misclassified just
+// draws a bit more clutter, while one that's actually meaningful but misclassified as
+// structural would go invisible, the worse failure).
+// THE WIRE EDGE CLASSES FIX: this table is a fallback now, used only for a type the header's
+// own `link_type_class` (fetchStreamSnapshot's own edgeClassByType) doesn't carry a value
+// for, not the primary source any more. A stale earlier version of this fallback logic read
+// a field (`edge_classes`) the wire never actually sent, so it ran unconditionally; kept
+// here in case a future snapshot genuinely omits the header key.
 const STRUCTURAL_EDGE_TYPES = new Set([
   "in_repo", "works_in", "governs", "holds", "acts_for", "member_of", "employs",
   "worktree_of", "succeeds_seat", "owns", "owned_by", "subsidiary_of", "ultimate_parent",
@@ -75,27 +71,23 @@ const STRUCTURAL_EDGE_TYPES = new Set([
 function classOfEdgeType(type) {
   return STRUCTURAL_EDGE_TYPES.has(type) ? "structural" : "semantic";
 }
-// WAVE 27, THE LENS PANEL: "container" is its own distinct edgeClass now (see the wire
-// classification comment above, in fetchStreamSnapshot), but every pre-existing check that
-// used to rely on container reading as "structural" (membership-degree detection: a real
-// container-focus walk, the drill's own focus-type gate) still needs to treat the two
-// alike -- this is the one place that equivalence lives now, instead of re-normalizing at
-// ingest.
+// "container" is its own distinct edgeClass now (see the wire classification comment above,
+// in fetchStreamSnapshot), but every pre-existing check that used to rely on container
+// reading as "structural" (membership-degree detection: a real container-focus walk, the
+// drill's own focus-type gate) still needs to treat the two alike; this is the one place
+// that equivalence lives now, instead of re-normalizing at ingest.
 function isStructuralLike(edgeClass) {
   return edgeClass === "structural" || edgeClass === "container";
 }
 
-// THE READING LAYER, part B (ruling c5953bb1): the curated provenance/evidence edge-type
-// allowlist a real FOCUS walks — the actual "long paths leading back and upstream" the
-// operator asked to see, as opposed to part A's structural containment edges, which never
-// widen a path. Pure, DOM-free module-level functions (not closures inside initSpace) so
-// the acceptance test Thoth's own dispatch named — "a synthetic 5-hop chain where focus at
-// the tail lights exactly the chain and nothing else" — can exercise the real algorithm
-// directly via Node, not a string-presence proof.
-// THE LEGIBILITY PASS, TIP 1 AMENDMENT (operator via Thoth mail 10726, ruling amending
-// e1cb9e3b): "the lens is the TREE TO SOURCE" -- grounded_by, decided_in, answers added to
-// the walk so a decision's own grounding trail is reachable, not just its narrower
-// derivation chain.
+// THE READING LAYER, part B: the curated provenance/evidence edge-type allowlist a real
+// focus walk traces, the actual long paths leading back and upstream, as opposed to part A's
+// structural containment edges, which never widen a path. Pure, DOM-free module-level
+// functions (not closures inside initSpace) so an acceptance test (a synthetic 5-hop chain
+// where focus at the tail lights exactly the chain and nothing else) can exercise the real
+// algorithm directly via Node, not a string-presence proof.
+// The lens is the tree to source: grounded_by, decided_in, answers are added to the walk so
+// a decision's own grounding trail is reachable, not just its narrower derivation chain.
 export const PATH_EDGE_TYPES = new Set([
   "possible_upstream", "cites", "derived_from", "spawned_by",
   "succeeded_from", "supersedes", "resolves", "grounded_by", "decided_in", "answers",
@@ -112,9 +104,9 @@ export function buildPathAdjacency(edges) {
   return { outAdj, inAdj };
 }
 // bidirectional BFS, depth-limited (a widen control raises depth interactively rather than
-// a hardcoded ceiling) — Osiris convention: from_id = the dependent/newer fact, to_id =
-// what it points at, so "upstream" follows outAdj (X.source -> target) and "downstream...
-// over the same reversed" follows inAdj.
+// a hardcoded ceiling). Osiris convention: from_id = the dependent/newer fact, to_id = what
+// it points at, so "upstream" follows outAdj (X.source -> target) and "downstream" follows
+// the same relation reversed, via inAdj.
 export function walkPath(outAdj, inAdj, startId, depth) {
   const seen = new Set([startId]);
   let frontier = [startId];
@@ -142,8 +134,8 @@ function decodeSnapshot(buf) {
   const out = { ...header, arrays: undefined };
   for (const [name, meta] of Object.entries(header.arrays)) {
     const Ctor = _DTYPE_CTOR[meta.dtype];
-    // typed-array views need an offset that's a multiple of their own element size — the
-    // wire format packs arrays back to back with no padding, so a Float32/Uint32 view at a
+    // typed-array views need an offset that's a multiple of their own element size. The wire
+    // format packs arrays back to back with no padding, so a Float32/Uint32 view at a
     // non-4-aligned offset throws; slice+copy is the safe general case (arrays here are a
     // few hundred KB at most, not worth hand-padding the server's own byte layout for).
     const byteOff = bodyStart + meta.offset;
@@ -165,40 +157,39 @@ async function fetchStreamSnapshot() {
       x: snap.x[i], y: snap.y[i],
       degree: snap.weight[i],
       statusFlag: snap.status_flag[i],
-      // WAVE 26, LINEAGES ARE TIME (thread 3683a12a): epoch seconds, float32 on the
-      // wire (see graph_stream.py's own docstring item 11) -- fine for a timeline
-      // spanning weeks/months/years, not sub-minute precision.
+      // LINEAGES ARE TIME: epoch seconds, float32 on the wire (see graph_stream.py's own
+      // docstring item 11); fine for a timeline spanning weeks/months/years, not sub-minute
+      // precision.
       createdAt: snap.created_at ? snap.created_at[i] : 0,
-      // WAVE 26, COMMUNITY REGIONS (mail 11592/11664): index-aligned, 0 = no real
-      // community (a small project, or a Leiden-detected community too small to be a real
-      // project-refinement) -- Khnum's own graph_physics._detect_communities,
-      // unchanged, the same partition the compact-arrangement layout is built on.
+      // COMMUNITY REGIONS: index-aligned, 0 = no real community (a small project, or a
+      // Leiden-detected community too small to be a real project-refinement); comes from the
+      // server's own graph_physics._detect_communities, unchanged, the same partition the
+      // compact-arrangement layout is built on.
       communityCode: snap.community_code ? snap.community_code[i] : 0,
-      // TIP 1b (Thoth mail 10755): "swap the client label fallback for the header
-      // labels" -- Khnum's own labels array (index-aligned to object_ids, tip 2g) is
-      // the label now, computed server-side with the exact same per-type rule and
-      // 40-char truncation THE LEGIBILITY PASS specified. Falls back to a client-built
-      // string only if an older snapshot lacks the field.
+      // The header's own labels array (index-aligned to object_ids) is the label now,
+      // computed server-side with the exact same per-type rule and 40-char truncation the
+      // legibility pass specified. Falls back to a client-built string only if an older
+      // snapshot lacks the field.
       label: snap.labels ? snap.labels[i] : undefined,
     });
   }
-  // THE WIRE EDGE CLASSES FIX (Thoth mail 11291): the client's own STRUCTURAL_EDGE_TYPES
-  // table was never anything but a fallback, but it ran 100% of the time -- the code read
-  // `snap.edge_classes`, a field the wire never actually sends. The real field is
-  // `link_type_class`, index-aligned to `edge_types` the same way (values semantic/
-  // structural/container), which is exactly why the browser marked authored_by/spawned_by
-  // "semantic" and drew them at rest (6,413 authored_by edges over 20k units read as the
-  // yellow beam) while the header's own link_type_class says authored_by is structural.
+  // THE WIRE EDGE CLASSES FIX: the client's own STRUCTURAL_EDGE_TYPES table was never
+  // anything but a fallback, but it ran 100% of the time; the code read `snap.edge_classes`,
+  // a field the wire never actually sends. The real field is `link_type_class`,
+  // index-aligned to `edge_types` the same way (values semantic/structural/container), which
+  // is exactly why the browser marked authored_by/spawned_by "semantic" and drew them at
+  // rest (6,413 authored_by edges over 20k units read as the yellow beam) while the header's
+  // own link_type_class says authored_by is structural.
   // "container" (membership/containment, distinct from ordinary structural) used to
-  // normalize to "structural" here -- every existing check in this file only ever
-  // distinguished "structural" from everything else, so collapsing it avoided special-
-  // casing every call site. WAVE 27, THE LENS PANEL (Thoth mail 11754) asks for container
-  // as its OWN lens toggle, alongside semantic/structural -- kept distinct now; every call
-  // site that relied on container reading as structural (isContainerFocus,
-  // containerMembersByType, the pathReachable one-hop widen fallback) goes through
-  // isStructuralLike() instead, below, so their own behavior is unchanged. Built once from
-  // the type vocabulary itself (edge_types), not per-edge, so a type with zero edges in
-  // THIS snapshot still has a real effective class to report on the debug API.
+  // normalize to "structural" here; every existing check in this file only ever
+  // distinguished "structural" from everything else, so collapsing it avoided special-casing
+  // every call site. The lens panel asks for container as its own lens toggle, alongside
+  // semantic/structural, kept distinct now; every call site that relied on container reading
+  // as structural (isContainerFocus, containerMembersByType, the pathReachable one-hop widen
+  // fallback) goes through isStructuralLike() instead, below, so their own behavior is
+  // unchanged. Built once from the type vocabulary itself (edge_types), not per-edge, so a
+  // type with zero edges in this snapshot still has a real effective class to report on the
+  // debug API.
   const edgeClassByType = {};
   if (snap.edge_types) {
     for (let i = 0; i < snap.edge_types.length; i++) {
@@ -217,28 +208,26 @@ async function fetchStreamSnapshot() {
       type, edgeClass,
     });
   }
-  // THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066) killed LOD entirely --
-  // Khnum's own project_aggregates/type_aggregates/cluster_edges/type_pair_edges (tip
-  // 2i/2j/h) still ride the same wire header; type_aggregates/cluster_edges/type_pair_edges
-  // remain unread client-side, but THE DRAWING TIP (mail 11408) reuses project_aggregates
-  // as exactly the project geometry it needs (a real centroid + exact member-distance-
-  // bound radius per project, already computed server-side from the same positions) --
-  // resolve its numeric project code back to a name off the same `projects` table
-  // node.project already reads, rather than re-deriving anything. THE NAME, NEVER THE
-  // SLUG (operator ruling a1cde8a3): `projects[]` is the wire's own canonical string
-  // (repo:<name>) -- `canonical` keeps the full thing for hover/identity, `name` is the
-  // reader-facing text this pseudo-node's own label actually shows.
+  // THE LAST RENDERER killed LOD entirely; project_aggregates/type_aggregates/cluster_edges/
+  // type_pair_edges still ride the same wire header. type_aggregates/cluster_edges/
+  // type_pair_edges remain unread client-side, but the drawing tip reuses project_aggregates
+  // as exactly the project geometry it needs (a real centroid plus exact
+  // member-distance-bound radius per project, already computed server-side from the same
+  // positions); it resolves its numeric project code back to a name off the same `projects`
+  // table node.project already reads, rather than re-deriving anything. THE NAME, NEVER THE
+  // SLUG: `projects[]` is the wire's own canonical string (repo:<name>); `canonical` keeps
+  // the full thing for hover/identity, `name` is the reader-facing text this pseudo-node's
+  // own label actually shows.
   const projectAggregates = (snap.project_aggregates || []).map((a) => ({
     name: Osiris.projectDisplayName(snap.projects[a.project]), canonical: snap.projects[a.project],
     count: a.count, cx: a.cx, cy: a.cy, radius: a.radius,
   }));
-  // WAVE 26, COMMUNITY REGIONS (mail 11592): `communities` is Khnum's own header table,
-  // the SAME shape as project_aggregates/type_aggregates -- one row per real (non-zero)
-  // community code, project resolved back to a name off the same `projects` table
-  // projects already use, so a community's own project membership is a plain string
-  // comparison, never a second id space to reconcile. `projectName` is reader-facing
-  // (THE NAME, NEVER THE SLUG, ruling a1cde8a3) the same way projectAggregates' own
-  // `name` above is.
+  // COMMUNITY REGIONS: `communities` is the server's own header table, the same shape as
+  // project_aggregates/type_aggregates; one row per real (non-zero) community code, project
+  // resolved back to a name off the same `projects` table projects already use, so a
+  // community's own project membership is a plain string comparison, never a second id space
+  // to reconcile. `projectName` is reader-facing (the name, never the slug) the same way
+  // projectAggregates' own `name` above is.
   const communityAggregates = (snap.communities || []).map((c) => ({
     code: c.community, projectName: Osiris.projectDisplayName(snap.projects[c.project]),
     count: c.count, cx: c.cx, cy: c.cy, radius: c.radius,
@@ -247,7 +236,7 @@ async function fetchStreamSnapshot() {
 }
 
 // resolves DOM refs from a passed-in container map, falling back to the same fixed ids
-// space.html's own standalone page has always used — lets console.js mount this against
+// space.html's own standalone page has always used, letting console.js mount this against
 // its own #cy-replacement markup while space.html keeps working unchanged.
 function resolveContainer(container) {
   const byId = (id) => document.getElementById(id);
@@ -279,14 +268,14 @@ export async function initSpace(container) {
   const typeColors = await loadTypeColors();
 
   // ---- renderer / scene / camera -----------------------------------------------------
-  // pixel ratio capped at 1.5 and antialias only below/at native DPR (Thoth's own live
-  // measurement on an Iris Xe box, mail 10581): AA is a real GPU cost that scales with
-  // resolution, and stacking it on top of an already-high device pixel ratio was part of
-  // what made a real laptop GPU choke on this scene.
+  // pixel ratio capped at 1.5 and antialias only below/at native DPR: AA is a real GPU cost
+  // that scales with resolution, and stacking it on top of an already-high device pixel
+  // ratio was part of what made a real laptop GPU choke on this scene (measured on an Iris
+  // Xe box).
   const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
   const renderer = new THREE.WebGLRenderer({ antialias: dpr <= 1 });
   // three.js's ColorManagement converts every hex colour (THREE.Color.set('#8ab4f8')) from
-  // sRGB into LINEAR space internally — without this, the renderer displays those linear
+  // sRGB into LINEAR space internally; without this, the renderer displays those linear
   // values as-is, reading systematically darker than the real colour.
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setPixelRatio(dpr);
@@ -297,16 +286,16 @@ export async function initSpace(container) {
   scene.background = new THREE.Color(0x0d1219);
   const pickScene = new THREE.Scene();
 
-  // THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066): "a per-pixel saturation
-  // cap (tone-map the additive pass...) so overlap reads as brightness and never as white."
-  // Additive blending alone can sum well past 1.0 per channel and hard-clip to flat white
-  // the moment enough points/edges overlap the same pixel -- a genuine HDR render target
-  // (HalfFloatType, values free to exceed 1.0) plus a Reinhard tone-map full-screen pass
-  // (color / (color + 1), mathematically bounded in [0, 1) for any non-negative input, no
-  // matter how many instances overlap) makes "never white" a property of the math, not a
-  // heuristic. Falls back to rendering straight to the canvas if the render target can't be
-  // created (an old GPU lacking float render-target support) -- the additive brightness cap
-  // this buys is a real improvement, never a hard requirement to render at all.
+  // THE LAST RENDERER: a per-pixel saturation cap (tone-map the additive pass) so overlap
+  // reads as brightness and never as white. Additive blending alone can sum well past 1.0
+  // per channel and hard-clip to flat white the moment enough points/edges overlap the same
+  // pixel; a genuine HDR render target (HalfFloatType, values free to exceed 1.0) plus a
+  // Reinhard tone-map full-screen pass (color / (color + 1), mathematically bounded in
+  // [0, 1) for any non-negative input, no matter how many instances overlap) makes "never
+  // white" a property of the math, not a heuristic. Falls back to rendering straight to the
+  // canvas if the render target can't be created (an old GPU lacking float render-target
+  // support); the additive brightness cap this buys is a real improvement, never a hard
+  // requirement to render at all.
   let sceneTarget = null, toneMapScene = null, toneMapCamera = null;
   try {
     sceneTarget = new THREE.WebGLRenderTarget(1, 1, {
@@ -343,15 +332,14 @@ export async function initSpace(container) {
       Math.max(1, Math.round(wrap.clientHeight * dpr)));
   }
 
-  // world extent depends entirely on Khnum's own layout heartbeat (deterministic hash
-  // placement, piece A) and is NOT a fixed constant — a project-center hash can land
-  // anywhere; fitToNodes() (below) frames the camera from the real loaded bbox instead of
-  // a guessed number the moment the first snapshot lands, and Fit re-measures live rather
-  // than resetting to a stale guess. minViewSize/maxViewSize (Thoth's own live-verified fix,
-  // mail 10581) are likewise derived from the real fitted bbox, not the old hardcoded
-  // [8, 2000] clamp — that clamp predated the deterministic layout and let one wheel tick
-  // snap a 259,779-unit-wide view down to 2,862 (a 90x jump into a single dense group,
-  // read by the operator as "zoom does not work").
+  // world extent depends entirely on the server's own layout heartbeat (deterministic hash
+  // placement, piece A) and is not a fixed constant; a project-center hash can land
+  // anywhere. fitToNodes() (below) frames the camera from the real loaded bbox instead of a
+  // guessed number the moment the first snapshot lands, and Fit re-measures live rather than
+  // resetting to a stale guess. minViewSize/maxViewSize are likewise derived from the real
+  // fitted bbox, not the old hardcoded [8, 2000] clamp; that clamp predated the deterministic
+  // layout and let one wheel tick snap a 259,779-unit-wide view down to 2,862 (a 90x jump
+  // into a single dense group, which read as "zoom does not work").
   let viewSize = 1300;
   let minViewSize = 20, maxViewSize = 2000;
   const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 10);
@@ -375,29 +363,27 @@ export async function initSpace(container) {
     markDirty();
   });
 
-  // ---- render ON DEMAND (Thoth's own live measurement, mail 10581): the render loop used
-  // to run every frame forever (rAF plus a 50ms setTimeout fallback), even when browse
-  // isn't the active surface or the tab is hidden — pure waste, and on top of the
-  // per-wheel-event instance-buffer rewrite this fix removes below, it compounded into the
-  // "super fried" report. Now a frame only renders when something actually changed
-  // (camera move, data, focus, label pick); the loop stops scheduling itself entirely once
-  // idle rather than polling at 20fps forever.
+  // ---- render ON DEMAND: the render loop used to run every frame forever (rAF plus a 50ms
+  // setTimeout fallback), even when browse isn't the active surface or the tab is hidden;
+  // pure waste, and on top of the per-wheel-event instance-buffer rewrite this fix removes
+  // below, it compounded into a real performance problem. Now a frame only renders when
+  // something actually changed (camera move, data, focus, label pick); the loop stops
+  // scheduling itself entirely once idle rather than polling at 20fps forever.
   let dirty = true, running = true, rafPending = false;
-  // THE SETTINGS PANE FOLLOW-UP (thread ea9aedba, Thoth mail 13404, live Chrome review):
-  // positionLabels' own declutter state used to sit right next to positionLabels itself,
-  // far below markDirty/renderIfDirty/forceRender -- all of which CAN reach positionLabels
+  // positionLabels' own declutter state used to sit right next to positionLabels itself, far
+  // below markDirty/renderIfDirty/forceRender, all of which can reach positionLabels
   // (forceRender directly; markDirty via its requestAnimationFrame(renderIfDirty) chain).
   // `positionLabels`/`overlapsPlaced` are function declarations (hoisted, callable from
-  // anywhere in this scope from the first line), but `_placed` was a `const` -- in the
-  // temporal dead zone until ITS OWN line ran. An early forceRender() call (or, in a
-  // headless/fake-timer test harness, an rAF firing sooner than a real browser's next
-  // paint) reached positionLabels() before that line executed and threw "Cannot access
-  // '_placed' before initialization" at its very first statement. Hoisted here, before
-  // every path that can reach positionLabels, closes that window for good.
+  // anywhere in this scope from the first line), but `_placed` was a `const`, in the
+  // temporal dead zone until its own line ran. An early forceRender() call (or, in a
+  // headless/fake-timer test harness, an rAF firing sooner than a real browser's next paint)
+  // reached positionLabels() before that line executed and threw "Cannot access '_placed'
+  // before initialization" at its very first statement. Hoisted here, before every path that
+  // can reach positionLabels, closes that window for good.
   const _placed = []; // [x0,y0,x1,y1] boxes already shown this frame
   const LABEL_W = 90, LABEL_H = 16, LABEL_GAP = 4;
   // `w` defaults to LABEL_W for any caller that doesn't have a real measured width handy
-  // (e.g. a synthetic probe) -- every real call site below always passes the label's own
+  // (e.g. a synthetic probe); every real call site below always passes the label's own
   // cached labelWidths entry.
   function overlapsPlaced(x, y, w = LABEL_W) {
     const x0 = x - w / 2, x1 = x + w / 2, y0 = y - LABEL_H, y1 = y;
@@ -437,11 +423,10 @@ export async function initSpace(container) {
   function renderIfDirty() {
     rafPending = false;
     if (!running || !dirty) return;
-    // WHEEL HANG INSTRUMENTATION (Thoth mail 11248): temporary, gated behind
-    // window.__spaceWheelTiming -- per-stage performance.now() around the two costs a
-    // wheel tick actually pays for (this render call, and positionLabels' own tail of
-    // drill/anchor/stub positioning), logged so a single real tick's own cost is visible
-    // stage-by-stage rather than guessed at.
+    // WHEEL HANG INSTRUMENTATION: temporary, gated behind window.__spaceWheelTiming;
+    // per-stage performance.now() around the two costs a wheel tick actually pays for (this
+    // render call, and positionLabels' own tail of drill/anchor/stub positioning), logged so
+    // a single real tick's own cost is visible stage-by-stage rather than guessed at.
     if (window.__spaceWheelTiming) {
       const t0 = performance.now();
       renderScene();
@@ -461,11 +446,11 @@ export async function initSpace(container) {
     if (document.hidden) pause(); else resume();
   });
 
-  // WebGL context loss (Thoth's own live report: the first load in her tab was refused
-  // outright, "Web page caused context loss and was blocked", and a later tab vanished —
-  // a GPU reset Chrome then blocks the page from reusing). preventDefault on loss keeps the
-  // browser from tearing the canvas down permanently; rebuild GPU resources on restore
-  // instead of leaving a dead black canvas or crashing the tab.
+  // WebGL context loss: a real load was once refused outright ("Web page caused context
+  // loss and was blocked"), and a later tab vanished after a GPU reset Chrome then blocks
+  // the page from reusing. preventDefault on loss keeps the browser from tearing the canvas
+  // down permanently; rebuild GPU resources on restore instead of leaving a dead black
+  // canvas or crashing the tab.
   renderer.domElement.addEventListener("webglcontextlost", (ev) => {
     ev.preventDefault();
     pause();
@@ -485,33 +470,32 @@ export async function initSpace(container) {
   let meshUniforms = null, pickUniforms = null;
   let visibleAttr = null;
   let idToNode = [];
-  // one id->node index, rebuilt only when the node set itself changes (buildScene) --
-  // TIP 1 AMENDMENT's own 100ms budget (mail 10726 item 2) made this the fix, not a
-  // premature one: rebuilding a 49k-entry Map costs ~15ms each, and focusObject used to
-  // build FOUR of them (ego layout, restore, path edges, camera fit) on every single click.
+  // one id->node index, rebuilt only when the node set itself changes (buildScene). Worth
+  // the cost: rebuilding a 49k-entry Map costs ~15ms each, and focusObject used to build
+  // four of them (ego layout, restore, path edges, camera fit) on every single click.
   let idById = new Map();
-  // TIP 1(e): header taxonomy-pill type filters hide instances through the same per-instance
-  // aVisible flag focus uses (1(d)) — empty means nothing filtered, everything shown.
+  // header taxonomy-pill type filters hide instances through the same per-instance aVisible
+  // flag focus uses; empty means nothing filtered, everything shown.
   let hiddenNodeTypes = new Set();
-  // WAVE 27, THE LENS PANEL (Thoth mail 11754): two more reader-opt-OUT toggles alongside
-  // the legend's existing node-type/edge-class/edge-type checkboxes — default false (shown),
-  // same "a reader's lens, never a default hide" convention. Declared here, not down by
-  // their own build functions, for the same TDZ-safety reason as every other early-block
-  // state this file already collects (syncCommunityVisibility/buildHighDegreeBadges run
-  // during initSpace's own synchronous setup, before a `let` declared near those functions'
-  // own definitions would have executed yet).
+  // THE LENS PANEL: two more reader-opt-OUT toggles alongside the legend's existing
+  // node-type/edge-class/edge-type checkboxes; default false (shown), same "a reader's lens,
+  // never a default hide" convention. Declared here, not down by their own build functions,
+  // for the same TDZ-safety reason as every other early-block state this file already
+  // collects (syncCommunityVisibility/buildHighDegreeBadges run during initSpace's own
+  // synchronous setup, before a `let` declared near those functions' own definitions would
+  // have executed yet).
   let communitiesHiddenByLens = false;
   let highDegreeBadgesHiddenByLens = false;
-  // WAVE 27, THE LENS PANEL: "state on the URL hash so a view is shareable" -- one JSON
-  // blob under its own hash param (never the whole hash, so other hash consumers keep their
-  // own space), sorted arrays so two sessions with the same lens produce the SAME hash text,
-  // not just an equivalent one. Read once at load (applyLensStateFromHash, before the first
+  // THE LENS PANEL: state on the URL hash so a view is shareable; one JSON blob under its
+  // own hash param (never the whole hash, so other hash consumers keep their own space),
+  // sorted arrays so two sessions with the same lens produce the same hash text, not just an
+  // equivalent one. Read once at load (applyLensStateFromHash, before the first
   // buildScene/renderLegend), written after every toggle (renderLegend's own last line).
-  // THE HASH-RESTORE FIX (Thoth mail 11981/12052): a same-document navigation to a
-  // different #lens fragment never re-runs this file's own init path, so a live
-  // hashchange listener (below, near the initial buildScene call) reapplies the hash and
-  // rebuilds the same way a toggle does -- opening a shared link in an already-open tab
-  // now restores correctly too, not just a genuinely fresh load.
+  // THE HASH-RESTORE FIX: a same-document navigation to a different #lens fragment never
+  // re-runs this file's own init path, so a live hashchange listener (below, near the
+  // initial buildScene call) reapplies the hash and rebuilds the same way a toggle does;
+  // opening a shared link in an already-open tab now restores correctly too, not just a
+  // genuinely fresh load.
   const LENS_HASH_PARAM = "lens";
   function readLensStateFromHash() {
     const params = new URLSearchParams(location.hash.replace(/^#/, ""));
@@ -547,37 +531,35 @@ export async function initSpace(container) {
     communitiesHiddenByLens = !!state.hideCommunities;
     highDegreeBadgesHiddenByLens = !!state.hideHighDegree;
   }
-  // CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7, thread 0be2f790's own operator-
-  // finding follow-up): the header's repo selector drives the SAME aVisible flag through
-  // this sibling set — nd.project (already carried on every node since the snapshot's own
-  // project_code lookup, line ~148) is the field it filters on, empty means nothing
-  // filtered, everything shown.
+  // The header's repo selector drives the same aVisible flag through this sibling set;
+  // nd.project (already carried on every node since the snapshot's own project_code lookup,
+  // line ~148) is the field it filters on, empty means nothing filtered, everything shown.
   let hiddenProjects = new Set();
-  // THE DRILL, item 5 (Thoth mail 11048): ids a project-filter stub click revealed --
-  // "without unhiding the project" itself, so this stays a NARROW override, never merged
-  // into hiddenProjects. Reset whenever the filter itself changes (setHiddenProjects).
+  // THE DRILL: ids a project-filter stub click revealed, without unhiding the project
+  // itself, so this stays a narrow override, never merged into hiddenProjects. Reset
+  // whenever the filter itself changes (setHiddenProjects).
   let revealedStubIds = new Set();
-  // THE READING LAYER, part B: FOCUS = PATH LENS (ruling c5953bb1, Thoth DM 10596). SELECT
-  // (a plain click) and FOCUS (double-click, Enter, or the inspector's Focus button) are now
-  // two different acts — selectedId just shows the inspector; pathFocusId/pathReachable are
-  // the real path-lens state (only non-empty while an actual focus is active).
+  // THE READING LAYER, part B: FOCUS = PATH LENS. SELECT (a plain click) and FOCUS
+  // (double-click, Enter, or the inspector's Focus button) are two different acts;
+  // selectedId just shows the inspector, while pathFocusId/pathReachable are the real
+  // path-lens state (only non-empty while an actual focus is active).
   let selectedId = null;
   let pathFocusId = null;
   let pathReachable = new Set();
-  let focusStack = []; // ids, most recent last — back() pops, Escape/Clear focus wipes the overlay
+  let focusStack = []; // ids, most recent last: back() pops, Escape/Clear focus wipes the overlay
   // THE DRILL: cross-project anchor click targets. Declared here (not next to
   // buildProjectObjectIndex/buildProjectAnchors further down) because buildScene calls
-  // buildProjectObjectIndex() on every load -- a `let` declared below buildScene's own
-  // call site is still in its temporal dead zone at that point, a real crash-on-every-load
-  // bug THE LAST RENDERER's live verification caught (ReferenceError: Cannot access
-  // 'projectObjectByName' before initialization).
+  // buildProjectObjectIndex() on every load; a `let` declared below buildScene's own call
+  // site is still in its temporal dead zone at that point, a real crash-on-every-load bug
+  // live verification caught (ReferenceError: Cannot access 'projectObjectByName' before
+  // initialization).
   let projectObjectByName = new Map(); // "repo:foo" -> that SoftwareProject object's own id
   // shared world->screen scratch vector for every per-frame div-positioning pass (labels,
-  // drill entries, project anchors, project stubs) -- same TDZ reasoning as
+  // drill entries, project anchors, project stubs), same TDZ reasoning as
   // projectObjectByName above: positionDrillDivs/positionProjectAnchors/
   // positionProjectStubs are all reachable during a container focus called well before a
-  // declaration placed down near positionLabels would have run. One shared instance is
-  // also just correct: it's pure per-call scratch, never carries state between calls.
+  // declaration placed down near positionLabels would have run. One shared instance is also
+  // just correct: it's pure per-call scratch, never carries state between calls.
   const _screenV = new THREE.Vector3();
 
   function disposeCurrent() {
@@ -591,16 +573,15 @@ export async function initSpace(container) {
     mesh = pickMesh = edgeLines = ribbonLines = null;
   }
 
-  // THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066, freezing the renderer):
-  // "points at a constant SCREEN size in px on a steep degree curve (~2px leaf, ~8px@100
-  // links, ~16px@1000, ~32px@10000; no world-unit sizing, no 48px cap)." A full circle back
-  // to this file's own ORIGINAL pre-legibility-pass scheme (aRadiusPx * uWorldPerPx, a
-  // constant screen size regardless of zoom) -- what changed since is the CURVE, not the
-  // mechanism: px = 2 * degree^log10(2) hits all four of the ruling's own anchors exactly
-  // (degree 1 -> 2px, 100 -> 8px, 1,000 -> 16px, 10,000 -> 32px -- verified algebraically:
+  // THE LAST RENDERER: points at a constant screen size in px on a steep degree curve
+  // (~2px leaf, ~8px@100 links, ~16px@1000, ~32px@10000; no world-unit sizing, no 48px cap).
+  // A full circle back to this file's own original pre-legibility-pass scheme (aRadiusPx *
+  // uWorldPerPx, a constant screen size regardless of zoom); what changed since is the
+  // curve, not the mechanism: px = 2 * degree^log10(2) hits all four anchors exactly
+  // (degree 1 -> 2px, 100 -> 8px, 1,000 -> 16px, 10,000 -> 32px, verified algebraically:
   // d^log10(2) = 10^(log10(d)*log10(2)) = 2^log10(d), so at d=10^k the curve is exactly
-  // 2*2^k), left uncapped past that per the ruling's own words -- no world-unit sizing, no
-  // LOD tiers standing in for a floor once zoomed out (kill LOD entirely, same mail).
+  // 2*2^k), left uncapped past that; no world-unit sizing, no LOD tiers standing in for a
+  // floor once zoomed out (LOD is killed entirely).
   const DEGREE_PX_BASE = 2;
   const DEGREE_PX_EXPONENT = Math.log10(2); // ≈0.30103
   function nodeScreenPx(nd) {
@@ -608,13 +589,12 @@ export async function initSpace(container) {
   }
   function worldPerPx() { return viewSize / wrap.clientHeight; }
 
-  // TIP 4 (operator ruling "DENSITY NOT DISCS", mail 11011): "every object draws at every
-  // zoom as an additive point sprite... a project far out is a haze whose brightness is its
-  // count." `additive` is true for the DRAW mesh only, never the pick mesh -- GPU picking
-  // decodes an exact RGB-encoded instance id out of the render target, which additive
-  // blending would corrupt the moment two picked instances' colours overlap in that tiny
-  // readback; the pick mesh stays fully opaque, same as before this tip. THE LAST RENDERER
-  // caps overall SATURATION with a tone-map post-process pass instead (see
+  // DENSITY NOT DISCS: every object draws at every zoom as an additive point sprite, so a
+  // project far out is a haze whose brightness is its count. `additive` is true for the draw
+  // mesh only, never the pick mesh; GPU picking decodes an exact RGB-encoded instance id out
+  // of the render target, which additive blending would corrupt the moment two picked
+  // instances' colours overlap in that tiny readback, so the pick mesh stays fully opaque.
+  // THE LAST RENDERER caps overall saturation with a tone-map post-process pass instead (see
   // makeToneMapPass below) rather than a per-instance opacity ceiling, so raw additive
   // brightness here can exceed 1.0 without a hard per-material alpha limiting it.
   const NODE_POINT_OPACITY = 0.85;
@@ -643,20 +623,19 @@ export async function initSpace(container) {
     return { material: mat, uniforms };
   }
 
-  // THE READING LAYER, part A: edges fade by SCREEN length, not by zoom level — a long line
-  // crossing most of the view (two groups that happen to be linked) reads as noise; a
-  // short local one is the actual signal. Same GPU-uniform discipline as node sizing (mail
-  // 10581): each vertex carries the OTHER endpoint's world position too (`otherPosition`),
-  // so the vertex shader can project both ends to screen pixels and compute the segment's
-  // own on-screen length using nothing but modelViewMatrix/projectionMatrix — already
-  // updated by three.js every frame for free. No per-zoom CPU work, no material.opacity
-  // scalar to keep in sync (replaces the old viewSize-based updateEdgeStyle entirely).
-  // THE LAST RENDERER (Thoth mail 11066): "an edge draws only when both ends are visible,
-  // no structural-hop exception, with an alpha floor (~0.06) so any drawn edge is faintly
-  // visible." uMinAlpha raised from 0.04 to that floor; the density-scale multiplier TIP 4
-  // added (uDensityScale) is gone -- overall saturation is now bounded by the tone-map
-  // post-process pass (makeToneMapPass) instead of thinning every edge's own alpha by how
-  // many are on screen.
+  // THE READING LAYER, part A: edges fade by screen length, not by zoom level; a long line
+  // crossing most of the view (two groups that happen to be linked) reads as noise, while a
+  // short local one is the actual signal. Same GPU-uniform discipline as node sizing: each
+  // vertex carries the other endpoint's world position too (`otherPosition`), so the vertex
+  // shader can project both ends to screen pixels and compute the segment's own on-screen
+  // length using nothing but modelViewMatrix/projectionMatrix, already updated by three.js
+  // every frame for free. No per-zoom CPU work, no material.opacity scalar to keep in sync
+  // (replaces the old viewSize-based updateEdgeStyle entirely).
+  // THE LAST RENDERER: an edge draws only when both ends are visible, no structural-hop
+  // exception, with an alpha floor (~0.06) so any drawn edge is faintly visible. uMinAlpha
+  // raised from 0.04 to that floor; the earlier density-scale multiplier (uDensityScale) is
+  // gone, overall saturation is now bounded by the tone-map post-process pass
+  // (makeToneMapPass) instead of thinning every edge's own alpha by how many are on screen.
   const edgeFadeUniforms = {
     uViewportPx: { value: new THREE.Vector2(wrap.clientWidth, wrap.clientHeight) },
     uMaxFadePx: { value: 320 },
@@ -697,28 +676,26 @@ export async function initSpace(container) {
     });
   }
 
-  // THE DRAWING TIP (Thoth mail 11408, operator ruling 4a51cab1/1178e7d9, thread 325ef660):
-  // "nothing hidden, nothing drawn twice" -- caps and hides (ruling c5953bb1's own
-  // "structural hidden by default") were the OLD answer to graph density; this tip
-  // replaces the answer, not just the renderer. Membership is a fill (a project fill),
-  // the two universal fans are HIGH-DEGREE OBJECTS with a count, every other edge draws
-  // at rest (same-project as a line, cross-project aggregated into a per-(project,project,
-  // type) ribbon that resolves to individual lines once that specific ribbon's own
-  // endpoints are far enough apart on screen). Confirmed by the two numbers-first spikes
-  // this tip builds on: Seshat 57992143 (this project/ribbon/high-degree-object model,
-  // frame 0.77ms, accounting exact) and Khnum 5f6c4db3 (high-degree objects are already
-  // excluded as membership containers, not a separate concern for this renderer).
+  // THE DRAWING TIP: nothing hidden, nothing drawn twice. Caps and hides (structural hidden
+  // by default) were the old answer to graph density; this tip replaces the answer, not just
+  // the renderer. Membership is a fill (a project fill), the two universal fans are
+  // high-degree objects with a count, every other edge draws at rest (same-project as a
+  // line, cross-project aggregated into a per-(project,project,type) ribbon that resolves to
+  // individual lines once that specific ribbon's own endpoints are far enough apart on
+  // screen). Confirmed by two numbers-first spikes this model builds on: this
+  // project/ribbon/high-degree-object model measured at frame 0.77ms with exact accounting,
+  // and a separate check confirming high-degree objects are already excluded as membership
+  // containers, not a separate concern for this renderer.
   //
   // THE PROJECT FILL MODEL: `projectFills` is project_aggregates (already computed
-  // server-side -- a real centroid + exact member-distance-bound radius per project, no
-  // new query). `PROJECT_FILL_TYPES` are the five membership link types (item 1: the
-  // original four plus Sekhmet's new `owned_by`) -- never drawn as lines at all, the
-  // project fill IS the membership claim, drawn once as a filled region instead of once
-  // per member as a spoke. `highDegreeTargets` are the two universal-fan targets (item 3)
-  // -- found DATA-DRIVEN (the single node receiving the most edges of that type), not
-  // hardcoded by canonical id. Every edge landing on a high-degree target's own target, of
-  // that target's own type, is excluded from line-drawing and folded into that node's own
-  // badge count instead.
+  // server-side, a real centroid plus exact member-distance-bound radius per project, no new
+  // query). `PROJECT_FILL_TYPES` are the five membership link types (the original four plus
+  // `owned_by`), never drawn as lines at all; the project fill is the membership claim,
+  // drawn once as a filled region instead of once per member as a spoke. `highDegreeTargets`
+  // are the two universal-fan targets, found data-driven (the single node receiving the most
+  // edges of that type), not hardcoded by canonical id. Every edge landing on a high-degree
+  // target's own target, of that target's own type, is excluded from line-drawing and folded
+  // into that node's own badge count instead.
   const PROJECT_FILL_TYPES = new Set(["in_repo", "works_in", "holds", "member_of", "owned_by"]);
   const HIGH_DEGREE_EDGE_TYPES = ["acts_for", "authored_by"];
   let projectFills = []; // [{name, count, cx, cy, radius}]
@@ -727,9 +704,9 @@ export async function initSpace(container) {
   let ribbons = []; // [{a, b, type, count}] -- a/b are project names, a <= b
   let ribbonsResolvedKeys = new Set(); // "a|b|type" keys currently resolved to individual lines
   let projectLabelCandidates = []; // pseudo-nodes for pickLabels' own shared budget, below
-  // WAVE 26, THE STORYLINE (mail 11534): declared here, well before fitToNodes' own initial
-  // synchronous call site (below) reads storylineActive via syncStorylineAxis -- the exact
-  // TDZ crash class projectLabelCandidates above already hit once; see renderStoryline's
+  // THE STORYLINE: declared here, well before fitToNodes' own initial synchronous call site
+  // (below) reads storylineActive via syncStorylineAxis; the exact TDZ crash class
+  // projectLabelCandidates above already hit once; see renderStoryline's
   // own docstring, further down, for what these actually mean.
   let storylineActive = false;
   let storylineChainIds = new Set();
@@ -739,10 +716,10 @@ export async function initSpace(container) {
   let storylineLines = null;
   let storylineAxisEntries = []; // [{t, x, y, div}]
   let storylineMaxSubrowOffsetPx = 0; // deepest sub-agent arc offset (raw px) used this render (THE SPAWN ROW)
-  // WAVE 26, COMMUNITY REGIONS (mail 11592/11664): declared here for the same reason as
-  // the storyline state just above -- syncCommunityVisibility (further down) is read from
-  // fitToNodes' own initial synchronous call site, well before this point in the file
-  // would otherwise execute a `let` declared near its own function.
+  // COMMUNITY REGIONS: declared here for the same reason as the storyline state just above;
+  // syncCommunityVisibility (further down) is read from fitToNodes' own initial synchronous
+  // call site, well before this point in the file would otherwise execute a `let` declared
+  // near its own function.
   let communities = []; // [{code, projectName, count, cx, cy, radius}]
   let communityByCode = new Map();
   let communityRegionsVisible = false;
@@ -765,7 +742,7 @@ export async function initSpace(container) {
     highDegreeTargets = {};
     for (const t of HIGH_DEGREE_EDGE_TYPES) highDegreeTargets[t] = findHighDegreeTarget(t);
     // the real per-project-pair aggregation (computeRibbons) needs idById, not built yet
-    // at this fetch/parse stage -- deferred to buildRibbonLines, called after buildScene.
+    // at this fetch/parse stage; deferred to buildRibbonLines, called after buildScene.
     ribbonsResolvedKeys = new Set();
     buildProjectLabelCandidates();
   }
@@ -789,24 +766,23 @@ export async function initSpace(container) {
       .sort((x, y) => y.count - x.count);
     return ribbons;
   }
-  // THE PER-RIBBON RESOLVE (item 2, mail 11408: "resolving per ribbon by its own
-  // screen-space centroid distance, not one global viewSize scalar"; refined by mail 11414
-  // off the prior-art note's own §4 -- "nothing drawn twice" needs a ribbon never co-drawn
+  // THE PER-RIBBON RESOLVE: resolving per ribbon by its own screen-space centroid distance,
+  // not one global viewSize scalar. "Nothing drawn twice" needs a ribbon never co-drawn
   // beside the lines it summarises, either (a) hierarchy-routed splines that separate on
   // zoom, or (b) a strict LOD swap, one or the other per ribbon, never both. Picked (b): a
   // ribbon in `ribbonsResolvedKeys` is dropped from the ribbon mesh entirely and its own
-  // edges draw as individual lines instead; a ribbon NOT in the set draws only in the
-  // ribbon mesh -- edgeAccounting()'s own line/ribbon counts are exactly this swap,
-  // verified live never double-counting the same edge either way.
+  // edges draw as individual lines instead; a ribbon not in the set draws only in the ribbon
+  // mesh. edgeAccounting()'s own line/ribbon counts are exactly this swap, verified live
+  // never double-counting the same edge either way.
   //
-  // the spike's own single median-radius-derived threshold flipped EVERY ribbon at once
-  // regardless of how far apart its own two projectFills actually sit -- a ribbon between two
-  // ADJACENT small projectFills resolved at the exact same zoom step as one spanning the whole
-  // graph. Each ribbon's own two project centroids are projected to real screen pixels (the
-  // same camera.project convention positionHighDegreeBadges already uses); a ribbon resolves
-  // once its own on-screen centroid distance crosses the threshold. Recomputed on the same
-  // deliberate-step cadence buildEdgeLines' other callers already follow (a zoom step or a
-  // camera fit, never per pointermove) -- cheap, and consistent with "rebuild on a
+  // An earlier single median-radius-derived threshold flipped every ribbon at once
+  // regardless of how far apart its own two projectFills actually sit; a ribbon between two
+  // adjacent small projectFills resolved at the exact same zoom step as one spanning the
+  // whole graph. Each ribbon's own two project centroids are projected to real screen pixels
+  // (the same camera.project convention positionHighDegreeBadges already uses); a ribbon
+  // resolves once its own on-screen centroid distance crosses the threshold. Recomputed on
+  // the same deliberate-step cadence buildEdgeLines' other callers already follow (a zoom
+  // step or a camera fit, never per pointermove), cheap, and consistent with "rebuild on a
   // deliberate step, never per frame."
   const RIBBON_RESOLVE_SCREEN_PX = 900;
   function projectFillScreenPx(d) {
@@ -828,17 +804,16 @@ export async function initSpace(container) {
     for (const k of a) if (!b.has(k)) return false;
     return true;
   }
-  // "accounting exact" (mail 11408's own acceptance line, echoing the spike's 11392):
-  // every live edge counted into EXACTLY one of fill/highDegree/line/ribbon -- a live-
-  // verification receipt hook, not consulted by the renderer itself.
+  // "accounting exact": every live edge counted into exactly one of fill/highDegree/line/
+  // ribbon; a live-verification receipt hook, not consulted by the renderer itself.
   function edgeAccounting() {
     let fill = 0, highDegree = 0, line = 0, ribbon = 0, communityRibbon = 0, other = 0;
     for (const e of edges) {
       if (PROJECT_FILL_TYPES.has(e.type)) { fill++; continue; }
       const lm = highDegreeTargets[e.type];
-      // WAVE 27, THE LENS PANEL: a hidden badge still isn't "gone" -- its own edges just
-      // draw (and count) as ordinary lines instead, same "nothing hidden" promise the
-      // community bucket below already keeps under its own visibility gate.
+      // THE LENS PANEL: a hidden badge still isn't "gone"; its own edges just draw (and
+      // count) as ordinary lines instead, same "nothing hidden" promise the community bucket
+      // below already keeps under its own visibility gate.
       if (lm && e.target === lm.id) {
         if (highDegreeBadgesHiddenByLens) { line++; } else { highDegree++; }
         continue;
@@ -851,9 +826,9 @@ export async function initSpace(container) {
         if (ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) line++; else ribbon++;
         continue;
       }
-      // WAVE 26, PIECE 2: the SAME swap one level down, only live once communities are
-      // actually visible (mid zoom) -- below that, this bucket stays empty and every
-      // same-project edge counts as an ordinary "line", matching what's actually drawn.
+      // The same swap one level down, only live once communities are actually visible
+      // (mid zoom); below that, this bucket stays empty and every same-project edge counts
+      // as an ordinary "line", matching what's actually drawn.
       if (communityRegionsVisible && na && nb && na.project === nb.project &&
         na.communityCode && nb.communityCode && na.communityCode !== nb.communityCode) {
         const ca = na.communityCode <= nb.communityCode ? na.communityCode : nb.communityCode;
@@ -917,18 +892,18 @@ export async function initSpace(container) {
     ribbonLines = new THREE.LineSegments(geo, makeEdgeFadeMaterial());
     scene.add(ribbonLines);
   }
-  // THE PROJECT LABEL BUDGET (item 4, mail 11408: "project labels earn their place by
-  // size -- one shared label budget with object labels, declutter with the same
-  // overlapsPlaced, small projectFills under a threshold unlabelled at rest and folded into an
-  // 'other' wash"). Project labels no longer own a permanent div per project (the spike's
-  // own always-on per-project label divs) -- they compete for the SAME N_LABELS slots and the
-  // SAME overlapsPlaced declutter pass pickLabels/positionLabels already run for object
-  // labels, entered as label-pool CANDIDATES (see pickLabels' own PROJECT_LABEL_MIN_COUNT
-  // gate and positionLabels' own project-label pass). `projectFillMeshGroup` (the fill
-  // geometry itself) is unaffected -- every project still fills, labelled or not; only the
-  // TEXT is budget-gated, and an unlabelled small project is what "folded into an 'other'
-  // wash" means here -- its fill alone, unlabeled, reads as background texture rather than
-  // a named place.
+  // THE PROJECT LABEL BUDGET: project labels earn their place by size, one shared label
+  // budget with object labels, declutter with the same overlapsPlaced, small projectFills
+  // under a threshold unlabelled at rest and folded into an "other" wash. Project labels no
+  // longer own a permanent div per project (an earlier always-on per-project label divs
+  // approach); they compete for the same N_LABELS slots and the same overlapsPlaced
+  // declutter pass pickLabels/positionLabels already run for object labels, entered as
+  // label-pool candidates (see pickLabels' own PROJECT_LABEL_MIN_COUNT gate and
+  // positionLabels' own project-label pass). `projectFillMeshGroup` (the fill geometry
+  // itself) is unaffected; every project still fills, labelled or not; only the text is
+  // budget-gated, and an unlabelled small project is what "folded into an 'other' wash"
+  // means here: its fill alone, unlabeled, reads as background texture rather than a named
+  // place.
   const PROJECT_LABEL_MIN_COUNT = 8; // below this member count, a project never labels at rest
   let projectFillMeshGroup = null;
   function buildProjectFillMeshes() {
@@ -949,10 +924,10 @@ export async function initSpace(container) {
   function buildHighDegreeBadges() {
     for (const e of highDegreeBadgeEntries) e.div.remove();
     highDegreeBadgeEntries = [];
-    // WAVE 27, THE LENS PANEL: the lens's own hide -- no divs at all, same "rare, deliberate
-    // rebuild" convention every other legend checkbox already uses (not a per-frame CSS
-    // hide). buildEdgeLines/edgeAccounting's own highDegreeBadgesHiddenByLens checks are
-    // what keep those edges drawn as ordinary lines instead of vanishing outright.
+    // THE LENS PANEL: the lens's own hide, no divs at all, same "rare, deliberate rebuild"
+    // convention every other legend checkbox already uses (not a per-frame CSS hide).
+    // buildEdgeLines/edgeAccounting's own highDegreeBadgesHiddenByLens checks are what keep
+    // those edges drawn as ordinary lines instead of vanishing outright.
     if (highDegreeBadgesHiddenByLens) return;
     for (const t of HIGH_DEGREE_EDGE_TYPES) {
       const lm = highDegreeTargets[t];
@@ -975,14 +950,14 @@ export async function initSpace(container) {
     }
   }
 
-  // WAVE 26, PIECE 2: COMMUNITY REGIONS (Thoth mail 11592/11664, thread 3683a12a): "at mid
-  // zoom inside a project, each community is a labelled region refined from the project
-  // fill, never replacing it." Khnum's own `communities` header table is the SAME Leiden
-  // partition his compact-arrangement layout is already built on -- reused, never
-  // re-derived. Nested inside the project model, not a peer of it: a community only ever
-  // exists WITHIN one project (a small project never has one at all, community_code stays
-  // 0 for every one of its members), so every community-level check below runs on top of
-  // an edge/node that already passed its own project-level check first.
+  // COMMUNITY REGIONS: at mid zoom inside a project, each community is a labelled region
+  // refined from the project fill, never replacing it. The server's own `communities`
+  // header table is the same Leiden partition its compact-arrangement layout is already
+  // built on: reused, never re-derived. Nested inside the project model, not a peer of it: a
+  // community only ever exists within one project (a small project never has one at all,
+  // community_code stays 0 for every one of its members), so every community-level check
+  // below runs on top of an edge/node that already passed its own project-level check
+  // first.
   const COMMUNITY_LABEL_MIN_COUNT = 20; // below this member count, a community never labels
   function buildCommunityModel(communityAggregates) {
     communities = communityAggregates || [];
@@ -1045,8 +1020,8 @@ export async function initSpace(container) {
       .sort((x, y) => y.count - x.count);
     return communityRibbons;
   }
-  // per-ribbon screen-distance resolve, same convention as computeResolvedRibbonKeys --
-  // "ribbons between communities resolve the same way project ribbons do" (mail 11664).
+  // per-ribbon screen-distance resolve, same convention as computeResolvedRibbonKeys:
+  // ribbons between communities resolve the same way project ribbons do.
   function pointScreenPx(x, y) {
     _screenV.set(x, y, 0).project(camera);
     return { x: (_screenV.x * 0.5 + 0.5) * wrap.clientWidth, y: (-_screenV.y * 0.5 + 0.5) * wrap.clientHeight };
@@ -1073,7 +1048,7 @@ export async function initSpace(container) {
     computeCommunityRibbons();
     const unresolved = communityRegionsVisible
       ? communityRibbons.filter((r) => !communityRibbonsResolvedKeys.has(ribbonKey(r)))
-      : []; // never drawn at all below mid zoom -- the plain same-project line covers it
+      : []; // never drawn at all below mid zoom: the plain same-project line covers it
     if (!unresolved.length) return;
     const positions = new Float32Array(unresolved.length * 6);
     const otherPositions = new Float32Array(unresolved.length * 6);
@@ -1102,15 +1077,15 @@ export async function initSpace(container) {
     communityRibbonLines = new THREE.LineSegments(geo, makeEdgeFadeMaterial());
     scene.add(communityRibbonLines);
   }
-  // recomputes visibility + the resolved set, rebuilding ONLY when either actually changed
-  // -- same "deliberate step, never per frame" discipline as syncRibbonResolve.
+  // recomputes visibility + the resolved set, rebuilding only when either actually changed,
+  // same "deliberate step, never per frame" discipline as syncRibbonResolve.
   function syncCommunityVisibility() {
     if (!communities.length) return;
     const wasVisible = communityRegionsVisible;
-    // WAVE 27, THE LENS PANEL: the lens toggle is a hard AND on top of the zoom gate --
-    // hidden means hidden regardless of scale, same call site either way (a checkbox
-    // change re-invokes this function directly, so the existing wasVisible/resolvedChanged
-    // early-return already covers "did anything actually change" for both triggers).
+    // THE LENS PANEL: the lens toggle is a hard AND on top of the zoom gate; hidden means
+    // hidden regardless of scale, same call site either way (a checkbox change re-invokes
+    // this function directly, so the existing wasVisible/resolvedChanged early-return
+    // already covers "did anything actually change" for both triggers).
     communityRegionsVisible = !communitiesHiddenByLens &&
       communityZoomViewSize > 0 && viewSize < communityZoomViewSize;
     const resolved = computeResolvedCommunityRibbonKeys();
@@ -1124,41 +1099,39 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // legend state: which edge classes/types are hidden from the base render. Structural was
-  // hidden by DEFAULT under the old "not drawn at rest" rule (ruling c5953bb1); THE DRAWING
-  // TIP's own operator ruling (4a51cab1/1178e7d9) retires that rule outright -- "nothing
-  // hidden ... caps and hides are escape hatches" -- structural edges that aren't already
-  // folded into a project fill or a high-degree badge (the five new types Sekhmet minted:
-  // recorded_by, owned_by [also a fill type], admitted_by, vendor_of) now draw
-  // at rest same as anything else; the legend remains how a reader opts back OUT.
+  // legend state: which edge classes/types are hidden from the base render. Structural used
+  // to be hidden by default under the old "not drawn at rest" rule; THE DRAWING TIP retires
+  // that rule outright: nothing hidden, caps and hides are escape hatches. Structural edges
+  // that aren't already folded into a project fill or a high-degree badge (the five newer
+  // types: recorded_by, owned_by [also a fill type], admitted_by, vendor_of) now draw at
+  // rest same as anything else; the legend remains how a reader opts back out.
   const hiddenEdgeClasses = new Set();
   const hiddenEdgeTypes = new Set();
-  // TIP 1(d): "focus HIDES unreachable nodes AND EDGES" — an edge whose endpoint is
-  // currently invisible (focus-unreachable or type-filtered, same aVisible flag applyDim
-  // maintains) is dropped from the base layer too, not just faded; the bright path overlay
-  // (updatePathEdges) draws the reachable ones on top regardless.
+  // Focus hides unreachable nodes and edges: an edge whose endpoint is currently invisible
+  // (focus-unreachable or type-filtered, same aVisible flag applyDim maintains) is dropped
+  // from the base layer too, not just faded; the bright path overlay (updatePathEdges) draws
+  // the reachable ones on top regardless.
   function nodeVisible(nd) {
     if (!nd) return false;
     if (hiddenNodeTypes.has(nd.type)) return false;
-    // THE DRILL, item 5 (Thoth mail 11048): revealedStubIds overrides a project's own
-    // hidden state for the specific nodes a stub click revealed -- "without unhiding the
-    // project" itself, only this one path.
+    // THE DRILL: revealedStubIds overrides a project's own hidden state for the specific
+    // nodes a stub click revealed, without unhiding the project itself, only this one path.
     if (hiddenProjects.size > 0 && hiddenProjects.has(nd.project) && !revealedStubIds.has(nd.id)) return false;
     if (pathFocusId && nd.id !== pathFocusId && !pathReachable.has(nd.id)) return false;
     return true;
   }
-  // THE LAST RENDERER (Thoth mail 11066): "an edge draws only when both ends are visible,
-  // no structural-hop exception." Every prior tier/budget/bundling mechanism (TIP 3's LOD
-  // cutoff, TIP 4's density scale, THE DRILL's cross-group Bezier bundling) is gone --
-  // one universal rule, straight lines, nodeVisible on both ends, same at every zoom.
+  // THE LAST RENDERER: an edge draws only when both ends are visible, no structural-hop
+  // exception. Every prior tier/budget/bundling mechanism (an earlier LOD cutoff, an earlier
+  // density scale, an earlier cross-group Bezier bundling) is gone: one universal rule,
+  // straight lines, nodeVisible on both ends, same at every zoom.
   function buildEdgeLines(nodes, edgeList) {
     if (edgeLines) { scene.remove(edgeLines); edgeLines.geometry.dispose(); edgeLines.material.dispose(); edgeLines = null; }
     const byId = new Map(nodes.map((nd) => [nd.id, nd]));
-    // THE DRAWING TIP: project-fill types never draw as individual lines at all (the fill
-    // IS the claim); a high-degree target's own incoming edges of its own type fold into that node's
-    // badge count instead of a spoke; a cross-project edge of any other type is
+    // THE DRAWING TIP: project-fill types never draw as individual lines at all (the fill is
+    // the claim); a high-degree target's own incoming edges of its own type fold into that
+    // node's badge count instead of a spoke; a cross-project edge of any other type is
     // represented once, either as a ribbon (its own key not yet in ribbonsResolvedKeys) or
-    // individually (its own ribbon HAS resolved) -- never both, per "nothing drawn twice."
+    // individually (its own ribbon has resolved), never both, per "nothing drawn twice."
     const visible = edgeList.filter((e) => {
       if (PROJECT_FILL_TYPES.has(e.type)) return false;
       const lm = highDegreeTargets[e.type];
@@ -1199,9 +1172,9 @@ export async function initSpace(container) {
     for (const e of visible) {
       const na = byId.get(e.source), nb = byId.get(e.target);
       if (!na || !nb) continue;
-      // colour-coded by relationship type ("that would make a ton of sense" — no link-type
-      // palette exists server-side, so a stable hash-to-hue keeps a given edge type the
-      // same colour across reloads without inventing new server state).
+      // colour-coded by relationship type: no link-type palette exists server-side, so a
+      // stable hash-to-hue keeps a given edge type the same colour across reloads without
+      // inventing new server state.
       ec.set(colorForEdgeType(e.type));
       const ax = na.x || 0, ay = na.y || 0, bx = nb.x || 0, by = nb.y || 0;
       positions[vi] = ax; positions[vi + 1] = ay; positions[vi + 2] = -0.1;
@@ -1223,11 +1196,11 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // legend: lists every class + type actually present in the loaded data, checkbox per
-  // row, toggling straight into hiddenEdgeClasses/hiddenEdgeTypes and rebuilding the edge
-  // geometry — a legend toggle is a rare, deliberate act, never a per-frame cost. TIP 1(e):
-  // node types sit alongside edge classes now, driving the same aVisible flag the header
-  // taxonomy pills drive (setHiddenTypes) — either control moves the one underlying filter.
+  // legend: lists every class + type actually present in the loaded data, checkbox per row,
+  // toggling straight into hiddenEdgeClasses/hiddenEdgeTypes and rebuilding the edge
+  // geometry; a legend toggle is a rare, deliberate act, never a per-frame cost. Node types
+  // sit alongside edge classes, driving the same aVisible flag the header taxonomy pills
+  // drive (setHiddenTypes); either control moves the one underlying filter.
   function renderLegend(edgeList, nodeList) {
     if (!legendPanel) return;
     const classOf = new Map();
@@ -1252,9 +1225,9 @@ export async function initSpace(container) {
       const esc = String(type).replace(/"/g, "&quot;");
       return `<label class="legend-row legend-node-type"><input type="checkbox" data-legend-node-type="${esc}" ${checked} /> <span class="legend-swatch" style="background:${typeColors.get(type) || "#6e7681"}"></span>${esc}</label>`;
     };
-    // WAVE 27, THE LENS PANEL (Thoth mail 11754): two more opt-OUT rows past the edge/node
-    // type checkboxes above -- same convention (checked = shown, the default), same rebuild-
-    // on-toggle discipline, just gating a mesh/badge group instead of hiddenEdgeClasses/Types.
+    // THE LENS PANEL: two more opt-OUT rows past the edge/node type checkboxes above, same
+    // convention (checked = shown, the default), same rebuild-on-toggle discipline, just
+    // gating a mesh/badge group instead of hiddenEdgeClasses/Types.
     const lensRow = (key, label, checked) =>
       `<label class="legend-row legend-lens"><input type="checkbox" data-legend-lens="${key}" ${checked ? "checked" : ""} /> ${label}</label>`;
     legendPanel.innerHTML =
@@ -1324,15 +1297,15 @@ export async function initSpace(container) {
     const geo = new THREE.CircleGeometry(1, 10);
     // this three.js build's fragment shader only multiplies by vColor (and so only shows
     // instanceColor) when USE_COLOR/USE_COLOR_ALPHA is defined, which is driven by a
-    // GEOMETRY-level `color` attribute, not instanceColor alone — the vertex shader
-    // computes the right colour into vColor but the fragment shader silently drops it
-    // without this, rendering flat black regardless of instanceColor.
+    // geometry-level `color` attribute, not instanceColor alone. The vertex shader computes
+    // the right colour into vColor but the fragment shader silently drops it without this,
+    // rendering flat black regardless of instanceColor.
     geo.setAttribute("color", new THREE.Float32BufferAttribute(
       new Float32Array(geo.attributes.position.count * 3).fill(1), 3));
     const radiusAttr = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(n, 1)), 1);
     geo.setAttribute("aRadiusPx", radiusAttr); // shared by mesh + pickMesh, same geometry instance
     visibleAttr = new THREE.InstancedBufferAttribute(new Float32Array(Math.max(n, 1)).fill(1), 1);
-    geo.setAttribute("aVisible", visibleAttr); // TIP 1(d)/(e): per-instance hide, updated in place by applyDim
+    geo.setAttribute("aVisible", visibleAttr); // per-instance hide, updated in place by applyDim
 
     const built = makeInstancedCircleMaterial({ additive: true });
     const mat = built.material;
@@ -1354,11 +1327,11 @@ export async function initSpace(container) {
       nd.radiusPx = nodeScreenPx(nd);
       radiusAttr.setX(i, nd.radiusPx);
       visibleAttr.setX(i, 1);
-      // "sizing more intuitive where high-degree nodes stand out without obfuscating
-      // smaller nodes" — a bigger circle can still sit BEHIND a smaller one drawn later
-      // in the same z-plane; give every node a tiny z bias proportional to its own radius
-      // so the important (bigger) ones are always nearer the camera and never occluded.
-      // Scale stays 1 here deliberately — the shader (aRadiusPx * uWorldPerPx) owns sizing.
+      // sizing more intuitive where high-degree nodes stand out without obfuscating smaller
+      // nodes: a bigger circle can still sit behind a smaller one drawn later in the same
+      // z-plane; give every node a tiny z bias proportional to its own radius so the
+      // important (bigger) ones are always nearer the camera and never occluded.
+      // Scale stays 1 here deliberately; the shader (aRadiusPx * uWorldPerPx) owns sizing.
       dummy.position.set(nd.x || 0, nd.y || 0, nd.radiusPx * 0.002);
       dummy.scale.setScalar(1);
       dummy.updateMatrix();
@@ -1386,11 +1359,10 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // TIP 1(d): focus HIDES unreachable nodes outright (per-instance aVisible flag), not a
-  // dim — "no dim" per Thoth's own dispatch. Reachable-but-not-focused nodes stay visible at
-  // their normal type colour (still legible as part of the path); the focused node alone
-  // gets the accent colour. A type hidden via the header/legend filter (hiddenNodeTypes,
-  // TIP 1(e)) is invisible regardless of focus state.
+  // Focus hides unreachable nodes outright (per-instance aVisible flag), never a dim.
+  // Reachable-but-not-focused nodes stay visible at their normal type colour (still legible
+  // as part of the path); the focused node alone gets the accent colour. A type hidden via
+  // the header/legend filter (hiddenNodeTypes) is invisible regardless of focus state.
   function applyDim() {
     if (!mesh) return;
     const color = new THREE.Color();
@@ -1412,47 +1384,47 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // TIP 1(e): the header taxonomy pills' own type filter (SELECTED_ENTITY_TYPES in
-  // console.js) drives this — called with the full set of types that should stay HIDDEN
-  // (console.js translates its own allowlist semantics before calling). The legend's own
-  // node-type checkboxes (renderLegend, below) call this too, so both controls drive the
-  // exact same aVisible flag rather than two independent mechanisms.
+  // the header taxonomy pills' own type filter (SELECTED_ENTITY_TYPES in console.js) drives
+  // this, called with the full set of types that should stay hidden (console.js translates
+  // its own allowlist semantics before calling). The legend's own node-type checkboxes
+  // (renderLegend, below) call this too, so both controls drive the exact same aVisible flag
+  // rather than two independent mechanisms.
   function setHiddenTypes(types) {
     hiddenNodeTypes.clear(); // in place, like hiddenEdgeClasses/hiddenEdgeTypes
     for (const t of types || []) hiddenNodeTypes.add(t);
     applyDim();
     buildEdgeLines(idToNode, edges);
-    scheduleLabelPick(); // review flaw #5: labels never re-picked on a filter change before
-    // THE FILTER-FIT FIX (Thoth mail 11241): a filter change refits the camera to what's
-    // now actually visible -- the camera used to just sit wherever it was, which reads as
-    // a black screen when the old view center falls inside newly-hidden content.
+    scheduleLabelPick(); // labels never re-picked on a filter change before this fix
+    // THE FILTER-FIT FIX: a filter change refits the camera to what's now actually visible;
+    // the camera used to just sit wherever it was, which reads as a black screen when the
+    // old view center falls inside newly-hidden content.
     fitToNodes(visibleNodesForFit());
   }
 
-  // CONSOLE CHROME CLEANUP piece 2 (decision 31717ca7): the header's repo pill's own
-  // sibling to setHiddenTypes above — same "caller hands the full HIDDEN set, translated
-  // from whatever allowlist/selection semantics that caller owns" convention (console.js's
-  // selectRepos()/applyRepoFilter() do the SELECTED-repos-to-hidden-repos translation, same
-  // shape toggleEntityType already does for types).
+  // the header's repo pill's own sibling to setHiddenTypes above; same "caller hands the
+  // full hidden set, translated from whatever allowlist/selection semantics that caller
+  // owns" convention (console.js's selectRepos()/applyRepoFilter() do the
+  // selected-repos-to-hidden-repos translation, same shape toggleEntityType already does for
+  // types).
   function setHiddenProjects(projects) {
     hiddenProjects = new Set(projects || []);
-    // THE DRILL, item 5: a fresh filter change starts from a clean reveal state -- a stub
-    // reveal was scoped to the OLD filter's own boundary, not guaranteed to still make
-    // sense against a new one.
+    // THE DRILL: a fresh filter change starts from a clean reveal state; a stub reveal was
+    // scoped to the old filter's own boundary, not guaranteed to still make sense against a
+    // new one.
     revealedStubIds = new Set();
     applyDim();
     buildEdgeLines(idToNode, edges);
     buildProjectStubs();
-    // THE LAST RENDERER (Thoth mail 11066, measured leak): "project filter hides points,
-    // edges and labels of hidden projects completely." applyDim/buildEdgeLines already gate
-    // points/edges via nodeVisible; labels are a separate pool (pickLabels) that needs its
-    // own re-pick to drop a just-hidden project's own labels immediately, not on the next
-    // debounced pan/zoom.
+    // THE LAST RENDERER (measured leak): a project filter hides points, edges and labels of
+    // hidden projects completely. applyDim/buildEdgeLines already gate points/edges via
+    // nodeVisible; labels are a separate pool (pickLabels) that needs its own re-pick to
+    // drop a just-hidden project's own labels immediately, not on the next debounced
+    // pan/zoom.
     scheduleLabelPick();
-    // THE FILTER-FIT FIX (Thoth mail 11241, live review of w299): "after picking osiris
-    // the canvas rendered fully black until Fit" -- the camera used to just sit wherever
-    // it was before the filter, which reads as a black screen when the old view center
-    // falls inside newly-hidden content. Refit to the now-visible set immediately.
+    // THE FILTER-FIT FIX: a live review once found the canvas rendered fully black until
+    // Fit; the camera used to just sit wherever it was before the filter, which reads as a
+    // black screen when the old view center falls inside newly-hidden content. Refit to the
+    // now-visible set immediately.
     fitToNodes(visibleNodesForFit());
   }
 
@@ -1463,25 +1435,25 @@ export async function initSpace(container) {
     return m;
   }
 
-  // frames the camera around the REAL bounding box of whatever's currently loaded —
-  // the fixed viewSize=1300 default this used to reset to was measured against the old
-  // force-relax layout's small extent and reads as "zoomed into one dense group" against
-  // Khnum's new deterministic hash-placement layout, whose extent can run tens of
-  // thousands of world units wide depending on how far apart two project hashes land.
-  // THE FILTER-FIT FIX (Thoth mail 11241, live review of w299): "the canvas rendered fully
-  // black until Fit, and Fit must fit the VISIBLE set, not the whole graph." fitToNodes
-  // itself stays a pure bbox-over-a-list function (still used for the initial whole-graph
-  // load and context-restore, where "the whole graph" IS the visible set); this is what
-  // both the Fit button and a filter change now pass it, instead of raw idToNode.
+  // frames the camera around the real bounding box of whatever's currently loaded; the
+  // fixed viewSize=1300 default this used to reset to was measured against the old
+  // force-relax layout's small extent and reads as "zoomed into one dense group" against the
+  // newer deterministic hash-placement layout, whose extent can run tens of thousands of
+  // world units wide depending on how far apart two project hashes land.
+  // THE FILTER-FIT FIX: a live review once found the canvas rendered fully black until Fit,
+  // and Fit must fit the visible set, not the whole graph. fitToNodes itself stays a pure
+  // bbox-over-a-list function (still used for the initial whole-graph load and
+  // context-restore, where "the whole graph" is the visible set); this is what both the Fit
+  // button and a filter change now pass it, instead of raw idToNode.
   function visibleNodesForFit() {
     return idToNode.filter(nodeVisible);
   }
   function fitToNodes(list) {
-    // THE 98TH-PERCENTILE FIT FIX (Thoth mail 11249): a handful of far outliers in the
-    // visible set stretched the exact min/max bbox enough that the actual group sat in
-    // one corner at a much-too-zoomed-out view (measured live: osiris at 67 wpp). Trim the
-    // outermost 1% on each axis before framing -- still the real bbox, just not held
-    // hostage by a few stray points.
+    // THE 98TH-PERCENTILE FIT FIX: a handful of far outliers in the visible set stretched
+    // the exact min/max bbox enough that the actual group sat in one corner at a
+    // much-too-zoomed-out view (measured live: osiris at 67 wpp). Trim the outermost 1% on
+    // each axis before framing; still the real bbox, just not held hostage by a few stray
+    // points.
     const xs = [], ys = [];
     for (const nd of list) {
       if (nd.x == null || nd.y == null) continue;
@@ -1497,9 +1469,9 @@ export async function initSpace(container) {
     camera.position.y = (minY + maxY) / 2;
     const span = Math.max(maxX - minX, maxY - minY, 0);
     viewSize = Math.max(30, span * 1.1 + 40);
-    // the wheel clamp's own bounds (Thoth's fix, mail 10581) — derived from THIS fit's real
-    // span, not a guess: a floor small enough to inspect one dense group, a ceiling about
-    // 2x the whole fitted graph so "zoom out" can't run away past anything meaningful.
+    // the wheel clamp's own bounds, derived from this fit's real span, not a guess: a floor
+    // small enough to inspect one dense group, a ceiling about 2x the whole fitted graph so
+    // "zoom out" can't run away past anything meaningful.
     minViewSize = 20;
     maxViewSize = Math.max(span * 2, 200);
     updateFrustum();
@@ -1511,11 +1483,11 @@ export async function initSpace(container) {
   }
 
   // ---- THE LAST RENDERER retired the whole LOD/tier/group/halo machinery this comment
-  // block used to introduce (operator ruling d7d55257, Thoth mail 11066: "kill LOD
-  // entirely -- remove zoomLOD, label tiers, cluster_edges at far, group rings, the halo
-  // texture, per-tier alpha, and every far/mid/near branch; delete their tests"). See
-  // positionLabels/pickLabels below for the one label rule that replaces it (viewport
-  // top-N by degree, de-overlapped, at every zoom, no separate project-label pass).
+  // block used to introduce: LOD killed entirely, removing zoomLOD, label tiers,
+  // cluster_edges at far, group rings, the halo texture, per-tier alpha, and every
+  // far/mid/near branch, tests deleted along with them. See positionLabels/pickLabels below
+  // for the one label rule that replaces it (viewport top-N by degree, de-overlapped, at
+  // every zoom, no separate project-label pass).
   setStatus("loading the whole graph…");
   let { nodes, edges, edgeClassByType, projectAggregates, communityAggregates } =
     await fetchStreamSnapshot();
@@ -1527,13 +1499,13 @@ export async function initSpace(container) {
   setStatus(`${nodes.length} objects, ${edges.length} edges`);
   levelBadge.textContent = "whole graph";
 
-  // THE LENS PANEL hash-restore bug, root cause (Thoth mail 11981/12052): applyLensStateFromHash
-  // only ran once, at the top of this async function, on the assumption that a shared #lens
-  // link always means a full page load. It doesn't -- navigating to the same page with a
-  // different #lens fragment is a same-document hash navigation (no reload), so this whole
-  // function never re-runs and the new hash's state was silently ignored until the next
-  // manual toggle overwrote it with stale in-memory state. Listening for hashchange and
-  // re-running the same restore + rebuild a toggle already does closes that gap.
+  // THE LENS PANEL hash-restore bug, root cause: applyLensStateFromHash only ran once, at
+  // the top of this async function, on the assumption that a shared #lens link always means
+  // a full page load. It doesn't: navigating to the same page with a different #lens
+  // fragment is a same-document hash navigation (no reload), so this whole function never
+  // re-runs and the new hash's state was silently ignored until the next manual toggle
+  // overwrote it with stale in-memory state. Listening for hashchange and re-running the
+  // same restore + rebuild a toggle already does closes that gap.
   window.addEventListener("hashchange", () => {
     applyLensStateFromHash();
     applyDim();
@@ -1544,7 +1516,7 @@ export async function initSpace(container) {
   });
 
   // ---- deltas: GET /graph/stream/deltas is an SSE poll-diff over the outbox, keyed by
-  // object id (not array index — see the module docstring). Applied live so the canvas
+  // object id (not array index, see the module docstring). Applied live so the canvas
   // never needs a full reload after the first snapshot; a 'retired' delta drops the node
   // from the next full rebuild rather than trying to hide a single InstancedMesh instance
   // (there is no per-instance visibility toggle cheaper than a rebuild at this node count).
@@ -1579,46 +1551,45 @@ export async function initSpace(container) {
     console.error("graph/stream/deltas unavailable", err);
   }
 
-  // THE READING LAYER, part B, AMENDED by TIP 1's own amendment (operator via Thoth mail
-  // 10726, ruling amending e1cb9e3b): "the lens is the TREE TO SOURCE" — upstream (X's
-  // OUTGOING edges, X.source -> target, Osiris's own from_id->to_id convention) walks by
-  // DEFAULT, until roots (no depth cap — focusDepth is Infinity now, not a fixed 4);
-  // downstream (INCOMING edges) is a TOGGLE, off by default (includeDownstream). Structural
-  // containment (in_repo, works_in, ...) never widens the walk itself, per part A — only the
-  // "focus is never empty" one-hop fallback below reaches into it.
-  // buildPathAdjacency/walkPath are pure, DOM-free, module-level functions (below the
-  // module docstring) precisely so THE ACCEPTANCE TEST Thoth's own dispatch named — "a
-  // synthetic 5-hop chain where focus at the tail lights exactly the chain and nothing
-  // else" — can exercise the real algorithm directly via Node, not a string-presence proof.
-  const FOCUS_DEPTH_DEFAULT = Infinity; // "until roots" — walkPath/bfsHops stop naturally
+  // THE READING LAYER, part B: the lens is the tree to source. Upstream (X's outgoing edges,
+  // X.source -> target, Osiris's own from_id->to_id convention) walks by default, until
+  // roots (no depth cap; focusDepth is Infinity now, not a fixed 4); downstream (incoming
+  // edges) is a toggle, off by default (includeDownstream). Structural containment (in_repo,
+  // works_in, ...) never widens the walk itself, per part A; only the "focus is never
+  // empty" one-hop fallback below reaches into it.
+  // buildPathAdjacency/walkPath are pure, DOM-free, module-level functions (below the module
+  // docstring) precisely so an acceptance test (a synthetic 5-hop chain where focus at the
+  // tail lights exactly the chain and nothing else) can exercise the real algorithm directly
+  // via Node, not a string-presence proof.
+  const FOCUS_DEPTH_DEFAULT = Infinity; // "until roots": walkPath/bfsHops stop naturally
   let focusDepth = FOCUS_DEPTH_DEFAULT;
   let includeDownstream = false;
   const { outAdj: outAdjPath, inAdj: inAdjPath } = buildPathAdjacency(edges);
 
-  // EGO RELAYOUT (TIP 1's own amendment, mail 10726): while a focus is on, the reachable set
-  // is relaid out LOCALLY — focus at centre, ancestors ranked leftward by hop (roots
-  // farthest left), siblings spread within their own rank; downstream (when toggled) ranked
-  // rightward the same way. Spacing is fixed in SCREEN pixels, converted to world units at
-  // the CURRENT zoom so the fan-out reads the same size regardless of viewSize. Temporary:
-  // the real stored x/y (Khnum's own layout heartbeat) is saved before the first move and
-  // restored by clearFocus or before laying out a new focus — never written back anywhere.
+  // EGO RELAYOUT: while a focus is on, the reachable set is relaid out locally; focus at
+  // centre, ancestors ranked leftward by hop (roots farthest left), siblings spread within
+  // their own rank; downstream (when toggled) ranked rightward the same way. Spacing is
+  // fixed in screen pixels, converted to world units at the current zoom so the fan-out
+  // reads the same size regardless of viewSize. Temporary: the real stored x/y (the
+  // server's own layout heartbeat) is saved before the first move and restored by
+  // clearFocus or before laying out a new focus, never written back anywhere.
   const EGO_COL_SPACING_PX = 150;
   const EGO_ROW_SPACING_PX = 34;
-  // review flaw #2: "until roots" with no cap let a real high-degree object (repo:osiris,
-  // degree 20,560) reach 20,266 nodes in 3.1s and light the whole graph -- not a lens any
-  // more. Rank-capped now: the walk still goes to genuine roots for an ordinary object,
-  // but never surfaces more than this many nodes for one direction, so a high-degree
-  // focus stays a legible tree.
+  // "until roots" with no cap once let a real high-degree object (repo:osiris, degree
+  // 20,560) reach 20,266 nodes in 3.1s and light the whole graph, not a lens any more.
+  // Rank-capped now: the walk still goes to genuine roots for an ordinary object, but never
+  // surfaces more than this many nodes for one direction, so a high-degree focus stays a
+  // legible tree.
   const MAX_EGO_NODES = 300;
   let egoSaved = null; // Map<id, {x,y}> of positions the active relayout overwrote
-  // THE ONE-HOP FOCUS FIX (operator ruling, grounds 5b37d219, Thoth mail 11272):
-  // measured defect -- focus walked PATH_EDGE_TYPES only, so focusing a real agent
-  // (Sekhmet, degree 402) reached 43 nodes over succeeded_from/succeeds_seat and nothing
-  // else; the operator saw a wall of same-named labels and never what the agent actually
-  // did. focusBasePathReachable is the ORIGINAL provenance-path walk's own reachable set
-  // (upstream/downstream over PATH_EDGE_TYPES, unchanged); the one-hop-all-types
-  // focus is additive on top of it, grouped per (type, direction) into a paged
-  // count node when a bucket exceeds DRILL_PAGE_SIZE, added as real objects otherwise.
+  // THE ONE-HOP FOCUS FIX: measured defect, focus walked PATH_EDGE_TYPES only, so focusing a
+  // real high-degree agent object (degree 402) reached 43 nodes over
+  // succeeded_from/succeeds_seat and nothing else; a reader saw a wall of same-named labels
+  // and never what the agent actually did. focusBasePathReachable is the original
+  // provenance-path walk's own reachable set (upstream/downstream over PATH_EDGE_TYPES,
+  // unchanged); the one-hop-all-types focus is additive on top of it, grouped per (type,
+  // direction) into a paged count node when a bucket exceeds DRILL_PAGE_SIZE, added as real
+  // objects otherwise.
   let focusBasePathReachable = new Set();
   let focusHopsUp = new Map(), focusHopsDown = new Map();
   function bfsHops(adj, startId, depth) {
@@ -1650,12 +1621,12 @@ export async function initSpace(container) {
     const focusNode = idx.get(focusId);
     if (!focusNode) return;
     const cx = focusNode.x || 0, cy = focusNode.y || 0;
-    // review flaw #6 (TIP 1c, Thoth mail 10891): using the CURRENT (pre-focus) worldPerPx
-    // made the ego layout's own scale track whatever zoom the camera happened to be at --
-    // a small reachable set following another tight focus could spiral the fit down to a
-    // near-empty viewSize, where the 48px screen CAP then dominates the whole frame.
-    // maxViewSize (the whole graph's own fitted scale, stable since fitToNodes) gives a
-    // reference wpp that never shrinks just because the camera was already zoomed in.
+    // using the current (pre-focus) worldPerPx made the ego layout's own scale track
+    // whatever zoom the camera happened to be at; a small reachable set following another
+    // tight focus could spiral the fit down to a near-empty viewSize, where the 48px screen
+    // cap then dominates the whole frame. maxViewSize (the whole graph's own fitted scale,
+    // stable since fitToNodes) gives a reference wpp that never shrinks just because the
+    // camera was already zoomed in.
     const wpp = maxViewSize / wrap.clientHeight;
     const colW = EGO_COL_SPACING_PX * wpp, rowH = EGO_ROW_SPACING_PX * wpp;
     const chainW = CHAIN_SPACING_PX * wpp;
@@ -1669,14 +1640,14 @@ export async function initSpace(container) {
       if (id === focusId || hop === 0) continue;
       (byRank.get(hop) || (byRank.set(hop, []), byRank.get(hop))).push(id);
     }
-    // SUCCESSION CHAIN COLUMN COMPRESSION (mail 11272 items 2/4): live-verified root cause
-    // of "the camera does not refit to something legible" for a long-lineage agent -- a
-    // pure single-file succession run (rank K has exactly one member, connected to rank
-    // K-1's own single member by a succession edge) used to pay the FULL EGO_COL_SPACING_PX
-    // every hop, same as any unrelated provenance hop. A real 43-generation Sekhmet chain
-    // measured a 544,433-world-unit span from that alone. Adjacent succession-only ranks
-    // now use the same tight CHAIN_SPACING_PX the one-hop groups use; a branching or
-    // mixed-type rank still gets the normal column width.
+    // SUCCESSION CHAIN COLUMN COMPRESSION: live-verified root cause of "the camera does not
+    // refit to something legible" for a long-lineage agent. A pure single-file succession
+    // run (rank K has exactly one member, connected to rank K-1's own single member by a
+    // succession edge) used to pay the full EGO_COL_SPACING_PX every hop, same as any
+    // unrelated provenance hop. A real 43-generation agent succession chain measured a
+    // 544,433-world-unit span from that alone. Adjacent succession-only ranks now use the
+    // same tight CHAIN_SPACING_PX the one-hop groups use; a branching or mixed-type rank
+    // still gets the normal column width.
     const successionAdj = new Map(); // id -> Set of ids reachable by one succession edge
     for (const e of edges) {
       if (!SUCCESSION_EDGE_TYPES.has(e.type)) continue;
@@ -1708,17 +1679,16 @@ export async function initSpace(container) {
         seed.set(id, { x, y: cy + (i - (ids.length - 1) / 2) * rowH });
       });
     }
-    // ONE-HOP FOCUS (mail 11272 item 1): real neighbour objects a (type, direction)
-    // bucket was small enough to place directly, seeded radially around the center by
-    // buildEgoGroups -- merged into the SAME seed/relax pass so real edges between them and
-    // the path-ranked members still pull toward each other, not just toward the center. A node
-    // already placed by the path walk keeps its ranked-column seed; the one-hop walk never
-    // fights it.
-    // pinned ids (SUCCESSION CHAIN LAYOUT, mail 11272 item 4): a chain member's own
-    // position is a deliberate, ordered-by-generation placement, not a physics seed --
-    // exempted from repulsion/springs entirely, or the SAME O(n^2) spread that unfolds a
-    // wide rank into a fan would just as happily unfold a 50-member chain back into the
-    // "40-wide row of labels" this layout exists to prevent.
+    // ONE-HOP FOCUS: real neighbour objects a (type, direction) bucket was small enough to
+    // place directly, seeded radially around the center by buildEgoGroups; merged into the
+    // same seed/relax pass so real edges between them and the path-ranked members still
+    // pull toward each other, not just toward the center. A node already placed by the path
+    // walk keeps its ranked-column seed; the one-hop walk never fights it.
+    // pinned ids (SUCCESSION CHAIN LAYOUT): a chain member's own position is a deliberate,
+    // ordered-by-generation placement, not a physics seed; exempted from repulsion/springs
+    // entirely, or the same O(n^2) spread that unfolds a wide rank into a fan would just as
+    // happily unfold a 50-member chain back into the "40-wide row of labels" this layout
+    // exists to prevent.
     const fixedIds = new Set([focusId, ...chainRankIds]);
     if (extraSeed) {
       for (const [id, p] of extraSeed) {
@@ -1747,11 +1717,11 @@ export async function initSpace(container) {
     }
   }
 
-  // THE ONE-HOP FOCUS (mail 11272 item 1): "focus = the clicked object plus its
-  // ONE-HOP focus over ALL link types, both directions ... container-class
-  // neighbours appear as one anchor each." Groups every real one-hop neighbour by
-  // (edge type, direction relative to id) -- a container-scale neighbour (isContainerFocus
-  // of its own) gets pulled out separately, one anchor each, never grouped into a bucket.
+  // THE ONE-HOP FOCUS: focus = the clicked object plus its one-hop focus over all link
+  // types, both directions; container-class neighbours appear as one anchor each. Groups
+  // every real one-hop neighbour by (edge type, direction relative to id); a container-scale
+  // neighbour (isContainerFocus of its own) gets pulled out separately, one anchor each,
+  // never grouped into a bucket.
   function oneHopByTypeDirection(id) {
     const byKey = new Map(); // "type|direction" -> Map<id, nd>
     const containerNeighbors = new Map(); // id -> nd
@@ -1773,14 +1743,13 @@ export async function initSpace(container) {
     return { groups, containerNeighbors: [...containerNeighbors.values()] };
   }
 
-  // SUCCESSION CHAIN LAYOUT (mail 11272 item 4): "a succession chain renders as a chain
-  // (ordered by generation, spaced by pixels), never overlapping." Live-verified without
-  // this: focusing a real 402-degree agent's "spawned_by (in)" bucket spread 381
-  // same-named lineage members via generic repulsion into one wide horizontal smear --
-  // exactly the "40-wide row of labels" the operator's own report described. A succession
-  // edge type gets a real linear order (BFS outward from the focus over ONLY that edge
-  // type, among this bucket's own members) instead of a radial fan; distance from focus
-  // doubles as generation.
+  // SUCCESSION CHAIN LAYOUT: a succession chain renders as a chain (ordered by generation,
+  // spaced by pixels), never overlapping. Live-verified without this: focusing a real
+  // 402-degree agent's "spawned_by (in)" bucket spread 381 same-named lineage members via
+  // generic repulsion into one wide horizontal smear, exactly the "40-wide row of labels"
+  // problem this layout exists to prevent. A succession edge type gets a real linear order
+  // (BFS outward from the focus over only that edge type, among this bucket's own members)
+  // instead of a radial fan; distance from focus doubles as generation.
   const SUCCESSION_EDGE_TYPES = new Set(["succeeded_from", "succeeds_seat"]);
   function orderSuccessionChain(focusId, members, edgeType) {
     const memberIds = new Set(members.map((m) => m.id));
@@ -1803,7 +1772,7 @@ export async function initSpace(container) {
       }
     }
     // members the chain walk never reached (a disconnected outlier within the same edge
-    // type/direction bucket) still need a slot -- appended past the real chain, sorted by
+    // type/direction bucket) still need a slot; appended past the real chain, sorted by
     // degree so at least the ordering stays deterministic.
     const ordered = members.filter((m) => dist.has(m.id))
       .sort((a, b) => dist.get(a.id) - dist.get(b.id));
@@ -1875,11 +1844,11 @@ export async function initSpace(container) {
     }
   }
   // computes this focus's own one-hop groups/anchors and returns the real member ids to
-  // seed into applyEgoLayout's own relax pass -- small buckets (<= DRILL_PAGE_SIZE, and
+  // seed into applyEgoLayout's own relax pass; small buckets (<= DRILL_PAGE_SIZE, and
   // budget-permitting) place directly; a bucket over the page size (or one that would blow
   // the MAX_EGO_NODES budget) becomes a paged count node instead, same mechanic THE DRILL's
   // own container buckets use.
-  const CHAIN_SPACING_PX = 22; // tighter than EGO_ROW_SPACING_PX (34) -- lineage siblings, not the ranked tree
+  const CHAIN_SPACING_PX = 22; // tighter than EGO_ROW_SPACING_PX (34): lineage siblings, not the ranked tree
   function buildEgoGroups(id, center) {
     disposeEgoGroupDivs();
     disposeEgoContainerAnchors();
@@ -1894,12 +1863,12 @@ export async function initSpace(container) {
     const angleStep = slotCount ? (2 * Math.PI / slotCount) : 0;
     let slot = 0;
     for (const key of keys) {
-      // THE NO-OP EXPANSION FIX (Thoth mail 11359): oneHopByTypeDirection walks ALL edges
-      // touching id, including ones the ORIGINAL PATH_EDGE_TYPES walk already reached (a
-      // real Thread's own "possible_upstream|out" one-hop bucket can be entirely a subset
-      // of focusBasePathReachable) -- offering, and letting a reader page open, a group
-      // that adds zero new nodes to the reachable set is a dead click. Filter to members
-      // not already reachable; a group left with none is never offered at all.
+      // THE NO-OP EXPANSION FIX: oneHopByTypeDirection walks all edges touching id,
+      // including ones the original PATH_EDGE_TYPES walk already reached (a real Thread's
+      // own "possible_upstream|out" one-hop bucket can be entirely a subset of
+      // focusBasePathReachable); offering, and letting a reader page open, a group that
+      // adds zero new nodes to the reachable set is a dead click. Filter to members not
+      // already reachable; a group left with none is never offered at all.
       const members = groups.get(key).filter((nd) => !focusBasePathReachable.has(nd.id));
       if (members.length === 0) continue;
       const [type, direction] = key.split("|");
@@ -1919,12 +1888,12 @@ export async function initSpace(container) {
             const d = ringR + (k + 1) * chainStep;
             extraSeed.set(nd.id, { x: cx + dirX * d, y: cy + dirY * d, pinned: true });
           } else {
-            // THE PHYSICS DIVERGENCE FIX (Thoth mail 11308): a page angle step of 0.08 rad
-            // wraps past a full 2*PI revolution once `take` (DRILL_PAGE_SIZE *
-            // egoGroupPageCount, unbounded by repeated "more" clicks) exceeds ~79 -- at a
-            // CONSTANT radius that puts two genuinely different members at the exact same
-            // seed (x,y). A small per-index radius growth (a spiral, not a circle) makes
-            // that structurally impossible regardless of how many pages are open.
+            // THE PHYSICS DIVERGENCE FIX: a page angle step of 0.08 rad wraps past a full
+            // 2*PI revolution once `take` (DRILL_PAGE_SIZE * egoGroupPageCount, unbounded by
+            // repeated "more" clicks) exceeds ~79, at a constant radius that puts two
+            // genuinely different members at the exact same seed (x,y). A small per-index
+            // radius growth (a spiral, not a circle) makes that structurally impossible
+            // regardless of how many pages are open.
             const a2 = angle + (k - (take - 1) / 2) * 0.08;
             const r2 = ringR * 1.3 + k * 2;
             extraSeed.set(nd.id, { x: cx + Math.cos(a2) * r2, y: cy + Math.sin(a2) * r2 });
@@ -1962,21 +1931,20 @@ export async function initSpace(container) {
     buildEgoContainerAnchorDivs();
     return extraSeed;
   }
-  // the shared render path for BOTH the initial focus and any group/"more" click after it
-  // -- never resets egoGroupExpandedKey/egoGroupPageCount itself (the caller, focusObject
-  // or a click handler, decides that), the exact bug THE DRILL's own clearDrillState hit
-  // (mail 11241) if this had reset unconditionally instead.
+  // the shared render path for both the initial focus and any group/"more" click after it;
+  // never resets egoGroupExpandedKey/egoGroupPageCount itself (the caller, focusObject or a
+  // click handler, decides that), the exact bug an earlier clearDrillState hit if this had
+  // reset unconditionally instead.
   function renderFocusEgoGroups(id, hopsUp, hopsDown) {
     const center = idById.get(id);
     if (!center) return;
     const extraSeed = buildEgoGroups(id, center);
     pathReachable = new Set([...focusBasePathReachable, ...extraSeed.keys()]);
-    // THE STALE TABLE FIX (Thoth mail 11308): onFocus (console.js's own onSpaceFocus,
-    // wired through to renderEntityExplorerStage/hydrateFocusReachable) used to fire only
-    // from focusObject's own INITIAL call -- a group/"more" click re-renders through this
-    // shared path directly, never notifying the table that pathReachable just grew, so it
-    // stayed at the ORIGINAL row count after an expansion. Every call here re-notifies,
-    // same id or not.
+    // THE STALE TABLE FIX: onFocus (console.js's own onSpaceFocus, wired through to
+    // renderEntityExplorerStage/hydrateFocusReachable) used to fire only from focusObject's
+    // own initial call; a group/"more" click re-renders through this shared path directly,
+    // never notifying the table that pathReachable just grew, so it stayed at the original
+    // row count after an expansion. Every call here re-notifies, same id or not.
     if (onFocus) onFocus(id);
     applyEgoLayout(id, hopsUp, hopsDown, extraSeed);
     syncMovedInstancePositions(egoSaved ? new Set(egoSaved.keys()) : null);
@@ -2010,36 +1978,36 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // THE DRILL (ruling d7d55257, Thoth mail 11048, item 6): "physics on the visible set
-  // only: a small force step (repulsion + springs, a few hundred iterations, seeded) over
-  // the expanded nodes, nothing else moves." `seed` is a Map<id,{x,y}> of STARTING
-  // positions (the rank layout's own output, or a simple radial scatter for the drill) --
-  // a good seed matters far more than iteration count for this to converge quickly and
-  // legibly; `edges` is a list of [aId, bId] pairs to spring together (real reachable-set
-  // edges for an ego tree, synthetic center-to-child pairs for a drill's star topology).
-  // `fixedId` (usually the focus/center) never moves. O(n^2) repulsion is fine at this scale
-  // -- the whole point of THE DRILL and the ego cap is that n never exceeds MAX_EGO_NODES.
+  // THE DRILL: physics on the visible set only, a small force step (repulsion + springs, a
+  // few hundred iterations, seeded) over the expanded nodes, nothing else moves. `seed` is a
+  // Map<id,{x,y}> of starting positions (the rank layout's own output, or a simple radial
+  // scatter for the drill); a good seed matters far more than iteration count for this to
+  // converge quickly and legibly; `edges` is a list of [aId, bId] pairs to spring together
+  // (real reachable-set edges for an ego tree, synthetic center-to-child pairs for a drill's
+  // star topology). `fixedId` (usually the focus/center) never moves. O(n^2) repulsion is
+  // fine at this scale: the whole point of THE DRILL and the ego cap is that n never exceeds
+  // MAX_EGO_NODES.
   const EGO_FORCE_ITERATIONS = 180;
   const EGO_REPULSION = 3200;
   const EGO_SPRING = 0.02;
-  // THE PHYSICS DIVERGENCE FIX (Thoth mail 11308, w306 review BLOCKER): live-verified --
-  // focusing a real 223-degree Thread (177 reachable, 154 Message) or 125-degree Decision
-  // (213 reachable, 211 Message) left camera.position at 3.6e83 / -1.0e85, canvas black.
-  // Root cause: buildEgoGroups' own small-bucket seeding fans members by angle alone at a
-  // CONSTANT radius (`a2 = angle + i * step`) -- once a bucket's own member count pushes
-  // the total angular spread past 2*PI (154 members * a 0.1 rad step ~= 15.4 rad, 2.4 full
-  // turns), cos/sin periodicity puts genuinely DIFFERENT members at the EXACT SAME (x,y).
-  // The old `d2 = max(d2, 1)` clamp bounds any ONE pair's force, but dozens of exactly-
-  // coincident pairs at one point still sum to an enormous single-iteration displacement,
-  // and 180 iterations of that compounds into non-finite territory. Three independent
-  // guards, not just one, since seeding is only ONE of several places a coincidence or a
-  // runaway sum could originate: a real minimum-separation floor (not 1 world unit -- big
-  // enough that even a full pile-up sums to a bounded force), a hard per-iteration
-  // displacement cap (so a raw force spike can never move a point further than a fraction
-  // of the graph's own real scale in one step regardless of how many neighbours pile onto
-  // it), and a finite-position assertion at the caller (renderFocusEgoGroups/
-  // renderContainerDrill) with a fallback to the pre-relax seed.
-  const EGO_MIN_SEP2 = 400; // d2 floor -- max single-pair force EGO_REPULSION/400 = 8
+  // THE PHYSICS DIVERGENCE FIX: live-verified, focusing a real 223-degree Thread (177
+  // reachable, 154 Message) or 125-degree Decision (213 reachable, 211 Message) left
+  // camera.position at 3.6e83 / -1.0e85, canvas black. Root cause: buildEgoGroups' own
+  // small-bucket seeding fans members by angle alone at a constant radius (`a2 = angle + i *
+  // step`); once a bucket's own member count pushes the total angular spread past 2*PI (154
+  // members * a 0.1 rad step ~= 15.4 rad, 2.4 full turns), cos/sin periodicity puts
+  // genuinely different members at the exact same (x,y). The old `d2 = max(d2, 1)` clamp
+  // bounds any one pair's force, but dozens of exactly-coincident pairs at one point still
+  // sum to an enormous single-iteration displacement, and 180 iterations of that compounds
+  // into non-finite territory. Three independent guards, not just one, since seeding is only
+  // one of several places a coincidence or a runaway sum could originate: a real
+  // minimum-separation floor (not 1 world unit, big enough that even a full pile-up sums to
+  // a bounded force), a hard per-iteration displacement cap (so a raw force spike can never
+  // move a point further than a fraction of the graph's own real scale in one step
+  // regardless of how many neighbours pile onto it), and a finite-position assertion at the
+  // caller (renderFocusEgoGroups/renderContainerDrill) with a fallback to the pre-relax
+  // seed.
+  const EGO_MIN_SEP2 = 400; // d2 floor: max single-pair force EGO_REPULSION/400 = 8
   const EGO_MAX_DISPLACEMENT = 400; // per node, per iteration, in world units
   function relaxPositions(seed, springs, fixedId) {
     const ids = [...seed.keys()];
@@ -2084,9 +2052,9 @@ export async function initSpace(container) {
     return pos;
   }
   // last-resort safety net: a non-finite position anywhere in the relaxed set means the
-  // physics genuinely diverged (a real bug, not something to paper over silently) -- the
-  // caller falls back to the pre-relax seed rather than feeding NaN/Infinity into the
-  // camera fit, which is what actually produced the black-canvas symptom.
+  // physics genuinely diverged (a real bug, not something to paper over silently); the
+  // caller falls back to the pre-relax seed rather than feeding NaN/Infinity into the camera
+  // fit, which is what actually produced the black-canvas symptom.
   function relaxedOrSeed(seed, relaxed) {
     for (const p of relaxed.values()) {
       if (!Number.isFinite(p.x) || !Number.isFinite(p.y)) return seed;
@@ -2094,9 +2062,9 @@ export async function initSpace(container) {
     return relaxed;
   }
 
-  // pushes the (few) moved nodes' new positions into the GPU buffers directly — never a
-  // full buildScene rebuild, so this stays well inside the 100ms budget below regardless of
-  // total graph size (cost is O(moved), not O(49k)).
+  // pushes the (few) moved nodes' new positions into the GPU buffers directly; never a full
+  // buildScene rebuild, so this stays well inside the 100ms budget below regardless of total
+  // graph size (cost is O(moved), not O(49k)).
   function syncMovedInstancePositions(movedIds) {
     if (!mesh || !movedIds || !movedIds.size) return;
     const dummy = new THREE.Object3D();
@@ -2114,16 +2082,16 @@ export async function initSpace(container) {
     if (touched) { mesh.instanceMatrix.needsUpdate = true; pickMesh.instanceMatrix.needsUpdate = true; }
   }
 
-  // ---- THE DRILL (operator ruling d7d55257, Thoth mail 11048) ----------------------------
-  // A CONTAINER is any object whose own structural (containment/membership) degree exceeds
-  // MAX_EGO_NODES -- a project, an agent with a huge working set, any high-degree object the ordinary ego
-  // walk could never show in full. Khnum's own `container` value in link_type_class landed
-  // (Thoth mail 11291) and is normalized into "structural" at decode time (fetchStreamSnapshot's
-  // own edgeClassByType) -- the exact set every other container-shaped check in this file
-  // already uses. Focusing a container
-  // is a DRILL, not the ordinary ego tree: the center plus one count node per member type,
-  // sorted by count, real members hidden until a reader clicks a type open. Acceptance:
-  // "focusing repo:osiris opens under 30 nodes" -- confirmed live, see the tip's own commit.
+  // ---- THE DRILL ----------------------------------------------------------------------
+  // A container is any object whose own structural (containment/membership) degree exceeds
+  // MAX_EGO_NODES: a project, an agent with a huge working set, any high-degree object the
+  // ordinary ego walk could never show in full. The server's own `container` value in
+  // link_type_class is normalized into "structural" at decode time (fetchStreamSnapshot's
+  // own edgeClassByType), the exact set every other container-shaped check in this file
+  // already uses. Focusing a container is a drill, not the ordinary ego tree: the center
+  // plus one count node per member type, sorted by count, real members hidden until a
+  // reader clicks a type open. Acceptance: focusing repo:osiris opens under 30 nodes,
+  // confirmed live.
   function containerMembersByType(id) {
     const byType = new Map(); // type -> nd[]
     for (const e of edges) {
@@ -2136,13 +2104,13 @@ export async function initSpace(container) {
     }
     return byType;
   }
-  // THE MEMBERSHIP-CLASS FIX (Thoth mail 11359): a high structural degree alone is not a
-  // container -- since spawned_by went structural (mail 11291), a busy Agent seat's own
-  // structural degree can exceed MAX_EGO_NODES the same way a real project's membership
-  // degree does, and the drill wrongly ate the whole focus (three count stubs, "0 shown",
-  // none of the agent's own succession/messages visible). Only genuine membership-container
-  // types ever take the drill; everything else, however high its structural degree, goes
-  // through the ordinary one-hop ego groups (which already page a huge bucket).
+  // THE MEMBERSHIP-CLASS FIX: a high structural degree alone is not a container; since
+  // spawned_by went structural, a busy Agent seat's own structural degree can exceed
+  // MAX_EGO_NODES the same way a real project's membership degree does, and the drill
+  // wrongly ate the whole focus (three count stubs, "0 shown", none of the agent's own
+  // succession/messages visible). Only genuine membership-container types ever take the
+  // drill; everything else, however high its structural degree, goes through the ordinary
+  // one-hop ego groups (which already page a huge bucket).
   const CONTAINER_FOCUS_TYPES = new Set(["SoftwareProject", "Seat"]);
   function isContainerFocus(id) {
     const nd = idById.get(id);
@@ -2207,15 +2175,14 @@ export async function initSpace(container) {
     restoreEgoLayout();
     if (restored) syncMovedInstancePositions(restored);
     disposeProjectAnchors(); // a drill replaces the normal focus view entirely
-    // THE DRILL EXPANSION FIX (Thoth mail 11241, live review of w299): clearDrillState()
-    // used to run unconditionally on every call here, wiping drillExpandedType/
-    // drillPageCount the SAME turn a type/"more" click had just set them (buildDrillDivs'
-    // own click handler sets one then calls straight back into this function) -- expanding
-    // a type or paging "more" always looked like nothing happened, because the state that
-    // was supposed to drive the new render was destroyed before this function ever read
-    // it. Only reset the expand state when the container itself is actually changing; a
-    // same-container re-render (the expand/page click's own path) just needs its stale
-    // divs disposed, not its just-set intent wiped.
+    // THE DRILL EXPANSION FIX: clearDrillState() used to run unconditionally on every call
+    // here, wiping drillExpandedType/drillPageCount the same turn a type/"more" click had
+    // just set them (buildDrillDivs' own click handler sets one then calls straight back
+    // into this function); expanding a type or paging "more" always looked like nothing
+    // happened, because the state that was supposed to drive the new render was destroyed
+    // before this function ever read it. Only reset the expand state when the container
+    // itself is actually changing; a same-container re-render (the expand/page click's own
+    // path) just needs its stale divs disposed, not its just-set intent wiped.
     if (drillContainerId !== id) clearDrillState();
     else disposeDrillDivs();
     selectedId = id;
@@ -2308,21 +2275,19 @@ export async function initSpace(container) {
     await inspect(id);
   }
 
-  // WAVE 26, THE STORYLINE (Thoth mail 11534, operator's word "keep cooking, everyone
-  // gets a lane"; ruling 1178e7d9's fourth principle -- lineages are time; held thread
-  // 3683a12a): focusing an Agent lays its own succession chain (succeeded_from/
-  // succeeds_seat, both directions from the focus, up to 100+ generations) out on a real
-  // horizontal TIME axis instead of the ordinary ranked-column ego tree -- x from each
-  // body's own `createdAt` (now on the wire, graph_stream.py item 11), one row for the
-  // chain itself, a sub-agent (spawned_by a chain member, but not itself IN the chain --
-  // a fork, not a successor) hangs as a short branch off its own parent's row at its own
-  // spawn time, and a Decision/Thread `recorded_by` a chain member or sub-agent sits as a
-  // tick directly ON that body's own row at its own time -- literally a ruler tick, the
-  // node's own ontology color already distinguishing it from an Agent body without any
-  // separate styling. "Nothing hidden" (this WAVE's own standing rule, carried over from
-  // THE DRAWING TIP): every chain member, every sub-agent, every tick is positioned and
-  // drawn, none paged/capped by count -- MAX_STORYLINE_NODES below is a crash-guard
-  // against a pathological/cyclic graph, never a designed display budget.
+  // THE STORYLINE: every lineage gets a lane, since lineages are time. Focusing an Agent
+  // lays its own succession chain (succeeded_from/succeeds_seat, both directions from the
+  // focus, up to 100+ generations) out on a real horizontal time axis instead of the
+  // ordinary ranked-column ego tree; x from each body's own `createdAt` (on the wire, see
+  // graph_stream.py item 11), one row for the chain itself, a sub-agent (spawned_by a chain
+  // member, but not itself in the chain, a fork, not a successor) hangs as a short branch
+  // off its own parent's row at its own spawn time, and a Decision/Thread `recorded_by` a
+  // chain member or sub-agent sits as a tick directly on that body's own row at its own
+  // time, literally a ruler tick, the node's own ontology color already distinguishing it
+  // from an Agent body without any separate styling. "Nothing hidden" (a standing rule,
+  // carried over from THE DRAWING TIP): every chain member, every sub-agent, every tick is
+  // positioned and drawn, none paged/capped by count; MAX_STORYLINE_NODES below is a
+  // crash-guard against a pathological/cyclic graph, never a designed display budget.
   function isAgentFocus(id) {
     const nd = idById.get(id);
     return !!nd && nd.type === "Agent";
@@ -2333,21 +2298,20 @@ export async function initSpace(container) {
   const STORYLINE_ROW_OFFSET_PX = 90;
   const STORYLINE_SUBROW_STEP_PX = 26;
   const STORYLINE_AXIS_TICK_COUNT = 6;
-  // WAVE 27, THE SPAWN ROW (Thoth mail 11754, her w313 review note): a real burst-spawned
-  // parent (50 sub-agents minted within the same short window) collapsed onto a HANDFUL of
-  // rows once the old tier count wrapped modulo a fixed cap (5) -- two siblings 10 apart in
-  // spawn order landed on the exact same (dir, tier), and with near-identical createdAt too,
-  // the exact same (x, y). No amount of label decluttering can separate two coincident
-  // points. FIRST ATTEMPT (live-caught regression, kept here as a warning): uncapping the
-  // tier LINEARLY (tier * STEP_PX) fixes the collision but a real fleet burst (measured
-  // live: one parent, 1188 siblings) then explodes the vertical extent to +-12,000 world
-  // units, zooming the WHOLE storyline down to a handful of visible pixels -- "0 label
-  // overlaps" only because nothing is legible. The offset below grows with sqrt(tier)
-  // instead: still strictly monotonic (no two siblings of one parent ever share a
-  // position -- sqrt is injective on non-negative integers), but a burst 100x bigger only
-  // needs ~10x the height, not 100x. storylineMaxSubrowOffsetPx tracks the deepest offset
-  // actually used this render (in raw, pre-wpp pixels) so the axis (below) clears
-  // whatever extent really occurred, instead of assuming a fixed constant.
+  // THE SPAWN ROW: a real burst-spawned parent (50 sub-agents minted within the same short
+  // window) collapsed onto a handful of rows once the old tier count wrapped modulo a fixed
+  // cap (5); two siblings 10 apart in spawn order landed on the exact same (dir, tier), and
+  // with near-identical createdAt too, the exact same (x, y). No amount of label
+  // decluttering can separate two coincident points. First attempt (live-caught regression,
+  // kept here as a warning): uncapping the tier linearly (tier * STEP_PX) fixes the
+  // collision but a real fleet burst (measured live: one parent, 1188 siblings) then
+  // explodes the vertical extent to +-12,000 world units, zooming the whole storyline down
+  // to a handful of visible pixels; "0 label overlaps" only because nothing is legible. The
+  // offset below grows with sqrt(tier) instead: still strictly monotonic (no two siblings of
+  // one parent ever share a position, sqrt is injective on non-negative integers), but a
+  // burst 100x bigger only needs ~10x the height, not 100x. storylineMaxSubrowOffsetPx
+  // tracks the deepest offset actually used this render (in raw, pre-wpp pixels) so the axis
+  // (below) clears whatever extent really occurred, instead of assuming a fixed constant.
   function buildSuccessionAdjacency() {
     const adj = new Map();
     for (const e of edges) {
@@ -2644,28 +2608,27 @@ export async function initSpace(container) {
     }
   }
 
-  // THE DRILL, item 5 (Thoth mail 11048): "under a project filter a visible node with
-  // hidden cross-project links shows a small counted stub; clicking the stub reveals that
-  // project's part of the path without unhiding the project." Computed once per filter
-  // change (setHiddenProjects calls buildProjectStubs), never per-frame -- a full edge
-  // scan is a rare, deliberate act's cost, not a render one.
+  // THE DRILL: under a project filter a visible node with hidden cross-project links shows
+  // a small counted stub; clicking the stub reveals that project's part of the path without
+  // unhiding the project. Computed once per filter change (setHiddenProjects calls
+  // buildProjectStubs), never per-frame; a full edge scan is a rare, deliberate act's cost,
+  // not a render one.
   //
-  // MAX_PROJECT_STUBS: THE LAST RENDERER's own live verification (repo:osiris filtered
-  // to itself, mail 11222) caught a real freeze here -- osiris's own cross-project fan-out
-  // (works_in: 8,363 edges) produced 12,273 distinct (node, hiddenProject) boundary pairs,
-  // one real DOM div EACH, repositioned via positionProjectStubs() on EVERY render frame.
-  // That's the same declutter problem labels already solve (pickLabels' own top-N-by-
-  // degree-in-viewport): keep the biggest, most-informative stubs, drop the rest, same as
-  // the doc comment above already promises ("a small counted stub") but the code never
-  // actually bounded. THE STUB AGGREGATION FIX (Thoth mail 11241, live review of w299)
-  // went further: even capped, 80 divs reading "+N in unfiled" all stacked on the same
-  // spot was still noise, not signal -- two problems, not one. "unfiled" is never a real,
-  // pickable project (the repo dropdown never lists it), so it should never read as a
-  // hidden-project boundary at all. And the per-NODE grouping was the wrong unit -- a
-  // visible project can have hundreds of individual boundary nodes into the same one
-  // hidden project; the legible fact is "this project has N links into that project," not
-  // N separate one-node stubs. Regrouped to (visible node's own project, hidden project),
-  // capped tighter now that aggregation already does most of the decluttering.
+  // MAX_PROJECT_STUBS: live verification (repo:osiris filtered to itself) caught a real
+  // freeze here: osiris's own cross-project fan-out (works_in: 8,363 edges) produced 12,273
+  // distinct (node, hiddenProject) boundary pairs, one real DOM div each, repositioned via
+  // positionProjectStubs() on every render frame. That's the same declutter problem labels
+  // already solve (pickLabels' own top-N-by-degree-in-viewport): keep the biggest,
+  // most-informative stubs, drop the rest, same as the doc comment above already promises
+  // ("a small counted stub") but the code never actually bounded. THE STUB AGGREGATION FIX
+  // went further: even capped, 80 divs reading "+N in unfiled" all stacked on the same spot
+  // was still noise, not signal; two problems, not one. "unfiled" is never a real, pickable
+  // project (the repo dropdown never lists it), so it should never read as a hidden-project
+  // boundary at all. And the per-node grouping was the wrong unit: a visible project can
+  // have hundreds of individual boundary nodes into the same one hidden project; the
+  // legible fact is "this project has N links into that project," not N separate one-node
+  // stubs. Regrouped to (visible node's own project, hidden project), capped tighter now
+  // that aggregation already does most of the decluttering.
   const MAX_PROJECT_STUBS = 20;
   let projectStubEntries = []; // [{x, y, visibleProject, hiddenProject, count, div}]
   function disposeProjectStubs() {
@@ -2678,7 +2641,7 @@ export async function initSpace(container) {
       div.className = "lod-glyph-label ego-drill-label";
       div.style.cursor = "pointer";
       div.textContent = `+${entry.count} in ${Osiris.projectDisplayName(entry.hiddenProject)}`;
-      div.title = entry.hiddenProject; // THE NAME, NEVER THE SLUG (ruling a1cde8a3): full canonical on hover
+      div.title = entry.hiddenProject; // THE NAME, NEVER THE SLUG: full canonical on hover
       div.addEventListener("click", (ev) => { ev.stopPropagation(); revealProjectStub(entry); });
       labelsEl.appendChild(div);
       entry.div = div;
@@ -2703,12 +2666,11 @@ export async function initSpace(container) {
       groups.set(key, g);
     }
     if (!groups.size) { projectStubEntries = []; return; }
-    // THE STUB PLACEMENT FIX (Thoth mail 11249): "place each at the project boundary
-    // toward its hidden project's centroid" -- every project's own centroid and radius,
-    // in one pass over idToNode (real positions exist regardless of visibility), so a
-    // stub for (osiris, projA) and one for (osiris, projB) fan out toward projA's and
-    // projB's own real direction instead of both landing on osiris's own centroid and
-    // stacking there.
+    // THE STUB PLACEMENT FIX: place each at the project boundary toward its hidden
+    // project's centroid; every project's own centroid and radius, in one pass over
+    // idToNode (real positions exist regardless of visibility), so a stub for (osiris,
+    // projA) and one for (osiris, projB) fan out toward projA's and projB's own real
+    // direction instead of both landing on osiris's own centroid and stacking there.
     const sums = new Map(); // project -> {sx, sy, n}
     for (const nd of idToNode) {
       const s = sums.get(nd.project) || { sx: 0, sy: 0, n: 0 };
@@ -2754,10 +2716,10 @@ export async function initSpace(container) {
   }
   function positionProjectStubs() {
     // de-overlap: aggregation alone still leaves every hidden-project stub rooted in the
-    // SAME visible project at roughly the same centroid ("80 stubs ... stacked on one
-    // spot", Thoth mail 11241) -- nudge a colliding stub straight down past whatever
-    // already claimed that screen slot, same greedy idea positionLabels' own overlapsPlaced
-    // uses, kept local/independent since stubs are a bounded (<=20), separate pass.
+    // same visible project at roughly the same centroid (once measured as 80 stubs stacked
+    // on one spot); nudge a colliding stub straight down past whatever already claimed that
+    // screen slot, same greedy idea positionLabels' own overlapsPlaced uses, kept
+    // local/independent since stubs are a bounded (<=20), separate pass.
     const placed = [];
     const W = 90, H = 16, GAP = 4;
     for (const entry of projectStubEntries) {
@@ -2791,27 +2753,26 @@ export async function initSpace(container) {
     markDirty();
   }
 
-  // a second LineSegments drawn OVER the dim base edges: the reachable PATH edges (bright,
-  // WITH DIRECTION — a vertex-colour gradient, brighter at the source/dependent end, dimmer
-  // at the target/depended-on end, per Osiris's own from_id->to_id convention). Ruling
-  // c5953bb1's own "the focused object's structural edges draw on focus only" carve-out is
-  // GONE (THE LAST RENDERER, Thoth mail 11066: "an edge draws only when both ends are
-  // visible, no structural-hop exception") -- it used to draw every structural edge
-  // touching the focus regardless of whether the other end was ever positioned or visible,
-  // which for a container-scale focus (repo:osiris, ~20k structural neighbours) meant
-  // thousands of lines fanning to scattered original positions, "a solid disc of edges."
-  // A structural edge among the reachable set (e.g. a drill's own center-to-member link) still
-  // draws through the ordinary base layer (buildEdgeLines) if the legend's own structural
-  // checkbox is opted back in -- no separate exception needed or wanted any more.
+  // a second LineSegments drawn over the dim base edges: the reachable path edges (bright,
+  // with direction, a vertex-colour gradient, brighter at the source/dependent end, dimmer
+  // at the target/depended-on end, per Osiris's own from_id->to_id convention). An earlier
+  // "the focused object's structural edges draw on focus only" carve-out is gone (THE LAST
+  // RENDERER: an edge draws only when both ends are visible, no structural-hop exception);
+  // it used to draw every structural edge touching the focus regardless of whether the
+  // other end was ever positioned or visible, which for a container-scale focus
+  // (repo:osiris, ~20k structural neighbours) meant thousands of lines fanning to scattered
+  // original positions, a solid disc of edges. A structural edge among the reachable set
+  // (e.g. a drill's own center-to-member link) still draws through the ordinary base layer
+  // (buildEdgeLines) if the legend's own structural checkbox is opted back in; no separate
+  // exception needed or wanted any more.
   let pathHighlightEdges = null;
   const PATH_EDGE_BRIGHT = new THREE.Color(0x58a6ff);
   const PATH_EDGE_DIM = new THREE.Color(0x58a6ff).multiplyScalar(0.35);
-  // CROSS-PROJECT FOCUS EDGE BUNDLING (operator ruling, grounds 5b37d219, Thoth mail 11272
-  // item 5): "cross-project edges longer than a threshold in screen pixels draw as bundled
-  // quadratic curves with alpha falling with length." Scoped to the FOCUS overlay only
-  // (this function) -- THE LAST RENDERER's own "no bundling, straight lines" rule (mail
-  // 11066) stays in force for the base dim layer (buildEdgeLines); this reopens rendering
-  // for focus/preview specifically, per the new ruling, not a blanket reversal.
+  // CROSS-PROJECT FOCUS EDGE BUNDLING: cross-project edges longer than a threshold in
+  // screen pixels draw as bundled quadratic curves with alpha falling with length. Scoped
+  // to the focus overlay only (this function); THE LAST RENDERER's own "no bundling,
+  // straight lines" rule stays in force for the base dim layer (buildEdgeLines); this
+  // reopens rendering for focus/preview specifically, not a blanket reversal.
   const BUNDLE_SCREEN_PX_THRESHOLD = 220;
   const BUNDLE_CURVE_SEGMENTS = 14;
   const BUNDLE_BOW_PX = 60; // how far the curve's own midpoint bows off the straight line
@@ -2842,9 +2803,9 @@ export async function initSpace(container) {
           PATH_EDGE_DIM.r, PATH_EDGE_DIM.g, PATH_EDGE_DIM.b);
         continue;
       }
-      // alpha falls with length past the threshold -- baked into the vertex COLOR here
-      // (this material has no separate alpha attribute), scaling the bright/dim endpoints
-      // toward black so additive blending reads as dimmer without ever hitting true zero.
+      // alpha falls with length past the threshold, baked into the vertex color here (this
+      // material has no separate alpha attribute), scaling the bright/dim endpoints toward
+      // black so additive blending reads as dimmer without ever hitting true zero.
       const over = (screenLen - BUNDLE_SCREEN_PX_THRESHOLD) / BUNDLE_SCREEN_PX_THRESHOLD;
       const alpha = Math.max(BUNDLE_ALPHA_FLOOR, 1 / (1 + over)); // Reinhard-shaped falloff, bounded
       const midX = (ax + bx) / 2, midY = (ay + by) / 2;
@@ -2874,12 +2835,12 @@ export async function initSpace(container) {
     scene.add(pathHighlightEdges);
   }
 
-  // ---- pan + zoom — LOOKING ONLY, never changes what's loaded ------------------------
-  // a browser fires a real "click" event at pointerup even after a long drag, as long as
-  // it lands back on the same element — the operator caught this exactly ("dragging and
-  // releasing... refocuses on a random object"). Track total drag distance and only treat
-  // the click handler's pick as genuine below a small pixel threshold; anything past that
-  // was a pan, not a click, and the trailing click event is swallowed.
+  // ---- pan + zoom: looking only, never changes what's loaded --------------------------
+  // a browser fires a real "click" event at pointerup even after a long drag, as long as it
+  // lands back on the same element: dragging and releasing used to refocus on a random
+  // object. Track total drag distance and only treat the click handler's pick as genuine
+  // below a small pixel threshold; anything past that was a pan, not a click, and the
+  // trailing click event is swallowed.
   let dragging = false, lastX = 0, lastY = 0, dragDistance = 0;
   const CLICK_SLOP_PX = 4;
   renderer.domElement.addEventListener("pointerdown", (ev) => {
@@ -2895,14 +2856,14 @@ export async function initSpace(container) {
     const wpy = (camera.top - camera.bottom) / wrap.clientHeight;
     camera.position.x -= dx * wpx;
     camera.position.y += dy * wpy;
-    // no scheduleLabelUpdate() here — label POSITIONS are repainted on every render this
-    // markDirty() triggers (render-on-demand, see the loop below); only WHICH labels show
+    // no scheduleLabelUpdate() here: label positions are repainted on every render this
+    // markDirty() triggers (render-on-demand, see the loop below); only which labels show
     // is still debounced (scheduleLabelPick).
     markDirty();
     scheduleLabelPick();
   });
 
-  // O(1) regardless of node count now — sizing lives in the shader (aRadiusPx * a live
+  // O(1) regardless of node count now: sizing lives in the shader (aRadiusPx * a live
   // uWorldPerPx uniform, see makeInstancedCircleMaterial), so a zoom step only ever writes
   // one float per material (the draw mesh's and pick mesh's own uWorldPerPx) instead of
   // rewriting 49,019 instance matrices.
@@ -2910,18 +2871,17 @@ export async function initSpace(container) {
     const wpp = worldPerPx();
     if (meshUniforms) meshUniforms.uWorldPerPx.value = wpp;
     if (pickUniforms) pickUniforms.uWorldPerPx.value = wpp;
-    // no edge-style call here any more — the edge-fade shader (makeEdgeFadeMaterial) reads
+    // no edge-style call here any more: the edge-fade shader (makeEdgeFadeMaterial) reads
     // screen length straight off projectionMatrix/modelViewMatrix every render, already
     // current every frame with zero extra work on a zoom step.
   }
 
-  // wheel = LOOKING ONLY, cursor-anchored (Thoth's own live fix, mail 10581 item 5: "zoom
-  // is not anchored at the cursor"), coalesced to one update per animation frame no matter
-  // how many wheel events land in that frame (a real trackpad/mouse burst is 20-60 events —
-  // each one used to trigger its own full rescale; now each just accumulates a delta, and
-  // ONE zoomAt() runs per frame).
+  // wheel = looking only, cursor-anchored (zoom used to not be anchored at the cursor),
+  // coalesced to one update per animation frame no matter how many wheel events land in
+  // that frame (a real trackpad/mouse burst is 20-60 events, each one used to trigger its
+  // own full rescale; now each just accumulates a delta, and one zoomAt() runs per frame).
   let pendingWheelDelta = 0, wheelClientX = 0, wheelClientY = 0, wheelRafPending = false;
-  let wheelReceivedAt = 0; // wheel-hang instrumentation only (Thoth mail 11248)
+  let wheelReceivedAt = 0; // wheel-hang instrumentation only
   function zoomAt(clientX, clientY, deltaY) {
     const t = window.__spaceWheelTiming ? performance.now() : 0;
     const rect = wrap.getBoundingClientRect();
@@ -2966,23 +2926,23 @@ export async function initSpace(container) {
     { passive: false }
   );
 
-  // ---- GPU picking (nearest-within-tolerance, review flaw #3/#8) ----------------------
-  // review flaw #3: the original 1x1 pick was EXACT-PIXEL, no tolerance -- two real clicks
-  // on genuinely visible small nodes (4px, 8px) missed outright (selectedId/pickAt both
-  // null). Same root cause made the hover card read empty on a real hover (#8): it calls
-  // this same function. Fixed by rendering a small box around the cursor instead of one
-  // pixel and picking whichever hit id sits closest to the box's own centre — an exact hit
-  // still wins immediately (distance 0), a near-miss within PICK_BOX/2 px now resolves too.
-  const PICK_BOX = 33; // device px, odd -- generous tolerance, still a trivial GPU readback
+  // ---- GPU picking (nearest-within-tolerance) ------------------------------------------
+  // the original 1x1 pick was exact-pixel, no tolerance: two real clicks on genuinely
+  // visible small nodes (4px, 8px) missed outright (selectedId/pickAt both null). Same root
+  // cause made the hover card read empty on a real hover: it calls this same function.
+  // Fixed by rendering a small box around the cursor instead of one pixel and picking
+  // whichever hit id sits closest to the box's own centre; an exact hit still wins
+  // immediately (distance 0), a near-miss within PICK_BOX/2 px now resolves too.
+  const PICK_BOX = 33; // device px, odd: generous tolerance, still a trivial GPU readback
   const PICK_HALF = (PICK_BOX - 1) / 2;
   const pickTarget = new THREE.WebGLRenderTarget(PICK_BOX, PICK_BOX);
   const pickBuf = new Uint8Array(PICK_BOX * PICK_BOX * 4);
   function pickAt(clientX, clientY) {
     const rect = renderer.domElement.getBoundingClientRect();
-    // setViewOffset's (x,y) origin is TOP-LEFT (matching a mouse event's own coordinates,
-    // per its own docstring's tile-grid example: A/B/C at y=0 sit ABOVE D/E/F at y=h) —
-    // NOT WebGL's bottom-left convention. The earlier flip here was the real cause of
-    // clicks missing the node visually under the cursor.
+    // setViewOffset's (x,y) origin is top-left (matching a mouse event's own coordinates,
+    // per its own docstring's tile-grid example: A/B/C at y=0 sit above D/E/F at y=h), not
+    // WebGL's bottom-left convention. The earlier flip here was the real cause of clicks
+    // missing the node visually under the cursor.
     const px = (clientX - rect.left) * (window.devicePixelRatio || 1);
     const py = (clientY - rect.top) * (window.devicePixelRatio || 1);
     camera.setViewOffset(
@@ -3007,11 +2967,10 @@ export async function initSpace(container) {
     return bestId === 0 ? null : idToNode[bestId - 1];
   }
 
-  // TIP 1 AMENDMENT (operator via Thoth mail 10726): a single CLICK on a node IS focus —
-  // select, inspector, hide, fit, one gesture. No double-click, no Enter-to-promote; a click
-  // on empty canvas still clears. Back/Escape are the only acts left that navigate history.
-  // TIP 4 (operator ruling "DENSITY NOT DISCS", mail 11011) simplifies this back to the
-  // pre-TIP-3 shape: every object is drawn (and so pickable, same GPU pick pass) at every
+  // a single click on a node is focus: select, inspector, hide, fit, one gesture. No
+  // double-click, no Enter-to-promote; a click on empty canvas still clears. Back/Escape
+  // are the only acts left that navigate history. DENSITY NOT DISCS simplifies this back to
+  // an earlier shape: every object is drawn (and so pickable, same GPU pick pass) at every
   // zoom now, no separate glyph layer or drill-in branch to special-case any more.
   renderer.domElement.addEventListener("click", (ev) => {
     if (dragDistance > CLICK_SLOP_PX) return; // the trailing click after a real pan/drag
@@ -3020,9 +2979,9 @@ export async function initSpace(container) {
     else clearFocus();
   });
 
-  // TIP 1(c): the hover card shows the label line plus type and project — the inspector
-  // (click) has the rest. Debounced like the label pick (not every mousemove — pickAt is a
-  // real render-target pass, cheap once, not something to run at full mouse-event rate) and
+  // the hover card shows the label line plus type and project; the inspector (click) has
+  // the rest. Debounced like the label pick (not every mousemove; pickAt is a real
+  // render-target pass, cheap once, not something to run at full mouse-event rate) and
   // skipped entirely while dragging so it never fights a pan.
   let hoverNode = null;
   let hoverTimer = null;
@@ -3030,9 +2989,9 @@ export async function initSpace(container) {
   hoverEl.className = "hover-card";
   hoverEl.hidden = true;
   wrap.appendChild(hoverEl);
-  // THE UNMISTAKABLE FOCUS (mail 11272 item 2): "a ring or halo" around the clicked
-  // object itself -- a plain HTML overlay (same pattern as hoverEl above), sized off the
-  // focused node's own aRadiusPx-equivalent screen size, never the WebGL scene.
+  // THE UNMISTAKABLE FOCUS: a ring or halo around the clicked object itself; a plain HTML
+  // overlay (same pattern as hoverEl above), sized off the focused node's own
+  // aRadiusPx-equivalent screen size, never the WebGL scene.
   const focusRingEl = document.createElement("div");
   focusRingEl.className = "focus-ring";
   focusRingEl.hidden = true;
@@ -3050,18 +3009,18 @@ export async function initSpace(container) {
     focusRingEl.style.height = `${r * 2}px`;
     focusRingEl.hidden = false;
   }
-  // THE UNMISTAKABLE FOCUS (mail 11272 item 3): "the hover card shows the same identity
-  // string as the label plus type, project and generation; label and card never
-  // disagree." labelTextFor(nd) is already the SAME call pickLabels' own div.textContent
-  // uses -- label and card were already structurally incapable of disagreeing, since both
-  // read the identical function on the identical node.
-  // THE HONEST GENERATION FIX (Thoth mail 11359): this count is succeeded_from HOP DEPTH,
-  // not the seat's own generation numeral the label string carries (Khnum's roman numeral,
-  // seat_generation) -- for a seat whose own succession chain has gaps or a different root,
-  // the two numbers genuinely differ (sekhmet XLIV: label roman XLIV / seat_generation 44,
+  // THE UNMISTAKABLE FOCUS: the hover card shows the same identity string as the label plus
+  // type, project and generation; label and card never disagree. labelTextFor(nd) is
+  // already the same call pickLabels' own div.textContent uses; label and card were already
+  // structurally incapable of disagreeing, since both read the identical function on the
+  // identical node.
+  // THE HONEST GENERATION FIX: this count is succeeded_from hop depth, not the seat's own
+  // generation numeral the label string carries (a roman numeral, seat_generation); for a
+  // seat whose own succession chain has gaps or a different root, the two numbers
+  // genuinely differ (a real seat measured: label roman numeral XLIV / seat_generation 44,
   // this count 43). Parsing the label's own roman numeral client-side would silently break
-  // on every future label-format change Khnum makes; named for what it actually measures
-  // instead of claiming to be the generation.
+  // on every future label-format change the server makes; named for what it actually
+  // measures instead of claiming to be the generation.
   let succeededFromNext = null; // built lazily, once: id -> id it succeeded (older)
   let succeededFromMembers = null; // ids appearing anywhere in a succeeded_from edge
   function computeGeneration(nd) {
@@ -3143,8 +3102,8 @@ export async function initSpace(container) {
   });
   upBtn.addEventListener("click", clearFocus);
   if (backBtn) backBtn.addEventListener("click", goBack);
-  // TIP 1 AMENDMENT: the downstream toggle (was "Widen" — depth is unlimited by default
-  // now, so raising a cap is moot). Off by default; re-runs the current focus on toggle.
+  // the downstream toggle (was "Widen": depth is unlimited by default now, so raising a cap
+  // is moot). Off by default; re-runs the current focus on toggle.
   if (downstreamBtn) {
     downstreamBtn.textContent = "Downstream: off";
     downstreamBtn.addEventListener("click", () => {
@@ -3165,26 +3124,26 @@ export async function initSpace(container) {
     focusObject(prev, { skipStackPush: true });
   }
 
-  // ---- FOCUS = THE TREE TO SOURCE (ruling c5953bb1, amended by mail 10726): a single click
-  // is the whole gesture now — select, inspector, hide, fit, all synchronous, all CLIENT-SIDE
-  // off the already-loaded edge list (never a network wait; `inspect(id)`'s own fetch is
-  // awaited LAST, below, and never gates any of this). Walks upstream by default until
-  // roots, downstream only when toggled on, hides everything unreachable (TIP 1(d), no
-  // dim), relays out the reachable set locally (TIP 1's own ego-layout amendment), fits the
-  // camera, then the inspector fetch fills in after.
+  // ---- FOCUS = THE TREE TO SOURCE: a single click is the whole gesture now, select,
+  // inspector, hide, fit, all synchronous, all client-side off the already-loaded edge list
+  // (never a network wait; `inspect(id)`'s own fetch is awaited last, below, and never
+  // gates any of this). Walks upstream by default until roots, downstream only when
+  // toggled on, hides everything unreachable (no dim), relays out the reachable set
+  // locally (the ego-layout amendment), fits the camera, then the inspector fetch fills in
+  // after.
   async function focusObject(id, opts) {
-    // review flaw #9: focusObject(null) (a stray call with no real hit — the footer's own
-    // "focused-badge" onclick, or a failed pick) used to set pathFocusId=null yet still walk
-    // and report "focused: 1 reachable" against a degenerate single-null-entry set.
+    // focusObject(null) (a stray call with no real hit, the footer's own "focused-badge"
+    // onclick, or a failed pick) used to set pathFocusId=null yet still walk and report
+    // "focused: 1 reachable" against a degenerate single-null-entry set.
     if (!id) { clearFocus(); return; }
-    // THE DRILL (Thoth mail 11048): a container-scale focus never runs the ordinary ego
-    // walk at all -- it would either blow straight past MAX_EGO_NODES or (worse, the
-    // operator's own observed bug) silently truncate while updatePathEdges still drew every
-    // one of the focus's own uncapped structural edges, "a solid disc."
+    // THE DRILL: a container-scale focus never runs the ordinary ego walk at all; it would
+    // either blow straight past MAX_EGO_NODES or (worse, an observed bug) silently
+    // truncate while updatePathEdges still drew every one of the focus's own uncapped
+    // structural edges, a solid disc.
     if (isContainerFocus(id)) { await renderContainerDrill(id, opts); return; }
-    // WAVE 26, THE STORYLINE (mail 11534): an Agent focus lays out on a time axis
-    // instead of the ordinary ranked-column ego tree -- checked after the container
-    // gate (an Agent is never a CONTAINER_FOCUS_TYPES member, so this never races it).
+    // THE STORYLINE: an Agent focus lays out on a time axis instead of the ordinary
+    // ranked-column ego tree; checked after the container gate (an Agent is never a
+    // CONTAINER_FOCUS_TYPES member, so this never races it).
     if (isAgentFocus(id)) { await renderStoryline(id, opts); return; }
     if (storylineActive) clearStorylineState(); // leaving a storyline for an ordinary focus
     clearDrillState(); // leaving a drill (if any) for an ordinary small-object focus
@@ -3196,15 +3155,15 @@ export async function initSpace(container) {
     const hopsUp = bfsHops(outAdjPath, id, focusDepth);
     const hopsDown = includeDownstream ? bfsHops(inAdjPath, id, focusDepth) : new Map([[id, 0]]);
     pathReachable = new Set([...hopsUp.keys(), ...hopsDown.keys()]);
-    // TIP 1(d)/amendment: "focus is never empty" — Thoth's own live measurement found a
-    // degree-8 Decision with no PATH_EDGE_TYPES links reaching only itself and collapsing
-    // the camera fit to a point. When the walk finds nothing beyond the focused node itself,
-    // widen one hop over its own STRUCTURAL edges instead (ranked as upstream, hop 1, for
-    // the ego layout below) — still just this node's real neighbours, never a synthetic
-    // minimum. review flaw #2's OWN second half: this loop had no cap at all — a real
-    // high-degree object (repo:osiris, structural degree 20k+) has few/no PATH_EDGE_TYPES links of its own, so
-    // pathReachable.size<=1 was true and this fallback alone reproduced the exact same
-    // whole-graph blowup the rank cap above was built to prevent. Same MAX_EGO_NODES cap.
+    // "focus is never empty": live measurement found a degree-8 Decision with no
+    // PATH_EDGE_TYPES links reaching only itself and collapsing the camera fit to a point.
+    // When the walk finds nothing beyond the focused node itself, widen one hop over its
+    // own structural edges instead (ranked as upstream, hop 1, for the ego layout below),
+    // still just this node's real neighbours, never a synthetic minimum. This loop once had
+    // no cap at all: a real high-degree object (repo:osiris, structural degree 20k+) has
+    // few/no PATH_EDGE_TYPES links of its own, so pathReachable.size<=1 was true and this
+    // fallback alone reproduced the exact same whole-graph blowup the rank cap above was
+    // built to prevent. Same MAX_EGO_NODES cap.
     if (pathReachable.size <= 1) {
       for (const e of edges) {
         if (pathReachable.size >= MAX_EGO_NODES) break;
@@ -3218,37 +3177,37 @@ export async function initSpace(container) {
     if (!options.skipStackPush) pushFocusStack(id);
     if (onFocus) onFocus(id); // shares the selection with an embedding table (console.js)
 
-    // ONE-HOP FOCUS (mail 11272 item 1): the provenance-path walk above stays the
-    // BASE reachable set (unchanged semantics); the one-hop-all-types focus is
-    // additive on top of it. A fresh focus onto a DIFFERENT object resets the group/page
-    // expand state; re-focusing the SAME one (or a group/"more" click within it) keeps it.
+    // ONE-HOP FOCUS: the provenance-path walk above stays the base reachable set (unchanged
+    // semantics); the one-hop-all-types focus is additive on top of it. A fresh focus onto
+    // a different object resets the group/page expand state; re-focusing the same one (or a
+    // group/"more" click within it) keeps it.
     focusBasePathReachable = new Set(pathReachable);
     focusHopsUp = hopsUp; focusHopsDown = hopsDown;
     if (egoGroupFocusId !== id) { egoGroupExpandedKey = null; egoGroupPageCount = 1; }
     egoGroupFocusId = id;
 
-    // EGO RELAYOUT (mail 10726): focus at centre, ancestors ranked leftward by hop (roots
-    // farthest left), downstream (if on) ranked rightward — "distance rational instead of
-    // the world-unit spread." The one-hop groups/anchors, camera refit, edge rebuild and
-    // status line all live in renderFocusEgoGroups now, shared with every group/"more"
-    // click after this one so they behave identically.
+    // EGO RELAYOUT: focus at centre, ancestors ranked leftward by hop (roots farthest
+    // left), downstream (if on) ranked rightward; distance rational instead of the
+    // world-unit spread. The one-hop groups/anchors, camera refit, edge rebuild and status
+    // line all live in renderFocusEgoGroups now, shared with every group/"more" click after
+    // this one so they behave identically.
     renderFocusEgoGroups(id, hopsUp, hopsDown);
-    // TIP 1's own 100ms budget (mail 10726 item 2): everything above is client-side and
-    // synchronous; only the inspector's own network fetch happens after, unawaited by the
-    // visual. Logged, not asserted, since a live DevTools/CPU throttle can't be simulated
-    // in a unit test — the discipline is the guarantee, not this one measurement.
+    // everything above is client-side and synchronous, within a 100ms budget; only the
+    // inspector's own network fetch happens after, unawaited by the visual. Logged, not
+    // asserted, since a live DevTools/CPU throttle can't be simulated in a unit test; the
+    // discipline is the guarantee, not this one measurement.
     if (window.__spaceDebugTiming) console.debug("focusObject sync ms:", performance.now() - t0);
     await inspect(id);
   }
 
   async function inspect(id) {
-    // review flaw #1 (TIP 1c, Thoth mail 10891): "the right pane must show the focused
-    // object's details... today it stays empty after a click." Root cause: no response
-    // check plus objectDetail() throwing synchronously (e.g. reading o.properties.some on
-    // a malformed/error body) meant the `rightRail.innerHTML = ...` assignment never
-    // happened at all — the rail silently kept whatever it showed BEFORE the click (the
-    // "Click any object to inspect..." placeholder on a fresh session, read as "empty").
-    // Every path below now writes something real to the rail, success or failure.
+    // the right pane must show the focused object's details; it used to stay empty after a
+    // click. Root cause: no response check plus objectDetail() throwing synchronously (e.g.
+    // reading o.properties.some on a malformed/error body) meant the `rightRail.innerHTML =
+    // ...` assignment never happened at all; the rail silently kept whatever it showed
+    // before the click (the "Click any object to inspect..." placeholder on a fresh
+    // session, read as "empty"). Every path below now writes something real to the rail,
+    // success or failure.
     let obj;
     try {
       const res = await fetch(`/objects/${id}`);
@@ -3263,9 +3222,9 @@ export async function initSpace(container) {
         `${(err && err.message) || err}</div>`;
       return;
     }
-    // the inspector's own Focus button — a re-focus shortcut, now that a plain click on
-    // the canvas already IS focus (TIP 1 amendment retired the old double-click/Enter
-    // triggers this button used to sit alongside).
+    // the inspector's own Focus button: a re-focus shortcut, now that a plain click on the
+    // canvas already is focus (the old double-click/Enter triggers this button used to sit
+    // alongside are retired).
     const focusBtn = document.createElement("button");
     focusBtn.className = "iconbtn";
     focusBtn.textContent = pathFocusId === id ? "Focused" : "Focus";
@@ -3273,8 +3232,7 @@ export async function initSpace(container) {
     focusBtn.addEventListener("click", () => focusObject(id));
     rightRail.prepend(focusBtn);
     // every object reference in the inspector (upstream_ids, readers, links) walks the
-    // focus — ruling c5953bb1's own "harmony" requirement, part C, but the wiring lives
-    // here since it's the same click-through this inspector has always used.
+    // focus, the same click-through this inspector has always used.
     const relsEl = rightRail.querySelector("[data-rels]");
     if (relsEl) {
       try {
@@ -3285,36 +3243,35 @@ export async function initSpace(container) {
     }
   }
 
-  // TIP 1 AMENDMENT (mail 10726): "no double-click or Enter" — a click already IS focus,
-  // so the old Enter-promotes-selection listener (and the dblclick listener above it) are
-  // retired outright, not left as harmless redundancy.
+  // no double-click or Enter: a click already is focus, so the old Enter-promotes-selection
+  // listener (and the dblclick listener above it) are retired outright, not left as
+  // harmless redundancy.
 
-  // TIP 1(e), amended: ONE search, ONE gesture — the in-canvas "Find a node" box is gone;
-  // the header omnibox (console.js's own runOmniSearch/execOmniItem) drives the graph
-  // directly now, a hit always focuses (click and Enter no longer differ, matching the
-  // canvas's own "one gesture" — see mail 10726).
+  // one search, one gesture: the in-canvas "Find a node" box is gone; the header omnibox
+  // (console.js's own runOmniSearch/execOmniItem) drives the graph directly now, a hit
+  // always focuses (click and Enter no longer differ, matching the canvas's own "one
+  // gesture").
 
-  // TIP 1(c), TIP 1b (Thoth mail 10755): LABELS ARE NAMES — Agent by handle/name,
-  // SoftwareProject by repo name, Person by name, everything else type + short title. One
-  // line, hard-truncated at 40 chars with an ellipsis. Khnum's own `labels` wire header
-  // (tip 2g, fixed live in mail 10892/commit 0496a7d to resolve a real summary/title/
-  // subject/name assertion for every type — a Commit's own label now carries its real
-  // subject line straight off the wire) computes exactly this rule server-side,
-  // index-aligned to object_ids — nd.label is already the final text, synchronous, no
+  // LABELS ARE NAMES: Agent by handle/name, SoftwareProject by repo name, Person by name,
+  // everything else type + short title. One line, hard-truncated at 40 chars with an
+  // ellipsis. The server's own `labels` wire header (fixed live to resolve a real
+  // summary/title/subject/name assertion for every type; a Commit's own label now carries
+  // its real subject line straight off the wire) computes exactly this rule server-side,
+  // index-aligned to object_ids; nd.label is already the final text, synchronous, no
   // per-node network fetch for any type. The earlier Commit-only client-side upgrade
-  // (fetchCommitSubject, review flaw #6) is retired outright now that the gap it patched
-  // is closed at the source.
+  // (fetchCommitSubject) is retired outright now that the gap it patched is closed at the
+  // source.
   function fallbackLabel(nd) { return `${nd.type} ${nd.id.slice(0, 8)}`; }
   function labelTextFor(nd) { return nd.label || fallbackLabel(nd); }
 
-  // THE LAST RENDERER (operator ruling d7d55257, Thoth mail 11066): "labels for the top-N
-  // objects by degree inside the current viewport, de-overlapped, at every zoom." No
-  // separate project-label pass any more -- a project's own name just IS whatever object in
-  // it has the highest degree in view. Candidacy is nodeVisible(nd) (already the single
-  // source of truth for hidden types/hidden projects/focus-reachability everywhere else in
-  // this file) intersected with the camera's own world-space frustum bounds -- a node must
-  // genuinely be on screen to be a label candidate, not merely "near the camera centre" (the
-  // old rule, which could label something off past the edge of the viewport).
+  // THE LAST RENDERER: labels for the top-N objects by degree inside the current viewport,
+  // de-overlapped, at every zoom. No separate project-label pass any more; a project's own
+  // name just is whatever object in it has the highest degree in view. Candidacy is
+  // nodeVisible(nd) (already the single source of truth for hidden types/hidden
+  // projects/focus-reachability everywhere else in this file) intersected with the
+  // camera's own world-space frustum bounds; a node must genuinely be on screen to be a
+  // label candidate, not merely "near the camera centre" (the old rule, which could label
+  // something off past the edge of the viewport).
   const N_LABELS = 40;
   let labeledNodes = [];
   const labelDivs = new Map(); // node -> div, reused across frames instead of rebuilt
@@ -3324,15 +3281,15 @@ export async function initSpace(container) {
     if (labelPickTimer) return;
     labelPickTimer = setTimeout(() => { labelPickTimer = null; pickLabels(); }, 150);
   }
-  // THE PROJECT LABEL BUDGET (item 4, mail 11408): a project "earns its place by size" in
-  // the SAME N_LABELS pool object labels compete for -- built as a stable pseudo-node per
-  // project (own .x/.y/.degree so it drops into the identical sort/slice/declutter path
-  // with no special-casing there), never real graph nodes, so `.id` is namespaced
+  // THE PROJECT LABEL BUDGET: a project earns its place by size in the same N_LABELS pool
+  // object labels compete for; built as a stable pseudo-node per project (own
+  // .x/.y/.degree so it drops into the identical sort/slice/declutter path with no
+  // special-casing there), never real graph nodes, so `.id` is namespaced
   // (`project:<name>`) and `isLit` naturally never matches one. Rebuilt only when the
-  // project model itself changes (buildProjectFillModel/buildProjectFillMeshes), not per pick --
-  // identity stays stable across picks so labelDivs doesn't churn DOM nodes for a project
-  // that stays labeled from one pick to the next. `projectLabelCandidates` itself is
-  // declared up in THE PROJECT MODEL block, not here -- buildProjectFillModel calls this
+  // project model itself changes (buildProjectFillModel/buildProjectFillMeshes), not per
+  // pick; identity stays stable across picks so labelDivs doesn't churn DOM nodes for a
+  // project that stays labeled from one pick to the next. `projectLabelCandidates` itself
+  // is declared up in THE PROJECT MODEL block, not here; buildProjectFillModel calls this
   // function during initSpace's own synchronous setup, well before this point in the file
   // would otherwise execute; declaring the `let` down here hit the exact TDZ crash class
   // THE LAST RENDERER's own commit message already named once (projectObjectByName).
@@ -3351,30 +3308,30 @@ export async function initSpace(container) {
     const inView = (nd) => nd.x >= minX && nd.x <= maxX && nd.y >= minY && nd.y <= maxY;
     const pool = idToNode.filter((nd) => nodeVisible(nd) && inView(nd));
     const projectPool = projectLabelCandidates.filter(inView);
-    // WAVE 26, PIECE 2: community labels only ever compete for a slot once communities
-    // are actually visible (mid zoom) -- below that they'd just be noise nobody asked for
-    // yet, the exact same reasoning the fill/ribbon gates above already use.
+    // community labels only ever compete for a slot once communities are actually visible
+    // (mid zoom); below that they'd just be noise nobody asked for yet, the exact same
+    // reasoning the fill/ribbon gates above already use.
     const communityPool = communityRegionsVisible ? communityLabelCandidates.filter(inView) : [];
-    // THE FOCUS LABEL POOL FIX (Thoth mail 11359): a plain top-N-by-degree sort ignores the
-    // focus entirely -- a real focus's own reachable set is mostly low-natural-degree nodes
-    // (Message, chain members), so the pool filled with whatever happened to have the
-    // highest degree elsewhere in the viewport, leaving most of what the reader actually
-    // focused on unlabeled. Lit (focused/reachable/selected) nodes fill the pool FIRST,
+    // THE FOCUS LABEL POOL FIX: a plain top-N-by-degree sort ignores the focus entirely; a
+    // real focus's own reachable set is mostly low-natural-degree nodes (Message, chain
+    // members), so the pool filled with whatever happened to have the highest degree
+    // elsewhere in the viewport, leaving most of what the reader actually focused on
+    // unlabeled. Lit (focused/reachable/selected) nodes fill the pool first,
     // highest-degree-first among themselves; only remaining slots go to the ordinary
     // degree ranking. Acceptance: every reachable node gets a label slot up to N_LABELS.
     const isLit = (nd) => nd.id === pathFocusId || pathReachable.has(nd.id) || nd.id === selectedId;
-    // WAVE 26 live-verification finding: a project's own count (thousands) always beat an
-    // ordinary node's degree by luck, so it never needed special priority -- a community's
-    // own count (order 10s-100s, same order as plenty of individual node degrees) does not
-    // have that luck, and the plain degree sort silently crowded every community label out
-    // (0 ever won a slot against ordinary high-degree nodes in the same view). A project/
-    // community pseudo-node now sits in its own tier, between lit and ordinary -- ranked
-    // by its own size within that tier, never competing against unrelated object degree.
+    // live-verification finding: a project's own count (thousands) always beat an ordinary
+    // node's degree by luck, so it never needed special priority; a community's own count
+    // (order 10s-100s, same order as plenty of individual node degrees) does not have that
+    // luck, and the plain degree sort silently crowded every community label out (0 ever
+    // won a slot against ordinary high-degree nodes in the same view). A project/community
+    // pseudo-node now sits in its own tier, between lit and ordinary; ranked by its own
+    // size within that tier, never competing against unrelated object degree.
     const tier = (nd) => (isLit(nd) ? 2 : (nd.__isProjectFill || nd.__isCommunity) ? 1 : 0);
     labeledNodes = pool.concat(projectPool, communityPool)
       .sort((a, b) => tier(b) - tier(a) || (b.degree || 0) - (a.degree || 0))
       .slice(0, N_LABELS);
-    // reconcile DOM: remove divs for nodes no longer labeled, add for newly labeled ones —
+    // reconcile DOM: remove divs for nodes no longer labeled, add for newly labeled ones;
     // reuses existing elements instead of an innerHTML rebuild every pick.
     const wanted = new Set(labeledNodes);
     for (const [nd, div] of labelDivs) {
@@ -3388,33 +3345,32 @@ export async function initSpace(container) {
       // fallback text now, swapped for the real name async (real nodes only)
       div.textContent = (nd.__isProjectFill || nd.__isCommunity)
         ? `${nd.name} (${nd.degree})` : labelTextFor(nd);
-      // THE NAME, NEVER THE SLUG (ruling a1cde8a3): the full canonical on hover, secondary
+      // THE NAME, NEVER THE SLUG: the full canonical on hover, secondary
       if (nd.__isProjectFill) div.title = nd.canonical || "";
       labelsEl.appendChild(div);
       labelDivs.set(nd, div);
-      // THE REAL-WIDTH DECLUTTER FIX (live-verification finding, mail 11471's own "overlap
-      // pairs" acceptance line): a long label (a Decision title can run 200px+) was always
-      // boxed at the same fixed LABEL_W=90 for overlap purposes, regardless of its own real
-      // rendered width -- a genuine visual overlap the fixed-box declutter had no way to
-      // catch. Measured once, right here, before the div is ever hidden (offsetWidth reads
-      // 0 once `hidden` -- display:none -- applies, so this is the only safe moment).
+      // THE REAL-WIDTH DECLUTTER FIX: a long label (a Decision title can run 200px+) was
+      // always boxed at the same fixed LABEL_W=90 for overlap purposes, regardless of its
+      // own real rendered width; a genuine visual overlap the fixed-box declutter had no
+      // way to catch. Measured once, right here, before the div is ever hidden (offsetWidth
+      // reads 0 once `hidden`, display:none, applies, so this is the only safe moment).
       labelWidths.set(nd, div.offsetWidth || LABEL_W);
     }
     markDirty(); // newly (un)labeled divs need one more positionLabels() pass to place them
   }
-  // runs on every render (render-on-demand now, not an unconditional per-frame loop — see
-  // below) — cheap (one project() + style write per already-chosen label, no sort, no DOM
+  // runs on every render (render-on-demand now, not an unconditional per-frame loop, see
+  // below), cheap (one project() + style write per already-chosen label, no sort, no DOM
   // create/destroy) so labels track the scene with zero perceptible lag whenever it fires.
-  // DECLUTTER: "present text without it looking like garbage" — labeledNodes is already
-  // nearest-to-camera-first (from pickLabels' own sort), so a plain greedy pass — show a
-  // label unless its screen box would overlap one already placed this frame — keeps the
+  // DECLUTTER: present text without it looking like garbage. labeledNodes is already
+  // nearest-to-camera-first (from pickLabels' own sort), so a plain greedy pass, show a
+  // label unless its screen box would overlap one already placed this frame, keeps the
   // closest/most-relevant labels and silently drops the rest, rather than stacking dozens
   // of overlapping strings into an unreadable wall of text. _placed/overlapsPlaced
-  // themselves are declared much earlier in this function now (thread ea9aedba, Thoth
-  // mail 13404) -- see that declaration's own comment for why.
+  // themselves are declared much earlier in this function now; see that declaration's own
+  // comment for why.
   function positionLabels() {
     _placed.length = 0;
-    // THE LAST RENDERER: object titles show at every zoom now, no tier gate -- the same
+    // THE LAST RENDERER: object titles show at every zoom now, no tier gate; the same
     // top-N-by-degree-in-viewport pool pickLabels() computed applies universally.
     for (const nd of labeledNodes) {
       const div = labelDivs.get(nd);
@@ -3423,9 +3379,9 @@ export async function initSpace(container) {
       const x = (_screenV.x * 0.5 + 0.5) * wrap.clientWidth;
       const y = (-_screenV.y * 0.5 + 0.5) * wrap.clientHeight;
       const w = labelWidths.get(nd) || LABEL_W;
-      // a project (or WAVE 26 community) pseudo-node is never focus-reachable and never
-      // the succession-chain declutter's own concern -- it just competes for a slot and
-      // yields to overlap like any ordinary (non-lit) label, keeping its own class untouched.
+      // a project (or community) pseudo-node is never focus-reachable and never the
+      // succession-chain declutter's own concern; it just competes for a slot and yields to
+      // overlap like any ordinary (non-lit) label, keeping its own class untouched.
       if (nd.__isProjectFill || nd.__isCommunity) {
         if (overlapsPlaced(x, y, w)) { div.hidden = true; continue; }
         div.hidden = false;
@@ -3435,23 +3391,23 @@ export async function initSpace(container) {
         continue;
       }
       const lit = nd.id === pathFocusId || pathReachable.has(nd.id) || nd.id === selectedId;
-      // THE CHAIN LABEL DECLUTTER (Thoth mail 11308): "lit labels always win their spot"
-      // is right for an ordinary small reachable set, but a real succession chain (up to
-      // 50+ pinned members, ALL lit since they're all in pathReachable) flooded the view
-      // into an unbroken wall of identical labels -- lit never used to yield to anything.
-      // A chain member keeps that guarantee only at generation 1 (nearest the focus) or a
-      // multiple of 5; every other generation declutters like an ordinary label instead.
+      // THE CHAIN LABEL DECLUTTER: "lit labels always win their spot" is right for an
+      // ordinary small reachable set, but a real succession chain (up to 50+ pinned
+      // members, all lit since they're all in pathReachable) flooded the view into an
+      // unbroken wall of identical labels; lit never used to yield to anything. A chain
+      // member keeps that guarantee only at generation 1 (nearest the focus) or a multiple
+      // of 5; every other generation declutters like an ordinary label instead.
       const generation = lit ? computeGeneration(nd) : null;
       const chainDeclutters = generation != null && generation !== 1 && generation % 5 !== 0;
-      // WAVE 26, THE STORYLINE (live-verification finding, mail 11534's own "label overlaps
-      // 0" acceptance line): in a storyline, pathReachable IS the whole chain+sub-agent+tick
-      // population -- often thousands -- so EVERY storyline node reads "lit," and the
-      // generation-modulo-5 exception above only ever fires for true succeeded_from chain
-      // members, not the sub-agents/ticks that make up most of that population. The result
-      // was 780 overlap pairs measured live against the real DOM. A storyline never gets the
-      // "lit always wins" guarantee at all -- every storyline label declutters like an
-      // ordinary one; the focus node still wins its own slot in practice because pickLabels'
-      // own isLit-first sort already places it first into an empty _placed.
+      // THE STORYLINE (live-verification finding): in a storyline, pathReachable is the
+      // whole chain+sub-agent+tick population, often thousands, so every storyline node
+      // reads "lit," and the generation-modulo-5 exception above only ever fires for true
+      // succeeded_from chain members, not the sub-agents/ticks that make up most of that
+      // population. The result was 780 overlap pairs measured live against the real DOM. A
+      // storyline never gets the "lit always wins" guarantee at all; every storyline label
+      // declutters like an ordinary one; the focus node still wins its own slot in practice
+      // because pickLabels' own isLit-first sort already places it first into an empty
+      // _placed.
       const alwaysShown = lit && !storylineActive;
       // lit/focused labels always win their spot (never declutter the thing you asked to
       // see) UNLESS this chain rule (or being in a storyline) says otherwise; ordinary
@@ -3460,9 +3416,9 @@ export async function initSpace(container) {
       div.hidden = false;
       div.style.left = `${x}px`;
       div.style.top = `${y}px`;
-      // THE UNMISTAKABLE FOCUS (mail 11272 item 2): the clicked object's own label is
-      // strictly bigger than a merely-lit one, never just bold-and-bright -- pinned is
-      // already true for it via `lit` above, this is the "larger" half of the same ask.
+      // THE UNMISTAKABLE FOCUS: the clicked object's own label is strictly bigger than a
+      // merely-lit one, never just bold-and-bright; pinned is already true for it via `lit`
+      // above, this is the "larger" half of the same ask.
       div.className = "lbl" + (lit ? " lit" : "") + (nd.id === pathFocusId ? " focus-label" : "");
       _placed.push([x - w / 2, y - LABEL_H, x + w / 2, y]);
     }
@@ -3491,10 +3447,10 @@ export async function initSpace(container) {
   }
 
   // the render loop itself is defined above (markDirty/renderIfDirty, right after the
-  // camera/resize setup) — render-on-demand per Thoth's own live measurement (mail 10581):
-  // the old unconditional rAF-plus-50ms-fallback loop rendered forever regardless of
-  // whether anything changed or the tab/surface was even visible, which is real waste this
-  // fix removes rather than papering over.
+  // camera/resize setup); render-on-demand per a live measurement: the old unconditional
+  // rAF-plus-50ms-fallback loop rendered forever regardless of whether anything changed or
+  // the tab/surface was even visible, which is real waste this fix removes rather than
+  // papering over.
   pickLabels();
   markDirty();
 
@@ -3503,24 +3459,24 @@ export async function initSpace(container) {
     setHiddenProjects,
     get idToNode() { return idToNode; },
     get edges() { return edges; },
-    // THE WIRE EDGE CLASSES FIX (Thoth mail 11291): the effective per-type classification
-    // -- the header's own link_type_class when the wire carries one for that type
-    // (container already normalized to structural), the client's classOfEdgeType fallback
-    // otherwise. Same live-verification convention as the rest of this debug surface.
+    // THE WIRE EDGE CLASSES FIX: the effective per-type classification, the header's own
+    // link_type_class when the wire carries one for that type (container already
+    // normalized to structural), the client's classOfEdgeType fallback otherwise. Same
+    // live-verification convention as the rest of this debug surface.
     effectiveEdgeClass(type) { return edgeClassByType[type] || classOfEdgeType(type); },
     get edgeClassByType() { return { ...edgeClassByType }; },
     get pathReachable() { return pathReachable; },
     get pathFocusId() { return pathFocusId; },
     get selectedId() { return selectedId; },
-    // DRAWING THE WHOLE GRAPH (spike, Thoth mail 11392) -- live-verification/report hooks,
-    // same convention as the rest of this debug surface.
+    // DRAWING THE WHOLE GRAPH: live-verification/report hooks, same convention as the rest
+    // of this debug surface.
     get projectFills() { return projectFills.map((d) => ({ ...d })); },
     get highDegreeTargets() { return { ...highDegreeTargets }; },
     get ribbons() { return ribbons.map((r) => ({ ...r })); },
     get ribbonsResolvedKeys() { return [...ribbonsResolvedKeys]; },
     get projectLabelCandidateCount() { return projectLabelCandidates.length; },
     edgeAccounting,
-    // WAVE 26, THE STORYLINE (mail 11534) -- live-verification hooks, same convention.
+    // THE STORYLINE: live-verification hooks, same convention.
     isAgentFocus,
     get storylineActive() { return storylineActive; },
     get storylineChainLength() { return storylineChainIds.size; },
@@ -3529,7 +3485,7 @@ export async function initSpace(container) {
     get storylineTimeSpanSeconds() { return storylineMaxT - storylineMinT; },
     get storylineAxisLabelCount() { return storylineAxisEntries.length; },
     get storylineMaxSubrowOffsetPx() { return storylineMaxSubrowOffsetPx; },
-    // WAVE 26, PIECE 2: COMMUNITY REGIONS (mail 11592/11664) -- live-verification hooks.
+    // COMMUNITY REGIONS: live-verification hooks.
     get communities() { return communities.map((c) => ({ ...c })); },
     get communityRegionsVisible() { return communityRegionsVisible; },
     get communityRibbons() { return communityRibbons.map((r) => ({ ...r })); },
@@ -3537,7 +3493,7 @@ export async function initSpace(container) {
     get communityLabelCandidateCount() { return communityLabelCandidates.length; },
     get communityZoomViewSize() { return communityZoomViewSize; },
     get communityRegionsDrawn() { return communityRegionsVisible ? communities.length : 0; },
-    // WAVE 27, THE LENS PANEL (mail 11754) -- live-verification hooks, same convention.
+    // THE LENS PANEL: live-verification hooks, same convention.
     isStructuralLike,
     get communitiesHiddenByLens() { return communitiesHiddenByLens; },
     get highDegreeBadgesHiddenByLens() { return highDegreeBadgesHiddenByLens; },
@@ -3548,20 +3504,20 @@ export async function initSpace(container) {
     get edgeSegmentsDrawn() { return edgeLines ? edgeLines.geometry.attributes.position.count / 2 : 0; },
     get ribbonSegmentsDrawn() { return ribbonLines ? ribbonLines.geometry.attributes.position.count / 2 : 0; },
     camera, pickAt, mesh: () => mesh, worldPerPx, nodeScreenPx, renderer,
-    // debug/test hooks only (same convention as window.__space always being exposed) —
+    // debug/test hooks only (same convention as window.__space always being exposed):
     // zoomAt bypasses the rAF-coalesced wheel path for direct exercise; forceRender skips
     // the dirty check for a synchronous frame.
     zoomAt, forceRender: () => { renderScene(); positionLabels(); },
-    // same "debug/test hooks only" convention as forceRender above -- skips
+    // same "debug/test hooks only" convention as forceRender above: skips
     // scheduleLabelPick's own 150ms debounce for direct live-verification exercise.
     pickLabelsNow: () => pickLabels(),
-    // live-verification/test hooks for the top-N-by-degree label pool -- same "debug hooks
+    // live-verification/test hooks for the top-N-by-degree label pool, same "debug hooks
     // alongside the real api" convention as zoomAt/forceRender above.
     get toneMapActive() { return !!sceneTarget; },
     get labeledNodeCount() { return labeledNodes.length; },
     get visibleLabelCount() { return [...labelDivs.values()].filter((d) => !d.hidden).length; },
-    // THE DRILL (Thoth mail 11048): live-verification/test hooks for the container drill,
-    // cross-project anchors, and the project-filter stub reveal.
+    // THE DRILL: live-verification/test hooks for the container drill, cross-project
+    // anchors, and the project-filter stub reveal.
     isContainerFocus, containerMembersByType,
     get drillContainerId() { return drillContainerId; },
     get drillNodeEntries() { return drillNodeEntries.map((e) => ({ key: e.key, kind: e.kind, type: e.type, count: e.count })); },
@@ -3570,8 +3526,8 @@ export async function initSpace(container) {
     get projectAnchorCount() { return projectAnchorEntries.length; },
     get projectStubEntries() { return projectStubEntries.map((e) => ({ visibleProject: e.visibleProject, hiddenProject: e.hiddenProject, count: e.count })); },
     revealProjectStub,
-    // THE ONE-HOP FOCUS (mail 11272 item 1): live-verification/test hooks, same
-    // convention as the container drill's own hooks above.
+    // THE ONE-HOP FOCUS: live-verification/test hooks, same convention as the container
+    // drill's own hooks above.
     oneHopByTypeDirection,
     get egoGroupEntries() { return egoGroupEntries.map((e) => ({ key: e.key, kind: e.kind, type: e.type, direction: e.direction, count: e.count })); },
     get egoContainerAnchorEntries() { return egoContainerAnchorEntries.map((e) => ({ id: e.id, label: e.label })); },

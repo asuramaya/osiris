@@ -95,16 +95,30 @@ def test_shell_listens_for_osiris_run_scoped_away_from_the_mailbox_surface() -> 
             "e.detail.subject || FOCUS);") in shell_listener
 
 
+def test_author_composition_opens_an_inline_form_not_a_browser_prompt() -> None:
+    body = _JS.split("function authorComposition()", 1)[1].split("\nfunction ", 1)[0]
+    assert "prompt(" not in body
+    assert "openPeek(" in body
+
+
 def test_author_composition_previews_before_saving() -> None:
-    body = _JS.split("async function authorComposition()", 1)[1].split("\nasync function ", 1)[0]
+    body = _JS.split(
+        "async function submitAuthorComposition()", 1)[1].split("\nasync function ", 1)[0]
     # the preview call comes before the save call — a bad spec must never reach the DB
     preview_at = body.index("'/compositions/run-spec'")
     save_at = body.index("JSON.stringify({ name: name, spec: spec })")
     assert preview_at < save_at
 
 
+def test_fork_composition_opens_an_inline_form_not_a_browser_prompt() -> None:
+    body = _JS.split("function forkComposition()", 1)[1].split("\nasync function ", 1)[0]
+    assert "prompt(" not in body
+    assert "openPeek(" in body
+
+
 def test_fork_composition_saves_the_on_screen_spec_under_a_new_name() -> None:
-    body = _JS.split("async function forkComposition()", 1)[1].split("\nasync function ", 1)[0]
+    body = _JS.split(
+        "async function submitForkComposition()", 1)[1].split("\nasync function ", 1)[0]
     assert "LAST_COMPOSITION_RUN.spec" in body
     assert "room_id" not in body
 
@@ -473,12 +487,22 @@ def test_repairs_panel_dry_run_posts_to_the_backfill_route() -> None:
     assert "dry_run: true" in body
 
 
-def test_repairs_panel_apply_confirms_and_requires_because() -> None:
+def test_repairs_panel_apply_requires_an_inline_reason_never_a_browser_dialog() -> None:
     body = _JS.split("async function applyRepair(target)", 1)[1].split(
         "\n// ── Projects", 1)[0]
-    assert "confirm(" in body
-    assert "prompt(" in body
+    assert "confirm(" not in body
+    assert "prompt(" not in body
+    assert "repair-because-" in body
     assert "dry_run: false" in body
+
+
+def test_repairs_panel_apply_button_disabled_until_reason_and_confirm_are_set() -> None:
+    body = _JS.split("function repairUpdateButtonState(target)", 1)[1].split(
+        "\nasync function dryRunRepair", 1)[0]
+    assert "confirmBox.checked" in body
+    row_body = _JS.split("function renderRepairsPanel()", 1)[1].split(
+        "\nfunction repairUpdateButtonState", 1)[0]
+    assert "id=\"repair-btn-' + esc(t.key) + '\" disabled" in row_body
 
 
 def test_settings_panel_shows_structured_per_field_errors_inline() -> None:
