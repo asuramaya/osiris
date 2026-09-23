@@ -1,4 +1,4 @@
-"""The soul store: verbatim ingest plus hash chain (task #51 piece 1).
+"""The soul store: verbatim ingest plus hash chain (piece 1).
 
 INFINITE RETENTION, deliberately separate from transcript_store.py (see 0050's own
 docstring for the full reasoning): that store is a derived, disposable index of per-turn
@@ -57,7 +57,7 @@ def _warn_soul_key_missing_once(exc: SoulKeyMissing) -> None:
         return
     _soul_key_missing_warned = True
     _log.warning(
-        "no soul-store encryption key configured — new soul_lines/soul_lines_cold "
+        "no soul-store encryption key configured: new soul_lines/soul_lines_cold "
         "rows are writing as LEGACY PLAINTEXT until this is fixed: %s", exc)
 
 
@@ -464,7 +464,7 @@ def _confession_line(seek_entry: dict[str, Any], withheld: int) -> bytes:
     `rematerialize_to_disk`'s own docstring."""
     now = datetime.now(UTC).isoformat().replace("+00:00", "Z")
     text = (f"[osiris] this session was resumed as of an earlier point in its own "
-            f"history — {withheld} later entr{'y' if withheld == 1 else 'ies'} exist in "
+            f"history: {withheld} later entr{'y' if withheld == 1 else 'ies'} exist in "
             f"the stored record but were withheld from this transcript. Ask osiris to "
             f"rematerialize the full session if you need them.")
     entry = {
@@ -512,25 +512,25 @@ def verify_jsonl_chain_boundary(file_a: str, file_b: str) -> str | None:
     a = _chain_linked_entries(_split_lines(_read_source(file_a)))
     b = _chain_linked_entries(_split_lines(_read_source(file_b)))
     if not a:
-        return f"{file_a} has no uuid-bearing entries — nothing to verify"
+        return f"{file_a} has no uuid-bearing entries: nothing to verify"
     if not b:
-        return f"{file_b} has no uuid-bearing entries — nothing to verify"
+        return f"{file_b} has no uuid-bearing entries: nothing to verify"
     uuids_a = {u for _, u, _ in a}
     uuids_b = {u for _, u, _ in b}
     overlap = uuids_a & uuids_b
     if overlap:
-        return (f"uuid overlap between {file_a} and {file_b}: {sorted(overlap)[:5]!r} — "
+        return (f"uuid overlap between {file_a} and {file_b}: {sorted(overlap)[:5]!r}, "
                 f"not two distinct halves of one conversation")
     last_a_uuid = a[-1][1]
     first_b_uuid, first_b_parent = b[0][1], b[0][2]
     if first_b_parent != last_a_uuid:
-        return (f"chain broken at the join — {file_b}'s first entry ({first_b_uuid}) has "
+        return (f"chain broken at the join: {file_b}'s first entry ({first_b_uuid}) has "
                 f"parentUuid={first_b_parent!r}, expected {file_a}'s last entry "
                 f"({last_a_uuid!r})")
     seen: set[str] = set(uuids_a)
     for i, (_, u, parent) in enumerate(b):
         if i > 0 and parent is not None and parent not in seen:
-            return (f"orphan entry {u} in {file_b} — its parentUuid {parent!r} matches "
+            return (f"orphan entry {u} in {file_b}: its parentUuid {parent!r} matches "
                     f"nothing in {file_a} or earlier in {file_b}")
         seen.add(u)
     return None
@@ -773,7 +773,7 @@ class SoulStore:
         already uses, never a second hash-chain implementation.
 
         NEVER SILENT: returns `{"reingested": True, "lines": N}`, or `{"reingested":
-        False, "reason": "never soul-stored — nothing to reconcile"}` when this
+        False, "reason": "never soul-stored: nothing to reconcile"}` when this
         anchor_sid was never ingested in the first place (a cwd heal on a session this
         store has no opinion about is not this function's concern)."""
         harness = harness or self._detect_harness(source_path)
@@ -782,7 +782,7 @@ class SoulStore:
             harness, anchor_sid)
         if not existing:
             return {"reingested": False,
-                    "reason": "never soul-stored — nothing to reconcile"}
+                    "reason": "never soul-stored: nothing to reconcile"}
         async with self.pool.acquire() as conn:
             async with conn.transaction():
                 await conn.execute(
@@ -1031,7 +1031,7 @@ class SoulStore:
             for a, b in zip(source_paths, source_paths[1:], strict=False):
                 reason = verify_jsonl_chain_boundary(a, b)
                 if reason is not None:
-                    raise ValueError(f"splice_sources refused — {reason}")
+                    raise ValueError(f"splice_sources refused: {reason}")
         harness = harness or self._detect_harness(source_paths[0])
         idx, prev_hash = await self._progress(anchor_sid, harness=harness)
         all_rows: list[tuple[str, str, int, bytes, str, str | None]] = []
@@ -1231,7 +1231,7 @@ class SoulStore:
                     content = gzip.decompress(fernet.decrypt(cold_blob))
                 except InvalidToken:
                     raise _ChainBroken({
-                        "error": "cold tier decryption failed — no configured key opens "
+                        "error": "cold tier decryption failed: no configured key opens "
                                  "this blob (wrong or rotated-out key)",
                         "verified_through": -1}) from None
             else:
@@ -1244,7 +1244,7 @@ class SoulStore:
                     # _ChainBroken every other corruption already gets, never an
                     # unhandled gzip traceback.
                     raise _ChainBroken({
-                        "error": "cold tier chain broken — the stored blob is neither a "
+                        "error": "cold tier chain broken: the stored blob is neither a "
                                  "valid Fernet token nor valid gzip (corrupted)",
                         "verified_through": -1}) from None
             lines_cold = _split_cold_content(content)
@@ -1253,7 +1253,7 @@ class SoulStore:
             _, _, final_hash = _hash_rows(harness, anchor_sid, lines_cold, 0, None)
             if final_hash != cold["last_hash"]:
                 raise _ChainBroken({
-                    "error": "cold tier chain broken — the recomputed hash does not "
+                    "error": "cold tier chain broken: the recomputed hash does not "
                              "match the hash recorded at fold time (corrupted or "
                              "tampered)", "verified_through": -1})
             for line in lines_cold:
@@ -1272,12 +1272,12 @@ class SoulStore:
             for row in rows:
                 if row["line_idx"] != i:
                     raise _ChainBroken({
-                        "error": f"chain broken — a GAP at line_idx {i} (expected "
+                        "error": f"chain broken: a GAP at line_idx {i} (expected "
                                  f"{i}, found {row['line_idx']})",
                         "verified_through": i - 1})
                 if row["prev_hash"] != expected_prev:
                     raise _ChainBroken({
-                        "error": f"chain broken at line {i} — prev_hash does not "
+                        "error": f"chain broken at line {i}: prev_hash does not "
                                  "match the prior line's own hash",
                         "verified_through": i - 1})
                 raw = bytes(row["raw_line"])
@@ -1286,14 +1286,14 @@ class SoulStore:
                         plaintext = fernet.decrypt(raw)
                     except InvalidToken:
                         raise _ChainBroken({
-                            "error": f"decryption failed at line {i} — no configured key "
+                            "error": f"decryption failed at line {i}: no configured key "
                                      "opens this row (wrong or rotated-out key)",
                             "verified_through": i - 1}) from None
                 else:
                     plaintext = raw  # legacy plaintext, pre-migration
                 if _chain_hash(row["prev_hash"], plaintext) != row["line_hash"]:
                     raise _ChainBroken({
-                        "error": f"chain broken at line {i} — stored hash does not "
+                        "error": f"chain broken at line {i}: stored hash does not "
                                  "match its own content (tampered or corrupted)",
                         "verified_through": i - 1})
                 expected_prev = row["line_hash"]
@@ -1312,7 +1312,7 @@ class SoulStore:
         "nothing usable" answer "not ingested" already meant), matching every one of
         those three callers' own contract; a cold row is never empty by construction
         (`fold_to_cold_tier` refuses an empty session), so this never returns `[]`
-        either, same as the hot path already promised."""
+        either, same as the hot-tier read already promised."""
         lines: list[bytes] = []
         try:
             async for line in self._iter_verified_lines(harness, anchor_sid):
@@ -1333,7 +1333,7 @@ class SoulStore:
         root: Path | None = None, limit_per_adapter: int = 0,
     ) -> dict[str, int]:
         """The periodic sweep: eat every session file on disk into the store, lines
-        newly ingested (task #51 piece 1). Reuses each HarnessAdapter's own
+        newly ingested (piece 1). Reuses each HarnessAdapter's own
         `enumerate()` walk, the SAME file discovery transcript_store.py's sibling
         backfill already trusts; no second file-walker.
 
@@ -1349,8 +1349,8 @@ class SoulStore:
         `root` to contain the blast radius. Pass `adapters=` explicitly to widen this once
         a piece 2/3 verbatim strategy for DSH/Crush actually exists.
 
-        INCREMENTAL BY A STAT-ONLY SPEND GATE, same law as the sibling store (task #19,
-        the one-switch-one-cost rule): a session whose source mtime is no newer
+        INCREMENTAL BY A STAT-ONLY SPEND GATE, same law as the sibling store (the
+        one-switch-one-cost rule): a session whose source mtime is no newer
         than this store's own `last_ingested_at` costs one stat plus one indexed row lookup
         and is never opened; a quiet fleet's steady-state sweep does no file IO beyond
         that. `ingest_path` itself is separately idempotent/resumable (last_line_idx/
@@ -1434,7 +1434,7 @@ class SoulStore:
             except (OSError, EOFError):
                 return False  # neither a Fernet token nor valid gzip, corrupted
             if not lines:
-                return True  # vacuous, same as the hot path's zero-rows case
+                return True  # vacuous, same as the hot-tier read's zero-rows case
             _, _, final_hash = _hash_rows(harness, anchor_sid, lines, 0, None)
             return bool(final_hash == cold["last_hash"])
         expected_prev: str | None = None
@@ -1500,7 +1500,7 @@ class SoulStore:
     async def mining_view(
         self, anchor_sid: str, harness: str = _HARNESS,
     ) -> list[dict[str, Any]] | None:
-        """THE MINING VIEW (task #51 piece 3): soul_lines projected into
+        """THE MINING VIEW (piece 3): soul_lines projected into
         a mineable per-turn shape, {session, turn_index, role, text, tool_calls}, so a
         miner reads the STORE, never re-parsing raw JSONL by hand. None when nothing has
         been ingested for this session.
@@ -1610,7 +1610,7 @@ class SoulStore:
                 _discard_tmp(f, tmp)  # type: ignore[arg-type]
             return exc.receipt
         if n_lines == 0:
-            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+            return {"error": f"no soul_lines ingested for {anchor_sid!r}: nothing to "
                              "materialize"}
         _finalize_tmp(f, tmp, target)  # type: ignore[arg-type]
         return {"written": str(target), "lines": n_lines, "sha256": hasher.hexdigest()}
@@ -1658,14 +1658,14 @@ class SoulStore:
         `confess` (default True, no effect when `upto` is None or already the true
         latest): a seek that excludes real, later content is honest only if it SAYS so,
         the same "mark, never pick a winner" grammar applied here as "never let a
-        resumed mind believe it is whole when it was seeked." Appends ONE synthetic
+        resumed session believe it is whole when it was seeked." Appends ONE synthetic
         `type":"user"` entry (`isMeta: true`, the same marker real hook-injected content
         already uses, so osiris's own mining/rendering skips it as it already skips
         other isMeta lines) naming the seek point and how many later entries were
         withheld, never silent, never a fabricated compaction (osiris does not invent
         what the model itself never summarized). VERIFIED against a live Claude Code
         resume, on an authorized probe run against disposable content: the harness
-        accepts this exact confession shape without error, and a resumed mind reads it
+        accepts this exact confession shape without error, and a resumed session reads it
         honestly rather than believing itself whole. Pass confess=False for a caller
         that wants the bare prefix with no injected line. `harness`: defaults to
         'claude-code' for backward compatibility, see `verify_chain`'s own note."""
@@ -1673,19 +1673,19 @@ class SoulStore:
             "SELECT source_path, last_ingested_at FROM soul_sessions "
             "WHERE harness=$1 AND anchor_sid=$2", harness, anchor_sid)
         if row is None:
-            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+            return {"error": f"no soul_lines ingested for {anchor_sid!r}: nothing to "
                              "materialize"}
         target = Path(dest) if dest is not None else Path(row["source_path"])
         if not force:
             existing_mtime = _path_mtime(target)
             if existing_mtime is not None and existing_mtime > row["last_ingested_at"]:
                 return {
-                    "error": "refused — a LIVE transcript exists at the target",
+                    "error": "refused: a LIVE transcript exists at the target",
                     "target": str(target),
                     "target_mtime": existing_mtime.isoformat(),
                     "last_ingested_at": row["last_ingested_at"].isoformat(),
                     "note": "the file was modified more recently than the store's last "
-                            "ingest — writing over it would clobber content the store "
+                            "ingest: writing over it would clobber content the store "
                             "never saw. Pass force=True to override.",
                 }
             if (upto is None and existing_mtime is not None
@@ -1702,7 +1702,7 @@ class SoulStore:
                 # the partial. A named success, never an error: `unchanged` tells the
                 # caller the record is at `target` right now.
                 return {"written": str(target), "unchanged": True,
-                        "note": "target is this session's own last-ingested source — "
+                        "note": "target is this session's own last-ingested source: "
                                 "the store holds nothing newer to emit"}
         if upto is None:
             # THE FAST PATH, unconditionally: every real resume call reaches here with
@@ -1717,13 +1717,13 @@ class SoulStore:
         if broken is not None:
             return broken
         if lines is None:
-            return {"error": f"no soul_lines ingested for {anchor_sid!r} — nothing to "
+            return {"error": f"no soul_lines ingested for {anchor_sid!r}: nothing to "
                              "materialize"}
         addressable = _addressable_entries(lines)
         match = next(((i, u, p) for i, u, p in addressable if u == upto), None)
         if match is None:
             return {"error": f"upto={upto!r} matches no user/assistant entry in "
-                             f"{anchor_sid!r}'s stored chain — refusing to guess"}
+                             f"{anchor_sid!r}'s stored chain, refusing to guess"}
         match_idx = match[0]
         withheld = len(lines) - (match_idx + 1)
         lines = lines[: match_idx + 1]
@@ -1777,7 +1777,7 @@ class SoulStore:
             fernet = get_soul_fernet()
         except SoulKeyMissing as exc:
             return {"anchor_sid": anchor_sid, "folded": False,
-                    "error": f"no soul-store encryption key configured — refusing to "
+                    "error": f"no soul-store encryption key configured: refusing to "
                              f"fold without one (run `osiris soul-key init`): {exc}"}
         expected_prev: str | None = None
         i = 0
@@ -1794,20 +1794,20 @@ class SoulStore:
             for row in rows:
                 if row["line_idx"] != i or row["prev_hash"] != expected_prev:
                     return {"anchor_sid": anchor_sid, "folded": False,
-                            "error": f"chain broken at line {i} — refusing to fold "
+                            "error": f"chain broken at line {i}: refusing to fold "
                                      "content that cannot be verified",
                             "verified_through": i - 1}
                 try:
                     raw = fernet.decrypt(bytes(row["raw_line"]))
                 except InvalidToken:
                     return {"anchor_sid": anchor_sid, "folded": False,
-                            "error": f"decryption failed at line {i} — no configured "
-                                     "key opens this row (wrong or rotated-out key) — "
+                            "error": f"decryption failed at line {i}: no configured "
+                                     "key opens this row (wrong or rotated-out key), "
                                      "refusing to fold content that cannot be verified",
                             "verified_through": i - 1}
                 if _chain_hash(row["prev_hash"], raw) != row["line_hash"]:
                     return {"anchor_sid": anchor_sid, "folded": False,
-                            "error": f"chain broken at line {i} — refusing to fold "
+                            "error": f"chain broken at line {i}: refusing to fold "
                                      "content that cannot be verified",
                             "verified_through": i - 1}
                 parts.append(raw + b"\n")
@@ -1977,7 +1977,7 @@ class SoulStore:
                         continue
                     failures.append({
                         "anchor_sid": anchor_sid,
-                        "error": f"byte mismatch — soul_lines reconstructs to "
+                        "error": f"byte mismatch: soul_lines reconstructs to "
                                  f"{result['sha256'][:12]}…, the file on disk hashes to "
                                  f"{src_hash[:12]}…",
                     })
@@ -2049,7 +2049,7 @@ class SoulStore:
             if live_lines != stored:
                 failures.append({
                     "anchor_sid": anchor_sid,
-                    "error": f"crush live mismatch — {len(stored)} line(s) stored, "
+                    "error": f"crush live mismatch: {len(stored)} line(s) stored, "
                              f"{len(live_lines)} live, content diverges",
                 })
         return RoundTripReport(failures=failures, skipped_live=0)
@@ -2095,7 +2095,7 @@ class SoulStore:
             if live_lines != stored:
                 failures.append({
                     "anchor_sid": anchor_sid,
-                    "error": f"dsh live mismatch — {len(stored)} line(s) stored, "
+                    "error": f"dsh live mismatch: {len(stored)} line(s) stored, "
                              f"{len(live_lines)} live, content diverges",
                 })
         return RoundTripReport(failures=failures, skipped_live=0)
@@ -2128,7 +2128,7 @@ async def encrypt_existing_soul_lines(
     condition.
 
     `fernet=` (`osiris soul-key status --path`) overrides the CURRENT
-    process's own `get_soul_fernet()` lookup: the seam `cmd_soul_key`'s status
+    process's own `get_soul_fernet()` lookup: `cmd_soul_key`'s status
     action needs to census against an explicit, non-default key path rather than
     whatever `OSIRIS_SOUL_KEY_FILE`/the installed unit resolves to; every other
     caller leaves it None and gets the ordinary live-primary behavior, unchanged.

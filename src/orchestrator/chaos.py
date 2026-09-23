@@ -7,8 +7,8 @@ failure, not just in a unit test's own fakes.
 
 FIVE INVARIANTS, each independently checkable, each NAMED in the report whether it holds
 or not (never a bare pass/fail with no evidence):
-  1. NO STRANGER MINTED OVER A LISTED BODY: every seat that had a LIVE, harness-confirmed
-     body (`registry_census`'s own `matched` set) immediately before the kill still holds
+  1. NO NEW IDENTITY MINTED OVER A LISTED PROCESS: every seat that had a LIVE, harness-confirmed
+     process (`registry_census`'s own `matched` set) immediately before the kill still holds
      that EXACT agent identity afterward (`seats.held_seat`/`seat_receipt`). The
      launch/dispatch gates must have refused any fork attempt that raced the crash window,
      not merely in their own mocked tests.
@@ -19,9 +19,9 @@ or not (never a bare pass/fail with no evidence):
      (see `_advisory_lock_count`'s own docstring for the one honest caveat this specific
      check carries, and `ADVISORY_LOCK_NOISE_TOLERANCE`'s own docstring for the measured
      cross-worker sampling race the margin exists to absorb).
-  3. ROWLESS BODIES NEVER GROW (registry_census's own `rowless_count`): the storm fires
-     while a body's own `agent_mounts` row may be mid-suspend; if the self-restore path
-     (`_reattach`) is doing its job, a body that WAS matched before the kill is matched
+  3. ROWLESS PROCESSES NEVER GROW (registry_census's own `rowless_count`): the storm fires
+     while a process's own `agent_mounts` row may be mid-suspend; if the self-restore path
+     (`_reattach`) is doing its job, a process that WAS matched before the kill is matched
      again after, never left permanently rowless.
   4. /automount RECOVERS CLEAN, NEVER FLAPS: polled concurrently with the kill+storm+
      restart, not just once after recovery. SPLIT: failures BEFORE the first confirmed
@@ -38,7 +38,7 @@ or not (never a bare pass/fail with no evidence):
 
 EVERY SIDE EFFECT IS INJECTABLE (`kill`, `restart`, `fire_storm`, `automount_probe`,
 `agents_json`/`read_exe`/`read_cwd`), the same discipline as `cmd_deploy`'s own
-`RestartServices`/`WaitForHealth` seams (src/cli.py): a test exercising this module's own
+`RestartServices`/`WaitForHealth` hooks (src/cli.py): a test exercising this module's own
 control flow (what it checks, in what order, how a partial failure is reported) has no
 business paying for, or risking, a real SIGKILL against a live daemon. The REAL defaults
 (`_real_kill_units`, `_real_fire_storm`) are the only place this module ever actually kills
@@ -105,7 +105,7 @@ async def _real_kill_units(units: list[str]) -> tuple[int, str]:
     """The one place this module ever actually SIGKILLs a service: `systemctl --user kill
     -s SIGKILL`, deliberately harsher than `cmd_deploy`'s own graceful `restart` (a clean
     SIGTERM stop+start never exercises the crash-recovery paths this whole module exists
-    to test, since a body that shuts down cleanly never leaves a dangling advisory lock or
+    to test, since a process that shuts down cleanly never leaves a dangling advisory lock or
     a suspended-not-restored mount row in the first place)."""
     proc = await asyncio.create_subprocess_exec(
         "systemctl", "--user", "kill", "-s", "SIGKILL", *units,
@@ -197,13 +197,13 @@ async def _stable_advisory_lock_count(
 async def _baseline_seat_map(
     pool: asyncpg.Pool, baseline_matched: list[dict[str, Any]],
 ) -> dict[str, str]:
-    """`{agent_id: seat_id}` for every body `registry_census` confirmed LIVE (harness +
+    """`{agent_id: seat_id}` for every process `registry_census` confirmed LIVE (harness +
     /proc both agree) immediately BEFORE the kill: resolved at baseline time, deliberately,
-    never re-derived afterward. Once a stranger has actually taken the seat, the ORIGINAL
-    agent's own `held_seat` reverses to None (its `holds` link is exactly what
+    never re-derived afterward. Once a different identity has actually taken the seat, the
+    ORIGINAL agent's own `held_seat` reverses to None (its `holds` link is exactly what
     `bind_holder` invalidates on a takeover), so asking `held_seat` again post-hoc would
-    silently SKIP the very specimen this check exists to catch. A body with no seat at all
-    is simply absent from the map, never a finding."""
+    silently SKIP the very specimen this check exists to catch. A process with no seat at
+    all is simply absent from the map, never a finding."""
     from src.orchestrator.seats import held_seat
 
     out: dict[str, str] = {}
@@ -221,7 +221,7 @@ async def _baseline_seat_map(
 async def _stranger_mints(pool: asyncpg.Pool, baseline_seats: dict[str, str]) -> list[str]:
     """For every `{agent_id: seat_id}` resolved at BASELINE time (`_baseline_seat_map`,
     before the kill), checks the seat's CURRENT holder (`seat_receipt`) still names that
-    same agent_id. A live body's seat quietly changing hands during the chaos window, the
+    same agent_id. A live process's seat quietly changing hands during the chaos window, the
     shape of a real prior incident, is named here explicitly, never inferred from a bare
     object count. This checks IDENTITY CONTINUITY against the baseline snapshot, never
     re-resolves the ORIGINAL agent's own current seat (see `_baseline_seat_map`'s own
@@ -234,9 +234,9 @@ async def _stranger_mints(pool: asyncpg.Pool, baseline_seats: dict[str, str]) ->
         current_holder = (receipt or {}).get("holder")
         if current_holder is not None and current_holder != agent_id:
             findings.append(
-                f"seat {seat_id} was held by {agent_id} (a live, harness-confirmed body "
-                f"before the chaos window) — now held by {current_holder}: a stranger was "
-                "minted over a listed body")
+                f"seat {seat_id} was held by {agent_id} (a live, harness-confirmed process "
+                f"before the chaos window), now held by {current_holder}: a new identity was "
+                "minted over a listed process")
     return findings
 
 
@@ -337,17 +337,17 @@ async def chaos_replay(
     if bad_post_recovery:
         findings.append(
             f"{len(bad_post_recovery)} /automount probe(s) failed AFTER recovery was first "
-            f"confirmed — flapping, a real regression (first: {bad_post_recovery[0][2]})")
+            f"confirmed: flapping, a real regression (first: {bad_post_recovery[0][2]})")
     if post_locks > baseline_locks + ADVISORY_LOCK_NOISE_TOLERANCE:
         findings.append(
             f"{post_locks} advisory lock(s) held after recovery, vs {baseline_locks} "
-            f"baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE}) — a real "
+            f"baseline before the kill (tolerance {ADVISORY_LOCK_NOISE_TOLERANCE}): a real "
             "leak (this check accounts for ordinary concurrent-fleet noise by comparing to "
             "its own baseline plus a small margin, not to zero or to an exact baseline match)")
     if post_census.get("rowless_count", 0) > baseline_census.get("rowless_count", 0):
         findings.append(
-            f"rowless body count grew from {baseline_census.get('rowless_count', 0)} to "
-            f"{post_census.get('rowless_count', 0)} — a body lost its agent_mounts row "
+            f"rowless process count grew from {baseline_census.get('rowless_count', 0)} to "
+            f"{post_census.get('rowless_count', 0)}: a process lost its agent_mounts row "
             "across the chaos window and never self-restored")
     findings.extend(await _stranger_mints(pool, baseline_seats))
 

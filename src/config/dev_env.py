@@ -51,7 +51,7 @@ def refuse_silent_live_db(caller: str) -> str | None:
     to run against the real graph on every ordinary invocation with nobody manually
     confirming; guarding them would break routine operation across the fleet. Reserve
     this for exploratory or scratch-run tools, never a deliberate, already-authorized
-    process's own door."""
+    process's own entry point."""
     if os.environ.get("DATABASE_URL") or os.environ.get("OSIRIS_ALLOW_LIVE") == "1":
         return None
     return (

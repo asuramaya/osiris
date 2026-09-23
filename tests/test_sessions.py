@@ -179,7 +179,7 @@ async def test_adversary_pass_from_store_errors_when_nothing_ingested(
     actions: Actions,
 ) -> None:
     report = await adversary_pass_from_store(actions, "neverseen0", FakeLLM({}))
-    assert report == {"error": "no soul_lines ingested for 'neverseen0' — nothing to mine"}
+    assert report == {"error": "no soul_lines ingested for 'neverseen0': nothing to mine"}
 
 
 async def test_adversary_pass_from_store_skips_a_wake_spawn(
@@ -578,7 +578,7 @@ async def test_obligation_lands_as_open_thread_and_surfaces_in_briefing(
 
     await seed_default_compositions(actions.pool)
     res = await run_composition(actions.pool, "briefing")
-    wall = res["items"]["The wall — what's genuinely unresolved"]
+    wall = res["items"]["The wall: what's genuinely unresolved"]
     top = [r["summary"] for r in wall["top_of_wall"]]
 
     assert any("composer branch" in s for s in top), "a DECLARED duty must never hide"
@@ -1007,7 +1007,7 @@ def test_dormant_history_confession_not_resumable_when_the_tail_is_empty(
     assert info["compactions"] == 1
     assert info["tail_bytes"] == len(_COMPACT_LINE)
     assert "resume_command" not in info
-    assert "seam itself" in info["not_resumable_reason"]
+    assert "compaction boundary itself" in info["not_resumable_reason"]
 
 
 # --- resume_verdict's CEILING is now OCCUPANCY, not raw tail bytes (2026-09-08: a real
@@ -1090,7 +1090,7 @@ def test_resume_verdict_min_tail_floor_still_fires_independent_of_occupancy(
 
     verdict = resume_verdict(t, ceiling_bytes=64_000_000, min_tail_bytes=10_000_000)
     assert verdict is not None
-    assert "seam itself" in verdict
+    assert "compaction boundary itself" in verdict
 
 
 def test_resume_verdict_corruption_bound_fires_regardless_of_occupancy(

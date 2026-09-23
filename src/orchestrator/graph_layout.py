@@ -268,8 +268,8 @@ def _sunflower_point(rank: int, spacing: float) -> tuple[float, float]:
 def project_center(rank: int) -> tuple[float, float]:
     """A sunflower point at a given rank -- used ONLY for the `unfiled` sentinel's own
     fixed center (rank 0, i.e. the origin) now that real projects are placed by
-    `_relax_projects`'s weighted force layout instead (THE READING LAYER, ruling
-    c5953bb1): unfiled has no real SoftwareProject row to store a position on, and
+    `_relax_projects`'s weighted force layout instead (THE READING LAYER): unfiled
+    has no real SoftwareProject row to store a position on, and
     isn't a node in the contracted project graph a force layout would place it against
     anyway. Kept as a plain sunflower point (not just a hardcoded origin) so a future
     caller with a real reason to rank unfiled-like sentinels can still do so."""

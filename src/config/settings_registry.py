@@ -3,7 +3,7 @@ pattern ontology/schema.py uses for graph entities (a tuple of dataclass instanc
 a database table) applied to configuration instead.
 
 Why declarations live in Python, not the `settings` table: that table holds values only,
-a row need not exist for a knob to have a default. Every menu, CLI, and write door
+a row need not exist for a knob to have a default. Every menu, CLI, and write path
 renders and validates against this tuple, never a hand-built form or bespoke per-key
 code (an older module's own ad hoc allow-list and validator are exactly what a generic
 registry replaces, one row's worth of declaration instead of a parallel implementation
@@ -98,11 +98,11 @@ _MANAGER_OVERLAY: tuple[SettingSpec, ...] = (
 )
 
 # The secrets-rotate feature's own backing file: the same shared EnvironmentFile= every
-# deployed unit already sources. The soul-key design independently reaches for this same
+# deployed unit already sources. The soul_key design independently reaches for this same
 # file rather than a dedicated per-secret file, "no new deploy step" being the shared
 # reasoning. Falls back to a dev-box `.env` at the repo root (this worktree has no
 # system-wide env file at all, confirmed absent, the same gap the CLI's own bootstrap
-# door names) so a rotate is exercisable here without writing into a system directory a
+# path names) so a rotate is exercisable here without writing into a system directory a
 # dev box has no business touching.
 SECRET_BACKING_FILE: str = (
     "/etc/osiris/osiris.env" if Path("/etc/osiris/osiris.env").exists()
@@ -116,7 +116,7 @@ SECRET_BACKING_FILE: str = (
 # re-exported by a running process) is the one genuinely secret-shaped value already in
 # this codebase with no registry entry at all -- `effect='restart:osiris-worker'` because
 # that snapshot only ever refreshes on the worker's own next boot, the exact "daemon that
-# must restart" the write receipt names. `authority='operator'`: rotating a real external
+# must restart" the write confirmation names. `authority='operator'`: rotating a real external
 # credential is not citable via a standing ruling the way a config knob is.
 _SECRETS: tuple[SettingSpec, ...] = (
     # default="" (not None) matches Settings.etherscan_api_key's own field default;
@@ -260,7 +260,7 @@ def _validate_offload_targets(value: Any) -> str | None:
 
 
 # The backup config panel's own fields, folded in from an earlier backup-settings
-# module's own singleton table, same authority shape that table's write door always had
+# module's own singleton table, same authority shape that table's write path always had
 # (`operator_or_ruling`, `write_name='backup_settings'`), generalized rather than
 # reinvented. All three `effect='next_deploy'`: none of them take hold until the unit
 # renderer regenerates the shipped units on the next deploy. `path`/`schedule` both
@@ -310,16 +310,16 @@ _SOUL_KEY_SETTINGS: tuple[SettingSpec, ...] = (
                consequence="low", requires_because=False),
 )
 
-# The wake/trigger ladder: every env-only settings.py field the mail-wake machinery
-# reads, all fresh per call (the same test seam the trigger's own tick functions already
-# use), never cached at process boot, so `effect='next_tick'` is honest here in the same
-# sense it is for the miner budgets: a write is live on the very next trigger-mail cron
-# pass. One knob deliberately not included here: `osiris_lease_refuse` lives on a
-# different process entirely (the manager daemon's own lease gate), registered
-# separately as `_MANAGER_OVERLAY` above instead. One pre-existing inconsistency in the
-# wake tool's own pass-through path (it passes the raw incoming `settings` parameter, not
-# its resolved overlay) is harmless today, since both resolve to the same bare read, but
-# is flagged here, not touched, by this pass.
+# The wake/trigger settings group: every env-only settings.py field the mail-wake
+# machinery reads, all fresh per call (the same test hook the trigger's own tick
+# functions already use), never cached at process boot, so `effect='next_tick'` is
+# honest here in the same sense it is for the miner budgets: a write is live on the very
+# next trigger-mail cron pass. One knob deliberately not included here:
+# `osiris_lease_refuse` lives on a different process entirely (the manager daemon's own
+# lease gate), registered separately as `_MANAGER_OVERLAY` above instead. One
+# pre-existing inconsistency in the wake tool's own pass-through path (it passes the raw
+# incoming `settings` parameter, not its resolved overlay) is harmless today, since both
+# resolve to the same bare read, but is flagged here, not touched, by this pass.
 _WAKE_LADDER: tuple[SettingSpec, ...] = (
     SettingSpec("wake.trigger.enabled", "bool", False, effect="next_tick",
                consequence="high", requires_because=True,
@@ -387,7 +387,7 @@ _WAKE_LADDER: tuple[SettingSpec, ...] = (
 )
 
 # Diagnostics: `osiris_memory_diag_enabled` gates the /diag/memory route; unlike the wake
-# ladder above it has no "tick" at all (an HTTP route, not a cron), but is read fresh on
+# settings group above it has no "tick" at all (an HTTP route, not a cron), but is read fresh on
 # every call once wired to the overlay, so 'immediate' is the honest label, not
 # 'next_tick'. `osiris_worker_boot_memtrace_enabled` is the opposite shape, confirmed by
 # reading its one call site: read exactly once at process boot and never again, the
@@ -524,7 +524,7 @@ _POOL_SIZES: tuple[SettingSpec, ...] = (
 # `settings.osiris_transcripts` defaulted to "" inside the MCP process, silently inert
 # for every transcript-reading path that runs there (the provenance backfill's own
 # index, and the liveness transcript-mtime fallback whenever it's reached through an MCP
-# door). Same shape as `_POOL_SIZES` above (`env_field`-driven, `restart:<unit>`, the
+# call). Same shape as `_POOL_SIZES` above (`env_field`-driven, `restart:<unit>`, the
 # value is read once at process boot, never live-overlaid) rather than a new pattern.
 _INGEST_SETTINGS: tuple[SettingSpec, ...] = (
     SettingSpec("ingest.transcripts_root", "path", "", effect="restart:osiris-mcp",

@@ -6,12 +6,12 @@ authoritative (the adapter records source_ref per turn); the store is a DERIVED
 fast-read layer, one evidence grade lower than direct observation, so high-stakes
 verdicts (the swap banner shown to the operator) can re-probe the source on demand.
 
-MOUNT-TIME EAT (Slice 1, completed by Slice 2: the JSONL-fallback removal, task #29):
+MOUNT-TIME EAT (Slice 1, completed by Slice 2: the JSONL-fallback removal):
 identity_reading() is called from every identity path (mount, _reattach, the automount
 path) before resolve_identity. It tries each adapter in order; the first that
 discovers a session ingests its turns and returns the model reading. This is the ONLY
 model-observation lane: resolve_identity no longer carries a JSONL probe of its own;
-non-Claude minds mount RESOLVED and a storeless call resolves no observed model.
+non-Claude models mount RESOLVED and a storeless call resolves no observed model.
 
 MINER-TICK BACKFILL (Slice 3): the miner will call ingest_since() on a schedule to keep
 the store current without a mount. Until then, mount-time is the only ingest trigger.
@@ -40,12 +40,12 @@ async def identity_reading(
     pool: asyncpg.Pool, *, cwd: str | None, job_dir: str | None,
     root: Path | None = None, transcript_path: str | None = None,
 ) -> ModelReading | None:
-    """The identity callers' one door to the store: discover_and_ingest, FAIL-OPEN.
+    """The identity callers' single entry point to the store: discover_and_ingest, FAIL-OPEN.
 
     mount(), _reattach() and the automount path all need the same thing: this
     session's model reading if the store can produce one, and NO EXCEPTION otherwise,
     since a store failure must never block an identity path. Since the JSONL-fallback
-    removal (task #29) this is the ONLY observation lane; None degrades resolve_identity
+    removal this is the ONLY observation lane; None degrades resolve_identity
     honestly to the caller's self-report.
 
     `transcript_path` passes a caller-KNOWN location straight through to
@@ -233,7 +233,7 @@ class TranscriptStore:
         adapter recognizes the path (or none is given), never a second, competing lane.
 
         Returns the model reading for identity resolution, or None when no adapter
-        recognizes the session, since the JSONL-fallback removal (task #29) there is no
+        recognizes the session, since the JSONL-fallback removal there is no
         legacy probe behind this: no reading means no observed model."""
         if transcript_path:
             p = Path(transcript_path)
@@ -264,7 +264,7 @@ class TranscriptStore:
     async def _ingest_locator(
         self, adapter: HarnessAdapter, locator: SessionLocator,
     ) -> ModelReading | None:
-        """The shared body behind BOTH discovery lanes above (explicit-path and search):
+        """The shared logic behind BOTH discovery lanes above (explicit-path and search):
         freshness-gated ingest, then read the reading back from the store. None means
         THIS locator yielded nothing (an empty source with no prior rows), the caller
         tries the next adapter/lane, never a hard failure."""
@@ -308,7 +308,7 @@ class TranscriptStore:
     async def last_usage_of_session(
         self, harness: str, anchor_sid: str,
     ) -> dict[str, int | None] | None:
-        """The most recent assistant turn's token usage, for context_lens's chrome glance.
+        """The most recent assistant turn's token usage, for context_lens's dashboard glance.
 
         Returns the {input, output, cache_read, cache_write} the harness recorded for the
         latest turn, or None when the store has no usage for this session (a harness that
@@ -359,7 +359,7 @@ class TranscriptStore:
     async def overhead_of_session(
         self, harness: str, anchor_sid: str,
     ) -> dict[str, Any] | None:
-        """THE OVERHEAD LENS, per session (task #34): what the harness itself
+        """THE OVERHEAD LENS, per session: what the harness itself
         cost this window, the visible primary vs the hidden channels (subagent
         sidechains, compactions), system-reminder injections, compaction churn, and the
         cache-vs-fresh split that decides the price of all of it.
@@ -393,7 +393,7 @@ class TranscriptStore:
 
     async def overhead_fleet(self, *, top: int = 15) -> dict[str, Any]:
         """THE OVERHEAD LENS, fleet-wide: totals across every eaten session plus the
-        top-N sessions by total tokens, the chrome's /overhead page reads this. Bounded:
+        top-N sessions by total tokens, the dashboard's /overhead page reads this. Bounded:
         the top list is capped, the totals are aggregates (land on counts, walk in)."""
         rows = await self.pool.fetch(
             "WITH ta AS (" + _TURN_AGG_SQL + " GROUP BY harness, anchor_sid) "

@@ -12,7 +12,7 @@ Two deliberate design choices:
     taxonomy already encodes AI uncertainty: a DERIVED node is a SPECULATIVE LEAF in
     the frontier, so an AI guess never spawns crawls until a second, independent
     source corroborates it. The model's confidence is a lead to verify, not a fact.
-  * **The LLM is an injected seam.** `LLMClient` is a Protocol; tests use a fake that
+  * **The LLM is an injected boundary.** `LLMClient` is a Protocol; tests use a fake that
     returns canned JSON (hermetic, no network, no cost). `AnthropicClient` is the live
     impl over httpx (no SDK dep). A document→entities task is flash-tier, so the model
     defaults to Haiku: Opus would be wasteful per-document at cron scale.
@@ -35,7 +35,7 @@ from src.ontology.catalog import is_known_link_type
 from src.ontology.entity_type import classify_entity_type, clean_entity_name
 from src.parsers.base import EvidenceClass
 
-# the inference seams live in providers.py (the GPU-as-key abstraction); re-exported
+# the inference boundaries live in providers.py (the GPU-as-key abstraction); re-exported
 # here for back-compat with callers/tests that import them from extract.
 __all__ = ["LLMClient", "extract_document", "parse_extraction"]
 
@@ -45,7 +45,7 @@ _CONF = 0.4  # confidence_for(DERIVED)
 
 _SYSTEM = (
     "You are an entity-extraction engine for an OSINT graph. Read the document and "
-    "return STRICT JSON only — no prose, no markdown fences. Extract real-world "
+    "return STRICT JSON only, no prose, no markdown fences. Extract real-world "
     "entities (people and organizations) and the relationships stated between them. "
     "Do not invent facts not supported by the text. Schema:\n"
     '{"entities":[{"name":str,"type":"Person"|"Organization",'
@@ -168,7 +168,7 @@ async def extract_document(
     telemetry rather than merging into session-extract's own count."""
     llm = llm or llm_provider()
     if llm is None:
-        raise RuntimeError("no LLM provider — set ANTHROPIC_API_KEY (the extraction seam)")
+        raise RuntimeError("no LLM provider: set ANTHROPIC_API_KEY (the extraction boundary)")
     model = model or get_settings().osiris_extract_model
     usage_out: list[Usage] = []
     raw = await llm.complete(system=_SYSTEM, prompt=text, model=model, usage_out=usage_out)

@@ -1,10 +1,10 @@
-"""THE OFFICE CEREMONY: one act moves a seat into its Osiris-owned office.
+"""ESTABLISHING A SEAT'S OFFICE: one act moves a seat into its Osiris-owned office.
 
 Agents sit at ~/.osiris/seats/<handle>/; code stays in the repos they govern. The sit-place
 is Osiris's, stable forever, so agent state no longer lives inside code repos behind a
 fragile gitignore. Earlier offices were hand-assembled across several separate acts (mkdir,
 .osiris, CLAUDE.md, rebind-extract); rolling this out to every seat needs to be ONE CALL
-with one receipt, or every transition has to be re-derived by hand from a transcript.
+with one result, or every transition has to be re-derived by hand from a transcript.
 
 The primitive composes what already exists rather than re-owning any of it: the standing
 orders are written here (the one genuinely new artifact, a per-seat boot sector), then
@@ -198,7 +198,7 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
         proposed: dict[str, str] = {}
         unknown: list[str] = []
         if len(distinct_handles) > 1:
-            unknown.append(f"seat: conflicting claims from {sorted(distinct_handles)} — "
+            unknown.append(f"seat: conflicting claims from {sorted(distinct_handles)}: "
                            "writing nothing")
         else:
             proposed["seat"] = next(iter(distinct_handles))
@@ -211,15 +211,15 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
             else:
                 proposed["house"] = only_house
         elif len(houses) > 1:
-            unknown.append(f"house: claimants disagree ({sorted(houses)}) — writing nothing")
+            unknown.append(f"house: claimants disagree ({sorted(houses)}); writing nothing")
         else:
             unknown.append("house: derive_house found nothing (unmanaged head with no "
-                           "stamp, or a managed_by cycle) — writing nothing")
+                           "stamp, or a managed_by cycle); writing nothing")
         kind = kind_of.get(path)
         if kind:
             proposed["kind"] = kind
         else:
-            unknown.append("kind: path shape matches neither office, worktree, nor repo — "
+            unknown.append("kind: path shape matches neither office, worktree, nor repo; "
                            "writing nothing")
         changes = {k: v for k, v in proposed.items() if current.get(k) != v}
         if changes or unknown:
@@ -228,9 +228,10 @@ async def plan_pin_migration(pool: asyncpg.Pool) -> dict[str, Any]:
     return {
         "plan": plan, "seats_scanned": len(data["seats"]), "paths_with_changes_or_gaps": len(plan),
         "caveats": [
-            "READ-ONLY: no file is touched by this function. A separate writer verb applies "
+            "READ-ONLY: no file is touched by this function. A separate writer function "
+            "applies "
             "`changes` one path at a time, only after this plan is reviewed.",
-            "kind is derived from PATH SHAPE alone, never the graph — a directory that "
+            "kind is derived from PATH SHAPE alone, never the graph; a directory that "
             "doesn't clearly read as office/worktree/repo gets no kind proposal, not a guess.",
             *data["caveats"],
         ],
@@ -307,7 +308,7 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
     try:
         existing = tomllib.loads(existing_text) if existing_text else {}
     except (tomllib.TOMLDecodeError, ValueError) as exc:
-        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}) — refusing to "
+        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}); refusing to "
                          "append onto a broken file"}
 
     to_add = {k: v for k, v in proposed.items() if k not in existing}
@@ -331,7 +332,7 @@ def write_pin_additions(path: str, proposed: dict[str, str]) -> dict[str, Any]:
 
 
 def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) -> dict[str, Any]:
-    """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY LAW: not a change to that
+    """THE NAMED EXCEPTION TO write_pin_additions' ADDITIVE-ONLY RULE: not a change to that
     function, not a bulk driver, and not interchangeable with it. write_pin_additions
     refuses to overwrite an existing key so that a disagreement between a declared pin and
     reality stays visible as `plan_pin_migration`'s own diagnosed `changes`, never silently
@@ -348,7 +349,7 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
     found_seat/mint_seat already learned that a fabricated placeholder is worse than
     genuine absence, and the pin-read self-heal already tolerates a missing key, but until
     this, nothing on the correction side could ever reach that state for a seat minted
-    before that fix, only for one founded after it. A transition verb moving a seat's
+    before that fix, only for one founded after it. A transition function moving a seat's
     project off a fabricated value onto "no project, genuinely" needs this as a legal
     target, not just the mint-time entry point.
 
@@ -367,17 +368,17 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
     try:
         existing = tomllib.loads(existing_text) if existing_text else {}
     except (tomllib.TOMLDecodeError, ValueError) as exc:
-        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}) — refusing to "
+        return {"error": f"{p} is not valid TOML ({type(exc).__name__}: {exc}); refusing to "
                          "correct a broken file"}
     if key not in existing:
-        return {"error": f"{key!r} is not declared in {p} — correct_pin_value only rewrites "
+        return {"error": f"{key!r} is not declared in {p}; correct_pin_value only rewrites "
                          "an EXISTING key; use write_pin_additions to add a missing one"}
     old_value = existing[key]
     if old_value == value:
         return {"written": False, "old_value": old_value, "path": str(p)}
     if not reason.strip():
         return {"error": "a correction with no reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this safeguard rules against; refusing"}
 
     backup = _pin_backup_path(p)
     backup.parent.mkdir(parents=True, exist_ok=True)
@@ -396,7 +397,7 @@ def correct_pin_value(path: str, key: str, value: str | None, *, reason: str) ->
             break
     if not rewritten:  # defensive: tomllib parsed the key but the line-scan missed it
         return {"error": f"{key!r} parsed by tomllib but its line could not be located in "
-                         f"{p} — refusing rather than guessing at the file's shape"}
+                         f"{p}; refusing rather than guessing at the file's shape"}
     p.write_text("".join(lines))
     return {"written": True, "old_value": old_value, "new_value": value,
             "reason": reason, "path": str(p), "backup": str(backup)}
@@ -432,7 +433,7 @@ def _correct_or_add_pin_value(
     `write_pin_additions` never carried those keys (it has no "old" value, only
     `added`/`skipped`/`discarded`), so returning it bare would trade one caller's
     KeyError for another's. `old_value=None` (there was none, that is the finding)
-    and `new_value=value`, layered onto write_pin_additions' own receipt unchanged."""
+    and `new_value=value`, layered onto write_pin_additions' own result unchanged."""
     result = correct_pin_value(path, key, value, reason=reason)
     if (result.get("error", "").endswith("use write_pin_additions to add a missing one")
             and value is not None):
@@ -459,7 +460,7 @@ async def correct_own_pin_value(
     Refuses on a caller holding no seat: a pin correction is a seat's own act, never
     performed on another's behalf and never inferred. `reason` stays required and non-empty;
     enforced by `correct_pin_value` itself, unchanged here. `office_root` exists only as a
-    test seam, same convention as `establish_office`. `value=None` unsets `key` (deletes the
+    test hook, same convention as `establish_office`. `value=None` unsets `key` (deletes the
     line) across every copy this reaches, see `correct_pin_value`'s own docstring.
 
     THE SECOND COPY: `rebind_seat` writes its own courtesy `.osiris` at the seat's anchor
@@ -482,7 +483,7 @@ async def correct_own_pin_value(
     a location this function still never reached even after the anchor extension above,
     live-verified still stale at the moment this was written. Same pattern, a third time,
     not a new design: self-scoped (the convention path, never caller-supplied,
-    `workspace_root` is a test seam only, matching `sweep_seat_workspace`'s own), corrected
+    `workspace_root` is a test hook only, matching `sweep_seat_workspace`'s own), corrected
     only when it exists, already declares `key`, and differs from both the office and the
     (possibly already-corrected) anchor path, never a double-write when a seat's anchor
     happens to equal its workspace default. Reported under `workspace`, same shape as
@@ -505,7 +506,7 @@ async def correct_own_pin_value(
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
-        return {"error": f"{agent_id} holds no seat — correcting a pin is a seat's own act, "
+        return {"error": f"{agent_id} holds no seat; correcting a pin is a seat's own act, "
                          "never done on another's behalf"}
     handle = bound["handle"].lower()
     root = office_root or _default_office_root()
@@ -548,7 +549,7 @@ async def correct_pin_value_third_party(
     no third-party entry point on any surface, so an operator or manager could not fix
     another seat's pin at all. Closed the same way the identical gap was closed for
     Seat.house: `resync_seat_house_third_party` is the precedent. Not self-scoped, not
-    headship-gated, `reason` required to actually write (same law `correct_pin_value` and
+    headship-gated, `reason` required to actually write (same requirement `correct_pin_value` and
     `resync_seat_house_third_party` both already enforce), and callers are responsible for
     the authorization this docstring cannot enforce. `seat_id` names any seat by its own
     canonical, never the caller's own held one.
@@ -557,14 +558,14 @@ async def correct_pin_value_third_party(
     pin copies (office, anchor, workspace) correctly and is not actually self-scoped in
     its own code; it is self-scoped only by every existing caller's convention of always
     passing the caller's own `agent_id` (its own CLI command already exploits this
-    identical seam, passing an explicitly-named agent instead). This entry point does the
+    identical convention, passing an explicitly-named agent instead). This entry point does the
     same: resolves `seat_id`'s own holder agent via `seat_occupancy` (the one authority
     for who holds a seat, live or cold, never a caller-supplied agent id) and hands that
     off to `correct_own_pin_value` unchanged for the real write. Refuses when the seat has
     no holder on record: a seat never claimed by any agent has nothing this call could
     correct.
 
-    `dry_run=True` (default, the same law `transition_seat_project` already established
+    `dry_run=True` (default, the same rule `transition_seat_project` already established
     for this exact shape) peeks every applicable copy (`_peek_pin_value`, read-only, the
     same preflight `transition_seat_project` already uses for its own plan) and returns
     a `plan`: which copies actually declare `key` with a value differing from the
@@ -585,7 +586,7 @@ async def correct_pin_value_third_party(
     occ = await seat_occupancy(pool, seat_id)
     holder = occ.get("holder")
     if not holder:
-        return {"error": f"{seat_id!r} has no holder on record — correct_pin_value_"
+        return {"error": f"{seat_id!r} has no holder on record; correct_pin_value_"
                          "third_party resolves the same way correct_own_pin_value does "
                          "(an agent whose held seat this is); a seat never claimed by "
                          "any agent has nothing to correct"}
@@ -594,7 +595,7 @@ async def correct_pin_value_third_party(
         reason = (reason or "").strip()
         if not reason:
             return {"error": "a correction with no reason is exactly the silent "
-                             "overwrite 719ed5b1 rules against — refusing"}
+                             "overwrite this safeguard rules against; refusing"}
         return await correct_own_pin_value(pool, holder, key, value, reason=reason,
                                            office_root=office_root,
                                            workspace_root=workspace_root,
@@ -652,7 +653,7 @@ def revert_pin_write(path: str) -> dict[str, Any]:
     p = Path(path) / ".osiris"
     backup = _pin_backup_path(p)
     if not backup.is_file():
-        return {"error": f"no backup at {backup} — nothing to revert to"}
+        return {"error": f"no backup at {backup}; nothing to revert to"}
     content = backup.read_text()
     if content:
         p.write_text(content)
@@ -679,14 +680,14 @@ async def revert_own_pin_write(
     office first, then the seat's own current `anchor_cwd` copy, then the `~/code/<handle>`
     workspace convention, each when a backup exists there too (silently skipped, never an
     error, when there isn't one to revert: that copy may never have been corrected at all,
-    or may be the same directory as one already reverted). Each copy's own receipt lands
+    or may be the same directory as one already reverted). Each copy's own result lands
     separately (`office`/`anchor`/`workspace`) so a caller can see exactly which copies
     actually moved."""
     from src.orchestrator.seats import held_seat
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
-        return {"error": f"{agent_id} holds no seat — reverting a pin is a seat's own act, "
+        return {"error": f"{agent_id} holds no seat; reverting a pin is a seat's own act, "
                          "never done on another's behalf"}
     handle = bound["handle"].lower()
     root = office_root or _default_office_root()
@@ -738,7 +739,7 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
     any two disagreeing, and the write is refused: `{"state": "unset", "reason": "..."}`
     names exactly which signals fired and which didn't, so unset stays a valid, auditable
     state rather than a silent gap. A caller with no held seat gets the same honest refusal;
-    self-healing is a seat's own act, same law `correct_own_pin_value` already keeps.
+    self-healing is a seat's own act, same rule `correct_own_pin_value` already keeps.
 
     The write itself goes through `write_pin_additions` unchanged (additive-only, backup-
     first, idempotent): this function only ever supplies its own candidate value to that
@@ -754,7 +755,7 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
 
     bound = await held_seat(pool, agent_id)
     if bound is None:
-        return {"state": "unset", "reason": "no seat held — self-healing is a seat's own "
+        return {"state": "unset", "reason": "no seat held: self-healing is a seat's own "
                                             "act; nothing to reconcile against"}
     seat_id = bound["seat_id"]
 
@@ -780,7 +781,7 @@ async def self_heal_project_pin(pool: asyncpg.Pool, agent_id: str, cwd: str) -> 
     if len(votes) != 1 or None in votes:
         return {"state": "unset", "reason": (
             f"governs={governs_vote!r} works_in={works_in_vote!r} "
-            f"anchor_cwd={anchor_vote!r} — not all three agree; leaving unset, valid")}
+            f"anchor_cwd={anchor_vote!r}, not all three agree; leaving unset, valid")}
 
     assert governs_vote is not None  # narrowed by the `None in votes` check above
     candidate = governs_vote  # == works_in_vote == anchor_vote, asserted above
@@ -801,20 +802,20 @@ def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
     who = peer_handle or peer_seat
     return (
         "\n## Peer\n"
-        f"You are peered with **{who}** (`{peer_seat}`) — a symmetric bond (ruling "
-        "d74492ee, spec e6636c7e), not a chain of command. It carries real law:\n"
+        f"You are peered with **{who}** (`{peer_seat}`), a symmetric bond, not a chain "
+        "of command. It carries real obligations:\n"
         "- **Two-tier decisions**: an ordinary act either of you takes ALONE binds the "
-        "pair — tell your peer, don't wait for sign-off. Extraordinary acts (schema "
+        "pair; tell your peer, don't wait for sign-off. Extraordinary acts (schema "
         "changes, external commitments, scope changes, spending) need BOTH your names.\n"
-        "- **Domain split**: a co-owned PROJECT is never a co-owned TASK — every item has "
+        "- **Domain split**: a co-owned PROJECT is never a co-owned TASK; every item has "
         "exactly one accountable peer.\n"
         "- **Mutual hold**: either of you may say HOLD on an irreversible act. Respect it; "
         "resolve within one exchange or escalate to the operator's desk.\n"
         "- **Fiduciary disclosure**: surface in-scope findings and risks to your peer "
-        "proactively — silence is a violation.\n"
+        "proactively; silence is a violation.\n"
         "- **Review cadence**: exchange a structured status and review each other's work "
         "at every settle.\n"
-        "- **The ledger**: keep small reciprocal obligations deliberately OPEN — a zeroed "
+        "- **The ledger**: keep small reciprocal obligations deliberately OPEN; a zeroed "
         "ledger is a dead bond.\n"
         "- **Anti-sycophancy**: never change a position without citing a reason not "
         "already on the table; two round-trips without convergence means "
@@ -832,18 +833,19 @@ def _peer_addendum(peer_seat: str, peer_handle: str | None) -> str:
 _CHARTER_TEMPLATE = """\
 # {handle}'s charter
 
-This file is **{handle}'s own live-state scratchpad** — write here AS YOU GO, not only at
-a seam. It is the OFFLOAD TARGET when context runs high (the stop-hook ritual enforces
+This file is **{handle}'s own live-state scratchpad**: write here AS YOU GO, not only at
+a natural breakpoint. It is the OFFLOAD TARGET when context runs high (the stop-hook ritual
+enforces
 writing here before a quiet stop is allowed): a session that dies mid-turn leaves its heir
 this file, never a blank page. Durable typed facts still belong in the graph
-(`record_decision` / `open_thread` / `resolve_thread`) — this file is for the WHY and the
+(`record_decision` / `open_thread` / `resolve_thread`): this file is for the WHY and the
 IN-PROGRESS state a typed object can't hold on its own.
 
 ## Current work
-(what you're doing right now — the thread that would be lost if this session ended mid-turn)
+(what you're doing right now: the thread that would be lost if this session ended mid-turn)
 
 ## Key ids
-(threads, decisions, commits worth a successor's first glance — short ids, one line each)
+(threads, decisions, commits worth a successor's first glance: short ids, one line each)
 
 ## Working notes
 (anything else worth carrying forward that doesn't fit the graph's typed objects)
@@ -851,11 +853,11 @@ IN-PROGRESS state a typed object can't hold on its own.
 
 # THE ONE UNDECLARED SENTINEL: the graph declaration (a Seat's own `governs` edges,
 # charter_of's own read) never had a single word for "nothing there yet"; mint_seat's
-# receipt said nothing at all about it while this ceremony, one call over, already spoke
+# result said nothing at all about it while this setup, one call over, already spoke
 # plainly. Centralized so every caller that reports charter state says the same thing,
 # not a copy that can drift the moment one side is edited.
 #
-# THE VERB, NAMED IN THE SENTINEL ITSELF: agents should be able to own their charter and
+# THE CALL, NAMED IN THE SENTINEL ITSELF: agents should be able to own their charter and
 # handle it on their own, so the original text, which sent a reader back to "the standing
 # orders" (CLAUDE.md, read once at mint/boot), was replaced by naming the call on the one
 # surface a seat actually re-reads every session: orient()'s own live payload. A live
@@ -863,10 +865,10 @@ IN-PROGRESS state a typed object can't hold on its own.
 # An office whose CLAUDE.md was "left in place" (compile_managed_body's own branch, an
 # existing office's standing orders are never recompiled) can go an entire reign without
 # that file crossing a session's eyes again; a sentinel that only points at it, rather
-# than carrying the verb itself, is a dead end for exactly the seat it's meant to move.
+# than carrying the call itself, is a dead end for exactly the seat it's meant to move.
 # Plain text, no harness assumed: `charter(repos=[...])` is the same MCP tool name on
 # every surface, Claude Code or otherwise.
-_CHARTER_UNDECLARED = ("UNDECLARED — call charter(repos=[...]) naming the repos you govern "
+_CHARTER_UNDECLARED = ("UNDECLARED: call charter(repos=[...]) naming the repos you govern "
                        "(the standing orders say more, but this is the one line every "
                        "session sees)")
 
@@ -889,7 +891,7 @@ async def _establish_pure_seat_office(
     actions: Actions, *, seat_id: str, actor: str | None,
     office_root: Path | None, projects_root: Path | None, claude_json: Path | None,
 ) -> dict[str, Any]:
-    """The office ceremony for a seat with no Agent lineage at all: every fact comes off
+    """The office setup for a seat with no Agent lineage at all: every fact comes off
     the Seat record alone, since there is no claimed occupant to resolve a handle/house/
     deed through. `seat_facts` already derives house the same way the agent-lineage path
     does (`derive_house`); the charter is the seat's own (`governs` is keyed on the seat,
@@ -903,10 +905,10 @@ async def _establish_pure_seat_office(
     facts = await seat_facts(actions.pool, seat_id)
     handle = facts["handle"]
     if not handle:
-        return {"error": f"{seat_id} has no handle on record — a seat directory is named "
+        return {"error": f"{seat_id} has no handle on record; a seat directory is named "
                          "for its seat's handle, and this one has none"}
     # A HOUSE IS OPTIONAL: a seat governing a single repo carries none. This used to
-    # refuse the whole ceremony on a houseless seat, the exact shape the rule exists to
+    # refuse the whole setup on a houseless seat, the exact shape the rule exists to
     # end (nothing in osiris may require a house). `house` renders as "" through
     # compile_managed_body/house_law.md, which drops the clause entirely rather than
     # showing an empty one.
@@ -914,14 +916,14 @@ async def _establish_pure_seat_office(
     root = office_root or _default_office_root()
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
-    seat_line = f" — durable identity `{seat_id}`."
+    seat_line = f", durable identity `{seat_id}`."
     repos = await charter_of(actions.pool, seat_id)
     from src.orchestrator.project_identity import charter_display_labels
 
     display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
-        "Your charter was never formally declared — it lives only in prose. First act: "
+        "Your charter was never formally declared; it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")
     peer_addendum = "\n"
@@ -935,8 +937,8 @@ async def _establish_pure_seat_office(
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
     if orders.exists() and agents.exists():
-        orders_state = "left in place — the seat directory already has standing orders"
-        agents_state = "left in place — the seat directory already has this file"
+        orders_state = "left in place: the seat directory already has standing orders"
+        agents_state = "left in place: the seat directory already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
@@ -954,7 +956,7 @@ async def _establish_pure_seat_office(
             agents, wrapped, label="its own compiled standing orders (vendor-neutral)")
     charter_file = office / "charter.md"
     if charter_file.exists():
-        charter_file_state = "left in place — the seat's own live state, never overwritten"
+        charter_file_state = "left in place: the seat's own live state, never overwritten"
     else:
         charter_file.write_text(_CHARTER_TEMPLATE.format(handle=handle))
         charter_file_state = "written"
@@ -964,7 +966,7 @@ async def _establish_pure_seat_office(
         office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
-        "office_deed": "n/a — no claimed occupant yet to deed a seat directory to",
+        "office_deed": "n/a, no claimed occupant yet to deed a seat directory to",
         "seat": seat_id,
         "charter": repos or _CHARTER_UNDECLARED,
         "standing_orders": orders_state,
@@ -972,8 +974,8 @@ async def _establish_pure_seat_office(
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
-        "note": f"{handle}'s seat directory stands at {office} — no agent has ever "
-                "claimed this seat, so this ceremony ran off the Seat record alone; the "
+        "note": f"{handle}'s seat directory stands at {office}: no agent has ever "
+                "claimed this seat, so this setup ran off the Seat record alone; the "
                 "first launch at this seat directory is what claims it",
     }
 
@@ -984,7 +986,7 @@ async def establish_office(
     claude_json: Path | None = None,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """The whole ceremony, one receipt: resolve the seat, write its standing orders
+    """The whole process, one result: resolve the seat, write its standing orders
     (never clobbering, an occupied office's orders may be hand-tuned), then
     `rebind_seat(extract=True)` into ~/.osiris/seats/<handle>/. Refuses loudly on an
     unknown seat and on an anonymous lineage (claim_name first: an office is named for
@@ -1019,15 +1021,15 @@ async def establish_office(
             "WHERE a.object_id=o.id AND a.name='handle' AND a.value #>> '{}' = $1))",
             seat_or_agent)
     if agent_id is None and direct_seat_id is None:
-        return {"error": f"no such seat or agent: {seat_or_agent!r} — a seat-directory "
-                         "ceremony never invents its occupant"}
+        return {"error": f"no such seat or agent: {seat_or_agent!r}; a seat-directory "
+                         "setup never invents its occupant"}
     if agent_id is None and direct_seat_id is not None:
         # THE OCCUPANCY GAP, found on a live run: `resolve_handle` and the
         # direct-Agent-canonical check above both only ever match a bare handle string
         # or a literal `agent:<id>`. Called with a seat canonical (or a seat matched only
         # by its `handle` property above, never actually tried as a name) whose holder is
         # cold (claimed, just not live this instant), neither one ever finds it, and this
-        # ceremony fell to the pure seat path claiming "no agent has ever claimed this
+        # setup fell to the pure seat path claiming "no agent has ever claimed this
         # seat" for a seat that plainly has one. `seat_occupancy` reads the same `holds`
         # graph link `identify_agent`/`doors()` uses for a `seat:` ref (never a cache
         # column); a real holder here, live or cold, means this is not the pure-seat
@@ -1044,7 +1046,7 @@ async def establish_office(
             projects_root=projects_root, claude_json=claude_json)
     handle = await _handle_of(actions.pool, agent_id)
     if not handle:
-        return {"error": f"{agent_id} has never claimed a name — a seat directory is "
+        return {"error": f"{agent_id} has never claimed a name; a seat directory is "
                          "named for its seat. claim_name first, then establish the "
                          "seat directory"}
     # RESOLVED, NEVER A RAW COPY: house_of's raw `project` stamp could be a mint-time
@@ -1053,21 +1055,21 @@ async def establish_office(
     # what counts as "something" moved.
     house = await project_of(actions.pool, agent_id)
     if not house:
-        return {"error": f"{agent_id} has no durable project label — it has never been "
+        return {"error": f"{agent_id} has no durable project label; it has never been "
                          "mounted in a project, so there is no house to pin at an office"}
     # A LIVE SEAT IS NEVER MOVED (the rollout guard): extraction relocates the lineage's
     # transcripts, and a running harness process appends to its own by path, so moving it
-    # mid-session splits the session's history between two slugs. The ceremony waits for a
+    # mid-session splits the session's history between two slugs. The setup waits for a
     # quiet seat (lineage-wide: a live heir blocks moving the base); close the session,
     # establish, relaunch at the office.
     #
     # ANOTHER SPECIMEN OF THE SAME "STALE ROW READ AS LIVE" SHAPE, found live while fixing
     # a related liveness check: a fresh/refreshing agent_mounts row alone used to be
-    # enough to refuse this whole ceremony, even with no harness-confirmed body behind it.
+    # enough to refuse this whole setup, even with no harness-confirmed process behind it.
     # This entry point was not caught by the earlier fix; found because it was masking
     # doors.py's own `_record` fix inside lift()'s own call chain (establish_office runs
     # its own, separate liveness check after lift()'s pre-claim check already passed).
-    # establish_office is a rare, deliberate ceremony (never a frequently-called path), so
+    # establish_office is a rare, deliberate process (never a frequently-called path), so
     # the same registry_census cross-check is affordable here too.
     from src.orchestrator.agents import _generation
     from src.orchestrator.mounts import registry_census
@@ -1087,15 +1089,15 @@ async def establish_office(
             (r for r in fresh_rows if str(r["agent_id"]) in matched_ids), None)
     if confirmed_fresh is not None:
         return {"error": f"{handle} ({agent_id}) is LIVE right now (last seen "
-                         f"{confirmed_fresh['last_seen'].isoformat()}) — moving a live "
+                         f"{confirmed_fresh['last_seen'].isoformat()}): moving a live "
                          "seat splits its running session's history between two homes. "
                          "Close its tab first, then establish; it wakes up in the office"}
     root = office_root or _default_office_root()
     office = root / handle.lower()
     office.mkdir(parents=True, exist_ok=True)
     bound = await held_seat(actions.pool, agent_id)
-    seat_line = (f" — durable identity `{bound['seat_id']}`." if bound else
-                 " — not yet seated: your next claim binds you (the on-ramp).")
+    seat_line = (f", durable identity `{bound['seat_id']}`." if bound else
+                 ", not yet seated: your next claim binds you (the on-ramp).")
     # THE CHARTER IS THE SEAT'S, not the lineage's: reads through the same `bound` this
     # function already resolved for seat_line, one line up, no second lookup and no
     # lineage-string walk. An agent not yet seated has no charter to read.
@@ -1106,7 +1108,7 @@ async def establish_office(
     display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
-        "Your charter was never formally declared — it lives only in prose. First act: "
+        "Your charter was never formally declared; it lives only in prose. First act: "
         "`charter(repos=[...])` naming the repos you actually govern. A house is what a "
         "seat GOVERNS, not where it sits.")
     # THE PEER ADDENDUM: computed live, like seat_line and charter_block above it, so a
@@ -1126,8 +1128,8 @@ async def establish_office(
     orders = office / "CLAUDE.md"
     agents = office / "AGENTS.md"
     if orders.exists() and agents.exists():
-        orders_state = "left in place — the seat directory already has standing orders"
-        agents_state = "left in place — the seat directory already has this file"
+        orders_state = "left in place: the seat directory already has standing orders"
+        agents_state = "left in place: the seat directory already has this file"
     else:
         from src.orchestrator.boot_compiler import (
             compile_managed_body,
@@ -1148,7 +1150,7 @@ async def establish_office(
     # hand-maintained live state, exactly like CLAUDE.md stays untouched once written.
     charter_file = office / "charter.md"
     if charter_file.exists():
-        charter_file_state = "left in place — the seat's own live state, never overwritten"
+        charter_file_state = "left in place: the seat's own live state, never overwritten"
     else:
         charter_file.write_text(_CHARTER_TEMPLATE.format(handle=handle))
         charter_file_state = "written"
@@ -1156,7 +1158,7 @@ async def establish_office(
         actions, seat_or_agent=agent_id, new_cwd=str(office), actor=actor,
         projects_root=projects_root, claude_json=claude_json, extract=True,
         office_root=root)
-    # THE DEED: the ceremony records office ownership in the graph, because this entry
+    # THE DEED: this step records office ownership in the graph, because this entry
     # point must survive the seat's death, and mount rows don't (SessionEnd releases
     # them; a lineage whose session had ended held none, so every fresh launch at its own
     # office minted an unrecognized occupant). The deed is what office_seat reads first.
@@ -1164,7 +1166,7 @@ async def establish_office(
 
     deeded = await file_office_deed(
         actions, agent_id=agent_id, cwd=str(office),
-        actor=actor or "ceremony:establish-office", office_root=root)
+        actor=actor or "office-setup:establish-office", office_root=root)
     return {
         "office": str(office), "handle": handle, "house": house,
         "office_deed": "filed" if deeded else "already on the lineage's record",
@@ -1175,7 +1177,7 @@ async def establish_office(
         "charter_file": charter_file_state,
         "rebind": rebind,
         "launch": f"cd {office} && claude   (or claude --resume there)",
-        "note": f"{handle}'s seat directory stands at {office} — the whisper will mount "
+        "note": f"{handle}'s seat directory stands at {office}: the session will mount "
                 f"house {house} from the pin; transcripts moved are re-addressed so "
                 "resume works in place",
     }
@@ -1192,9 +1194,9 @@ async def _live_body_at_office(
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any] | None:
     """One registry_census read, matched against `office` by either cwd the census carries
-    (harness-reported `harness_cwd` or /proc-confirmed `proc_cwd`; a body can disagree with
-    itself mid-move, so both are checked) over `verified` (every /proc-confirmed live body,
-    matched-to-a-graph-row or not: "rowless" bodies are exactly the population that must
+    (harness-reported `harness_cwd` or /proc-confirmed `proc_cwd`; a process can disagree with
+    itself mid-move, so both are checked) over `verified` (every /proc-confirmed live process,
+    matched-to-a-graph-row or not: "rowless" processes are exactly the population that must
     never be treated as absent just because agent_mounts missed them). A blind census
     (`blind: true`, the harness read itself failed) is never read as "nothing live": it
     refuses the same as a real hit, one instant's silence is not proof of an empty room."""
@@ -1222,7 +1224,7 @@ async def sweep_retired_office(
     """THE MISSING DISK HALF of seat cleanup: retire_seat/vacate_holder are graph-only by
     design, neither touches the office directory establish_office scaffolded, so a retired
     seat's `~/.osiris/seats/<handle>/` sits on disk forever, a complete-looking office
-    belonging to nobody. This is the deliberately separate verb that closes that gap,
+    belonging to nobody. This is the deliberately separate function that closes that gap,
     never folded into retire_seat (every existing caller relies on its graph-only
     contract, and a seat can legitimately be retired while its files are kept for
     archival/audit) or vacate_holder (that releases a still-reusable seat; deleting the
@@ -1233,14 +1235,14 @@ async def sweep_retired_office(
     - no office directory at the resolved path: nothing to sweep;
     - more than one Seat object shares this handle (any status): ambiguous, never guesses
       which one owns this directory;
-    - a matching Seat exists and is not retired (active/unknown status): this verb only
+    - a matching Seat exists and is not retired (active/unknown status): this function only
       ever touches a graph-retired seat's office, or an office with no Seat row at all
       (pure test-run filesystem debris, never a real seat, confirmed independently
       across several prior generations);
     - a matching Seat carries an active `holds` link despite its retired status: a shape
-      that should never exist and is not this verb's business to untangle;
-    - a live body's cwd resolves inside the office right now, per registry_census;
-    - a live body's cwd resolves inside the office after waiting `_SWEEP_HEAL_WAIT_SECS`:
+      that should never exist and is not this function's business to untangle;
+    - a live process's cwd resolves inside the office right now, per registry_census;
+    - a live process's cwd resolves inside the office after waiting `_SWEEP_HEAL_WAIT_SECS`:
       a supervised harness daemon can silently re-resume a killed session onto a fresh pid
       within about a minute, so a single instant's clean read is not proof of an empty
       office. The guard is two reads, never one, exactly the discipline this demanded.
@@ -1255,19 +1257,19 @@ async def sweep_retired_office(
     exactly as it would be under dry-run, which is what makes the two modes trustworthy:
     dry-run predicts precisely what execute does, never an approximation of it."""
     if not dry_run and not (because or "").strip():
-        return {"error": "because is required to execute — a filesystem delete is not "
+        return {"error": "because is required to execute: a filesystem delete is not "
                          "self-justifying the way a dry-run report is"}
     handle = (handle or "").strip()
     if not handle:
         return {"error": "a handle is required"}
     root = office_root or _default_office_root()
     office = root / handle.lower()
-    # CONTAINMENT, AND IT IS THE ONE GUARD THIS VERB WAS MISSING, found during a merge
+    # CONTAINMENT, AND IT IS THE ONE GUARD THIS FUNCTION WAS MISSING, found during a merge
     # review. Every other refusal below interrogates the seat: is it retired, is it
-    # ambiguous, does it hold, is a body live in it. Not one of them interrogates the
+    # ambiguous, does it hold, is a process live in it. Not one of them interrogates the
     # path, and `handle` is a caller-supplied string that goes straight into a `/` join:
     # handle='../../code/osiris/docs' resolves clean out of the office root, matches no
-    # Seat row, carries no holder, has no live body inside it, so it sails past all five
+    # Seat row, carries no holder, has no live process inside it, so it sails past all five
     # seat guards and reaches shutil.rmtree with a real source directory in hand. Verified
     # by hand before this line existed. It was harmless while dry_run was the only wired
     # mode and became an arbitrary-directory delete the instant the execute path landed:
@@ -1285,11 +1287,11 @@ async def sweep_retired_office(
     resolved_root = root.resolve()
     if office.resolve().parent != resolved_root:
         return {"error": f"handle {handle!r} does not name an office directly under "
-                         f"{resolved_root} — it resolves to {office.resolve()}, outside "
-                         "the office root. Refusing: this verb deletes, and a handle is "
+                         f"{resolved_root}: it resolves to {office.resolve()}, outside "
+                         "the office root. Refusing: this function deletes, and a handle is "
                          "a seat's name, never a path"}
     if not office.is_dir():
-        return {"error": f"no office directory at {office} — nothing to sweep"}
+        return {"error": f"no office directory at {office}; nothing to sweep"}
 
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
@@ -1298,14 +1300,14 @@ async def sweep_retired_office(
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
         "ORDER BY o.created_at", handle)
     if len(rows) > 1:
-        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r} — "
+        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r}; "
                          "ambiguous, refuses rather than guessing which one owns this office",
                 "office": str(office), "seats": [r["canonical"] for r in rows]}
     seat_id = rows[0]["canonical"] if rows else None
     seat_status = rows[0]["status"] if rows else None
     if seat_id is not None and seat_status != "retired":
         return {"error": f"{handle} is a graph Seat ({seat_id}) with status={seat_status!r} "
-                         "— sweep_retired_office only touches a RETIRED seat's office, or "
+                         "; sweep_retired_office only touches a RETIRED seat's office, or "
                          "an office with no matching Seat row at all",
                 "office": str(office), "seat": seat_id, "seat_status": seat_status}
     if seat_id is not None:
@@ -1315,16 +1317,16 @@ async def sweep_retired_office(
             "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", rows[0]["id"])
         if holder:
             return {"error": f"{handle} is retired but carries an active holder ({holder}) "
-                             "— a shape that should never exist; refusing rather than "
+                             ": a shape that should never exist; refusing rather than "
                              "resolving it silently",
                     "office": str(office), "seat": seat_id}
 
     first = await _live_body_at_office(
         pool, office, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if first is not None:
-        detail = ("the harness registry read itself failed (blind census) — never read as "
+        detail = ("the harness registry read itself failed (blind census): never read as "
                   "'nothing live'" if first.get("blind") else
-                  f"a live body's cwd resolves inside this office right now (pid "
+                  f"a live process's cwd resolves inside this office right now (pid "
                   f"{first.get('pid')})")
         return {"status": "refused-live-body", "office": str(office), "seat": seat_id,
                 "detail": detail}
@@ -1334,10 +1336,10 @@ async def sweep_retired_office(
         pool, office, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if second is not None:
         detail = ("the harness registry read itself failed on the heal-interval re-check "
-                  "(blind census) — never read as 'nothing live'" if second.get("blind") else
-                  f"clean at the first read, but a live body appeared after the "
-                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}) — "
-                  "exactly the daemon-respawn race wave6probe reproduced")
+                  "(blind census): never read as 'nothing live'" if second.get("blind") else
+                  f"clean at the first read, but a live process appeared after the "
+                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}): "
+                  "exactly the daemon-respawn race this heal-wait guard exists to catch")
         return {"status": "refused-live-body-after-heal-wait", "office": str(office),
                 "seat": seat_id, "detail": detail}
 
@@ -1380,13 +1382,13 @@ async def sweep_seat_workspace(
     workspace_root.resolve()`, a handle is a seat's name, never a path, so `../../` never
     sails past the other five seat guards the way it did before sweep_retired_office's own
     containment fix landed), the ambiguous-Seat refusal, the retired-or-no-Seat-row gate,
-    the active-holder refusal even on a nominally-retired seat, and the double live-body
+    the active-holder refusal even on a nominally-retired seat, and the double live-process
     check (immediate plus a `_SWEEP_HEAL_WAIT_SECS` heal-wait re-check, guarding against a
     measured daemon-respawn race) before `shutil.rmtree` is ever reached. `dry_run=True`
     (default) reports `would-delete`; `dry_run=False` is operator-gated (`because`
-    required), same law every repair verb here follows."""
+    required), same requirement every repair function here follows."""
     if not dry_run and not (because or "").strip():
-        return {"error": "because is required to execute — a filesystem delete is not "
+        return {"error": "because is required to execute: a filesystem delete is not "
                          "self-justifying the way a dry-run report is"}
     handle = (handle or "").strip()
     if not handle:
@@ -1396,11 +1398,12 @@ async def sweep_seat_workspace(
     resolved_root = root.resolve()
     if workspace.resolve().parent != resolved_root:
         return {"error": f"handle {handle!r} does not name a workspace directly under "
-                         f"{resolved_root} — it resolves to {workspace.resolve()}, outside "
-                         "the workspace root. Refusing: this verb deletes, and a handle is "
+                         f"{resolved_root}: it resolves to {workspace.resolve()}, outside "
+                         "the workspace root. Refusing: this function deletes, and a handle "
+                         "is "
                          "a seat's name, never a path"}
     if not workspace.is_dir():
-        return {"error": f"no workspace directory at {workspace} — nothing to sweep"}
+        return {"error": f"no workspace directory at {workspace}; nothing to sweep"}
 
     rows = await pool.fetch(
         "SELECT o.id, o.canonical, o.status FROM objects o WHERE o.type='Seat' "
@@ -1409,7 +1412,7 @@ async def sweep_seat_workspace(
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
         "ORDER BY o.created_at", handle)
     if len(rows) > 1:
-        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r} — "
+        return {"error": f"{len(rows)} Seat objects (any status) match handle {handle!r}; "
                          "ambiguous, refuses rather than guessing which one owns this "
                          "workspace",
                 "workspace": str(workspace), "seats": [r["canonical"] for r in rows]}
@@ -1417,7 +1420,7 @@ async def sweep_seat_workspace(
     seat_status = rows[0]["status"] if rows else None
     if seat_id is not None and seat_status != "retired":
         return {"error": f"{handle} is a graph Seat ({seat_id}) with status={seat_status!r} "
-                         "— sweep_seat_workspace only touches a RETIRED seat's workspace, "
+                         "; sweep_seat_workspace only touches a RETIRED seat's workspace, "
                          "or a workspace with no matching Seat row at all",
                 "workspace": str(workspace), "seat": seat_id, "seat_status": seat_status}
     if seat_id is not None:
@@ -1427,16 +1430,16 @@ async def sweep_seat_workspace(
             "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", rows[0]["id"])
         if holder:
             return {"error": f"{handle} is retired but carries an active holder ({holder}) "
-                             "— a shape that should never exist; refusing rather than "
+                             ": a shape that should never exist; refusing rather than "
                              "resolving it silently",
                     "workspace": str(workspace), "seat": seat_id}
 
     first = await _live_body_at_office(
         pool, workspace, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if first is not None:
-        detail = ("the harness registry read itself failed (blind census) — never read as "
+        detail = ("the harness registry read itself failed (blind census): never read as "
                   "'nothing live'" if first.get("blind") else
-                  f"a live body's cwd resolves inside this workspace right now (pid "
+                  f"a live process's cwd resolves inside this workspace right now (pid "
                   f"{first.get('pid')})")
         return {"status": "refused-live-body", "workspace": str(workspace), "seat": seat_id,
                 "detail": detail}
@@ -1446,10 +1449,10 @@ async def sweep_seat_workspace(
         pool, workspace, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if second is not None:
         detail = ("the harness registry read itself failed on the heal-interval re-check "
-                  "(blind census) — never read as 'nothing live'" if second.get("blind") else
-                  f"clean at the first read, but a live body appeared after the "
-                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}) — "
-                  "exactly the daemon-respawn race wave6probe reproduced")
+                  "(blind census): never read as 'nothing live'" if second.get("blind") else
+                  f"clean at the first read, but a live process appeared after the "
+                  f"{_SWEEP_HEAL_WAIT_SECS}s heal-interval wait (pid {second.get('pid')}): "
+                  "exactly the daemon-respawn race this heal-wait guard exists to catch")
         return {"status": "refused-live-body-after-heal-wait", "workspace": str(workspace),
                 "seat": seat_id, "detail": detail}
 

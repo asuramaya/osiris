@@ -31,7 +31,7 @@ Decision (any status), no active `governs` edge pointing in -- on top of retire_
 commit/open-thread/live-mount refusals, which stay the final safety net (a row that clears
 this sweep's guard but still fails there is reported, never raised). Compensating retire
 only (`Actions.set_status` via `retire_project`), never a DELETE; each retirement named in
-the return receipt.
+the returned result.
 """
 from __future__ import annotations
 

@@ -32,8 +32,8 @@ def test_groups_by_project_and_collapses_the_past() -> None:
     tree = render_fleet_tree(nodes)
     lines = tree.splitlines()
     # one section per project, sorted ALPHABETICALLY; counts in the header
-    assert lines[0].startswith("▸ osiris — 1 live · 3 sessions")
-    assert any(line.startswith("▸ sibling-one — 0 live · 2 sessions") for line in lines)
+    assert lines[0].startswith("▸ osiris · 1 live · 3 sessions")
+    assert any(line.startswith("▸ sibling-one · 0 live · 2 sessions") for line in lines)
     # the live agent is expanded; the retired collapse to one counted line with the freshest id
     assert "● agent:live1  fable-5" in tree
     assert "○ 2 past sessions (latest agent:old2)" in tree
@@ -56,7 +56,7 @@ def test_swarm_children_fold_into_a_model_tally() -> None:
     assert "○ swarm: 4 retired (opus-4-8 ×2, sonnet-5 ×1, haiku-4-5-20251001 ×1)" in tree
     assert "agent:kid1" not in tree
     # the header carries the swarm total
-    assert "▸ osiris — 1 live · 1 sessions · swarm 4" in tree
+    assert "▸ osiris · 1 live · 1 sessions · swarm 4" in tree
 
 
 def test_a_live_descendant_keeps_its_line_open() -> None:
@@ -155,7 +155,7 @@ def test_os_bodies_rides_beside_the_project_head_and_names_the_gap() -> None:
         nodes, os_bodies={"osiris": 1, "sibling-one": 1},
         ghost_gap={"osiris": {"false_live": ["agent:live2"], "false_dead": []}})
     osiris_line = tree.splitlines()[0]
-    assert osiris_line.startswith("▸ osiris — 2 live · 2 sessions")
+    assert osiris_line.startswith("▸ osiris · 2 live · 2 sessions")
     assert "1 os body" in osiris_line
     assert "⚠ 1 ghost (1 false-live)" in osiris_line
     sibling_line = next(line for line in tree.splitlines() if line.startswith("▸ sibling-one"))
@@ -223,7 +223,7 @@ def test_resolved_project_groups_by_the_graph_project_not_the_raw_label() -> Non
         "agent:b": _n(project="osiris", resolved_project="osiris", ts=T0),
     }
     tree = render_fleet_tree(nodes)
-    assert "▸ osiris — 1 live · 2 sessions" in tree
+    assert "▸ osiris · 1 live · 2 sessions" in tree
     assert "prototype" not in tree
 
 
@@ -234,7 +234,7 @@ def test_a_question_mark_session_resolves_through_the_pin_before_unfiled() -> No
         "agent:q": _n(project=None, resolved_project="pinnedproj", live=True, ts=T1),
     }
     tree = render_fleet_tree(nodes)
-    assert "▸ pinnedproj — 1 live · 1 sessions" in tree
+    assert "▸ pinnedproj · 1 live · 1 sessions" in tree
     assert "unfiled" not in tree
 
 
@@ -252,7 +252,7 @@ def test_junk_labels_that_never_resolve_collapse_into_one_unfiled_line() -> None
     lines = tree.splitlines()
     assert lines[-1] == "▸ unfiled: 3 sessions in 2 dirs"
     assert "nonexistent-probe" not in tree
-    assert "▸ osiris — 1 live · 1 sessions" in tree
+    assert "▸ osiris · 1 live · 1 sessions" in tree
 
 
 def test_full_mode_expands_unfiled_into_its_own_raw_label_sections() -> None:
@@ -278,7 +278,7 @@ def test_a_worktree_session_resolves_through_its_parent_project() -> None:
                        live=True, ts=T1),
     }
     tree = render_fleet_tree(nodes)
-    assert "▸ osiris — 1 live · 1 sessions" in tree
+    assert "▸ osiris · 1 live · 1 sessions" in tree
     assert "wt-fleet-render-by-project" not in tree
 
 
@@ -323,7 +323,7 @@ def test_paint_fleet_text_recolors_project_names_and_live_marks_only_when_enable
 
 
 def test_paint_fleet_text_dims_the_unfiled_line_and_colors_the_ghost_note() -> None:
-    text = ("▸ osiris — 1 live · 1 sessions · ⚠ 2 ghosts "
+    text = ("▸ osiris · 1 live · 1 sessions · ⚠ 2 ghosts "
             "(1 false-live, 1 unclaimed body)\n"
             "▸ unfiled: 3 sessions in 2 dirs")
     colored = paint_fleet_text(text, Paint(enabled=True))

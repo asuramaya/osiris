@@ -427,7 +427,7 @@ async def derive_or_abstain(
         return {"minted": not exists, "to": to_id, "abstained": False, "reason": None,
                "candidate_count": 1}
     reason = why_if_ambiguous or (
-        f"{len(candidates)} candidates for {link_type} — not a unique lookup, "
+        f"{len(candidates)} candidates for {link_type}, not a unique lookup, "
         "never guessed" if candidates else
         f"no candidate found for {link_type}")
     # property name carries `link_type` (never a bare "derivation_abstained"): assert_
@@ -446,7 +446,7 @@ async def derive_or_abstain(
 async def resolve_repo_default(
     pool: asyncpg.Pool, repo: str | None, actor: str, ident_project: str | None,
 ) -> dict[str, Any]:
-    """THE ONE LADDER: every repo= identity-default caller (record_decision, open_thread,
+    """THE ONE SEQUENCE: every repo= identity-default caller (record_decision, open_thread,
     and the still-deferred ingest_reference / settle() bulk loops) climbs the same three
     rungs, never a caller-specific reinvention. An earlier record_decision-only version
     of this logic is folded back into this shared shape rather than left to drift as the
@@ -508,7 +508,7 @@ async def record_lineage_abstain(
     list[str]}`."""
     reason = (
         f"{len(lineage_projects)} distinct projects across this lineage's own "
-        f"works_in ({', '.join(lineage_projects)}) — not a unique lookup, never "
+        f"works_in ({', '.join(lineage_projects)}), not a unique lookup, never "
         "guessed" if lineage_projects else None)
     abstain = await derive_or_abstain(
         Actions(pool), object_id, "in_repo", lineage_candidates, actor,
@@ -517,12 +517,12 @@ async def record_lineage_abstain(
            "candidates": [str(c) for c in abstain.get("candidates", [])]}
 
 
-# HISTORICAL BACKFILL: `resolve_repo_default`'s ladder is write-time-only by design, it
+# HISTORICAL BACKFILL: `resolve_repo_default`'s sequence is write-time-only by design, it
 # fires once, when a Decision/Thread is minted, and was never going to retroactively
 # touch an object that already existed before it deployed. Measured at one point: 468
-# pre-existing, zero-live-link Decision/Thread objects predated that ladder landing, 281
+# pre-existing, zero-live-link Decision/Thread objects predated that sequence landing, 281
 # of which `resolve_repo_default` would mint cleanly today if it ever ran against them, a
-# missing verb, not a defect in the live safeguard, exactly the same shape two earlier
+# missing function, not a defect in the live safeguard, exactly the same shape two earlier
 # backfills each already covered for their own populations. This population shifts as
 # other changes land, so re-measure before trusting any prior count; a measurement can be
 # invalidated by a later repair.
@@ -545,7 +545,7 @@ async def record_lineage_abstain(
 # is used instead, so a case this backfill (or a future pass) once abstained on and later
 # resolves does not sit in `retryable_abstentions`' queue forever regardless of which
 # actor recorded the original abstention. At last check, the overlap was empty (zero rows
-# carried a live `derivation_abstained_in_repo` at all, since that ladder never abstained
+# carried a live `derivation_abstained_in_repo` at all, since that sequence never abstained
 # on anything before this backfill existed), but the handling below is unconditional, not
 # contingent on that measurement staying true. The abstain path itself (candidates
 # 0-or-2+) does go through `derive_or_abstain` directly, so it already gets the shared
@@ -649,7 +649,7 @@ async def backfill_lineage_repo_links(
         else:
             reason = (
                 f"{len(result['lineage_projects'])} distinct projects across this "
-                f"lineage's own works_in ({', '.join(result['lineage_projects'])}) — not "
+                f"lineage's own works_in ({', '.join(result['lineage_projects'])}), not "
                 "a unique lookup, never guessed" if result["lineage_projects"] else
                 "no project found anywhere across this lineage's own works_in")
             entry = {"id": str(row["id"]), "type": row["type"], "verdict": "abstain",
@@ -728,7 +728,7 @@ async def backfill_lineage_repo_links_at_write_time(
             reason = (
                 f"{len(lineage['projects'])} distinct projects across this lineage's own "
                 f"works_in AT {row['observed_at'].isoformat()} "
-                f"({', '.join(lineage['projects'])}) — not a unique lookup, never guessed"
+                f"({', '.join(lineage['projects'])}), not a unique lookup, never guessed"
                 if lineage["projects"] else
                 "no project found anywhere across this lineage's own works_in, even at "
                 "the object's own write time")
@@ -761,7 +761,7 @@ _BOOT_ALARM_HEAD_RE = re.compile(r"running HEAD '([0-9a-f]{7,40})' was never rec
 async def backfill_boot_alarm_commit_links(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for Lane 1 (a previously named population): every zero-live-
+    """Repair function for Lane 1 (a previously named population): every zero-live-
     link Thread stamped `source_id` in {boot:osiris-mcp, boot:osiris-worker} whose summary
     cites a boot sha, linked `noted_in` its own already-existing Commit object via Lane 0's
     `derive_or_abstain`, never a guess, never a low-confidence edge (the same binary rule
@@ -901,7 +901,7 @@ async def resolve_agent_orphans(
             projects = sorted({p for d in matches if (p := _project_of(d))})
             if not projects:
                 reason = (f"session {session!r} matches no on-disk session directory "
-                          "under ~/.claude/projects — the tree may have been pruned")
+                          "under ~/.claude/projects, the tree may have been pruned")
             else:
                 for proj in projects:
                     pid = await actions.create_or_find_object(
@@ -909,7 +909,7 @@ async def resolve_agent_orphans(
                     candidate_ids.append(pid)
                 if len(projects) > 1:
                     reason = (f"session {session!r} matches {len(projects)} distinct "
-                              f"projects ({', '.join(projects)}) — not a unique lookup, "
+                              f"projects ({', '.join(projects)}), not a unique lookup, "
                               "never guessed")
         if len(candidate_ids) == 1:
             entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
@@ -990,7 +990,7 @@ async def resolve_reference_orphans(
         candidate_ids: list[uuid.UUID] = []
         reason: str | None = None
         if not matching:
-            reason = (f"topic {topic!r} carries no live project's name as a prefix — no "
+            reason = (f"topic {topic!r} carries no live project's name as a prefix, no "
                       "signal to derive from" if topic else
                       "no topic property recorded at all")
         else:
@@ -1000,7 +1000,7 @@ async def resolve_reference_orphans(
                 candidate_ids.append(pid)
             if len(matching) > 1:
                 reason = (f"topic {topic!r} matches {len(matching)} distinct project name "
-                          f"prefixes ({', '.join(matching)}) — not a unique lookup, never "
+                          f"prefixes ({', '.join(matching)}), not a unique lookup, never "
                           "guessed")
         if len(candidate_ids) == 1:
             entry = {"id": str(row["id"]), "canonical": row["canonical"], "verdict": "mint",
@@ -1072,7 +1072,7 @@ async def resolve_practice_orphans(
         if len(candidate_ids) != 1:
             reason = (
                 f"{len(projects)} distinct projects across this Practice's own witnesses "
-                f"({', '.join(projects)}) — not a unique lookup, never guessed"
+                f"({', '.join(projects)}), not a unique lookup, never guessed"
                 if projects else
                 "no project found among any of this Practice's own witnesses")
         if len(candidate_ids) == 1:
@@ -1103,7 +1103,7 @@ async def resolve_superstition_orphans(
     straight through when one is given; an orphan Superstition is exactly the case where
     that call had none, same "missing at write time" gap the Decision/Thread lanes above
     close for their own objects. `killed_by` names either a Decision id or a commit hash
-    (`kill_superstition`'s own docstring), resolved via the same `_resolve_ref` ladder
+    (`kill_superstition`'s own docstring), resolved via the same `_resolve_ref` sequence
     every other identifier-shaped reference in this module uses, `require_identifier=True`
     so a malformed value refuses rather than falls through to a fuzzy text search.
 
@@ -1142,7 +1142,7 @@ async def resolve_superstition_orphans(
         reason: str | None = None
         if killer is None:
             reason = (f"killed_by {killed_by!r} does not resolve to any live "
-                      "Decision/Commit — no signal to derive from" if killed_by else
+                      "Decision/Commit, no signal to derive from" if killed_by else
                       "no killed_by property recorded at all")
         else:
             proj_rows = await pool.fetch(
@@ -1154,7 +1154,7 @@ async def resolve_superstition_orphans(
             if len(candidate_ids) > 1:
                 names = sorted({p["canonical"].removeprefix("repo:") for p in proj_rows})
                 reason = (f"the killing decision/commit itself names {len(names)} distinct "
-                          f"projects ({', '.join(names)}) — not a unique lookup, never "
+                          f"projects ({', '.join(names)}), not a unique lookup, never "
                           "guessed")
             elif not candidate_ids:
                 reason = "the killing decision/commit carries no project link of its own yet"
@@ -1309,7 +1309,7 @@ async def resolve_project_orphans(
 
 
 _PROVENANCE_SWEEP_BECAUSE = (
-    "classification_laws_heartbeat: provenance sweep self-heal (wave 15, mail 8840) — "
+    "classification_laws_heartbeat: provenance sweep self-heal, "
     "every lane below is cardinality-1-mint-or-abstain via derive_or_abstain, never a "
     "guess, so an unattended cron running it is exactly as safe as a supervised one"
 )
@@ -1522,7 +1522,7 @@ async def retryable_abstentions(
 # shrunk since it was last asked. `retryable_ambiguous_abstentions` is exactly that check,
 # LANE-AGNOSTIC (unlike a zero-candidate retry, which needs each lane's own lookup re-run,
 # no such thing exists here or is proposed by this lane): it needs only the stored
-# candidate ids, never re-derives anything, so one generic write verb
+# candidate ids, never re-derives anything, so one generic write function
 # (`retry_ambiguous_abstentions`, below) can safely serve every lane's ambiguous
 # abstentions at once, present or future.
 _AMBIGUOUS_SURVIVOR_CTE = (
@@ -1617,8 +1617,8 @@ async def retry_ambiguous_abstentions(
     surviving set is a singleton by this function's own selection), and its own cross-
     source supersede step retires the stale abstention regardless of which actor
     originally recorded it. LANE-AGNOSTIC BY CONSTRUCTION: no lane-specific lookup is
-    re-run, only the stored candidate ids' current status is rechecked, so this one verb
-    already covers every present and future lane's ambiguous abstentions, not just this
+    re-run, only the stored candidate ids' current status is rechecked, so this one
+    function already covers every present and future lane's ambiguous abstentions, not just this
     house's own current single lane (in_repo).
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
@@ -2229,7 +2229,7 @@ async def record_decision(
     either side, no `status` touch, no path that could gray the target out of orient's
     recent list the way `supersedes` deliberately does. See `mint_narrows` below.
     `cites` joins the same
-    fold; the verb `bears_on` (Decision->Thread only) and `narrows` (bounds scope, the
+    fold; the relation `bears_on` (Decision->Thread only) and `narrows` (bounds scope, the
     wrong relation) both correctly refused: a decision that adds a new facet to an
     earlier one's ongoing finding, neither bounding, refuting, nor independently re-
     deriving it. Reuses the existing `cites` link type (already legal Decision->Decision,
@@ -2311,13 +2311,13 @@ async def record_decision(
 
     `resolves` closes the thread this decision answers, in the same act: mints `answers`
     and marks the thread resolved. Until this existed, capture had a one-way valve: the
-    answer landed and the question stayed lit, because closing was a separate verb that a
+    answer landed and the question stayed lit, because closing was a separate step that a
     dying session forgets. A ruling was made on a lineage question; the
     decision recording that ruling announced "resolving thread <id>" in prose, nothing
     in the code read the prose, and the graph went on asking about a question already
     answered for a full day. open_thread(question) -> record_decision(answer)
     is the fleet's most common write; the close belongs inside the answer, not beside it.
-    A ruling that can name its question should not need a second verb to finish the sentence.
+    A ruling that can name its question should not need a second call to finish the sentence.
     Same strictness as `supersedes`: a ref that matches nothing raises, and nothing is
     recorded: a ruling that miscites the question it settles has not settled it.
 
@@ -2447,7 +2447,7 @@ async def record_decision(
         for thread_id in answered:
             # the answer and the close in one transaction: a ruling that lands while its
             # question stays open is how a resolved question gets asked twice. Same shape the
-            # resolve_thread verb writes (status/resolved_in/resolved_because), so every
+            # resolve_thread function writes (status/resolved_in/resolved_because), so every
             # lens that already renders a resolved thread renders this one unchanged. A
             # batch just runs this once per thread in the set: same act, same transaction.
             exists = await a.pool.fetchval(
@@ -2569,14 +2569,14 @@ async def _resolve_ref(
     pool: asyncpg.Pool, type_: str, ref: str, *, text_field: str,
     require_identifier: bool = False,
 ) -> uuid.UUID | None:
-    """The shared resolution ladder every `_find_*` helper in this module is built on,
+    """The shared resolution sequence every `_find_*` helper in this module is built on,
     fixing an earlier near-miss: a ref that looks like an
     identifier must resolve deterministically or refuse; it must never silently fall
     through to a fuzzy text search, because a hex-looking string can coincidentally
     substring-match a completely different object's text field (exactly what happened: a
     bare canonical suffix substring-matched a bug-report thread that merely quoted it).
 
-    Ladder: (1) a full UUID, exact `id` match. (2) this type's own canonical scheme
+    Order: (1) a full UUID, exact `id` match. (2) this type's own canonical scheme
     (`_canon`'s `<type>:<12hex>`, with or without the caller supplying the `type:` prefix),
     an exact `canonical` match, never ambiguous by the UNIQUE constraint. (3) a
     short-id prefix (the pre-existing 8+ hex/dash convention, unchanged), exactly one
@@ -2606,7 +2606,7 @@ async def _resolve_ref(
         # EXISTENCE + TYPE CHECKED, NOT ASSUMED: this leg
         # used to return a syntactically-valid UUID unconditionally: a real id belonging
         # to the wrong type, or no object at all, resolved exactly like a genuine hit,
-        # unlike every other rung of this same ladder (canonical/short-id both refuse on
+        # unlike every other step of this same sequence (canonical/short-id both refuse on
         # no match). A caller passed a Decision's own id where a Thread was expected and
         # got silent success instead of the refusal this function's own docstring promises.
         exists = await pool.fetchval(
@@ -2660,7 +2660,7 @@ async def _find_decision(
     pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
 ) -> uuid.UUID | None:
     """A Decision by UUID, by canonical, by short-id prefix, then by summary substring
-    (shortest summary wins), see `_resolve_ref` for the full ladder and why it refuses
+    (shortest summary wins), see `_resolve_ref` for the full sequence and why it refuses
     rather than guesses on identifier-shaped input. `require_identifier=True` drops the
     summary-substring leg, the same opt-in `_find_thread` already exposes, for a call path
     that closes the record it names rather than merely reading it (ack_handoff)."""
@@ -2695,7 +2695,7 @@ async def verify_ruling(
     act under that ruling's authority, provided the ruling actually says so. Three
     checks, in order, each naming exactly what failed: (1) `ruling_ref` resolves to a
     real Decision (`_find_decision`'s own by-uuid/canonical/short-id/summary-substring
-    ladder, never a guess); (2) that decision's own `kind` property reads 'ruling', not
+    sequence, never a guess); (2) that decision's own `kind` property reads 'ruling', not
     'decision' or anything else, an ordinary decision is not standing authority to act
     on, only a ruling is; (3) the ruling's own summary or rationale text actually names
     `write_name` (a case-insensitive substring match), a ruling about something else
@@ -2738,7 +2738,7 @@ async def _thread_summary(pool: asyncpg.Pool, thread_id: uuid.UUID) -> str | Non
 # PRIOR-ART SURFACING, from a re-derivation post-mortem:
 # a ruling contradicting standing law must not mint frictionlessly. Canonical failure this
 # prevents: a decision minted in direct contradiction of an earlier naming decision with
-# zero friction; a human caught it, the verb didn't. `search`'s own fused engine
+# zero friction; a human caught it, the code didn't. `search`'s own fused engine
 # (lexical + semantic routes) is topical, not lexical, the exact property needed here, since
 # a contradicting ruling rarely reuses its predecessor's wording. `via` in ('id', 'both')
 # means an independent second route corroborated the match (an id-exact hit, or both the
@@ -2831,7 +2831,7 @@ def prior_art_from_hits(
     only, unchanged for existing callers; pass UNIFIED_PRIOR_ART_KINDS for the unified
     check over {Decisions, Practices, Superstitions}). Excludes the item just
     recorded and any explicit `supersedes`/`refutes` target, those are already handled by
-    that verb, naming them again as "prior art" would just be noise. A `superseded`
+    that call, naming them again as "prior art" would just be noise. A `superseded`
     Decision or a `refuted` Practice is dead testimony for this purpose (it no longer
     stands for anything a new record could be redundant with), so both are excluded here
     even though search() itself still surfaces them, flagged, for direct lookup. LOUD,
@@ -3291,7 +3291,7 @@ ARC_DEFINITIONS: dict[str, str] = {
         "the roadmap/board rendering itself, not the underlying work those surfaces show."
     ),
     "Fleet-Hygiene": (
-        "Tool/ledger/graph reliability bugs: a verb that silently drops data, a lint "
+        "Tool/ledger/graph reliability bugs: a function that silently drops data, a lint "
         "check, a stale-obligation sweep. The machinery's own correctness, not what it "
         "was used to build."
     ),
@@ -3752,7 +3752,7 @@ async def _find_thread(
     suffix silently matched a bug-report thread that merely quoted it).
     `require_identifier=True` drops the summary-substring leg entirely; record_decision's
     `resolves=` opts in, since it closes the thread it names rather than merely reading
-    it. See `_resolve_ref` for the full ladder and rationale."""
+    it. See `_resolve_ref` for the full sequence and rationale."""
     return await _resolve_ref(pool, "Thread", ref, text_field="summary",
                               require_identifier=require_identifier)
 
@@ -3782,7 +3782,7 @@ async def reclassify_thread(
     without ever calling this module's own write block, so re-calling `open_thread` with
     the same summary text plus an `arc` value is a silent no-op on an already-open thread.
     This was discovered live: 17 attempted stamps, zero landed, caught by checking the
-    record afterward rather than trusting the receipt. This was the missing verb, not a
+    record afterward rather than trusting the receipt. This was the missing function, not a
     filing gap: `reclassify_thread` already exists for exactly this shape (judging an
     existing thread's own metadata after the fact) and `arc` is a closed taxonomy exactly
     like `kind`, so it gets the same validate-then-assert treatment rather than new
@@ -4019,7 +4019,7 @@ async def resolve_threads_bulk(
     dry_run: bool = True, source: str = _SOURCE,
 ) -> dict[str, Any]:
     """Batch-close obligations, built as a parameter on the existing single-ref
-    `resolve_thread` rather than a new verb: every ref closes under the same shared
+    `resolve_thread` rather than a new function: every ref closes under the same shared
     `because`/`artifact`, each write still its own independent compensating event (never
     one collapsed write) via a plain per-ref call to `resolve_thread` below.
 
@@ -4037,11 +4037,11 @@ async def resolve_threads_bulk(
     `dry_run=True` (hard default, mirrors every other bulk primitive in this codebase)
     previews every match (id, summary, whether already resolved) and writes nothing; pass
     `dry_run=False` to actually close. `_find_thread(..., require_identifier=True)` is
-    used for every ref (record_decision's own `resolves=` ladder, not the looser
+    used for every ref (record_decision's own `resolves=` sequence, not the looser
     summary-substring read `resolve_thread`'s single-ref call still allows): a batch
     closes what it names, same discipline as resolves=, never a loose match."""
     if not refs:
-        return {"ok": False, "reason": "empty ref list — nothing to do"}
+        return {"ok": False, "reason": "empty ref list, nothing to do"}
     if not because or not because.strip():
         return {"ok": False, "reason": "because is mandatory for a batch close"}
     resolved: dict[str, uuid.UUID | None] = {}
@@ -4506,7 +4506,7 @@ async def _find_practice(
     pool: asyncpg.Pool, ref: str, *, require_identifier: bool = False,
 ) -> uuid.UUID | None:
     """A Practice by UUID, by canonical, by short-id prefix, then by `statement`
-    substring (shortest statement wins), same resolution ladder as
+    substring (shortest statement wins), same resolution sequence as
     `_find_decision`/`_find_thread`; see `_resolve_ref`. `require_identifier=True` drops
     the statement-substring leg, the same opt-in `_find_decision`/`_find_thread` expose,
     for a call path that converts or links the record it names rather than merely
@@ -4552,7 +4552,7 @@ async def record_practice(
     witnesses: list[uuid.UUID] | None = None, source: str = _SOURCE,
     unlinked_because: str | None = None, unlinked_because_kind: str | None = None,
 ) -> uuid.UUID:
-    """Capture a transferable technique, Superstition's positive twin: the graph could
+    """Capture a transferable technique, Superstition's positive counterpart: the graph could
     hold what to stop believing but nothing held engineering technique that outlives any
     single repo or date, so independent teams could re-derive the same lesson without
     ever finding each other's version. `statement` is the imperative one-liner (e.g.
@@ -5058,9 +5058,9 @@ async def mint_bears_on(
     threaded through record_decision's own atomic transaction the way
     `resolves`/`supersedes` are. That separation is deliberate, not an oversight, guided
     by a standing no-auto-act rule: every specimen worth having was found by a human
-    reading and judging, and a verb that acts on a row is how the correct ones get lost
-    along with the wrong ones. `resolves=` stays the close-and-cite verb for a ruling
-    that settles its question; this is the cite-only verb for a finding that merely
+    reading and judging, and a function that acts on a row is how the correct ones get lost
+    along with the wrong ones. `resolves=` stays the close-and-cite function for a ruling
+    that settles its question; this is the cite-only function for a finding that merely
     speaks to one, a stale row's text going wrong, an already-answered measurement
     nobody routed back, anything short of "and therefore this row is done."
 
@@ -5132,7 +5132,7 @@ async def acknowledge_prior_art(
     actions: Actions, decision_id: uuid.UUID, prior_art_id: str, source: str = _SOURCE,
 ) -> None:
     """'Related standing law, reviewed, no action needed' as a graph event, not a shrug
-    swallowed in prose: the third path prior_art_flag's two-verb (supersede-or-cite)
+    swallowed in prose: the third path prior_art_flag's two-step (supersede-or-cite)
     prompt was missing.
 
     PROMOTED FROM A STRING TO A REAL EDGE: the system computed relatedness, surfaced it,
@@ -5157,7 +5157,7 @@ async def refute_practice(
     source: str = _SOURCE,
 ) -> dict[str, uuid.UUID] | None:
     """THE POLARITY FLIP: a Practice refuted converts to a Superstition, same family,
-    same kill-verb (`kill_superstition`), reusing the Practice's own statement so the
+    same kill mechanism (`kill_superstition`), reusing the Practice's own statement so the
     dead workaround is searchable under the exact words it propagated as. The Practice
     itself is never retired: it stays active carrying `refuted_by`, because a
     half-remembered refuted lesson is exactly the thing that must stay findable,
@@ -5203,13 +5203,13 @@ async def amend_practice(
     record_practice's own idempotency key (its normalized text is what "the same lesson"
     means to every future caller); mutating it here would silently redefine that key out
     from under anyone who re-encounters the original wording and expects record_practice
-    to find, not twin, it, the exact risk amend_decision's own design already avoids for
+    to find, not duplicate, it, the exact risk amend_decision's own design already avoids for
     `summary`. So this can only add a new, independently-current property, never touch
     `statement`/`witnesses`/anything already on the object, same mechanism as
     `annotate_thread`/`amend_decision` (`_append_property_name`).
 
     A Practice's own live read surface is `practices()`, every caller actually uses it,
-    so this verb's amendments are wired into that composition directly
+    so this function's amendments are wired into that composition directly
     (`_fn_practices`), the same reasoning `recall()` now applies to a Decision's own
     addenda (`recall()` no longer leaves them write-only, see recall.py's own
     docstring). That is the whole point of narrowing a practice's text in place: a
@@ -5408,7 +5408,7 @@ async def set_lifecycle(
 # regardless of intent) nor `record_decision` (write-once-plus-supersede, mint fresh, or
 # bury under a correction) lets a session add to a durable object without replacing or
 # closing it. Both force batch-at-the-end capture, which is exactly what dies at a
-# context-window seam. Two verbs below, one law: append, never overwrite.
+# context-window boundary. Two functions below, one rule: append, never overwrite.
 #
 # Every addition carries its own source/observed_at/grade, the same metadata every
 # assertion in this module already carries, under a property name that can never collide
@@ -5440,20 +5440,20 @@ async def annotate_thread(
     `assign_thread` hands off; `defer_thread` snoozes; this one just adds). `status` is
     never touched: an annotated thread stays exactly as open, or resolved, or deferred,
     as it was before the call. This is addition, not a state transition, and it fills a
-    real gap: today `resolve_thread` is the only verb that writes to an existing thread,
+    real gap: today `resolve_thread` is the only function that writes to an existing thread,
     and it closes on call regardless of intent, so anything short of a full close gets
     forced into batch-at-the-end capture, exactly what a dying session drops.
 
     Carries the same source/observed_at/grade every assertion in this module already
     does, stamped under a property name that can never collide with an earlier append
     (`_append_property_name`), since a genuine within-source supersede here would
-    silently bury an earlier note from `current_assertions`, the loss this verb exists
+    silently bury an earlier note from `current_assertions`, the loss this function exists
     to prevent. Read the whole record back, in the order it was understood, with
     `thread_notes`.
 
     `corrected_summary` (optional: "let annotate carry corrected_summary in the same
     call"): one call fixes the headline instead of requiring a caller to already know
-    `correct_thread_summary` is a second, separate verb, closing an affordance gap where
+    `correct_thread_summary` is a second, separate function, closing an affordance gap where
     the obvious action pointed at the wrong tool by default. Writes through the same
     shared helper `correct_thread_summary` itself calls (`_write_corrected_summary`),
     never a second copy of that property-write. `because` rides beside it, same meaning
@@ -5463,7 +5463,7 @@ async def annotate_thread(
     This is not `resolve_thread`'s `because` used alone: without `corrected_summary`,
     annotate_thread still has no parameter that can change `summary`/`status`/any
     existing property, it can only add. A caller who means "the earlier understanding
-    was wrong" and does not pass `corrected_summary` wants a different verb entirely;
+    was wrong" and does not pass `corrected_summary` wants a different function entirely;
     nothing here revises anything unless that parameter is given.
 
     Returns the thread id, or None if `ref` matched nothing (same convention as
@@ -5590,16 +5590,16 @@ async def correct_thread_summary(
     actions: Actions, ref: str, corrected_summary: str, *, because: str | None = None,
     source: str = _SOURCE,
 ) -> uuid.UUID | None:
-    """The verb `annotate_thread` names and refuses to be (its own docstring: "a caller
-    who means the earlier understanding was wrong wants a different verb entirely"),
-    this is that verb.
+    """The function `annotate_thread` names and refuses to be (its own docstring: "a caller
+    who means the earlier understanding was wrong wants a different function entirely"),
+    this is that function.
 
     THE PROBLEM MEASURED, NOT ASSUMED: a Thread's own `summary` can never be re-asserted
     in place. `open_thread` mints on `_canon("thread", summary)`, so the original
     summary text is the object's own identity/dedup key; re-asserting it under a
     changed value would not correct the thread, it would silently stop finding it (a
-    caller who now supplies the corrected text mints a twin instead of updating the
-    original, the exact failure this verb exists to prevent). `annotate_thread`'s
+    caller who now supplies the corrected text mints a duplicate instead of updating the
+    original, the exact failure this function exists to prevent). `annotate_thread`'s
     `_append_property_name` pattern (many independently-current notes, by design, see
     its own docstring) is the wrong shape here too: a correction is not one more
     coexisting note, it is the new headline, there should be exactly one live answer to
@@ -5611,7 +5611,7 @@ async def correct_thread_summary(
     (assert_property's own within-source supersede). Calling this again re-asserts it:
     the new text wins in `current_assertions`, the old one survives as non-current,
     queryable history exactly the way `summary`/`status`/everything else already works,
-    no new mechanism, no twin, `summary` itself untouched (still the object's own
+    no new mechanism, no duplicate, `summary` itself untouched (still the object's own
     identity, still what a caller matches against). `because` (optional) rides the same
     pattern as a second property, `corrected_because`, why the headline changed, not
     just that it did.
@@ -5667,14 +5667,14 @@ async def amend_decision(
     dedup problems start), and neither is `rationale`/`kind`/anything else already on
     the object; amend_decision structurally has no parameter that could touch them, it
     can only add a new, independent property, same law and same mechanism as
-    `annotate_thread` (`_append_property_name`), see that verb's docstring for why a
+    `annotate_thread` (`_append_property_name`), see that function's docstring for why a
     content hash would be the wrong key here.
 
     Refuses (raises ValueError, naming supersede by name) when `ref` resolves to a decision
     that is already superseded: a dead ruling does not grow new reasoning, amending it would
     either misattribute fresh testimony to a ruling no longer in force, or quietly do
     supersede's job without supersede's bookkeeping (the two-way superseded_by/supersedes
-    navigation). A correction belongs on `record_decision(supersedes=...)`; this verb only
+    navigation). A correction belongs on `record_decision(supersedes=...)`; this function only
     ever adds to a ruling still standing.
 
     Returns the decision id, or None if `ref` matched nothing (same convention as

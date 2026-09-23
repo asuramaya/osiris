@@ -808,7 +808,7 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
             index.append({"reference": r["title"], "vendor": r["vendor"],
                           "grounds": r["grounds"], "source": r["source"],
                           "text": _trim(secs[0][1]) if secs else ""})
-        return {"Design canon — Palantir · Notion · own docs": index}
+        return {"Design canon: Palantir · Notion · own docs": index}
     # rank by how many QUERY TERMS hit (meta > heading > body), NOT a whole-string match: a
     # natural multi-word query (e.g. migrated project history recall) matched nothing contiguously
     # and returned empty, silently breaking the migration's promised bounded-query recall path.
@@ -830,7 +830,7 @@ async def _fn_canon(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[st
                 "section": heading, "source": r["source"], "text": _trim(text),
             }))
     hits.sort(key=lambda h: h[0], reverse=True)
-    return {f'Canon — "{q}"': [h[1] for h in hits[:_CANON_MAX_HITS]]}
+    return {f'Canon: "{q}"': [h[1] for h in hits[:_CANON_MAX_HITS]]}
 
 
 # NB: `decisions` was a hand-written Function (a SQL query joining decided_in → commit). It is
@@ -894,7 +894,7 @@ async def _fn_family(
                      "missing": ", ".join(sorted(rmap[i] for i in missing)) or "-",
                      "consistent": not missing})
     rows.sort(key=lambda r: (r["consistent"], r["role"]))   # inconsistencies (the findings) first
-    return {f"Family consistency — {len(rmap)} repos ({', '.join(sorted(rmap.values()))})": rows}
+    return {f"Family consistency: {len(rmap)} repos ({', '.join(sorted(rmap.values()))})": rows}
 
 
 async def _fn_family_drift(
@@ -949,7 +949,7 @@ async def _fn_family_drift(
                       else f"identical across {repos_l}")
         out.append({"role": role, "drift": drift, "detail": detail})
     out.sort(key=lambda x: (not x["drift"], x["role"]))       # drift (the findings) first
-    return {f"Family content drift — {len(rmap)} repos": out}
+    return {f"Family content drift: {len(rmap)} repos": out}
 
 
 async def _fn_project(
@@ -1020,10 +1020,10 @@ async def _fn_project(
         "AND (l.valid_until IS NULL OR l.valid_until > now())", repo)
     role_list = sorted(r["role"] for r in roles if r["role"])
     return {
-        f"{name} — recent commits": [
+        f"{name}: recent commits": [
             {"when": (c["date"] or "")[:10], "commit": c["summary"]}
             for c in commits if c["summary"]],
-        f"{name} — decisions": [
+        f"{name}: decisions": [
             {"kind": d["kind"], "decision": d["summary"]} for d in decisions if d["summary"]],
         f"file roles for {name}": [{"roles": ", ".join(role_list) or "-"}],
     }
@@ -1143,7 +1143,7 @@ async def _fn_portfolio(
             "commits": ncommits[rid],
         })
     rows.sort(key=lambda x: -x["commits"])
-    return {f"Portfolio — {len(rmap)} repos": rows}
+    return {f"Portfolio: {len(rmap)} repos": rows}
 
 
 # The digest reads the pulse LOG on demand, so its liveness verdict is re-derived every time
@@ -1155,7 +1155,7 @@ _PULSE_STALE = timedelta(minutes=45)
 # last tick. Bounded so a fast `--watch` loop can't return thousands of rows.
 _PULSE_WINDOW = timedelta(hours=24)
 _PULSE_CAP = 200
-_PULSE_TITLE = "Pulse — what changed while you were away"
+_PULSE_TITLE = "Pulse: what changed while you were away"
 
 
 def _ago(delta: timedelta) -> str:
@@ -4380,7 +4380,7 @@ async def _fn_desk_project(
     p = next((x for x in (desk.get("by_project") or []) if x["project"] == project), None)
     if p is None:
         return [{"debt": f"nothing owed to {project}: cleared, or never was", "kind": "-"}]
-    because_not_mine = f"operator: not mine — {project} owns this"
+    because_not_mine = f"operator: not mine, {project} owns this"
     rows = [
         {"debt": t["summary"], "kind": t.get("kind") or "-", "id": t["id"],
          "_actions": [
@@ -6438,7 +6438,7 @@ async def save_composition(
             "SELECT section FROM compositions WHERE name=$1", name)
         if prior_section is None:
             logger.warning(
-                "save_composition(%r): no section given and none on record — "
+                "save_composition(%r): no section given and none on record, "
                 "defaulting to the '_more' shelf", name)
         section = prior_section or "_more"
     if room_id is None:
@@ -6451,13 +6451,13 @@ async def save_composition(
                 "SELECT id FROM rooms WHERE name='engineer'")
             if fallback_room is not None:
                 logger.warning(
-                    "save_composition(%r): no room_id given and none on record — "
+                    "save_composition(%r): no room_id given and none on record, "
                     "defaulting to the 'engineer' room (%s)", name, fallback_room)
                 room_id = fallback_room
             else:
                 logger.warning(
                     "save_composition(%r): no room_id given, none on record, and no "
-                    "'engineer' room exists here — leaving room_id unassigned", name)
+                    "'engineer' room exists here, leaving room_id unassigned", name)
     return await pool.fetchval(  # type: ignore[no-any-return]
         "INSERT INTO compositions (name, kind, spec, webhook_url, active, room_id, "
         " description, section, refresh_secs) "
@@ -6768,9 +6768,9 @@ BRIEFING: dict[str, Any] = {
     "sections": [
         # the raw open-thread select showed 919 rows on 2026-07-11, 850 of them untouched
         # miner echoes; the wall function is the graded truth
-        {"title": "The wall — what's genuinely unresolved",
+        {"title": "The wall: what's genuinely unresolved",
          "body": {"op": "function", "name": "wall"}},
-        {"title": "Recent work — what just happened",
+        {"title": "Recent work: what just happened",
          "body": {"op": "table",
                   "from": {"op": "take", "n": 8,
                            "from": {"op": "order", "by": "authored_date", "dir": "desc",
@@ -6780,7 +6780,7 @@ BRIEFING: dict[str, Any] = {
                   "columns": [{"name": "change", "property": "summary"},
                               {"name": "scope", "property": "scope"},
                               {"name": "when", "property": "authored_date"}]}},
-        {"title": "Resolved — self-healed by later commits",
+        {"title": "Resolved: self-healed by later commits",
          "body": {"op": "table",
                   "from": {"op": "select", "object_type": "Thread",
                            "where": [{"property": "status", "op": "eq", "value": "resolved"}]},
@@ -6796,7 +6796,7 @@ BRIEFING: dict[str, Any] = {
 DECISION_LOG: dict[str, Any] = {
     "op": "sections",
     "sections": [
-        {"title": "Decisions — the project's WHY (mined from commit rationale)",
+        {"title": "Decisions: the project's WHY (mined from commit rationale)",
          "body": {"op": "order", "by": "when", "dir": "desc",
                   "from": {"op": "table",
                            "from": {"op": "select", "object_type": "Decision",

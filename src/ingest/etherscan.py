@@ -157,7 +157,7 @@ def _parse_source(result: Any) -> dict[str, Any]:
     return out
 
 
-# --- network seam -----------------------------------------------------------
+# --- network boundary --------------------------------------------------------
 
 class EtherscanError(RuntimeError):
     pass
@@ -195,7 +195,7 @@ async def _call(
         if _is_rate_limit(msg, detail):
             await asyncio.sleep(0.3 * (attempt + 1))
             continue
-        raise EtherscanError(f"{module}.{action}: {f'{msg} — {detail}'.strip(' —') or 'error'}")
+        raise EtherscanError(f"{module}.{action}: {f'{msg}: {detail}'.strip(': ') or 'error'}")
     raise EtherscanError(f"{module}.{action}: rate limited after {retries} retries")
 
 

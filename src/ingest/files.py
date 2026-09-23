@@ -118,8 +118,8 @@ async def ingest_files(
     and the in_repo link is deduped (the gitlog lesson: re-ingest must not inflate edges).
 
     `name` is a git-derived directory basename (never caller text), but still runs through
-    task #107's validation gate (capture.py's `_validate_repo_name`) before minting, the
-    same check used at every other SoftwareProject mint site, as a second safeguard against
+    capture.py's `_validate_repo_name` before minting, the same check used at every other
+    SoftwareProject mint site, as a second safeguard against
     a genuinely degenerate basename (an empty toplevel, a stray punctuation-only directory)
     rather than trusting derivation alone. Returns `{"error": ...}` instead of raising: this
     runs from the pulse daemon's own unattended tick (pulse.py), where an uncaught exception
@@ -130,7 +130,7 @@ async def ingest_files(
     folder itself is never renamed. The moment it is renamed (the case that surfaced this: a
     repo still `repo:xxit` in the graph after being renamed to `handlingtheloop` both on
     disk and via `rename_project`), a fresh ingest here would derive the NEW basename and
-    mint a stub twin under it rather than finding the real, already-`repo:xxit` object.
+    mint a stub duplicate under it rather than finding the real, already-`repo:xxit` object.
     `_resolve_repo` (capture.py, the same lookup `create_project`/`_mint_or_find_repo`
     already use) is tried first; only a genuine zero-match mints."""
     top = _git(path, "rev-parse", "--show-toplevel").strip()

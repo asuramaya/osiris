@@ -170,12 +170,12 @@ async def _matching_ingested_project(actions: Actions, local_part: str) -> uuid.
 async def declare_machine_identity(
     actions: Actions, *, email: str, project: str, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE declare-machine-identity DOOR: covers what the ingest heuristic
+    """THE declare-machine-identity FUNCTION: covers what the ingest heuristic
     (_matching_ingested_project + _is_machine_shaped_domain) misses, a bot committing
     from a real-looking domain, or a local part that doesn't happen to match any repo
     name. Manual, so it demands a written `because`, never silent. Mints/finds the
     MachineIdentity, bridges any pre-existing dev:<email> Person via same_as (never
-    deleted, never retyped), and mints committer_for with `since` = now (this door has
+    deleted, never retyped), and mints committer_for with `since` = now (this function has
     no commit history of its own to date it by, unlike the ingest heuristic's own
     first-seen date). Idempotent: re-declaring the same (email, project) is a no-op past
     the first call, same dedup discipline as ingest_repo's own links."""
@@ -300,18 +300,18 @@ async def ingest_repo(
     never a replacement, never asserted when the resolver can't name a live holder for
     that exact instant.
 
-    THE INGEST-ACTOR FALLBACK, built after the primary signal and the backfill door:
+    THE INGEST-ACTOR FALLBACK, built after the primary signal and the backfill function:
     when NO seat is bound to this worktree at all (`committed_by_seat is None`, a bare
     checkout, or a project nobody has ever `bind_seat_tree`d), `actor` (the identity that
     CALLED this ingest, when the caller has one to pass; `ingest_project`'s own
-    self-service door does) is the fallback committed_by for every commit THIS RUN newly
+    self-service path does) is the fallback committed_by for every commit THIS RUN newly
     links `in_repo`, a strictly weaker signal than the worktree+time primary (it names
     who ran ingest NOW, not who held any seat when the commit was AUTHORED), scoped on
     purpose to commits actually touched by this call, never applied retroactively to the
-    whole repo's history (the backfill door's own time-windowed resolution stays the
-    only door for that). A seat IS bound but its holds history doesn't cover the
+    whole repo's history (the backfill function's own time-windowed resolution stays the
+    only path for that). A seat IS bound but its holds history doesn't cover the
     commit's own author time is a DIFFERENT, genuine "don't know" shape (the backfill
-    door's `abstained` bucket); this fallback never masks that one, it only fires when
+    function's `abstained` bucket); this fallback never masks that one, it only fires when
     there is no seat to ask at all. `actor=None` (the default; most callers, including
     the bare CLI/cron path, have no caller identity to offer) leaves this fallback dark,
     unchanged from before it existed."""

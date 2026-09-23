@@ -70,6 +70,9 @@ REGEN_CMD = "uv run python tests/test_product_voice.py --write"
 REGEN_NAMES_CMD = "uv run python tests/test_product_voice.py --write-names"
 
 _ID_RE = re.compile(r"\b[0-9a-f]{8}\b")
+_ID_TYPE_PREFIX_RE = re.compile(
+    r"\b(?:agent|seat|repo|project|principal|thread|decision):[0-9a-f]{8}\b", re.IGNORECASE)
+_ID_ROMAN_SUFFIX_RE = re.compile(r"\b[0-9a-f]{8}-[ivxlcdm]+\b", re.IGNORECASE)
 _MAIL_RE = re.compile(r"\b(?:mail|dm|msg)\s+#?\d{3,}\b", re.IGNORECASE)
 _WAVE_RE = re.compile(r"\bwave\s+\d+\b|\bgate\s+w\d+\b|\bw\d{2,4}\b", re.IGNORECASE)
 _OPERATOR_QUOTE_RE = re.compile(
@@ -115,11 +118,30 @@ def _names_re() -> re.Pattern[str]:
     return re.compile(r"\b(" + "|".join(escaped) + r")\b", re.IGNORECASE)
 
 
+def _count_id_hits(text: str) -> int:
+    """An 8-hex token is a real object canonical, not a ruling/decision/thread citation,
+    when it carries a type prefix (`agent:`, `seat:`, `repo:`, `project:`, `principal:`,
+    `thread:`, `decision:`) or a trailing Roman-numeral generation suffix (`-vi`). Either
+    marker excludes the token from the count."""
+    canonical_spans = [
+        m.span() for m in _ID_TYPE_PREFIX_RE.finditer(text)
+    ] + [
+        m.span() for m in _ID_ROMAN_SUFFIX_RE.finditer(text)
+    ]
+    count = 0
+    for m in _ID_RE.finditer(text):
+        start, end = m.span()
+        if any(cs <= start and end <= ce for cs, ce in canonical_spans):
+            continue
+        count += 1
+    return count
+
+
 def _count_violations(text: str, names_re: re.Pattern[str]) -> int:
     return (
         len(names_re.findall(text))
         + len(_MAIL_RE.findall(text))
-        + len(_ID_RE.findall(text))
+        + _count_id_hits(text)
         + len(_WAVE_RE.findall(text))
         + len(_OPERATOR_QUOTE_RE.findall(text))
         + len(_EM_DASH_RE.findall(text))

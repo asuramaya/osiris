@@ -478,7 +478,7 @@ async def test_chaos_replay_reports_a_stranger_minted_over_a_listed_body(
         read_exe=lambda pid: _VERSIONS_EXE, read_cwd=lambda pid: "/code/osiris",
         sleep=_noop_sleep)
     assert report["ok"] is False
-    assert any("stranger was minted" in f for f in report["findings"])
+    assert any("new identity was minted" in f for f in report["findings"])
 
 
 async def test_chaos_replay_reports_an_advisory_lock_leak(actions: Actions) -> None:

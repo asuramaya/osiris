@@ -57,8 +57,8 @@ class Settings(BaseSettings):
     # reads the OSIRIS_HARNESS_ADAPTER env var into this field by name, so a caller need
     # only read `settings.osiris_harness_adapter`. 'auto' (default) picks the first
     # available() adapter in [claude, dsh, crush, cursor] order; naming one forces it even
-    # when unavailable (every door then refuses by name, never silently falls through to a
-    # different adapter than the one named).
+    # when unavailable (every adapter then refuses by name, never silently falls through
+    # to a different adapter than the one named).
     osiris_harness_adapter: str = "auto"
     osiris_crush_binary: str = "crush"
     # The DSH opt-in profile: dsh's own launcher (`dsh --profile <name> [args...]`)
@@ -78,8 +78,8 @@ class Settings(BaseSettings):
     # Semantic search. The Claude CLI has no embeddings endpoint and keyless is a feature,
     # so the embedder is a local static model (model2vec, a distilled lookup table: pure
     # CPU, no key, no GPU, roughly 30MB from Hugging Face on first load). 'auto' = use
-    # model2vec when importable, else the semantic door stays closed and search runs its
-    # lexical doors only; 'none' forces it closed.
+    # model2vec when importable, else semantic search stays disabled and search runs its
+    # lexical paths only; 'none' forces it disabled.
     osiris_embed_provider: str = "auto"
     osiris_embed_model: str = "minishlab/potion-base-8M"
     # A remote satellite agent (cron phase 6/7): this agent's id and the vantages it
@@ -252,7 +252,7 @@ class Settings(BaseSettings):
     # its post-compaction context fully intact; a compaction-count gate excludes exactly
     # the sessions worth resuming. The replacement checks the same tail-bytes number the
     # ceiling above already checks against a minimum floor instead: a tail at or near zero
-    # means the session closed at the compaction seam itself, genuinely nothing to resume
+    # means the session closed at the compaction boundary itself, genuinely nothing to resume
     # into. Default picked, not measured the way the old gate's larger study was: small
     # enough to pass any transcript with real post-boundary activity, large enough to
     # exclude a truly-empty tail. A one-constant change if evidence says otherwise.
@@ -268,19 +268,20 @@ class Settings(BaseSettings):
     # streaming turn, or the echo of someone typing). A busy window's mail waits for the
     # next tick; delivery to a live owner covers the actively-working case.
     osiris_poke_min_idle_secs: int = 600
-    # The lease gate's refusal. Off means today's advisory-only birth receipt. On means a
-    # foreign body summoned into a seat's charter room while the resident lineage's pulse
-    # is live is refused, not warned, closing the failure class of unattributed presence.
+    # The lease gate's refusal. Off means today's advisory-only startup record. On means a
+    # foreign process spawned into a seat's own workspace while the resident lineage's
+    # pulse is live is refused, not warned, closing the failure class of unattributed
+    # presence.
     # The build is complete either way; the flag exists because refusal semantics that can
     # block anyone's hand need an explicit ruling before they arm (a lease that can block
     # the owner needs the owner's word).
     osiris_lease_refuse: bool = False
-    # The poke-only arm: when true, the trigger's ladder ends at the poke, deliver to a
-    # live owner, type into an open window, and nothing else. No resume, no mint, no new
+    # The poke-only arm: when true, the trigger's escalation stops at the poke, deliver to
+    # a live owner, type into an open window, and nothing else. No resume, no mint, no new
     # process, ever. Mail with no live owner and no open window stays pull-only until the
-    # spawning rungs get their own re-arm. This is a lane switch, deliberately separate
-    # from osiris_trigger_enabled (the ladder's master) and from the miner's license:
-    # three different levers, three different costs.
+    # spawning stages get their own re-arm. This is a lane switch, deliberately separate
+    # from osiris_trigger_enabled (the master switch for the whole escalation) and from
+    # the miner's license: three different levers, three different costs.
     osiris_trigger_poke_only: bool = False
     # Wake hands: a triggered `claude -p` is headless, it cannot answer a permission
     # prompt, so in a repo with no stored approval every mcp__osiris__* call is silently
@@ -327,13 +328,13 @@ class Settings(BaseSettings):
     # downgrade of a working seat. The triage and mint lanes keep osiris_wake_model.
     osiris_dm_resume_model: str = ""
     # The default spawn lane: launch_seat's default is the harness-native substrate
-    # (`claude --bg`), so every body it creates is visible in the operator's own agent
+    # (`claude --bg`), so every process it creates is visible in the operator's own agent
     # list by construction. "pty" keeps the old osiris PTY-broker lane alive as an
     # explicit, vendor-neutral fallback, for an incident, or a harness build that lacks
     # --bg. A launch_seat caller's own `substrate` argument always wins over this
     # fleet-wide default.
     osiris_launch_substrate: str = "harness"
-    # Crash replay as a gate: off by default, the same law as osiris_trigger_enabled: a
+    # Crash replay as a gate: off by default, the same policy as osiris_trigger_enabled: a
     # mechanism that kills a live service earns its own kill switch, never inherits one.
     # When on, `osiris deploy` runs the chaos-replay check as an additional gate after its
     # own ordinary graceful restart.
@@ -368,7 +369,7 @@ class Settings(BaseSettings):
     # running its own baseline suite, which was doing its job. Arming this, at actual
     # deploy time, is a separate decision from shipping the code.
     osiris_deploy_full_suite_gate: bool = False
-    # The pair heartbeat: off by default, the same law as osiris_trigger_enabled: a
+    # The pair heartbeat: off by default, the same policy as osiris_trigger_enabled: a
     # mechanism that pages a human's desk earns its own kill switch, never inherits one.
     # When on, a tick alarms on any manager-worker pair's ask-graded DM sitting unread
     # past osiris_mail_lease_secs while the addressee is provably not mid-turn; after
@@ -377,43 +378,43 @@ class Settings(BaseSettings):
     # twice on the same message.
     osiris_pit_watch_enabled: bool = False
     osiris_pit_watch_escalate_at: int = 3
-    # The fleet reconcile reaper: off by default, the same law as osiris_trigger_enabled:
+    # The fleet reconcile reaper: off by default, the same policy as osiris_trigger_enabled:
     # a mechanism that writes to the graph on a schedule earns its own kill switch. When
-    # on, a tick runs the reconcile-and-execute verb, the exact same acting verb reachable
+    # on, a tick runs the reconcile-and-execute action, the exact same action reachable
     # by hand, composing the fold and duplicate-resolution primitives for the two bulk-act
     # buckets, plus a row-scoped mount drop for dead-project residue. Rows a human has
     # flagged for manual review are never touched, by construction. Flipping this flag is
     # a second signature on top of a reviewed diff; the code ships inert, a human decides
     # separately when it may actually act.
     osiris_fleet_reconcile_enabled: bool = False
-    # The closure miner's cadence: off by default, the same law as
+    # The closure miner's cadence: off by default, the same policy as
     # osiris_fleet_reconcile_enabled: a mechanism that writes to the graph on a schedule
     # earns its own kill switch, never inherits one. When on, a tick runs the
-    # commit-driven closure sweep fleet-wide, the exact same acting verb reachable by
+    # commit-driven closure sweep fleet-wide, the exact same action reachable by
     # hand. Its blast radius is narrower than the reaper's (only a commit literally naming
     # a thread's own short id auto-closes; everything else stays a candidate for a human
     # to confirm) but it still writes unattended, so it gets the same second signature
     # before it may act.
     osiris_closure_miner_enabled: bool = False
     # The phantom-heal sweep's own switch: the false-mint class must heal mechanically,
-    # never by hand, the same law as the two above: a mechanism that writes to the graph
+    # never by hand, the same policy as the two above: a mechanism that writes to the graph
     # on a schedule earns its own kill switch. Off by default. When on, a periodic tick
     # folds only fresh, never-flagged zero-turn phantoms (the going-forward class this was
     # built for); a phantom already flagged but never fully unwound is reported via an
     # obligation, never auto-completed, regardless of this switch.
     osiris_phantom_heal_enabled: bool = False
     # The phantom/fold backlog reap's own switch: this class of cleanup should manage
-    # itself rather than be babysat, the same law as every switch above: a mechanism that
-    # writes to the graph on a schedule earns its own kill switch, never inherits one. Off
-    # by default. When on, a periodic tick reinstates a false-mint generation only when an
-    # independent census confirms a live body beyond the graph's own claim, and
-    # invalidates a duplicate project-membership edge only when exactly one live target is
-    # a non-active, non-merged project. Parallel-lives and half-healed phantom threads are
-    # counted and surfaced, never acted on; the code's own standing behavior there is
-    # unchanged by this.
+    # itself rather than be babysat, the same policy as every switch above: a mechanism
+    # that writes to the graph on a schedule earns its own kill switch, never inherits
+    # one. Off by default. When on, a periodic tick reinstates a false-mint generation
+    # only when an independent census confirms a live process beyond the graph's own
+    # claim, and invalidates a duplicate project-membership edge only when exactly one
+    # live target is a non-active, non-merged project. Parallel-lives and half-healed
+    # phantom threads are counted and surfaced, never acted on; the code's own standing
+    # behavior there is unchanged by this.
     osiris_phantom_fold_reap_enabled: bool = False
     # The tree-ingest alarm's own switch: self-healing over manual bug-chasing, the same
-    # law as the switches above: a mechanism that acts on a schedule earns its own kill
+    # policy as the switches above: a mechanism that acts on a schedule earns its own kill
     # switch, never inherits one. Off by default. When on, a periodic tick discovers trees
     # fleet-wide and, for each tree its owning seat has never been alarmed about in the
     # last 24h, sends that seat a graded ask; it never ingests anything itself, ingesting
@@ -422,7 +423,7 @@ class Settings(BaseSettings):
     osiris_tree_ingest_alarm_enabled: bool = False
     # The landing audit's own switch: a prior gap found the audit's only caller had not
     # completed in days, blocked by an unrelated gate, meaning the check itself was
-    # correct but its sole trigger was dark. Same law as the switches above: a mechanism
+    # correct but its sole trigger was dark. Same policy as the switches above: a mechanism
     # that writes to the graph on a schedule earns its own kill switch, never inherits
     # one. Off by default. When on, a periodic tick runs the landing audit fleet-wide,
     # minting one obligation per branch unmerged into the main line for 48h or more with
@@ -442,27 +443,28 @@ class Settings(BaseSettings):
     # osiris_obligation_hygiene_enabled above, keyed off `stale_after` rather than
     # idle-since-last-touch: an open obligation thread with no annotation, owner change,
     # or resolution for 21+ days past its own stale_after reclassifies to kind='task'
-    # (never resolved, never a status change), with a receipt on the owner's mail. Off by
+    # (never resolved, never a status change), with a notice on the owner's mail. Off by
     # default; no explicit "ship it on" instruction accompanied this one, unlike its named
     # exceptions above.
     osiris_no_regrow_enabled: bool = True
     # The retention heartbeat's own switch: a daily tick deletes published outbox rows and
-    # audit_log rows older than 90 days, batched, and posts a desk receipt naming both
+    # audit_log rows older than 90 days, batched, and posts a desk notice naming both
     # counts every run. True by default, same named exception as
     # osiris_obligation_hygiene_enabled above, shipped on by explicit request. Measured
     # live before this ran: hundreds of megabytes each in the outbox and audit_log
     # tables, neither ever pruned before this.
     osiris_retention_heartbeat_enabled: bool = True
-    # The soul store's cold tier switch: memory gets tiers, not deletion. A daily tick
-    # folds up to a bounded batch of sessions untouched for 30+ days into one compressed
-    # cold-tier row each, deleting their per-line hot-tier rows; the read paths (resume,
-    # verify, rematerialize) read through both tiers transparently. True by default, same
-    # named exception as osiris_obligation_hygiene_enabled above, shipped on by explicit
-    # request.
+    # The session-memory store's cold tier switch: memory gets tiers, not deletion. A
+    # daily tick folds up to a bounded batch of sessions untouched for 30+ days into one
+    # compressed cold-tier row each, deleting their per-line hot-tier rows; the read
+    # paths (resume, verify, rematerialize) read through both tiers transparently. True
+    # by default, same named exception as osiris_obligation_hygiene_enabled above,
+    # shipped on by explicit request.
     osiris_soul_cold_tier_enabled: bool = True
-    # The gates-are-law enforcement switch: same law as osiris_closure_miner_enabled, but
-    # the action here is a refusal, not a write: the commit-time gate script always runs
-    # lint/type/scoped-test checks against a commit and always prints what it found,
+    # The gates-are-mandatory enforcement switch: same policy as
+    # osiris_closure_miner_enabled, but the action here is a refusal, not a write: the
+    # commit-time gate script always runs lint/type/scoped-test checks against a commit
+    # and always prints what it found,
     # whether this is on or off; the switch controls only whether a failing gate can
     # actually abort a `git commit` in this shared, multi-agent-concurrent tree. Armed
     # true after both blockers cleared: a retroactive replay across recent history (the
@@ -498,7 +500,7 @@ class Settings(BaseSettings):
     # exactly why wake() prefixes its own self-identifying marker, it refuses to hide
     # behind that label, and that discipline stays, it is attribution honesty, not a
     # workaround. Still not a public API: an undocumented internal of someone else's
-    # product, free to change without notice, which is why the injectable nudge seam in
+    # product, free to change without notice, which is why the injectable nudge hook in
     # the trigger's own tick stays, operational insurance now, not legal cover.
     osiris_wake_enabled: bool = True
     # The standing model choice (the intent). The harness silently demotes the intended
@@ -515,7 +517,7 @@ class Settings(BaseSettings):
     # Memory diagnostics: osiris-mcp has been observed oscillating within its memory cap
     # and swapping on some incarnations, cause unmeasured since the last capacity change.
     # Python's tracemalloc itself costs real CPU and memory overhead while tracing, off by
-    # default, the same law every other diagnostic or write mechanism in this file
+    # default, the same policy every other diagnostic or write mechanism in this file
     # follows, so it never runs silently in production; an operator flips it on for a
     # measurement window only. The first version of this diagnostic caused a live outage
     # the same night it shipped: an unbounded trace pinned the event loop and only a hard
@@ -548,7 +550,7 @@ class Settings(BaseSettings):
     osiris_miner_daily_budget_base: int = 5
     osiris_miner_new_pair_starter_budget: int = 1
     osiris_miner_zero_acceptance_window_days: int = 7
-    # Layout knobs (product law: every action has a door): the heartbeat's own per-tick
+    # Layout knobs (product convention: every action is configurable): the heartbeat's own per-tick
     # batch size and cron cadence, both previously bare module constants. batch_size takes
     # effect on the next tick and is genuinely table-driven (the layout batch job reads it
     # via the live settings-service path, not the env-overlay path, which only covers

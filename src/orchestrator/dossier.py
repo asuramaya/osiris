@@ -236,7 +236,7 @@ async def entity_dossier(
         if len(rels) > 10:
             out["relationships_note"] = (
                 f"{len(rels)} relationship(s) across {len(by_type)} type(s); showing the "
-                "first 10 — pass want_relationships=True for the full list")
+                "first 10, pass want_relationships=True for the full list")
     return out
 
 

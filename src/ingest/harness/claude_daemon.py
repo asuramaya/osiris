@@ -105,9 +105,9 @@ async def reply(job: dict[str, Any], text: str) -> bool:
     (wake() does exactly this). Attribution honesty is ours to keep, not the harness's to
     give. (2) this is an undocumented internal of someone else's product, sanctioned to
     use but free to break without notice, so the injectable `nudge` parameter in
-    trigger.trigger_mail_tick stays as the swap seam, kept as operational insurance rather
-    than legal cover. (`job_for` above is a read of daemon job state, the same liveness
-    read that reachability checks consult.)"""
+    trigger.trigger_mail_tick stays as the override hook, kept as operational insurance
+    rather than legal cover. (`job_for` above is a read of daemon job state, the same
+    liveness read that reachability checks consult.)"""
     key = _control_key()
     raw = str(job.get("_sock") or "")
     short = str(job.get("short") or "")

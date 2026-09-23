@@ -1,4 +1,4 @@
-"""LLM usage telemetry: what the inference seam actually spent, per call.
+"""LLM usage telemetry: what each inference call actually spent.
 
 Until this, the auto-ingest's cost was an ESTIMATE (per-call size x the 10-minute rate cap).
 Each completion now records its real tokens, and, on the CLI backend, the real cost_usd from

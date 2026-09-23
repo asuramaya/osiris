@@ -318,9 +318,10 @@ async def compute_self_compaction(
     job = await job_for({session_id, session_id[:8]})
     if job is None:
         return {**out, "why": "no daemon job wears this session (foreground tab, or bg-cold)"}
-    text = (f"/compact osiris self-compaction at {pct}% (>= {SELF_COMPACT_PCT}%, ruling "
-            f"a3fb7c11): settle() reported every box complete for {row['agent_id']}; the "
-            "successor should orient() and read the is_handoff marker first")
+    text = (f"/compact osiris self-compaction at {pct}% (>= {SELF_COMPACT_PCT}%, per the "
+            f"settle-first ruling): settle() reported every box complete for "
+            f"{row['agent_id']}; the successor should orient() and read the is_handoff "
+            "marker first")
     ok = bool(await reply(job, text))
     return {**out, "compacted": ok, "agent_id": str(row["agent_id"]),
             "job_short": str(job.get("short") or ""),
@@ -523,8 +524,8 @@ async def _confess_if_parked(
     from src.orchestrator.mailbox import send_message
     await send_message(
         conn, from_agent=agent_id, from_project=project, to_agent=manager_seat,
-        body=f"stopping; last turn ended on an unanswered question with no mail ask sent "
-             f"— likely parked, nobody's in the room to answer it: “{q}”",
+        body=f"stopping; last turn ended on an unanswered question with no mail ask sent, "
+             f"likely parked, nobody's in the room to answer it: “{q}”",
         grade="fyi")
 
 
@@ -629,7 +630,7 @@ async def _confess_if_practice_violated(
     await send_message(
         conn, from_agent=agent_id, from_project=project, to_agent=manager_seat,
         body=f"stopping; this turn may have violated standing Practice {hit['practice_id']} "
-             f"(\"{hit['statement']}\") — reversal language found ({', '.join(hit['cues'])}); "
+             f"(\"{hit['statement']}\"), reversal language found ({', '.join(hit['cues'])}); "
              "a heuristic flag, not a verdict, worth a look",
         grade="fyi")
 

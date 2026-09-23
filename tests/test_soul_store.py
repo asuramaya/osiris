@@ -576,7 +576,7 @@ async def test_rematerialize_to_disk_refuses_a_live_transcript(
     os.utime(dest, (future, future))
 
     receipt = await store.rematerialize_to_disk("a11ce00b", dest=str(dest))
-    assert receipt.get("error", "").startswith("refused — a LIVE transcript")
+    assert receipt.get("error", "").startswith("refused: a LIVE transcript")
     assert dest.read_text() == "someone else's newer content\n"  # untouched
 
 
@@ -2272,7 +2272,7 @@ async def test_forget_and_reingest_reports_nothing_to_reconcile_when_never_inges
     p = _write_transcript(tmp_path / "neveringested.jsonl", _synthetic_lines(2))
     out = await store.forget_and_reingest(str(p), "notyetseen1")
     assert out == {"reingested": False,
-                   "reason": "never soul-stored — nothing to reconcile"}
+                   "reason": "never soul-stored: nothing to reconcile"}
     assert await store.raw_lines("notyetseen1") is None  # never invented anything
 
 

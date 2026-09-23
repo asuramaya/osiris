@@ -27,13 +27,13 @@ SPLIT BY CONFIDENCE, chosen deliberately over auto-closing everything:
               commit id this module already selected as the witness. Reversible,
               provenanced, never a DELETE.
   · WEAK    → NEVER closes. It becomes a `rot_candidate` carrying its evidence, for a human
-              to confirm. The membrane holds where the evidence is thin (constitution #6:
+              to confirm. The boundary holds where the evidence is thin (constitution #6:
               the loop may close, but never silently and never irreversibly).
 
-AND THE HARD GUARD, which outranks every signal below: a thread ANY MIND HAS TOUCHED
-(evidence_class self_declared: an operator's duty, an agent's declared obligation) is NEVER
-auto-closed by a machine reading a git log. A guess may be swept by evidence; a declaration
-is answered only by its owner. This is the line that makes the crossing safe.
+AND THE HARD GUARD, which outranks every signal below: a thread ANY PERSON OR AGENT HAS
+TOUCHED (evidence_class self_declared: a human's duty, an agent's declared obligation) is
+NEVER auto-closed by a machine reading a git log. A guess may be swept by evidence; a
+declaration is answered only by its owner. This is the line that makes the crossing safe.
 """
 from __future__ import annotations
 
@@ -79,9 +79,10 @@ _CONF = confidence_for(EvidenceClass.DERIVED)
 # record, where a false "done" outlives everyone who could remember it was false.
 #
 # So the automatic lane is reserved for the ONE unambiguous witness: THE COMMIT NAMES THE
-# THREAD. A mind wrote that id into a commit message on purpose; nothing else here is a fact.
-# Everything lexical, however strong it scores, becomes a rot_candidate carrying its evidence,
-# for a human to confirm in bulk. The membrane holds exactly where the evidence stops.
+# THREAD. A person wrote that id into a commit message on purpose; nothing else here is a
+# fact. Everything lexical, however strong it scores, becomes a rot_candidate carrying its
+# evidence, for a human to confirm in bulk. The boundary holds exactly where the evidence
+# stops.
 STRONG_SCORE = 9.0       # kept as the RANKING knob: best candidates first, never an auto-close
 WEAK_SCORE = 4.0         # below this there is nothing worth even asking about
 _SHORT_ID = re.compile(r"\b[0-9a-f]{8}\b")
@@ -118,7 +119,7 @@ def _evidence(
         return None
     top = sorted(shared, key=lambda t: -idf.get(t, 0.0))[:5]
     hedge = "likely" if score >= strong else "possibly"
-    why = (f"{hedge} — score {score:.1f} · rarest shared terms: "
+    why = (f"{hedge}, score {score:.1f}, rarest shared terms: "
            + ", ".join(f"{t}({idf.get(t, 0.0):.1f})" for t in top))
     return ("weak", score, why)      # lexical similarity ASKS. It never asserts.
 
@@ -126,8 +127,8 @@ def _evidence(
 async def _open_untouched_threads(
     pool: asyncpg.Pool, repo: str | None,
 ) -> list[dict[str, Any]]:
-    """Open threads NO MIND HAS TOUCHED, in one tree (or all). The self_declared exclusion is
-    the hard guard: a declared duty is never a machine's to close."""
+    """Open threads NO PERSON OR AGENT HAS TOUCHED, in one tree (or all). The self_declared
+    exclusion is the hard guard: a declared duty is never a machine's to close."""
     return [dict(r) for r in await pool.fetch(
         "SELECT o.id, o.created_at, "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -141,7 +142,8 @@ async def _open_untouched_threads(
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "  AND a.name='status' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1),'open') "
         "  = 'open' "
-        # THE HARD GUARD: a mind touched it, so a git log does not get to answer for it
+        # THE HARD GUARD: a person or agent touched it, so a git log does not get to answer
+        # for it
         "AND NOT EXISTS (SELECT 1 FROM assertions a WHERE a.object_id=o.id "
         "  AND a.evidence_class='self_declared') "
         # and never re-judge one already awaiting the human's confirmation
@@ -198,8 +200,8 @@ async def close_by_commits(
     THE WATERMARK. Without it this was O(threads x ALL commits) on EVERY call, forever: a
     scheduled sweep would re-derive work it had already fully derived last time, unboundedly,
     as both corpora grow. `threads` stays unscoped by design (it's already a small,
-    slow-changing set, open AND untouched, which shrinks the moment a mind or this sweep
-    itself acts on a row); `commits` is now scoped to `since` the last successful
+    slow-changing set, open AND untouched, which shrinks the moment a person, an agent, or
+    this sweep itself acts on a row); `commits` is now scoped to `since` the last successful
     (non-dry-run) pass's watermark, stored under key `f"{_WATERMARK_PREFIX}:{repo or '*'}"`
     in the generic `watermarks` table (monitor.get_cursor/set_cursor, the same primitive
     session-sensing's transcript cursor already uses, not a new mechanism). CORRECTNESS:
@@ -223,7 +225,7 @@ async def close_by_commits(
         return {"repo": repo, "threads": len(threads), "commits": len(commits),
                 "since": since.isoformat() if since else None,
                 "resolved": 0, "candidates": 0,
-                "note": "nothing to witness — this tree's work is not in the graph"}
+                "note": "nothing to witness, this tree's work is not in the graph"}
 
     prepared = [(c, f"{c['subject'] or ''} {c['rationale'] or ''}",
                  c["at"] or c["created_at"].isoformat()) for c in commits]
@@ -260,7 +262,7 @@ async def close_by_commits(
                                               _CONF, evidence_class=_EC, actor=_SOURCE)
                 await actions.assert_property(
                     t["id"], "resolved_because",
-                    f"witnessed by a later commit — {cite} ({why})"[:300],
+                    f"witnessed by a later commit: {cite} ({why})"[:300],
                     _SOURCE, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
                 # THE MISSING EDGE: "strong" here is the commit literally naming the
                 # thread's short id (_evidence's ONLY strong path), exactly resolved_by's
@@ -288,7 +290,7 @@ async def close_by_commits(
             if not dry_run and weight >= strong:
                 await actions.assert_property(
                     t["id"], "rot_candidate",
-                    f"a later commit may have done this — {cite} ({why})"[:300],
+                    f"a later commit may have done this: {cite} ({why})"[:300],
                     _SOURCE, observed, _CONF, evidence_class=_EC, actor=_SOURCE)
     new_watermark = max(c["created_at"] for c in commits)
     if not dry_run:
@@ -320,7 +322,7 @@ async def close_by_commits(
         "resolved": len(resolved), "candidates": len(candidates),
         "annotated": sum(1 for c in candidates if c["score"] >= strong),
         "resolved_rows": resolved[:20], "candidate_rows": candidates[:20],
-        "note": ("DRY RUN — nothing written" if dry_run else
+        "note": ("DRY RUN, nothing written" if dry_run else
                  f"{len(resolved)} closed citing a commit; {len(candidates)} await your word"),
     }
 
@@ -338,11 +340,11 @@ async def close_by_commits_scheduled_tick(
     fleet_reconcile_heartbeat already stands on: a mechanism that WRITES to the graph on a
     schedule earns its own kill switch, never inherits one). The code ships inert;
     flipping the flag is a second signature separate from approving the diff. When on, it
-    composes `close_by_commits(dry_run=False)` fleet-wide, the exact same acting verb
+    composes `close_by_commits(dry_run=False)` fleet-wide, the exact same action
     reachable by hand, so the schedule and a human's own manual call are provably the same
     path, never two implementations that could drift.
 
-    `settings` is the injected test seam (`reconcile_scheduled_tick`'s own convention:
+    `settings` is the injected test hook (`reconcile_scheduled_tick`'s own convention:
     `st = settings or get_settings()`) so a test can flip the flag without touching the
     real environment or monkeypatching `get_settings`.
     """
@@ -360,7 +362,7 @@ async def close_by_commits_scheduled_tick(
 # THE FINDING THAT MOTIVATES THIS: closure_health's own needs_human split proved most of
 # the fleet-wide resolved-edgeless pile is not missing evidence at all: it's evidence
 # sitting in `resolved_because` PROSE ("SHIPPED in 9a12b71", "Fixed in adaptive.js: ...")
-# that a mind wrote on purpose, and `_find_artifact` structurally could never see it,
+# that a person wrote on purpose, and `_find_artifact` structurally could never see it,
 # because it only ever looked at `resolved_artifact`. A 110-thread hand-read sample found
 # this is the DOMINANT pattern, not a rare one: a crude keyword floor alone caught 429 of
 # 929 (46%), and reading the residual by hand suggested the true recoverable share is far
@@ -452,7 +454,7 @@ async def _classify_miss(
 async def close_by_prose_backfill(
     actions: Actions, *, repo: str | None = None, dry_run: bool = True,
 ) -> dict[str, Any]:
-    """Mine `resolved_because` PROSE for hash-shaped evidence a mind already wrote but
+    """Mine `resolved_because` PROSE for hash-shaped evidence a person already wrote but
     `_find_artifact` could never see, because that resolver only ever reads
     `resolved_artifact` (piece 2 of the closure-backfill work; piece 1 widened
     `_find_artifact` itself to match Thread). `repo` (a project name) scopes the read;
@@ -498,7 +500,7 @@ async def close_by_prose_backfill(
 
     NEVER MINTS resolved_by AT THE SAME TRUST LEVEL A DIRECT CITATION CARRIES: every mint
     here uses the SAME resolved_by edge shape (correct: it IS what closed the thread,
-    structurally), but from a DISTINCT source (`closure-backfill`, not a mind's own
+    structurally), but from a DISTINCT source (`closure-backfill`, not a person's own
     `session`/agent id) at `EvidenceClass.DERIVED`, this module's own existing `_EC`/`_CONF`
     constants, the same ones `close_by_commits` already uses, deliberately never
     `SELF_DECLARED`. Migration 0045 reads `thread_closure_edges`' strength from `source_id`
@@ -570,12 +572,12 @@ async def close_by_prose_backfill(
         "resolved_rows": resolved[:20], "unresolvable_rows": unresolvable[:20],
         "unresolvable_breakdown": {k: len(v) for k, v in breakdown.items()},
         "unresolvable_breakdown_rows": {k: v[:20] for k, v in breakdown.items()},
-        "note": ("DRY RUN — nothing written" if dry_run else
+        "note": ("DRY RUN, nothing written" if dry_run else
                  f"{len(resolved)} closed via prose-mined citation (weak, source="
                  f"{_BACKFILL_SOURCE!r}); {len(unresolvable)} had a hash-shaped candidate "
                  "that resolved to nothing (not_a_hash="
                  f"{len(breakdown['not_a_hash'])}, "
                  f"out_of_scope_repo={len(breakdown['out_of_scope_repo'])}, "
-                 f"genuinely_missing={len(breakdown['genuinely_missing'])} — only the last "
+                 f"genuinely_missing={len(breakdown['genuinely_missing'])}, only the last "
                  "is a real commit-ingestion gap)"),
     }

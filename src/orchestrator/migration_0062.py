@@ -1,6 +1,6 @@
-"""MIGRATION 0062, THE WORKTREE FOLD (thread 922d920c, census 583e2669's own ballgem-
-wt-358/359/361/363/nleg residue): before `census_trees`'s own worktree fix (this same
-thread), a git worktree living as a SIBLING directory under a census root -- its own
+"""MIGRATION 0062, THE WORKTREE FOLD (the census worktree fix's own ballgem-
+wt-358/359/361/363/nleg residue): before `census_trees`'s own worktree fix, a git
+worktree living as a SIBLING directory under a census root -- its own
 `.git` a FILE, the one signal the old walk couldn't tell apart from a real repo -- minted
 a phantom SoftwareProject, keyed on the worktree dir's own basename, instead of being
 filed as a Worktree of its real parent.

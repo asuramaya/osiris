@@ -1,4 +1,4 @@
-"""The disposal seam: a producer proposes candidate rows, an owning seat disposes of them, and
+"""The disposal step: a producer proposes candidate rows, an owning seat disposes of them, and
 nothing is ever left silently unjudged.
 
 A background miner minted 3,579 rows across the fleet; only 10.5% were ever touched by anyone.
@@ -6,22 +6,23 @@ Its telemetry reported what it made (e.g. {"chunks": 12, "threads": 8}), never w
 a producer that was 90% garbage and one that was 90% gold emitted identical numbers, and quality
 drifted for days with nothing anywhere able to notice.
 
-The fix is not a better prompt. It is a seam: a place where somebody with standing must look at
-each guess and say relevant or irrelevant, and where saying nothing is not an option. That
-requirement traces to an explicit operator directive: the disposal process should redirect the
-burden of judgment onto a human/seat and make it impossible to leave a guess unresolved, so every
-row ends up either relevant or irrelevant.
+The fix is not a better prompt. It is a checkpoint: a place where somebody with standing must
+look at each guess and say relevant or irrelevant, and where saying nothing is not an option.
+That requirement traces to an explicit operator directive: the disposal process should redirect
+the burden of judgment onto a human/seat and make it impossible to leave a guess unresolved, so
+every row ends up either relevant or irrelevant.
 
 Four rules, each one tracing back to a bug that actually shipped:
 
-  1. ONLY A SEAT WITH STANDING MAY DISPOSE OF A PROJECT'S PILE. A stranger judging another
-     project's rows would be acting on judgement instead of proof, which this design forbids.
+  1. ONLY A SEAT WITH STANDING MAY DISPOSE OF A PROJECT'S PILE. An unrelated party judging
+     another project's rows would be acting on judgement instead of proof, which this design
+     forbids.
      Each seat disposes of its own project's pile only; nobody else's pile is theirs to judge.
 
   2. ADMIT PROMOTES IN PLACE. The row is not copied, it is adopted: a self-declared assertion in
      the seat's own name, with an owner and a reason. That single act makes it the seat's word
      rather than the machine's, and it puts the row permanently behind the disposal guard, which
-     never touches anything a mind has already signed.
+     never touches anything a human/seat has already signed.
 
   3. A DROP MUST NAME ITS CLASS. Not "no", but why no. The taxonomy below was derived by reading
      a large hand-sorted sample of candidate rows, and it is the extractor's specification: every
@@ -49,7 +50,7 @@ import asyncpg
 
 from src.actions.core import Actions
 
-_EC = "self_declared"   # a disposition is a mind's word, never the machine's
+_EC = "self_declared"   # a disposition is a human/seat's word, never the machine's
 _CONF = 0.9
 
 # The taxonomy: derived from a hand-sorted sample of 264 candidate rows. Each class is a rule
@@ -84,9 +85,10 @@ _MINER_ORIGIN = (
     "                ORDER BY a.object_id, a.observed_at, a.id) "
 )
 
-# A candidate is: the miner's own output (derived, from a mining source), that no mind has ever
-# touched, not already disposed of, and still open. The moment a mind lays a self_declared
-# assertion on it, it stops being a candidate and becomes that mind's business, permanently.
+# A candidate is: the miner's own output (derived, from a mining source), that no human/seat has
+# ever touched, not already disposed of, and still open. The moment a human/seat lays a
+# self_declared assertion on it, it stops being a candidate and becomes their business,
+# permanently.
 _CANDIDATE_WHERE = (
     "  AND g.ec='derived' "
     "  AND (g.source_id LIKE 'agent:%' OR g.source_id IN ('session-miner','git-memory')) "
@@ -146,7 +148,7 @@ async def candidates(
                         "summary": r["summary"]}
                        for r in rows if r["summary"]],
         "how": "dispose(admit=[{id, because, owner?}], drop=[{id, why, because?}], "
-               "ask=[{id, because?, owner?}]) — "
+               "ask=[{id, because?, owner?}]): "
                f"why ∈ {sorted(DROP_CLASSES)}. A guess is not a duty: expect to drop ~9 in 10; "
                "a real open QUESTION is asked, never admitted into a promise.",
     }
@@ -168,8 +170,9 @@ async def _resolve(pool: asyncpg.Pool, ref: str) -> uuid.UUID | None:
 
 
 async def _is_candidate(pool: asyncpg.Pool, tid: uuid.UUID) -> bool:
-    """Guard: never dispose of something a mind already signed. Checked per row, at write time,
-    not once at the top, because the pile a seat is reading can be adopted underneath it."""
+    """Guard: never dispose of something a human/seat already signed. Checked per row, at
+    write time, not once at the top, because the pile a seat is reading can be adopted
+    underneath it."""
     return bool(await pool.fetchval(
         _MINER_ORIGIN +
         "SELECT 1 FROM objects o JOIN origin g ON g.object_id=o.id "
@@ -213,11 +216,11 @@ async def dispose(
         if tid is None or not because:
             done["skipped"].append({"id": item.get("id"),
                                     "why": "unknown id" if tid is None
-                                           else "an admit needs `because` — why is it real?"})
+                                           else "an admit needs `because`: why is it real?"})
             continue
         if not await _is_candidate(actions.pool, tid):
-            done["skipped"].append({"id": item.get("id"), "why": "not a candidate (a mind has "
-                                                                "already signed it, or it is "
+            done["skipped"].append({"id": item.get("id"), "why": "not a candidate (a human/seat "
+                                                                "has already signed it, or it is "
                                                                 "already disposed)"})
             continue
         # Promotion: the miner proposed, the seat adopts. Self-declared, in the seat's own name.
@@ -245,7 +248,7 @@ async def dispose(
             done["skipped"].append({"id": item.get("id"), "why": "not a candidate"})
             continue
         note = str(item.get("because") or "").strip()
-        reason = f"{why.upper()} — {DROP_CLASSES[why]}" + (f" · {note}" if note else "")
+        reason = f"{why.upper()}: {DROP_CLASSES[why]}" + (f" · {note}" if note else "")
         # A compensating event, never a delete: the row stays readable and this unwinds with a
         # single re-assert of retracted=''.
         await actions.assert_property(tid, "retracted", True, source, now, _CONF,
@@ -369,10 +372,10 @@ async def adversary_yield(
                            "corpse_excluded": corpse}
     if judged:
         out["yield"] = round((admitted + asked) / judged, 3)
-        out["reads"] = ("admitted ÷ judged — the adversary's LICENCE. Osiris's own first pass "
+        out["reads"] = ("admitted / judged, the adversary's LICENCE. Osiris's own first pass "
                         "scored 0.098 (26 of 264). Below the floor, it does not get to spend.")
     else:
-        out["reads"] = "nothing judged in this window — the seam has not been walked"
+        out["reads"] = "nothing judged in this window, the disposal step has not been walked"
     if judged_h:
         out["yield_honest"] = round(
             (int(row["admitted_h"] or 0) + int(row["asked_h"] or 0)) / judged_h, 3)
@@ -425,14 +428,14 @@ async def licence(pool: asyncpg.Pool, *, days: int = 30) -> dict[str, Any]:
     # bad pile. With no corpse rows the two rates are the same number.
     rate = m.get("yield_honest") if m.get("judged_honest") else m.get("yield")
     corpse_note = (f" ({m['corpse_excluded']} corpse row(s) born after their project's last "
-                   "superseding ruling excluded — the honest denominator, 1258d382)"
+                   "superseding ruling excluded, the honest denominator)"
                    if m.get("corpse_excluded") else "")
     if judged < LICENCE_MIN_JUDGED:
-        return {"may_spend": True, "reason": f"only {judged} rows judged in {days}d — a producer "
+        return {"may_spend": True, "reason": f"only {judged} rows judged in {days}d, a producer "
                 f"is given a real sample ({LICENCE_MIN_JUDGED}) before it is judged", **m}
     if rate is not None and rate < YIELD_FLOOR:
         return {"may_spend": False, "reason": f"YIELD {rate} IS BELOW THE FLOOR ({YIELD_FLOOR}) "
-                f"over {judged} judged rows in {days}d{corpse_note} — the adversary is not "
+                f"over {judged} judged rows in {days}d{corpse_note}, the adversary is not "
                 "earning its tokens "
                 "and has lost the right to spend them. Fix its prompt, or leave it dark. Nothing "
                 "auto-restarts it (Osiris has no hands over your systems).", **m}
@@ -475,7 +478,7 @@ async def orphans(pool: asyncpg.Pool) -> dict[str, Any]:
     return {
         "orphans": total,
         "by_producer": [dict(r) for r in rows],
-        "verdict": "clean — every machine guess has an owner" if not total else
+        "verdict": "clean: every machine guess has an owner" if not total else
                    f"{total} row(s) belong to NO project, so NO seat can ever dispose them. "
                    f"The producer must be made to name an owner, not the pile swept.",
     }
@@ -504,7 +507,7 @@ _STALE_PILE_RE = re.compile(
 async def repair_stale_pile_summons(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads
+    """Repair function for the 2026-07-13 bulk-minted "DISPOSE OF YOUR MINER PILE" threads
     (one per project, `owner`=<project>): re-measures each still-open one's project against
     a live `candidates(project=..., limit=0)` call and compares it to the frozen count in
     the thread's own summary text.
@@ -517,8 +520,8 @@ async def repair_stale_pile_summons(
     >0 but differs from the frozen one: the seat's own judging duty is real and still theirs,
     so this calls `correct_thread_summary` (never `annotate_thread`, whose own docstring
     names this exact shape as the wrong one: a caller who means the earlier understanding was
-    wrong wants a different verb entirely, and that verb is this one) so the headline itself
-    stops asserting a number that is simply false, while the duty, never resolved, never
+    wrong wants a different function entirely, and that function is this one) so the headline
+    itself stops asserting a number that is simply false, while the duty, never resolved, never
     disposed of on anyone's behalf, stays exactly where it belongs (rule 1).
 
     Mechanical and conservative: only matches the exact bulk-mint template (`_STALE_PILE_RE`)
@@ -526,7 +529,7 @@ async def repair_stale_pile_summons(
     mentions a candidate count. `owner` (already asserted on every one of these threads at
     mint time) names the project directly; never re-derived from prose.
 
-    Dry run is the default, same rule as every other repair verb in this house.
+    Dry run is the default, same rule as every other repair function in this house.
     `dry_run=False` requires a non-blank `because` for the resolve actions (the corrected-
     summary actions carry their own fixed, self-explanatory `corrected_because` and need no
     separate citation, per `correct_thread_summary`'s own supersession semantics). Genuinely
@@ -535,7 +538,7 @@ async def repair_stale_pile_summons(
     onto an unchanged current value via `assert_property`'s own within-source rule, so there
     is no growing pile of duplicate corrections."""
     if not dry_run and not (because or "").strip():
-        return {"error": "repairing without a because is an un-audited repair — cite the "
+        return {"error": "repairing without a because is an un-audited repair: cite the "
                          "evidence/finding that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(
@@ -584,7 +587,7 @@ async def repair_stale_pile_summons(
     for entry in to_resolve:
         await resolve_thread(
             actions, entry["id"],
-            because=f"pile is empty (candidates(project={entry['owner']!r}) returns 0) — "
+            because=f"pile is empty (candidates(project={entry['owner']!r}) returns 0), "
                     f"the thread's own frozen count ({entry['frozen']}) was the count at "
                     f"mint time (2026-07-13); resolving as moot rather than fabricating a "
                     f"disposal against an empty pile ({because})",
@@ -595,7 +598,7 @@ async def repair_stale_pile_summons(
         await correct_thread_summary(
             actions, entry["id"], corrected,
             because=f"the thread's own count ({entry['frozen']}) was frozen at mint time "
-                    f"(2026-07-13) — candidates(project={entry['owner']!r}) returns "
-                    f"{entry['live']} now; repair_stale_pile_summons, thread e2326ab7",
+                    f"(2026-07-13); candidates(project={entry['owner']!r}) returns "
+                    f"{entry['live']} now; repair_stale_pile_summons",
             source=actor)
     return report

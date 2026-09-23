@@ -3,9 +3,9 @@
 The bug class this cures is structural: the durable identity key used to be
 `agent:<session-id>`, a fact about a conversation, the most ephemeral object in the
 system. Everything that matters (seat, house, charter, mail) was layered on top of that
-key as assertions, reconstructed by inference at every entry point (whisper, mount,
+key as assertions, reconstructed by inference at every entry point (session boot, mount,
 re-attach, heartbeat). Every inference entry point could mint a new identity, and
-patching each one individually (mint-lock, debounce, null-seam gate, dating gate, fork
+patching each one individually (mint-lock, debounce, null-boundary gate, dating gate, fork
 archaeology, claimed-sid guard, the binding rule) kept defending the same underlying
 wound. The fix is to stop inferring identity at all: a Seat is minted once as
 `seat:<uuid8>` and never re-keyed. Its handle, house, and anchor are mutable assertions,
@@ -25,10 +25,10 @@ The attach protocol, and why each rule exists:
   * Tokens live in a plain table (hot secrets, revocable), never in the append-only
     kernel.
 
-The mind layer keeps its own generation seam (swaps/compactions mint a new mind, and a
-numeral tracks which one), and the binding follows the lineage head at every mint
-(`follow_binding`, called from mint_heir), so the seat is the stable address precisely
-because minds churn underneath it.
+The agent layer keeps its own generation boundary (swaps/compactions mint a new agent
+generation, and a numeral tracks which one), and the binding follows the lineage head at
+every mint (`follow_binding`, called from mint_heir), so the seat is the stable address
+precisely because agent generations churn underneath it.
 """
 
 from __future__ import annotations
@@ -238,7 +238,7 @@ async def seat_of_mount(pool: asyncpg.Pool, *, job_dir: str) -> str | None:
 async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> str | None:
     """A manually resumed session follows the seat binding: the holds link is the
     binding's durable half and survives session_end, while the mount row does not. A
-    fresh row minted for a mind that actively holds a seat re-earns its `seat_id` from
+    fresh row minted for an agent that actively holds a seat re-earns its `seat_id` from
     the link, no token needed, because the graph already knows who holds what.
     Idempotent and deliberately conservative: only a row with no binding is ever
     touched (an explicit attach, or a surviving row, always outranks a re-derivation)."""
@@ -257,8 +257,8 @@ async def reseed_binding(pool: asyncpg.Pool, *, agent_id: str, job_dir: str) -> 
 
 
 async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
-    """The Seat this mind actively holds, with its display facts: the "who am I" half of
-    the binding. orient/mount tell a bound mind which role it sits in, whether or not it
+    """The Seat this agent actively holds, with its display facts: the "who am I" half of
+    the binding. orient/mount tell a bound agent which role it sits in, whether or not it
     ever claim_named itself in the assertion world. None when unbound.
 
     Lineage-aware: a seat-binding gap was once caught from two independent angles in the
@@ -310,12 +310,12 @@ async def held_seat(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
 
 async def held_seat_exact(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """`held_seat`'s exact-generation counterpart. Lineage-wide resolution (any
-    generation sharing the base, newest wins) is right for a live mind asking "what
+    generation sharing the base, newest wins) is right for a live agent asking "what
     seat do I sit in", but wrong for a third-party act on a specific named generation,
     like `retire_agent`'s own seat-vacate step. An ancestor already succeeded away (its
     own `holds` link long invalidated by `bind_holder`) shares its heir's base, so the
     lineage-wide query once resolved to the seat the heir currently, rightfully holds,
-    and retire_agent then vacated it, evicting a live mind as a side effect of retiring
+    and retire_agent then vacated it, evicting a live agent as a side effect of retiring
     a generation that held nothing of its own. Returns the seat canonical only when
     `agent_id` itself, no base, no `-%` widening, carries a live `holds` link; None
     otherwise, even if its lineage holds plenty."""
@@ -396,12 +396,12 @@ async def _seated_house(pool: asyncpg.Pool, agent_id: str) -> str | None:
     charter when it has exactly one (a real, deliberately-declared `governs` edge),
     never guessed from cwd. Falls back to the seat's derived house only when no charter
     is declared, or when more than one is (an ambiguity this function refuses to
-    arbitrate, same law as everywhere else in this house).
+    arbitrate, same rule as everywhere else in this house).
 
     A live production specimen: a seat's own house is its name, not necessarily its
     work. One seat's house was its own name, but its charter (and its office's own
     .osiris pin, already correctly fixed) named a different, unrelated repo. The
-    unconditional house-as-project law this function used to enforce was written for
+    unconditional house-as-project rule this function used to enforce was written for
     the self-managed case, where a seat's house and its work happen to share a name, and
     it silently re-corrupted every other seat's project back to its own name on every
     single mount, forever. Not a one-time historical artifact: a standing bug, whose
@@ -436,7 +436,7 @@ async def resolve_and_persist_seated_project(
 ) -> str | None:
     """`_seated_house`, but also fixes a gap: mount()'s own
     `_resolve_project_seat_first` (and automount()'s counterpart) mutate the in-memory
-    AgentIdentity's `.project`, which fixes that call's own receipt and the durable
+    AgentIdentity's `.project`, which fixes that call's own result and the durable
     mount-registry row, but register_agent had already asserted (or skipped
     asserting, when cwd resolved to nothing) the Agent object's own `project` property
     moments earlier, and nothing ever went back to correct it. fleet() reads that
@@ -515,12 +515,12 @@ async def seat_occupancy(
 ) -> dict[str, Any]:
     """Vacant / occupied / cold: one authority for whether a Seat has a living session
     in it, computed at read time from links(holds) + agent_mounts, no schema change, no
-    new table. The acceptance case that drove this: one office once showed four bodies
+    new table. The acceptance case that drove this: one office once showed four sessions
     where one lived; a seat with no holder at all must read vacant on its own, never
     silently absent from a query that only ever asks about agents.
 
-    Vacant: no `holds` link has ever existed for this seat (mint_seat's own law: a seat
-    is furniture until a body sits in it). Occupied: an active holder exists and is live
+    Vacant: no `holds` link has ever existed for this seat (mint_seat's own rule: a seat
+    is furniture until an agent sits in it). Occupied: an active holder exists and is live
     right now. Cold: held, now or in the past, but nobody live this instant: the
     ordinary in-between state of a seat between sessions, never an alarm by itself.
 
@@ -549,8 +549,8 @@ async def seat_occupancy(
     a mount row can still be tagged to an ancestor label mid-succession.
 
     This is the read launch() needs for its own idempotency (detect-existing-window
-    before spawning, never mint a duplicate body) and its honest liveness receipt
-    (body-exists and can-receive are separate states, each independently verifiable):
+    before spawning, never mint a duplicate session) and its honest liveness result
+    (session-exists and can-receive are separate states, each independently verifiable):
     call it with the seat about to be launched into, before launching."""
     if live_secs != _LIVE_SECS:
         raise ValueError(
@@ -609,7 +609,8 @@ _ROSTER_CAVEATS = (
     "proves the object exists, not that it is the current or correct name for a repo. Near-"
     "duplicate variants (the bytebye/byebyte history is the live example) can each "
     "independently look valid here. Canonicalizing project names is a separate concern, "
-    "not this verb's: a caller that needs 'which of these names is right' asks there, not here.",
+    "not this function's: a caller that needs 'which of these names is right' asks there, "
+    "not here.",
     "pin is read from anchor_cwd's own .osiris, or, when anchor_cwd is not recorded, from the "
     "conventional ~/.osiris/seats/<handle>/.osiris path when that probe finds one "
     "(probed_anchor_cwd names which). A seat with a distinct tree_cwd (the office/"
@@ -654,7 +655,7 @@ _ROSTER_CAVEATS = (
     "on a no-such-project pin means the value matches nothing at all, a genuinely dead pin.",
     "pin_charter_agreement compares only pin.declared against chartered_repos, and inherits "
     "every caveat above (not certified canonical, anchor_cwd-only, single snapshot). "
-    "'disagree' names a conflict for a mind to resolve (rebind_seat/correct_pin_value/"
+    "'disagree' names a conflict for an operator to resolve (rebind_seat/correct_pin_value/"
     "set_charter), it never picks which side is right (the same rule as triage_bucket "
     "above), a seat legitimately holding one pin while its charter covers several OTHER "
     "repos too still reads 'agree' as long as the pin's own value is among them. 'n/a' means "
@@ -773,7 +774,7 @@ async def _pin_name_resolution_note(pool: asyncpg.Pool, pin_value: str,
 
 
 def _roster_caveats_out(caveats: list[str], want_caveats: bool) -> dict[str, Any]:
-    """Trims the receipt: `_ROSTER_CAVEATS` alone is 10 standing paragraphs, printed on
+    """Trims the result: `_ROSTER_CAVEATS` alone is 10 standing paragraphs, printed on
     every call regardless of whether the caller has ever needed the text, measured as a
     significant contributor to response size. Default is a one-line pointer;
     `want_caveats=True` restores the full list, unchanged from before this trim."""
@@ -802,7 +803,7 @@ async def roster(
     Cold is not vacant, the root cause, made structurally impossible to collapse here:
     each row's `occupancy` is `seat_occupancy`'s own vacant/occupied/cold, unchanged.
     Vacant means no `holds` link has ever existed for this seat; cold means held, now or
-    in the past, but nobody live this instant; occupied means a live body is in it right
+    in the past, but nobody live this instant; occupied means a live agent is in it right
     now. A caller reading this dict cannot mistake the second for the first without
     discarding a field that is right there.
 
@@ -820,7 +821,7 @@ async def roster(
     already carried `pin.declared` and `chartered_repos` and nothing compared them, so a
     mis-binding surfaced only when someone happened to notice by hand. `'agree'`/
     `'disagree'`/`'n/a'` is a mark, never a verdict: a caller sees a conflict and
-    resolves it with the existing repair verbs (rebind_seat/correct_pin_value/
+    resolves it with the existing repair operations (rebind_seat/correct_pin_value/
     set_charter), this function never picks a side. `'n/a'`, not `'disagree'`, when
     there is nothing to compare: an unset pin is a valid state, not a defect, and an
     uncharted seat has no charter to disagree with.
@@ -1125,7 +1126,8 @@ _TREE_LEDGER_CAVEATS = (
     "first pass; nothing here consumes those fields for a verdict yet, matching the same "
     "note that nothing else does either.",
     "READ-ONLY: this reports disagreements and phantom suspicions, it never repairs, folds, "
-    "or merges anything; repo:code's disposition is a separate design decision, not this verb's.",
+    "or merges anything; repo:code's disposition is a separate design decision, not this "
+    "function's.",
     "A GAP IN THE CANONICAL READER ITSELF, FLAGGED NOT FIXED: "
     "`_read_osiris_key` (agents.py, used unmodified by this report and by every other "
     "caller, roster(), resolve_identity, project_identity_evidence) climbs `cwd` and its "
@@ -1181,7 +1183,7 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
     identically whether reached through a seat's pin or through this fleet-wide sweep.
 
     `limit`/`offset` (default 200/0, capped 2000, `total` always reported): the
-    no-silent-caps law, though 58 active SoftwareProjects exist today (measured),
+    no-silent-caps rule, though 58 active SoftwareProjects exist today (measured),
     comfortably inside one page.
 
     `phantom_verdict_basis` and `note` are returned with the rows, not left to a
@@ -1371,7 +1373,7 @@ async def tree_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 0) 
     what this instrument cannot see rather than reporting a clean sweep over a coverage
     boundary it never states. Never repairs: this names disagreements and phantom
     suspicions; disposing of one (a fold, a rename, a merge) is always a separate,
-    deliberate, evidence-gated verb's job, never this one's."""
+    deliberate, evidence-gated function's job, never this one's."""
     projects = await project_ledger(pool, limit=limit, offset=offset)
     cwds = await live_cwd_ledger(pool)
     return {"project_ledger": projects, "live_cwd_ledger": cwds,
@@ -1380,14 +1382,14 @@ async def tree_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 0) 
 
 async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     """Can this lineage be reached right now: the truthful answer, consulted from the
-    Claude harness daemon's own job state. A mail send-receipt can lie during a
-    compaction seam ("no resumable session, never handed to a fresh successor") while
+    Claude harness daemon's own job state. A mail send-acknowledgment can lie during a
+    compaction boundary ("no resumable session, never handed to a fresh successor") while
     the daemon's job_for on the same lineage has held a live, resumable job the whole
     time. A stale disk/DB snapshot infers liveness; job_for reads it from the one place
-    that cannot lag the seam: the daemon owns the job, so it knows the instant a
+    that cannot lag the boundary: the daemon owns the job, so it knows the instant a
     successor exists, before any mount row or transcript file catches up.
 
-    Composes with seat_occupancy: occupancy answers "is a live body here" (holds link +
+    Composes with seat_occupancy: occupancy answers "is a live session here" (holds link +
     agent_mounts); this answers "and can it receive a turn, this instant" (the daemon's
     own job table), two different authorities for two different questions, not a
     duplicate.
@@ -1395,14 +1397,14 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     Lineage-wide, matching every other liveness read in this codebase (held_seat,
     seat_occupancy, trigger.py's own `doors`): checks every job_dir this base or any of
     its generations has ever mounted, because a fresh successor's own mount row is
-    exactly the evidence a seam can lag, since the daemon may already hold its job
+    exactly the evidence a boundary can lag, since the daemon may already hold its job
     before agent_mounts reflects it at all.
 
     A read only, deliberately: this does not retry a refused send, notify anyone, or
-    change what dispatch_dm does. It is the truthful primitive that any notify-at-seam
+    change what dispatch_dm does. It is the truthful primitive that any notify-at-boundary
     work should consult, not a rewrite of either. `job_for` is a pure read of daemon job
     state (claude_daemon.job_for), never the `reply` injection lane, a distinction worth
-    keeping even though that lane is also sanctioned: a read cannot move another mind,
+    keeping even though that lane is also sanctioned: a read cannot move another agent,
     so this stays side-effect-free by construction, not by policy. Fails open like
     claude_daemon's own convention: a dark daemon or an unknown lineage reads
     unreachable-by-this-check, never treated as proof of death, only as "this read
@@ -1432,7 +1434,7 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
 
 async def manager_of_seat(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """The manager Seat of a worker Seat, or None when unmanaged: the single-pair read
-    originally promoted here so notify-at-seam (mint_heir's compaction path) didn't
+    originally promoted here so notify-at-boundary (mint_heir's compaction path) didn't
     hand-roll a third copy. The stop hook's own former local `_manager_seat` duplicate
     is gone: the claim that it "cannot import across the script/package boundary
     without a heavier refactor" was stale, since the hook already puts the repo root on
@@ -1485,7 +1487,7 @@ async def team_roster(
     once: no lineage-base widening (a promoted successor generation's own mount row
     wears a different numeral than the `holds` edge's exact `holder` canonical, reading
     cold here while `agent_liveness` correctly followed the lineage) and no
-    transcript-mtime fallback (a mind live and writing, with no fresh `agent_mounts` row
+    transcript-mtime fallback (an agent live and writing, with no fresh `agent_mounts` row
     to say so). The `live_secs`-scoped `EXISTS` is gone entirely, `agent_liveness` owns
     its own window, so the verdict now comes from the same single source `resume`'s
     occupancy gate and `vacate_dead_seat` also call: one instrument, not three
@@ -1597,7 +1599,7 @@ async def derive_house(pool: asyncpg.Pool, seat_id: str, *, max_hops: int = _MAX
       (1) a real crossing: this seat's own stamped `house` is non-empty and differs from
           what deriving one hop further (through its manager) would answer. Required
           because the operator's hand alone is not enough: the specimen that forced this
-          is the promotion verb's own operator-tab call shape, a freshly-promoted worker
+          is the promotion operation's own operator-tab call shape, a freshly-promoted worker
           with no stamped house of its own has nothing to cross, so an operator-sourced
           managed_by edge onto it must still derive the new manager's house, not anchor at
           nothing.
@@ -1858,8 +1860,8 @@ async def set_seat_attended(
 async def rename_seat(
     actions: Actions, *, seat_id: str, new_handle: str, actor: str, because: str,
 ) -> dict[str, Any]:
-    """Rename a seat, operator-ordered: no rename verb existed before this; claim_name is
-    self-claiming only (a mind picks its own name), and handles across this fleet have
+    """Rename a seat, operator-ordered: no rename operation existed before this; claim_name is
+    self-claiming only (an agent picks its own name), and handles across this fleet have
     drifted in casing (one handle lowercase at one layer, all-caps at another, for the
     same seat) with nothing to correct it deliberately. A manager or the operator
     renames a seat by hand, always with a reason on the record, enforced: this claimed
@@ -1869,12 +1871,12 @@ async def rename_seat(
     Scope, both compensating assertions (old handle stays in history, never deleted):
     (1) the seat's own `handle` property; (2) the current holder's `handle` stamp too, if
     the seat is occupied, since a rename that only touched the seat would leave the live
-    mind still answering to its old name in every seat_label() render. Mirrors
+    agent still answering to its old name in every seat_label() render. Mirrors
     claim_name's own 40-char cap on a handle: same class of field, same discipline.
 
     Out of scope, deliberately: the harness-session display name (a terminal/window
-    title) is not touched: it belongs to a running process this verb has no reach into.
-    The honest receipt is "graph renamed; the harness name follows at next spawn,"
+    title) is not touched: it belongs to a running process this operation has no reach into.
+    The honest result is "graph renamed; the harness name follows at next spawn,"
     never a claim of something this call didn't do.
 
     Self-managed seats self-authorize: a seat with no manager on record is a legitimate
@@ -1884,7 +1886,7 @@ async def rename_seat(
     bind_seat_tree's own carve-out exactly: a holder acting on its own seat, with no
     manager to defer to, is never a wider trust grant than the manager check already
     allows (a manager may rename any seat it manages; this only ever lets a holder
-    rename its own). The receipt confesses it under `authorization` rather than reading
+    rename its own). The result confesses it under `authorization` rather than reading
     identically to a manager-approved write.
 
     Refuses loudly on: a blank `new_handle` or one over 40 chars; a blank `because` (a
@@ -1962,7 +1964,7 @@ async def bind_seat_tree(
 
     This system never provisions the tree (the harness owns isolation); this call
     records a location, it does not create one. `launch_seat` is the one that checks the
-    directory actually exists on disk before trusting it; this verb writes
+    directory actually exists on disk before trusting it; this operation writes
     unconditionally on a valid call, exactly as `ensure_seat`'s own `anchor_cwd` write
     does.
 
@@ -1981,7 +1983,7 @@ async def bind_seat_tree(
     tree_cwd after an operator-ordered folder move with nobody able to fix it). That
     carve-out never widens what a manager can already do (a manager may rebind any seat
     it manages; self-authorization only ever lets a holder rebind its own, and only when
-    no manager exists to defer to instead). The receipt confesses it under
+    no manager exists to defer to instead). The result confesses it under
     `authorization` rather than reading identically to a manager-approved write.
 
     Refuses loudly on: a blank `tree_cwd`; a blank `because` (a location change is
@@ -2008,7 +2010,7 @@ async def bind_seat_tree(
         # seat, with no manager to defer to, is never a wider trust grant than the
         # manager check already allows (a manager may rebind any seat it manages; this
         # only ever lets a holder rebind its own), but it is still a bypass of the
-        # normal chain, so the receipt confesses it explicitly rather than reading
+        # normal chain, so the result confesses it explicitly rather than reading
         # identically to a manager-approved write.
         if not authorized and manager_seat_id is None and caller_seat_id == seat_id:
             authorized, self_authorized = True, True
@@ -2062,7 +2064,7 @@ async def sweep_seat_trees(
     produced before its fix landed (this sweep never touches a seat minted after the
     fix, since those never fabricated a tree to begin with). Reuses `bind_seat_tree`
     unchanged for every real write (the same cross-source-safe collapse, never a second
-    implementation), scoped by `actor` exactly as that verb already enforces (operator,
+    implementation), scoped by `actor` exactly as that function already enforces (operator,
     or the target seat's own manager).
 
     A seat repairs when its own charter (`governed_trees`) names exactly one project
@@ -2127,7 +2129,7 @@ async def sweep_seat_trees(
             repo, winner = real_trees[0]
             # The current name, never the canonical: governed_trees' own repo label is
             # charter_of's frozen-at-mint canonical. This only ever feeds the
-            # receipt/audit text below, never a graph write of its own (bind_seat_tree
+            # result/audit text below, never a graph write of its own (bind_seat_tree
             # writes `winner`, the tree path), but a stale label in an audit trail is
             # exactly the confusion this resolves.
             from src.orchestrator.charter import project_current_name
@@ -2160,7 +2162,7 @@ async def bind_holder(
     """Make `agent_id` the seat's active holder: prior holders' `holds` links heal by
     valid_until (never deleted, history walkable), one active link remains. The shared
     tail of the two deliberate binding acts: the attach protocol (token-gated,
-    spawner-driven) and a `claim_name` (guard-gated, the live mind's own act). Callers
+    spawner-driven) and a `claim_name` (guard-gated, the live agent's own act). Callers
     run their refusals first; this only writes.
 
     Now symmetric on both sides of `holds`: this always invalidated a seat's own prior
@@ -2172,7 +2174,7 @@ async def bind_holder(
     same one copied over: works_in stayed additive-only because no evidence source can
     tell "changed project" from "works two projects" (a declared multi-project charter
     is a real, sanctioned state), so auto-invalidating there would be guessing exactly
-    where that law forbids it. `holds` has no such ambiguity: a Seat is a specific
+    where that rule forbids it. `holds` has no such ambiguity: a Seat is a specific
     identity ("one seat, one live lineage head" already establishes seat-holding as
     exclusive on the seat's own side; a visitor spawn is explicitly excluded from ever
     resolving as a holder at all, per binding_of_handle/seat_holder_ineligible's own
@@ -2184,7 +2186,7 @@ async def bind_holder(
     (fleet-wide, not sampled). This closes the gap before an incident, the cheap time
     to close it.
 
-    Returns a receipt: `{"seat_id", "old_holder", "new_holder"}`. `old_holder` is
+    Returns a result: `{"seat_id", "old_holder", "new_holder"}`. `old_holder` is
     whoever this call just invalidated on the seat's own side (None if the seat was
     vacant), never the agent-side `other_seats` this also heals. Deliberately no
     liveness guard here: every caller (attach_session's own live-sitter refusal,
@@ -2227,24 +2229,24 @@ async def rehold_seat(
 ) -> dict[str, Any]:
     """The third-party re-hold entry point: the specimen that forced this was a compaction
     successor losing its own seat's binding to a wrongly-grafted sibling generation,
-    with no sanctioned MCP verb able to put it back (`bind_holder` is a raw internal
+    with no sanctioned MCP operation able to put it back (`bind_holder` is a raw internal
     primitive, never exposed, and `reconcile_identity`'s third-party path only heals
     house/project property contradictions, never the `holds` link itself). This is that
     entry point: refuses when the seat's current holder is live (`seat_occupancy`, the same
     authority every other occupancy read in this codebase shares) and from a different
     lineage than `agent_id`, the exact shape a careless rehold could silently steal a
-    seat out from under a genuinely different, still-working mind, unless
+    seat out from under a genuinely different, still-working agent, unless
     `override_live=True` names that as a deliberate act (renamed from the bare
     `override` this shipped with, so the same word is used across every hold-move
-    entry point's receipt/guard family; the MCP surface already spoke it this way, only the
-    internal parameter lagged). `because` is required, same law as every other
+    entry point's result/guard family; the MCP surface already spoke it this way, only the
+    internal parameter lagged). `because` is required, same rule as every other
     third-party correction in this codebase (a correction with no stated reason is the
     silent overwrite this rules against, not a fix).
 
     The retraction itself is `bind_holder`'s own already-sanctioned mechanism:
     invalidate_link, never deleted, history walkable, both sides symmetric (a stray hold
     the new holder carried elsewhere heals too). This adds only the guard, the required
-    reason (kept on the seat as `rehold_because`), and a receipt naming both sides of the
+    reason (kept on the seat as `rehold_because`), and a result naming both sides of the
     change, never a second implementation of the bind itself.
 
     `dry_run` (default False, since every existing caller already calls this expecting a
@@ -2381,7 +2383,7 @@ async def backfill_unbound_seats(
 
 
 async def holds(pool: asyncpg.Pool, agent_id: str, seat_id: str) -> bool:
-    """Does this mind actively hold this seat? The read side of seat-addressed mail:
+    """Does this agent actively hold this seat? The read side of seat-addressed mail:
     a message to `seat:<id>` is deliverable to whoever this returns True for."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id "
@@ -2391,7 +2393,7 @@ async def holds(pool: asyncpg.Pool, agent_id: str, seat_id: str) -> bool:
 
 
 async def seat_receipt(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any] | None:
-    """The DM-receipt facts for a seat address: its display handle/house and the mind
+    """The DM-lookup facts for a seat address: its display handle/house and the agent
     currently holding it (None while vacant: the mail waits; a seat address is never a
     grave, its next holder reads it). None when no such living Seat exists."""
     display = await _seat_display(pool, seat_id)
@@ -2455,9 +2457,9 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
     ineligible holder(s), only for the fourth shape: a seat exists, uniquely, does have
     at least one active holder, and none of them are eligible. A caller (send_message)
     that sees this string must refuse before ever calling resolve_seat: the refusal
-    belongs in the resolution, not a post-hoc check on the receipt (both `dm_to` and
+    belongs in the resolution, not a post-hoc check on the result (both `dm_to` and
     `lineage_head` agree on the same wrong answer once the fallback has already run, so
-    no receipt-side check can catch this after the fact).
+    no result-side check can catch this after the fact).
 
     Any eligible holder, not just the newest: a correction caught in review, before an
     earlier build of this deployed. `binding_of_handle` filters out marked/visitor
@@ -2468,7 +2470,7 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
     docstring already promised ("does any eligible holder exist"), and those two
     disagree exactly whenever a Seat carries more than one active `holds` edge with the
     newest marked and an older one still eligible. Not hypothetical: one real seat
-    carried exactly this shape, a zero-turn phantom mint's own ordinary seam (generation
+    carried exactly this shape, a zero-turn phantom mint's own ordinary boundary (generation
     N+1 takes the newest holds edge, gets marked false_mint seconds later, generation N
     still holds and is still eligible) reproduces it on demand. A fleet-wide single
     point of failure (send_message) must never refuse-to-serve on a check that can
@@ -2516,7 +2518,7 @@ async def pause_seat_or_agent(
     the same way a DM address is (refusing loudly on `seat_holder_ineligible`'s own
     shape rather than silently falling through to a dead generation). Stamps
     `paused`/`paused_reason` on whichever object (Seat or Agent) the resolution landed
-    on, counts this address's own queued-but-unread DMs, and returns the exact receipt
+    on, counts this address's own queued-but-unread DMs, and returns the exact result
     shape the MCP tool always has.
 
     `who` is the caller's own resolved target string (already defaulted to the caller's
@@ -2571,7 +2573,7 @@ async def pause_seat_or_agent(
 async def _seat_display(pool: asyncpg.Pool, seat_id: str) -> dict[str, Any]:
     """Handle and house for a seat address. `house` is derived, never read from this
     seat's own stored `house` property: reading the raw stamp here was the same bypass
-    seat_bearings shipped, just for mail receipts (seat_receipt) instead of orient()."""
+    seat_bearings shipped, just for mail lookups (seat_receipt) instead of orient()."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -2588,7 +2590,7 @@ async def attach_session(
     live_secs: int = _LIVE_SECS,
 ) -> dict[str, Any]:
     """Verify the token, then bind the session to its Seat. Refusals are loud (an error
-    dict the whisper prints) and write nothing; only a verified fresh use, or the same
+    dict the startup routine prints) and write nothing; only a verified fresh use, or the same
     presenter resuming, touches the tables."""
     pool = actions.pool
     row = await pool.fetchrow(
@@ -2628,8 +2630,8 @@ async def attach_session(
             "ORDER BY last_seen DESC LIMIT 1", seat_id, job_dir, live_secs)
         if holder is not None:
             return {"error": f"ATTACH REFUSED: {seat_id} ({display.get('handle')}) is held "
-                             f"LIVE by {holder['agent_id']}. Two minds in one seat is the "
-                             "collision class the ceremony exists to kill; nothing was bound."}
+                             f"LIVE by {holder['agent_id']}. Two agents in one seat is the "
+                             "collision class this protocol exists to kill; nothing was bound."}
         claimed = await pool.execute(
             "UPDATE seat_tokens SET used_by=$2, used_at=now() "
             "WHERE token=$1 AND used_at IS NULL", token, job_dir)
@@ -2660,7 +2662,7 @@ async def follow_binding(
     """The binding follows the lineage head (mint_heir's hook): every Seat the lineage
     actively holds re-links to the heir. The old link heals by valid_until, the seat's
     holder history stays walkable, and seat-addressed anything keeps reaching whoever the
-    mind is now. No seat, no-op.
+    agent is now. No seat, no-op.
 
     Returns one `{"seat_id", "old_holder", "new_holder"}` per seat actually moved: a live
     sibling's seat, skipped by the guard below, simply never appears in the list, so a
@@ -2720,7 +2722,7 @@ async def _exact_holder_live(pool: asyncpg.Pool, canonical: str) -> bool:
 # ═══ SEAT LIFECYCLE: self-organizing seats. A head corrects its own anchor, a
 # duplicate seat folds deliberately, a genuinely dead role retires. None of this is
 # fenced to the operator's hand: each is an identity act within its own caller's
-# authority, the same law claim_name already runs on.
+# authority, the same rule claim_name already runs on.
 
 
 async def correct_house(actions: Actions, agent_id: str, new_house: str, *, source: str,
@@ -2735,23 +2737,23 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
     its manager now, so stamping its own house property would be inert data nobody
     reads, the exact "legacy write stays inert" shape derive_house already documents).
 
-    Prior art is surfaced, never refused: the receipt's own `prior_art`/`prior_art_flag`
+    Prior art is surfaced, never refused: the result's own `prior_art`/`prior_art_flag`
     keys, when present, name a standing Decision that may already cover this seat's
     house, the same search()-based guard record_decision runs on itself, generalized
     here. This cannot distinguish a deliberate correction from an uninformed overwrite;
     it only ensures the write does not land silently unread.
 
-    A fourth edge case is named in the receipt: `was == new_house` means this call's own
+    A fourth edge case is named in the result: `was == new_house` means this call's own
     declaration was already true before it ran. The write above still lands (a fresh
     assertion, harmless, matching the append-only discipline), but nothing was actually
-    corrected, and a verb whose name promises correction owes the caller that word
-    instead of a receipt indistinguishable from a real one. `already_correct` says so
+    corrected, and a function whose name promises correction owes the caller that word
+    instead of a result indistinguishable from a real one. `already_correct` says so
     plainly. Separately, and this is the part `was` alone could never say: other sources
     may still carry a contradicting `house` value for this seat, never invalidated by
     this or any call. `still_contradicted` lists them (source, value, observed_at),
     read-only, so a caller who declared the truth weeks ago and still shows up in a
     "contradicted" triage bucket can see exactly why: declaring is not the missing step,
-    invalidating is, and this verb still does not do it (that is the read side, not this
+    invalidating is, and this function still does not do it (that is the read side, not this
     write)."""
     new_house = (new_house or "").strip()
     if not new_house:
@@ -2818,7 +2820,7 @@ async def resync_seat_house_third_party(
     house" (a genuinely empty derived house is treated like "no seat yet"): every
     existing reader already does a truthy check, not an `is None` check, so this is not
     a new state to teach anything, only a new route to reach the state through. The
-    receipt always reports `None`, never `""`, for a clean external contract.
+    result always reports `None`, never `""`, for a clean external contract.
 
     `still_contradicted` (the same fourth-edge-case fix as `correct_house`): names any
     other source's lingering `house` value neither branch here touches. Writing or
@@ -2842,7 +2844,7 @@ async def resync_seat_house_third_party(
     if seat_row is None:
         return {"error": f"no active seat matches {seat_id!r}"}
     facts = await seat_facts(actions.pool, seat_id)
-    was = facts.get("house") or None  # normalize a stored "" back to None for the receipt
+    was = facts.get("house") or None  # normalize a stored "" back to None for the result
     seat_obj = await actions.create_or_find_object("Seat", seat_id, source)
     written = was != new_house
     if written:
@@ -2892,7 +2894,7 @@ async def resync_seat_project(
     Refuses on: an empty reason (a correction with no stated reason is exactly the
     silent overwrite this house rules against); an unknown/inactive seat; a charter
     governing zero projects (nothing to derive from: never invents one, the same "never
-    fabricate, leave genuinely unset" law this property has always held); a charter
+    fabricate, leave genuinely unset" rule this property has always held); a charter
     governing more than one (ambiguous: no single project to derive, names them all,
     never guesses)."""
     if not reason.strip():
@@ -2922,7 +2924,7 @@ async def resync_seat_project(
     await actions.assert_singular_property(
         seat_obj, "house", new_project, source, datetime.now(UTC), _CONF,
         because=f"{reason} (resync_seat_project: re-derived from its own charter, "
-                "cross-source collapse, ruling 1335332e)",
+                "cross-source collapse)",
         evidence_class=_EC)
     from src.orchestrator.identity_heal import heal_contradicting_property
     await heal_contradicting_property(actions, object_id=seat_obj, name="house",
@@ -2934,7 +2936,7 @@ async def resync_seat_project(
 async def _move_seat_estate(
     actions: Actions, dupe_oid: uuid.UUID, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:
-    """The seat estate-move itself, factored out of `fold_seat` so `reconcile_seat_fold`
+    """The seat holdings-move itself, factored out of `fold_seat` so `reconcile_seat_fold`
     can run the exact same repair on an already-merged pair rather than a second
     implementation that could drift from what a normal fold already does. Every item here
     is individually idempotent: a holder or managed_by edge already re-pointed, or mail
@@ -2988,8 +2990,8 @@ async def fold_seat(
     because a seat transfer is a deliberate act there, never a fold's side effect):
     fold_seat's whole job is moving active holders. Every live `holds` link on `dupe`
     re-points to `into`. If `dupe` had more than one concurrent holder (the duplicate's
-    own anomaly, the thing this verb exists to close, not preserve), they converge to
-    one: bind_holder's own succession law means whichever is re-pointed last survives as
+    own anomaly, the thing this function exists to close, not preserve), they converge to
+    one: bind_holder's own succession rule means whichever is re-pointed last survives as
     `into`'s active holder, so this processes oldest-first, meaning the newest holder
     wins, matching every recency-wins convention elsewhere in this codebase. All are
     still named in `holders_moved`. `managed_by` edges move too, in either direction, so
@@ -3019,13 +3021,13 @@ async def fold_seat(
     if by_label[into]["status"] == "merged":
         return {"error": f"{into} is itself folded, fold into the living seat instead"}
     dupe_oid, into_oid = by_label[dupe]["id"], by_label[into]["id"]
-    # The estate, seat-shaped: active holders move first, the point of this verb, where
-    # fold_agent refuses instead (bind_holder's own succession law converges a
+    # The holdings, seat-shaped: active holders move first, the point of this function, where
+    # fold_agent refuses instead (bind_holder's own succession rule converges a
     # duplicate's multiple concurrent holders to the newest one, matching every
     # recency-wins convention elsewhere in this codebase). Mail and managed_by follow
     # too, before the kernel merge (mirroring fold_project/fold_agent's shared pattern):
     # a crash between here and the merge below leaves dupe.status=='active', so a retry
-    # continues rather than hitting the merge's own "already folded" refusal with estate
+    # continues rather than hitting the merge's own "already folded" refusal with holdings
     # stranded on dupe forever.
     estate = await _move_seat_estate(actions, dupe_oid, dupe, into, actor)
     # the kernel merge: event, projection, resolve-on-read, the same primitive fold_agent
@@ -3038,12 +3040,12 @@ async def reconcile_seat_fold(
     actions: Actions, *, dupe: str, into: str, actor: str,
 ) -> dict[str, Any]:
     """The repair path fold_seat never had: folds are idempotent-by-refusal when they
-    need to be idempotent-by-repair. Re-points any live holder/managed_by/mail estate
+    need to be idempotent-by-repair. Re-points any live holder/managed_by/mail holdings
     item still aimed at an already-merged dupe, using the same `_move_seat_estate`
     `fold_seat` itself calls, not a second implementation that could drift from what a
     normal fold already does.
 
-    The inverse precondition of fold_seat, on purpose, so the two verbs' refusal
+    The inverse precondition of fold_seat, on purpose, so the two functions' refusal
     conditions never overlap: fold_seat requires status=='active' and refuses an
     already-folded dupe; reconcile requires dupe.status=='merged' and dupe's own
     `merged_into` pointing at exactly `into` (refuses to redirect a dupe merged into
@@ -3099,7 +3101,7 @@ async def unfold_seat(
     justification, the same discipline `unfold_agent` already holds, generalized to
     seats.
 
-    Estate, seat-shaped: fold_seat's holders and managed_by moves are event-sourced
+    Holdings, seat-shaped: fold_seat's holders and managed_by moves are event-sourced
     (`invalidate_link` + `create_link`) and are restored automatically when and only
     when nothing has touched them since (`folds._reversible_moved_links`: a holder now
     on some other seat, or a managed_by edge since re-pointed again, is never guessed
@@ -3208,11 +3210,11 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
     """Mark a Seat permanently closed: a genuinely dead role, no successor, no merge
     target (fold_seat is for a duplicate; this is for a role that's simply over).
     Distinct from the session-level retire() (mcp_server.py), which retires a live
-    agent's own turn; this retires the role itself, for every mind that ever might hold
+    agent's own turn; this retires the role itself, for every agent that ever might hold
     it.
 
-    Refuses loudly on: unknown or already-inactive seat; an active holder (a live mind
-    sitting in a seat is not this verb's business to evict: transfer or let it vacate
+    Refuses loudly on: unknown or already-inactive seat; an active holder (a live agent
+    sitting in a seat is not this function's business to evict: transfer or let it vacate
     first, the same discipline fold_agent already holds for agents); an active peer_of
     edge (a peered seat retiring first would leave the bond pointing at a dead seat
     forever: unpeer first, same reasoning as the holder guard).
@@ -3227,7 +3229,7 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
 
     The peer guard: unpeer requires both seats active to resolve them, so retiring a
     peered seat first, with nothing else stopping that, left the bond stuck active
-    forever, pointing at a dead seat with no sanctioned verb able to heal it (the
+    forever, pointing at a dead seat with no sanctioned function able to heal it (the
     identical class of bug as a fold/bond that outlives the object it names). Refusing
     here, symmetrically with the holder check, keeps the fix on the retire side rather
     than loosening unpeer's own active-seat guard, which would weaken a real invariant
@@ -3245,7 +3247,7 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
         "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", row["id"])
     if holder:
         return {"error": f"{seat_id} is actively held by {holder}, retire_seat never "
-                         "evicts a live mind; transfer or vacate the seat first"}
+                         "evicts a live agent; transfer or vacate the seat first"}
     peer = await _active_peer(actions.pool, row["id"])
     if peer is not None:
         return {"error": f"{seat_id} is peered with {peer['peer']}, retiring it would "
@@ -3265,19 +3267,19 @@ async def vacate_holder(
     """Release a seat's active holder(s) without binding a new one: the deliberate-hand
     complement to bind_holder (which only ever moves the link onto a new holder) and to
     retire_seat's own stale-holder refusal (which is right to refuse: retire_seat closes
-    the role, and evicting a live mind is not its business). This is for the one case
+    the role, and evicting a live agent is not its business). This is for the one case
     that refusal correctly can't resolve on its own: a holder whose process is confirmed
-    dead without ever calling retire() on itself (a `claude stop`ped body leaves its
+    dead without ever calling retire() on itself (a `claude stop`ped session leaves its
     `holds` link stale forever, with nothing to release it).
 
-    This verb trusts its caller. It does no liveness check of its own: that evidence is
+    This function trusts its caller. It does no liveness check of its own: that evidence is
     trigger.py's job (vacate_dead_seat, the only sanctioned caller), which reads the real
     process roster and the transcript's own timestamped content before ever reaching
     here, exactly as retire_seat's docstring already distinguishes "the graph's word"
     from "an actual eviction." Calling this directly on a genuinely live holder is a
     caller error, not a refusal this function can catch.
 
-    Refuses loudly on: an unknown/inactive seat, a blank `because` (the same law
+    Refuses loudly on: an unknown/inactive seat, a blank `because` (the same rule
     set_seat_attended already holds: a seat's occupancy changing this way belongs on the
     record), or a seat with no active holder (nothing to vacate)."""
     if not because.strip():
@@ -3305,13 +3307,13 @@ async def vacate_holder(
     return {"vacated": seat_id, "was_held_by": [str(h["holder"]) for h in holders]}
 
 
-# ═══ PEER_OF: a sanctioned pair of verbs minting/healing a symmetric Seat<->Seat bond,
+# ═══ PEER_OF: a sanctioned pair of functions minting/healing a symmetric Seat<->Seat bond,
 # shaped after retire_seat/vacate_holder immediately above: self-contained, gathers its
 # own refusal evidence, writes only once every check clears. Recognition-first
 # (research-peer-structures.md, mechanism 11, Ostrom p7): the edge's whole v1 job is
 # making a pair legible (to orient(), to the standing-orders peer addendum). The
-# two-tier-decision/mutual-hold/disclosure law the research condensed lives in the
-# addendum's prose (offices.py), not enforced here; these verbs only mint and heal the
+# two-tier-decision/mutual-hold/disclosure rule the research condensed lives in the
+# addendum's prose (offices.py), not enforced here; these functions only mint and heal the
 # recognition edge itself.
 #
 # Symmetric by convention, not by schema: `peer_of` is stored as one directional row
@@ -3510,7 +3512,7 @@ async def hold_action(
     act, time-boxed. Reuses `open_thread`'s existing Thread shape wholesale (no new
     object type, no new table): the hold is an obligation Thread, `owner=held` (whose
     move it is to respond), `severity='hold'` so it's filterable without a text match,
-    resolved the ordinary way: `resolve_thread` on the returned id, same verb every
+    resolved the ordinary way: `resolve_thread` on the returned id, same function every
     other obligation uses, no new resolve path needed. The escalation half (an
     unresolved hold auto-reaching the operator past its time-box) is deliberately not
     built here: that needs a live sweep (pit_watch.py's own shape) or a lint check, a
@@ -3543,7 +3545,7 @@ async def hold_action(
     peer = await peer_of_seat(actions.pool, holder)
     if peer != held:
         return {"error": f"{holder!r} and {held!r} are not an active peer_of pair, a "
-                         "hold is a peer's own power, not a stranger's"}
+                         "hold is a peer's own power, not an unrelated seat's"}
     now = datetime.now(UTC)
     deadline = now + timedelta(hours=hours)
     from src.orchestrator.capture import open_thread
@@ -3606,7 +3608,7 @@ async def attach_seat(
     re-point (only for an existing edge). Every seat that predates mint_seat, was
     adopted, or lost its edge to a detach nobody re-pointed has had no path back except
     raw SQL, the graph's own defect report this house refuses to write around (raw SQL
-    against the kernel is a missing verb, never a shortcut). Confirmed live: 30 active
+    against the kernel is a missing function, never a shortcut). Confirmed live: 30 active
     seats, 23 with no managed_by edge at all; a manager was reported to hold eight of
     them by word alone, but the graph, before this, could represent only two.
 
@@ -3647,8 +3649,8 @@ async def promote_seat(
     actions: Actions, target: str, workers: list[str], *, because: str, actor: str,
 ) -> dict[str, Any]:
     """A seat can only promote itself over others, never be promoted by another seat on
-    its behalf: it has to be self-managed. This verb mints `target` as manager over each
-    named worker, in one transaction, self-scoped to the promoted seat's own body (or the
+    its behalf: it has to be self-managed. This function mints `target` as manager over each
+    named worker, in one transaction, self-scoped to the promoted seat's own session (or the
     operator) so a coordinator can never do this to someone else's team. Per-worker
     outcome, never a whole-call failure: a batch of promotions is a manifest of
     independent bets, not one atomic all-or-nothing (promoting over three workers where
@@ -3695,7 +3697,7 @@ async def promote_seat(
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             return {"error": f"{caller_desc} is not authorized to promote {target_canonical} "
-                             "over workers, this runs by the promoted seat's OWN body or "
+                             "over workers, this runs by the promoted seat's OWN session or "
                              "the operator, never a coordinator acting on another's behalf"}
 
     manifest: dict[str, str] = {}

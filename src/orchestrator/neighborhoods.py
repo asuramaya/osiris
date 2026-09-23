@@ -59,8 +59,8 @@ _CONF = 0.5
 _SYSTEM = (
     "You are the neighborhood consolidator of a provenance-first memory graph. You are "
     "given one project's recent memory: open threads (unfinished lines of work) and "
-    "recent decisions (rulings, with rationales). Write a compact digest — under 300 "
-    "words, plain prose with short paragraphs — that a returning mind could read INSTEAD "
+    "recent decisions (rulings, with rationales). Write a compact digest, under 300 "
+    "words, plain prose with short paragraphs, that a returning reader could use INSTEAD "
     "of the fragments: what this project is about right now, the main open lines and how "
     "they relate, and what was settled recently (with the WHY when it matters). Never "
     "invent facts not present in the input; never editorialize about priorities.")
@@ -122,13 +122,13 @@ async def discover_trees(pool: asyncpg.Pool, *, watched: list[str]) -> list[dict
         reason = None
         if commits == 0:
             if not path:
-                reason = "no on_disk_path registered — the disk census hasn't found it yet"
+                reason = "no on_disk_path registered: the disk census hasn't found it yet"
             elif not is_watched:
                 reason = f"on disk at {path}, not in the ingest watch list"
             elif when is None:
                 reason = "in the watch list but ingest has never ticked for it yet"
             else:
-                reason = "ingest has run and found nothing — the path may no longer be a git repo"
+                reason = "ingest has run and found nothing: the path may no longer be a git repo"
         out.append({
             "tree": tree, "path": path, "watched": is_watched, "commits": commits,
             "activity": r["activity"], "last_ingested_at": when, "reason": reason,
@@ -230,7 +230,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
     additionally gated on the old on_disk_path being confirmed gone (or never having been
     recorded): a live old path means this is a copy of a working tree, not a move, and a
     copy must mint its own object rather than steal another checkout's identity. One walk,
-    with a loud receipt (`reconnected` in the return dict): the same idempotent cadence
+    with a clear record (`reconnected` in the return dict): the same idempotent cadence
     that already bounds on_disk_path staleness bounds a missed reconnect too, and a bad
     reconnect can't reach the graph in the first place because the ambiguous case above
     refuses outright, so a second confirmation walk would buy no correctness gain here,
@@ -267,7 +267,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
             if parent_path is None:
                 refused.append({"name": name, "path": str(repo),
                                 "reason": "looks like a worktree (.git is a file) but its "
-                                "parent checkout could not be resolved — refusing to guess"})
+                                "parent checkout could not be resolved: refusing to guess"})
                 continue
             parent_name = Path(parent_path).name
             parent_obj = await _resolve_repo(actions.pool, parent_name)
@@ -315,7 +315,7 @@ async def census_trees(actions: Actions, *, roots: list[str]) -> dict[str, Any]:
                 refused.append({
                     "name": name, "path": str(repo),
                     "reason": f"ambiguous remote_url match: {len(candidates)} active "
-                    "SoftwareProjects already carry this remote — refusing to guess which "
+                    "SoftwareProjects already carry this remote, refusing to guess which "
                     "one this directory reconnects to (a human/seat declaration is needed, "
                     "same doctrine as fork_project)",
                 })
@@ -496,7 +496,7 @@ async def _member_texts(pool: asyncpg.Pool, repo_id: Any) -> str:
         tag = f"[{r['type'].lower()}:{r['status'] or '?'}]"
         line = f"{tag} {r['summary'][:400]}"
         if r["rationale"]:
-            line += f" — WHY: {r['rationale'][:300]}"
+            line += f" | WHY: {r['rationale'][:300]}"
         lines.append(line)
     return "\n".join(lines)
 
@@ -530,7 +530,7 @@ async def summarize_neighborhoods(
         if not body.strip():
             continue  # an empty digest is not a memory, leave the old one standing
         ref_id, _canon = await ingest_reference(
-            actions, f"Neighborhood — {repo}", vendor="osiris",
+            actions, f"Neighborhood: {repo}", vendor="osiris",
             body=body.strip()[:8000], repo=repo, source=_SOURCE)
         # DERIVED, not testimony: ingest_reference grades an agent's READ self_declared;
         # the watermark is the miner's own bookkeeping at the machine's grade

@@ -1252,7 +1252,7 @@ def _gate_name(detail: str) -> str:
     re-derive a mismatch/unknown distinction by string-matching rendered prose, which is
     the same shape of bug this function's own docstring above already warns against for
     every other gate it names."""
-    if "seam itself" in detail:
+    if "compaction boundary itself" in detail:
         return "compaction"
     # CORRECTED 2026-09-08: the ceiling refusal's own prose no longer says "context
     # ceiling." It names either the occupancy read (`_occupancy_ceiling_verdict`, the

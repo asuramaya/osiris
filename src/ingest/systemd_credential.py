@@ -1,8 +1,9 @@
 """The shared systemd-creds primitives, extracted as part of the key-custody rewrite so
 the restic offload password gets the same custody mechanics used for the soul-store key
 in `soul_crypto.py`, rather than a hand-copied second implementation that could drift
-from the first (a sibling that silently diverges from its twin is a well-known failure
-mode this project's own standing practices warn against). `soul_crypto.py` itself still
+from the first (a duplicate implementation that silently diverges from the original is a
+well-known failure mode this project's own standing practices warn against). `soul_crypto.py`
+itself still
 owns its own `_credential_path`/`_meta_path`/`_resolve_backend`/`_write_key_for_backend`/
 `soul_key_*`; those are shaped around one specific secret (a Fernet key wrapping the
 soul store) and its own recovery model (FIDO2). Only the raw systemd-creds subprocess
@@ -14,8 +15,8 @@ encrypt --user --with-key=host` round-trips without root; `--with-key=host+tpm2`
 succeeds once the caller's own user has joined the `tss` group (owns `/dev/tpmrm0`);
 `--with-key=tpm2` alone refuses in `--user` scope ("Selected key not available in
 --uid= scoped mode, refusing"). `is_tss_member`/`systemd_creds_available` exist
-specifically so a caller's own backend-selection logic can reproduce that same ladder
-without re-deriving it.
+specifically so a caller's own backend-selection logic can reproduce that same fallback
+sequence without re-deriving it.
 """
 from __future__ import annotations
 

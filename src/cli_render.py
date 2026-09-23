@@ -507,7 +507,7 @@ def paint_fleet_text(text: str, paint: Paint) -> str:
                 return paint.bad(m.group(0))
             line = _GHOST_SPAN_RE.sub(
                 lambda m: paint.warn(_GHOST_DETAIL_RE.sub(_detail, m.group(0))), line)
-            name, sep, rest = line[2:].partition(" — ")
+            name, sep, rest = line[2:].partition(" · ")
             line = f"▸ {paint.bold(name)}{sep}{rest}" if sep else line
         line = _SEAM_PCT_RE.sub(lambda m: _paint_seam_pct(m.group(0), paint), line)
         line = line.replace("●", paint.good("●")).replace("○", paint.dim("○"))

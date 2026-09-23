@@ -5,7 +5,7 @@ The engine NEVER runs a GPU. Document extraction needs two model capabilities:
   * a **vision** model: OCR a scanned notice / PDF page into text first (county
     foreclosure notices are images, not clean text).
 
-Both sit behind an injected seam (`LLMClient`, `VisionClient`). Config picks the
+Both sit behind an injected boundary (`LLMClient`, `VisionClient`). Config picks the
 backend: a hosted API (an API key, no ops) for the managed broker deployment, or a
 local model for a self-hoster with their own GPU, same code. "Whose GPU / which
 model" becomes a deployment switch, not a rewrite. Live providers use httpx directly
@@ -140,7 +140,7 @@ class AnthropicClient:
 
 _OCR_INSTRUCTION = (
     "Transcribe ALL text in this document image exactly, preserving names, addresses, "
-    "dates, and amounts. Output only the transcribed text — no commentary."
+    "dates, and amounts. Output only the transcribed text, no commentary."
 )
 
 
@@ -282,7 +282,7 @@ def spend_is_metered(settings: Settings | None = None) -> bool:
     The daily ceiling (orchestrator.ceiling) only means something when a dollar is actually
     charged. The local Claude CLI runs on the operator's SUBSCRIPTION: the envelope's
     `total_cost_usd` is a NOTIONAL number the vendor prints, not a debit against a card, and the
-    triggered sessions don't even report a reliable token count (the spawner bins the receipt).
+    triggered sessions don't even report a reliable token count (the spawner bins the envelope).
     So `total_cost_usd` on that path is not a small or fuzzy price, it is not a measurement at
     all; summing it and gating on it stops real work on imaginary money (observed as a false
     '$12/$10' stop, 2026-07-21).
@@ -317,7 +317,7 @@ async def document_to_text(
 ) -> str:
     """Normalize a fetched document to text for the extractor. Plain text passes
     through; a scanned page (image/*, application/pdf) is OCR'd via the vision provider.
-    The OCR seam is the same key-as-GPU abstraction: no local inference."""
+    The OCR boundary is the same key-as-GPU abstraction: no local inference."""
     if isinstance(content, str):
         return content
     if any(media_type.startswith(t) for t in _TEXTUAL):
@@ -325,7 +325,7 @@ async def document_to_text(
     v = vision or vision_provider()
     if v is None:
         raise RuntimeError(
-            f"no vision provider for {media_type!r} — set ANTHROPIC_API_KEY (the OCR seam)"
+            f"no vision provider for {media_type!r}: set ANTHROPIC_API_KEY (the OCR boundary)"
         )
     return await v.to_text(
         image=content, media_type=media_type, model=model or get_settings().osiris_vision_model

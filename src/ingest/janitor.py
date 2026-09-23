@@ -11,11 +11,11 @@ threads were untouched guesses nobody had ever read.
 What the janitor may touch, and the boundaries are the whole design:
 
   1. Only its own output. Evidence class DERIVED, minted by the mining path. The miner may retract
-     what the miner wrote. It may never touch a mind's declaration, another source's objects, or
+     what the miner wrote. It may never touch an agent's declaration, another source's objects, or
      anything a human signed. (Rule 5: a miner never touches another source's objects.)
 
-  2. Only what no mind has touched. The instant an agent triages, adopts, resolves, or so much as
-     comments on a mined thread, it is theirs. A mind's attention is testimony, and testimony
+  2. Only what no agent has touched. The instant an agent triages, adopts, resolves, or so much as
+     comments on a mined thread, it is theirs. An agent's attention is testimony, and testimony
      outranks the machine that produced the row. This guard is absolute and it is checked first.
 
   3. Only what is provably garbage, never what is merely suspected. Two classes qualify, and both
@@ -58,8 +58,8 @@ _SOURCE = "session-janitor"
 _EC = EvidenceClass.DIRECT_OBSERVATION  # a fact about the record, not a reading of a conversation
 _CONF = 0.95
 
-WAKE_SPAWN = "mined from a wake session Osiris spawned itself — its chatter was never knowledge"
-PLAGIARISED = ("mined from a session that documents itself — the ownership boundary should have "
+WAKE_SPAWN = "mined from a wake session Osiris spawned itself: its chatter was never knowledge"
+PLAGIARISED = ("mined from a session that documents itself: the ownership boundary should have "
                "left it alone (rule 7: backfill the silent, never second-guess the diligent)")
 
 
@@ -119,7 +119,7 @@ async def janitor_pass(
         "WHERE o.type IN ('Thread','Decision') AND o.status='active' "
         # the miner's OWN output, and only that
         "  AND ca.evidence_class='derived' AND ca.source_id LIKE 'agent:%' "
-        # GUARD ONE, absolute: a mind's attention is testimony. Never retract what it touched.
+        # GUARD ONE, absolute: an agent's attention is testimony. Never retract what it touched.
         "  AND NOT EXISTS (SELECT 1 FROM assertions sa WHERE sa.object_id=o.id "
         "                  AND sa.evidence_class='self_declared') "
         # ...and never re-retract

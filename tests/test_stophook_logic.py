@@ -472,7 +472,7 @@ async def test_compute_stop_stage_a_practice_check_disabled_by_default_sends_not
 
 
 async def test_compute_self_compaction_settle_first_then_the_seam(actions: Actions) -> None:
-    """Ruling a3fb7c11 (operator, 2026-09-06; thread e9c8cf50): the trigger injects /compact
+    """The settle-first ruling (operator, 2026-09-06): the trigger injects /compact
     into THIS session's own daemon job, carries its own provenance in the text (the harness
     stamps injected turns 'human'), and never fires below SELF_COMPACT_PCT. The daemon lane
     is injected here exactly like dispatch_dm's nudge seam."""
@@ -503,7 +503,7 @@ async def test_compute_self_compaction_settle_first_then_the_seam(actions: Actio
                                         job_for=_job_for, reply=_reply)
     assert hit["compacted"] is True and hit["agent_id"] == a and hit["job_short"] == "selfcomp"
     assert len(sent) == 1 and sent[0][1].startswith("/compact ")
-    assert "a3fb7c11" in sent[0][1] and a in sent[0][1]  # provenance rides in the text
+    assert "settle-first" in sent[0][1] and a in sent[0][1]  # provenance rides in the text
     stranger = await compute_self_compaction(actions.pool, session_id="nobody-0000",
                                              pct=99, job_for=_job_for, reply=_reply)
     assert stranger["compacted"] is False and len(sent) == 1  # never another body

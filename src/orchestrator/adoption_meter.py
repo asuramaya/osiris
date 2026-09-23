@@ -249,21 +249,21 @@ _LEGACY_EXTENSION_REASON_STRINGS = frozenset({
 
 
 _HATCH_CAVEAT = (
-    "a 0 here is NOT proof the gate is broken (Imhotep msg 5828): the gate only fires on "
-    "types that declare required_link_kinds, and none do yet — Khnum's content pass for "
-    "that is separate and has not landed. ALL-TIME CUMULATIVE, NEVER A WINDOW OR A RATE "
-    "(Lane C, Thoth XC msg 6143): unlinked_because is asserted once per object at write "
-    "time and never retracted, so total/split only ever grow — two readings taken weeks "
+    "a 0 here is NOT proof the gate is broken: the gate only fires on "
+    "types that declare required_link_kinds, and none do yet, that content pass "
+    "is separate and has not landed. ALL-TIME CUMULATIVE, NEVER A WINDOW OR A RATE: "
+    "unlinked_because is asserted once per object at write "
+    "time and never retracted, so total/split only ever grow, and two readings taken weeks "
     "apart are not a before/after comparison of the SAME thing, they are two cumulative "
-    "totals at different elapsed times. THE EXACT-STRING CLASSIFICATION BUG IS FIXED "
-    "(thread 20b06fbb, Thoth XC msg 6159): the split now reads a separate, non-prose "
-    "`unlinked_because_kind` property asserted at write time — never a re-parse of "
+    "totals at different elapsed times. THE EXACT-STRING CLASSIFICATION BUG IS FIXED: "
+    "the split now reads a separate, non-prose "
+    "`unlinked_because_kind` property asserted at write time, never a re-parse of "
     "`unlinked_because`'s own text, which drifted three times as this reason constant's "
     "enumerated param list grew (b7fee6c/57c9a0b/6fb6ba5) and silently miscounted 15 "
     "historical rows as standalone. Rows written before this fix carry no "
     "`unlinked_because_kind` at all and fall back to `_LEGACY_EXTENSION_REASON_STRINGS`, "
     "a closed, git-verified enumeration of every wording the constant is known to have "
-    "held — so historical rows read correctly at query time too, no backfill needed"
+    "held, so historical rows read correctly at query time too, no backfill needed"
 )
 
 
@@ -294,7 +294,7 @@ async def _hatch_counts(pool: asyncpg.Pool) -> dict[str, Any]:
     `unlinked_because_kind` at all; `_LEGACY_EXTENSION_REASON_STRINGS` is the closed, frozen
     enumeration of every wording `_EXTENSION_LINK_PENDING_REASON` is known to have ever held
     (found by reading git history, not guessed), so those rows still classify correctly at
-    query time, no backfill or repair verb needed: historical rows read correctly by
+    query time, no backfill or repair step needed: historical rows read correctly by
     re-evaluating at query time. This list is closed going forward too: every future write
     gets `unlinked_because_kind` structurally, so the constant's own prose is never
     load-bearing for classification again and this frozenset needs no further entries."""
@@ -364,9 +364,9 @@ def render_adoption_line(meter: dict[str, Any]) -> str:
     if hatch["split"] is not None:
         hatch_str = (f"extension={hatch['split']['extension_link_pending']} "
                      f"standalone={hatch['split']['standalone_other']} (all-time total, "
-                     f"not a window — do not diff against a prior deploy's line)")
+                     f"not a window, do not diff against a prior deploy's line)")
     else:
-        hatch_str = f"{hatch['total']} total (unsplit — reason constant not on this build)"
+        hatch_str = f"{hatch['total']} total (unsplit, reason constant not on this build)"
     if headline is None:
         cohort_str = "no 30-day-aged cohort yet"
     else:
