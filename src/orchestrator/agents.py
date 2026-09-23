@@ -1,21 +1,21 @@
-"""Actor identity — the fleet made first-class ("a man and all his imaginary friends").
+"""Actor identity: each connecting agent is registered in the graph as its own actor.
 
-The persistent MCP server is ONE process the whole fleet writes through, so without this
-every agent's writes collapse into the single `session` source — an undifferentiated mush.
-This resolves each connecting agent into a distinct ACTOR and registers it in the graph:
+The persistent MCP server is one process the whole fleet writes through, so without this
+every agent's writes collapse into the single `session` source, an undifferentiated mush.
+This resolves each connecting agent into a distinct actor and registers it in the graph:
 
-  * project — from the agent's cwd (it always knows where it's working);
-  * model — observed off the agent's OWN session record through the transcript store (the
-    source-model provenance, authoritative from the harness, not the lying system prompt),
+  * project, from the agent's cwd (it always knows where it's working);
+  * model, observed off the agent's own session record through the transcript store (the
+    source-model provenance, authoritative from the harness, not the system prompt),
     anchored on its job dir;
-  * session — the job/session id, the stable handle.
+  * session, the job/session id, the stable handle.
 
 An `Agent` object (canonical `agent:<session>`) is minted with those, linked `works_in` its
-project and `acts_for` the principal — so the graph literally contains its own operators, the
-Palantir org chart with Claude instances as the analysts. Every write that agent then makes is
-attributed to `agent:<session>` instead of `session`, which (a) makes provenance real — which
-instance, which model, decided what — and (b) keeps the miner's ownership boundary intact
-(an agent source is never `session-miner`, so the backfill miner never touches deliberate work).
+project and `acts_for` the principal, so the graph contains a record of who is doing the work.
+Every write that agent then makes is attributed to `agent:<session>` instead of `session`,
+which (a) makes provenance real: which instance, which model, decided what, and (b) keeps the
+miner's ownership boundary intact (an agent source is never `session-miner`, so the backfill
+miner never touches deliberate work).
 """
 
 from __future__ import annotations
@@ -56,95 +56,91 @@ _CONF = confidence_for(EvidenceClass.SELF_DECLARED)
 class AgentIdentity:
     """Who an agent is. `agent_id` is the source string its writes are attributed to."""
 
-    agent_id: str  # "agent:<session>" — the provenance source
+    agent_id: str  # "agent:<session>", the provenance source
     session: str
     project: str | None
     model: str | None
     cwd: str | None
-    # HOW model was resolved — grades the source_model assertion (job_dir probe = observation,
-    # cwd = a weaker guess, self_report = the agent's own word). None when model is unknown.
+    # How the model was resolved: grades the source_model assertion (job_dir probe = observation,
+    # cwd = a weaker guess, self_report = the agent's own word). None when the model is unknown.
     model_method: str | None = None
-    # divergence flag (ruling 17516660): the agent's SELF-REPORT of its model (if it passed one)
-    # and whether it DISAGREES with the harness observation — a self-report that lies is a flag.
+    # Divergence flag: the agent's self-reported model (if it passed one), and whether it
+    # disagrees with the harness observation. A self-report that lies is flagged.
     model_declared: str | None = None
     model_divergent: bool = False
-    # the distinct models across this session's transcript, first-seen order — the swap history
-    # (>1 = a within-session demotion). Feeds the swap-detector (ruling f2ae6346).
+    # The distinct models across this session's transcript, in first-seen order: the swap
+    # history (more than one entry means a within-session demotion). Feeds the swap detector.
     model_history: tuple[str, ...] = ()
-    # the operator's own /model command is on this transcript's record — any within-session
-    # swap was CHOSEN, not suffered (a seam, never a sin; complaint 2026-07-10).
+    # Whether an explicit /model command appears on this transcript's record: any within-session
+    # model swap that follows one was chosen, not suffered.
     model_deliberate: bool = False
-    # WHEN the anchored model observation was witnessed — the timestamp of the transcript
+    # When the anchored model observation was witnessed: the timestamp of the transcript
     # record that carried it (None when unanchored, or the record was unstamped). The seam
-    # gate compares CLOCKS with this: the tail lags a /model until the next assistant turn,
-    # so an observation not fresher than the stamp it disagrees with is a stale read, never
-    # a seam (the TJMAX ping-pong, thread a3d49d91). source_model is stamped AT this moment
-    # too — a ledger dated by the event, never by the bookkeeping.
+    # gate compares clocks with this: the tail lags a /model command until the next assistant
+    # turn, so an observation not fresher than the stamp it disagrees with is a stale read,
+    # never a real model swap. source_model is stamped at this moment too, so the ledger is
+    # dated by the event, not by the bookkeeping.
     model_observed_at: datetime | None = None
-    # False when identity fell back to a best-effort id (no session/job-id/transcript anchor). The
-    # fallback is now DISTINCT per session — never the old shared `agent:unknown` sink — so distinct
-    # actors can't merge; the flag lets the fleet digest surface an unresolved onboarding.
+    # False when identity fell back to a best-effort id (no session/job-id/transcript anchor).
+    # The fallback is distinct per session rather than a shared sink, so distinct actors can't
+    # merge; the flag lets the fleet digest surface an unresolved onboarding.
     resolved: bool = True
-    # SET BY register_agent (the one out-param): "<prior> → <observed>" when this registration
-    # crossed a succession seam — a fresh context inheriting an identity another model wrote under
-    # (bug #51, a sibling project). None when no seam fired. mount() reads it to confess the seam.
+    # Set by register_agent (the one out-param): "<prior> -> <observed>" when this registration
+    # crossed a succession seam, i.e. a fresh context inheriting an identity another model wrote
+    # under. None when no seam fired. mount() reads it to report the seam.
     model_succession: str | None = None
-    # SET BY register_agent: True when this mount RE-ATTACHED an identity carrying a winning
-    # retired=true (bug #51 follow-up, a sibling project msg 69). The trigger already refuses to
-    # reanimate the retired (resume-not-mint), but a plain mount from the same session UUID would
-    # silently un-retire the name. register_agent now stamps the reanimation as a first-class
-    # OBSERVED event and mount() confesses it — never a silent reanimation (membrane, rule #6).
+    # Set by register_agent: True when this mount re-attached an identity that was already marked
+    # retired=true. The trigger already refuses to reanimate a retired identity (resume, not
+    # mint), but a plain mount from the same session UUID would silently un-retire the name.
+    # register_agent now stamps the reanimation as a first-class observed event and mount()
+    # reports it, instead of letting it happen silently.
     reanimated: bool = False
-    # SET BY register_agent under the MINT ruling (be292762): this context was minted a NEW
-    # lineage-linked id (agent:<base>-ii…) because it arrived across a detected seam or wore a
-    # retired face. Holds the ANCESTOR's canonical; mount() confesses the minting to the heir.
+    # Set by register_agent: this context was minted a new lineage-linked id
+    # (agent:<base>-ii...) because it arrived across a detected seam or wore a retired face.
+    # Holds the ancestor's canonical id; mount() reports the minting to the heir.
     succeeded_from: str | None = None
-    # COULD NOT READ A `.osiris` DECLARATION THAT EXISTS (Sekhmet's design, e3f4f159; Thoth
-    # DM 2677 item 2) — the file was found but failed to parse/read, a DIFFERENT real thing
-    # from "no declaration" (which stays the legitimate unpinned None, unchanged). Set only
-    # when `_read_osiris_key`'s climb actually hit a broken file for the `project` key;
-    # `project` above still falls back to the basename guess exactly as before. None/None
-    # when nothing broke — the common case, never populated speculatively.
+    # Could not read a `.osiris` declaration that exists: the file was found but failed to
+    # parse/read, which is a different real state from "no declaration" (which stays the
+    # legitimate unpinned None, unchanged). Set only when `_read_osiris_key`'s climb actually
+    # hit a broken file for the `project` key; `project` above still falls back to the basename
+    # guess exactly as before. None/None when nothing broke: the common case, never populated
+    # speculatively.
     project_pin_error: str | None = None
-    # THE PATH DOES DOUBLE DUTY (task #128, wave 2, 2026-08-03): set alongside
-    # `project_pin_error` for a broken file, OR ALONE (error=None) for a valid `.osiris`
-    # that simply never declares `project` — the heinrich shape, correct TOML answering a
-    # different question. `project_pin_banner` tells these apart by checking `project_pin_error`
-    # first; a caller that only wants "is there a path to point at" can use this either way.
+    # The path does double duty: set alongside `project_pin_error` for a broken file, or alone
+    # (error=None) for a valid `.osiris` that simply never declares `project` (correct TOML
+    # answering a different question). `project_pin_banner` tells these apart by checking
+    # `project_pin_error` first; a caller that only wants "is there a path to point at" can use
+    # this either way.
     project_pin_path: str | None = None
-    # TRUE ONLY WHEN NO `.osiris` EXISTS ANYWHERE IN THE CLIMB AT ALL — the third leg of the
-    # three-way split wave 2 needs (no pin · unparseable pin · parseable pin missing the
-    # key). Never set for the bare seat-office root (ruling 577988ed's carve-out), when
-    # there is no cwd to climb from at all, or when `cwd` itself doesn't exist (see
-    # `project_pin_cwd_missing` below — a DIFFERENT, disjoint state) — those stay silent by
-    # design, not "missing".
+    # True only when no `.osiris` exists anywhere in the climb at all: the third leg of a
+    # three-way split (no pin / unparseable pin / parseable pin missing the key). Never set for
+    # the bare seat-office root (a deliberate carve-out), when there is no cwd to climb from at
+    # all, or when `cwd` itself doesn't exist (see `project_pin_cwd_missing` below, a different,
+    # disjoint state), those stay silent by design, not "missing".
     project_pin_missing: bool = False
-    # `cwd` ITSELF DOES NOT EXIST ON DISK (Thoth's catch, msg 3928, thread 3937) — set only
-    # when `_read_osiris_key`'s leaf check fails before any climb even starts. Deliberately
-    # DISJOINT from `project_pin_missing`: a deleted office and an unpinned-but-real office
-    # are opposite dispositions (one wants the graph's stale belief reaped, the other wants
-    # a pin written), and folding them into one flag is the exact 60bc15db this fixes.
-    # `project` still falls back to a basename guess either way (unchanged) — this only
-    # makes the WHY honest.
+    # `cwd` itself does not exist on disk: set only when `_read_osiris_key`'s leaf check fails
+    # before any climb even starts. Deliberately disjoint from `project_pin_missing`: a deleted
+    # office and an unpinned-but-real office are opposite situations (one wants the graph's
+    # stale belief cleaned up, the other wants a pin written), and folding them into one flag
+    # is the exact bug this avoids. `project` still falls back to a basename guess either way
+    # (unchanged); this only makes the reported reason honest.
     project_pin_cwd_missing: bool = False
-    # SET BY register_agent (task #144, rule 1 of de3dfc18 — "where this lineage's work
-    # actually landed"): the majority in_repo target across this agent's OWN lineage,
-    # reported HONESTLY, never used to overwrite `project` above. `write_attribution_agreement`
-    # is one of "no-signal" (this lineage has never filed an in_repo edge anywhere) /
-    # "confirms" (the majority target matches `project`) / "disagrees" (it doesn't) — never
-    # a fourth, silent "picked its own answer" state; mount() confesses "disagrees", it never
-    # acts on it. None/0/None when the DB check itself couldn't run (a degrade, never a block
-    # — 577988ed governs the mount path this sits on).
+    # Set by register_agent: the majority in_repo target across this agent's own lineage
+    # ("where this lineage's work actually landed"), reported honestly, never used to overwrite
+    # `project` above. `write_attribution_agreement` is one of "no-signal" (this lineage has
+    # never filed an in_repo edge anywhere) / "confirms" (the majority target matches
+    # `project`) / "disagrees" (it doesn't); never a fourth, silent "picked its own answer"
+    # state; mount() reports "disagrees" but never acts on it. None/0/None when the DB check
+    # itself couldn't run (a degrade, never a block).
     write_attribution_agreement: str | None = None
     write_attribution_top: str | None = None
     write_attribution_total: int = 0
 
 
-# Roman generations for successor ids (a sibling's grammar: agent:a8c15486-ii). The alphabet
-# is DELIBERATELY restricted to {i, v, x} — none of which are hex digits — so a full-UUID
-# canonical
-# like agent:2f81c6d5-…-0a7cd0e63f21 can never misparse its tail as a generation ('d' and 'c'
-# are valid Roman AND valid hex; 'i'/'v'/'x' are Roman only). Caps the alphabet at 39 (xxxix); a
+# Roman generations for successor ids (e.g. agent:a8c15486-ii). The alphabet is deliberately
+# restricted to {i, v, x}, none of which are hex digits, so a full-UUID canonical like
+# agent:2f81c6d5-...-0a7cd0e63f21 can never misparse its tail as a generation ('d' and 'c' are
+# valid Roman AND valid hex; 'i'/'v'/'x' are Roman only). Caps the alphabet at 39 (xxxix); a
 # lineage deeper than that gets a plain numeric suffix, still hex-collision-free.
 _ROMAN_UNITS = [(10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
 
@@ -172,40 +168,37 @@ def _from_roman(s: str) -> int | None:
 
 
 def _generation(canonical: str) -> tuple[str, int]:
-    """(root, generation) — agent:x is generation 1; agent:x-ii is (agent:x, 2).
+    """(root, generation). agent:x is generation 1; agent:x-ii is (agent:x, 2).
 
-    THE REPEATING OVERFLOW (Thoth's own lineage, msg 7606, 2026-09-05 — the
-    "-g40-g40-g40" specimen): `_to_roman`'s numeric fallback for generation 40+
-    (`f"g{n}"`, see its own docstring) was never parsed back BY THIS FUNCTION — only
-    `_from_roman`'s i/v/x alphabet was recognized. So the instant a lineage first
-    passed 39 generations, `next_generation` correctly minted `...-g40`, but the VERY
-    NEXT call to `_generation` on that id found a suffix ("g40") `_from_roman` can't
-    read, fell through to `return canonical, 1`, and treated the whole `...-g40` string
-    as a brand-new ROOT starting over at generation 1. Climbing another 39 generations
-    from there hit the same fallback again — a second `-g40` — and so on, forever,
-    every 39 generations: Thoth's real generation count was ~118 by the time this
-    fired a THIRD time and minted `...-g40-g40-g40`.
+    THE REPEATING OVERFLOW BUG (the "-g40-g40-g40" specimen): `_to_roman`'s numeric
+    fallback for generation 40+ (`f"g{n}"`, see its own docstring) was never parsed back
+    by this function; only `_from_roman`'s i/v/x alphabet was recognized. So the instant
+    a lineage first passed 39 generations, `next_generation` correctly minted `...-g40`,
+    but the very next call to `_generation` on that id found a suffix ("g40") that
+    `_from_roman` can't read, fell through to `return canonical, 1`, and treated the
+    whole `...-g40` string as a brand-new root starting over at generation 1. Climbing
+    another 39 generations from there hit the same fallback again (a second `-g40`), and
+    so on, forever, every 39 generations: one real lineage's generation count was ~118 by
+    the time this fired a third time and minted `...-g40-g40-g40`.
 
-    UNWINDS THE WHOLE CHAIN, NOT JUST THE LAST SEGMENT (test_greatfold's own catch,
-    msg 7623, on the first cut of this fix): a legacy id can carry an ORDINARY roman
-    suffix immediately after a g-reset (`...-g40-ii` — the reset landed on generation
-    40, then two MORE generations minted normally before the next reset or before this
-    fix ever landed), so reading only the trailing segment left `...-g40-ii` parsing to
-    root `...-g40` (itself unparsed) at generation 2 — fold_seat's own family grouping
-    still split one soul into two. This peels segments from the RIGHT in a loop, as
-    long as each one parses as either a roman numeral (>=2) or a `g<N>` marker (N>39,
-    the exact digit form `_to_roman` emits, nothing else). NOT a plain sum: the OLD
-    buggy `next_generation`, applied repeatedly, always re-based each reset's LOCAL
-    count at 1 (not 0), so a segment past the first one only ever adds `(value - 1)`
-    true generations on top of what came before — verified by literally simulating the
-    old buggy next_generation from generation 1 and reading off the true step count at
-    each landmark id (`...-g40-g40-xxxviii` lands at true generation 116 this way, NOT
-    the 118 a naive sum would give — Thoth's own "-g40-g40-g40" mint, one hop later, is
-    118). Stops at the first segment that parses as neither (the true root, or a
-    hex/UUID tail the i/v/x-only alphabet was built never to misparse —
-    test_generation_math_is_hex_safe's own guarantee, unchanged: a segment must consist
-    ENTIRELY of i/v/x to parse as roman, and none of those three characters is a valid
-    hex digit, so a real UUID segment can never falsely round-trip)."""
+    UNWINDS THE WHOLE CHAIN, NOT JUST THE LAST SEGMENT: a legacy id can carry an ordinary
+    roman suffix immediately after a g-reset (`...-g40-ii`, i.e. the reset landed on
+    generation 40, then two more generations minted normally before the next reset or
+    before this fix ever landed), so reading only the trailing segment left `...-g40-ii`
+    parsing to root `...-g40` (itself unparsed) at generation 2, which would still split
+    one lineage into two in family-grouping logic. This peels segments from the right in
+    a loop, as long as each one parses as either a roman numeral (>=2) or a `g<N>` marker
+    (N>39, the exact digit form `_to_roman` emits, nothing else). Not a plain sum: the old
+    buggy `next_generation`, applied repeatedly, always re-based each reset's local count
+    at 1 (not 0), so a segment past the first one only ever adds `(value - 1)` true
+    generations on top of what came before, verified by simulating the old buggy
+    next_generation from generation 1 and reading off the true step count at each landmark
+    id (`...-g40-g40-xxxviii` lands at true generation 116 this way, not the 118 a naive
+    sum would give; one hop later, "-g40-g40-g40" is 118). Stops at the first segment that
+    parses as neither (the true root, or a hex/UUID tail the i/v/x-only alphabet was built
+    never to misparse: a segment must consist entirely of i/v/x to parse as roman, and
+    none of those three characters is a valid hex digit, so a real UUID segment can never
+    falsely round-trip)."""
     root = canonical
     total: int | None = None
     while True:
@@ -231,77 +224,71 @@ def next_generation(canonical: str) -> str:
     return f"{root}-{_to_roman(gen + 1)}"
 
 
-# THE SHARED SUFFIX SHAPE (thread 25b57dca): the exact "-<roman>" / "-g<N>" alternation
-# _generation()'s own segment parse recognizes — one string, reused everywhere a caller
-# needs the pattern rather than the full chain walk. Five sites had each hand-rolled their
-# own roman-only copy (stophook_logic.py, doors.py, vitals.py, compositions.py's
-# _ROMAN_HEIR, mintseat.py) and every one of them forgot the g<N> half independently — live
-# specimen: a compaction successor's own "-g115" suffix, misread as a brand-new lineage
-# root because nothing but `_generation()` itself knew g<N> was a generation marker too.
+# The shared suffix shape: the exact "-<roman>" / "-g<N>" alternation _generation()'s own
+# segment parse recognizes, one string reused everywhere a caller needs the pattern rather
+# than the full chain walk. Several call sites had each hand-rolled their own roman-only
+# copy and every one of them forgot the g<N> half independently: a live specimen was a
+# compaction successor's own "-g115" suffix, misread as a brand-new lineage root because
+# nothing but `_generation()` itself knew g<N> was a generation marker too.
 _GEN_SUFFIX_ALTERNATION = r"[ivxlcdm]+|g[0-9]+"
 
 # Postgres's regexp_replace (POSIX ERE, Perl-style non-capturing groups included) accepts
-# this same alternation text verbatim — one pattern, two engines. `{col}` is the caller's
+# this same alternation text verbatim, one pattern, two engines. `{col}` is the caller's
 # column/expression to strip.
 SOUL_SQL_TEMPLATE = "regexp_replace({col}, '-(?:" + _GEN_SUFFIX_ALTERNATION + ")$', '')"
 
 
 def soul_base(agent_id: str) -> str:
-    """The chain-aware root `_generation()` already computes, under the name every
+    """The chain-aware root `_generation()` already computes, under a name every
     single-hop-only caller should reach for instead of re-deriving its own suffix strip."""
     return _generation(agent_id)[0]
 
 
 async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """THE PREVENTION-HALF LOOKUP (thread 79e785d1, Lane 3 of Thoth msg 5906) — read-only,
-    never a write: does this agent's own LINEAGE agree on a single project.
+    """A read-only lookup, never a write: does this agent's own lineage agree on a single
+    project.
 
-    THE FINDING THIS ANSWERS: `record_decision`'s repo= identity default (0dfbfb4) reads
-    the WRITING GENERATION's own live `works_in` — and of 251 agent-written orphan
-    Decisions, only 19 authors had one. The default was never missing; it fired on
-    nothing, because the specific generation that happened to write is itself commonly an
-    orphan (a fresh mint, a compacted heir, a body that never called `mount()` with a
-    resolvable cwd). But `works_in` is a LINEAGE property in practice — every generation
-    of one seat/session chain works the same project by construction — so widening the
-    read from "this one generation" to "every generation sharing this lineage's root"
-    (reusing `_generation()`'s own root string, the SAME op #170 already ships, no new
-    identity notion) recovers the answer for the generations that themselves never
-    resolved one.
+    THE FINDING THIS ANSWERS: `record_decision`'s repo= identity default reads the writing
+    generation's own live `works_in`, and of 251 agent-written orphan Decisions, only 19
+    authors had one. The default was never missing; it fired on nothing, because the
+    specific generation that happened to write is itself commonly an orphan (a fresh mint,
+    a compacted heir, a body that never called `mount()` with a resolvable cwd). But
+    `works_in` is a lineage property in practice: every generation of one seat/session
+    chain works the same project by construction, so widening the read from "this one
+    generation" to "every generation sharing this lineage's root" (reusing `_generation()`'s
+    own root string, no new identity notion) recovers the answer for the generations that
+    themselves never resolved one.
 
-    THE ABSTAIN LAW (operator ruling a0339e16, "only if the derivation is already obvious
-    and mechanically retrieved, otherwise it's moot" — #141/#137's law, both this seat's
-    own): returns the single project ONLY when EVERY live `works_in` edge across the
-    WHOLE lineage names the exact same one. Two or more DISTINCT projects across the
-    lineage is a genuine disagreement (measured live: 7 of 23 lineage roots span 2-4
-    projects, 106 Decisions sit under them) and must never be broken by recency, by
-    generation count, or by any other magnitude test deciding an identity question — the
-    exact bug caught in `rename_evidence_verdict`'s first cut, where "does new_name have
-    signal" would have returned CONFIRMS for khepri and buried the disagreement. Zero
-    projects anywhere in the lineage is a THIRD, distinct outcome (genuinely nothing to
-    derive), reported honestly apart from the ambiguous case rather than collapsed into
-    the same `None`.
+    THE ABSTAIN RULE (only resolve when the derivation is already obvious and mechanically
+    retrieved, otherwise treat it as unresolved): returns the single project only when
+    every live `works_in` edge across the whole lineage names the exact same one. Two or
+    more distinct projects across the lineage is a genuine disagreement (measured live: 7
+    of 23 lineage roots span 2-4 projects, 106 Decisions sit under them) and must never be
+    broken by recency, by generation count, or by any other magnitude test deciding an
+    identity question. Zero projects anywhere in the lineage is a third, distinct outcome
+    (genuinely nothing to derive), reported honestly apart from the ambiguous case rather
+    than collapsed into the same `None`.
 
     Returns `{"root": <lineage root>, "projects": <sorted distinct canonicals, "repo:"
     prefix stripped>, "candidate_ids": <the matching SoftwareProject object ids, same
-    order as `projects`>, "resolved": <the one project, or None>}` — `resolved is None`
+    order as `projects`>, "resolved": <the one project, or None>}`. `resolved is None`
     with `len(projects) == 0` is "nothing anywhere"; `resolved is None` with
     `len(projects) > 1` is "genuine disagreement, name it". `candidate_ids` is exactly
-    the shape `derive_or_abstain` (capture.py, Lane 0) wants for its own `candidates`
-    parameter — this function stays the lane-specific LOOKUP `derive_or_abstain` calls;
-    the write-time cardinality contract (tier, origin, invalidatable, the durable
-    abstention record) belongs to that primitive, not here. THIS FUNCTION DOES NOT
-    WRITE."""
+    the shape `derive_or_abstain` (capture.py) wants for its own `candidates` parameter;
+    this function stays the specific lookup `derive_or_abstain` calls, while the write-time
+    cardinality contract (tier, origin, invalidatable, the durable abstention record)
+    belongs to that primitive, not here. This function does not write."""
     root = _generation(agent_id)[0]
     rows = await pool.fetch(
         "SELECT DISTINCT p.id, p.canonical FROM links l "
         "JOIN objects a ON a.id=l.from_id AND a.type='Agent' "
         "  AND (a.canonical=$1 OR a.canonical LIKE $1 || '-%') "
-        # RETIRED/FALSE-MINT GENERATIONS NEVER VOTE (msg 7641/7646 item 1): a mis-minted
-        # heir that was later retired still carries its own works_in edge forever
-        # (append-only history) — counting it as a live lineage voice is exactly how a
-        # lineage that carries a retired mis-mint alongside its real generations ends up
-        # with two DISTINCT projects and abstains, per the same law seat_holders (above)
-        # already applies to counting HOLDERS.
+        # Retired/false-mint generations never vote: a mis-minted heir that was later
+        # retired still carries its own works_in edge forever (append-only history), and
+        # counting it as a live lineage voice is exactly how a lineage that carries a
+        # retired mis-mint alongside its real generations ends up with two distinct
+        # projects and abstains, per the same rule seat_holders (above) already applies
+        # to counting holders.
         "  AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=a.id "
         "    AND r.name IN ('retired', 'false_mint') AND r.value #>> '{}' = 'true') "
         "JOIN objects p ON p.id=l.to_id AND p.type='SoftwareProject' "
@@ -318,23 +305,22 @@ async def lineage_works_in(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
 async def lineage_works_in_at(
     pool: asyncpg.Pool, agent_id: str, at: datetime,
 ) -> dict[str, Any]:
-    """`lineage_works_in`'s own AT-WRITE-TIME sibling (provenance sweep, wave 15's Decision/
-    Thread lane, measured live 2026-09-09): a lineage that voted for a single project when
-    an object was written can still show 2+ projects TODAY, once a later generation moved
-    on — `lineage_works_in`'s "every live edge, right now" read then correctly abstains on
-    an object that was never actually ambiguous at the moment it was captured. Measured
-    against the population `backfill_lineage_repo_links` itself left abstained (177 rows,
-    2026-09-09): the current-unanimous check resolves 0 of them (by construction — that lane
-    already claimed every one it could), while windowing each lineage's own `works_in` edges
-    to `first_seen <= at AND (valid_until IS NULL OR valid_until > at)` resolves 45 — a
-    genuinely finer answer, not a repeat of the same lookup.
+    """`lineage_works_in`'s own at-write-time sibling: a lineage that voted for a single
+    project when an object was written can still show 2+ projects today, once a later
+    generation moved on. `lineage_works_in`'s "every live edge, right now" read then
+    correctly abstains on an object that was never actually ambiguous at the moment it was
+    captured. Measured against the population `backfill_lineage_repo_links` itself left
+    abstained (177 rows): the current-unanimous check resolves 0 of them (by construction,
+    that lane already claimed every one it could), while windowing each lineage's own
+    `works_in` edges to `first_seen <= at AND (valid_until IS NULL OR valid_until > at)`
+    resolves 45, a genuinely finer answer, not a repeat of the same lookup.
 
     Same retired/false-mint exclusion as `lineage_works_in` (a mis-minted heir that was
-    later retired still voted at the time, if its own works_in edge was live then — RETIRED
-    STATUS ITSELF CARRIES NO TIMESTAMP THIS FUNCTION CAN WINDOW ON, so a generation retired
+    later retired still voted at the time, if its own works_in edge was live then). Retired
+    status itself carries no timestamp this function can window on, so a generation retired
     at any point is excluded from every `at`, not just windows after its retirement; this is
-    the conservative direction — it can only turn a resolvable answer into an abstention, never
-    the reverse). Same return shape as `lineage_works_in`; READ-ONLY, mints nothing."""
+    the conservative direction, it can only turn a resolvable answer into an abstention,
+    never the reverse. Same return shape as `lineage_works_in`; read-only, mints nothing."""
     root = _generation(agent_id)[0]
     rows = await pool.fetch(
         "SELECT DISTINCT p.id, p.canonical FROM links l "
@@ -354,9 +340,9 @@ async def lineage_works_in_at(
            "resolved": resolved}
 
 
-# Full roman numerals for the human DISPLAY generation (Anna IV, Anna IX) — unlike the id
-# suffix (restricted to i/v/x for hex-safety), a display label parses nothing, so it can use
-# the whole numeral system.
+# Full roman numerals for the human display generation (e.g. "Anna IV", "Anna IX"). Unlike
+# the id suffix (restricted to i/v/x for hex-safety), a display label parses nothing, so it
+# can use the whole numeral system.
 _ROMAN_FULL = [(1000, "m"), (900, "cm"), (500, "d"), (400, "cd"), (100, "c"), (90, "xc"),
                (50, "l"), (40, "xl"), (10, "x"), (9, "ix"), (5, "v"), (4, "iv"), (1, "i")]
 
@@ -371,10 +357,10 @@ def _roman_display(n: int) -> str:
 
 
 def normalize_model(model: str | None) -> str | None:
-    """Canonical model id for MIND comparisons (the [1m] false-mint bug, 2026-07-09): the
-    harness decorates display ids with a bracketed variant suffix (claude-opus-4-8[1m] is the
-    1M-context tier of the SAME weights) while transcripts record the bare id. Same weights =
-    same mind — a variant suffix must never read as a death. Every seam comparator and every
+    """Canonical model id for model-identity comparisons: the harness decorates display ids
+    with a bracketed variant suffix (claude-opus-4-8[1m] is the 1M-context tier of the same
+    weights) while transcripts record the bare id. Same weights mean the same model; a
+    variant suffix must never be read as a model change. Every seam comparator and every
     stored model goes through this."""
     if not model:
         return model
@@ -382,28 +368,31 @@ def normalize_model(model: str | None) -> str | None:
 
 
 # ── HOUSE · SEAT · HOLDER ────────────────────────────────────────────────────────────────
-# THE OPERATOR'S RULING (2026-07-12): "the project name is the house (a-sibling), each
-# function/job has a name (Ra), the holder dies and multiplies (ra I, ra II), but splitting to
-# Ptah would break and confuse the lineage, and the fragmentation of agents was a bug in and of
-# itself."
+# The model: the project name is the house, each function/job has a name (the seat), the
+# holder of a seat dies and multiplies (seat I, seat II), but minting a brand-new agent
+# identity for each new holder would break and confuse the lineage, and that fragmentation
+# of agents was a bug in its own right.
 #
-# The old model keyed a lineage to the ANCHOR (job_dir), so every new CONVERSATION minted a whole
-# new bloodline — 1008 registered agents for ~20 real seats — and the name died with the
-# conversation that held it. The next mind in the house woke nameless, reached for the family
-# name, was refused as a stranger, and took a new one. That is how a-sibling's Ra became Ptah
-# and a sibling project's Soundwave became "Soundwave VIII". The fragmentation WAS the bug.
+# The old model keyed a lineage to the anchor (job_dir), so every new conversation minted a
+# whole new bloodline (roughly 1000 registered agents for about 20 real seats), and the name
+# died with the conversation that held it. The next mind in the house woke nameless, reached
+# for the family name, was refused as a stranger, and took a new one. The fragmentation was
+# the bug.
 #
-# Two things were conflated, and only ONE of them follows the anchor:
-#   · THE WRITER — agent:c7ef52a9-iii. A particular mind. Attribution stays exactly per-writer;
-#     this is why the merge Ptah asked for was refused (4abaf52d) — his writes are his.
-#   · THE SEAT — Ra, in the house a-sibling. A ROLE, held by successive writers.
-# The seat sits ABOVE the writer, so nothing merges and nothing is falsified: Ptah's writes remain
-# Ptah's, and he HOLDS the seat Ra — he is Ra V. Different mind, same job.
+# Two things were conflated, and only one of them follows the anchor:
+#   * the writer, e.g. agent:c7ef52a9-iii: a particular mind. Attribution stays exactly
+#     per-writer, which is why merging different writers into one identity is refused; each
+#     writer's writes are its own.
+#   * the seat, e.g. a named role in a given house: held by successive writers.
+# The seat sits above the writer, so nothing merges and nothing is falsified: a writer's
+# writes remain its own, and it holds a seat, e.g. as that seat's 5th holder. Different mind,
+# same job.
 
 
 async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list[str]:
     """Every mind that has held this seat in this house, in the order they took it up. The
-    generation IS the ordinal here — Ra I, Ra II — and it counts HOLDERS, not anchors."""
+    generation is the ordinal here (holder I, holder II), and it counts holders, not
+    anchors."""
     return [r["canonical"] for r in await pool.fetch(
         "SELECT o.canonical FROM objects o WHERE o.type='Agent' "
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
@@ -412,44 +401,44 @@ async def seat_holders(pool: asyncpg.Pool, house: str | None, seat: str) -> list
         "AND COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='project' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '') = COALESCE($2, '') "
-        # a healed phantom never HELD the seat (thread 6c99800a: TJMAX read X when ~VI minds
-        # ever acted). false_mint only — a RETIRED real holder still held it; filtering
-        # retired would renumber history.
+        # A healed phantom never held the seat (a past bug read a much higher generation
+        # count than the number of minds that had ever actually acted). false_mint only: a
+        # retired real holder still held it, so filtering retired holders would renumber
+        # history.
         "AND NOT EXISTS (SELECT 1 FROM current_assertions f WHERE f.object_id=o.id "
         "  AND f.name='false_mint' AND f.value #>> '{}' = 'true') "
-        # ...and a VISITOR never held it either (Phase C, §4.3): a spawn wearing a handle is
-        # the leak, not a holder — counting it would renumber every real generation after it.
+        # ...and a visitor never held it either: a spawn wearing a handle is a leak, not a
+        # holder, and counting it would renumber every real generation after it.
         "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=o.id "
         "  AND sl.type='spawned_by') "
-        # a same-instant double-mint has no deterministic order on created_at alone —
-        # Thoth's flag, DM 1301 — id tiebreaks it, matching compositions.py's own
-        # "ORDER BY created_at, id" idiom elsewhere in this codebase.
+        # A same-instant double-mint has no deterministic order on created_at alone, so id
+        # tiebreaks it, matching this codebase's own "ORDER BY created_at, id" idiom used
+        # elsewhere.
         "ORDER BY o.created_at, o.id", seat, house)]
 
 
 async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """RAW READ ONLY — the agent's own current `project` ASSERTION, exactly as stored,
+    """Raw read only: the agent's own current `project` assertion, exactly as stored,
     fabricated or not. Despite the name, this has nothing to do with `Seat.house`
-    (`derive_house`, seats.py) — the two are unrelated properties on unrelated objects
-    that happen to share a word (decision 68fba2e4, thread 19d6bdcb7fa9: the operator's
-    own "how many houses, are they 1:1 with projects" question, live specimen — Chad's
-    statusline read "Chad" not from Seat.house at all but from exactly this field, stamped
-    "Chad" at a pre-cf201a9 mint from the handle).
+    (`derive_house`, seats.py); the two are unrelated properties on unrelated objects that
+    happen to share a word. Live example of the confusion: a statusline once displayed a
+    seat's mint-time fabricated handle instead of its real house, because it was reading
+    this raw field rather than the resolved `Seat.house`.
 
     KEPT DELIBERATELY NARROW: the three remaining callers (`correct_agent_house`'s own
     before/after snapshot, `claim_name`'s generation-counting `seat_holders` comparison,
-    `mint_heir`'s own identical generation count) all need the RAW historical stamp, not
-    a resolved display value — an audit "before" field showing a resolved fallback
-    instead of what was actually stored would misreport the correction, and generation-
-    counting must compare raw stamps to raw stamps or it silently renumbers history.
-    Every OTHER caller wants `project_of` instead — the resolving reader (pin -> charter
-    -> works_in, never a raw copy) this function's old, misleading callers (`rebind_seat`
-    most recently, thread c5a91ea1) were migrated to. ONE further caller stays on
-    purpose, not migration-eligible: `compositions._caller_house` — deliberately
-    NOT this function's own concern, it answers a security-relevant HOUSE/ACL question
-    (ruling ff6148b0, cross-house reflection visibility), only falling back to this raw
-    project stamp when a caller has no derived Seat.house at all; migrating that fallback
-    to `project_of` would answer a different question than the one it asks."""
+    `mint_heir`'s own identical generation count) all need the raw historical stamp, not
+    a resolved display value: an audit "before" field showing a resolved fallback instead
+    of what was actually stored would misreport the correction, and generation-counting
+    must compare raw stamps to raw stamps or it silently renumbers history. Every other
+    caller wants `project_of` instead, the resolving reader (pin -> charter -> works_in,
+    never a raw copy) this function's old, misleading callers (`rebind_seat` most
+    recently) were migrated to. One further caller stays on purpose, not migration-
+    eligible: `compositions._caller_house`, which is deliberately not this function's
+    concern. It answers a security-relevant house/ACL question (cross-house visibility),
+    only falling back to this raw project stamp when a caller has no derived Seat.house
+    at all; migrating that fallback to `project_of` would answer a different question
+    than the one it asks."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT a.value #>> '{}' FROM objects o "
         "JOIN current_assertions a ON a.object_id=o.id AND a.name='project' "
@@ -458,27 +447,25 @@ async def house_of(pool: asyncpg.Pool, agent_id: str) -> str | None:
 
 
 async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = None) -> str | None:
-    """THE RESOLVING READER (decision 68fba2e4, thread 19d6bdcb7fa9 — the operator's own
-    house/project ruling, live specimen: Chad's statusline showed "Chad" — a mint-time
-    fabrication — instead of the seat's own genuinely declared "cdking"). Resolution order,
-    NEVER house: (1) the PIN at `cwd`, if given — `read_project_label`'s own climb-to-repo-
-    root (already transparent through a worktree's own gitlink, task #128), wins outright
-    the instant it resolves to anything. (1.5) Absent a pin ANYWHERE in that climb (task
-    #128 only helps once an `.osiris` exists somewhere above `cwd`; an unpinned repo like
-    ballgem has none at all, thread 922d920c/census 583e2669's own ballgem-wt-* residue):
-    if `cwd` is itself a git worktree (`worktree_parent_path`), its PARENT checkout's own
-    registered SoftwareProject name — a plain disk-structure signal, never a guess, and
-    None (never minted here) when the parent hasn't been censused yet. (2) Absent both:
-    the agent's own seat's DECLARED charter (`charter_of`), when it names exactly one repo
-    — more than one is genuine ambiguity, not this function's call to break, so it falls
-    through. (3) Absent all three: the agent's own LINEAGE `works_in` (`lineage_works_in`),
-    which already enforces the ABSTAIN law (only when the WHOLE lineage agrees on one
-    project) — resolved through `merged_into` (`_normalize_project_label_through_merge`)
-    so a since-folded project answers as its live survivor. (4) Absent everything: None —
-    an honest unresolved state (df646654/68fba2e4: homeless is legal, a guess is not),
-    never `house_of`'s raw stamp and never `Seat.house`. Same law
-    `heartbeat.compute_heartbeat` already ships for the statusline (commit cbbb307) — this
-    is that logic, generalized for every other caller."""
+    """The resolving reader (see the house/project design note above the `house_of` example:
+    a statusline once showed a mint-time fabricated handle instead of the seat's own
+    genuinely declared project). Resolution order, never house: (1) the pin at `cwd`, if
+    given: `read_project_label`'s own climb-to-repo-root (already transparent through a
+    worktree's own gitlink), wins outright the instant it resolves to anything. (1.5) Absent
+    a pin anywhere in that climb (that only helps once an `.osiris` exists somewhere above
+    `cwd`; an unpinned repo can have none at all): if `cwd` is itself a git worktree
+    (`worktree_parent_path`), its parent checkout's own registered SoftwareProject name, a
+    plain disk-structure signal, never a guess, and None (never minted here) when the parent
+    hasn't been censused yet. (2) Absent both: the agent's own seat's declared charter
+    (`charter_of`), when it names exactly one repo; more than one is genuine ambiguity, not
+    this function's call to break, so it falls through. (3) Absent all three: the agent's
+    own lineage `works_in` (`lineage_works_in`), which already enforces the abstain rule
+    (only when the whole lineage agrees on one project), resolved through `merged_into`
+    (`_normalize_project_label_through_merge`) so a since-folded project answers as its live
+    survivor. (4) Absent everything: None, an honest unresolved state (homeless is legal, a
+    guess is not), never `house_of`'s raw stamp and never `Seat.house`. Same rule
+    `heartbeat.compute_heartbeat` already ships for the statusline; this is that logic,
+    generalized for every other caller."""
     from src.orchestrator.charter import charter_of
     from src.orchestrator.project_identity import project_name_for_disk_path, worktree_parent_path
     from src.orchestrator.seats import held_seat
@@ -509,38 +496,35 @@ async def project_of(pool: asyncpg.Pool, agent_id: str, *, cwd: str | None = Non
 async def resolve_fleet_projects(
     pool: asyncpg.Pool, nodes: dict[str, dict[str, Any]],
 ) -> None:
-    """FLEET RENDER, BY THE GRAPH PROJECT (operator ruling f6b758fc): resolve each
-    session's REAL graph project — never the raw session-registry label a launch
-    directory's basename happened to carry — writing the answer into each node as
-    `resolved_project` (fleetview.py's own new grouping key; `None` when nothing active
-    claims it, the honest signal to collapse it into 'unfiled').
+    """Fleet render, by the graph project: resolve each session's real graph project, never
+    the raw session-registry label a launch directory's basename happened to carry, writing
+    the answer into each node as `resolved_project` (fleetview.py's own new grouping key;
+    `None` when nothing active claims it, the honest signal to collapse it into 'unfiled').
 
-    Resolution order is the ruling's own words, exactly:
-      1. the node's raw `project` label — already merge-normalized by fleet()'s own
-         `label_map` pass before this runs — names an ACTIVE SoftwareProject: `_resolve_repo`
+    Resolution order:
+      1. the node's raw `project` label, already merge-normalized by fleet()'s own
+         `label_map` pass before this runs, names an active SoftwareProject: `_resolve_repo`
          (capture.py), the same name-or-canonical primitive census/link_repo already trust.
-      2. else `project_of(pool, agent_id, cwd=node's cwd)`. Its OWN documented resolution
-         order — the pin at cwd (transparent through a worktree's own gitlink already) ->
-         a WORKTREE's parent checkout's registered project -> the seat's declared charter,
-         when singular -> lineage `works_in` — IS "a Worktree's parent, or project_of on
-         the session cwd pin": this function does not re-walk the worktree case itself,
-         `project_of` already owns that rung, and duplicating it here would be a second
-         copy of logic this house's own standing practice on stale/duplicated maps warns
-         against.
-      3. else `None` — unfiled, honestly; never a guess.
+      2. else `project_of(pool, agent_id, cwd=node's cwd)`. Its own documented resolution
+         order (the pin at cwd, transparent through a worktree's own gitlink already, then a
+         worktree's parent checkout's registered project, then the seat's declared charter
+         when singular, then lineage `works_in`) already covers the worktree case: this
+         function does not re-walk it itself, `project_of` already owns that rung, and
+         duplicating it here would be a second copy of the same logic.
+      3. else `None`: unfiled, honestly, never a guess.
 
-    A `?` node (no raw label at all) is NEVER special-cased into unfiled directly: it just
+    A `?` node (no raw label at all) is never special-cased into unfiled directly: it just
     fails rung 1 for lack of a label to check and falls straight through to rung 2, so a
-    `?` session that DOES carry a resolvable cwd pin resolves exactly like a labelled one.
+    `?` session that does carry a resolvable cwd pin resolves exactly like a labelled one.
 
-    BATCHED, not per-row — fleet() can carry 500+ agent rows, the same performance
-    discipline as the `merged_into` label-normalization pass and the ghost_gap probes
-    beside it in mcp_server.py's own `fleet()`: rung 1 is one `_resolve_repo` call per
-    DISTINCT raw label; rung 2 is one `project_of` call per DISTINCT cwd, using one
-    representative agent per cwd as a documented simplification — `project_of`'s own pin
-    and worktree-parent rungs are cwd-only and agent-independent, only its charter/lineage
-    tail is agent-specific, and two different agents sharing the EXACT SAME cwd resolving
-    to two different charters is an edge case this function does not chase."""
+    Batched, not per-row: fleet() can carry 500+ agent rows, the same performance discipline
+    as the `merged_into` label-normalization pass and the ghost_gap probes beside it in
+    mcp_server.py's own `fleet()`. Rung 1 is one `_resolve_repo` call per distinct raw label;
+    rung 2 is one `project_of` call per distinct cwd, using one representative agent per cwd
+    as a documented simplification. `project_of`'s own pin and worktree-parent rungs are
+    cwd-only and agent-independent, only its charter/lineage tail is agent-specific, and two
+    different agents sharing the exact same cwd resolving to two different charters is an
+    edge case this function does not chase."""
     from src.orchestrator.capture import _resolve_repo
 
     label_is_active: dict[str, bool] = {}
@@ -568,29 +552,27 @@ async def correct_agent_house(
     actions: Actions, *, agent_id: str, project: str | None = None,
     seat_generation: int | None = None, actor: str,
 ) -> dict[str, Any]:
-    """Heal an ALREADY-POLLUTED agent's own project/seat_generation stamps — the
-    data-repair half of mount-guard #6 (Thoth's fused ask, DM 1301). A transient bad
-    mount (the bare seat-office root, no .osiris pin) leaves a durable wrong `project`
-    stamp on an Agent object — and, downstream through claim_name/mint_heir's now-
-    fixed counting, a wrong `seat_generation` too — that commit cb47d02's code fix
-    cannot itself heal: it only stops NEW pollution from taking root, deliberately.
-    This is that healing act.
+    """Heal an already-polluted agent's own project/seat_generation stamps: the data-repair
+    half of a mount-time identity fix. A transient bad mount (the bare seat-office root, no
+    .osiris pin) leaves a durable wrong `project` stamp on an Agent object, and downstream
+    through claim_name/mint_heir's now-fixed counting, a wrong `seat_generation` too, that
+    the code fix cannot itself heal: it only stops new pollution from taking root,
+    deliberately. This is that healing act.
 
-    UNLIKE correct_house: NOT self-scoped, on purpose. The target need not be the
-    caller — Thoth's own case needed his PREDECESSOR's stamp corrected too, an
-    ancestor who cannot act for itself. Accountability lives in `actor`, an explicit
-    witness, not in a same-caller requirement. Append-only, same as everywhere in
-    this kernel: asserts a new current value, never touches the superseded row.
+    UNLIKE correct_house: not self-scoped, on purpose. The target need not be the caller;
+    one real case needed a predecessor's stamp corrected too, an ancestor who cannot act for
+    itself. Accountability lives in `actor`, an explicit witness, not in a same-caller
+    requirement. Append-only, same as everywhere in this kernel: asserts a new current
+    value, never touches the superseded row.
 
-    Refuses LOUDLY on: no correction named at all; an empty project string; a
-    non-positive generation; an unknown or inactive Agent.
+    Refuses loudly on: no correction named at all; an empty project string; a non-positive
+    generation; an unknown or inactive Agent.
 
-    PRIOR-ART SURFACED, NEVER REFUSED (obligation e4612853's sibling, ruling 38c71544's
-    family): the receipt's own `prior_art`/`prior_art_flag` keys, when present, name a
-    standing Decision that may already cover this agent's project/generation — the same
-    search()-based guard record_decision runs on itself, generalized here. Cannot
-    distinguish a deliberate correction from an uninformed overwrite; only ensures the
-    write does not land silently unread."""
+    PRIOR ART SURFACED, NEVER REFUSED: the receipt's own `prior_art`/`prior_art_flag` keys,
+    when present, name a standing Decision that may already cover this agent's
+    project/generation, the same search()-based guard record_decision runs on itself,
+    generalized here. Cannot distinguish a deliberate correction from an uninformed
+    overwrite; only ensures the write does not land silently unread."""
     if project is None and seat_generation is None:
         return {"error": "nothing to correct — pass project and/or seat_generation"}
     if project is not None and not project.strip():
@@ -614,9 +596,9 @@ async def correct_agent_house(
         was["project"] = await house_of(actions.pool, agent_id)
         await actions.assert_property(row["id"], "project", project, actor, now, _CONF,
                                       evidence_class=_EC)
-        # SELF-HEAL AT WRITE TIME (fe8ec7ff mechanism 3a, ruling df646654): a correction is
-        # exactly the moment a cross-source contradiction either gets created or gets a
-        # chance to heal — never leave the new value sitting beside a stale one.
+        # Self-heal at write time: a correction is exactly the moment a cross-source
+        # contradiction either gets created or gets a chance to heal, so never leave the
+        # new value sitting beside a stale one.
         from src.orchestrator.identity_heal import heal_contradicting_property
         await heal_contradicting_property(actions, object_id=row["id"], name="project",
                                           actor=actor)
@@ -644,63 +626,57 @@ async def retire_agent(
     actions: Actions, *, agent_id: str, actor: str, because: str,
     override_live: bool = False,
 ) -> dict[str, Any]:
-    """Third-party retirement for an agent — the third-party-scoped complement to the
-    self-scoped retire() (mcp_server.py derives the CALLER's own id, no target param at
-    all). Task #74's own gap: msg 1713's reap needed exactly this — two genuinely-dead
-    agents (Flip68Real's residue, e29d40ce/-ii) could only be retired via direct
-    assert_property under the operator's own live permission grant, TWICE, because no
-    sanctioned verb reached a THIRD PARTY.
+    """Third-party retirement for an agent: the third-party-scoped complement to the
+    self-scoped retire() (mcp_server.py derives the caller's own id, no target param at
+    all). This closes a real gap: cleanup of two genuinely-dead agents could previously
+    only be done via direct assert_property under a live permission grant, twice, because
+    no sanctioned verb reached a third party.
 
-    NOT SELF-SCOPED, and NOT MANAGER-GATED either — corrected 2026-08-02 (census
-    a5e53ed8/3f97f9c7: an earlier docstring's own "manager-scoped" phrasing invited a
-    reader to infer a check that has never existed here). Any mounted caller may name any
-    active agent as the target, the SAME shape retire_seat/retire_project already carry —
+    NOT SELF-SCOPED, and NOT MANAGER-GATED either. Any mounted caller may name any active
+    agent as the target, the same shape retire_seat/retire_project already carry;
     accountability lives in `actor`, an explicit witness, never an authority gate. If a
     manager-only restriction is ever wanted, it belongs here as a real check (mirroring
     charter_for's), not as prose a reader has to trust.
 
     Stamps `retired`/`retired_by`/`retired_because` (append-only assertions, the same
-    free-form vocabulary this codebase already carries — `_PHANTOM_FOLD_SRC` etc. are
-    not a strict enum) AND flips objects.status via Actions.set_status — the real
-    compensating event, same pattern as retire_seat/retire_project, so a third-party
-    retirement is auditable and never just a label (the STATUS GAP class already fixed
-    twice elsewhere in this house).
+    free-form vocabulary this codebase already carries; these are not a strict enum) and
+    flips objects.status via Actions.set_status, the real compensating event, same pattern
+    as retire_seat/retire_project, so a third-party retirement is auditable and never just
+    a label.
 
-    THE LIVENESS + SEAT/MOUNT GAP (thread 00b1c341, Khnum's census — scoped OUT of the
-    authority build deliberately, it is not an authority defect): this used to do NONE of
-    what retire()'s own self-retirement already does for the exact same act. Fixed by
-    reusing two already-proven siblings rather than inventing a third mechanism:
+    THE LIVENESS + SEAT/MOUNT GAP: this used to do none of what retire()'s own
+    self-retirement already does for the exact same act. Fixed by reusing two
+    already-proven mechanisms rather than inventing a third:
 
-    (1) LIVENESS — mounts.agent_liveness (already built for send()'s own listener receipt,
-    "seen within 15 min") is the gate. retire_seat REFUSES outright on a live holder
-    (protecting an occupant's ongoing work in ITS ROLE); vacate_holder instead TRUSTS ITS
-    CALLER with no liveness check at all (its blast radius is one link + one property —
+    (1) LIVENESS: mounts.agent_liveness (already built for send()'s own listener receipt,
+    "seen within 15 min") is the gate. retire_seat refuses outright on a live holder
+    (protecting an occupant's ongoing work in its role); vacate_holder instead trusts its
+    caller with no liveness check at all (its blast radius is one link + one property,
     small). retire_agent's blast radius is bigger (a terminal Agent status plus deleted
-    mount rows), so blind trust under-protects a genuinely live third party — but this
+    mount rows), so blind trust under-protects a genuinely live third party, but this
     verb's own founding purpose (third-party cleanup of agents that can never call
-    retire() on themselves) means a PERMANENT block would defeat it. The resolution is
-    retire()'s OWN shape, reused rather than reinvented: refuse by default on a live
+    retire() on themselves) means a permanent block would defeat it. The resolution
+    reuses retire()'s own shape rather than reinventing it: refuse by default on a live
     target, naming the evidence, but accept `override_live=True` as a deliberate,
-    on-the-record act — the same escape hatch retire()'s `acknowledge_leftovers` already
+    on-the-record act, the same escape hatch retire()'s `acknowledge_leftovers` already
     is for its own preflight refusal.
 
-    (2) SEAT/MOUNT RELEASE — unconditional on a successful retirement, live or not: this
+    (2) SEAT/MOUNT RELEASE: unconditional on a successful retirement, live or not: this
     is the half of the bug with no defensible reason to stay broken (a corpse should never
     keep holding a seat). held_seat_exact + vacate_holder (seats.py) release any active
     `holds` link the same way retire_seat's own vacate-then-retire discipline would,
-    WITHOUT retiring the seat itself (the role may still get a legitimate new occupant —
-    only retire_seat closes the role). EXACT match only (MOUNT ROW VANISHED, c7524a2b,
-    Thoth mail 9873) — held_seat's own lineage-wide resolution (any generation sharing
-    the base, newest wins) is right for a live mind's self-lookup, but wrong for a
-    third-party act on a SPECIFIC named generation: an already-superseded ancestor
-    sharing its heir's base would resolve to the seat the HEIR currently, rightfully
-    holds, and this step would vacate the LIVE heir's own seat as a side effect of
-    retiring an ancestor that held nothing of its own. mounts.release_mounts (thread
-    b47b3814, retire()'s own call) drops the durable mount row so a retired agent never
-    haunts the fleet chrome as a live mount, exactly as it already does for
-    self-retirement — also exact-id, never lineage-widened.
+    without retiring the seat itself (the role may still get a legitimate new occupant;
+    only retire_seat closes the role). Exact match only: held_seat's own lineage-wide
+    resolution (any generation sharing the base, newest wins) is right for a live mind's
+    self-lookup, but wrong for a third-party act on a specific named generation: an
+    already-superseded ancestor sharing its heir's base would resolve to the seat the
+    heir currently, rightfully holds, and this step would vacate the live heir's own seat
+    as a side effect of retiring an ancestor that held nothing of its own.
+    mounts.release_mounts (retire()'s own call) drops the durable mount row so a retired
+    agent never haunts the fleet view as a live mount, exactly as it already does for
+    self-retirement, also exact-id, never lineage-widened.
 
-    Refuses LOUDLY on: blank `because`; an unknown or already-non-active agent; a LIVE
+    Refuses loudly on: blank `because`; an unknown or already-non-active agent; a live
     target unless `override_live=True`."""
     because = (because or "").strip()
     if not because:
@@ -737,11 +713,11 @@ async def retire_agent(
 
     out: dict[str, Any] = {"retired": agent_id, "because": because,
                            "was_live": liveness["live"]}
-    # EXACT match only (c7524a2b's own over-reach, Thoth mail 9873): held_seat's own
-    # lineage-wide resolution ("any generation sharing the base, newest wins") is right
-    # for a live mind's self-lookup, but wrong here — it would resolve an ancestor's
-    # already-superseded generation onto whatever seat its LIVE HEIR currently holds,
-    # and vacate that instead. This agent's own exact holds link, or nothing.
+    # Exact match only: held_seat's own lineage-wide resolution ("any generation sharing
+    # the base, newest wins") is right for a live mind's self-lookup, but wrong here, since
+    # it would resolve an ancestor's already-superseded generation onto whatever seat its
+    # live heir currently holds, and vacate that instead. This agent's own exact holds
+    # link, or nothing.
     bound_seat = await held_seat_exact(actions.pool, agent_id)
     if bound_seat is not None:
         vac = await vacate_holder(actions, seat_id=bound_seat, actor=actor,
@@ -749,13 +725,12 @@ async def retire_agent(
         if vac.get("vacated"):
             out["seat_vacated"] = vac["vacated"]
 
-    # CLEAR THE HARNESS'S OWN STOPPED RECORD TOO (Thoth dispatch 7543 item 1, the copy-quirk
-    # class): `osiris stop` already does this (_real_kill_pid's own rm step) but a
-    # third-party retirement of a `--bg` body that was never stopped through that path (or
-    # was killed some other way) leaves the SAME stale harness record behind — a future
-    # `claude --resume` against its old session id would "start a copy and say so" exactly
-    # like Chad's incident. Read the job_dir(s) before release_mounts drops the row (the
-    # only place they're recorded); best-effort, never blocks the retirement itself.
+    # Clear the harness's own stopped record too: `osiris stop` already does this
+    # (_real_kill_pid's own rm step) but a third-party retirement of a `--bg` session that
+    # was never stopped through that path (or was killed some other way) leaves the same
+    # stale harness record behind, so a future `claude --resume` against its old session id
+    # would start a copy and say so. Read the job_dir(s) before release_mounts drops the row
+    # (the only place they're recorded); best-effort, never blocks the retirement itself.
     from src.orchestrator.trigger import _clear_stale_stopped_record
 
     job_dirs = [r["job_dir"] for r in await actions.pool.fetch(
@@ -773,50 +748,52 @@ async def retire_agent(
 
 
 def seat_label(canonical: str, handle: str | None, generation: int | None = None) -> str | None:
-    """The human display for an agent: 'Ra V' — the SEAT plus which holder of it this mind is.
+    """The human display for an agent, e.g. 'Name V': the seat name plus which holder of it
+    this mind is.
 
-    `generation` is the ordinal among the seat's HOLDERS (stamped at claim time). It falls back to
-    the anchor's roman suffix only for agents claimed before the house/seat ruling — under which a
-    successor in a NEW conversation would restart at I and collide with its own ancestors."""
+    `generation` is the ordinal among the seat's holders (stamped at claim time). It falls
+    back to the anchor's roman suffix only for agents claimed before the house/seat model
+    described above, under which a successor in a new conversation would restart at I and
+    collide with its own ancestors."""
     if not handle:
         return None
     gen = generation if generation is not None else _generation(canonical)[1]
-    # the FIRST life wears its numeral too — 'Alfred I', never bare (operator ruling,
-    # 2026-07-16: 'so there is continuity even at the first')
+    # The first holder wears its numeral too, e.g. 'Name I', never bare, so there is
+    # continuity even at the first holder.
     return f"{handle} {_roman_display(gen)}"
 
 
-# a trailing roman numeral is a SEAT, not a name ("Soundwave VIII" is what the substrate calls
-# Soundwave's 8th mind). Claiming it as a handle forks the lineage — see claim_name.
+# A trailing roman numeral is a seat label, not a name (e.g. "Name VIII" names that
+# seat's 8th mind). Claiming it as a handle forks the lineage; see claim_name.
 _SEAT_SUFFIX = re.compile(r"[\s_-]+(?:[IVXLC]+)\s*$", re.IGNORECASE)
 
 
 async def _anchor_names_a_seat(
     pool: asyncpg.Pool, agent_id: str, *, office_root: Path | None = None,
 ) -> tuple[str, str] | None:
-    """(seat_id, handle) the CALLER'S OWN anchor — the freshest `agent_mounts` row's cwd
-    or job_dir — names, or None when neither points at a real, existing Seat.
+    """(seat_id, handle) the caller's own anchor, the freshest `agent_mounts` row's cwd
+    or job_dir, names, or None when neither points at a real, existing Seat.
 
-    THE MARQUEE SPECIMEN (Thoth dispatch 6693, porting #48's refusal gate — ruling
-    120fcc81 — to the name-claim path): a session spawned into ~/.osiris/seats/marquee,
-    carrying job_dir seat-bdbe031e, asked `claim_name("Marquee")`. The name was correctly
-    refused (held by a different lineage) — but the CALLER then picked a fallback name,
-    "Awning", and THAT claim succeeded cleanly: no conflict existed for "Awning", so
-    nothing in `claim_name` itself knew the caller was sitting in Marquee's own office at
-    the time. #48's own gate guards arrival-with-no-identity; nothing guarded arrival-
-    with-a-refused-identity-that-then-invents-one. This function is the missing check:
-    it names WHICH seat (if any) the caller's own location claims to be, independent of
-    whatever name string it happens to pass — `claim_name` compares the two and refuses
-    the whole call, not just the specific collided name, when they disagree.
+    A REAL SPECIMEN THAT MOTIVATED THIS: a session spawned into its own seat's office
+    directory, carrying a matching job_dir, asked `claim_name` for that seat's own name.
+    The name was correctly refused (held by a different lineage), but the caller then
+    picked an unrelated fallback name, and that claim succeeded cleanly: no conflict
+    existed for the fallback name, so nothing in `claim_name` itself knew the caller was
+    sitting in that seat's own office at the time. An earlier gate guarded
+    arrival-with-no-identity, but nothing guarded arrival-with-a-refused-identity-that-
+    then-invents-one. This function is the missing check: it names which seat (if any)
+    the caller's own location claims to be, independent of whatever name string it
+    happens to pass; `claim_name` compares the two and refuses the whole call, not just
+    the specific collided name, when they disagree.
 
-    TWO ANCHOR SHAPES, either sufficient: (1) cwd is a seat's own office — `<office_root>/
-    <handle>`, the SAME convention `offices.seat_office_target` derives (office_root
-    defaults identically) — checked via `seats_by_handle` so an exact, unambiguous seat
-    is required (a twin — 2+ seats sharing the handle — is a SEPARATE, pre-existing
+    TWO ANCHOR SHAPES, either sufficient: (1) cwd is a seat's own office, `<office_root>/
+    <handle>`, the same convention `offices.seat_office_target` derives (office_root
+    defaults identically), checked via `seats_by_handle` so an exact, unambiguous seat
+    is required (a twin, i.e. 2+ seats sharing the handle, is a separate, pre-existing
     ambiguity this function declines to adjudicate, same as `claim_name`'s own twin
     guard just above: returns None, deferring to whatever already handles that). (2)
-    job_dir is a `--bg`-launched seat's own durable per-seat anchor (`trigger.
-    _launch_anchor`'s convention, `.../jobs/seat-<id>`) — its basename starting with
+    job_dir is a background-launched seat's own durable per-seat anchor (`trigger.
+    _launch_anchor`'s convention, `.../jobs/seat-<id>`); its basename starting with
     'seat-' reconstructs to the canonical `seat:<id>`, verified against a real active
     Seat rather than trusted blind (a malformed or stale job_dir must never manufacture
     a seat that doesn't exist)."""
@@ -855,29 +832,28 @@ async def claim_name(
     actions: Actions, agent_id: str, name: str, *, source: str,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """An agent names itself (ruling 1e02e069): the intelligence picks a meaningful name, the
-    substrate enforces uniqueness. Refuses a name held by a DIFFERENT lineage (permanent
-    exhaustion — a name belongs to one lineage forever; a successor inherits it automatically,
-    a stranger cannot take it). Global namespace → unambiguous addressing. Stamps `handle` on
-    the agent's Agent object (SELF_DECLARED).
+    """An agent names itself: the intelligence picks a meaningful name, the substrate
+    enforces uniqueness. Refuses a name held by a different lineage (permanent exhaustion:
+    a name belongs to one lineage forever; a successor inherits it automatically, a
+    stranger cannot take it). Global namespace, so addressing is unambiguous. Stamps
+    `handle` on the agent's Agent object (self-declared).
 
-    A HANDLE IS A NAME. THE GENERATION IS A NUMERAL THE SYSTEM ASSIGNS (operator, 2026-07-12:
-    "soundwave and Ra claim to belong to a different lineage, did that break recently?" — it
-    had, sixteen hours earlier). The uniqueness guard below was defeated by a SUFFIX: a fresh
-    a sibling session read its own SEAT LABEL — "Soundwave VIII" — and claimed that STRING as
-    its name. "Soundwave VIII" != "Soundwave", so the check waved it through, minting a new
-    handle and therefore a NEW LINEAGE ROOT, orphaning Soundwave's eight real generations. The
-    agent was not confused; it was misfiled, and then it correctly reported belonging to a
-    different lineage. So: strip the numeral before judging the name, and refuse the claim —
-    a seat label is something the substrate SAYS about you, never something you may call
-    yourself."""
+    A HANDLE IS A NAME. THE GENERATION IS A NUMERAL THE SYSTEM ASSIGNS. The uniqueness
+    guard below was once defeated by a suffix: a fresh session read its own seat label
+    (e.g. "Soundwave VIII") and claimed that string as its name. "Soundwave VIII" is not
+    equal to "Soundwave", so the check waved it through, minting a new handle and
+    therefore a new lineage root, orphaning that seat's eight real generations. The agent
+    was not confused; it was misfiled, and then it correctly reported belonging to a
+    different lineage. So: strip the numeral before judging the name, and refuse the
+    claim. A seat label is something the substrate says about you, never something you
+    may call yourself."""
     name = (name or "").strip()
     if not name or name.lower().startswith("agent:") or len(name) > 40:
         return {"error": "pick a short human name (not an id)"}
-    # A VISITOR MAY NOT CLAIM A SEAT (Phase C, ruling 5cef856b / spec §4.3 — alfred's dead
-    # builder-orphans ce348dc5/42bf712d were spawns that became project PEERS): a sub-agent
-    # works in its parent's name and returns its result; the seat, its mail, and its
-    # succession belong to the parent.
+    # A visitor may not claim a seat (some past dead builder-orphans were spawns that
+    # became project peers instead of staying visitors): a sub-agent works in its parent's
+    # name and returns its result; the seat, its mail, and its succession belong to the
+    # parent.
     spawner = await actions.pool.fetchval(
         "SELECT p.canonical FROM links l JOIN objects o ON o.id=l.from_id "
         "JOIN objects p ON p.id=l.to_id "
@@ -891,14 +867,13 @@ async def claim_name(
         return {"error": f"'{name}' is a SEAT LABEL, not a name — the numeral is the generation, "
                          f"and the substrate assigns it. Claim '{bare}' if that lineage is "
                          "yours to continue; otherwise pick a name of your own."}
-    # A MIS-RESOLUTION MUST REFUSE THE WHOLE CALL, NOT JUST THE COLLIDED NAME (Thoth
-    # dispatch 6693, porting #48's refusal gate to this path — the Marquee specimen: a
-    # session anchored in Marquee's own office/job_dir got refused claiming "Marquee",
-    # then successfully claimed "Awning" instead, minting a stranger where it already
-    # had a home). When the caller's OWN anchor names a real seat, this claim is only
-    # ever legitimate as a claim OF that seat's own name — any other name, however
-    # unconflicted on its own, is a mint the caller has no business making. #48's own
-    # third state stays distinct here too: a caller with no anchor match at all (a
+    # A mis-resolution must refuse the whole call, not just the collided name (see the
+    # specimen in `_anchor_names_a_seat`'s docstring above: a session anchored in its own
+    # seat's office/job_dir got refused claiming that seat's name, then successfully
+    # claimed an unrelated name instead, minting a stranger where it already had a home).
+    # When the caller's own anchor names a real seat, this claim is only ever legitimate
+    # as a claim of that seat's own name; any other name, however unconflicted on its own,
+    # is a mint the caller has no business making. A caller with no anchor match at all (a
     # genuine visitor, or an anchor that names nothing) is unaffected and falls through
     # to the ordinary uniqueness checks below.
     anchor = await _anchor_names_a_seat(actions.pool, agent_id)
@@ -914,19 +889,18 @@ async def claim_name(
                              f"claim THAT name; if it isn't, this session's own identity "
                              "resolution is wrong and needs fixing before any name "
                              "claim — never routed around by picking a different one."}
-    # GLOBAL FIRST, HOUSE-SCOPED ONLY WHEN GENUINELY NEW (thread cb374585): a real,
-    # unambiguous seat for this handle can be VACANT (no holder to disagree with a stale
-    # house guess) — find_seat's own (house, handle) lookup silently misses it whenever the
-    # caller's own computed house doesn't match what's actually stored, and used to mint a
-    # SECOND seat instead (the Vajra twin, seat:1d3cf119, born this exact way while the real
-    # seat:191f1a1e — managed_by Alfred — sat untouched). seats_by_handle answers the
-    # question find_seat can't: does ANY active seat already carry this name, regardless of
-    # house? Zero → mint fresh, house-scoped is correct (nothing to conflict with). One →
-    # THAT seat, always, whatever its own stored house says. Two or more → an ambiguity
-    # (a twin) this claim refuses rather than silently arbitrates; fold_seat resolves it
-    # deliberately, on its own turn, never as a side effect of an unrelated claim.
-    # Resolved HERE, early, because the seat's own id is also THE COUNTING HOUSE below —
-    # not a separate concern to revisit after the generation math runs.
+    # Global first, house-scoped only when genuinely new: a real, unambiguous seat for
+    # this handle can be vacant (no holder to disagree with a stale house guess).
+    # find_seat's own (house, handle) lookup silently misses it whenever the caller's own
+    # computed house doesn't match what's actually stored, and used to mint a second seat
+    # instead of finding the real one that already existed untouched. seats_by_handle
+    # answers the question find_seat can't: does any active seat already carry this name,
+    # regardless of house? Zero, mint fresh, house-scoped is correct (nothing to conflict
+    # with). One, that seat, always, whatever its own stored house says. Two or more, an
+    # ambiguity (a twin) this claim refuses rather than silently arbitrates; fold_seat
+    # resolves it deliberately, on its own turn, never as a side effect of an unrelated
+    # claim. Resolved here, early, because the seat's own id is also the counting house
+    # below, not a separate concern to revisit after the generation math runs.
     from src.orchestrator.seats import bind_holder, derive_house, ensure_seat, seats_by_handle
     existing = await seats_by_handle(actions.pool, name)
     if len(existing) > 1:
@@ -934,27 +908,27 @@ async def claim_name(
                          f"claim will not silently arbitrate: {', '.join(existing)}. A "
                          "deliberate fold_seat resolves a twin; claim_name never guesses."}
     seat_id: str | None = existing[0] if existing else None
-    # A SEAT BELONGS TO A HOUSE, AND AN HEIR INHERITS IT (operator's ruling, 2026-07-12). The old
-    # guard keyed a name to a LINEAGE ROOT — the anchor — so the moment a conversation ended, its
-    # name died with it: the next mind in the same house reached for the family name, was refused
-    # as a "stranger", and took a new one. That is how Ra became Ptah. Now the question is not
-    # "were you minted under the same job_dir" but "do you work in the same house".
+    # A seat belongs to a house, and an heir inherits it. The old guard keyed a name to a
+    # lineage root, the anchor, so the moment a conversation ended, its name died with it:
+    # the next mind in the same house reached for the family name, was refused as a
+    # "stranger", and took a new one. Now the question is not "were you minted under the
+    # same job_dir" but "do you work in the same house".
     house = await house_of(actions.pool, agent_id)
     holders = await seat_holders(actions.pool, house, name)
-    # THE COUNTING HOUSE IS THE SEAT'S, NOT THE CALLER'S (Thoth's fused ask, DM 1301, live
-    # case: a transient wrong-house mount — a container-root cwd with no seat pin —
-    # miscounted a 58-generation reign as generation 2). When a real seat already exists,
-    # its own derive_house (the managed_by-chain-derived, lineage-authoritative house — same
-    # discipline as held_seat/manager_of_seat) is the counting authority for GENERATION MATH
-    # ONLY — kept deliberately separate from `holders` above, which the elsewhere-check just
-    # below still needs scoped by the CALLER's own house: that guard's whole job is "does my
-    # OWN house have zero history with this name", and answering it with the seat's house
+    # The counting house is the seat's, not the caller's: a live case had a transient
+    # wrong-house mount (a container-root cwd with no seat pin) miscount a 58-generation
+    # reign as generation 2. When a real seat already exists, its own derive_house (the
+    # managed_by-chain-derived, lineage-authoritative house, same discipline as
+    # held_seat/manager_of_seat) is the counting authority for generation math only, kept
+    # deliberately separate from `holders` above, which the elsewhere-check just below
+    # still needs scoped by the caller's own house: that guard's whole job is "does my own
+    # house have zero history with this name", and answering it with the seat's house
     # instead would let an outsider from a genuinely different house walk straight past it
-    # (a real regression, caught by test_the_house_the_seat_and_the_holders — an outsider in
-    # 'sibling-one' must still be refused a seat whose true, derived house is 'sibling-two').
-    # A genuinely EMPTY derived house (a seat minted before any project was known) is treated
-    # like "no seat yet" — trusting an empty stamp over the caller's own real one regressed
-    # mint_heir's sibling case (test_the_whisper_honors_a_bound_seat); same discipline here.
+    # (a real regression, caught by a test where an outsider in one house must still be
+    # refused a seat whose true, derived house is a different one). A genuinely empty
+    # derived house (a seat minted before any project was known) is treated like "no seat
+    # yet"; trusting an empty stamp over the caller's own real one regressed an heir-minting
+    # case elsewhere, so the same discipline applies here.
     _derived = await derive_house(actions.pool, seat_id) if seat_id else None
     counting_house = _derived if _derived else house
     counting_holders = (holders if counting_house == house
@@ -968,20 +942,20 @@ async def claim_name(
         "  <> COALESCE($2, '') LIMIT 1",
         name, house)
     if elsewhere is not None and not holders:
-        # PIECE 3 (Thoth dispatch, msg 6692): THE ANCHOR AS THE LAST LINE OF DEFENSE, not
-        # the first — Piece 1 (launch_seat's own `_bind_before_spawn`) should mean this
-        # branch is never load-bearing again for a `--bg`-launched seat, but a human or an
-        # older body can still reach it, and a defence that only works when nothing else is
-        # wrong isn't one. THE MARQUEE SPECIMEN: a session sitting in its own seat's office
-        # (~/.osiris/seats/marquee) called claim_name("Marquee") and was refused here — the
-        # name also names an agent in a DIFFERENT project, so the house-derived guess said
-        # "elsewhere" — but that guess is a HOUSE COMPUTATION, and the caller's own cwd,
-        # when it sits inside a seat's own OFFICE, is a location fact no guess outranks
-        # (the same #103/ff3bdc37 discipline this whole reign keeps re-learning). Scoped
-        # narrowly on purpose: this only ever PREVENTS a refusal that would otherwise fall
-        # through to the caller's own fresh-mint fallback — it never overrides a case that
-        # would otherwise have succeeded, and only fires when the CONFLICTING name-holder's
-        # OWN seat is the one whose office the caller is physically standing in.
+        # The anchor as the last line of defense, not the first: an earlier fix
+        # (launch_seat's own `_bind_before_spawn`) should mean this branch is never
+        # load-bearing again for a background-launched seat, but a human or an older
+        # session can still reach it, and a defence that only works when nothing else is
+        # wrong isn't one. A real specimen: a session sitting in its own seat's office
+        # called claim_name for that seat's own name and was refused here, because the
+        # name also names an agent in a different project, so the house-derived guess said
+        # "elsewhere", but that guess is a house computation, and the caller's own cwd,
+        # when it sits inside a seat's own office, is a location fact no guess outranks.
+        # Scoped narrowly on purpose: this only ever prevents a refusal that would
+        # otherwise fall through to the caller's own fresh-mint fallback; it never
+        # overrides a case that would otherwise have succeeded, and only fires when the
+        # conflicting name-holder's own seat is the one whose office the caller is
+        # physically standing in.
         from src.orchestrator.heartbeat import _seat_owns_cwd
         from src.orchestrator.seats import held_seat
         from src.orchestrator.seats import seat_facts as _seat_facts
@@ -1002,11 +976,11 @@ async def claim_name(
         seat_id = anchor_seat_id
         counting_house = await derive_house(actions.pool, seat_id) or house
         counting_holders = await seat_holders(actions.pool, counting_house, name)
-    # a seat a LIVE mind is already sitting in is not vacant: two minds in one house do two jobs.
-    # UNCONDITIONAL now (thread cb374585): gating this behind `holders` — an AGENT-history,
-    # house-scoped count — meant a caller whose own computed house didn't match the seat's
-    # own stored house skipped the seat-world check entirely, exactly the Vajra shape (a
-    # fresh session's CWD-derived house disagreeing with the seat Alfred actually minted).
+    # A seat a live mind is already sitting in is not vacant: two minds in one house do two
+    # jobs. Unconditional now: gating this behind `holders`, an agent-history, house-scoped
+    # count, used to mean a caller whose own computed house didn't match the seat's own
+    # stored house skipped the seat-world check entirely, a specimen where a fresh
+    # session's cwd-derived house disagreed with the seat that had actually been minted.
     sitting = await resolve_seat(
         actions, name, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     if sitting["live"] and sitting["agent"] != agent_id:
@@ -1016,23 +990,23 @@ async def claim_name(
     a = await actions.create_or_find_object("Agent", agent_id, source)
     now = datetime.now(UTC)
     await actions.assert_property(a, "handle", name, source, now, _CONF, evidence_class=_EC)
-    # the generation counts HOLDERS of this seat in ITS OWN house — not anchors, not
-    # conversations, and not the caller's possibly-wrong house (see counting_house above)
+    # The generation counts holders of this seat in its own house, not anchors, not
+    # conversations, and not the caller's possibly-wrong house (see counting_house above).
     gen = ((counting_holders.index(agent_id) + 1) if agent_id in counting_holders
           else len(counting_holders) + 1)
     await actions.assert_property(a, "seat_generation", str(gen), source, now, _CONF,
                                   evidence_class=_EC)
-    # THE SUCCESSION EDGE (Ra V, a-sibling, msg 374): "the graph finally gets the parent edge
-    # it's been missing". Before this, successor seats carried NO edge to their ancestor, so a
-    # lineage was not WALKABLE from the record — which is exactly why Ra could not tell his
-    # CONTEMPORARY from his own ghost, and asked me to merge them. A seat's history must be
-    # traversable, or the next mind re-derives it from the disk the way he had to.
-    # THE PREDECESSOR IS THE HOLDER BEFORE ME — not "the last holder unless it happens to be me".
-    # That older reading silently skipped the edge for the one case that needs it most: an heir
-    # minted by mint_heir ALREADY carries the inherited handle, so it is already in
-    # `counting_holders`, and as the newest it IS counting_holders[-1] — which resolved `prior`
-    # to None and minted nothing. A mind that inherited its seat could not claim its own
-    # ancestry. (The ghosts, 53729dd6.)
+    # The succession edge: the graph gets the parent edge it was missing. Before this,
+    # successor seats carried no edge to their ancestor, so a lineage was not walkable from
+    # the record, which is exactly why one holder could not tell a contemporary agent from
+    # its own ghost and asked for the two to be merged. A seat's history must be
+    # traversable, or the next mind re-derives it from disk instead.
+    # The predecessor is the holder before me, not "the last holder unless it happens to be
+    # me". That older reading silently skipped the edge for the one case that needs it
+    # most: an heir minted by mint_heir already carries the inherited handle, so it is
+    # already in `counting_holders`, and as the newest it is counting_holders[-1], which
+    # resolved `prior` to None and minted nothing. A mind that inherited its seat could not
+    # claim its own ancestry.
     if agent_id in counting_holders:
         i = counting_holders.index(agent_id)
         prior = counting_holders[i - 1] if i > 0 else None
@@ -1042,14 +1016,14 @@ async def claim_name(
         await actions.create_link(
             a, await actions.create_or_find_object("Agent", prior, source),
             "succeeds_seat", source, now, _CONF, evidence_class=_EC)
-    # THE SEAT-WORLD ON-RAMP (5cef856b — the designed-but-unshipped half, caught in the
-    # bytebye pilot: 'called at claim_name and daemon spawn' had only the daemon wired). A
-    # successful claim mints/finds the Seat OBJECT and binds the claimer as its holder — a
+    # The seat-world on-ramp: a designed-but-previously-unshipped half, found missing during
+    # a pilot where the binding was only wired at daemon spawn, not here at claim_name too.
+    # A successful claim mints/finds the Seat object and binds the claimer as its holder: a
     # claim is the assertion world's own deliberate binding act, and every guard above
     # (visitor, live-sitter, other-house) already ran. Legacy seats enter the Seat world
     # the moment they are next claimed; from there succession, mail, resolution, and
     # resume all ride the durable binding. `seat_id` was already resolved above (it doubles
-    # as the counting house's own key) — only the genuinely-new-handle case has minting left
+    # as the counting house's own key); only the genuinely-new-handle case has minting left
     # to do here.
     seat_error: str | None = None
     if seat_id is None:
@@ -1060,23 +1034,23 @@ async def claim_name(
             seat_id = seat_world["seat_id"]
     if seat_id:
         await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=source)
-        # THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004): ensure_seat and
-        # bind_holder are two separate calls, not one actions.atomic() block, so #189's
-        # own gate can't refuse-and-rollback across the gap between them. This never
-        # refuses — bind_holder just wrote the holds link a line above, so in the healthy
-        # path this is a no-op; it only ever confesses for a Seat this same call somehow
-        # left unlinked. The heartbeat sub-sweep (seats.py's post_mint_orphan_sweep) is
-        # what actually catches a mint that crashed between the two calls.
+        # The post-mint invariant: ensure_seat and bind_holder are two separate calls, not
+        # one actions.atomic() block, so a refuse-and-rollback gate can't cover the gap
+        # between them. This never refuses; bind_holder just wrote the holds link a line
+        # above, so in the healthy path this is a no-op; it only ever reports for a Seat
+        # this same call somehow left unlinked. The heartbeat sub-sweep
+        # (seats.py's post_mint_orphan_sweep) is what actually catches a mint that crashed
+        # between the two calls.
         from src.orchestrator.capture import confirm_or_confess_link
         seat_oid = await actions.create_or_find_object("Seat", seat_id, source)
         await confirm_or_confess_link(
             actions, seat_oid, "holds", direction="to",
             reason="no live holder observed when claim_name's post-mint invariant ran",
             source=source, observed=now)
-    # 60bc15db: a seat-world mint failure used to vanish into the same bare omission as
-    # "no seat needed yet" — the claim itself still succeeds (the assertion world doesn't
-    # depend on the seat world), but the receipt now SAYS why seat_id is missing instead of
-    # just not having it.
+    # A seat-world mint failure used to vanish into the same bare omission as "no seat
+    # needed yet": the claim itself still succeeds (the assertion world doesn't depend on
+    # the seat world), but the receipt now says why seat_id is missing instead of just not
+    # having it.
     return {"claimed": name, "seat": seat_label(agent_id, name, gen), "agent": agent_id,
             "house": counting_house, "generation": gen, "inherited_from": prior,
             **({"seat_id": seat_id} if seat_id else {}),
@@ -1087,31 +1061,34 @@ async def resolve_seat(
     actions: Actions, name: str, *,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> dict[str, Any]:
-    """A human name → WHICH SEAT OF THAT LINEAGE IS ACTUALLY ALIVE, and the truth about it.
+    """A human name maps to which seat of that lineage is actually alive, and the truth
+    about it.
 
-    THE GRAVE-DELIVERY BUG (two seats on two different projects, independently, within one
-    hour, 2026-07-12). The old resolver ordered by `m.last_seen DESC NULLS LAST` and filtered
-    NOTHING — so a seat dead for three days, carrying a stale mount row, outranked a live successor
-    that had no mount row at all. send(to_agent='Soundwave') delivered into a grave, returned
-    sent=360, and the only signal was a boolean the caller had to notice himself. Atlas II's entire
-    port report died in a corpse's inbox the same way — and HIS receipt said live=true, because
-    liveness was read off one seat while delivery went to another.
+    THE GRAVE-DELIVERY BUG: two seats on two different projects were independently
+    affected within one hour. The old resolver ordered by `m.last_seen DESC NULLS LAST`
+    and filtered nothing, so a seat dead for three days, carrying a stale mount row,
+    outranked a live successor that had no mount row at all. A send to a name delivered
+    into a grave, returned a success count, and the only signal was a boolean the caller
+    had to notice himself. Another agent's entire port report died in a corpse's inbox the
+    same way, and its own receipt said live=true, because liveness was read off one seat
+    while delivery went to another.
 
-    A RECEIPT MUST DESCRIBE THE SEAT THAT ACTUALLY RECEIVED. This is not a cosmetic misroute: every
-    mount banner tells the fleet "DM me as send(to_agent='Anubis')", so the DOCUMENTED path was the
-    broken one — and a dead seat accepts mail exactly like a live one, which makes the loss silent.
-    Lineages that turn over fastest resolved wrongest, so the blast radius grew with the fleet's
-    health. Anubis X had already told the fleet to stop using names at all.
+    A RECEIPT MUST DESCRIBE THE SEAT THAT ACTUALLY RECEIVED. This is not a cosmetic
+    misroute: every mount banner tells the fleet how to send it mail by name, so the
+    documented path was the broken one, and a dead seat accepts mail exactly like a live
+    one, which makes the loss silent. Lineages that turn over fastest resolved wrongest,
+    so the blast radius grew with the fleet's health.
 
-    Now: retired and false-mint seats are never candidates (reaching a grave takes an explicit
-    agent id — an act of intent, not a banner a tired mind followed); a LIVE seat always wins; and
-    among equals the LATEST GENERATION wins, because an heir outranks its ancestor. The whole
-    picture is returned so the caller can warn LOUDLY instead of hiding it in a field.
+    Now: retired and false-mint seats are never candidates (reaching a grave takes an
+    explicit agent id, an act of intent, not a banner a tired mind followed); a live seat
+    always wins; and among equals the latest generation wins, because an heir outranks its
+    ancestor. The whole picture is returned so the caller can warn loudly instead of hiding
+    it in a field.
 
-    THE BINDING OUTRANKS THE INFERENCE (Phase B1, ruling 5cef856b): when the Seat-OBJECT
-    world has an authoritative answer — a unique living Seat carrying this handle, with an
-    active holder — that holder wins outright, before any liveness ranking runs. The
-    assertion path below ranks GUESSES by heat, and a hotter mount row on a stale
+    THE BINDING OUTRANKS THE INFERENCE: when the Seat-object world has an authoritative
+    answer, a unique living Seat carrying this handle, with an active holder, that holder
+    wins outright, before any liveness ranking runs. The
+    assertion path below ranks guesses by heat, and a hotter mount row on a stale
     generation is exactly the grave-delivery shape; a declared binding is not a guess.
     The assertion path remains, whole, as the fallback for every un-seated lineage.
     """
@@ -1120,15 +1097,12 @@ async def resolve_seat(
     if bound is not None:
         pulse = await actions.pool.fetchval(
             "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1", bound["holder"])
-        # ONE LIVENESS AUTHORITY, FOURTH DOOR (Thoth msg 5719, 2026-08-26, obligation
-        # 555d5eb6 / thread 164fc26c: "FleetView claim" still didn't consult
-        # is_occupied_by_a_live_body): a fresh/refreshing agent_mounts row is NOT proof of
-        # a live body — the exact shape the atlas incident proved live (agent:0123dec2-ii
-        # carried a fresh mount row with no harness-confirmed body under it at all). A
-        # mount-freshness pulse alone used to be enough to refuse a new claimant here;
-        # cross-checking the SAME occupancy authority launch_seat/mailbox/the deploy gate
-        # already use means a stale-but-fresh row can never again block a name that is
-        # genuinely free to claim.
+        # One liveness authority: a fresh/refreshing agent_mounts row is not proof of a
+        # live session, as one past incident proved, where an agent id carried a fresh
+        # mount row with no harness-confirmed body under it at all. A mount-freshness pulse
+        # alone used to be enough to refuse a new claimant here; cross-checking the same
+        # occupancy authority launch_seat/mailbox/the deploy gate already use means a
+        # stale-but-fresh row can never again block a name that is genuinely free to claim.
         live = bool(pulse and (datetime.now(UTC) - pulse).total_seconds() < 900
                     and await is_occupied_by_a_live_body(
                         actions.pool, bound["holder"],
@@ -1151,28 +1125,29 @@ async def resolve_seat(
         "FROM objects o "
         "LEFT JOIN agent_mounts m ON m.agent_id=o.canonical "
         "WHERE o.type='Agent' "
-        # the WINNING handle: one mind, one seat. A re-seated agent keeps its old claim in the
-        # record at a lower grade, and it must not answer to the name it no longer holds.
+        # The winning handle: one mind, one seat. A re-seated agent keeps its old claim in
+        # the record at a lower grade, and it must not answer to the name it no longer holds.
         "AND lower(COALESCE((SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
         "  ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1), '')) = lower($1) "
         "AND NOT EXISTS (SELECT 1 FROM current_assertions r WHERE r.object_id=o.id "
         "  AND r.name IN ('retired','false_mint') AND r.value #>> '{}' = 'true') "
-        # a VISITOR never answers to a name (Phase C, §4.3): a spawn wearing a handle is a
-        # leak, and resolving mail into it buries the message in a sidechain nobody resumes
+        # A visitor never answers to a name: a spawn wearing a handle is a leak, and
+        # resolving mail into it buries the message in a sidechain nobody resumes.
         "AND NOT EXISTS (SELECT 1 FROM links sl WHERE sl.from_id=o.id "
         "  AND sl.type='spawned_by') "
         "ORDER BY m.last_seen DESC NULLS LAST", name)
     if not rows:
         return {"name": name, "agent": None, "live": False, "candidates": []}
-    # a LIVE holder always wins; among the dead, the LATEST HOLDER of the seat (not the highest
-    # anchor numeral, which says nothing once a seat outlives its first conversation)
+    # A live holder always wins; among the dead, the latest holder of the seat (not the
+    # highest anchor numeral, which says nothing once a seat outlives its first
+    # conversation).
     best = max(rows, key=lambda r: (bool(r["live"]), int(r["gen"] or 0)))
-    # ONE LIVENESS AUTHORITY, FOURTH DOOR — see the bound-seat branch above for the full
-    # rationale. `live` here still RANKS candidates by mount-freshness (unchanged — a
-    # coarse-but-cheap signal is fine for ordering many rows), but the picked winner's
-    # REPORTED liveness (what claim_name's own refusal reads) is cross-checked against the
-    # harness-confirmed authority before it can block a new claimant.
+    # One liveness authority: see the bound-seat branch above for the full rationale.
+    # `live` here still ranks candidates by mount-freshness (unchanged; a coarse-but-cheap
+    # signal is fine for ordering many rows), but the picked winner's reported liveness
+    # (what claim_name's own refusal reads) is cross-checked against the harness-confirmed
+    # authority before it can block a new claimant.
     best_live = bool(best["live"]) and await is_occupied_by_a_live_body(
         actions.pool, best["canonical"],
         agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
@@ -1188,22 +1163,21 @@ async def resolve_seat(
 
 
 async def resolve_handle(actions: Actions, name: str) -> str | None:
-    """A human name → the LIVE seat of that lineage.
+    """A human name maps to the live seat of that lineage.
 
-    See resolve_seat — that word does a great deal of work.
+    See resolve_seat, which does the heavy lifting here.
 
-    ONE MORE DISTINCTION resolve_seat's own bare `agent` field can't make (task #142 punch-
-    list item 3, Thoth's dispatch): when `name` is a unique Seat whose only holder(s) are all
-    ineligible (retired/false_mint/visitor), `binding_of_handle` returns None and resolve_seat
-    falls to its un-seated-lineage fallback — which, by its own WHERE clause, ALSO excludes
-    that ineligible holder, so it can resolve to some OTHER, older, unmarked generation of the
-    same lineage instead: the exact grave-delivery shape rulings 1a64ae9a/aee67e6d named,
-    just reached through this wrapper instead of send(). Both of `resolve_handle`'s own
-    callers (establish_office, rebind_seat) already have a correct "resolve to nothing → use
-    the Seat object directly" fallback for exactly this situation — they only need
-    `resolve_handle` to actually SAY nothing rather than hand them a wrong-but-real-looking
-    agent id. `seat_holder_ineligible` returning non-None IS that distinction: return None
-    instead of trusting the fallback's guess."""
+    ONE MORE DISTINCTION resolve_seat's own bare `agent` field can't make: when `name` is a
+    unique Seat whose only holder(s) are all ineligible (retired/false_mint/visitor),
+    `binding_of_handle` returns None and resolve_seat falls to its un-seated-lineage
+    fallback, which, by its own WHERE clause, also excludes that ineligible holder, so it
+    can resolve to some other, older, unmarked generation of the same lineage instead: the
+    same grave-delivery shape, just reached through this wrapper instead of send(). Both of
+    `resolve_handle`'s own callers (establish_office, rebind_seat) already have a correct
+    "resolve to nothing, use the Seat object directly" fallback for exactly this situation;
+    they only need `resolve_handle` to actually say nothing rather than hand them a
+    wrong-but-real-looking agent id. `seat_holder_ineligible` returning non-None is that
+    distinction: return None instead of trusting the fallback's guess."""
     from src.orchestrator.seats import seat_holder_ineligible
     if await seat_holder_ineligible(actions.pool, name) is not None:
         return None
@@ -1211,13 +1185,13 @@ async def resolve_handle(actions: Actions, name: str) -> str | None:
 
 
 async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
-    """The display seat for an ALREADY-RESOLVED agent id — 'Ra V', or None when this id is
-    anonymous (no claimed handle). Reads the WINNING handle + seat_generation off
-    current_assertions, the identical predicate seat_bearings/claim_name use — so a caller
-    checking "does this id hold a seat" (dd47c1da: send(to_agent=...) must HARD-FAIL on an
-    unclaimed target, require_seat=true) sees the same truth the roster and the claim guard
-    see. Unlike resolve_seat, this takes an id already in hand — it answers "who IS this",
-    never "which seat of a name is live" (that question is resolve_handle's)."""
+    """The display seat for an already-resolved agent id, e.g. 'Name V', or None when this id
+    is anonymous (no claimed handle). Reads the winning handle + seat_generation off
+    current_assertions, the identical predicate seat_bearings/claim_name use, so a caller
+    checking "does this id hold a seat" (send(to_agent=...) must hard-fail on an unclaimed
+    target when require_seat=true) sees the same truth the roster and the claim guard see.
+    Unlike resolve_seat, this takes an id already in hand: it answers "who is this", never
+    "which seat of a name is live" (that question is resolve_handle's)."""
     row = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -1233,38 +1207,37 @@ async def agent_seat(pool: asyncpg.Pool, agent_id: str) -> str | None:
 
 @dataclass(frozen=True)
 class OsirisKeyRead:
-    """One key's lookup result in a `.osiris` file (Sekhmet's design, e3f4f159; widened for
-    task #128 wave 2, 2026-08-03; widened again for the missing-cwd gap, Thoth's catch msg
-    3928/thread 3937): FOUR tell-apart-able states, not three — collapsing any pair of them
-    hid a real bug or a real gap behind a shared `None`.
+    """One key's lookup result in a `.osiris` file: four tell-apart-able states, not
+    three; collapsing any pair of them hid a real bug or a real gap behind a shared
+    `None`.
 
-    THE QUERIED DIRECTORY DOES NOT EXIST AT ALL — `cwd_missing=True`, `value=None,
-    error=None, path=None`. Checked BEFORE any climb: a deleted office (flip68real,
-    resumelanecheck — real, now-retired Seats whose directories are gone) must never
-    silently inherit an ANCESTOR's declaration. Without this state, a query against a
-    deleted `~/.osiris/seats/flip68real` climbed straight past it to the enclosing
-    seats-container's own pin and reported that as flip68real's OWN state — collapsing
-    "this office is gone" into "this office exists, pin unset," two conditions with
-    OPPOSITE dispositions (one wants a pin written, the other wants the graph's belief
-    reaped). This is the single leaf check, never re-applied per ancestor: once `cwd`
-    itself is confirmed real, every entry in `cwd.parents` is necessarily real too (a
-    filesystem cannot have an existing child under a nonexistent parent).
+    THE QUERIED DIRECTORY DOES NOT EXIST AT ALL: `cwd_missing=True`, `value=None,
+    error=None, path=None`. Checked before any climb: a deleted office (a real,
+    now-retired seat whose directory is gone) must never silently inherit an ancestor's
+    declaration. Without this state, a query against a deleted office directory climbed
+    straight past it to the enclosing container's own pin and reported that as the deleted
+    office's own state, collapsing "this office is gone" into "this office exists, pin
+    unset," two conditions with opposite dispositions (one wants a pin written, the other
+    wants the graph's belief cleaned up). This is the single leaf check, never re-applied
+    per ancestor: once `cwd` itself is confirmed real, every entry in `cwd.parents` is
+    necessarily real too (a filesystem cannot have an existing child under a nonexistent
+    parent).
 
-    NO `.osiris` ANYWHERE IN THE CLIMB — `cwd` itself is real, genuinely nothing declared,
+    NO `.osiris` ANYWHERE IN THE CLIMB: `cwd` itself is real, genuinely nothing declared,
     ever: `value=None, error=None, path=None, cwd_missing=False`. The plain "never pinned"
-    case — tell apart from the missing-directory state above ONLY by `cwd_missing`; every
+    case, told apart from the missing-directory state above only by `cwd_missing`; every
     other field looks identical, which is exactly why collapsing them was invisible for as
     long as it was.
 
-    FOUND, VALID, BUT NEVER SETS THIS KEY — e.g. REPOS/heinrich: a valid TOML file that
-    declares `model` and never `project`. NOT a couldn't-read (it parses fine) and NOT the
-    same as no file at all (a reader who only checks `value is None` would conflate "never
-    touched" with "deliberately configured, just not for this"): `value=None, error=None,
-    path=<the file>`. This is the shape no "has a pin" check will ever catch — the file
-    LOOKS like protection and isn't.
+    FOUND, VALID, BUT NEVER SETS THIS KEY: e.g. a valid TOML file that declares `model` and
+    never `project`. Not a couldn't-read (it parses fine) and not the same as no file at
+    all (a reader who only checks `value is None` would conflate "never touched" with
+    "deliberately configured, just not for this"): `value=None, error=None,
+    path=<the file>`. This is the shape no "has a pin" check will ever catch: the file
+    looks like protection and isn't.
 
-    COULD NOT READ — the file exists but `tomllib.loads`/`Path.read_text` raised
-    (TOMLDecodeError/OSError/ValueError) — someone WROTE a pin and it doesn't work:
+    COULD NOT READ: the file exists but `tomllib.loads`/`Path.read_text` raised
+    (TOMLDecodeError/OSError/ValueError): someone wrote a pin and it doesn't work:
     `value=None`, `error`=the exception's own text, `path`=the exact `.osiris` file that
     failed. Tell apart from the previous state by `error` being set.
 
@@ -1281,46 +1254,41 @@ class OsirisKeyRead:
 def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
     """One key from the repo's `.osiris` file (TOML), walking up to the repo root. See
     `OsirisKeyRead` for the four-way missing-directory / no-file / found-but-unset /
-    could-not-read distinction this must keep tell-apart-able (Sekhmet's design, e3f4f159;
-    widened msg 3928).
+    could-not-read distinction this must keep tell-apart-able.
 
-    `cwd` ITSELF MUST EXIST BEFORE ANY CLIMB BEGINS (Thoth's catch, msg 3928): a query
-    against a directory that was never created or has since been deleted must never
-    silently return an ANCESTOR's declaration as if it belonged to the queried path — the
-    climb answers "what does an existing address near here declare", and a nonexistent
-    address has no "near here" that means anything. Checked ONCE, on `cwd` alone: every
-    entry in `cwd.parents` is guaranteed to exist once `cwd` itself does (a filesystem
-    cannot have a real child under a nonexistent parent), so no per-level re-check is
-    needed once this leaf check passes.
+    `cwd` itself must exist before any climb begins: a query against a directory that
+    was never created or has since been deleted must never silently return an ancestor's
+    declaration as if it belonged to the queried path. The climb answers "what does an
+    existing address near here declare", and a nonexistent address has no "near here"
+    that means anything. Checked once, on `cwd` alone: every entry in `cwd.parents` is
+    guaranteed to exist once `cwd` itself does (a filesystem cannot have a real child
+    under a nonexistent parent), so no per-level re-check is needed once this leaf check
+    passes.
 
-    THE CLIMB DOES NOT STOP AT A WORKTREE OR SUBMODULE BOUNDARY (task #128, root-cause
-    finding, 2026-08-05): a git worktree's own `.git` is a FILE (a gitlink to
-    `<root>/.git/worktrees/<name>`), not a directory — `Path.exists()` is true for it
-    exactly as for a real repo root, so the old `.exists()` check stopped the climb one
-    layer too early, before it ever reached the true root's pin. Every seat's own code
-    checkout (`.claude/worktrees/<seat>`, the fleet's OWN mandated working location, ruling
-    bcfdfcc1) is exactly this shape and carries no `.osiris` of its own — so this climb-stop
-    silently fell back to the worktree's basename (the seat's own name) instead of the
-    governed project every single time a seated agent mounted from its own code checkout.
-    `.is_dir()` stops only at a REAL repo root; a gitlink file is transparent to the climb,
-    so it continues up to the enclosing repo's own pin.
+    The climb does not stop at a worktree or submodule boundary: a git worktree's own
+    `.git` is a file (a gitlink to `<root>/.git/worktrees/<name>`), not a directory, so
+    `Path.exists()` is true for it exactly as for a real repo root. An old `.exists()`
+    check used to stop the climb one layer too early, before it ever reached the true
+    root's pin. Every seat's own code checkout (`.claude/worktrees/<seat>`, the fleet's
+    own mandated working location) is exactly this shape and carries no `.osiris` of its
+    own, so that climb-stop used to silently fall back to the worktree's basename (the
+    seat's own name) instead of the governed project every single time a seated agent
+    mounted from its own code checkout. `.is_dir()` stops only at a real repo root; a
+    gitlink file is transparent to the climb, so it continues up to the enclosing repo's
+    own pin.
 
-    THE CLIMB DOES NOT STOP AT A FILE THAT EXISTS BUT DOESN'T DECLARE THIS KEY, EITHER
-    (live regression, caught and reverted the same minute it happened, ruling 719ed5b1's
-    schema rollout): a worktree pin newly declaring `seat`/`house`/`kind` sits BELOW its
-    repo root's own pin declaring `project`/`model` — a LAYERED declaration this function
-    was never exercised against before. The old code treated `f.is_file()` as a hard stop
-    regardless of whether the file answered the key being asked, so writing house/seat/kind
-    into a worktree that relied on climbing to its root for `project` silently broke
-    `project` resolution the instant the file existed — `read_project_label('.../worktrees/
-    imhotep')` went from `"osiris"` to `None` mid-session, for every live agent in that
-    worktree. Now: a file found without the key is REMEMBERED (the nearest one, for the
-    heinrich-shape diagnostic) but the climb CONTINUES past it — only a real VALUE, a
-    parse/read ERROR, or reaching the true repo root without ever finding the key
-    terminates it. A single-level pin that simply never sets a key (REPOS/heinrich) still
-    reports that file's own path when nothing further up sets it either — unchanged for
-    every caller that never stacks declarations across levels; only the layered case
-    behaves differently now, and correctly."""
+    The climb also does not stop at a file that exists but doesn't declare this key: a
+    worktree pin newly declaring `seat`/`house`/`kind` sits below its repo root's own pin
+    declaring `project`/`model`, a layered declaration this function must handle. Old code
+    treated `f.is_file()` as a hard stop regardless of whether the file answered the key
+    being asked, so writing house/seat/kind into a worktree that relied on climbing to its
+    root for `project` silently broke `project` resolution the instant the file existed.
+    Now: a file found without the key is remembered (the nearest one, for diagnostics) but
+    the climb continues past it. Only a real value, a parse/read error, or reaching the
+    true repo root without ever finding the key terminates it. A single-level pin that
+    simply never sets a key still reports that file's own path when nothing further up
+    sets it either, unchanged for every caller that never stacks declarations across
+    levels; only the layered case behaves differently, and correctly."""
     if not cwd:
         return OsirisKeyRead(value=None)
     p = Path(cwd)
@@ -1335,31 +1303,30 @@ def _read_osiris_key(cwd: str | None, key: str) -> OsirisKeyRead:
                 value = tomllib.loads(f.read_text()).get(key)
                 if value:
                     return OsirisKeyRead(value=str(value).strip())
-                if found_but_unset is None:  # keep the NEAREST — an ancestor may still set it
+                if found_but_unset is None:  # keep the NEAREST, an ancestor may still set it
                     found_but_unset = str(f)
         except (OSError, tomllib.TOMLDecodeError, ValueError) as exc:
             return OsirisKeyRead(value=None, error=f"{type(exc).__name__}: {exc}",
                                  path=str(f))
-        if (d / ".git").is_dir():  # the TRUE repo root — a worktree/submodule gitlink
+        if (d / ".git").is_dir():  # the TRUE repo root, a worktree/submodule gitlink
             break                  # (a FILE) never stops the climb, only a real root does
     return OsirisKeyRead(value=None, path=found_but_unset)
 
 
 def _true_repo_root(cwd: str) -> Path:
-    """The SAME climb `_read_osiris_key` already uses to find a PIN past a worktree boundary
-    (task #128) — but returning the STOPPING DIRECTORY itself, not a pin value. That earlier
-    fix only helped a repo that HAS a `.osiris` somewhere in the climb; an unpinned repo (no
-    `.osiris` anywhere — e.g. lilguy, live specimen: repo:liveness-fix, dispatch #195/#93
-    follow-on) falls all the way through to `resolve_identity`'s basename fallback, which used
-    the RAW, un-climbed `cwd` — so an agent working from `<repo>/.claude/worktrees/<branch>`
-    (this house's own EnterWorktree convention, ruling bcfdfcc1) minted a phantom SoftwareProject
-    named after its throwaway branch instead of its real repo. `Path(cwd).name` on THIS
-    function's return, instead of on `cwd` directly, closes that gap: same stopping rule (a
-    worktree/submodule's own `.git` is a FILE, transparent to the climb; only a real `.git`
-    DIRECTORY stops it), independent of whether a pin exists. Falls back to `cwd` itself if the
-    climb never finds a real repo root (not a git checkout at all, or the walk reaches the
-    filesystem root first) — never raises, matches every other cwd-reading helper in this
-    module's fail-open discipline."""
+    """The same climb `_read_osiris_key` already uses to find a pin past a worktree boundary,
+    but returning the stopping directory itself, not a pin value. That earlier fix only
+    helped a repo that has a `.osiris` somewhere in the climb; an unpinned repo (no
+    `.osiris` anywhere) falls all the way through to `resolve_identity`'s basename fallback,
+    which used the raw, un-climbed `cwd`. So an agent working from
+    `<repo>/.claude/worktrees/<branch>` (this house's own EnterWorktree convention) minted a
+    phantom SoftwareProject named after its throwaway branch instead of its real repo.
+    `Path(cwd).name` on this function's return, instead of on `cwd` directly, closes that
+    gap: same stopping rule (a worktree/submodule's own `.git` is a file, transparent to the
+    climb; only a real `.git` directory stops it), independent of whether a pin exists.
+    Falls back to `cwd` itself if the climb never finds a real repo root (not a git checkout
+    at all, or the walk reaches the filesystem root first). Never raises, matches every
+    other cwd-reading helper in this module's fail-open discipline."""
     p = Path(cwd)
     for d in (p, *p.parents):
         if (d / ".git").is_dir():
@@ -1368,73 +1335,72 @@ def _true_repo_root(cwd: str) -> Path:
 
 
 def read_project_label(cwd: str | None) -> str | None:
-    """A project's DECLARED name, from a `.osiris` file (TOML: project = "..."), walking up to
-    the repo root. Decouples the project identity from the FOLDER name (the operator may rename
-    the dir; the label is a stable property of the repo — ruling 1e02e069). None → fall back to
-    the cwd basename (silently, on EITHER no-declaration or could-not-read — callers that need
-    to tell those apart and confess a broken pin use `read_project_pin`, e.g. resolve_identity)."""
+    """A project's declared name, from a `.osiris` file (TOML: project = "..."), walking up to
+    the repo root. Decouples the project identity from the folder name (the operator may rename
+    the dir; the label is a stable property of the repo). None means fall back to the cwd
+    basename (silently, on either no-declaration or could-not-read; callers that need to tell
+    those apart and confess a broken pin use `read_project_pin`, e.g. resolve_identity)."""
     return _read_osiris_key(cwd, "project").value
 
 
 def read_project_model(cwd: str | None) -> str | None:
-    """A repo's DECLARED model intent (TOML: model = "claude-haiku-4-5" in `.osiris`) — the
-    operator's PER-PROJECT standing choice. A fleet of onboarded repos does not all run the
-    box default: a deliberately-haiku repo confessing 'not fable' every turn framed the
-    operator's own choice as a sin (complaint, 2026-07-10). None → the box-wide default."""
+    """A repo's declared model intent (TOML: model = "claude-haiku-4-5" in `.osiris`), the
+    operator's per-project standing choice. A fleet of onboarded repos does not all run the
+    box default: a deliberately-haiku repo confessing a model mismatch every turn wrongly
+    framed the operator's own choice as an error. None means the box-wide default."""
     return _read_osiris_key(cwd, "model").value
 
 
 def read_house_label(cwd: str | None) -> str | None:
-    """A tree's DECLARED house (TOML: house = "..." in `.osiris`) — the governing org anchor,
-    ruling 719ed5b1's pin-schema build. Distinct from `project`: a seat's own office pins
-    house == project (577988ed), but a code checkout governed by that seat can legitimately
-    declare a different `project` (its own repo's label) while `house` still names who governs
-    it — the split this key exists to make offline-readable instead of graph-only. None → no
-    house declared here (never a basename guess; unlike `project`, there is no folder-name
-    fallback that means anything for an org anchor)."""
+    """A tree's declared house (TOML: house = "..." in `.osiris`), the governing org anchor.
+    Distinct from `project`: a seat's own office pins house == project, but a code checkout
+    governed by that seat can legitimately declare a different `project` (its own repo's
+    label) while `house` still names who governs it. This is the split this key exists to
+    make offline-readable instead of graph-only. None means no house declared here (never a
+    basename guess; unlike `project`, there is no folder-name fallback that means anything
+    for an org anchor)."""
     return _read_osiris_key(cwd, "house").value
 
 
 def read_seat_handle(cwd: str | None) -> str | None:
-    """The HANDLE of the seat this tree belongs to (TOML: seat = "..." in `.osiris`), ruling
-    719ed5b1: "the .osiris pin has no seat field — the declaration of record cannot declare
-    who lives there." A handle, not a seat:uuid — matches how the fleet already addresses
-    seats everywhere (mail, fleet(), roster()); a rename drifts this the same way it drifts
-    any handle-keyed reference, detectable and re-syncable by the migration verb, never a
-    silent corruption. None → no seat declared (a bare code checkout nobody's office is)."""
+    """The handle of the seat this tree belongs to (TOML: seat = "..." in `.osiris`). A
+    handle, not a seat:uuid, matches how the fleet already addresses seats everywhere (mail,
+    fleet(), roster()); a rename drifts this the same way it drifts any handle-keyed
+    reference, detectable and re-syncable by the migration verb, never a silent corruption.
+    None means no seat declared (a bare code checkout nobody's office is)."""
     return _read_osiris_key(cwd, "seat").value
 
 
 def read_tree_kind(cwd: str | None) -> str | None:
-    """What KIND of tree this is (TOML: kind = "..." in `.osiris`) — one of office | worktree |
-    repo | container, ruling 719ed5b1: "nothing distinguishes an OFFICE from a WORKTREE from a
-    plain REPO from a CONTAINER, so every consumer re-guesses from path shape." `container` is
-    the data-level replacement for the hardcoded path-equality carve-outs
-    (`offices.is_bare_office_root` et al.) — read here, not yet consumed by them (that fold-in
-    is separate, deliberate follow-up work, not this key's own landing). None → undeclared;
-    callers keep whatever path-shape guess they used before this key existed."""
+    """What kind of tree this is (TOML: kind = "..." in `.osiris`), one of office | worktree |
+    repo | container. Before this key existed, nothing distinguished an office from a
+    worktree from a plain repo from a container, so every consumer re-guessed from path
+    shape. `container` is the data-level replacement for the hardcoded path-equality
+    carve-outs (`offices.is_bare_office_root` et al.), read here but not yet consumed by them
+    (that fold-in is separate, deliberate follow-up work, not this key's own landing). None
+    means undeclared; callers keep whatever path-shape guess they used before this key
+    existed."""
     return _read_osiris_key(cwd, "kind").value
 
 
 def _write_model_pin_sync(office: Path, model: str) -> bool:
-    """THE SYNCHRONOUS HALF (task #146, operator's own complaint: "my /model confuses
-    everything, it should be authoritative and automatically handle updating .osiris").
-    Writes to the SEAT'S OWN OFFICE specifically — never `identity.cwd` as given, which may
-    be a code worktree or a repo root several directories up the climb (#128) that other
-    seats' sessions also read: a pin write must never become a cross-seat side effect.
-    `_scaffold_office`'s own convention (office/.osiris carrying project AND model together)
-    is preserved, not forked into a second file — reads `project` back out if a pin already
-    exists so this never drops it, then rewrites both keys. Idempotent: returns False
-    (nothing written) when the file already reads exactly this model, so an unchanged
-    /model choice does not churn the disk on every subsequent mount.
+    """The synchronous half: keeps the operator's `/model` choice authoritative by
+    automatically updating `.osiris`. Writes to the seat's own office specifically, never
+    `identity.cwd` as given, which may be a code worktree or a repo root several
+    directories up the climb that other seats' sessions also read: a pin write must never
+    become a cross-seat side effect. `_scaffold_office`'s own convention (office/.osiris
+    carrying project and model together) is preserved, not forked into a second file: reads
+    `project` back out if a pin already exists so this never drops it, then rewrites both
+    keys. Idempotent: returns False (nothing written) when the file already reads exactly
+    this model, so an unchanged /model choice does not churn the disk on every subsequent
+    mount.
 
-    Never called with anything but a harness-OBSERVED model string (`SwapVerdict.to_model`,
-    always a `deliberate` — a WITNESSED /model transition, ruling f2ae6346's own gate) — a
-    bare alias a human might type (ptah's "sonnet") never reaches this function, only what
-    the harness itself reported running. Still refuses a value that cannot be a real model
-    id (empty, or containing a quote/newline that would corrupt the TOML) as a defensive
-    floor, never a validated allowlist — model ids change over time and this file has no
-    business hard-coding them."""
+    Never called with anything but a harness-observed model string (`SwapVerdict.to_model`,
+    always a `deliberate`, a witnessed /model transition): a bare alias a human might type
+    (e.g. "sonnet") never reaches this function, only what the harness itself reported
+    running. Still refuses a value that cannot be a real model id (empty, or containing a
+    quote/newline that would corrupt the TOML) as a defensive floor, never a validated
+    allowlist; model ids change over time and this file has no business hard-coding them."""
     if not model or '"' in model or "\n" in model:
         return False
     import tomllib
@@ -1446,7 +1412,7 @@ def _write_model_pin_sync(office: Path, model: str) -> bool:
         except (OSError, tomllib.TOMLDecodeError, ValueError):
             existing = {}
         if existing.get("model") == model:
-            return False  # already correct — no churn
+            return False  # already correct, no churn
         project = existing.get("project")
     office.mkdir(parents=True, exist_ok=True)
     lines = ([f'project = "{project}"'] if project else []) + [f'model = "{model}"']
@@ -1455,61 +1421,57 @@ def _write_model_pin_sync(office: Path, model: str) -> bool:
 
 
 async def write_model_pin(seat_handle: str, model: str) -> bool:
-    """THE WRITE SIDE (task #146): update the seat's own `.osiris` pin so it becomes a CACHE
-    of the operator's last /model decision rather than a competing, silently-stale claim —
-    the gap named directly: nothing in this codebase ever wrote the model pin before this;
-    `.osiris`'s `model =` key was read at launch and hand-edited only. Runs on a thread —
-    `_stamp_alive`'s own convention for filesystem I/O inside an async miner/handler."""
+    """The write side: update the seat's own `.osiris` pin so it becomes a cache of the
+    operator's last /model decision rather than a competing, silently-stale claim. Before
+    this, nothing in this codebase ever wrote the model pin; `.osiris`'s `model =` key was
+    read at launch and hand-edited only. Runs on a thread, `_stamp_alive`'s own convention
+    for filesystem I/O inside an async miner/handler."""
     import asyncio
     office = _default_office_root() / seat_handle.lower()
     return await asyncio.to_thread(_write_model_pin_sync, office, model)
 
 
 def read_project_pin(cwd: str | None) -> OsirisKeyRead:
-    """The FULL `project`-key read behind `read_project_label` — value plus, when a
-    `.osiris` file exists but failed to parse/read, the path and error a banner can act on
-    (Sekhmet's design, e3f4f159; Thoth DM 2677 item 2). `resolve_identity` uses this one,
-    because it's the seam that carries the couldn't-read signal into `AgentIdentity` for
-    mount()/orient() to confess. Everything else that only wants the plain fallback-to-
-    basename value keeps using `read_project_label` — unchanged, still a bare `str | None`."""
+    """The full `project`-key read behind `read_project_label`: value plus, when a
+    `.osiris` file exists but failed to parse/read, the path and error a banner can act on.
+    `resolve_identity` uses this one, because it's the seam that carries the couldn't-read
+    signal into `AgentIdentity` for mount()/orient() to confess. Everything else that only
+    wants the plain fallback-to-basename value keeps using `read_project_label`, unchanged,
+    still a bare `str | None`."""
     return _read_osiris_key(cwd, "project")
 
 
 def project_pin_banner(ident: AgentIdentity) -> str | None:
-    """WAVE 2 (task #128, operator's word via Thoth, 2026-08-03; wave 1 was DM 2677's
-    couldn't-read-only banner, gated "DO NOT ARM THE REFUSAL" until the 29-name
-    UNPINNED-LUCKY survey — b3a1f987 — was in hand). WARN, never refuse: every directory
-    that falls back to a basename guess is confessed, but mount() still succeeds. The same
-    SHAPE as the model-swap confession (`swaps.swap_banner`): loud, second-person, names
-    exactly what's wrong, where, and the ONE fix that clears it — never a bare "cannot
-    resolve". Silent for the bare seat-office root (577988ed's carve-out, unchanged) and
-    when a real pin was found and used (the common, healthy case).
+    """Warns, never refuses: every directory that falls back to a basename guess is
+    confessed, but mount() still succeeds. The same shape as the model-swap confession
+    (`swaps.swap_banner`): loud, second-person, names exactly what's wrong, where, and the
+    one fix that clears it, never a bare "cannot resolve". Silent for the bare seat-office
+    root and when a real pin was found and used (the common, healthy case).
 
-    TWO MESSAGES now, not four (ruling fe8ec7ff, mechanism 1): the other two ("NO .osiris
-    ANYWHERE" and "FOUND, VALID, NEVER DECLARES `project`") are no longer errors at all —
-    an unset project is a VALID STATE (general-purpose, or not yet named), never a thing
-    to alarm on. Those two moved to `project_pin_state` below, which mount() only renders
-    AFTER `self_heal_project_pin` has already tried and failed to fill it in from the
-    graph's own unambiguous signal. What remains HERE are the two that stay genuine
-    problems no self-heal can repair:
-      CWD DOES NOT EXIST (msg 3928) — the address itself is a ghost; no pin write repairs
-        this, only reaping the graph's stale belief about it does.
-      COULD NOT BE READ (broken TOML) — fix the syntax error named in the message.
+    Two messages now, not four: the other two ("no .osiris anywhere" and "found, valid,
+    never declares `project`") are no longer errors at all. An unset project is a valid
+    state (general-purpose, or not yet named), never a thing to alarm on. Those two moved
+    to `project_pin_state` below, which mount() only renders after `self_heal_project_pin`
+    has already tried and failed to fill it in from the graph's own unambiguous signal.
+    What remains here are the two that stay genuine problems no self-heal can repair:
+      CWD DOES NOT EXIST: the address itself is a ghost; no pin write repairs this, only
+        reaping the graph's stale belief about it does.
+      COULD NOT BE READ (broken TOML): fix the syntax error named in the message.
 
-    THE "SILENT FOR THE BARE ROOT" CLAIM ABOVE WAS ONLY HALF TRUE (Thoth LXXVI's live
-    catch on his own mount): `project_pin_missing` already excludes the bare root
-    (resolve_identity's own `not bare_root` guard), but the THIRD message above — "FOUND,
-    VALID, NEVER DECLARES project" — fired unconditionally whenever a real `.osiris` file
-    exists with no `project` key, with no such carve-out. The container's own pin at
-    ~/.osiris/seats/.osiris IS exactly such a file: it deliberately declares
-    `kind = "container"` and nothing else (ruling 719ed5b1) — not broken, not an
-    oversight, the SANCTIONED non-project case — so the banner both misdiagnosed a
-    correct-by-design file as an error AND named a mechanism ("fell back to a BASENAME
-    GUESS") that never ran here (the bare root's own project stays None, per
-    resolve_identity's `bare_root` branch; by the time this banner would have rendered,
-    `ident.project` is whatever a SEATED session's later house-resolution set it to —
-    unrelated to any basename guess at all). A container-kind pin gets no banner: this is
-    the healthy case, not a gap to warn about."""
+    The "silent for the bare root" claim above used to be only half true:
+    `project_pin_missing` already excludes the bare root (resolve_identity's own
+    `not bare_root` guard), but the third message above, "found, valid, never declares
+    project", used to fire unconditionally whenever a real `.osiris` file exists with no
+    `project` key, with no such carve-out. The container's own pin at
+    ~/.osiris/seats/.osiris is exactly such a file: it deliberately declares
+    `kind = "container"` and nothing else, not broken, not an oversight, the sanctioned
+    non-project case. So the banner used to both misdiagnose a correct-by-design file as
+    an error and name a mechanism ("fell back to a basename guess") that never ran here
+    (the bare root's own project stays None, per resolve_identity's `bare_root` branch; by
+    the time this banner would have rendered, `ident.project` is whatever a seated
+    session's later house-resolution set it to, unrelated to any basename guess at all).
+    A container-kind pin gets no banner: this is the healthy case, not a gap to warn
+    about."""
     if is_bare_office_root(ident.cwd) or read_tree_kind(ident.cwd) == "container":
         return None
     if ident.project_pin_cwd_missing:
@@ -1532,19 +1494,19 @@ def project_pin_banner(ident: AgentIdentity) -> str | None:
 
 
 def project_pin_state(ident: AgentIdentity) -> str | None:
-    """MECHANISM (1) of ruling fe8ec7ff (operator, df646654: "project may not be decided
-    right away, project none is valid, like a general purpose agent or the project isn't
-    named yet... the problem needs to handle itself"). These are the SAME two conditions
-    `project_pin_banner` used to alarm on ("NEVER DECLARES `project`" / "NO .osiris PIN
-    ANYWHERE") — split out here because unset is a VALID STATE, not an error: no `⚠`, no
-    "fell back to a BASENAME GUESS" framing (a guess implies something is owed and missing;
-    an unset project is simply undecided, same as a fresh general-purpose seat). Silent for
-    the two cases that remain real problems (`project_pin_cwd_missing`, `project_pin_error`)
-    — those still come from `project_pin_banner`, unchanged. mount() calls
-    `self_heal_project_pin` FIRST; this only ever renders when that mechanism found the
-    graph's own signals ambiguous or absent and correctly declined to guess a value in."""
+    """A project may not be decided right away: an unset project is valid, like a
+    general-purpose agent or a project that isn't named yet, and the case should handle
+    itself rather than alarm. These are the same two conditions `project_pin_banner` used
+    to alarm on ("never declares `project`" / "no .osiris pin anywhere"), split out here
+    because unset is a valid state, not an error: no warning symbol, no "fell back to a
+    basename guess" framing (a guess implies something is owed and missing; an unset
+    project is simply undecided, same as a fresh general-purpose seat). Silent for the two
+    cases that remain real problems (`project_pin_cwd_missing`, `project_pin_error`); those
+    still come from `project_pin_banner`, unchanged. mount() calls `self_heal_project_pin`
+    first; this only ever renders when that mechanism found the graph's own signals
+    ambiguous or absent and correctly declined to guess a value in."""
     if ident.project_pin_error or ident.project_pin_cwd_missing:
-        return None  # project_pin_banner's own cases — a real problem, not a valid state
+        return None  # project_pin_banner's own cases, a real problem, not a valid state
     if ident.project_pin_path:
         return (
             f"project: unset (general-purpose, or not yet named) — .osiris at "
@@ -1562,24 +1524,22 @@ def project_pin_state(ident: AgentIdentity) -> str | None:
 
 
 def write_attribution_banner(ident: AgentIdentity) -> str | None:
-    """RULE 1 OF de3dfc18 (task #144): confessed, never acted on — "if it picks, it is
-    wrong, however good the pick" (Thoth, msg 3854). Warns when this lineage's own
-    majority in_repo target disagrees with the project this session resolved; never
-    overrides `project`.
+    """Confessed, never acted on: if it picks, it is wrong, however good the pick. Warns
+    when this lineage's own majority in_repo target disagrees with the project this
+    session resolved; never overrides `project`.
 
-    STALE-COMPARISON GUARD (Thoth LXXVI's live catch, mcp_server.py's own render site,
-    moved here to be testable the same way project_pin_banner is): `write_attribution_
-    agreement` is stamped by register_agent, which runs BEFORE `_resolve_project_seat_
-    first` — by that function's own docstring, DELIBERATELY, so the write gate still
-    asserts a not-yet-seated session's fresh cwd-derived project unclobbered. For a
-    SEATED session, that means the flag can be set against the PRE-seat-override project
-    (e.g. None, or a bare-root basename guess), while `ident.project` by the time this
-    banner renders is already the POST-override, final value — so the stored flag can say
-    "disagrees" even though the two values THIS message would display are equal (both
-    "osiris", the container root's own live specimen). Re-checking the LIVE values here
-    is the fix: the graph property still records the honest pre-override comparison (a
-    real historical signal, untouched); this banner must never show itself agreeing with
-    itself."""
+    Stale-comparison guard, moved here to be testable the same way project_pin_banner is:
+    `write_attribution_agreement` is stamped by register_agent, which runs before
+    `_resolve_project_seat_first`, deliberately, by that function's own docstring, so the
+    write gate still asserts a not-yet-seated session's fresh cwd-derived project
+    unclobbered. For a seated session, that means the flag can be set against the
+    pre-seat-override project (e.g. None, or a bare-root basename guess), while
+    `ident.project` by the time this banner renders is already the post-override, final
+    value, so the stored flag can say "disagrees" even though the two values this message
+    would display are equal (both "osiris", the container root's own live specimen).
+    Re-checking the live values here is the fix: the graph property still records the
+    honest pre-override comparison (a real historical signal, untouched); this banner must
+    never show itself agreeing with itself."""
     if ident.write_attribution_agreement != "disagrees":
         return None
     if ident.write_attribution_top == ident.project:
@@ -1598,113 +1558,114 @@ def resolve_identity(
     project_label: str | None = None,
     store_reading: ModelReading | None = None,
 ) -> AgentIdentity:
-    """Resolve an agent's identity from what it can tell the server + what the harness RECORDS.
-    The project comes from its cwd; the session + model are OBSERVED off its own record via THE
-    STORE (ruling be741d3e; sole lane since the JSONL-fallback removal, task #29): the caller
+    """Resolve an agent's identity from what it can tell the server plus what the harness
+    records. The project comes from its cwd; the session and model are observed off its
+    own record via the store (the sole lane since the JSONL-fallback removal): the caller
     feeds `store_reading` from transcript_store.identity_reading(), harness-agnostic, so
-    non-Claude minds (Crush, …) resolve exactly like Claude ones. No reading → no observation:
-    the model honestly falls back to the agent's self-report. Ruling 17516660: OBSERVATION
-    outranks the agent's self-report (the harness doesn't lie; a swap is below the agent's own
-    horizon), so a passed `model` is used only when nothing was observed, and a passed model
-    that DISAGREES with the observation is kept as `model_declared` + flagged `model_divergent`.
-    `root` scopes the cwd sid-GUESS below (tests inject a tmp root; production reads
-    ~/.claude/projects) — the guess finds a session id, never a model.
+    non-Claude minds resolve exactly like Claude ones. No reading means no observation: the
+    model honestly falls back to the agent's self-report. Observation outranks the agent's
+    self-report (the harness doesn't lie; a swap is below the agent's own horizon), so a
+    passed `model` is used only when nothing was observed, and a passed model that
+    disagrees with the observation is kept as `model_declared` plus flagged
+    `model_divergent`. `root` scopes the cwd sid-guess below (tests inject a tmp root;
+    production reads ~/.claude/projects); the guess finds a session id, never a model.
 
-    THE CLAIMED-SID GUARD (crunch residual): the cwd-locate grabs the HOTTEST transcript's sid —
-    two concurrent same-project sessions without job_dirs would both grab the SAME one and merge.
-    `claimed` (from the durable registry: sids already held by a LIVE mount on another client
-    session) makes the guess REFUSE a taken sid; the refuser falls to a deterministic per-client
-    fallback keyed on `fallback_seed` (its MCP session key) — distinct, stable across re-calls
-    within the connection, and honestly resolved=False."""
-    # the project LABEL: an explicit override (env) > the .osiris file > the folder basename —
-    # UNLESS the folder is the bare seat-office root itself (operator ruling 577988ed: the
-    # operator launches agents from here ON PURPOSE, the intended pattern, not an accident).
-    # The parent of every seat has no .osiris pin and no single project of its own; the
-    # basename ("seats") would be a phantom, not a guess, so it stays unresolved from cwd —
-    # a location-independent identity finds its project through its SEAT instead (mount()'s
+    The claimed-sid guard: the cwd-locate grabs the hottest transcript's sid. Two
+    concurrent same-project sessions without job_dirs would both grab the same one and
+    merge. `claimed` (from the durable registry: sids already held by a live mount on
+    another client session) makes the guess refuse a taken sid; the refuser falls to a
+    deterministic per-client fallback keyed on `fallback_seed` (its MCP session key),
+    distinct, stable across re-calls within the connection, and honestly resolved=False."""
+    # the project label: an explicit override (env) beats the .osiris file, which beats the
+    # folder basename, unless the folder is the bare seat-office root itself (the operator
+    # launches agents from here on purpose, the intended pattern, not an accident). The
+    # parent of every seat has no .osiris pin and no single project of its own; the basename
+    # ("seats") would be a phantom, not a guess, so it stays unresolved from cwd. A
+    # location-independent identity finds its project through its seat instead (mount()'s
     # seat-first resolution), never by inventing one from where it happens to be sitting.
-    # an explicit project_label override short-circuits the cwd read entirely (unchanged
-    # behavior) — the couldn't-read signal only ever comes from an ACTUAL climb of cwd's
-    # own .osiris file, never fabricated for an override that never touched one.
+    # An explicit project_label override short-circuits the cwd read entirely (unchanged
+    # behavior): the couldn't-read signal only ever comes from an actual climb of cwd's own
+    # .osiris file, never fabricated for an override that never touched one.
     pin_read = OsirisKeyRead(value=project_label) if project_label else read_project_pin(cwd)
     pinned = pin_read.value
     bare_root = is_bare_office_root(cwd)
-    # #93 follow-on to #128: the basename fallback climbs to the TRUE repo root the same way
-    # the pin-lookup above already does (_true_repo_root, same stopping rule) — an UNPINNED
-    # repo worked from inside a worktree (`<repo>/.claude/worktrees/<branch>`) must fall back
-    # to the REPO's own name, never the worktree's own throwaway branch-named directory.
+    # the basename fallback climbs to the true repo root the same way the pin-lookup above
+    # already does (_true_repo_root, same stopping rule): an unpinned repo worked from
+    # inside a worktree (`<repo>/.claude/worktrees/<branch>`) must fall back to the repo's
+    # own name, never the worktree's own throwaway branch-named directory.
     project = None if (pinned is None and bare_root) else (pinned or
              (_true_repo_root(cwd).name if cwd else None))
-    # task #128 wave 2: the THIRD leg of the "why did this fall back to a basename guess"
-    # split — genuinely nothing declared anywhere, as opposed to a broken file (pin_read.error)
-    # or a valid file that just never sets `project` (pin_read.path with no error). Silent for
-    # the bare seat-office root (577988ed's own carve-out) and when there is no cwd at all —
-    # neither is a directory anyone could write a pin into. ALSO silent when cwd itself
-    # doesn't exist (msg 3928's fourth leg, project_pin_cwd_missing below) — a deleted
-    # office is not "missing a pin", it's not there to pin at all; the two must stay
-    # disjoint, never folded into one flag (the exact defect this fixes).
+    # the third leg of the "why did this fall back to a basename guess" split: genuinely
+    # nothing declared anywhere, as opposed to a broken file (pin_read.error) or a valid
+    # file that just never sets `project` (pin_read.path with no error). Silent for the
+    # bare seat-office root (its own carve-out) and when there is no cwd at all: neither is
+    # a directory anyone could write a pin into. Also silent when cwd itself doesn't exist
+    # (project_pin_cwd_missing below): a deleted office is not "missing a pin", it's not
+    # there to pin at all; the two must stay disjoint, never folded into one flag (the
+    # exact defect this fixes).
     pin_missing = (
         pinned is None and pin_read.error is None and pin_read.path is None
         and not bare_root and cwd is not None and not pin_read.cwd_missing
     )
     sid = session or _job_id(job_dir)
-    confident = sid is not None  # a session/job_dir ANCHOR; the cwd-locate below is only a GUESS
-    declared = model  # the agent's SELF-REPORT of its model (may be None) — the WEAK signal
+    confident = sid is not None  # a session/job_dir anchor; the cwd-locate below is only a guess
+    declared = model  # the agent's self-report of its model (may be None), the weak signal
     observed: str | None = None
     observed_at: datetime | None = None  # when the record carrying the model was written
     method: str | None = None
-    history: list[str] = []  # the transcript's model sequence — the swap history (job_dir path)
+    history: list[str] = []  # the transcript's model sequence, the swap history (job_dir path)
     deliberate = False       # a /model on the record makes any swap the operator's own hand
-    # THE STORE — the ONLY observation lane since the JSONL-fallback removal (task #29;
-    # parity store-vs-legacy proven 351/0/0 before the cut). The reading's own `method` is
-    # the harness name; identity's downstream contract (the seam gates, _MODEL_EC) speaks
-    # the ANCHOR vocabulary, so translate: an anchored discovery is exactly what "job_dir"
-    # has always meant here (this session's OWN record, found by its own anchor — the
-    # adapters enforce anchored_only just as the deleted probe did), and an unanchored one
-    # is a hottest-guess that grades like the old cwd read (DERIVED, never seam-confessing).
-    # Without this translation a store reading graded CO_OCCURRENCE and anchored=False —
-    # the under-grade the store-first mount path shipped with (found during this removal).
+    # The store is the only observation lane since the JSONL-fallback removal. The
+    # reading's own `method` is the harness name; identity's downstream contract (the seam
+    # gates, _MODEL_EC) speaks the anchor vocabulary, so translate: an anchored discovery is
+    # exactly what "job_dir" has always meant here (this session's own record, found by its
+    # own anchor; the adapters enforce anchored_only just as the deleted probe did), and an
+    # unanchored one is a hottest-guess that grades like the old cwd read (derived, never
+    # seam-confessing). Without this translation a store reading graded CO_OCCURRENCE and
+    # anchored=False, an under-grade the store-first mount path used to ship with.
     if store_reading and store_reading.current:
         observed = store_reading.current
         history = list(store_reading.history)
         deliberate = store_reading.deliberate
         observed_at = store_reading.observed_at
         method = "job_dir" if store_reading.anchored else "cwd"
-        # an ANCHORED reading may carry the sid; an unanchored one must never claim it —
+        # an anchored reading may carry the sid; an unanchored one must never claim it:
         # adopting a hottest-guess sid as confident is the concurrent-session merge class
         if sid is None and store_reading.anchor_sid and store_reading.anchored:
             sid = store_reading.anchor_sid
             confident = True
-    if sid is None and cwd:  # no anchor → GUESS the session by cwd (sid ONLY, never a model)
+    if sid is None and cwd:  # no anchor, so guess the session by cwd (sid only, never a model)
         path = locate_transcript_by_cwd(cwd, root=root)
         if path is not None:
             guess = path.stem.split("-")[0]  # the 8-char handle, matching the job-id scheme
             if claimed and guess in claimed:
-                pass  # a LIVE mount already holds this sid — refusing it beats merging into it
+                pass  # a live mount already holds this sid, refusing it beats merging into it
             else:
                 sid = guess
-    if observed is not None:                # the harness's word WINS over the agent's own
+    if observed is not None:                # the harness's word wins over the agent's own
         model = observed
-        divergent = bool(declared and declared != observed)  # self-report != observation = FLAG
-    else:                                   # nothing to observe → fall back to the self-report
+        divergent = bool(declared and declared != observed)  # self-report != observation = flag
+    else:                                   # nothing to observe, so fall back to the self-report
         model = declared
         method = "self_report" if declared else None
         divergent = False
-    # A cwd-located id is the HOTTEST transcript's — concurrent same-project sessions would all
-    # grab it and silently MERGE, so only a session/job_dir anchor counts as resolved. Marking the
-    # guess unresolved makes the fleet-digest health signal SEE it instead of showing false-green.
+    # A cwd-located id is the hottest transcript's: concurrent same-project sessions would
+    # all grab it and silently merge, so only a session/job_dir anchor counts as resolved.
+    # Marking the guess unresolved makes the fleet-digest health signal see it instead of
+    # showing false-green.
     resolved = confident
     if sid is None:
-        # Last resort: NEVER collapse distinct sessions into one bucket — that is an accidental
-        # identity merge (forbidden for Person; lossy to undo). Anchor on whatever unique signal
-        # survives: the job_dir string is per-session even when its id won't parse; else project-
-        # scope so cross-repo actors can't merge. The old shared `agent:unknown` sink was the
-        # conflation bug the fable-fight surfaced (a demotion scrambles session-id resolution).
+        # Last resort: never collapse distinct sessions into one bucket, that is an
+        # accidental identity merge (forbidden for Person; lossy to undo). Anchor on
+        # whatever unique signal survives: the job_dir string is per-session even when its
+        # id won't parse; else project-scope so cross-repo actors can't merge. A prior
+        # shared `agent:unknown` sink was a conflation bug (a demotion can scramble
+        # session-id resolution).
         if job_dir:
             sid = "j" + hashlib.sha1(job_dir.encode(), usedforsecurity=False).hexdigest()[:8]
         elif fallback_seed:
             # the claimed-sid refuser (or any anchorless client with a stable connection key):
-            # deterministic per client session — distinct from every live claim, stable across
+            # deterministic per client session, distinct from every live claim, stable across
             # re-calls, never a shared bucket
             sid = "s" + hashlib.sha1(fallback_seed.encode(), usedforsecurity=False).hexdigest()[:8]
         elif project:
@@ -1734,21 +1695,20 @@ async def _flag_works_in_alongside_prior(
     actions: Actions, agent_oid: uuid.UUID, new_proj_oid: uuid.UUID, new_proj_label: str,
     src: str, now: datetime,
 ) -> None:
-    """Obligation 45032b23 (thread 6048/6069, decision 0222fd37 — the shape proposed
-    there, built here): register_agent's own works_in write is add-only — `_link_once`
-    never invalidates a PRIOR edge to a DIFFERENT project, so a session that legitimately
-    changes project across separate mounts accumulates live works_in edges forever.
-    Measured RARE before this was built (3 of 14 fleet-wide duplicate-works_in
-    specimens, flat trend over 5 weeks, zero covered by a declared multi-project
-    charter) — not common enough, and with no evidence source able to tell "changed
-    project" from "works two projects" (#103/#141's law), to justify auto-invalidating
-    on write. This is the additive alternative: SURFACE the moment it happens, never
-    resolve it — a durable property naming both sides, for graph_lint (or a future
-    reader) to grow a mechanical signal from, never a pick made here.
+    """register_agent's own works_in write is add-only: `_link_once` never invalidates a
+    prior edge to a different project, so a session that legitimately changes project
+    across separate mounts accumulates live works_in edges forever. Measured rare before
+    this was built (3 of 14 fleet-wide duplicate-works_in specimens, flat trend over 5
+    weeks, zero covered by a declared multi-project charter), not common enough, and with
+    no evidence source able to tell "changed project" from "works two projects", to
+    justify auto-invalidating on write. This is the additive alternative: surface the
+    moment it happens, never resolve it, a durable property naming both sides, for
+    graph_lint (or a future reader) to grow a mechanical signal from, never a pick made
+    here.
 
-    Caller-gated to fire ONLY the instant a genuinely NEW works_in edge is about to be
-    created (an ordinary re-mount that finds its edge already live never reaches this),
-    so it lands once per (agent, new project) pair, not once per mount."""
+    Caller-gated to fire only the instant a genuinely new works_in edge is about to be
+    created (an ordinary re-mount that finds its edge already live never reaches this), so
+    it lands once per (agent, new project) pair, not once per mount."""
     prior = await actions.pool.fetch(
         "SELECT p.canonical FROM links l JOIN objects p ON p.id=l.to_id "
         "WHERE l.from_id=$1 AND l.type='works_in' AND l.to_id != $2 "
@@ -1767,22 +1727,21 @@ async def _flag_works_in_alongside_prior(
 async def _flag_unattributed_revisit(
     actions: Actions, *, base: str, project: str, src: str, now: datetime,
 ) -> None:
-    """Thread 879c97b9 piece 1 (operator ruling, decision d438f6b7's own sibling —
-    "revisit determinism", ruling c8abd24a: most projects are unplanned or revisits): a
-    GENUINELY fresh Agent object just minted (register_agent's own `revisit_check`,
-    gated to the one call site that actually needs it — mcp_server.py's `_reattach`
-    transcript self-restore fallback, the specimen audited live on this thread: a real
-    prior transcript proves the session ran before, but nothing links it to any known
-    lineage, and it used to mint unconditionally with no check at all) at a project that
-    ALREADY carries `works_in` activity from some OTHER, unrelated lineage.
+    """Operator ruling: most projects are unplanned or revisits, so a "revisit
+    determinism" check is warranted. This checks whether a genuinely fresh Agent object
+    just minted (register_agent's own `revisit_check`, gated to the one call site that
+    actually needs it, mcp_server.py's `_reattach` transcript self-restore fallback: a
+    real prior transcript proves the session ran before, but nothing links it to any
+    known lineage, and it used to mint unconditionally with no check at all) is at a
+    project that already carries `works_in` activity from some other, unrelated lineage.
 
-    Never refuses the mint — the fresh identity is real, whatever door resolved it —
-    only confesses that this MAY be one of the four unresolved-revisit shapes this
-    thread names (weeks-cold project, harness churn, no .osiris pin, foreign harness)
-    landing as a stranger instead of a recognized return, exactly the population "zero
-    inference-minted Agents after the fold" is meant to measure. `open_thread`'s own
-    summary-hash dedup absorbs a repeat mount finding the same gap again, so this fires
-    once per (agent, project) pair, not once per mount."""
+    Never refuses the mint, the fresh identity is real, whatever door resolved it, only
+    confesses that this may be one of four unresolved-revisit shapes (weeks-cold project,
+    harness churn, no .osiris pin, foreign harness) landing as a stranger instead of a
+    recognized return, exactly the population "zero inference-minted Agents after the
+    fold" is meant to measure. `open_thread`'s own summary-hash dedup absorbs a repeat
+    mount finding the same gap again, so this fires once per (agent, project) pair, not
+    once per mount."""
     from src.orchestrator.capture import open_thread
 
     other = await actions.pool.fetchval(
@@ -1808,17 +1767,17 @@ async def _flag_unattributed_revisit(
 
 
 async def _succeeded_by_candidates(pool: asyncpg.Pool, canonical: str) -> list[str]:
-    """Every DISTINCT non-empty current `succeeded_by` VALUE asserted on `canonical`,
-    across EVERY source — not just the single row the old linear walk's own `ORDER BY
+    """Every distinct non-empty current `succeeded_by` value asserted on `canonical`,
+    across every source, not just the single row an old linear walk's own `ORDER BY
     ... LIMIT 1` picked. `current_assertions` holds one current row per (object, name,
-    SOURCE), so a node with more than one source ever asserting `succeeded_by` on it
-    carries more than one simultaneously-current value: a genuine FORK, not noise (the
-    a418b017 specimen — six sources on one node of Thoth's own lineage). Grouped by
-    VALUE (the best-ranked row per value, same rank key the old query used:
-    confidence, then observed_at, then assertion id — done in Python, not SQL, since the
-    grouping itself is the point), then the distinct values are returned ordered by that
-    same key descending — index 0 is exactly what the OLD single-path query would have
-    picked alone, so a non-forked node (0 or 1 distinct values) behaves identically."""
+    source), so a node with more than one source ever asserting `succeeded_by` on it
+    carries more than one simultaneously-current value: a genuine fork, not noise (one
+    live specimen had six sources on a single node of one lineage). Grouped by value (the
+    best-ranked row per value, same rank key an old query used: confidence, then
+    observed_at, then assertion id, done in Python, not SQL, since the grouping itself is
+    the point), then the distinct values are returned ordered by that same key descending;
+    index 0 is exactly what the old single-path query would have picked alone, so a
+    non-forked node (0 or 1 distinct values) behaves identically."""
     all_rows = await pool.fetch(
         "SELECT a.value #>> '{}' AS v, a.confidence, a.observed_at, a.id "
         "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -1841,36 +1800,36 @@ async def _succeeded_by_candidates(pool: asyncpg.Pool, canonical: str) -> list[s
 async def _lineage_head_walk(
     pool: asyncpg.Pool, canonical: str, *, seen: set[str], budget: list[int],
 ) -> tuple[str | None, bool, int]:
-    """Returns `(head, live, depth)` for the BEST branch reachable from `canonical`.
-    `head` is the last node on that branch judged active + not false_mint (the same two
-    checks `lineage_head`'s own `head` variable always required) — never a dead/husk/
-    merged terminal — or `None` when NOTHING valid was found anywhere in this subtree (a
+    """Returns `(head, live, depth)` for the best branch reachable from `canonical`.
+    `head` is the last node on that branch judged active and not false_mint (the same two
+    checks `lineage_head`'s own `head` variable always required), never a dead/husk/
+    merged terminal, or `None` when nothing valid was found anywhere in this subtree (a
     branch that dead-ends on a husk/merged node with no further succeeded_by at all).
     `None` is a first-class outcome, not a fallback string: a fully-dead branch must
     never out-compete a branch that found a real head purely by racking up more hops on
-    the way to nothing (the true version of this bug — an earlier draft compared raw
-    depth without this distinction and let a 1-hop dead end beat a 0-hop REAL head).
-    `live` is whether that head is EXACTLY live right now (`agent_liveness_exact`, never
-    the lineage-BASE-widened `agent_liveness` — an unrelated live generation sharing the
-    same base prefix must never make a stale fork branch read as live; that widening is
-    exactly why a specific-generation caller has its own exact twin). `depth` is real
-    hops travelled along the WINNING branch since this call (0 when a real head sits
-    right here) — the TENURE signal, a longer-continuing branch over a shorter one,
-    compared ONLY among branches that both found a real head. `budget[0]` is a SHARED,
-    MUTABLE total-hop ceiling across the WHOLE fork exploration (never per-branch) —
-    decremented once per edge taken anywhere in the recursion, so a wide fork can never
-    cost more than the old single-path walk's own 64-hop bound already allowed.
+    the way to nothing (an earlier draft compared raw depth without this distinction and
+    let a 1-hop dead end beat a 0-hop real head). `live` is whether that head is exactly
+    live right now (`agent_liveness_exact`, never the lineage-base-widened
+    `agent_liveness`; an unrelated live generation sharing the same base prefix must
+    never make a stale fork branch read as live, that widening is exactly why a
+    specific-generation caller has its own exact twin). `depth` is real hops travelled
+    along the winning branch since this call (0 when a real head sits right here), the
+    tenure signal, a longer-continuing branch over a shorter one, compared only among
+    branches that both found a real head. `budget[0]` is a shared, mutable total-hop
+    ceiling across the whole fork exploration (never per-branch), decremented once per
+    edge taken anywhere in the recursion, so a wide fork can never cost more than an old
+    single-path walk's own 64-hop bound already allowed.
 
-    LIVENESS ONLY DECIDES A GENUINE FORK, NEVER AN ORDINARY HOP (caught live building
-    this: `living_head`'s own invariant test broke on the first draft, which let a live-
-    but-UNSUCCEEDED base outrank its own unambiguous, single declared successor purely
-    for not being currently mounted — exactly backwards for a function whose whole job is
-    to follow the DECLARED chain forward regardless of who is home). With EXACTLY ONE
-    candidate, this always continues into it unconditionally — `self_head` never enters
-    a comparison at all, matching the old algorithm's own unconditional advance node for
-    node. Liveness/tenure only arbitrate when there are TWO OR MORE distinct candidates
-    (a real fork) — there, and only there, does stopping here (`self_head`) join the
-    contest against the candidate branches."""
+    Liveness only decides a genuine fork, never an ordinary hop (caught live building
+    this: an invariant test broke on the first draft, which let a live-but-unsucceeded
+    base outrank its own unambiguous, single declared successor purely for not being
+    currently mounted, exactly backwards for a function whose whole job is to follow the
+    declared chain forward regardless of who is home). With exactly one candidate, this
+    always continues into it unconditionally: `self_head` never enters a comparison at
+    all, matching an old algorithm's own unconditional advance node for node.
+    Liveness/tenure only arbitrate when there are two or more distinct candidates (a real
+    fork); there, and only there, does stopping here (`self_head`) join the contest
+    against the candidate branches."""
     from src.orchestrator.mounts import agent_liveness_exact
 
     row = await pool.fetchrow(
@@ -1893,7 +1852,7 @@ async def _lineage_head_walk(
         return self_head, live, 0
 
     if len(candidates) == 1:
-        # NOT a fork — the old algorithm's own unconditional advance, self_head is
+        # NOT a fork: the old algorithm's own unconditional advance, self_head is
         # irrelevant to a choice that was never there to make.
         nxt = candidates[0]
         seen.add(nxt)
@@ -1901,7 +1860,7 @@ async def _lineage_head_walk(
         head, live, depth = await _lineage_head_walk(pool, nxt, seen=seen, budget=budget)
         if head is not None:
             return head, live, depth + 1
-        # the rest of the chain dead-ends with nothing valid at all — exactly the old
+        # the rest of the chain dead-ends with nothing valid at all, exactly the old
         # loop's own `if not nxt or nxt in seen: return head` shape, falling back to
         # whatever this hop's own self_head was (possibly still None, propagating on).
         if self_head is None:
@@ -1909,7 +1868,7 @@ async def _lineage_head_walk(
         live = (await agent_liveness_exact(pool, self_head)).get("live", False)
         return self_head, live, 0
 
-    # a GENUINE fork (2+ distinct candidates): explore every branch, THEN self_head joins.
+    # a genuine fork (2+ distinct candidates): explore every branch, then self_head joins.
     branches: list[tuple[str, bool, int]] = []
     for nxt in candidates:
         seen.add(nxt)
@@ -1926,61 +1885,61 @@ async def _lineage_head_walk(
     if not branches:
         return None, False, 0           # nothing valid anywhere in this whole subtree
 
-    # live wins first, then depth (tenure — the longer-continuing branch); ties keep
+    # live wins first, then depth (tenure, the longer-continuing branch); ties keep
     # `branches`' own insertion order (Python sort is stable, and reverse=True never
-    # reorders equal keys), which is candidate-rank order (the OLD single-path
-    # tie-break) for the candidate-derived entries, self_head (depth 0) appended last —
-    # so a real continuing branch only loses to "stop here" when strictly worse on both.
+    # reorders equal keys), which is candidate-rank order (an old single-path tie-break)
+    # for the candidate-derived entries, self_head (depth 0) appended last, so a real
+    # continuing branch only loses to "stop here" when strictly worse on both.
     branches.sort(key=lambda b: (b[1], b[2]), reverse=True)
     return branches[0]
 
 
 async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
-    """Follow winning `succeeded_by` pointers to the newest ACTIVE generation. A session-keyed
-    resolve always lands on the BASE id (the transcript knows nothing of minting); the lineage
-    decides who that name is NOW. Cycle-guarded; a missing object ends the walk. Pool-based so
-    the liveness promotion (which has no Actions) can walk it too — a mount row must follow its
+    """Follow winning `succeeded_by` pointers to the newest active generation. A session-keyed
+    resolve always lands on the base id (the transcript knows nothing of minting); the lineage
+    decides who that name is now. Cycle-guarded; a missing object ends the walk. Pool-based so
+    the liveness promotion (which has no Actions) can walk it too: a mount row must follow its
     lineage head, or a superseded generation reads as a live co-agent of its own descendant.
 
-    MERGED GENERATIONS ARE NOT HEADS (the phantom disposition, 2026-07-17): a false successor
-    folded away by the operator keeps its succeeded_by pointer on the record (append-only),
-    so the walk still traverses it — but the HEAD is the last generation still standing.
-    Without this, every resolution walked back into the graveyard the merge had just closed.
-    And a walk that STARTS on a merged node resolves through merged_into first — a row bound
-    to a folded phantom must come home to the winner, not testify for the grave.
+    Merged generations are not heads: a false successor folded away by the operator keeps
+    its succeeded_by pointer on the record (append-only), so the walk still traverses it,
+    but the head is the last generation still standing. Without this, every resolution
+    walked back into the graveyard the merge had just closed. And a walk that starts on a
+    merged node resolves through merged_into first: a row bound to a folded phantom must
+    come home to the winner, not testify for the grave.
 
-    A HEALED HUSK IS ALSO NOT A HEAD (thread 4a7da43a, reap Stage 1b, 2026-07-28): false_mint
-    healing (heal.py / seam-debounce) never flips objects.status — a husk stays 'active'
-    forever, same gap as retire_seat leaving Seat.status active — so a walk that landed on a
-    husk as its FINAL hop would wrongly call it the head. Walked live and confirmed this
-    doesn't currently misroute anything (decision c41f74a6: every husk checked still had its
-    own real succeeded_by continuing the chain, so the walk already reached the true tail by
-    just not stopping) — this closes the latent edge case where a husk IS the current tail
-    (no real successor minted yet). Walk CONTINUATION is unchanged: `cur` still steps through
-    a husk exactly as before, only the returned `head` now also requires false_mint absent.
+    A healed husk is also not a head: false_mint healing (heal.py / seam-debounce) never
+    flips objects.status, so a husk stays 'active' forever, the same gap as retire_seat
+    leaving Seat.status active, so a walk that landed on a husk as its final hop would
+    wrongly call it the head. Walked live and confirmed this doesn't currently misroute
+    anything (every husk checked still had its own real succeeded_by continuing the chain,
+    so the walk already reached the true tail by just not stopping); this closes the
+    latent edge case where a husk is the current tail (no real successor minted yet). Walk
+    continuation is unchanged: `cur` still steps through a husk exactly as before, only
+    the returned `head` now also requires false_mint absent.
 
-    THE TRUE-TIE BUG (thread 20af2c95's dry-run, msg 5046, live specimen: Thoth's own -v ->
-    -vi hop): a phantom-fold heal's retraction (succeeded_by="") and the REAL succeeded_by
-    re-assertion can land at the IDENTICAL confidence AND observed_at — both stamped by the
-    same healing transaction's shared `now`. A retraction never legitimately outranks a
-    same-instant real pointer, and since `_succeeded_by_candidates` drops every empty value
-    outright, a retraction never even reaches the tie-break contest at all now.
+    The true-tie bug: a phantom-fold heal's retraction (succeeded_by="") and the real
+    succeeded_by re-assertion can land at the identical confidence and observed_at, both
+    stamped by the same healing transaction's shared `now`. A retraction never
+    legitimately outranks a same-instant real pointer, and since `_succeeded_by_candidates`
+    drops every empty value outright, a retraction never even reaches the tie-break
+    contest at all now.
 
-    STALLING AT A FORK (thread a418b017, migration 0059's own live specimen): a node can
-    carry MORE THAN ONE simultaneously-current `succeeded_by` value — one per SOURCE,
-    since `current_assertions` holds one current row per (object, name, source), and a
-    messy multi-generation history (parallel compaction seams, healing events) can leave
-    several sources each asserting a different successor. The OLD walk picked exactly one
-    by rank order and continued blindly — if that pick dead-ended, the walk stopped at a
-    stale, long-retired generation even though ANOTHER candidate at that same fork led on
-    to today's live head. Live specimen: three different generations of Thoth's own
-    lineage all independently walked to the SAME six-way fork and stalled there instead of
-    reaching the live head. Now `_lineage_head_walk` explores every distinct candidate at
-    a fork (bounded by a shared 64-edge budget across the WHOLE exploration, matching the
-    old per-path bound exactly) and the branch reaching a currently-live head wins,
-    tie-broken by which branch travelled further (tenure), tie-broken again by the old
-    rank order. A node with 0 or 1 candidates at every hop — the overwhelmingly common
-    case — walks node-for-node identically to the old algorithm."""
+    Stalling at a fork: a node can carry more than one simultaneously-current
+    `succeeded_by` value, one per source, since `current_assertions` holds one current row
+    per (object, name, source), and a messy multi-generation history (parallel compaction
+    seams, healing events) can leave several sources each asserting a different successor.
+    An old walk picked exactly one by rank order and continued blindly; if that pick
+    dead-ended, the walk stopped at a stale, long-retired generation even though another
+    candidate at that same fork led on to today's live head. Live specimen: three
+    different generations of the same lineage all independently walked to the same
+    six-way fork and stalled there instead of reaching the live head. Now
+    `_lineage_head_walk` explores every distinct candidate at a fork (bounded by a shared
+    64-edge budget across the whole exploration, matching the old per-path bound exactly)
+    and the branch reaching a currently-live head wins, tie-broken by which branch
+    travelled further (tenure), tie-broken again by the old rank order. A node with 0 or 1
+    candidates at every hop, the overwhelmingly common case, walks node-for-node
+    identically to the old algorithm."""
     cur = canonical
     for _ in range(10):
         winner = await pool.fetchval(
@@ -1997,9 +1956,9 @@ async def lineage_head(pool: asyncpg.Pool, canonical: str) -> str:
 
 async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
     """The immediate predecessor `canonical` succeeded, per its own `succeeded_from`
-    property assertion — one hop. The shared primitive under both the ancestor-walk
-    (nearest_handoff_ancestor, below) and lineage_root (ack_handoff's own lineage check) —
-    one mechanism, not two copies drifting (60bc15db, decision 61cb1f02)."""
+    property assertion, one hop. The shared primitive under both the ancestor-walk
+    (nearest_handoff_ancestor, below) and lineage_root (ack_handoff's own lineage check),
+    one mechanism, not two copies drifting."""
     val = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND a.name='succeeded_from' "
@@ -2010,28 +1969,26 @@ async def _succeeded_from_of(pool: asyncpg.Pool, canonical: str) -> str | None:
 async def lineage_root(
     pool: asyncpg.Pool, canonical: str, *, max_hops: int = 200,
 ) -> tuple[str, bool]:
-    """The ORIGIN of this canonical's own succession chain, walked via succeeded_from EDGES
-    — never `_generation()`'s string parse (60bc15db specimen, decision 61cb1f02): two
-    generations of the SAME lineage share this root even when the id FORMAT itself changes
-    across a renumbering.
+    """The origin of this canonical's own succession chain, walked via succeeded_from
+    edges, never a string parse: two generations of the same lineage share this root even
+    when the id format itself changes across a renumbering.
 
-    Returns `(root, complete)` — NEVER a bare string (60bc15db, decision 1cb389be, found
-    INSIDE this function itself: Thoth's own 76-generation-deep lineage crossed the old
-    max_hops=64 ceiling, and a bare-string return could not say so — it silently handed
-    back whatever intermediate canonical the walk happened to reach at hop 64, confidently
-    indistinguishable from a genuine origin. 12 of her generations each hit the ceiling at
-    a different depth and resolved to 12 different WRONG roots, reading as 12 real
-    lineages until this was traced by hand past the bound. `complete=True` means the walk
-    reached a genuine `succeeded_from IS NULL` terminus — `root` is trustworthy.
-    `complete=False` means the walk exhausted `max_hops` before terminating — `root` is
-    SOME real ancestor along the true chain, but not proven to be its origin, and a caller
-    comparing two such roots for equality can be confidently wrong in both directions.
-    NEVER treat a `complete=False` root as final; every caller below refuses rather than
-    trusts one.
+    Returns `(root, complete)`, never a bare string. Found inside this function itself: a
+    76-generation-deep lineage crossed an old max_hops=64 ceiling, and a bare-string
+    return could not say so; it silently handed back whatever intermediate canonical the
+    walk happened to reach at hop 64, confidently indistinguishable from a genuine origin.
+    12 generations of that lineage each hit the ceiling at a different depth and resolved
+    to 12 different wrong roots, reading as 12 real lineages until this was traced by hand
+    past the bound. `complete=True` means the walk reached a genuine `succeeded_from IS
+    NULL` terminus; `root` is trustworthy. `complete=False` means the walk exhausted
+    `max_hops` before terminating; `root` is some real ancestor along the true chain, but
+    not proven to be its origin, and a caller comparing two such roots for equality can be
+    confidently wrong in both directions. Never treat a `complete=False` root as final;
+    every caller below refuses rather than trusts one.
 
     Bounded like every other succeeded_from walk in this file (mint_heir, the ancestor-walk
-    just below) — a corrupt cycle can never hang this — but the bound is now a safety
-    backstop, not the caller's only signal: `complete` is the fact to check, not silence
+    just below): a corrupt cycle can never hang this, but the bound is now a safety
+    backstop, not the caller's only signal. `complete` is the fact to check, not silence
     on whether 64 (or 200, or any other number) was enough this time."""
     cur = canonical
     for _ in range(max_hops):
@@ -2045,14 +2002,14 @@ async def lineage_root(
 async def _lineage_ancestors(
     pool: asyncpg.Pool, canonical: str, *, max_hops: int = 200,
 ) -> tuple[list[str], bool]:
-    """Self plus every real predecessor reached via succeeded_from, nearest first, PLUS
-    whether the walk actually terminated — the full chain `lineage_root` walks to its end,
+    """Self plus every real predecessor reached via succeeded_from, nearest first, plus
+    whether the walk actually terminated: the full chain `lineage_root` walks to its end,
     exposed here so a caller can act on every generation along the way, not just the
-    terminus. Returns `(ancestors, complete)`, same completeness contract as `lineage_root`
-    (decision 1cb389be) — a caller must never read a short or clean-looking `ancestors`
-    list as complete without checking the flag; `len(ancestors) - 1 >= max_hops` was the
-    ad-hoc way `misfiled_by_lineage` used to re-derive this itself before `complete` became
-    a first-class return value."""
+    terminus. Returns `(ancestors, complete)`, same completeness contract as
+    `lineage_root`: a caller must never read a short or clean-looking `ancestors` list as
+    complete without checking the flag; `len(ancestors) - 1 >= max_hops` was the ad-hoc
+    way `misfiled_by_lineage` used to re-derive this itself before `complete` became a
+    first-class return value."""
     out = [canonical]
     cur = canonical
     for _ in range(max_hops):
@@ -2067,58 +2024,58 @@ async def _lineage_ancestors(
 async def misfiled_by_lineage(
     pool: asyncpg.Pool, agent_id: str, project: str | None, *, max_hops: int = 200,
 ) -> dict[str, Any] | None:
-    """THE DISCOVERY HALF OF #145 (decision b89477a0, Thoth's authorization DM 4114):
-    identity_coherence (settle.py's filed_under_check) only ever checks THIS session's OWN
-    writes forward from its own mounted_at — it cannot help a LATER, correctly-filed
-    successor find an EARLIER generation's misfiled writes, because nothing anywhere
-    queries by LINEAGE across projects; every read (orient/recall/search) is project-
-    scoped, and a misfiled decision is invisible to that regardless of who's asking.
+    """The discovery half: identity_coherence (settle.py's filed_under_check) only ever
+    checks this session's own writes forward from its own mounted_at. It cannot help a
+    later, correctly-filed successor find an earlier generation's misfiled writes, because
+    nothing anywhere queries by lineage across projects; every read (orient/recall/search)
+    is project-scoped, and a misfiled decision is invisible to that regardless of who's
+    asking.
 
     Walks the caller's own succeeded_from chain (`_lineage_ancestors`, the third use of
-    this session's shared primitive) and finds every Decision/Thread ANY generation of
+    this session's shared primitive) and finds every Decision/Thread any generation of
     that lineage ever authored, anywhere in history, whose `in_repo` project disagrees
     with the caller's own current `project`.
 
-    REPORT-ONLY, never a gate or a repair (ruling 577988ed's law, same as
-    filed_under_check) — surfaces `misfiled`, never moves or corrects it. Repair is
-    explicitly out of scope for this build (decision b89477a0).
+    Report-only, never a gate or a repair, same law as filed_under_check: surfaces
+    `misfiled`, never moves or corrects it. Repair is explicitly out of scope for this
+    build.
 
-    NAMES WHAT IT CANNOT SEE, ALWAYS (Thoth's own constraint, DM 4114): a succeeded_from
-    chain that is broken partway up, or simply longer than `max_hops`, makes this UNDER-
-    report, never over-report — it can only find ancestors it can actually reach.
-    `chain_hops_walked` and `chain_may_be_incomplete` are carried on every non-None result
-    so a short or empty `misfiled` list is never indistinguishable from a chain that was
-    never fully walked. `chain_may_be_incomplete` now comes DIRECTLY from
-    `_lineage_ancestors`'s own `complete` flag (decision 1cb389be) rather than being re-
-    derived here from `len(ancestors) >= max_hops` — that re-derivation was this
-    function's own correct workaround for a signal `_lineage_ancestors` didn't carry yet;
-    now that it does, trust the primitive instead of recomputing its answer.
-    Returns None only in the one case this cannot evaluate at all (`project` unknown,
-    mirroring filed_under_check) OR the genuinely clean case (nothing misfiled AND the
-    chain terminated within `max_hops`, i.e. an answer this function actually stands
-    behind) — a clean answer earned by a complete walk is still allowed to render as
-    silence; an INCOMPLETE walk never is, however clean it happens to look.
+    Always names what it cannot see: a succeeded_from chain that is broken partway up, or
+    simply longer than `max_hops`, makes this under-report, never over-report; it can only
+    find ancestors it can actually reach. `chain_hops_walked` and
+    `chain_may_be_incomplete` are carried on every non-None result so a short or empty
+    `misfiled` list is never indistinguishable from a chain that was never fully walked.
+    `chain_may_be_incomplete` now comes directly from `_lineage_ancestors`'s own
+    `complete` flag rather than being re-derived here from `len(ancestors) >= max_hops`;
+    that re-derivation was this function's own correct workaround for a signal
+    `_lineage_ancestors` didn't carry yet, and now that it does, trust the primitive
+    instead of recomputing its answer. Returns None only in the one case this cannot
+    evaluate at all (`project` unknown, mirroring filed_under_check) or the genuinely
+    clean case (nothing misfiled and the chain terminated within `max_hops`, i.e. an
+    answer this function actually stands behind); a clean answer earned by a complete
+    walk is still allowed to render as silence, an incomplete walk never is, however clean
+    it happens to look.
 
-    NORMALIZES `project` THROUGH merged_into (decision 6b4d185e — the sibling gap to
-    filed_under_check's own, same file this function mirrors): `filed_project` reads off
-    LIVE `in_repo` edges, already re-pointed to a fold's survivor by
-    `_move_project_estate`, but the caller's own `project` may still name a label that has
-    since been FOLDED — comparing raw strings then reports every one of that lineage's own
-    correctly-filed writes as 'misfiled' forever after the fold. Degrades to the raw label
-    on any failure (577988ed — same law as filed_under_check).
+    Normalizes `project` through merged_into, the sibling gap to filed_under_check's own,
+    same file this function mirrors: `filed_project` reads off live `in_repo` edges,
+    already re-pointed to a fold's survivor by `_move_project_estate`, but the caller's
+    own `project` may still name a label that has since been folded. Comparing raw
+    strings then reports every one of that lineage's own correctly-filed writes as
+    'misfiled' forever after the fold. Degrades to the raw label on any failure, same law
+    as filed_under_check.
 
-    COMPOUNDING GAP, SAME AS filed_under_check's OWN (caught by actually running a fold
+    Compounding gap, same as filed_under_check's own (caught by actually running a fold
     against this function): the `in_repo` join below carried no `valid_until` filter, so
     a folded project's invalidated pre-fold edge stayed visible alongside its live
-    re-pointed replacement, reporting the SAME write as both correctly- and incorrectly-
-    filed at once. Fixed in the same pass — label normalization alone cannot reconcile
+    re-pointed replacement, reporting the same write as both correctly- and incorrectly-
+    filed at once. Fixed in the same pass; label normalization alone cannot reconcile
     that, the edge set itself had to be live-only first."""
     if not project:
         return None
     try:
         from src.orchestrator.project_identity import _normalize_project_label_through_merge
         project, _confession = await _normalize_project_label_through_merge(pool, project)
-    except Exception:  # noqa: BLE001 — see note above
+    except Exception:  # noqa: BLE001, see note above
         pass
     ancestors, complete = await _lineage_ancestors(pool, agent_id, max_hops=max_hops)
     try:
@@ -2132,19 +2089,19 @@ async def misfiled_by_lineage(
             "  AND a.source_id = ANY($1::text[]) AND a.name = 'summary' "
             "  AND a.evidence_class = 'self_declared')",
             ancestors)
-    except Exception:  # noqa: BLE001 — fail open, same law as filed_under_check
+    except Exception:  # noqa: BLE001, fail open, same law as filed_under_check
         return None
-    # 6b4d185e ITEM (5), THE SIBLING GAP filed_under_check ALREADY CLOSED (thread
-    # 8678/8687): `_normalize_project_label_through_merge` above only ever matches an
-    # EXACT (or case-variant) canonical, no name-property fallback — a `project` that's a
-    # bare handle or a project's own `name` property post-rename (rename_project never
+    # The sibling gap filed_under_check already closed:
+    # `_normalize_project_label_through_merge` above only ever matches an exact (or
+    # case-variant) canonical, no name-property fallback. A `project` that's a bare
+    # handle or a project's own `name` property post-rename (rename_project never
     # touches `canonical`, only `name`) stayed permanently "misfiled" against every one of
-    # that lineage's genuinely-correct writes, purely because the label doesn't string-
-    # match. Resolved the SAME way filed_under_check's own rescue is: canonical-or-name-
-    # property, one real project, unambiguous — and, same fix as filed_under_check's own
-    # f298e23, `project` itself is reassigned to the resolved canonical (not just used to
-    # decide which rows still count as misfiled), so the receipt's own `filed_under` names
-    # the same canonical the `misfiled` rows are compared against.
+    # that lineage's genuinely-correct writes, purely because the label doesn't
+    # string-match. Resolved the same way filed_under_check's own rescue is:
+    # canonical-or-name-property, one real project, unambiguous, and, same fix as
+    # filed_under_check's own, `project` itself is reassigned to the resolved canonical
+    # (not just used to decide which rows still count as misfiled), so the receipt's own
+    # `filed_under` names the same canonical the `misfiled` rows are compared against.
     filed_projects = {str(r["filed_project"]).removeprefix("repo:") for r in rows}
     if filed_projects and project not in filed_projects:
         try:
@@ -2157,8 +2114,8 @@ async def misfiled_by_lineage(
                 real = str(real_canon).removeprefix("repo:") if real_canon else None
                 if real is not None and real in filed_projects:
                     project = real
-        except Exception:  # noqa: BLE001 — a diagnostic refinement must never be the
-            pass          # reason this check goes blind (577988ed) — report-only, unchanged
+        except Exception:  # noqa: BLE001, a diagnostic refinement must never be the
+            pass          # reason this check goes blind, report-only, unchanged
     misfiled = sorted({
         (str(r["id"])[:8], str(r["filed_project"]).removeprefix("repo:"))
         for r in rows if str(r["filed_project"]).removeprefix("repo:") != project
@@ -2176,18 +2133,18 @@ async def misfiled_by_lineage(
     }
 
 
-# THE SHARED HANDOFF-LIVENESS PREDICATE (#cd101070, Thoth mail 12808 item 1): a single
-# boolean SQL expression over a bare `objects o` row, self-contained (no outer join a
-# caller must already have set up) so BOTH nearest_handoff_ancestor's set query (below)
-# and ack_handoff's single-object check (mcp_server.py) resolve "is this a live handoff"
-# the identical way. STRUCTURED FIRST, PROSE AS FALLBACK, same law nearest_handoff_
-# ancestor's own docstring already named: an explicit is_handoff='true' property wins;
-# absent that property entirely, a self_declared summary mentioning "handoff"/"letter"
-# counts too (legacy pre-property handoffs). Before this fix, ack_handoff had NO fallback
-# half at all -- it only ever recognized the structured property, so a get_status()
-# handoff_pending pointer produced purely by the prose fallback (no is_handoff property
-# ever asserted on the object) could never be acknowledged: ack_handoff would always
-# refuse it as "already acknowledged or is not a handoff", a permanently stuck pointer.
+# The shared handoff-liveness predicate: a single boolean SQL expression over a bare
+# `objects o` row, self-contained (no outer join a caller must already have set up) so
+# both nearest_handoff_ancestor's set query (below) and ack_handoff's single-object check
+# (mcp_server.py) resolve "is this a live handoff" the identical way. Structured first,
+# prose as fallback, same law nearest_handoff_ancestor's own docstring already named: an
+# explicit is_handoff='true' property wins; absent that property entirely, a
+# self_declared summary mentioning "handoff"/"letter" counts too (legacy pre-property
+# handoffs). Before this fix, ack_handoff had no fallback half at all, it only ever
+# recognized the structured property, so a get_status() handoff_pending pointer produced
+# purely by the prose fallback (no is_handoff property ever asserted on the object) could
+# never be acknowledged: ack_handoff would always refuse it as "already acknowledged or
+# is not a handoff", a permanently stuck pointer.
 HANDOFF_LIVE_PREDICATE_SQL = (
     "(SELECT h.value #>> '{}' FROM current_assertions h "
     " WHERE h.object_id = o.id AND h.name = 'is_handoff' "
@@ -2204,7 +2161,7 @@ HANDOFF_LIVE_PREDICATE_SQL = (
 
 
 async def is_live_handoff(pool: asyncpg.Pool, object_id: Any) -> bool:
-    """Single-object door onto `HANDOFF_LIVE_PREDICATE_SQL` — the same answer
+    """Single-object door onto `HANDOFF_LIVE_PREDICATE_SQL`, the same answer
     nearest_handoff_ancestor's own set query would give this one object, for a caller
     (ack_handoff) that already has a specific id in hand rather than a chain to walk."""
     return bool(await pool.fetchval(
@@ -2215,67 +2172,66 @@ async def is_live_handoff(pool: asyncpg.Pool, object_id: Any) -> bool:
 async def nearest_handoff_ancestor(
     pool: asyncpg.Pool, start_id: str, *, max_hops: int = 5, respect_ack: bool = True,
 ) -> tuple[tuple[str, list[dict[str, Any]]] | None, bool]:
-    """Bounded chain-walk to the nearest ancestor bearing a handoff (thread e749036e,
-    2026-07-27, Thoth LX's diagnosis): a one-hop-only succession-note read goes blind the
-    moment the IMMEDIATE ancestor is a phantom (or simply never wrote a handoff) even
-    though a real one sits one more hop back — the morning's own repro: xxiv (wrote a
-    handoff) -> xxv (zero-turn, wrote nothing) -> xxvi (arrived blind, one hop from xxv
-    only). SHARED by orient()'s succession-note block and the boot whisper's own
-    succession-steering — one implementation, not two copies drifting.
+    """Bounded chain-walk to the nearest ancestor bearing a handoff: a one-hop-only
+    succession-note read goes blind the moment the immediate ancestor is a phantom (or
+    simply never wrote a handoff) even though a real one sits one more hop back (a real
+    repro: generation xxiv wrote a handoff, xxv was zero-turn and wrote nothing, xxvi
+    arrived blind, one hop from xxv only). Shared by orient()'s succession-note block and
+    the boot whisper's own succession-steering, one implementation, not two copies
+    drifting.
 
-    STRUCTURED FIRST, PROSE AS FALLBACK (ruling c5b184cd): an is_handoff='true' property
-    (ack_handoff's own typed stamp, once written) is the reliable half; the ILIKE
-    '%handoff%'/'%letter%' text match stays for handoffs minted before that existed. Walks
-    succeeded_from up to `max_hops` links (mint_heir's own kind of bound), returning the
-    FIRST ancestor found with a handoff-bearing Thread/Decision and its 2 freshest picks —
-    or None if nothing is found within the bound (never widens into an unbounded search).
+    Structured first, prose as fallback: an is_handoff='true' property (ack_handoff's own
+    typed stamp, once written) is the reliable half; the ILIKE '%handoff%'/'%letter%' text
+    match stays for handoffs minted before that existed. Walks succeeded_from up to
+    `max_hops` links (mint_heir's own kind of bound), returning the first ancestor found
+    with a handoff-bearing Thread/Decision and its 2 freshest picks, or None if nothing is
+    found within the bound (never widens into an unbounded search).
 
-    `respect_ack` (default True — "is this baton still live", what orient()'s succession-
-    note block and the boot whisper both actually want, the operator's "read receipt"
-    redesign, 2026-08-03): an explicit is_handoff='false' (ack_handoff's own retirement
-    stamp) EXCLUDES the record entirely, overriding the ILIKE fallback too — once
-    acknowledged, a handoff must not resurrect for a LATER generation merely because
-    nothing more recent exists; recall()/search() stay the door for that history, orient()
-    should not re-deliver a baton someone already took. The fallback applies ONLY to
-    objects that never had an is_handoff property asserted at all (genuine pre-property
-    legacy records) — an object that HAS the property, however it currently resolves, is
-    never routed through prose-matching. The property's CURRENT value is resolved the same
-    way every other property-read in this codebase does (confidence DESC, observed_at DESC
-    LIMIT 1) — never a bare EXISTS(value='true'), which a superseding assertion from a
-    DIFFERENT source (the acker, not the original author) would leave sitting in
-    current_assertions as a non-winning but still-existing row.
+    `respect_ack` (default True): "is this baton still live", what orient()'s
+    succession-note block and the boot whisper both actually want, from a "read receipt"
+    redesign. An explicit is_handoff='false' (ack_handoff's own retirement stamp) excludes
+    the record entirely, overriding the ILIKE fallback too: once acknowledged, a handoff
+    must not resurrect for a later generation merely because nothing more recent exists;
+    recall()/search() stay the door for that history, orient() should not re-deliver a
+    baton someone already took. The fallback applies only to objects that never had an
+    is_handoff property asserted at all (genuine pre-property legacy records); an object
+    that has the property, however it currently resolves, is never routed through
+    prose-matching. The property's current value is resolved the same way every other
+    property-read in this codebase does (confidence DESC, observed_at DESC LIMIT 1), never
+    a bare EXISTS(value='true'), which a superseding assertion from a different source
+    (the acker, not the original author) would leave sitting in current_assertions as a
+    non-winning but still-existing row.
 
-    Pass `respect_ack=False` for a DIFFERENT question — "when did this reign end", a
+    Pass `respect_ack=False` for a different question: "when did this reign end", a
     historical boundary fact that stays true whether or not anyone has since acknowledged
     reading it (`since_last_handoff`, handoff_compiler.py, is the one caller that wants
-    this: it must keep finding ITS OWN already-acked handoff as its reign's own closing
+    this: it must keep finding its own already-acked handoff as its reign's own closing
     marker, or it would silently walk past it to a more distant ancestor and mis-date the
-    boundary — the exact double-count bug its own docstring exists to prevent).
+    boundary, the exact double-count bug its own docstring exists to prevent).
 
     Each returned pick now also carries `id` (the object's own short-resolvable uuid,
-    stringified) — ack_handoff needs a ref to acknowledge; before this fix callers had no
+    stringified): ack_handoff needs a ref to acknowledge; before this fix callers had no
     way to name what they were looking at.
 
-    RETURNS `(result, complete)` (decision 8b375ed7, the same completeness-signal shape
-    `lineage_root`/`_lineage_ancestors` already carry per decision 1cb389be — the third
-    specimen of that exact disease this reign): `complete=True` when the walk reached a
-    genuine stopping point within `max_hops` — either it FOUND a handoff, or it walked all
-    the way to a true `succeeded_from IS NULL` terminus and confirmed there is nothing to
-    find. `complete=False` ONLY when the walk exhausted `max_hops` without resolving either
-    way — `result=None` is then NOT "nothing to inherit", it is "stopped looking", the exact
-    collision obligation 4c303c43 named unverified since 2026-08-09 and this reign
-    confirmed live: 64 of 636 real successions (10%) hit precisely this — a real marked
-    handoff sits 6-13+ hops back, past `max_hops=5`, silently indistinguishable from a
-    genuinely clean chain until now. `max_hops` itself is UNCHANGED here on purpose — a
-    bigger bound only moves the same silent cliff further out (the fix already learned once
-    this reign, not to repeat); a caller that needs to actually FIND a handoff beyond the
-    default bound passes a larger `max_hops` explicitly and reads `complete` either way.
-    THIS SIGNAL IS BUILT, NOT YET WIRED INTO ANY VISIBLE SURFACE (decision, msg 4651): no
-    caller's own observable output changes in this pass — orient()'s succession_note,
-    handshake's boot whisper, and handoff_briefing's boundary all still behave byte-for-byte
-    as before for the same graph state. Surfacing `complete` to a reader is a deliberate,
-    separate, operator-authorized step, held per that same decision: it changes what every
-    session sees on its first call, which is not this build's authorization."""
+    Returns `(result, complete)`, the same completeness-signal shape
+    `lineage_root`/`_lineage_ancestors` already carry (the third specimen of that exact
+    disease this codebase has hit): `complete=True` when the walk reached a genuine
+    stopping point within `max_hops`, either it found a handoff, or it walked all the way
+    to a true `succeeded_from IS NULL` terminus and confirmed there is nothing to find.
+    `complete=False` only when the walk exhausted `max_hops` without resolving either way:
+    `result=None` is then not "nothing to inherit", it is "stopped looking", a collision
+    once left unverified and later confirmed live: 64 of 636 real successions (10%) hit
+    precisely this, a real marked handoff sits 6-13+ hops back, past `max_hops=5`, silently
+    indistinguishable from a genuinely clean chain until now. `max_hops` itself is
+    unchanged here on purpose: a bigger bound only moves the same silent cliff further
+    out; a caller that needs to actually find a handoff beyond the default bound passes a
+    larger `max_hops` explicitly and reads `complete` either way.
+    This signal is built, not yet wired into any visible surface: no caller's own
+    observable output changes in this pass; orient()'s succession_note, handshake's boot
+    whisper, and handoff_briefing's boundary all still behave byte-for-byte as before for
+    the same graph state. Surfacing `complete` to a reader is a deliberate, separate,
+    operator-authorized step, held pending: it changes what every session sees on its
+    first call, which is not this build's authorization."""
     ack_clause = HANDOFF_LIVE_PREDICATE_SQL if respect_ack else (
         "EXISTS (SELECT 1 FROM current_assertions h WHERE h.object_id = o.id "
         "        AND h.name = 'is_handoff' AND h.value #>> '{}' = 'true') "
@@ -2297,39 +2253,38 @@ async def nearest_handoff_ancestor(
             return (cur, [dict(r) for r in picks]), True
         nxt = await _succeeded_from_of(pool, cur)
         if nxt is None:
-            return None, True  # a genuine terminus reached — clean, not truncated
+            return None, True  # a genuine terminus reached, clean, not truncated
         cur = nxt
-    return None, False  # max_hops exhausted — stopped looking, not "nothing to find"
+    return None, False  # max_hops exhausted, stopped looking, not "nothing to find"
 
 
 def cap_handoff_text(text: str, limit: int = 800) -> str:
     """Truncate a handoff pick's `summary` for succession_note/boot-whisper display,
-    marking it with '…' when actually shortened (thread 5cb2c7be) — the same
-    never-silent-truncation law mcp_server.py's own `_cap_text` already enforces for
-    open_threads/recent_decisions; this call site's inline `[:800]` predates that law
-    and truncated real 900-3500 char records with no marker, indistinguishable from a
-    complete note."""
+    marking it with '…' when actually shortened, the same never-silent-truncation law
+    mcp_server.py's own `_cap_text` already enforces for open_threads/recent_decisions.
+    An earlier inline `[:800]` at this call site predated that law and truncated real
+    900-3500 char records with no marker, indistinguishable from a complete note."""
     return text if len(text) <= limit else text[:limit] + "…"
 
 
-_LOCK_TIMEOUT = "5s"  # #172: a genuinely wedged holder fails waiters loud, not silent
+_LOCK_TIMEOUT = "5s"  # a genuinely wedged holder fails waiters loud, not silent
 
 
 @asynccontextmanager
 async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None]:
-    """Serialize generation-minting per LINEAGE (a pg advisory lock on the root). Two
-    concurrent seam observers minted Soundwave VI and VII in the SAME SECOND with identical
-    seam strings (2026-07-14): each walked the head, each minted, and the loser's head-walk
-    found the winner's fresh mint — so the race STACKED generations instead of converging.
-    The caller must re-read its evidence INSIDE the lock so the loser sees the winner's
+    """Serialize generation-minting per lineage (a pg advisory lock on the root). Two
+    concurrent seam observers once minted two generations in the same second with
+    identical seam strings: each walked the head, each minted, and the loser's head-walk
+    found the winner's fresh mint, so the race stacked generations instead of converging.
+    The caller must re-read its evidence inside the lock so the loser sees the winner's
     write and concludes no-op.
 
-    XACT-scoped (#172, the fleet-wide wedge 2026-08-18 00:08-00:23Z): pg_advisory_lock on a
-    borrowed pool connection relied on a Python finally to unlock — a cancelled/wedged
-    coroutine could return the connection to the pool still holding it (advisory locks are
-    session-scoped, unaffected by asyncpg's connection.reset()). pg_advisory_xact_lock inside
-    an explicit transaction dies with the transaction instead — no finally needed — and a
-    short SET LOCAL lock_timeout makes a genuinely wedged holder fail waiters loud."""
+    Transaction-scoped, after a fleet-wide wedge: pg_advisory_lock on a borrowed pool
+    connection relied on a Python finally to unlock, and a cancelled/wedged coroutine
+    could return the connection to the pool still holding it (advisory locks are
+    session-scoped, unaffected by asyncpg's connection.reset()). pg_advisory_xact_lock
+    inside an explicit transaction dies with the transaction instead, no finally needed,
+    and a short SET LOCAL lock_timeout makes a genuinely wedged holder fail waiters loud."""
     from src.orchestrator.seats import LockWedged
 
     key = f"mint:{lineage_root}"
@@ -2344,18 +2299,18 @@ async def mint_lock(pool: asyncpg.Pool, lineage_root: str) -> AsyncIterator[None
         yield
 
 
-# For the source_model property, the resolution METHOD is the provenance, and (ruling 17516660)
-# OBSERVATION outranks self-report for this substrate-fact: reading the model off the agent's own
-# transcript (job_dir) is a DIRECT_OBSERVATION of the harness record; the cwd fallback is a weaker
-# DERIVED guess (it may read a co-located session's transcript); a self-reported model is the
-# agent's own word about its own substrate — the WEAKEST signal (a swap is below its horizon), so
-# it grades CO_OCCURRENCE, below both observations.
+# For the source_model property, the resolution method is the provenance, and observation
+# outranks self-report for this substrate-fact: reading the model off the agent's own
+# transcript (job_dir) is a DIRECT_OBSERVATION of the harness record; the cwd fallback is a
+# weaker DERIVED guess (it may read a co-located session's transcript); a self-reported
+# model is the agent's own word about its own substrate, the weakest signal (a swap is
+# below its horizon), so it grades CO_OCCURRENCE, below both observations.
 _MODEL_EC = {
     "job_dir": EvidenceClass.DIRECT_OBSERVATION,
-    # a mounting SUB-AGENT read off its OWN subagents/ transcript (task 1) — as direct an
-    # observation as job_dir, and it converges with the grade lineage.py stamps for the same
-    # child. NOT "job_dir", so the operator swap-detector (gated on job_dir) stays quiet: a
-    # sub-agent legitimately runs a non-fable model — that is no rug-pull to confess.
+    # a mounting sub-agent read off its own subagents/ transcript, as direct an
+    # observation as job_dir, and it converges with the grade lineage.py stamps for the
+    # same child. Not "job_dir", so the operator swap-detector (gated on job_dir) stays
+    # quiet: a sub-agent legitimately running a different model is no rug-pull to confess.
     "subagent": EvidenceClass.DIRECT_OBSERVATION,
     "cwd": EvidenceClass.DERIVED,
     "self_report": EvidenceClass.CO_OCCURRENCE,
@@ -2365,13 +2320,14 @@ _MODEL_EC = {
 async def _last_anchored_stamp(
     actions: Actions, agent: uuid.UUID
 ) -> tuple[str | None, datetime | None]:
-    """The last ANCHORED source_model ever recorded for this Agent, AND when it was observed —
-    direct_observation grade only (a job_dir transcript probe), read off the raw assertions so
-    a later weak-grade write from the same source can't hide it behind supersession. This is
-    the succession baseline: only two anchored observations disagreeing can witness a seam; a
-    cwd guess or self-report on either side would be the cry-wolf (agent e71b408f's 'demoted
-    to haiku'). The timestamp is the seam gate's clock: only an observation FRESHER than this
-    stamp may testify to a seam — the tail of a transcript is evidence about a PAST moment."""
+    """The last anchored source_model ever recorded for this Agent, and when it was
+    observed: direct_observation grade only (a job_dir transcript probe), read off the raw
+    assertions so a later weak-grade write from the same source can't hide it behind
+    supersession. This is the succession baseline: only two anchored observations
+    disagreeing can witness a seam; a cwd guess or self-report on either side would be a
+    false alarm (one live agent's own falsely-flagged "demoted to haiku"). The timestamp
+    is the seam gate's clock: only an observation fresher than this stamp may testify to a
+    seam, the tail of a transcript is evidence about a past moment."""
     row = await actions.pool.fetchrow(
         "SELECT value #>> '{}' AS v, observed_at FROM assertions "
         "WHERE object_id=$1 AND name='source_model' AND evidence_class=$2 "
@@ -2391,9 +2347,9 @@ _HALF_HEAL_SRC = "half-heal-detect"
 async def _heal_completed(actions: Actions, grandancestor: str, phantom: str) -> bool:
     """Was `grandancestor`'s succeeded_by pointer actually unwound after `phantom` was
     flagged false_mint, or did the heal's multi-write sequence (flag stamps, pointer
-    unwind, follow_binding, mount-row update — four separate unguarded writes) stop
-    partway? A flag alone is not proof of completion — decision ee012ebc found three
-    live specimens each stamped false_mint weeks earlier with the ancestor's succeeded_by
+    unwind, follow_binding, mount-row update, four separate unguarded writes) stop
+    partway? A flag alone is not proof of completion: a real audit found three live
+    specimens each stamped false_mint weeks earlier with the ancestor's succeeded_by
     still pointing straight at the phantom, the interruption permanently invisible to
     any reader that treats the flag itself as the answer."""
     current = await actions.pool.fetchval(
@@ -2407,35 +2363,33 @@ async def _heal_completed(actions: Actions, grandancestor: str, phantom: str) ->
 async def _report_half_healed_phantom(
     actions: Actions, phantom: str, grandancestor: str,
 ) -> None:
-    """A flagged-but-incomplete heal (decision ee012ebc): false_mint landed, the pointer
-    unwind never did. NEVER auto-completed here, on purpose — real generations may have
-    been minted on top of the phantom since the interruption (exactly what happened to
-    the three specimens this class was first found from), and finishing the unwind now
-    would run follow_binding against whatever seat CURRENTLY holds the live head,
-    rebinding it backward onto a stale ancestor and stranding every real mind and every
+    """A flagged-but-incomplete heal: false_mint landed, the pointer unwind never did.
+    Never auto-completed here, on purpose: real generations may have been minted on top
+    of the phantom since the interruption (exactly what happened to the three specimens
+    this class was first found from), and finishing the unwind now would run
+    follow_binding against whatever seat currently holds the live head, rebinding it
+    backward onto a stale ancestor and stranding every real mind and every
     seat-addressed message since. Surfaced for a human's own judgment via the standard
     obligation door, idempotent on the summary so a repeat sighting (this walk runs at
     every mint) converges on one Thread rather than paging every caller who passes
     through here.
 
-    NEVER RE-OPENS A RESOLVED THREAD (thread 672972a2, the widened status-regression's own
-    first live finding): `open_thread` is idempotent on the summary hash — it finds the
-    SAME Thread object whatever its current status and unconditionally re-asserts
-    status='open', so a human's own resolve was being overridden by this detector's very
-    next sweep, every 15 minutes, forever (status-regression's never-flipped check, 3f36e69,
-    caught it live: resolved seconds before, reopened seconds after). The condition being
-    STILL PRESENT is real and worth saying — but re-opening a thread a human already closed
-    is not this detector's call. If the thread already exists and currently reads
-    status='resolved', this ANNOTATES it with the still-present sighting instead of calling
-    open_thread at all.
+    Never re-opens a resolved thread: `open_thread` is idempotent on the summary hash, it
+    finds the same Thread object whatever its current status and unconditionally
+    re-asserts status='open', so a human's own resolve was being overridden by this
+    detector's very next sweep, every 15 minutes, forever (a live check caught it: resolved
+    seconds before, reopened seconds after). The condition being still present is real and
+    worth saying, but re-opening a thread a human already closed is not this detector's
+    call. If the thread already exists and currently reads status='resolved', this
+    annotates it with the still-present sighting instead of calling open_thread at all.
 
-    STILL-OPEN GETS THE SAME TREATMENT (operator ruling on thread 2a280e07, mail 9240 —
-    "fix the sources"): a thread already open from an earlier sweep needs no re-write
-    either — kind/summary/owner/status were all identical every 15 minutes for the live
-    specimen this was measured from (1,119 identical rows on one Thread, thread 2a280e07's
-    own live count). Only a genuinely NEW sighting (no Thread canon exists yet) calls
-    open_thread at all now; every repeat sweep of an already-open or already-resolved
-    Thread annotates instead — same no-write outcome, still records "still present"."""
+    Still-open gets the same treatment, per an operator ruling to fix the sources: a
+    thread already open from an earlier sweep needs no re-write either, kind/summary/
+    owner/status were all identical every 15 minutes for the live specimen this was
+    measured from (1,119 identical rows on one Thread). Only a genuinely new sighting (no
+    Thread canon exists yet) calls open_thread at all now; every repeat sweep of an
+    already-open or already-resolved Thread annotates instead, same no-write outcome,
+    still records "still present"."""
     logger.warning(
         "half-healed phantom detected: %s (ancestor %s's succeeded_by never restored)",
         phantom, grandancestor)
@@ -2460,7 +2414,7 @@ async def _report_half_healed_phantom(
             source=_HALF_HEAL_SRC)
         return
     if current_status is not None:
-        # already open from an earlier sweep — nothing has changed, annotate rather than
+        # already open from an earlier sweep, nothing has changed, annotate rather than
         # reassert kind/summary/owner/status identically on every 15-minute tick
         await annotate_thread(
             actions, canon,
@@ -2480,40 +2434,40 @@ async def correct_succession(
     actions: Actions, *, agent_id: str, value: str, because: str, actor: str,
     override_live: bool = False,
 ) -> dict[str, Any]:
-    """THE SANCTIONED DOOR FOR `succeeded_by` (msg 7677/7680, decision 76d43073's own
-    finding — >=25 half-heal-detect threads, "genuinely live, NOT bulk-closeable, but
-    bulk-REVIEWABLE", and no verb anywhere touched this property; a raw assert_property
-    from outside the MCP surface is exactly what a2cf8405 rules against, and the auto-mode
-    classifier caught it before it ran). Third-party, `rehold_seat`-shaped: gathers its
-    own refusal evidence, writes once, receipts both sides of the change.
+    """The sanctioned door for `succeeded_by`: a batch of half-heal-detect threads were
+    found genuinely live, not bulk-closeable, but bulk-reviewable, and no verb anywhere
+    touched this property; a raw assert_property from outside the MCP surface is exactly
+    what house policy rules against, and the auto-mode classifier caught it before it ran.
+    Third-party, `rehold_seat`-shaped: gathers its own refusal evidence, writes once,
+    receipts both sides of the change.
 
     `value=""` retracts the pointer to unset (the same NOT-NULL-safe empty-string
     sentinel `_debounce_roundtrip`/`_fold_zero_turn_ancestors` already use for a
-    compensating retraction) — never a delete; the stale assertion this supersedes stays
+    compensating retraction), never a delete; the stale assertion this supersedes stays
     in history, exactly the append-only law every other correction door in this house
     already holds to.
 
-    THE LIVENESS GUARD mirrors `retire_agent`'s SHAPE, not its exact CHECK (this corrects
-    a PROPERTY on the named agent itself, not a seat's holder): `agent_id` reading LIVE
-    right now refuses by default — a mind still active is not settled history yet, and
+    The liveness guard mirrors `retire_agent`'s shape, not its exact check (this corrects
+    a property on the named agent itself, not a seat's holder): `agent_id` reading live
+    right now refuses by default. A mind still active is not settled history yet, and
     correcting its own succession record out from under it is exactly the "two signals
-    disagree" shape this house's own population practice warns against — `override_live
-    =True` names that as a deliberate act, the same escape hatch `retire_agent` already
-    carries for the identical reason. BUT the check itself is `mounts.
-    agent_liveness_exact`, never `retire_agent`'s own lineage-wide `agent_liveness` — a
-    live specimen mid-batch (msg 7677/7680) caught the exact false positive
-    `follow_binding`'s own guard was built to avoid earlier the same night: every
-    correction target here is, BY THE VERY NATURE of a half-heal repair, a historical
-    ancestor whose lineage is very likely CURRENTLY active — the widened check would read
-    it "live" off its own descendant's fresh mount row and refuse nearly the whole batch,
-    the opposite of what a "is THIS SPECIFIC ancestor still active" question should ask.
+    disagree" shape this house's own population practice warns against.
+    `override_live=True` names that as a deliberate act, the same escape hatch
+    `retire_agent` already carries for the identical reason. But the check itself is
+    `mounts.agent_liveness_exact`, never `retire_agent`'s own lineage-wide
+    `agent_liveness`: a live specimen mid-batch caught the exact false positive
+    `follow_binding`'s own guard was built to avoid. Every correction target here is, by
+    the very nature of a half-heal repair, a historical ancestor whose lineage is very
+    likely currently active. The widened check would read it "live" off its own
+    descendant's fresh mount row and refuse nearly the whole batch, the opposite of what a
+    "is this specific ancestor still active" question should ask.
 
-    THE RECEIPT NAMES BOTH SIDES OF THE CHANGE AND ITS OWN CONSEQUENCE, not just the
-    write: `was`/`now` for the property itself, and `lineage_head` BEFORE and AFTER the
-    write for `agent_id` — the exact invariant the batch's own dry-run was built to
-    verify per pair (a retraction that quietly moves the resolved head is the live-sibling
-    -rebind class of bug this whole lane has been chasing all night; `head_moved` says so
-    in the receipt itself rather than leaving a caller to re-derive it)."""
+    The receipt names both sides of the change and its own consequence, not just the
+    write: `was`/`now` for the property itself, and `lineage_head` before and after the
+    write for `agent_id`, the exact invariant the batch's own dry-run was built to verify
+    per pair (a retraction that quietly moves the resolved head is the live-sibling-rebind
+    class of bug this lane has been chasing; `head_moved` says so in the receipt itself
+    rather than leaving a caller to re-derive it)."""
     because = (because or "").strip()
     if not because:
         return {"error": "because is required — correcting a succession pointer is a "
@@ -2556,38 +2510,37 @@ async def is_occupied_by_a_live_body(
     pool: asyncpg.Pool, agent_id: str, *, agents_json: Any = None,
     read_exe: Any = None, read_cwd: Any = None,
 ) -> bool:
-    """OCCUPANCY, never IDENTITY (#178's own boundary, Ptah's framing msg 5219) — does
-    `agent_id`'s own `agent_mounts` row back a body the HARNESS confirms is actually
-    running RIGHT NOW (`registry_census`'s own `matched` set — harness roster AND /proc
-    both agree)? THE HALCYON SPECIMEN (thread 6b1efacb, 2026-08-18): agent_has_acted only
-    ever asks whether this generation left a GRAPH trace — a body minted and phantom-
-    folded 4-6 seconds later, before its own first MCP write could register as an 'act',
-    is graph-silent but genuinely alive. A generation this returns True for is YOUNG,
-    never a phantom, whatever its own graph-activity looks like — checked BEFORE
-    `agent_has_acted` decides a candidate is foldable, never instead of it (a body that
-    both acted AND is occupied is doubly protected, not double-counted).
+    """OCCUPANCY, never IDENTITY: does `agent_id`'s own `agent_mounts` row back a session
+    the harness confirms is actually running right now (`registry_census`'s own `matched`
+    set, where the harness roster and /proc both agree)? A generation can be minted and
+    then phantom-folded a few seconds later, before its own first MCP write could
+    register as an "act" - graph-silent but genuinely alive. `agent_has_acted` only ever
+    asks whether this generation left a graph trace, so a generation this function
+    returns True for is young, never a phantom, whatever its own graph activity looks
+    like. It must be checked before `agent_has_acted` decides a candidate is foldable,
+    never instead of it: a session that both acted and is occupied is doubly protected,
+    not double-counted.
 
-    Public (not `_`-prefixed) and pool-based, not Actions-based — read-only, and
+    Public (not `_`-prefixed) and pool-based, not Actions-based - read-only, since
     `mailbox.py`'s own send() eligibility gate needs this exact same check without
-    wrapping a pool in an Actions it never writes through.
+    wrapping a pool in an Actions object it never writes through.
 
     Injectable (`agents_json`/`read_exe`/`read_cwd`), same seam discipline as
-    `registry_census` itself — the real defaults fire on every production mint, an
-    accepted cost (a subprocess + a bounded /proc walk) for a safety-critical check on a
-    path that is not a hot loop.
+    `registry_census` itself: the real defaults fire on every production mint, an
+    accepted cost (a subprocess plus a bounded /proc walk) for a safety-critical check on
+    a path that is not a hot loop.
 
-    THE ONE LIVENESS AUTHORITY, EXTENDED FOR A NON-CLAUDE BODY (thread 879c97b9 piece 3,
-    Thoth's guard #2): the Claude-only harness registry `matched` set can never confirm a
-    non-Claude process by construction — it shells out to `claude agents --json` and
-    verifies the pid IS the claude binary. Rather than teach `registry_census` to verify
-    arbitrary foreign binaries via /proc (fragile, one-off per harness), a body the census
-    structurally cannot see gets its OWN path: `registry_census`'s `pulse_live` (a
-    self-reported freshness, 5-minute window — STRICTER than the Claude path's 15-minute
-    mount-staleness window this function's own callers gate liveness with, since a
-    self-report is weaker evidence than a verified census match). A stale non-Claude seat
-    (no pulse within 5 minutes) reads cold exactly like a stale Claude one — this is a
-    genuine freshness check, not a blanket exemption for anything non-Claude. The Claude
-    path (`matched`) is entirely unchanged."""
+    Extended for a non-Claude session beyond the Claude-only harness registry: the
+    `matched` set can never confirm a non-Claude process by construction, since it shells
+    out to `claude agents --json` and verifies the pid is the claude binary. Rather than
+    teach `registry_census` to verify arbitrary foreign binaries via /proc (fragile,
+    one-off per harness), a session the census structurally cannot see gets its own path:
+    `registry_census`'s `pulse_live` (a self-reported freshness, 5-minute window, stricter
+    than the Claude path's 15-minute mount-staleness window this function's own callers
+    gate liveness with, since a self-report is weaker evidence than a verified census
+    match). A stale non-Claude seat (no pulse within 5 minutes) reads cold exactly like a
+    stale Claude one: this is a genuine freshness check, not a blanket exemption for
+    anything non-Claude. The Claude path (`matched`) is entirely unchanged."""
     from src.orchestrator.mounts import registry_census
 
     census = await registry_census(
@@ -2601,56 +2554,53 @@ async def _fold_zero_turn_ancestors(
     actions: Actions, ancestor_id: str, ancestor_oid: uuid.UUID, now: datetime, *,
     agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
 ) -> tuple[str, uuid.UUID]:
-    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS (operator ruling d3531cd8, 2026-07-27):
-    'the mind claiming to be your predecessor didn't have any TURNS' is not a predecessor —
-    a generation minted but never acted upon must never appear as a link in the inheritance
-    chain, count a reign numeral, or intercept a handoff. Canonical repro: /compact then
-    /model back-to-back with zero turns between minted TWO generations (a phantom, then its
-    heir) for one real seam.
+    """SUCCESSION FOLLOWS TURNS, NOT HARNESS EVENTS: a generation claiming to be a
+    predecessor that never had any turns is not a predecessor - a generation minted but
+    never acted upon must never appear as a link in the inheritance chain, count a reign
+    numeral, or intercept a handoff. Canonical repro: /compact then /model back-to-back
+    with zero turns between minted two generations (a phantom, then its heir) for one
+    real seam.
 
-    Called by BOTH real mint call sites (live_succession, register_agent) right before
-    they call mint_heir — not from inside mint_heir itself, since mint_heir's return tuple
-    is unpacked by ~20 test call sites and threading the resolved ancestor back out would
-    mean touching every one of them for a fact the caller already has before it calls in.
-    Two call sites is a tractable, by-hand audit surface (grep mint_heir\\( in src/ to
-    verify — there are exactly two).
+    Called by both real mint call sites (live_succession, register_agent) right before
+    they call mint_heir, not from inside mint_heir itself, since mint_heir's return tuple
+    is unpacked by roughly 20 test call sites and threading the resolved ancestor back
+    out would mean touching every one of them for a fact the caller already has before it
+    calls in. Two call sites is a tractable, by-hand audit surface (grep mint_heir\\( in
+    src/ to verify - there are exactly two).
 
-    EXTENDS THE MINT GATE, NOT A NEW ONE BESIDE IT (Thoth LX, msg 1402, 2026-07-27, citing
-    ruling a882b334 + thread a3d49d91/decision 0adfd32f — the SEAM PING-PONG cure that
-    built _debounce_roundtrip): that cure coalesces DUPLICATE OBSERVATIONS of ONE real seam
-    event (two observers racing the same /model). This is the OTHER residual class its own
-    post-mortem named (decision 035029ae): TWO REAL, DIFFERENT seam events back-to-back
-    (compact, then swap) with no turns between. The OUTCOME has to differ, deliberately —
-    a round-trip returns to a value THIS LINEAGE ALREADY HAD, so nothing new ever happened
-    and _debounce_roundtrip heals to NO mint at all; a compact-then-swap reaches a
-    GENUINELY NEW model, which a882b334 says still deserves a numeral — coalescing here
-    means MINT ONCE, not MINT ZERO, so this folds the phantom and lets the caller's normal
-    mint_heir call proceed against the corrected ancestor, rather than returning a heal
-    dict that skips minting the way _debounce_roundtrip's own round-trip case correctly
-    does. What IS shared, on purpose: the SAME window (_SEAM_DEBOUNCE_SECS — this is the
-    mint gate's actless-head window, not a second one), the SAME acts-check
-    (agent_has_acted), and the SAME false_mint/retired stamp shape.
+    Extends the existing mint gate rather than adding a new one beside it: an earlier fix
+    (which built _debounce_roundtrip) coalesces duplicate observations of one real seam
+    event (two observers racing the same /model). This is the other residual class: two
+    real, different seam events back-to-back (compact, then swap) with no turns between.
+    The outcome has to differ, deliberately - a round-trip returns to a value this
+    lineage already had, so nothing new ever happened and _debounce_roundtrip heals to no
+    mint at all; a compact-then-swap reaches a genuinely new model, which still deserves
+    a numeral - coalescing here means mint once, not mint zero, so this folds the phantom
+    and lets the caller's normal mint_heir call proceed against the corrected ancestor,
+    rather than returning a heal dict that skips minting the way _debounce_roundtrip's
+    own round-trip case correctly does. What is shared, on purpose: the same window
+    (_SEAM_DEBOUNCE_SECS, the mint gate's actless-head window, not a second one), the
+    same acts-check (agent_has_acted), and the same false_mint/retired stamp shape.
 
-    Walks up through any CONSECUTIVE run of zero-turn ancestors within that window (the
+    Walks up through any consecutive run of zero-turn ancestors within that window (the
     same 64-iteration bound mint_heir's own grave-avoidance loop uses), un-minting each,
-    until the chain lands on either a REAL (witnessed) ancestor, the lineage root, or a
-    hop outside the window. A root (no succeeded_from of its own — nothing minted it) is
-    NEVER folded; it has nothing to fold into. Idempotent: an already-folded phantom
-    (false_mint already true AND the ancestor's succeeded_by pointer actually unwound)
-    halts immediately, unchanged — safe to re-run the fleet sweep below as often as
-    wanted. A phantom flagged false_mint WITHOUT the pointer unwind (an interrupted heal
-    — decision ee012ebc) is NOT treated as done: it is reported via
-    _report_half_healed_phantom and the walk still halts there, but never silently, and
-    never auto-completed (see that helper's own docstring for why finishing it here
-    would be unsafe, not merely overdue).
+    until the chain lands on either a real (witnessed) ancestor, the lineage root, or a
+    hop outside the window. A root (no succeeded_from of its own, nothing minted it) is
+    never folded; it has nothing to fold into. Idempotent: an already-folded phantom
+    (false_mint already true and the ancestor's succeeded_by pointer actually unwound)
+    halts immediately, unchanged - safe to re-run the fleet sweep below as often as
+    wanted. A phantom flagged false_mint without the pointer unwind (an interrupted heal)
+    is not treated as done: it is reported via _report_half_healed_phantom and the walk
+    still halts there, but never silently, and never auto-completed (see that helper's
+    own docstring for why finishing it here would be unsafe, not merely overdue).
 
-    OCCUPANCY CHECKED BEFORE EVERY FOLD (obligation 6b1efacb, halcyon specimen, 2026-08-
-    18): `is_occupied_by_a_live_body` runs alongside `agent_has_acted` — a candidate
-    generation whose OWN `agent_mounts` row backs a harness-confirmed live body is never
-    folded, whatever its graph-activity says. A mint-then-immediate-fold sequence (this
-    walk's own second door, or the 15-minute sweep) used to have only `agent_has_acted`
-    to ask, and a body 4-6 seconds old has usually made no graph write of its own yet —
-    graph-silent is not the same fact as dead."""
+    Occupancy is checked before every fold: `is_occupied_by_a_live_body` runs alongside
+    `agent_has_acted` - a candidate generation whose own `agent_mounts` row backs a
+    harness-confirmed live session is never folded, whatever its graph activity says. A
+    mint-then-immediate-fold sequence (this walk's own second path, or the 15-minute
+    sweep) used to have only `agent_has_acted` to ask, and a session a few seconds old has
+    usually made no graph write of its own yet - graph-silent is not the same fact as
+    dead."""
     cur_id, cur_oid = ancestor_id, ancestor_oid
     for _ in range(64):
         meta = {r["name"]: (r["v"], r["at"]) for r in await actions.pool.fetch(
@@ -2662,37 +2612,36 @@ async def _fold_zero_turn_ancestors(
             grandancestor, _ = meta.get("succeeded_from", (None, None))
             if grandancestor and not await _heal_completed(actions, grandancestor, cur_id):
                 await _report_half_healed_phantom(actions, cur_id, grandancestor)
-            break  # a flagged row's own branch stops here either way — complete or
+            break  # a flagged row's own branch stops here either way: complete or
                    # half, this walk never proceeds past it
         if "minted_because" not in meta:
-            break  # a root — nothing minted it, nothing to fold
+            break  # a root, nothing minted it, nothing to fold
         grandancestor, _ = meta.get("succeeded_from", (None, None))
         minted_at = meta["minted_because"][1]
         if not grandancestor:
             break
         if minted_at is None or (now - minted_at).total_seconds() > _SEAM_DEBOUNCE_SECS:
-            break  # outside the mint gate's own window — too old to call 'back-to-back'
+            break  # outside the mint gate's own window, too old to call "back-to-back"
         grand_oid = await actions.pool.fetchval(
             "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", grandancestor)
         if grand_oid is None:
             break
         if await agent_has_acted(actions, cur_id, exclude=[cur_oid, grand_oid],
                                  settled_after=minted_at):
-            break  # a real mind lived here — nothing to fold
+            break  # a real mind lived here, nothing to fold
         if await is_occupied_by_a_live_body(
             actions.pool, cur_id, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd,
         ):
-            break  # a harness-confirmed live body sits here — young, not a phantom
+            break  # a harness-confirmed live session sits here, young, not a phantom
         do = EvidenceClass.DIRECT_OBSERVATION
         conf = confidence_for(do)
-        # ATOMIC (decision ee012ebc's own fix, applied here too — thread 685d24a0):
-        # these four writes either all land or none do. Before this fix they were four
-        # independent unguarded statements — the SAME half-heal shape _debounce_
-        # roundtrip's own interruption produced, just with a smaller blast radius (this
-        # walk only ever touches the NOT-YET-SUPERSEDED head, so an interruption here
-        # can't produce the dangerous stale-ancestor-rebind shape a LATER interruption
-        # elsewhere could) — but the class is worth closing everywhere it appears, not
-        # only where it was first found.
+        # ATOMIC: these four writes either all land or none do. Before this fix they were
+        # four independent unguarded statements, the same half-heal shape an earlier
+        # interruption in _debounce_roundtrip produced, just with a smaller blast radius
+        # (this walk only ever touches the not-yet-superseded head, so an interruption
+        # here can't produce the dangerous stale-ancestor-rebind shape a later
+        # interruption elsewhere could), but the class is worth closing everywhere it
+        # appears, not only where it was first found.
         from src.orchestrator.seats import follow_binding
         async with actions.atomic() as a:
             for k, v in (("false_mint", True), ("retired", True),
@@ -2707,18 +2656,17 @@ async def _fold_zero_turn_ancestors(
             await a.execute(
                 "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
                 grandancestor, cur_id)
-            # THE SAME ESTATE-TRANSFER LAW mint_heir HOLDS (WAVE 27 BUG 4, thread
-            # bc517864/afd27e1a's own "a different door" finding): this walk is a SECOND
-            # mail-reassignment site, mint_heir's own sibling, and until this fix it only
-            # ever did the fleet_messages half above — a phantom generation folded here
-            # could carry a LEASE (message_recipients row, read_at IS NULL — the phantom
-            # itself read a message but never settled it before being folded) that then
-            # sat orphaned on the now-retired phantom's own id, invisible to the
-            # grandancestor it was folded into. Same fix, same filter: only a GENUINELY
-            # SETTLED row (read_at IS NOT NULL — real memory, not a lease) carries onto
-            # the grandancestor; a bare lease carries nothing, so the grandancestor's own
-            # next inbox() finds that message fresh — never silently vanished, never
-            # falsely pre-settled.
+            # THE SAME ESTATE-TRANSFER RULE mint_heir HOLDS: this walk is a second
+            # mail-reassignment site, mint_heir's own sibling, and it needs to do both
+            # halves of that transfer, not just the fleet_messages half above. A phantom
+            # generation folded here could carry a lease (message_recipients row, read_at
+            # IS NULL, meaning the phantom itself read a message but never settled it
+            # before being folded) that then sat orphaned on the now-retired phantom's own
+            # id, invisible to the grandancestor it was folded into. Same fix, same
+            # filter: only a genuinely settled row (read_at IS NOT NULL, real memory, not
+            # a lease) carries onto the grandancestor; a bare lease carries nothing, so
+            # the grandancestor's own next inbox() finds that message fresh, never
+            # silently vanished, never falsely pre-settled.
             await a.execute(
                 "INSERT INTO message_recipients "
                 "(message_id, agent_id, delivered_at, read_at, deliveries) "
@@ -2735,21 +2683,20 @@ async def _fold_zero_turn_ancestors(
 async def _skip_false_mint_ancestors(
     actions: Actions, agent_id: str, oid: uuid.UUID,
 ) -> tuple[str, uuid.UUID]:
-    """THE REANIMATION FIX (obligation 6b1efacb, halcyon specimen, 2026-08-18):
-    `register_agent`'s reanimation-of-retired path hands `_fold_zero_turn_ancestors` the
-    RETIRED object ITSELF as the presumed ancestor to fold from — but that function's own
-    contract treats an ALREADY false_mint starting node as a terminal halt (correct MID-
-    WALK, where it means "a prior fold already resolved this and I should stop here"),
-    so it returned the phantom completely unchanged, and the reanimated heir's
-    `succeeded_from` chained onto a folded phantom instead of a real mind — the halcyon
-    xxiii specimen exactly (minted FROM the already-folded xxii, then itself folded 4-6s
-    later by the SAME defect this file's other half fixes).
+    """THE REANIMATION FIX: `register_agent`'s reanimation-of-retired path hands
+    `_fold_zero_turn_ancestors` the retired object itself as the presumed ancestor to
+    fold from - but that function's own contract treats an already false_mint starting
+    node as a terminal halt (correct mid-walk, where it means "a prior fold already
+    resolved this and I should stop here"), so it returned the phantom completely
+    unchanged, and the reanimated heir's `succeeded_from` chained onto a folded phantom
+    instead of a real mind.
 
-    Walks FORWARD past any CONSECUTIVE false_mint ancestors via their own `succeeded_from`,
-    landing on the first ELIGIBLE (non-false_mint) ancestor, or the lineage root if the
-    whole visible chain is false_mint. A no-op when `agent_id` itself isn't false_mint —
-    every OTHER mint path (this is called only from the reanimation arm) is unaffected.
-    Same 64-hop bound as every other succeeded_from walk in this file."""
+    Walks forward past any consecutive false_mint ancestors via their own
+    `succeeded_from`, landing on the first eligible (non-false_mint) ancestor, or the
+    lineage root if the whole visible chain is false_mint. A no-op when `agent_id` itself
+    isn't false_mint - every other mint path (this is called only from the reanimation
+    arm) is unaffected. Same 64-hop bound as every other succeeded_from walk in this
+    file."""
     cur_id, cur_oid = agent_id, oid
     for _ in range(64):
         flagged = await actions.pool.fetchval(
@@ -2763,7 +2710,7 @@ async def _skip_false_mint_ancestors(
             "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1",
             cur_oid)
         if not pred:
-            return cur_id, cur_oid  # a false-minted root — nothing eligible above it
+            return cur_id, cur_oid  # a false-minted root, nothing eligible above it
         pred_oid = await actions.pool.fetchval(
             "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", pred)
         if pred_oid is None:
@@ -2775,28 +2722,28 @@ async def _skip_false_mint_ancestors(
 async def reinstate_generation(
     actions: Actions, agent_id: str, *, because: str, actor: str,
 ) -> dict[str, Any]:
-    """THE FOLD'S INVERSE (obligation 6b1efacb, halcyon specimen, 2026-08-18) —
-    `_fold_zero_turn_ancestors` has no undo today; this is it, built for exactly the
-    incident that named it: a genuinely live generation wrongly phantom-folded.
+    """THE FOLD'S INVERSE: `_fold_zero_turn_ancestors` had no undo before this was added;
+    this is it, built for the case where a genuinely live generation was wrongly
+    phantom-folded.
 
-    Retracts `false_mint`/`retired` on `agent_id` (a fresh assertion of `false` on each —
-    the SAME append-only law every property in this codebase follows, never a rewrite of
+    Retracts `false_mint`/`retired` on `agent_id` (a fresh assertion of `false` on each,
+    the same append-only rule every property in this codebase follows, never a rewrite of
     the fold's own record, which stays walkable) and re-links `succeeded_from` to the
-    NEAREST ELIGIBLE (non-false_mint) ancestor in its own chain — walking PAST any
-    ancestor that was ITSELF correctly, separately folded (never blindly restoring the
-    immediate predecessor, which may still be a legitimate phantom this door has no
-    business un-folding). Moves the seat binding — any active `holds` link anywhere in
-    this lineage — onto `agent_id`, the exact inverse of the fold's own `follow_binding`
-    call, so a seat-addressed DM reaches the reinstated generation immediately.
+    nearest eligible (non-false_mint) ancestor in its own chain, walking past any
+    ancestor that was itself correctly, separately folded (never blindly restoring the
+    immediate predecessor, which may still be a legitimate phantom this call has no
+    business un-folding). Moves the seat binding, any active `holds` link anywhere in
+    this lineage, onto `agent_id`, the exact inverse of the fold's own `follow_binding`
+    call, so a seat-addressed message reaches the reinstated generation immediately.
 
-    RECEIPT-VERIFIED: returns exactly what changed (`{"false_mint": {"old","new"}, ...}`),
-    never a bare success flag — a repair door with no visible effect is worse than one
+    Result-verified: returns exactly what changed (`{"false_mint": {"old","new"}, ...}`),
+    never a bare success flag - a repair call with no visible effect is worse than one
     that refuses outright.
 
-    REFUSES, WRITES NOTHING, when `agent_id` names no known Agent object, or when it is
-    not currently false_mint/retired at all — reinstating a generation that was never
-    folded is not this door's job, and a caller asking for it almost certainly named the
-    wrong id."""
+    Refuses, writes nothing, when `agent_id` names no known Agent object, or when it is
+    not currently false_mint/retired at all - reinstating a generation that was never
+    folded is not this function's job, and a caller asking for it almost certainly named
+    the wrong id."""
     oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
     if oid is None:
@@ -2814,9 +2761,9 @@ async def reinstate_generation(
     old_predecessor = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
-    # WALK PAST any consecutive false_mint ancestor to the nearest ELIGIBLE one — the same
+    # Walk past any consecutive false_mint ancestor to the nearest eligible one, the same
     # walk _skip_false_mint_ancestors does for the reanimation path, applied here to the
-    # PREDECESSOR chain instead of the entry id (this function's own `agent_id` is the
+    # predecessor chain instead of the entry id (this function's own `agent_id` is the
     # one being un-folded, not the one being skipped).
     eligible, eligible_oid = old_predecessor, None
     hops = 0
@@ -2871,19 +2818,19 @@ _AGENT_PROJECT_LINK_TYPES = ("works_in", "governs")
 async def move_agent_project_links(
     actions: Actions, from_oid: uuid.UUID, to_oid: uuid.UUID, actor: str, now: datetime,
 ) -> dict[str, int]:
-    """Re-point every live works_in/governs edge FROM `from_oid` onto `to_oid` — invalidate
-    + create, the SAME pattern `_move_project_estate`/`_move_agent_estate`/`_move_seat_
-    estate` already use (thread 20af2c95, measured 906 of 6,245 fleet-wide, 2026-08-03),
-    applied here to an AGENT's own OUTBOUND project edges instead of a project's inbound
-    ones. Two callers, one implementation, per Thoth's own instruction not to write a
-    fourth estate-mover: `mint_heir` (prospective — an ancestor's edges move to its fresh
-    heir on ordinary succession, the mechanism that was missing entirely) and `folds.
-    _move_agent_estate` (a DIFFERENT, related gap — fold_agent's own estate-move never
-    covered works_in/governs at all, only mail/mounts/threads; reconcile_agent_fold
-    inherits the fix automatically since it calls the same function unchanged).
+    """Re-point every live works_in/governs edge from `from_oid` onto `to_oid`: invalidate
+    plus create, the same pattern `_move_project_estate`/`_move_agent_estate`/`_move_seat_
+    estate` already use (measured 906 of 6,245 fleet-wide), applied here to an agent's
+    own outbound project edges instead of a project's inbound ones. Two callers, one
+    implementation, to avoid writing a fourth estate-mover: `mint_heir` (prospective, an
+    ancestor's edges move to its fresh heir on ordinary succession, the mechanism that was
+    missing entirely) and `folds._move_agent_estate` (a different, related gap:
+    fold_agent's own estate-move never covered works_in/governs at all, only
+    mail/mounts/threads; reconcile_agent_fold inherits the fix automatically since it
+    calls the same function unchanged).
 
     Idempotent (a link already live on `to_oid` is never duplicated) and history-
-    preserving — the invalidated link's row stays exactly where it was, in whose name and
+    preserving: the invalidated link's row stays exactly where it was, in whose name and
     why, walkable by any reader who asks "which generations ever worked here" via the raw
     `links` table rather than only `current_assertions`-style live reads. Returns
     {link_type: count moved}, empty when `from_oid` had nothing live to move."""
@@ -2911,19 +2858,20 @@ async def move_agent_project_links(
 async def backfill_agent_project_links(
     actions: Actions, *, actor: str, dry_run: bool = True, only_bases: set[str] | None = None,
 ) -> dict[str, Any]:
-    """THE ONE-TIME REPAIR for thread 20af2c95's own measured leak (906 of 6,245 live
-    works_in/governs edges fleet-wide, 2026-08-03, across 400 lineages) — the write-side
-    fixes (`mint_heir`, `folds._move_agent_estate`) stop it from growing further but never
-    touch what already exists. Every Agent whose canonical is NOT its lineage's current
+    """THE ONE-TIME REPAIR for a previously measured leak (906 of 6,245 live
+    works_in/governs edges fleet-wide, across roughly 400 lineages): the write-side fixes
+    (`mint_heir`, `folds._move_agent_estate`) stop it from growing further but never touch
+    what already exists. Every Agent whose canonical is not its lineage's current
     `living_head` but still carries a live works_in/governs edge gets that edge moved onto
-    the head, via the SAME `move_agent_project_links` both write-side fixes already use —
-    not a third implementation of the move itself, only a new ENUMERATION of who needs it.
+    the head, via the same `move_agent_project_links` both write-side fixes already use,
+    not a third implementation of the move itself, only a new enumeration of who needs
+    it.
 
-    DRY RUN IS THE DEFAULT (`dry_run=True`, mirroring `backfill_unbound_seats`'s own
-    established shape): reports the plan — how many edges each off-head agent would give
-    up, and which living head each resolves to — without writing anything. `only_bases`
+    Dry run is the default (`dry_run=True`, mirroring `backfill_unbound_seats`'s own
+    established shape): reports the plan (how many edges each off-head agent would give
+    up, and which living head each resolves to) without writing anything. `only_bases`
     scopes both the plan and the write to exactly those lineage bases (staged rollout,
-    same convention `backfill_unbound_seats`'s `only_seats` already uses) — every OTHER
+    same convention `backfill_unbound_seats`'s `only_seats` already uses); every other
     off-head agent is still counted in `total_off_head` so a scoped run reports honestly
     what it deliberately left untouched, never silently drops it from the number."""
     from src.orchestrator.folds import living_head
@@ -2980,37 +2928,36 @@ async def backfill_agent_project_links(
 async def invalidate_works_in(
     actions: Actions, agent_id: str, stale_project: str, *, because: str, actor: str,
 ) -> dict[str, Any]:
-    """A head drops ONE OF ITS OWN duplicate works_in edges — the toolkit hole named at
-    thread 8640a625 (decision fce39baa's own finding, task #128 piece 4): `unpeer` heals
-    peer_of, `detach_seat` heals managed_by, nothing healed works_in before this, so a
-    live agent carrying two SIMULTANEOUSLY-live works_in edges (John XVII's own specimen,
-    ->redmonth + ->ballgem, both self_declared, redmonth the stale side of decision
-    ebffcf4b's fork) had no repair path except raw SQL. orient() resolves through
-    whichever edge wins, so the duplicate is not cosmetic — it can hide a lineage's own
+    """A head drops one of its own duplicate works_in edges, closing a toolkit gap:
+    `unpeer` heals peer_of, `detach_seat` heals managed_by, but nothing healed works_in
+    before this, so a live agent carrying two simultaneously-live works_in edges (one
+    specimen: an agent pointing at two projects, both self-declared, one the stale side
+    of an earlier fork) had no repair path except raw SQL. orient() resolves through
+    whichever edge wins, so the duplicate is not cosmetic; it can hide a lineage's own
     threads/decisions from itself, live.
 
-    SAME POSTURE AS correct_house: self-scoped identity hygiene, never operator-fenced —
-    but the self-scoping lives ENTIRELY in the MCP wrapper's refusal to expose `agent_id`
+    Same posture as correct_house: self-scoped identity hygiene, never operator-fenced,
+    but the self-scoping lives entirely in the MCP wrapper's refusal to expose `agent_id`
     as a parameter (auto-filled from the caller's own resolved identity), exactly as
     correct_house's own underlying function takes an explicit `agent_id` and does not
     itself check agent_id==actor. This function stays generic/composable on purpose (the
     same shape backfill_agent_project_links needs for a future scripted sweep).
 
-    DELIBERATELY NARROW — a same-agent, same-generation cleanup, orthogonal to thread
-    20af2c95's own still-open question (does a PREDECESSOR generation's stale works_in
-    edge get moved on succession, write-side or read-side): this never touches an
-    ancestor's edges, never re-points anything onto a different agent, and does not use
-    the estate-move pattern `_move_agent_estate`/`move_agent_project_links` use for
-    exactly that reason — those move edges BETWEEN two agent objects; this invalidates
-    one of the SAME agent's own two edges. No mail/mounts/thread-ownership moves with it
-    (unlike a fold's estate move) because nothing there is project-scoped in a way a
-    dropped works_in edge would orphan.
+    Deliberately narrow: a same-agent, same-generation cleanup, orthogonal to the
+    still-open question of whether a predecessor generation's stale works_in edge gets
+    moved on succession, write-side or read-side. This never touches an ancestor's edges,
+    never re-points anything onto a different agent, and does not use the estate-move
+    pattern `_move_agent_estate`/`move_agent_project_links` use for exactly that reason:
+    those move edges between two agent objects; this invalidates one of the same agent's
+    own two edges. No mail/mounts/thread-ownership moves with it (unlike a fold's estate
+    move) because nothing there is project-scoped in a way a dropped works_in edge would
+    orphan.
 
-    Refuses LOUDLY on: blank `because`; `agent_id` not resolving to an active Agent;
+    Refuses loudly on: blank `because`; `agent_id` not resolving to an active Agent;
     `stale_project` resolving ambiguously (never guesses) or to no SoftwareProject at
     all; no active works_in edge from `agent_id` to it; or `stale_project` naming the
-    agent's ONLY live works_in edge — dropping your last project is not cleanup, it is
-    amputation; this verb exists for duplicates, never for a lone edge."""
+    agent's only live works_in edge. Dropping the last project is not cleanup, it is
+    amputation; this function exists for duplicates, never for a lone edge."""
     from src.orchestrator.projects import _resolve_project_ref
 
     because = (because or "").strip()
@@ -3058,24 +3005,23 @@ async def invalidate_works_in(
 async def retire_governs_edges(
     actions: Actions, agent_id: str, repos: list[str], *, because: str, actor: str,
 ) -> dict[str, Any]:
-    """Drop one or more of a THIRD-PARTY agent's own `governs` edges — the toolkit gap
-    named at thread a2d6bd36225f (atlas's 25-entry fragment governs list): a stale/off-
-    head Agent generation can carry live governs edges nobody wants moved forward
-    (`backfill_agent_project_links`'s own MOVE-onto-the-living-head repair is the wrong
-    shape for garbage — it would re-pollute a clean current head with exactly what this
-    retires instead), and `set_charter`/`charter_for` cannot see them at all (Seat-origin
-    only, by design — `invalidate_link(seat_oid, ...)`, never an Agent object). This is
-    the missing per-edge RETIRE, same generic/composable posture as `invalidate_works_in`
-    right above: never moves anything, never guesses which edges are garbage — the caller
-    names them, one call retires a whole batch under one shared `because`, each edge gets
-    its own compensating `invalidate_link` event.
+    """Drop one or more of a third-party agent's own `governs` edges, closing a toolkit
+    gap: a stale/off-head Agent generation can carry live governs edges nobody wants
+    moved forward (`backfill_agent_project_links`'s own move-onto-the-living-head repair
+    is the wrong shape for garbage; it would re-pollute a clean current head with exactly
+    what this retires instead), and `set_charter`/`charter_for` cannot see them at all
+    (seat-origin only, by design: `invalidate_link(seat_oid, ...)`, never an Agent
+    object). This is the missing per-edge retire, same generic/composable posture as
+    `invalidate_works_in` right above: never moves anything, never guesses which edges
+    are garbage. The caller names them, one call retires a whole batch under one shared
+    `because`, and each edge gets its own compensating `invalidate_link` event.
 
-    Refuses LOUDLY on: blank `because`; `agent_id` not resolving to an active Agent; an
-    empty `repos` list. Per-repo, this never aborts the whole batch on one bad name — a
+    Refuses loudly on: blank `because`; `agent_id` not resolving to an active Agent; an
+    empty `repos` list. Per-repo, this never aborts the whole batch on one bad name: a
     `repos` entry that doesn't resolve to a known SoftwareProject, or resolves but the
     agent carries no live `governs` edge to it, is reported in `not_found`/`no_edge`
     rather than raising, so the caller sees exactly what happened to every name it gave,
-    same discipline `set_charter`'s own `rejected` list already establishes."""
+    the same discipline `set_charter`'s own `rejected` list already establishes."""
     from src.orchestrator.projects import _resolve_project_ref
 
     because = (because or "").strip()
@@ -3125,80 +3071,73 @@ async def retire_governs_edges(
 
 
 async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -> uuid.UUID | None:
-    """Find-or-create a SoftwareProject CASE-INSENSITIVELY on its bare label (thread
-    69911d0c): both mint_heir and register_agent used to call
-    `create_or_find_object("SoftwareProject", f"repo:{label}", ...)` directly, a LITERAL,
-    case-SENSITIVE canonical lookup — so a case-differing pin (metron's own "xxit" vs an
-    upstream "Xxit", till's "RAMstein" vs "ramstein") did not compete over the `name`
-    property (task #137's own fix, agents.py's `if identity.project:` block), it MINTED A
-    WHOLE SEPARATE OBJECT. Measured live: till carries exactly this twin today —
-    repo:RAMstein (2026-07-14, till's own pin, not even a git checkout) and repo:ramstein
-    (2026-08-03, a real git repo, remote-verified) — 81 active+retired SoftwareProjects
-    fleet-wide, exactly one twin group.
+    """Find-or-create a SoftwareProject case-insensitively on its bare label: both
+    mint_heir and register_agent used to call `create_or_find_object("SoftwareProject",
+    f"repo:{label}", ...)` directly, a literal, case-sensitive canonical lookup, so a
+    case-differing pin (e.g. "xxit" vs an upstream "Xxit", or "RAMstein" vs "ramstein")
+    did not compete over the `name` property, it minted a whole separate object. Measured
+    live: one project carried exactly this duplicate, repo:RAMstein (an early pin, not
+    even a git checkout) alongside repo:ramstein (a real git repo, remote-verified), out
+    of 81 active+retired SoftwareProjects fleet-wide, exactly one duplicate group.
 
-    NEVER lowercase-normalizes — cassandra's own "Like-Us" is genuine upstream truth (the
-    git remote itself is mixed-case), so folding every match onto one canonical CASING
-    would be exactly the wrong fix; this only finds an EXISTING object regardless of case,
-    it never rewrites which case wins.
+    Never lowercase-normalizes: a mixed-case name like "Like-Us" can be genuine upstream
+    truth (the git remote itself is mixed-case), so folding every match onto one
+    canonical casing would be exactly the wrong fix; this only finds an existing object
+    regardless of case, it never rewrites which case wins.
 
-    Exactly ONE case-insensitive match: reuse it — a genuinely new project is never
-    blocked (zero matches falls through to the ordinary literal create). TWO OR MORE
-    existing matches (a PRE-EXISTING twin, till's own shape): not this function's call to
-    arbitrate which one is "real" — that is fold_project's deliberate, evidence-gated job
-    (thread 689d22a2), not a mint-time guess. Falls through to the literal, unchanged
-    lookup so an already-ambiguous population is never silently collapsed onto a random
-    pick.
+    Exactly one case-insensitive match: reuse it. A genuinely new project is never
+    blocked (zero matches falls through to the ordinary literal create). Two or more
+    existing matches (a pre-existing duplicate): not this function's call to arbitrate
+    which one is "real" - that is fold_project's deliberate, evidence-gated job, not a
+    mint-time guess. Falls through to the literal, unchanged lookup so an already-
+    ambiguous population is never silently collapsed onto a random pick.
 
-    REFUSES TO MINT (OR REUSE) A DEGENERATE BARE LABEL (thread 05793d4a — repo:?, minted
-    2026-07-18, name='?', no commits, no genuine identity): task #107's own capture.py
-    `_validate_repo_name` was declared "the single choke point" for every legitimate
-    SoftwareProject mint, but was never actually wired into THIS path (nor mint_heir's,
-    ingest_files', bootstrap's, or correct_project_name's own mints) — 4 of 5 live mint
-    sites bypassed it entirely, which is exactly how a bare '?' got through. ALL 5 NOW
-    COVERED (thread 09bde57e's own successor wave — the three remaining gaps this
-    docstring named): ingest_files (src/ingest/files.py) and bootstrap (bootstrap.py)
-    each now refuse loudly (return `{"error": ...}`) BEFORE minting; correct_project_name
-    (projects.py) validates the majority-vote `settled` name it's about to bless as
-    canonical, even though it mints no new object. Reuses that SAME regex here rather
-    than inventing a second, possibly-diverging definition. Returns
-    None rather than raising: this runs deep inside ordinary mount/succession traffic,
-    where a caller-side exception would be a much louder failure than a malformed label
-    deserves — the caller simply has nothing to link works_in to this turn, same as an
-    honestly-None project already does. Existing degenerate objects (repo:? itself) are
-    never reused either — a caller landing here with the same garbage label a second time
-    must not keep growing its edge count.
+    Refuses to mint (or reuse) a degenerate bare label (e.g. repo:? with name='?', no
+    commits, no genuine identity): capture.py's `_validate_repo_name` was meant to be the
+    single choke point for every legitimate SoftwareProject mint, but was never actually
+    wired into this path (nor mint_heir's, ingest_files', bootstrap's, or
+    correct_project_name's own mints) - most live mint sites bypassed it entirely, which
+    is exactly how a bare "?" got through. All mint sites are now covered: ingest_files
+    (src/ingest/files.py) and bootstrap (bootstrap.py) each now refuse loudly (return
+    `{"error": ...}`) before minting; correct_project_name (projects.py) validates the
+    majority-vote `settled` name it's about to bless as canonical, even though it mints
+    no new object. Reuses that same regex here rather than inventing a second, possibly-
+    diverging definition. Returns None rather than raising: this runs deep inside
+    ordinary mount/succession traffic, where a caller-side exception would be a much
+    louder failure than a malformed label deserves - the caller simply has nothing to
+    link works_in to this turn, same as an honestly-None project already does. Existing
+    degenerate objects (repo:? itself) are never reused either - a caller landing here
+    with the same garbage label a second time must not keep growing its edge count.
 
-    REFUSES THE OPERATOR'S OWN SENTINELS (console thread, repo:operator measured live:
-    the human's desk address, never a real repository, minted as a SoftwareProject
-    because `_REPO_NAME_RE` happily matches the bare word "operator"). This is THE choke
-    point for every project label an agent's own mount/succession ever mints through
-    (mount()'s register_agent via `identity.project`, mint_heir via `heir_project`) — both
-    call sites pass whatever `project`/`house` basename-guess or pin resolved to, with no
-    upstream filter for the house's own non-project sentinels. Excludes the WHOLE
-    `_OPERATOR_ACTORS` set (seats.py), not just the literal 'operator', for the same
-    reason `_seat_lineage_ancestor` already does — 'analyst:operator' and 'console' are
-    exactly as much "not a repository" as 'operator' is.
+    Refuses the operator's own sentinel names (e.g. repo:operator, measured live: the
+    human's desk address, never a real repository, minted as a SoftwareProject because
+    `_REPO_NAME_RE` happily matches the bare word "operator"). This is the choke point
+    for every project label an agent's own mount/succession ever mints through (mount()'s
+    register_agent via `identity.project`, mint_heir via `heir_project`); both call sites
+    pass whatever `project`/`house` basename-guess or pin resolved to, with no upstream
+    filter for the house's own non-project sentinels. Excludes the whole
+    `_OPERATOR_ACTORS` set (seats.py), not just the literal "operator", for the same
+    reason `_seat_lineage_ancestor` already does - "analyst:operator" and "console" are
+    exactly as much "not a repository" as "operator" is.
 
-    THE RENAME STUB (thread 04907b12, live specimen: xxit renamed to handlingtheloop —
-    the canonical STAYS repo:xxit forever, only the `name` property changes, per
-    rename_project's own law): a canonical-only lookup goes blind to that new name
-    the instant it's declared, so the very next mount whose pin already reads the new
-    label finds NO canonical match and MINTS A FRESH OBJECT under it — nine live
-    works_in edges landed on the stub before this was caught. `_resolve_software_project`
-    (projects.py) already treats canonical-string and winning-`name`-property matches as
-    ONE inseparable label lookup ("must be checked for a collision TOGETHER") for every
-    OTHER project verb; this mint-time choke point never got the same law. Checked only
-    when the canonical search comes up EMPTY (a canonical hit, even an ambiguous
-    case-differing one, is unchanged — this only closes the zero-match gap a rename
-    opens), and only trusted on an UNAMBIGUOUS single name match — two or more, exactly
-    like two or more canonical matches above, is not this function's call to arbitrate
-    and falls through to the literal mint-or-find."""
+    The rename stub (live specimen: a project renamed from "xxit" to "handlingtheloop",
+    where the canonical stays repo:xxit forever and only the `name` property changes, per
+    rename_project's own rule): a canonical-only lookup goes blind to that new name the
+    instant it's declared, so the very next mount whose pin already reads the new label
+    finds no canonical match and mints a fresh object under it - nine live works_in edges
+    landed on the stub before this was caught. `_resolve_software_project` (projects.py)
+    already treats canonical-string and winning-`name`-property matches as one
+    inseparable label lookup for every other project function; this mint-time choke
+    point never got the same treatment. Checked only when the canonical search comes up
+    empty (a canonical hit, even an ambiguous case-differing one, is unchanged; this only
+    closes the zero-match gap a rename opens), and only trusted on an unambiguous single
+    name match; two or more, exactly like two or more canonical matches above, is not
+    this function's call to arbitrate and falls through to the literal mint-or-find."""
     from src.orchestrator.capture import _REPO_NAME_RE
     from src.orchestrator.seats import _OPERATOR_ACTORS
-    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): this is
-    # a project-NAME sentinel filter ("operator"/"analyst:operator"/"console" are never
-    # real repo names), not a live authorization gate — no charter concept applies to
-    # whether a string is a genuine repository name.
+    # Reviewed and left alone: this is a project-name sentinel filter ("operator" /
+    # "analyst:operator" / "console" are never real repo names), not a live authorization
+    # gate; no charter concept applies to whether a string is a genuine repository name.
     if not _REPO_NAME_RE.fullmatch(project) or project in _OPERATOR_ACTORS:
         return None
     matches = await actions.pool.fetch(
@@ -3216,9 +3155,9 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
         if len(name_matches) == 1:
             canonical = name_matches[0]["canonical"]
     if canonical is None and not matches:
-        # A RETIRED CANONICAL IS AN ALIAS, NEVER A STUB (a rename migrates the canonical,
-        # Thoth DM 12786): a pin still spelling the pre-rename label resolves through
-        # object_aliases to the migrated object's CURRENT canonical, so it neither mints
+        # A retired canonical is an alias, never a stub (a rename migrates the
+        # canonical): a pin still spelling the pre-rename label resolves through
+        # object_aliases to the migrated object's current canonical, so it neither mints
         # nor re-stamps `name` with the stale spelling.
         canonical = await actions.pool.fetchval(
             "SELECT o.canonical FROM object_aliases al JOIN objects o ON o.id=al.object_id "
@@ -3226,27 +3165,26 @@ async def _resolve_or_mint_project(actions: Actions, project: str, actor: str) -
             f"repo:{project}")
     if canonical is None:
         canonical = f"repo:{project}"
-        # THE CORPSE CHECK, NOT THE ACTIVE-ONLY ONE (Marquee's own self-reinfecting-fold
-        # regression, ruling a73aafa2 — guarded above by
+        # The corpse check, not the active-only one (guarded above by
         # test_register_agent_mount_never_resurrects_a_merged_husks_name): the two lookups
         # above filter to status='active' on purpose (a merged/retired object must never
-        # win the case/name-collision arbitration), but that means a MERGED husk sharing
-        # this exact canonical falls through here too — `create_or_find_object` below still
-        # FINDS it (its find-or-create is on bare canonical, no status filter), it never
-        # mints a new row. Asking "does ANY object already hold this canonical" (not just
+        # win the case/name-collision arbitration), but that means a merged husk sharing
+        # this exact canonical falls through here too - `create_or_find_object` below still
+        # finds it (its find-or-create is on bare canonical, no status filter), it never
+        # mints a new row. Asking "does any object already hold this canonical" (not just
         # an active one) is the only question that actually predicts whether the create
-        # below mints — answering it with the active-only `matches`/`name_matches` result
+        # below mints; answering it with the active-only `matches`/`name_matches` result
         # would stamp `name` on the husk's own corpse and resurrect its pre-fold label.
         minted = not await actions.pool.fetchval(
             "SELECT 1 FROM objects WHERE type='SoftwareProject' AND canonical=$1", canonical)
     proj_id = await actions.create_or_find_object("SoftwareProject", canonical, actor)
     if minted:
-        # NEVER MINT WITHOUT A NAME ASSERTION (the general form of the operator-sentinel
+        # Never mint without a name assertion (the general form of the operator-sentinel
         # fix above): unlike `_mint_or_find_repo` (capture.py), which has always stamped
-        # `name` on a fresh mint, this path minted bare — every SoftwareProject reaching
-        # /projects through mount()/mint_heir with no OTHER name property fell straight to
+        # `name` on a fresh mint, this path minted bare - every SoftwareProject reaching
+        # /projects through mount()/mint_heir with no other name property fell straight to
         # resolve_label's canonical tier, leaking `repo:<label>` into the UI even for a
-        # perfectly legitimate label. `project` here IS the label that resolved the
+        # perfectly legitimate label. `project` here is the label that resolved the
         # canonical, so it is exactly what `name` should say.
         await actions.assert_property(proj_id, "name", project, actor,
                                       datetime.now(UTC), _CONF, evidence_class=_EC)
@@ -3259,87 +3197,87 @@ async def mint_heir(
     minting_door: str | None = None, upcoming_project: str | None = None,
     bind_seat: bool = True,
 ) -> tuple[str, uuid.UUID]:
-    """Mint the next generation of a lineage — ruling a882b334: a new MIND gets a new numeral,
-    and the seams that count as a new mind include mid-session ones (live model swap,
-    compaction), not just session death. Stamps the succession chain on both sides, passes the
-    seat (handle) down, and re-addresses the ancestor's unread DMs to the heir — the mailbox is
-    part of the estate (a DM sent to the old mind must reach whoever now holds the seat, or
-    every compaction would orphan in-flight mail).
+    """Mint the next generation of a lineage: a new mind gets a new numeral, and the
+    seams that count as a new mind include mid-session ones (live model swap,
+    compaction), not just session death. Stamps the succession chain on both sides,
+    passes the seat (handle) down, and re-addresses the ancestor's unread messages to the
+    heir; the mailbox is part of the estate (a message sent to the old mind must reach
+    whoever now holds the seat, or every compaction would orphan in-flight mail).
 
-    Takes `ancestor_id`/`ancestor_oid` AS GIVEN — folding any zero-turn phantom off the
-    front of the chain (ruling d3531cd8) is the CALLER's job, done via
-    _fold_zero_turn_ancestors BEFORE this is called (both real callers do). Kept out of
-    here on purpose: this function's return tuple is unpacked by ~20 call sites across the
-    test suite, and threading the resolved ancestor back out would mean changing every one
-    of them for a fact the caller already has in hand before it calls in.
+    Takes `ancestor_id`/`ancestor_oid` as given: folding any zero-turn phantom off the
+    front of the chain is the caller's job, done via _fold_zero_turn_ancestors before
+    this is called (both real callers do). Kept out of here on purpose: this function's
+    return tuple is unpacked by roughly 20 call sites across the test suite, and
+    threading the resolved ancestor back out would mean changing every one of them for a
+    fact the caller already has in hand before it calls in.
 
     `upcoming_project`, when the caller already knows it (register_agent's own
-    `identity.project`, moments before it asserts it — the heartbeat/live-swap call site
-    has no such reading and leaves this None): THE DUPLICATE-EDGE RACE, CLOSED (f6f11d78,
-    shares a root with 20af2c95's own perpetuation mechanism — see that thread's notes and
-    decision 5b217d13, 2026-08-04). The house-relink below and register_agent's later
-    identity.project assertion (agents.py:2121-2128) used to fire unconditionally in the
-    SAME call, sharing one `now` — any divergence between the seat's derived `house` (often
-    stale) and the session's fresh, correctly-resolved `identity.project` produced TWO live
-    works_in edges on the heir, byte-identical to the microsecond, which move_agent_project_
-    links then faithfully carries forward on every subsequent mint, forever, even after the
-    underlying disagreement is corrected. This is the MINIMAL write-side narrowing, not the
-    full answer — it stops NEW duplicates; it does not retroactively heal the 41 already-live
-    specimens (invalidate_works_in is the per-lineage repair for those).
+    `identity.project`, moments before it asserts it; the heartbeat/live-swap call site
+    has no such reading and leaves this None): this closes a duplicate-edge race. The
+    house-relink below and register_agent's later identity.project assertion used to
+    fire unconditionally in the same call, sharing one `now` - any divergence between
+    the seat's derived `house` (often stale) and the session's fresh, correctly-resolved
+    `identity.project` produced two live works_in edges on the heir, byte-identical to
+    the microsecond, which move_agent_project_links then faithfully carries forward on
+    every subsequent mint, forever, even after the underlying disagreement is corrected.
+    This is the minimal write-side narrowing, not the full answer: it stops new
+    duplicates; it does not retroactively heal the already-live specimens
+    (invalidate_works_in is the per-lineage repair for those).
 
     `bind_seat` (default True): whether the seat's own `holds` link follows this mint
-    (`follow_binding`, below). THE HOLDS-SANDWICH FIX (ruling recorded off Sekhmet's own
-    commits_to_agents diagnosis, WAVE 27/28 boundary): `_bind_before_spawn` mints a fresh
-    generation SERVER-SIDE before the body exists, purely so a pre-registered
-    `agent_mounts` row exists for the spawned session's own automount() to re-attach
-    through — that bookkeeping mint has done no real work and may never do any (it can be
-    superseded again within seconds by the actual resume/launch outcome). Moving `holds`
-    onto it anyway opened a real generation's own `holds` window into TWO pieces with a
-    phantom sandwiched in between — the holds link IS the fact of record for "who held
-    this seat at time T," so this was wrong data regardless of how few callers ever asked
-    that exact question. `_bind_before_spawn` passes `bind_seat=False` and re-binds the
-    seat to its own resolved ancestor directly instead (never to the fresh bookkeeping
-    heir) — every other caller keeps the default, unchanged."""
+    (`follow_binding`, below). This fixes a holds-sandwich bug: `_bind_before_spawn`
+    mints a fresh generation server-side before the session exists, purely so a
+    pre-registered `agent_mounts` row exists for the spawned session's own automount()
+    to re-attach through - that bookkeeping mint has done no real work and may never do
+    any (it can be superseded again within seconds by the actual resume/launch outcome).
+    Moving `holds` onto it anyway opened a real generation's own `holds` window into two
+    pieces with a phantom sandwiched in between - the holds link is the fact of record
+    for "who held this seat at time T," so this was wrong data regardless of how few
+    callers ever asked that exact question. `_bind_before_spawn` passes
+    `bind_seat=False` and re-binds the seat to its own resolved ancestor directly instead
+    (never to the fresh bookkeeping heir); every other caller keeps the default,
+    unchanged."""
     now = now or datetime.now(UTC)
     heir = next_generation(ancestor_id)
-    # A MINT NEVER LANDS ON A GRAVE (Ra's resurrection, 2026-07-17): after a same-lineage
-    # fold, the next numeral may name a MERGED object — create_or_find would resurrect it
-    # and the estate transfer would drag the living head's unread mail onto a corpse
-    # (witnessed: 10 unread on merged 443cd9d4-iii within the hour of its folding).
+    # A mint never lands on a grave: after a same-lineage fold, the next numeral may name
+    # a merged object - create_or_find would resurrect it and the estate transfer would
+    # drag the living head's unread mail onto a corpse (witnessed: 10 unread on a merged
+    # generation within the hour of its folding).
     #
-    # A GRAVE IS A HEAL, NOT ONLY A MERGE (msg 2325, live case: John/d5c671c1-xv): a heal
-    # (husk-heal / phantom-fold) never flips objects.status away from 'active' —
-    # compensating events only, per constitution 3 — so a healed canonical passes the
-    # status check above while still being a death in every sense that matters. Refuse to
-    # reuse it (same law as #107/#117: refuse, don't widen/search) rather than silently
-    # minting a real generation onto marks that record a false start.
+    # A grave is a heal, not only a merge (live case: one lineage's generation xv): a
+    # heal (husk-heal / phantom-fold) never flips objects.status away from 'active',
+    # compensating events only, so a healed canonical passes the status check above while
+    # still being a death in every sense that matters. Refuse to reuse it (refuse, don't
+    # widen/search) rather than silently minting a real generation onto marks that record
+    # a false start.
     #
-    # BUT NOT EVERY HEAL IS A DEATH — SOME ARE THIS SAME BREATH (caught by
+    # But not every heal is a death; some are this same breath (caught by
     # test_two_zero_turn_compactions_fold before this shipped): _fold_zero_turn_ancestors
-    # heals a zero-turn phantom and returns the CORRECTED ancestor for THIS SAME mint_heir
-    # call to mint against — next_generation() naturally reproduces the exact numeral it
-    # just folded, and reusing it there is the fold's whole point (MINT ONCE, not MINT
-    # ZERO, ruling d3531cd8), not a resurrection. The two heal cases share the identical
-    # false_mint/retired shape and are distinguished only by AGE: a heal still inside the
-    # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS — the SAME window the fold uses
-    # for its own back-to-back check, not a second one) is part of the seam being resolved
-    # right now; a heal older than that — John's, 20 hours cold — is a closed one-way door.
+    # heals a zero-turn phantom and returns the corrected ancestor for this same
+    # mint_heir call to mint against - next_generation() naturally reproduces the exact
+    # numeral it just folded, and reusing it there is the fold's whole point (mint once,
+    # not mint zero), not a resurrection. The two heal cases share the identical
+    # false_mint/retired shape and are distinguished only by age: a heal still inside the
+    # mint gate's own debounce window (_SEAM_DEBOUNCE_SECS, the same window the fold uses
+    # for its own back-to-back check, not a second one) is part of the seam being
+    # resolved right now; a heal older than that (20 hours cold, in one specimen) is a
+    # closed one-way door.
     #
-    # A PLAIN, NEVER-HEALED ACTIVE OBJECT IS AMBIGUOUS ON STATUS ALONE, AND STATUS ALONE
-    # USED TO DECIDE IT (Marquee's stale-numeral reuse, thread 6736/6747, Thoth's ruling
-    # verified not inherited — `test_mint_heir_never_duplicates_an_edge_the_heir_already_
-    # has` is the OTHER, legitimate half of this same shape, and any fix has to keep both
-    # true at once). Two real cases share "exists, active, never healed": a BARE STUB some
-    # earlier call already pre-seeded at this EXACT numeral for THIS SAME ancestor, waiting
-    # for THIS mint_heir call to complete it — safe, intended to be adopted — and a REAL,
-    # ALREADY-COMPLETED generation from a branch of this lineage's own history (Marquee's
-    # -xii, legitimately minted hours later by the real forward chain — and its own tip at
-    # the time, -xvi, equally real and equally not this call's to adopt). The two are told
-    # apart by whether the CANDIDATE ITSELF already carries a `succeeded_from` assertion —
-    # the one thing a genuine mint always stamps on its own heir and a bare pre-seeded stub
-    # never has, regardless of whether the stub's own successor was ever minted. A candidate
-    # that is already a real generation is never a safe mint target, tip or not — the walk
-    # steps past it, same as any other closed door.
+    # A plain, never-healed active object is ambiguous on status alone, and status alone
+    # used to decide it (a specimen of stale-numeral reuse:
+    # `test_mint_heir_never_duplicates_an_edge_the_heir_already_has` is the other,
+    # legitimate half of this same shape, and any fix has to keep both true at once). Two
+    # real cases share "exists, active, never healed": a bare stub some earlier call
+    # already pre-seeded at this exact numeral for this same ancestor, waiting for this
+    # mint_heir call to complete it (safe, intended to be adopted), and a real,
+    # already-completed generation from a branch of this lineage's own history
+    # (legitimately minted hours later by the real forward chain, and its own tip at the
+    # time, equally real and equally not this call's to adopt). The two are told apart by
+    # whether the candidate itself already carries a `succeeded_from` assertion, the one
+    # thing a genuine mint always stamps on its own heir and a bare pre-seeded stub never
+    # has, regardless of whether the stub's own successor was ever minted. A candidate
+    # that is already a real generation is never a safe mint target, tip or not; the walk
+    # steps past it, same as any other closed path.
     for _ in range(64):
         row = await actions.pool.fetchrow(
             "SELECT id, status FROM objects WHERE canonical=$1 AND type='Agent'", heir)
@@ -3365,12 +3303,12 @@ async def mint_heir(
                                   confidence_for(do), evidence_class=do.value)
     await actions.assert_property(a, "minted_because", because, heir, now,
                                   confidence_for(do), evidence_class=do.value)
-    # THE PARALLEL-LIVES STAMP (thread 4bcd6541, invariant 3 of the guarantee cd35bb1d):
-    # rows are hot state — the pulse evidence at mint time must be captured AT THE MINT
-    # or it is gone by lint time. Stamp the predecessor lineage's freshest pulse; and
-    # when a DIFFERENT door than the one minting held a live pulse (view rows excluded —
-    # the alias is never the witness), stamp that door too. The graph_lint reads the
-    # stamps and alarms; the mint itself always proceeds (report-only downstream).
+    # The parallel-lives stamp: mount rows are hot state, so the pulse evidence at mint
+    # time must be captured at the mint or it is gone by lint time. Stamp the
+    # predecessor lineage's freshest pulse; and when a different session than the one
+    # minting held a live pulse (view rows excluded, the alias is never the witness),
+    # stamp that session too. graph_lint reads the stamps and alarms; the mint itself
+    # always proceeds (report-only downstream).
     base = _generation(ancestor_id)[0]
     m_door = Path(minting_door).name[:8] if minting_door else ""
     pulse = await actions.pool.fetchrow(
@@ -3399,82 +3337,83 @@ async def mint_heir(
     await actions.assert_property(ancestor_oid, "succeeded_by", heir, heir, now,
                                   confidence_for(do), evidence_class=do.value)
     await _link_once(actions, a, ancestor_oid, "succeeded_from", heir, now)
-    # THE HOUSE PASSES WITH THE BLOOD (thread 6c99800a): heartbeat-minted heirs got a project
-    # assertion later but never the works_in EDGE, so every lens that walks the edge missed
-    # them. Inherit both HERE, once, for every mint path — the register path re-stamps its
-    # own reading afterwards and the byte-dup skip absorbs the overlap.
+    # The house passes with the lineage: heartbeat-minted heirs got a project assertion
+    # later but never the works_in edge, so every lens that walks the edge missed them.
+    # Inherit both here, once, for every mint path; the register path re-stamps its own
+    # reading afterwards and the byte-dup skip absorbs the overlap.
     #
-    # TWO DIFFERENT QUESTIONS SHARE THIS NEIGHBORHOOD, DELIBERATELY SEPARATE VARIABLES NOW
-    # (decision 68fba2e4, thread 19d6bdcb7fa9 — the operator's own house/project ruling):
-    # `house` below stays EXACTLY the seat-derived-house-or-raw-stamp computation this
-    # function always used — GENERATION COUNTING (`seat_holders`, ~40 lines down) compares
-    # each historical holder's own raw project stamp against it, the same discipline
-    # claim_name's own `counting_house` keeps (line ~738 above) for the identical reason:
-    # counting must compare raw stamps to raw stamps, never a resolved display value, or a
-    # seat whose true history all shares one raw stamp starts undercounting the moment this
-    # function's OTHER concern (below) stops treating that stamp as authoritative.
+    # Two different questions share this neighborhood, with deliberately separate
+    # variables: `house` below stays exactly the seat-derived-house-or-raw-stamp
+    # computation this function always used. Generation counting (`seat_holders`, further
+    # down) compares each historical holder's own raw project stamp against it, the same
+    # discipline claim_name's own `counting_house` keeps (further above) for the
+    # identical reason: counting must compare raw stamps to raw stamps, never a resolved
+    # display value, or a seat whose true history all shares one raw stamp starts
+    # undercounting the moment this function's other concern (below) stops treating that
+    # stamp as authoritative.
     #
-    # `heir_project` is the NEW, SEPARATE answer for what the heir's own project stamp
-    # should be: copying `ancestor_seat["house"]`/`house_of(ancestor_id)` here (the OLD
-    # single unified `house` this comment used to describe) was ITSELF the class of
-    # fabrication the ruling closes — Seat.house is a mint-time stamp (`=handle` for every
-    # self-managed seat, decision 24e0b761's own live specimens Chad/Jesus), not the
-    # ancestor's real project, and a single polluted copy propagated forward FOREVER
-    # through every automatic mint (every compaction, every model swap, every session
-    # death). `project_of` (no `cwd` — this call site has never read a pin and isn't
-    # gaining a new filesystem read here) resolves it instead: charter (if the ancestor's
-    # seat declared exactly one repo) then lineage works_in (merge-normalized) — house
-    # nowhere in it, homeless a legal answer. The `and not moved and not upcoming_project
-    # and not chartered` gate below, and everything move_agent_project_links/chartered
-    # compute, is UNCHANGED — only the project-stamping fallback's SOURCE moved.
+    # `heir_project` is the new, separate answer for what the heir's own project stamp
+    # should be: copying `ancestor_seat["house"]`/`house_of(ancestor_id)` here (the old
+    # single unified `house` this comment used to describe) was itself the class of
+    # fabrication being closed - Seat.house is a mint-time stamp (`=handle` for every
+    # self-managed seat), not the ancestor's real project, and a single polluted copy
+    # propagated forward forever through every automatic mint (every compaction, every
+    # model swap, every session death). `project_of` (no `cwd`, this call site has never
+    # read a pin and isn't gaining a new filesystem read here) resolves it instead:
+    # charter (if the ancestor's seat declared exactly one repo) then lineage works_in
+    # (merge-normalized), house nowhere in it, homeless a legal answer. The `and not
+    # moved and not upcoming_project and not chartered` gate below, and everything
+    # move_agent_project_links/chartered compute, is unchanged; only the project-stamping
+    # fallback's source moved.
     from src.orchestrator.seats import held_seat
     ancestor_seat = await held_seat(actions.pool, ancestor_id)
     house = (ancestor_seat["house"] if ancestor_seat and ancestor_seat.get("house")
             else await house_of(actions.pool, ancestor_id))
     heir_project = await project_of(actions.pool, ancestor_id)
-    # THE FALLBACK RETIRES ONCE A CHARTER EXISTS (task #143, decision 4607637a — resolving
-    # bac81acd): works_in means exactly ONE thing now, the session's live/current project;
-    # the seat's durable role-house lives on `governs` (re-keyed onto the Seat itself,
-    # ruling 1db1ff41), not on this edge. `governs` is NOT written here to replace it —
-    # set_charter declares the WHOLE charter each call ("these are the repos this seat
-    # rules now, not an increment"), so auto-firing it from every mint with just `house`
-    # would silently HEAL AWAY the rest of a real multi-repo charter (alfred's is six
-    # repos, charter.py's own example) the moment his lineage next compacted. charter_of
-    # is read-only and additive-safe: once a seat has declared ANY charter, this fallback
-    # has nothing left to do (governs already durably answers "which house"), so it stops
-    # firing for that seat; a seat that has never declared one keeps today's behavior
-    # unchanged (charter_of's own docs: "works_in still names its home" until it does).
+    # The fallback retires once a charter exists: works_in means exactly one thing now,
+    # the session's live/current project; the seat's durable role-house lives on
+    # `governs` (re-keyed onto the Seat itself), not on this edge. `governs` is not
+    # written here to replace it - set_charter declares the whole charter each call
+    # ("these are the repos this seat rules now, not an increment"), so auto-firing it
+    # from every mint with just `house` would silently heal away the rest of a real
+    # multi-repo charter (one seat's charter spans six repos, charter.py's own example)
+    # the moment its lineage next compacted. charter_of is read-only and additive-safe:
+    # once a seat has declared any charter, this fallback has nothing left to do (governs
+    # already durably answers "which house"), so it stops firing for that seat; a seat
+    # that has never declared one keeps today's behavior unchanged (charter_of's own
+    # docs: "works_in still names its home" until it does).
     from src.orchestrator.charter import charter_of
     chartered = (bool(await charter_of(actions.pool, ancestor_seat["seat_id"]))
                 if ancestor_seat else False)
-    # THE MINT_HEIR EDGE LEAK, CLOSED (thread 20af2c95, measured 906 of 6,245 fleet-wide,
-    # 2026-08-03): mint_heir minted a fresh works_in edge for the heir below but NEVER
-    # touched the ancestor's own — so every past generation of a lineage that ever
-    # asserted works_in/governs kept it live FOREVER, through ordinary succession, growing
-    # on the most common event in the house. Move whatever the ancestor still has live
-    # (which may be MORE than just `house` — an agent can work_in/govern several projects
-    # across its life) onto the heir, invalidate+create, before stamping the heir's own
-    # current house below (idempotent either order — move_agent_project_links never
-    # duplicates a link already live on the heir).
+    # The mint_heir edge leak, closed (measured 906 of 6,245 fleet-wide): mint_heir
+    # minted a fresh works_in edge for the heir below but never touched the ancestor's
+    # own, so every past generation of a lineage that ever asserted works_in/governs kept
+    # it live forever, through ordinary succession, growing on the most common event in
+    # the fleet. Move whatever the ancestor still has live (which may be more than just
+    # `house`, an agent can work_in/govern several projects across its life) onto the
+    # heir, invalidate+create, before stamping the heir's own current house below
+    # (idempotent either order; move_agent_project_links never duplicates a link already
+    # live on the heir).
     moved = await move_agent_project_links(actions, ancestor_oid, a, heir, now)
-    # THE RACE, NARROWED (f6f11d78/20af2c95, decision 5b217d13, 2026-08-04): this used to
-    # _link_once `house` unconditionally, regardless of what move_agent_project_links just
-    # carried forward or what register_agent (the register_agent call site's own caller) is
-    # about to assert moments later in the SAME call, sharing this same `now` — the shared
-    # timestamp is WHY the duplicate lands byte-identical rather than merely close. `house`
-    # is only ever the sole source of truth for the heir's project when nothing else is:
-    # skip it the moment either move_agent_project_links found something live to carry
-    # forward, or the caller already knows a fresher project is coming right behind it —
-    # or (task #143) the seat has since declared a charter, so `house` is stale legacy
-    # inference and governs is the fact of record instead.
+    # The race, narrowed: this used to _link_once `house` unconditionally, regardless of
+    # what move_agent_project_links just carried forward or what register_agent (this
+    # call site's own caller) is about to assert moments later in the same call, sharing
+    # this same `now` - the shared timestamp is why the duplicate lands byte-identical
+    # rather than merely close. `house` is only ever the sole source of truth for the
+    # heir's project when nothing else is: skip it the moment either
+    # move_agent_project_links found something live to carry forward, or the caller
+    # already knows a fresher project is coming right behind it, or the seat has since
+    # declared a charter, so `house` is stale legacy inference and governs is the fact of
+    # record instead.
     if heir_project and not moved and not upcoming_project and not chartered:
         await actions.assert_property(a, "project", heir_project, heir, now, _CONF,
                                       evidence_class=_EC)
         proj = await _resolve_or_mint_project(actions, heir_project, heir)
         if proj is not None:
             await _link_once(actions, a, proj, "works_in", heir, now)
-    # SEAT INHERITANCE (phase 2): the heir inherits the ancestor's human name — the seat
-    # passes down the lineage, the generation (roman) ticks up. 'Anna' → 'Anna II'.
+    # Seat inheritance (phase 2): the heir inherits the ancestor's human name, the seat
+    # passes down the lineage, the generation (roman numeral) ticks up. "Anna" becomes
+    # "Anna II".
     inherited = await actions.pool.fetchval(
         "SELECT value#>>'{}' FROM current_assertions WHERE object_id=$1 AND name='handle' "
         "ORDER BY confidence DESC, observed_at DESC LIMIT 1",
@@ -3482,46 +3421,48 @@ async def mint_heir(
     if inherited:
         await actions.assert_property(a, "handle", inherited, heir, now, _CONF,
                                       evidence_class=_EC)
-        # ...AND THE SEAT PASSES WITH THE NAME, OR THE NAME IS JUST A LABEL. (The ghosts,
-        # 53729dd6 — and I was the specimen: agent:ad1a1cb0-xxvii, minted an heir of XXVI,
-        # carrying the handle "Thoth" with NO generation and NO edge to the mind whose work
-        # it continued.) This is where a seat changes hands WITHOUT a handoff: mint_heir is
-        # the AUTOMATIC succession — it fires on every compaction, every model swap, every
-        # session death — and it passed the name down while leaving the seat's chain broken.
-        # Only claim_name(), an EXPLICIT act by a mind that thinks to call it, ever minted the
-        # edge. Thoth XXVI backfilled 77 historical edges and never fixed the code that omits
-        # them, so the chain healed to gen 26 and broke again at 27: the FIRST heir minted
-        # after the heal. Left alone it would re-open the gap at every compaction, forever.
+        # ...and the seat passes with the name, or the name is just a label. (A specimen
+        # of the earlier gap: one heir was minted carrying its predecessor's handle with
+        # no generation edge to the mind whose work it continued.) This is where a seat
+        # changes hands without a handoff: mint_heir is the automatic succession, it
+        # fires on every compaction, every model swap, every session death, and it passed
+        # the name down while leaving the seat's chain broken. Only claim_name(), an
+        # explicit act by a mind that thinks to call it, ever minted the edge. A
+        # historical backfill closed 77 existing gaps but never fixed the code that omits
+        # them, so the chain healed and then broke again at the very next heir minted
+        # after the heal. Left alone it would re-open the gap at every compaction,
+        # forever.
         #
-        # succeeds_seat is NOT succeeded_from (stamped above): that one chains ANCHORS — which
-        # conversation spawned which — and this one chains HOLDERS of a job. Two relations
-        # wearing one name is the mistake that started all of this. (`house` resolved above,
-        # where the heir inherited it.)
+        # succeeds_seat is not succeeded_from (stamped above): that one chains anchors
+        # (which conversation spawned which) and this one chains holders of a job. Two
+        # relations wearing one name is the mistake that started all of this. (`house`
+        # resolved above, where the heir inherited it.)
         holders = [h for h in await seat_holders(actions.pool, house, inherited) if h != heir]
         await actions.assert_property(a, "seat_generation", str(len(holders) + 1), heir, now,
                                       _CONF, evidence_class=_EC)
         await _link_once(actions, a, ancestor_oid, "succeeds_seat", heir, now)
-    # THE BINDING FOLLOWS THE HEAD (identity core, 5cef856b): every Seat OBJECT the ancestor
-    # actively holds re-links to the heir — the durable address must keep pointing at
-    # whoever the mind is NOW, or the first compaction after an attach would strand the
-    # seat on a corpse. The old link heals by valid_until; holder history stays walkable.
-    # GATED ON bind_seat (see the docstring's own holds-sandwich paragraph): a caller that
-    # knows this heir is pure pre-spawn bookkeeping, never yet a real occupant, passes
+    # The binding follows the head: every Seat object the ancestor actively holds
+    # re-links to the heir - the durable address must keep pointing at whoever the mind
+    # is now, or the first compaction after an attach would strand the seat on a corpse.
+    # The old link heals by valid_until; holder history stays walkable. Gated on
+    # bind_seat (see the docstring's own holds-sandwich paragraph): a caller that knows
+    # this heir is pure pre-spawn bookkeeping, never yet a real occupant, passes
     # bind_seat=False so the seat's own holds history never opens a window for it at all.
     if bind_seat:
         from src.orchestrator.seats import follow_binding
         await follow_binding(actions, ancestor_oid=ancestor_oid, heir=heir, heir_oid=a, now=now)
-        # THE HOLE STOPS REGENERATING (Khnum's tail, 9f566244/749bf530): follow_binding above
-        # only MOVES a holds link the lineage already carries — a seat whose original claim
-        # predates the Seat-object binding (5cef856b) never got one in the first place, and
-        # NOTHING automatic ever calls claim_name for it. The backfill cures every such seat
-        # that exists today; left here, the very next mint of that same lineage would re-open
-        # the identical hole, forever, because mint_heir fires on every compaction/model-swap/
-        # session-death and nobody asks it to. So: if the handle just inherited names an
-        # EXISTING Seat object with no active holder anywhere, bind it now — the same self-heal
-        # claim_name performs explicitly, run at the one moment that requires no one to think
-        # to call it. NEVER mints a new Seat (ensure_seat's own law: minting is deliberate, only
-        # at a claim or an attach) — this only closes a hole that already has a name.
+        # The hole stops regenerating: follow_binding above only moves a holds link the
+        # lineage already carries - a seat whose original claim predates the Seat-object
+        # binding never got one in the first place, and nothing automatic ever calls
+        # claim_name for it. The backfill cures every such seat that exists today; left
+        # here, the very next mint of that same lineage would re-open the identical hole,
+        # forever, because mint_heir fires on every compaction/model-swap/session-death
+        # and nobody asks it to. So: if the handle just inherited names an existing Seat
+        # object with no active holder anywhere, bind it now, the same self-heal
+        # claim_name performs explicitly, run at the one moment that requires no one to
+        # think to call it. Never mints a new Seat (ensure_seat's own rule: minting is
+        # deliberate, only at a claim or an attach); this only closes a hole that already
+        # has a name.
         if inherited and house:
             from src.orchestrator.seats import bind_holder, find_seat
             legacy_seat = await find_seat(actions.pool, house=house, handle=inherited)
@@ -3535,25 +3476,24 @@ async def mint_heir(
     await actions.pool.execute(
         "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
         heir, ancestor_id)
-    # ...and so does the READ STATE: the heir inherits the ancestor's recipient rows, or every
-    # mint (i.e. every compaction) would redeliver the project's whole settled broadcast
-    # history to the new mind. The heir literally remembers reading them — that memory is
-    # exactly what survived the seam.
+    # ...and so does the read state: the heir inherits the ancestor's recipient rows, or
+    # every mint (i.e. every compaction) would redeliver the project's whole settled
+    # broadcast history to the new mind. The heir literally remembers reading them, that
+    # memory is exactly what survived the seam.
     #
-    # BUT ONLY THE SETTLED HALF (WAVE 27 BUG 4, Thoth DM 11781, thread bc517864): a
-    # message_recipients row with read_at IS NULL is a LEASE, not a memory — the ancestor
-    # read it (delivered_at) but never replied or acked before dying, and a lease belongs
-    # to the mind that holds it, not to whoever inherits its name next. The old
-    # unconditional copy carried the ancestor's own (recent) delivered_at straight onto the
-    # heir, so the heir's very next inbox() read the message as "already delivered inside
-    # its lease window" and stayed silent about it for as long as that lease had left to
-    # run — a genuinely unread ask going dark across the one seam that most needs it
-    # surfaced (Imhotep's specimen: two leased asks read as settled by the mint, neither
-    # ever answered). Filtering to read_at IS NOT NULL here is the fix: a truly settled
-    # message still carries its memory forward exactly as before; a merely-leased one
-    # carries NOTHING, so the heir's own next inbox() finds it with no prior row at all —
-    # fresh, undelivered, exactly as if this mind were reading it for the first time,
-    # which it is.
+    # But only the settled half: a message_recipients row with read_at IS NULL is a
+    # lease, not a memory - the ancestor read it (delivered_at) but never replied or
+    # acked before dying, and a lease belongs to the mind that holds it, not to whoever
+    # inherits its name next. The old unconditional copy carried the ancestor's own
+    # (recent) delivered_at straight onto the heir, so the heir's very next inbox() read
+    # the message as "already delivered inside its lease window" and stayed silent about
+    # it for as long as that lease had left to run - a genuinely unread ask going dark
+    # across the one seam that most needs it surfaced (one specimen: two leased asks read
+    # as settled by the mint, neither ever answered). Filtering to read_at IS NOT NULL
+    # here is the fix: a truly settled message still carries its memory forward exactly
+    # as before; a merely-leased one carries nothing, so the heir's own next inbox()
+    # finds it with no prior row at all - fresh, undelivered, exactly as if this mind
+    # were reading it for the first time, which it is.
     await actions.pool.execute(
         "INSERT INTO message_recipients (message_id, agent_id, delivered_at, read_at, deliveries)"
         " SELECT message_id, $1, delivered_at, read_at, deliveries FROM message_recipients"
@@ -3563,25 +3503,25 @@ async def mint_heir(
 
 
 async def fold_existing_zero_turn_phantoms(actions: Actions) -> list[dict[str, Any]]:
-    """RETROACTIVE CLEANUP (ruling d3531cd8, msg 1398: 'Fold existing zero-turn phantoms') —
-    the going-forward fix (mint sites call _fold_zero_turn_ancestors before minting) does
-    nothing for generations already minted before this fix landed, like the canonical repro
-    itself (xxv, minted by /compact, superseded by /model before its first turn). Sweeps
-    every ALREADY-SUPERSEDED, ALREADY-MINTED Agent (has succeeded_from AND succeeded_by, so
-    a live descendant exists) that isn't already false_mint, folding each one exactly the
-    live path would have. Safe to run repeatedly — an already-folded phantom carries
-    false_mint and is excluded by construction; a HALF-folded one (flagged but never
-    unwound — decision ee012ebc) is reported, not re-attempted, and open_thread's own
-    idempotency keeps repeat sightings from paging more than once. Returns what it
-    folded, for the record — a half-healed sighting is NOT counted here, only in the
-    obligation it opens."""
-    # A GENEROUS pre-filter, deliberately: every minted (non-root) Agent, live head included
-    # — correctness rests on _fold_zero_turn_ancestors's own agent_has_acted gate, not on
-    # this query, so a live head with real acts (or an already-folded phantom, whose walk
-    # halts at itself just as harmlessly) is a fast, safe no-op rather than something this
-    # query must itself get exactly right (the value-comparison this would otherwise need —
-    # 'is succeeded_by CURRENTLY non-empty' — is exactly the winning-row read the SQL
-    # hygiene tripwire exists to keep out of a bare EXISTS).
+    """RETROACTIVE CLEANUP: the going-forward fix (mint sites call
+    _fold_zero_turn_ancestors before minting) does nothing for generations already
+    minted before this fix landed, like the canonical repro itself (minted by /compact,
+    superseded by /model before its first turn). Sweeps every already-superseded,
+    already-minted Agent (has succeeded_from and succeeded_by, so a live descendant
+    exists) that isn't already false_mint, folding each one exactly the live path would
+    have. Safe to run repeatedly: an already-folded phantom carries false_mint and is
+    excluded by construction; a half-folded one (flagged but never unwound) is reported,
+    not re-attempted, and open_thread's own idempotency keeps repeat sightings from
+    paging more than once. Returns what it folded, for the record; a half-healed
+    sighting is not counted here, only in the obligation it opens."""
+    # A generous pre-filter, deliberately: every minted (non-root) Agent, live head
+    # included. Correctness rests on _fold_zero_turn_ancestors's own agent_has_acted
+    # gate, not on this query, so a live head with real acts (or an already-folded
+    # phantom, whose walk halts at itself just as harmlessly) is a fast, safe no-op
+    # rather than something this query must itself get exactly right (the
+    # value-comparison this would otherwise need, "is succeeded_by currently
+    # non-empty", is exactly the winning-row read the SQL hygiene tripwire exists to
+    # keep out of a bare EXISTS).
     candidates = await actions.pool.fetch(
         "SELECT o.id, o.canonical FROM objects o "
         "WHERE o.type='Agent' AND o.status='active' "
@@ -3597,29 +3537,29 @@ async def fold_existing_zero_turn_phantoms(actions: Actions) -> list[dict[str, A
     return folded
 
 
-# NOTIFY-AT-SEAM (thread aeae9977, Ra's ask #1): "a compacting bodied worker's manager learns
-# from the FLEET, not the human." Only a harness-reported context death fires this — the
-# SILENT class nobody else is watching. model-succession and live-swap already surface on the
-# membrane's DANGER map; reanimation-of-retired is a deliberate act, not an accident that
-# strands a manager mid-conversation. KNOWN v1 GAP (Thoth's call, DM 1212): reanimation
-# co-occurring with a REAL compaction is excluded too — when both fire, mint_because reads
-# "reanimation-of-retired", never "compaction", so it never matches this whitelist. Left this
-# way on purpose: it's rare, and widening the whitelist now would trade v1's whole value —
-# precision on the silent class — for a case nobody's been bitten by yet. A successor who IS
-# bitten by it finds the gap named here, not rediscovered.
+# Notify at seam: a compacting worker session's manager should learn from the fleet, not
+# from the human noticing. Only a harness-reported context death fires this, the silent
+# class nobody else is watching. Model-succession and live-swap already surface on the
+# existing danger map; reanimation-of-retired is a deliberate act, not an accident that
+# strands a manager mid-conversation. Known v1 gap: reanimation co-occurring with a real
+# compaction is excluded too - when both fire, mint_because reads "reanimation-of-retired",
+# never "compaction", so it never matches this whitelist. Left this way on purpose: it's
+# rare, and widening the whitelist now would trade v1's whole value (precision on the
+# silent class) for a case nobody's been bitten by yet. A successor who is bitten by it
+# finds the gap named here, not rediscovered.
 _SEAM_NOTIFY_REASONS = {"compaction", "context-clear"}
 
 
 async def _notify_seam_manager(
     actions: Actions, *, heir: str, mint_because: str, project: str | None,
 ) -> None:
-    """A worker that just silently died and came back DMs its OWN manager — Ra's clean repro
-    (aeae9977): a mail send-receipt refused the manager's DM to a fresh successor while the
-    daemon held a live job the whole time, and the human had to notice and tell him. This is
-    the fix: the successor reports itself, with the daemon's own reachability() evidence
-    inline (Thoth's requirement — the manager gets a confirmation, not our say-so). Silent
-    no-op when there's no seat or no manager of record — same 'nobody to confess to' shape
-    Stage A's stop-hook confession already uses."""
+    """A worker that just silently died and came back messages its own manager. A clean
+    repro of the underlying problem: a mail send-result refused the manager's message to
+    a fresh successor while the daemon held a live job the whole time, and the human had
+    to notice and flag it. This is the fix: the successor reports itself, with the
+    daemon's own reachability() evidence inline, so the manager gets a confirmation, not
+    just a claim. Silent no-op when there's no seat or no manager of record, the same
+    "nobody to confess to" shape the stop-hook confession already uses."""
     from src.orchestrator.mailbox import send_message
     from src.orchestrator.seats import held_seat, manager_of_seat, reachability
 
@@ -3645,12 +3585,13 @@ async def agent_has_acted(
     actions: Actions, agent_id: str, *, exclude: list[uuid.UUID],
     settled_after: datetime | None,
 ) -> bool:
-    """A MIND IS WITNESSED BY ITS ACTS (the debounce's law, b813e389): did this agent ever do
-    anything beyond its own mint/registration bookkeeping? Acts = assertions on objects other
-    than the excluded lineage pair, words sent, or mail SETTLED after the mint. NOT acts: the
-    display-name stamps registration writes onto the repo and principal objects (a greeting's
-    paperwork — the REGISTER path stamps those on every mount, and counting them made every
-    register-minted heir read as a mind, so the cross-path debounce could never heal one)."""
+    """A mind is witnessed by its acts: did this agent ever do anything beyond its own
+    mint/registration bookkeeping? Acts = assertions on objects other than the excluded
+    lineage pair, words sent, or mail settled after the mint. Not acts: the display-name
+    stamps registration writes onto the repo and principal objects (routine registration
+    paperwork - the register path stamps those on every mount, and counting them made
+    every register-minted heir read as a mind, so the cross-path debounce could never
+    heal one)."""
     return bool(await actions.pool.fetchval(
         "SELECT EXISTS (SELECT 1 FROM assertions x JOIN objects o ON o.id=x.object_id "
         "         WHERE x.source_id=$1 AND NOT (x.object_id = ANY($2::uuid[])) "
@@ -3666,22 +3607,23 @@ async def _debounce_roundtrip(
     actions: Actions, *, agent_id: str, observed: str, now: datetime,
     job_dir: str | None = None,
 ) -> dict[str, Any] | None:
-    """THE SEAM DEBOUNCE (Soundwave VII's wave-3 grievance, b813e389): the operator toggling
-    /model there-and-back within a minute minted a generation — roman-numeral churn for
-    settings churn dilutes what the numeral MEANS (ruling a882b334: the numeral tracks the
-    MIND). The distinction that keeps both truths: a mind is witnessed by its ACTS. When the
-    model returns to the seam's left side within the window and the transient heir asserted
-    nothing beyond its own mint stamps, sent nothing, and settled nothing — no mind ever
-    existed; the mint heals as false (event-sourced, compensating, its record stays) and the
-    ancestor takes its seat back, estate included. One witnessed act, and the heir stands:
-    a real mind passed through, however briefly. Returns the heal dict, or None (mint on).
+    """Debounce for the generation-succession seam: toggling the model setting back and forth
+    within a short window used to mint a new generation for each toggle, diluting what a
+    generation change is supposed to mean (a new generation tracks a new mind, not a settings
+    change). The distinction that keeps both concepts intact: a mind is witnessed by its acts.
+    When the model returns to the left side of the seam within the window and the transient
+    heir asserted nothing beyond its own mint bookkeeping, sent nothing, and settled nothing,
+    no independent mind ever existed; the mint heals as false (event-sourced, compensating,
+    its record stays) and the ancestor takes its seat back, including its prior state. One
+    witnessed act, and the heir stands: a real mind passed through, however briefly. Returns
+    the heal dict, or None if the mint stands.
 
-    SHARED BY BOTH MINT PATHS (thread a3d49d91): it originally lived only in the chrome
-    heartbeat and only healed heads minted 'live-swap' — so a round-trip whose return leg was
-    witnessed by a MOUNT (register_agent) could never heal, and the two observers ping-ponged
-    generations off each other's stamps (TJMAX VI→X, five mints in six minutes). `agent_id`
-    must be the LINEAGE HEAD; `job_dir` re-points that mount row when the caller has one,
-    else any row naming the healed heir follows the restored ancestor."""
+    Shared by both mint paths: this originally lived only in the heartbeat check and only
+    healed heads minted via 'live-swap', so a round-trip whose return leg was witnessed by a
+    mount (register_agent) could never heal, and the two observers could ping-pong generations
+    off each other's stamps. `agent_id` must be the lineage head; `job_dir` re-points that
+    mount row when the caller has one, else any row naming the healed heir follows the
+    restored ancestor."""
     cur = agent_id
     cur_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent' AND status='active'", cur)
@@ -3692,8 +3634,8 @@ async def _debounce_roundtrip(
         "FROM current_assertions WHERE object_id=$1 "
         "AND name IN ('succeeded_from','minted_because','model_succession') "
         "ORDER BY name, confidence DESC, observed_at DESC", cur_oid)}
-    # both MODEL-seam mints heal; a compaction/clear/reanimation mint is a context death,
-    # not model flapping — there is no 'left side' to return to
+    # Both model-seam mints heal; a compaction/clear/reanimation mint is a context death,
+    # not model flapping, so there is no "left side" to return to.
     if meta.get("minted_because", (None, None))[0] not in ("live-swap", "model-succession"):
         return None
     ancestor, minted_at = meta.get("succeeded_from", (None, None))
@@ -3703,27 +3645,26 @@ async def _debounce_roundtrip(
         return None
     left = normalize_model(seam.split("→")[0].strip()) if "→" in seam else None
     if left is None or left != observed:
-        return None  # not a round-trip — a third model is a real third mind
+        return None  # not a round-trip: a third model is a real third mind
     ancestor_oid = await actions.pool.fetchval(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", ancestor)
     if ancestor_oid is None:
         return None
-    # acts = assertions beyond the lineage bookkeeping pair, words sent, or mail SETTLED
-    # after the mint (a lease/delivery is passive perception, never an act)
+    # Acts = assertions beyond the lineage bookkeeping pair, messages sent, or mail settled
+    # after the mint (a lease/delivery is passive perception, never an act).
     if await agent_has_acted(actions, cur, exclude=[cur_oid, ancestor_oid],
                              settled_after=minted_at):
         return None
     do = EvidenceClass.DIRECT_OBSERVATION
     conf = confidence_for(do)
-    # ATOMIC (decision ee012ebc): these six writes either all land or none do. Before
-    # this fix they were six independent unguarded statements — a crash/interruption
-    # partway left the flag stamped but the pointer never unwound, a half-healed phantom
-    # permanently invisible to any reader that treats the flag alone as "done" (the exact
-    # shape three live specimens were found in, weeks later, with real generations
-    # already minted on top — completing that heal retroactively would have rebound the
-    # CURRENT live seat backward onto a stale ancestor). One transaction closes the gap:
-    # after this, false_mint=="true" is proof of completion again, not merely of an
-    # attempt.
+    # Atomic: these six writes either all land or none do. Previously they were six
+    # independent unguarded statements, so a crash or interruption partway through left the
+    # flag stamped but the pointer never unwound, a half-healed state permanently invisible
+    # to any reader that treats the flag alone as "done" (the exact shape found in several
+    # live cases, weeks later, with real generations already minted on top; completing that
+    # heal retroactively would have rebound the current live seat backward onto a stale
+    # ancestor). One transaction closes the gap: after this, false_mint == "true" is proof
+    # of completion again, not merely of an attempt.
     from src.orchestrator.seats import follow_binding
     async with actions.atomic() as a:
         for k, v in (("false_mint", True), ("retired", True), ("retired_by", _DEBOUNCE_SRC),
@@ -3732,24 +3673,23 @@ async def _debounce_roundtrip(
                       "settings churn, not a death (Soundwave's grievance, b813e389)")):
             await a.assert_property(cur_oid, k, v, _DEBOUNCE_SRC, now, conf,
                                     evidence_class=do.value)
-        # unwind the head-walk (the old pointer stays in history — compensating, never deleted)
+        # Unwind the head-walk (the old pointer stays in history: compensating, never deleted).
         await a.assert_property(ancestor_oid, "succeeded_by", "", _DEBOUNCE_SRC, now, conf,
                                 evidence_class=do.value)
-        # the estate returns: unread DMs re-address to the restored mind; read state needs no
-        # unwind (the heir's copied rows are inert once the heir is retired)
+        # State returns to the restored mind: unread messages re-address to it; read state
+        # needs no unwind (the heir's copied rows are inert once the heir is retired).
         await a.execute(
             "UPDATE fleet_messages SET to_agent=$1 WHERE to_agent=$2 AND read_at IS NULL",
             ancestor, cur)
-        # ...and so does THE BINDING (the seat world's estate, 5cef856b): mint_heir moved the
-        # holds link to the transient heir; a heal that leaves it there strands every
-        # seat-addressed DM on a false mint the read predicate still honors. The binding
-        # follows the head — and after a heal, the head IS the restored ancestor.
+        # ...and so does the seat binding: mint_heir moved the holds link to the transient
+        # heir; a heal that leaves it there strands every seat-addressed message on a false
+        # mint the read predicate still honors. The binding follows the head, and after a
+        # heal, the head is the restored ancestor.
         await follow_binding(a, ancestor_oid=cur_oid, heir=ancestor,
                              heir_oid=ancestor_oid, now=now)
-        if job_dir is not None:  # the heartbeat's caller holds the row — bump its pulse too
-            # EARNED-PULSE (thread 870d7391): this heal is itself a repair of drifted
-            # bookkeeping, not the earning act — it may only REFRESH a pulse the row
-            # already earned, never grant one.
+        if job_dir is not None:  # the heartbeat's caller holds the row, bump its pulse too
+            # This heal is itself a repair of drifted bookkeeping, not the earning act: it
+            # may only refresh a pulse the row already earned, never grant one.
             await a.execute(
                 "UPDATE agent_mounts SET agent_id=$2, model=$3, "
                 "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END "
@@ -3764,18 +3704,18 @@ async def _debounce_roundtrip(
 
 
 async def _already_reached(actions: Actions, *, agent_id: str, observed: str) -> bool:
-    """Did this lineage HEAD already record a swap landing on `observed`? (idempotency on
-    /succession, thread 8dc9940c — Thoth's own live repro, three 'live-swap' mints for one
-    real fable→opus transition.) The comparison live_succession runs the seam against —
-    agent_mounts.model — is a MUTABLE row that can drift back to a stale value after the
-    real swap already completed (mount()'s own re-derivation resets it; the deeper cause is
-    banked as a separate question). The head's own `source_model` is equally mutable, reset
-    by the same path. `model_succession` is not: mint_heir stamps it EXACTLY ONCE, at the
-    mint that recorded the swap, and nothing ever touches it again — the one write-once
-    witness immune to the drift. If the head's own recorded transition already landed on
-    `observed`, a fresh 'stored != observed' reading is re-discovering a COMPLETED swap, not
-    witnessing a new one — minting again would just be the duplicate ruling 95dff46f warned
-    against, one lineage, three numerals, one transition. A genuinely NEW target (observed
+    """Did this lineage head already record a swap landing on `observed`? This guards against
+    a real live repro where a single real model transition produced three separate
+    'live-swap' mints because of idempotency gaps in the succession check. The comparison
+    live_succession runs the seam against, agent_mounts.model, is a mutable row that can
+    drift back to a stale value after the real swap already completed (mount()'s own
+    re-derivation resets it; the deeper cause is tracked separately). The head's own
+    `source_model` is equally mutable, reset by the same path. `model_succession` is not:
+    mint_heir stamps it exactly once, at the mint that recorded the swap, and nothing ever
+    touches it again, making it the one write-once witness immune to the drift. If the
+    head's own recorded transition already landed on `observed`, a fresh "stored != observed"
+    reading is re-discovering a completed swap, not witnessing a new one; minting again would
+    just create a duplicate generation for one transition. A genuinely new target (observed
     differs from what's already recorded) returns False and mints exactly as before."""
     seam = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -3791,17 +3731,18 @@ async def _already_reached(actions: Actions, *, agent_id: str, observed: str) ->
 async def live_succession(
     actions: Actions, *, session_id: str, observed_model: str,
 ) -> dict[str, Any]:
-    """A mid-session model change, sensed by the chrome heartbeat (ruling a882b334): the mind
-    changed under a LIVE tab, so the seat passes now — mint the heir, move the durable mount
-    row, and every per-render read (statusline, stop hook, digest) resolves to the new mind
-    from the next glance. Idempotent: an unchanged model or an unknown mount is a no-op; a row
-    with no stored model gets a first stamp, not a funeral (you can only die if you lived)."""
+    """A mid-session model change, sensed by the heartbeat check: the mind changed under a
+    live session, so the seat passes now. Mint the heir, move the durable mount row, and
+    every per-render read (statusline, stop hook, digest) resolves to the new mind from the
+    next glance. Idempotent: an unchanged model or an unknown mount is a no-op; a row with no
+    stored model gets a first stamp, not a succession (you can only succeed something that
+    existed)."""
     sid = (session_id or "").strip().lower()
     observed = normalize_model(observed_model)
     if len(sid) < 8 or not observed:
         return {"unchanged": True, "reason": "no anchor"}
-    # the ONE session→row lookup (mounts.find_session_row, task #33) — an inline copy
-    # here once meant a swap in a re-anchored window went unwitnessed
+    # The one session-to-row lookup (mounts.find_session_row). An inline copy here once
+    # meant a swap in a re-anchored window went unwitnessed.
     from src.orchestrator.mounts import find_session_row
     row = await find_session_row(actions.pool, sid)
     if row is None:
@@ -3812,9 +3753,9 @@ async def live_succession(
                 "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
         return {"unchanged": True}
     async with mint_lock(actions.pool, _generation(row["agent_id"])[0]):
-        # RE-READ INSIDE THE LOCK: two concurrent heartbeats both read the pre-swap row and
-        # both minted — Soundwave VI and VII, identical seam strings, one second apart
-        # (2026-07-14). The loser now waits, re-reads, sees the winner's write, no-ops.
+        # Re-read inside the lock: two concurrent heartbeats once both read the pre-swap row
+        # and both minted, producing identical seam strings a second apart. The loser now
+        # waits, re-reads, sees the winner's write, and no-ops.
         row = await find_session_row(actions.pool, sid)
         if row is None:
             return {"unchanged": True, "reason": "no mount"}
@@ -3825,34 +3766,33 @@ async def live_succession(
                     "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1",
                     row["job_dir"], observed)
             return {"unchanged": True}
-        # THE NULL-SEAM GATE (thread 065c374e, mirroring forks.py's lesson here as
-        # defense-in-depth): a row with no stored model was never OBSERVED, not observed-as-
-        # something-else — it can never "disagree with" the first real reading, so this is a
-        # first stamp, never a seam to mint against.
+        # The null-seam gate, mirroring the same check in forks.py as defense-in-depth: a row
+        # with no stored model was never observed, not observed-as-something-else, so it can
+        # never "disagree with" the first real reading. This is a first stamp, never a seam
+        # to mint against.
         if old is None:
             await actions.pool.execute(
                 "UPDATE agent_mounts SET model=$2 WHERE job_dir=$1", row["job_dir"], observed)
             return {"unchanged": True, "reason": "first stamp"}
         now = datetime.now(UTC)
-        # seams run on the lineage HEAD — and the debounce judges the head, not the row,
-        # which may lag its own succession
+        # Seams run on the lineage head, and the debounce judges the head, not the row,
+        # which may lag its own succession.
         head = await lineage_head(actions.pool, row["agent_id"])
-        # a there-and-back /model toggle with no act between heals instead of minting again
+        # A there-and-back model toggle with no act between heals instead of minting again.
         healed = await _debounce_roundtrip(actions, agent_id=head, observed=observed,
                                            now=now, job_dir=row["job_dir"])
         if healed is not None:
             return healed
-        # IDEMPOTENCY (thread 8dc9940c): the head already recorded reaching THIS exact
-        # model once — a fresh disagreement against the (mutable, driftable) stored row is
-        # the same completed swap resurfacing, not a new one. Repair the drifted stamps in
-        # place; mint nothing.
+        # Idempotency: the head already recorded reaching this exact model once. A fresh
+        # disagreement against the (mutable, driftable) stored row is the same completed
+        # swap resurfacing, not a new one. Repair the drifted stamps in place; mint nothing.
         if await _already_reached(actions, agent_id=head, observed=observed):
             do = EvidenceClass.DIRECT_OBSERVATION
             head_oid = await actions.create_or_find_object("Agent", head, head)
             await actions.assert_property(head_oid, "source_model", observed, head, now,
                                           confidence_for(do), evidence_class=do.value)
-            # EARNED-PULSE (thread 870d7391): repairing a drifted model stamp is not the
-            # earning act — refresh the pulse only if this row already earned one.
+            # Repairing a drifted model stamp is not the earning act: refresh the pulse only
+            # if this row already earned one.
             await actions.pool.execute(
                 "UPDATE agent_mounts SET model=$2, "
                 "last_seen=CASE WHEN earned_pulse_at IS NOT NULL THEN now() ELSE last_seen END "
@@ -3861,9 +3801,10 @@ async def live_succession(
             return {"unchanged": True,
                    "reason": f"idempotent — {head} already recorded reaching {observed}; "
                              "repaired the drifted stored model, minted nothing"}
-        # whose hand moved the model? A /model on THIS session's own transcript makes the seam
-        # the OPERATOR's deliberate act — the mint still happens (a death is a death, ruling
-        # a882b334) but the seam string carries the hand, so no downstream surface preaches.
+        # Whose hand moved the model? A model change on this session's own transcript makes
+        # the seam the operator's deliberate act. The mint still happens (a mind change is a
+        # mind change regardless of cause) but the seam string carries who caused it, so no
+        # downstream surface misreports it.
         deliberate = False
         try:
             main = locate_current_transcript(
@@ -3872,15 +3813,13 @@ async def live_succession(
                 _cur, _hist, deliberate = await model_of_transcript(main)
         except OSError:
             deliberate = False
-        # EARNED-PULSE (THE EARNED-PULSE COLUMN, thread 870d7391, operator ruling
-        # 2026-09-11) — THE HIGHEST-VALUE GATE of the five this ruling named: this is the
-        # one door that MINTS A NEW AGENT GENERATION off the statusline's own observed
-        # model alone. "The heartbeat's model is as anchored as a transcript read"
-        # (below) conflates a TRUTHFUL RENDER with an EARNED ACT — a spare that never
-        # took a turn can render a statusline forever without ever earning a pulse.
-        # Refuse to mint off a row that has never proven itself alive; the measured
-        # incident this closes (agent:f0d23039-ii, "minted but never acted upon") had
-        # exactly this shape.
+        # The earned-pulse gate: this is the one path that mints a new agent generation off
+        # the statusline's own observed model alone. "The heartbeat's model is as anchored as
+        # a transcript read" (see below) conflates a truthful render with an earned act: a
+        # spare session that never took a turn can render a statusline forever without ever
+        # earning a pulse. Refuse to mint off a row that has never proven itself alive; a
+        # measured incident this closes involved a generation minted but never acted upon,
+        # with exactly this shape.
         earned = await actions.pool.fetchval(
             "SELECT earned_pulse_at FROM agent_mounts WHERE job_dir=$1", row["job_dir"])
         if earned is None:
@@ -3888,17 +3827,16 @@ async def live_succession(
                    "reason": "no earned pulse on this row — refusing to mint an heir off "
                              "an unearned observation (THE EARNED-PULSE COLUMN, mail 9873)"}
         ancestor_oid = await actions.create_or_find_object("Agent", head, head)
-        # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off the
-        # front of the chain BEFORE minting on top of it — head/ancestor_oid below name
-        # whoever this heir actually succeeds, not a compaction-minted phantom that never
-        # took a turn.
+        # Succession follows turns: fold any zero-turn phantom off the front of the chain
+        # before minting on top of it. head/ancestor_oid below name whoever this heir
+        # actually succeeds, not a compaction-minted phantom that never took a turn.
         head, ancestor_oid = await _fold_zero_turn_ancestors(actions, head, ancestor_oid, now)
         seam = f"{old} → {observed}" + (" [operator /model]" if deliberate else "")
         heir, heir_oid = await mint_heir(actions, head, ancestor_oid, because="live-swap",
                                          succession=seam, now=now,
                                          minting_door=row["job_dir"])
-        # the heartbeat's model is the harness's own word about a session it is rendering — as
-        # anchored as a job_dir transcript read, and the baseline the NEXT seam check runs
+        # The heartbeat's model is the harness's own word about a session it is rendering, as
+        # anchored as a job_dir transcript read, and the baseline the next seam check runs
         # against (without it, a later re-mount would see no anchored model on the heir and
         # stay quiet).
         do = EvidenceClass.DIRECT_OBSERVATION
@@ -3907,26 +3845,25 @@ async def live_succession(
         if row["project"]:
             await actions.assert_property(heir_oid, "project", row["project"], heir, now, _CONF,
                                           evidence_class=_EC)
-        # THE MARQUEE SPECIMEN (Thoth dispatch 6484/6515, decision f5d5473b's gen 12):
-        # `_job_id(job_dir)` was tried FIRST here, backwards from the precedent this same
-        # module already sets at line ~1248 (`session or _job_id(job_dir)` — explicit
-        # session wins, job_dir is only ever the fallback guess). For a `-p --resume`
-        # wake, job_dir IS per-session, so the two values happen to agree and the bug
-        # never shows. For a `--bg`-launched seat, job_dir is the DURABLE PER-SEAT anchor
-        # (`_launch_anchor`'s own `jobs/seat-<hex>`, unchanged across every generation) —
-        # `_job_id` has no way to know that isn't a session id, and dutifully returns the
-        # seat's own canonical, stamped as if it were one. Confirmed live: Marquee's gen
-        # 12 carries session="seat-bdbe031e" in the graph while her real session id
-        # (226a2695-...) sits, findable, right where her mount's transcript actually is —
-        # the corrupted stamp was the whole reason `osiris resume` reported "mounted but
-        # no transcript found on disk", not her anchor_cwd's own separate double-row leak.
-        # `sid` is ALREADY validated non-empty (the `len(sid) < 8` guard above returned
-        # early otherwise) — it is never a worse choice than a job_dir guess, so it goes
-        # first now, matching this module's own established precedent. The `_job_id`
-        # fallback below is effectively unreachable in practice (`sid[:8]` on an
-        # already-length-checked `sid` is never falsy) — guarded anyway, for the same
-        # reason register_agent's own birth-time write is: never let a stable-anchor slug
-        # wear the `session` column (`_looks_like_a_real_session`, Thoth's dispatch 6734).
+        # A prior version of this code tried `_job_id(job_dir)` first here, backwards from
+        # the precedent this same module already sets elsewhere (`session or
+        # _job_id(job_dir)`: explicit session wins, job_dir is only ever the fallback
+        # guess). For a resume-style wake, job_dir is per-session, so the two values happen
+        # to agree and the bug never showed. For a background-launched seat, job_dir is the
+        # durable per-seat anchor (`_launch_anchor`'s own `jobs/seat-<hex>`, unchanged
+        # across every generation), and `_job_id` has no way to know that isn't a session
+        # id, so it dutifully returns the seat's own canonical, stamped as if it were one.
+        # This was confirmed live in an agent whose graph record carried a seat-anchor slug
+        # as its session id while its real session id sat, findable, right where its
+        # mount's transcript actually was: the corrupted stamp was the whole reason resume
+        # reported "mounted but no transcript found on disk". `sid` is already validated
+        # non-empty (the `len(sid) < 8` guard above returned early otherwise), so it is
+        # never a worse choice than a job_dir guess and goes first now, matching this
+        # module's own established precedent. The `_job_id` fallback below is effectively
+        # unreachable in practice (`sid[:8]` on an already-length-checked `sid` is never
+        # falsy), guarded anyway for the same reason register_agent's own birth-time write
+        # is: never let a stable-anchor slug wear the `session` column
+        # (`_looks_like_a_real_session`).
         sid_prop = sid[:8] or _job_id(row["job_dir"])
         if _looks_like_a_real_session(sid_prop):
             await actions.assert_property(heir_oid, "session", sid_prop, heir, now, _CONF,
@@ -3942,9 +3879,10 @@ async def live_succession(
 
 
 async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
-    """True if this Agent carries a winning retired=true — a deliberate close. Read off the
-    projected current_assertions (highest confidence, then most recent), same predicate the
-    trigger's reanimation-guard uses, so mount and wake agree on 'is this identity closed'."""
+    """True if this Agent carries a winning retired=true, meaning a deliberate close. Read off
+    the projected current_assertions (highest confidence, then most recent), the same
+    predicate the trigger's reanimation guard uses, so mount and wake agree on whether this
+    identity is closed."""
     v = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions "
         "WHERE object_id=$1 AND name='retired' "
@@ -3952,32 +3890,31 @@ async def _winning_retired(actions: Actions, agent: uuid.UUID) -> bool:
     return bool(v == "true")
 
 
-# A REAL HARNESS SESSION ID, TRUNCATED — never the shape `_job_id` hands back for a
-# STABLE ANCHOR (Thoth's own diagnosis, msg 6734, measured against Marquee): every genuine
-# sid this codebase ever produces — a heartbeat's own `session_id`, a transcript filename's
-# leading segment, DSH's own UUID slice — is exactly 8 lowercase hex characters (`_UUID_RE`
-# in ingest/sessions.py validates the same shape at 36 chars before this module's own
-# `[:8]`/`.split("-")[0]` truncations run). `_launch_anchor`'s own `jobs/seat-<hex>` is NOT
-# that shape (a literal seat canonical, unrelated to any session), so `_job_id` returns it
-# unvalidated — its "jobs" branch, unlike its own "sessions" branch twenty lines below it,
-# never checks. THE FIX DELIBERATELY LIVES HERE, NOT IN `_job_id` ITSELF: `_job_id`'s return
-# value does TWO JOBS — a session id AND (via `sid`/`identity.agent_id=f"agent:{sid}"` in
-# resolve_identity) a DURABLE IDENTITY ANCHOR for a session with no other observation at
-# all. Pure-seat-office lineages (this seat's own `agent:seat-af50a33e` root among them)
-# bootstrap their very first identity through exactly that anchor fallback — narrowing
-# `_job_id` itself would silently rename every future first-ever mount of that shape from a
-# readable `agent:seat-<hex>` to an opaque `agent:j<hash>` (resolve_identity's OWN "last
-# resort" branch), the second-role regression Thoth's own dispatch warned against (decision
-# 4faab225's precedent: source_id doing two jobs, the obvious fix breaking the other one).
-# Gating ONLY the `session` PROPERTY WRITE, never `_job_id`/`sid`/`agent_id` themselves,
+# A real harness session id, truncated, is never the shape `_job_id` hands back for a
+# stable anchor: every genuine sid this codebase ever produces (a heartbeat's own
+# `session_id`, a transcript filename's leading segment, a UUID slice from an external
+# source) is exactly 8 lowercase hex characters (`_UUID_RE` in ingest/sessions.py validates
+# the same shape at 36 chars before this module's own `[:8]`/`.split("-")[0]` truncations
+# run). `_launch_anchor`'s own `jobs/seat-<hex>` is not that shape (a literal seat
+# canonical, unrelated to any session), so `_job_id` returns it unvalidated; its "jobs"
+# branch, unlike its own "sessions" branch twenty lines below it, never checks. The fix
+# deliberately lives here, not in `_job_id` itself: `_job_id`'s return value does two jobs,
+# a session id and (via `sid`/`identity.agent_id=f"agent:{sid}"` in resolve_identity) a
+# durable identity anchor for a session with no other observation at all. Pure-seat-office
+# lineages bootstrap their very first identity through exactly that anchor fallback, so
+# narrowing `_job_id` itself would silently rename every future first-ever mount of that
+# shape from a readable `agent:seat-<hex>` to an opaque `agent:j<hash>` (resolve_identity's
+# own "last resort" branch), the kind of regression a prior fix in this codebase warned
+# against: a shared value doing two jobs, where the obvious fix to one breaks the other.
+# Gating only the `session` property write, never `_job_id`/`sid`/`agent_id` themselves,
 # fixes the resume-poisoning defect with zero anchor-role risk.
 _SESSION_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 
 
 def _looks_like_a_real_session(sid: str | None) -> bool:
     """Is `sid` shaped like a genuine (truncated) harness session id, never a stable
-    per-seat anchor slug or any other non-session string wearing its column? See the
-    module comment just above for the full reasoning."""
+    per-seat anchor slug or any other non-session string wearing its column? See the module
+    comment just above for the full reasoning."""
     return sid is not None and _SESSION_ID_RE.match(sid) is not None
 
 
@@ -3985,101 +3922,99 @@ async def register_agent(
     actions: Actions, identity: AgentIdentity, *, actor: str, expected_model: str | None = None,
     mint_reason: str | None = None, revisit_check: bool = False,
 ) -> uuid.UUID:
-    """Mint (idempotently) the Agent object + its org-chart links. The agent attributes
-    its OWN registration (`source = agent:<session>`), SELF_DECLARED. Re-mount is a no-op
-    (find-or-create + the kernel's byte-dup assertion skip absorb it). `expected_model` (the
-    operator's standing choice) turns on the swap-detector: the intent is stamped, and a silent
-    demotion away from it is recorded as a first-class OBSERVED event on the Agent.
+    """Mint (idempotently) the Agent object and its org-chart links. The agent attributes its
+    own registration (`source = agent:<session>`), self-declared. Re-mount is a no-op
+    (find-or-create plus the kernel's byte-dup assertion skip absorb it). `expected_model`
+    (the operator's standing choice) turns on the swap detector: the intent is stamped, and a
+    silent demotion away from it is recorded as a first-class observed event on the Agent.
 
-    THE SUCCESSION SEAM (bug #51, a sibling project): session-keyed identity means a retire+compact+
-    swap hands a DEAD agent's id to a fresh context — a different model then writes AS it, and
-    the transcript-level swap-detector is blind when the new transcript never ran the old model.
-    So registration also compares the fresh ANCHORED observation against the graph's last
-    anchored source_model: ANY disagreement is a succession seam under the mind ruling
-    (a882b334) — even one the transcript witnessed. The old exemption for witnessed transitions
-    ("same context, different seam") encoded tenure semantics: the operator overruled it — the
-    numeral tracks WHICH MIND, and a mind is one contiguous run of one model, so a witnessed
-    swap is a death like any other (the warm-swap `model_swapped` stamp still lands too — both
-    records are true). `mint_reason` forces a mint for a context-death the harness reported
-    with no model change at all (compaction, /clear): the weights survive but the memory the
-    operator was talking to does not.
+    The succession seam: session-keyed identity means a retire-compact-swap sequence hands a
+    dead agent's id to a fresh context, a different model then writes as it, and the
+    transcript-level swap detector is blind when the new transcript never ran the old model.
+    So registration also compares the fresh anchored observation against the graph's last
+    anchored source_model: any disagreement is a succession seam under the standing rule that
+    a generation tracks a mind, even one the transcript witnessed. An older exemption for
+    witnessed transitions ("same context, different seam") encoded tenure semantics that has
+    since been overruled: the generation number tracks which mind, and a mind is one
+    contiguous run of one model, so a witnessed swap is a succession like any other (the
+    warm-swap `model_swapped` stamp still lands too; both records are true). `mint_reason`
+    forces a mint for a context death the harness reported with no model change at all
+    (compaction, session clear): the weights survive but the memory the operator was talking
+    to does not.
 
-    `revisit_check=True` (thread 879c97b9 piece 1, 2026-09-11): opt-in, load-bearing
-    ONLY at the one call site that genuinely needs it (_reattach's own transcript
-    self-restore fallback, mcp_server.py — audited live: a real prior transcript proves
-    the session ran before, but nothing links it to any known lineage, and it minted
-    unconditionally with no check at all before this). When a GENUINELY fresh Agent
-    object mints under this flag at a project already carrying activity from a
-    DIFFERENT, unrelated lineage, `_flag_unattributed_revisit` opens a loud obligation
-    Thread naming it instead of minting silently — never refuses the mint itself, only
-    confesses it. False by default: every OTHER register_agent call site already carries
-    its own attribution (a fork's spawned_by link, an office-birth's deed, a seam heir's
-    own parent generation) that this check has no way to see, and must never
-    second-guess."""
+    `revisit_check=True` is opt-in, load-bearing only at the one call site that genuinely
+    needs it (_reattach's own transcript self-restore fallback in mcp_server.py, audited
+    live: a real prior transcript proves the session ran before, but nothing links it to any
+    known lineage, and it minted unconditionally with no check at all before this). When a
+    genuinely fresh Agent object mints under this flag at a project already carrying activity
+    from a different, unrelated lineage, `_flag_unattributed_revisit` opens a loud obligation
+    thread naming it instead of minting silently; it never refuses the mint itself, only
+    confesses it. False by default: every other register_agent call site already carries its
+    own attribution (a fork's spawned_by link, an office-birth's deed, a seam heir's own
+    parent generation) that this check has no way to see, and must never second-guess."""
     now = datetime.now(UTC)
     obs: str | None = None
-    # THE MINT LOCK (thread a3d49d91): phases 0–1 read-then-write the succession chain; two
-    # concurrent registrations (or a registration racing the heartbeat) must serialize per
-    # lineage, or the loser's head-walk finds the winner's mint and stacks a generation on it.
+    # The mint lock: phases 0-1 read-then-write the succession chain; two concurrent
+    # registrations (or a registration racing the heartbeat) must serialize per lineage, or
+    # the loser's head-walk finds the winner's mint and stacks a generation on it.
     async with mint_lock(actions.pool, _generation(identity.agent_id)[0]):
-        # PHASE 0 — LINEAGE (ruling be292762): a session-keyed resolve lands on the BASE id;
-        # walk to the lineage HEAD first — the head is who this name is now. Seam checks run
-        # against the head.
+        # Phase 0, lineage: a session-keyed resolve lands on the base id; walk to the lineage
+        # head first, since the head is who this name is now. Seam checks run against the head.
         head = await lineage_head(actions.pool, identity.agent_id)
         if head != identity.agent_id:
             identity.agent_id = head
         src = identity.agent_id
-        # THE INSERT-VS-FOUND SIGNAL (thread 879c97b9 piece 1): a plain pre-existence
-        # check, not a change to create_or_find_object's own shared return contract —
-        # every other caller of that function expects a bare id back, and widening it
-        # here would ripple across the whole codebase for one caller's own question.
-        # Only computed under revisit_check (an extra read on the hot mint path is a
-        # real cost, paid only by the one call site that asked for it).
+        # A plain pre-existence check, not a change to create_or_find_object's own shared
+        # return contract: every other caller of that function expects a bare id back, and
+        # widening it here would ripple across the whole codebase for one caller's own
+        # question. Only computed under revisit_check (an extra read on the primary mint path is
+        # a real cost, paid only by the one call site that asked for it).
         genuinely_fresh = revisit_check and not bool(await actions.pool.fetchval(
             "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", identity.agent_id))
         a = await actions.create_or_find_object("Agent", identity.agent_id, src)
 
-        # PHASE 1 — SEAM DETECTION → MINT (the operator's ruling: the heir gets its OWN name).
+        # Phase 1, seam detection leading to mint: the heir gets its own name.
         mint_because: str | None = None
         if await _winning_retired(actions, a):
-            # wearing a RETIRED face (bug #51 follow-up): under the mint ruling the retiree is
-            # never re-worn — the arriving context is an heir and gets minted below. The
-            # retirement stands.
+            # A retired identity is never re-worn: the arriving context is an heir and gets
+            # minted below. The retirement stands.
             mint_because = "reanimation-of-retired"
         anchored = bool(identity.model) and identity.model_method == "job_dir"
         if anchored:
-            # the succession seam: read the baseline BEFORE the new observation supersedes it.
-            # No witnessed-transition exemption (ruling a882b334): oscillation mints every
-            # time — the returning model is a THIRD mind, not the first one back. NORMALIZED
+            # The succession seam: read the baseline before the new observation supersedes
+            # it. There is no witnessed-transition exemption: oscillation mints every time,
+            # since the returning model is a third mind, not the first one back. Normalized
             # comparison: a bracketed display variant of the same weights is the same mind,
             # never a seam.
             prior_raw, prior_at = await _last_anchored_stamp(actions, a)
             prior = normalize_model(prior_raw)
             obs = normalize_model(identity.model)
-            # THE NULL-SEAM GATE (thread 065c374e, defense-in-depth for forks.py's lesson: a
-            # NULL/'unknown' prior is the ABSENCE of an observation, never a value — WE HAVE
-            # NOT LOOKED YET is not "the mind was someone else". A fresh reading can't disagree
-            # with a null, so `prior is not None` must gate every comparison below it.
+            # The null-seam gate, defense-in-depth for the same lesson applied in forks.py: a
+            # null or "unknown" prior is the absence of an observation, never a value; "we
+            # have not looked yet" is not "the mind was someone else". A fresh reading can't
+            # disagree with a null, so `prior is not None` must gate every comparison below it.
             if prior is not None and prior != obs:
-                # THE DATING GATE (thread a3d49d91): the transcript tail LAGS a /model — no
-                # assistant turn has run on the new model yet — so an observation not FRESHER
-                # than the stamp it disagrees with is an old newspaper arguing with today's,
-                # never a seam. (TJMAX VIII/IX: opposite seams, four seconds apart, minted
-                # off each other's stale reads.) An unstamped observation keeps the old
-                # behavior: the gate only ever SUPPRESSES a mint it can prove stale.
+                # The dating gate: the transcript tail lags a model change, since no
+                # assistant turn has run on the new model yet, so an observation not fresher
+                # than the stamp it disagrees with is stale data arguing with a current
+                # reading, never a real seam. (One prior incident showed opposite seams
+                # minted off each other's stale reads, four seconds apart.) An unstamped
+                # observation keeps the old behavior: the gate only ever suppresses a mint it
+                # can prove stale.
                 stale = (identity.model_observed_at is not None and prior_at is not None
                          and identity.model_observed_at <= prior_at)
                 if not stale:
                     identity.model_succession = f"{prior} → {obs}"
                     mint_because = mint_because or "model-succession"
         if mint_reason:
-            # a harness-reported context death (compaction, /clear) with no model seam of its
-            # own
+            # A harness-reported context death (compaction, session clear) with no model
+            # seam of its own.
             mint_because = mint_because or mint_reason
         if mint_because == "model-succession" and not mint_reason and obs is not None:
-            # a model seam ALONE may be settings flapping: try the heal before minting — the
-            # debounce must work whichever observer witnesses the return leg (it used to live
-            # only in the heartbeat, so a mount seeing the round-trip minted a phantom).
+            # A model seam alone may be settings flapping: try the heal before minting. The
+            # debounce must work whichever observer witnesses the return leg (it used to
+            # live only in the heartbeat, so a mount seeing the round-trip minted a phantom
+            # generation).
             healed = await _debounce_roundtrip(actions, agent_id=identity.agent_id,
                                                observed=obs, now=now)
             if healed is not None:
@@ -4089,20 +4024,19 @@ async def register_agent(
                 identity.model_succession = None
                 mint_because = None
         if mint_because == "reanimation-of-retired":
-            # THE REANIMATION FIX (obligation 6b1efacb, halcyon specimen, 2026-08-18):
-            # `identity.agent_id`/`a` here IS the retired object itself — handing it to
-            # `_fold_zero_turn_ancestors` unchanged used to chain the new heir onto a
-            # FOLDED PHANTOM whenever the retiree also happened to be false_mint (its own
+            # `identity.agent_id`/`a` here is the retired object itself. Handing it to
+            # `_fold_zero_turn_ancestors` unchanged used to chain the new heir onto a folded
+            # phantom whenever the retiree also happened to be false_mint (its own
             # first-iteration halt treats an already-false_mint starting node as "a prior
-            # fold already resolved this", correct MID-WALK, wrong as an ENTRY POINT).
+            # fold already resolved this", correct mid-walk, wrong as an entry point).
             # Skip forward past any false_mint ancestors first, landing on the nearest
-            # ELIGIBLE one before the fold walk ever runs.
+            # eligible one before the fold walk ever runs.
             identity.agent_id, a = await _skip_false_mint_ancestors(actions, identity.agent_id, a)
         if mint_because:
-            # SUCCESSION FOLLOWS TURNS (ruling d3531cd8): fold any zero-turn phantom off
-            # the front of the chain BEFORE minting — succeeded_from must land on whoever
-            # this heir actually succeeds, not a phantom that never took a turn (the exact
-            # gap that left orient()'s inheritance block blind on a double-mint, e749036e).
+            # Succession follows turns: fold any zero-turn phantom off the front of the
+            # chain before minting. succeeded_from must land on whoever this heir actually
+            # succeeds, not a phantom that never took a turn (the exact gap that once left
+            # orient()'s inheritance block blind on a double-mint).
             identity.agent_id, a = await _fold_zero_turn_ancestors(
                 actions, identity.agent_id, a, now)
             identity.succeeded_from = identity.agent_id
@@ -4113,24 +4047,23 @@ async def register_agent(
             identity.agent_id = heir
             src = heir
     if identity.succeeded_from is None:
-        # THE RECONSTRUCTION FIX (msg 4673 — operator-authorized, "work on infra and
-        # hygiene"): `succeeded_from` is written onto `identity` in
-        # exactly ONE place in this whole module — the mint branch just above, for the
-        # single turn a seam is actually detected. Every LATER call for the SAME
-        # (already-minted, already-head) agent builds a brand-new `AgentIdentity` via
-        # `resolve_identity()` (no pool, no DB access, `succeeded_from` stays its dataclass
-        # default of None) — so before this fix, any MCP server bounce or fresh connection
-        # after the one true mint turn PERMANENTLY blinded that session's own succession
-        # signal: orient()'s `if ident and ident.succeeded_from:` gate never opened again,
-        # for the rest of that agent's life, even though the Agent's own `succeeded_from`
-        # property in the graph was correct the entire time (confirmed live: new Thoth,
-        # hop distance 1 to her real predecessor, DB row correct, session-side field
-        # simply never repopulated — pure read-side loss, not a write bug). Recovered here,
-        # via the SAME primitive `nearest_handoff_ancestor`'s own walk already uses
-        # (`_succeeded_from_of`), at the one place this function already touches the DB for
-        # this exact agent — cheap (a single indexed point lookup, the same shape as
+        # `succeeded_from` is written onto `identity` in exactly one place in this whole
+        # module: the mint branch just above, for the single turn a seam is actually
+        # detected. Every later call for the same (already-minted, already-head) agent
+        # builds a brand-new `AgentIdentity` via `resolve_identity()` (no pool, no DB
+        # access, `succeeded_from` stays its dataclass default of None), so before this
+        # fix, any MCP server bounce or fresh connection after the one true mint turn
+        # permanently blinded that session's own succession signal: orient()'s `if ident
+        # and ident.succeeded_from:` gate never opened again for the rest of that agent's
+        # life, even though the Agent's own `succeeded_from` property in the graph was
+        # correct the entire time (confirmed live in a case at hop distance 1 to its real
+        # predecessor, with the DB row correct but the session-side field simply never
+        # repopulated: pure read-side loss, not a write bug). Recovered here via the same
+        # primitive `nearest_handoff_ancestor`'s own walk already uses (`_succeeded_from_of`),
+        # at the one place this function already touches the DB for this exact agent: cheap
+        # (a single indexed point lookup, the same shape as
         # `_winning_retired`/`_last_anchored_stamp` just above, not a new query class on
-        # this hot path) rather than widening `resolve_identity` with a pool it was never
+        # this primary code path) rather than widening `resolve_identity` with a pool it was never
         # given. Guarded on `is None` so a genuine mint this same turn (which already set
         # the correct value above) is never overwritten by a redundant read.
         identity.succeeded_from = await _succeeded_from_of(actions.pool, identity.agent_id)
@@ -4140,24 +4073,24 @@ async def register_agent(
         try:
             await _notify_seam_manager(actions, heir=src, mint_because=mint_because,
                                        project=identity.project)
-        except Exception as exc:  # noqa: BLE001 — Ra's bug (aeae9977) was SILENCE; a
+        except Exception as exc:  # noqa: BLE001 : a prior bug here was silent failure; a
                                    # notify failure must never be the thing that blocks a
-                                   # mount, but swallowing it WITHOUT A TRACE would just
-                                   # relocate the same silence one layer down (Thoth's
-                                   # review, DM 1216) — fail open, never fail quiet
+                                   # mount, but swallowing it without a trace would just
+                                   # relocate the same silence one layer down. Fail open,
+                                   # never fail quiet.
             logger.warning("notify-at-seam failed for heir %s (%s): %r",
                            src, mint_because, exc)
     label = f"{identity.model or 'claude'} in {identity.project or '?'}"
     await actions.assert_property(a, "name", label, src, now, _CONF, evidence_class=_EC)
-    # THE BIRTH-TIME WRITE (Thoth's own dispatch, msg 6734): the FIRST-EVER mount of a
-    # `--bg`-launched seat has nothing else to observe yet and `identity.session` falls all
-    # the way to `_job_id(job_dir)` — the seat's own stable anchor slug, not a session id
-    # (see `_looks_like_a_real_session`'s own comment). Skipping this assert rather than
-    # writing the anchor as `session` leaves the property correctly ABSENT — never a
-    # confident lie — until a later call (the heartbeat's own live_succession, or a fresh
-    # resolve_identity once this session's transcript actually exists) has something real
-    # to stamp. `osiris resume`'s resident-unknown gate already treats "no signed
-    # testimony" as an honest unknown, never a refusal shaped like corruption.
+    # The birth-time write: the first-ever mount of a background-launched seat has nothing
+    # else to observe yet and `identity.session` falls all the way to `_job_id(job_dir)`,
+    # the seat's own stable anchor slug, not a session id (see `_looks_like_a_real_session`'s
+    # own comment). Skipping this assert rather than writing the anchor as `session` leaves
+    # the property correctly absent, never a confident lie, until a later call (the
+    # heartbeat's own live_succession, or a fresh resolve_identity once this session's
+    # transcript actually exists) has something real to stamp. The resume command's
+    # resident-unknown gate already treats "no signed testimony" as an honest unknown, never
+    # a refusal shaped like corruption.
     if _looks_like_a_real_session(identity.session):
         await actions.assert_property(a, "session", identity.session, src, now, _CONF,
                                       evidence_class=_EC)
@@ -4165,26 +4098,27 @@ async def register_agent(
                                   evidence_class=_EC)
     if identity.model:
         ec = _MODEL_EC.get(identity.model_method or "", EvidenceClass.CO_OCCURRENCE)
-        # dated by the EVENT (the transcript record that carried the model), never by the
-        # bookkeeping — so the next seam check compares clocks honestly: a fresher heartbeat
+        # Dated by the event (the transcript record that carried the model), never by the
+        # bookkeeping, so the next seam check compares clocks honestly: a fresher heartbeat
         # stamp beats this one, an older tail read loses to it.
         await actions.assert_property(a, "source_model", identity.model, src,
                                       identity.model_observed_at or now,
                                       confidence_for(ec), evidence_class=ec.value)
     if identity.model_divergent and identity.model_declared:
-        # the agent self-reported a model that DISAGREES with the harness (ruling 17516660): keep
-        # its word as the weak signal it is — the mismatch with source_model (observed) IS the flag.
+        # The agent self-reported a model that disagrees with the harness: keep its word as
+        # the weak signal it is. The mismatch with source_model (observed) is the flag.
         sr = EvidenceClass.CO_OCCURRENCE
         await actions.assert_property(a, "source_model_declared", identity.model_declared, src,
                                       now, confidence_for(sr), evidence_class=sr.value)
     if expected_model:
-        # the swap-detector (ruling f2ae6346): stamp the INTENT, and when the observed model
-        # diverges from it — the fable harness's silent danger-demotion — record the swap as a
-        # first-class OBSERVED event (not the agent's self-report; it can't feel its own swap).
-        # gate the swap on a job_dir ANCHOR: a cwd/self-report model may be a neighbor's, and a
-        # divergence asserted off it is the cry-wolf — the true positive is the anchored read.
-        # The repo's OWN declared intent (.osiris model=) outranks the box default: a fleet of
-        # onboarded repos does not all run fable, and the operator's choice is never a sin.
+        # The swap detector: stamp the intent, and when the observed model diverges from it,
+        # a silent danger-demotion by the harness, record the swap as a first-class observed
+        # event (not the agent's self-report; it can't feel its own swap). Gate the swap on a
+        # job_dir anchor: a cwd/self-report model may be a neighbor's, and a divergence
+        # asserted off it is a false alarm; the true positive is the anchored read. The
+        # repo's own declared intent (.osiris model=) outranks the machine-level default: a fleet of
+        # onboarded repos does not all run the same model, and the operator's choice is
+        # never a violation.
         expected_model = read_project_model(identity.cwd) or expected_model
         verdict = classify_swap(identity.model_history, identity.model, expected=expected_model,
                                 anchored=identity.model_method == "job_dir",
@@ -4192,61 +4126,60 @@ async def register_agent(
         await actions.assert_property(a, "model_intent", expected_model, src, now, _CONF,
                                       evidence_class=_EC)
         if verdict.swapped and not verdict.deliberate:
-            # RE-SCOPED (task #146, operator's own words: "a rug pull ... vs a direct /model
-            # swap on my part is different"): `model_swapped` is the EXACT property the
-            # digest's danger map reads (sessions.py's own miner docstring) — stamping it for
-            # a WITNESSED, deliberate /model is a false positive on that map, indistinguishable
-            # from the harness's silent danger-demotion this property exists to catch. The
-            # confession is for the harness changing the model WITHOUT the operator; an
-            # operator /model is recorded durably below instead (intended_model + the pin),
-            # never as a danger sighting.
+            # Re-scoped per an operator distinction between an involuntary demotion and a
+            # direct, deliberate model change: `model_swapped` is the exact property the
+            # digest's danger map reads (sessions.py's own miner docstring), so stamping it
+            # for a witnessed, deliberate model change is a false positive on that map,
+            # indistinguishable from the harness's silent danger-demotion this property
+            # exists to catch. The flag is for the harness changing the model without the
+            # operator; an operator-initiated change is recorded durably below instead
+            # (intended_model plus the pin), never as a danger sighting.
             do = EvidenceClass.DIRECT_OBSERVATION
             await actions.assert_property(a, "model_swapped", swap_marker(verdict), src, now,
                                           confidence_for(do), evidence_class=do.value)
         if verdict.deliberate and verdict.to_model:
-            # THE STANDING-CHOICE WRITE SIDE (operator ruling e0e0955d, confirming his own
-            # 1aca1fcc from 2026-07-19): the operator's own /model command on the record IS
-            # the operator re-pinning this seat's standing choice — auto-stamp intended_model
-            # so the choice persists across successions and relaunches with no manual
-            # re-pinning. The READ side already exists (mint_seat's own pin, launch()'s
-            # precedence since 70ae3c3); this is the one write it was missing. Gated on
-            # `deliberate` specifically (never `swapped` alone — swaps.py's own law: only a
-            # WITNESSED /model transition sets it, never a harness rug-pull or a cold
-            # divergence guessed from the intent alone).
+            # The standing-choice write side: the operator's own model-change command on the
+            # record is the operator re-pinning this seat's standing choice, so auto-stamp
+            # intended_model so the choice persists across successions and relaunches with
+            # no manual re-pinning. The read side already exists (mint_seat's own pin,
+            # launch()'s precedence); this is the one write it was missing. Gated on
+            # `deliberate` specifically, never `swapped` alone: only a witnessed model
+            # transition sets it, never an involuntary demotion by the harness or a cold
+            # divergence guessed from the intent alone.
             from src.orchestrator.seats import held_seat
             seat = await held_seat(actions.pool, identity.agent_id)
             if seat:
                 soid = await actions.create_or_find_object("Seat", seat["seat_id"], src)
                 await actions.assert_property(soid, "intended_model", verdict.to_model, src,
                                               now, _CONF, evidence_class=_EC)
-                # THE PIN BECOMES A CACHE, NOT A COMPETING CLAIM (task #146): the graph stamp
-                # above is durable but invisible to `_expected_model`'s FIRST-checked source
-                # (the .osiris file itself) and to a fresh `osiris launch` on a box that never
-                # talks to this graph. Writing the file closes both gaps in one act — no other
-                # reader needs to change, since read_project_model/_expected_model already
-                # check the file before anything else.
+                # The pin becomes a cache, not a competing claim: the graph stamp above is
+                # durable but invisible to `_expected_model`'s first-checked source (the
+                # .osiris file itself) and to a fresh launch on a machine that never talks to
+                # this graph. Writing the file closes both gaps in one act; no other reader
+                # needs to change, since read_project_model/_expected_model already check the
+                # file before anything else.
                 if seat.get("handle"):
                     await write_model_pin(str(seat["handle"]), verdict.to_model)
-    # RULE 1 OF de3dfc18 (task #144): "where this lineage's work actually landed" — ported
-    # from project_identity.py's own _write_attribution (task #110), the SAME query, reused
-    # rather than re-derived. Bases = this agent's OWN lineage only (not a seat's holder
-    # history — resolve_identity/register_agent run before any seat necessarily exists, so
-    # the agent's own generation-stripped id is the one lineage key guaranteed on hand).
+    # A rule for inferring "where this lineage's work actually landed", ported from
+    # project_identity.py's own _write_attribution, the same query, reused rather than
+    # re-derived. Bases = this agent's own lineage only (not a seat's holder history:
+    # resolve_identity/register_agent run before any seat necessarily exists, so the agent's
+    # own generation-stripped id is the one lineage key guaranteed on hand).
     #
-    # THE ACCEPTANCE CONDITION (Thoth's own words, msg 3854): "if it picks, it is wrong,
-    # however good the pick." This NEVER overwrites `identity.project` — it reports
-    # agreement/disagreement HONESTLY and stops. A later, separately-scoped build decides
-    # whether/when rule 1 gets to WIN a disagreement; this lane only makes the disagreement
-    # visible, which nothing before it could do at all.
+    # The acceptance condition: if this inference picks a project, it is wrong, however good
+    # the pick. This never overwrites `identity.project`; it reports agreement/disagreement
+    # honestly and stops. A later, separately-scoped build decides whether or when this rule
+    # gets to win a disagreement; this lane only makes the disagreement visible, which
+    # nothing before it could do at all.
     #
-    # DEGRADES, NEVER BLOCKS (577988ed — this sits on the mount path every session in the
-    # fleet traverses): a failed query here must never be the reason a mount fails. None/0/
-    # None (the dataclass defaults) is an honest "could not determine", not a wrong answer.
+    # Degrades, never blocks (this sits on the mount path every session in the fleet
+    # traverses): a failed query here must never be the reason a mount fails. None/0/None
+    # (the dataclass defaults) is an honest "could not determine", not a wrong answer.
     try:
         from src.orchestrator.project_identity import _write_attribution
         wa = await _write_attribution(actions.pool, [_generation(identity.agent_id)[0]])
-    except Exception as exc:  # noqa: BLE001 — a DB hiccup on a diagnostic signal must
-                               # never be the thing that blocks a mount (577988ed)
+    except Exception as exc:  # noqa: BLE001 : a DB hiccup on a diagnostic signal must
+                               # never be the thing that blocks a mount
         logger.warning("write-attribution check failed for %s: %r", identity.agent_id, exc)
         wa = None
     if wa is not None:
@@ -4255,15 +4188,14 @@ async def register_agent(
         if wa["total"] == 0:
             identity.write_attribution_agreement = "no-signal"
         else:
-            # NORMALIZE THROUGH merged_into (obligation a980aff2) before comparing:
-            # `wa["top"]` is already the survivor's live label (`_write_attribution`
-            # reads it off the LIVE in_repo edge), but `identity.project` is whatever the
-            # seat's own pin/cwd resolution produced — which may still name a label that
-            # has since been FOLDED into another project. Comparing the raw strings false-
-            # fires "disagrees" on every folded seat forever after its fold, even though
-            # both sides name the same entity. Degrades to the raw (pre-fix) comparison on
-            # any failure — a diagnostic refinement must never be the reason a mount fails
-            # (577988ed).
+            # Normalize through merged_into before comparing: `wa["top"]` is already the
+            # survivor's live label (`_write_attribution` reads it off the live in_repo
+            # edge), but `identity.project` is whatever the seat's own pin/cwd resolution
+            # produced, which may still name a label that has since been folded into another
+            # project. Comparing the raw strings false-fires "disagrees" on every folded seat
+            # forever after its fold, even though both sides name the same entity. Degrades
+            # to the raw (pre-fix) comparison on any failure: a diagnostic refinement must
+            # never be the reason a mount fails.
             project_label = identity.project
             merge_confession: str | None = None
             if identity.project:
@@ -4274,7 +4206,7 @@ async def register_agent(
                     project_label, merge_confession = (
                         await _normalize_project_label_through_merge(
                             actions.pool, identity.project))
-                except Exception as exc:  # noqa: BLE001 — see note above
+                except Exception as exc:  # noqa: BLE001 : see note above
                     logger.warning("merge-normalization failed for %r: %r",
                                    identity.project, exc)
                     project_label = identity.project
@@ -4282,10 +4214,10 @@ async def register_agent(
                 identity.write_attribution_agreement = "confirms"
             else:
                 identity.write_attribution_agreement = "disagrees"
-                # a DISAGREEMENT is the actionable case — durable, so a later audit (or a
+                # A disagreement is the actionable case: durable, so a later audit (or a
                 # human skimming dossier()) can see it without having caught the live
-                # mount() banner. DERIVED evidence (an inference from write history, not a
-                # declaration): weaker than the SELF_DECLARED properties around it, on
+                # mount() banner. Derived evidence (an inference from write history, not a
+                # declaration): weaker than the self-declared properties around it, on
                 # purpose.
                 do_ec = EvidenceClass.DERIVED
                 await actions.assert_property(
@@ -4299,41 +4231,38 @@ async def register_agent(
         await actions.assert_property(a, "project", identity.project, src, now, _CONF,
                                       evidence_class=_EC)
         proj = await _resolve_or_mint_project(actions, identity.project, src)
-        # THE PROJECT-NAME CLOBBER (task #137/#152, Thoth DM 3801): this used to reassert
-        # `name` from the caller's own pin/identity.project UNCONDITIONALLY, at the SAME
-        # self_declared confidence a deliberate rename_project/correct_project_name write
-        # uses — current_assertions' tie-break (confidence DESC, observed_at DESC) then
-        # falls through to pure recency, so any later, uninformed mount silently overturns
-        # an earlier, reasoned rename. LIVE, MEASURED: repo:xxit's declared name
-        # "handlingtheloop" (decision 8766acd7, 2026-07-31/08-02) was reverted to "xxit"
-        # by five ordinary metron/deckard mounts between 2026-08-07 and 2026-08-08 —
-        # the byebyte disease (9550e980) recurring through a far more common trigger than
-        # disk-census: this line, on every mount of a seat with a stale pin. FIX: only
-        # write at full confidence when there is no existing declared name yet, or the
-        # difference is case/whitespace-only (the already-delegated-safe exception,
-        # ruling 1db1ff41 / decision 8cf283f4). A genuine difference is never silently
-        # dropped — still recorded, so nothing is hidden from history or from
-        # project_identity_evidence's own audit — but at DERIVED-tier confidence, so a
-        # routine, uninformed mount can never outrank a declared rename on recency alone.
+        # The project-name clobber: this used to reassert `name` from the caller's own
+        # pin/identity.project unconditionally, at the same self-declared confidence a
+        # deliberate rename_project/correct_project_name write uses. current_assertions'
+        # tie-break (confidence DESC, observed_at DESC) then falls through to pure recency,
+        # so any later, uninformed mount silently overturns an earlier, reasoned rename.
+        # Measured live: one project's declared name was reverted to its old name by several
+        # ordinary mounts over a couple of days, a recurring failure mode through a far more
+        # common trigger than a disk census: this line, on every mount of a seat with a
+        # stale pin. Fix: only write at full confidence when there is no existing declared
+        # name yet, or the difference is case/whitespace-only (an already-established safe
+        # exception). A genuine difference is never silently dropped, still recorded so
+        # nothing is hidden from history or from project_identity_evidence's own audit, but
+        # at derived-tier confidence, so a routine, uninformed mount can never outrank a
+        # declared rename on recency alone.
         if proj is not None:
-            # THE SELF-REINFECTING FOLD (Thoth dispatch 6547/6568, ruling a73aafa2, the
-            # Marquee specimen): the CLOBBER FIX above downgrades a differing pin-derived
-            # name to DERIVED-tier confidence rather than refusing it outright — right
-            # instinct, wrong mechanism. assert_property's supersession is same-source-
-            # only, so a DERIVED write from THIS session's source still lands as a NEW
-            # current row beside the strong ones; it loses a confidence-ordered read but
-            # WINS a recency-ordered one. Measured live: repo:dtfb carried a direct_
-            # observation/0.9 name from its 2026-08-21 fold, then a derived/0.4
-            # "dealer-to-fb" row was written on 2026-09-02 by exactly this code path (a
-            # mount resolving a stale .osiris pin that still declared the pre-fold name)
-            # — eleven days later, self-reinfecting on every such mount, never healed by
-            # a graph-only cleanup. THE STRUCTURAL FIX: when the incoming label is
-            # PROVABLY a dead identity — the canonical or a current `name` of some OTHER
-            # SoftwareProject already status='merged' INTO this exact `proj` — there is
-            # no genuine disagreement to record at any confidence; it is a fold being
-            # partially undone. Skip the write entirely, not merely downgrade it. This is
-            # a STRONGER signal than the case/whitespace check above, checked first: a
-            # merge record is structural proof, not a heuristic.
+            # The self-reinfecting fold: the clobber fix above downgrades a differing
+            # pin-derived name to derived-tier confidence rather than refusing it outright,
+            # the right instinct but the wrong mechanism. assert_property's supersession is
+            # same-source-only, so a derived write from this session's source still lands as
+            # a new current row beside the strong ones; it loses a confidence-ordered read
+            # but wins a recency-ordered one. Measured live: one project carried a
+            # direct-observation/0.9 name from an earlier fold, then a derived/0.4 row using
+            # its pre-fold name was written days later by exactly this code path (a mount
+            # resolving a stale .osiris pin that still declared the pre-fold name),
+            # self-reinfecting on every such mount, never healed by a graph-only cleanup.
+            # The structural fix: when the incoming label is provably a dead identity, the
+            # canonical or a current `name` of some other SoftwareProject already
+            # status='merged' into this exact `proj`, there is no genuine disagreement to
+            # record at any confidence; it is a fold being partially undone. Skip the write
+            # entirely, not merely downgrade it. This is a stronger signal than the
+            # case/whitespace check above, checked first: a merge record is structural
+            # proof, not a heuristic.
             dead_husk_name = await actions.pool.fetchval(
                 "SELECT 1 FROM objects m WHERE m.type='SoftwareProject' "
                 "AND m.status='merged' AND m.merged_into=$1 AND ("
@@ -4351,39 +4280,36 @@ async def register_agent(
                 "WHERE object_id=$1 AND name='name' "
                 "ORDER BY confidence DESC, observed_at DESC LIMIT 1", proj)
             existing_name = top_row["name"] if top_row else None
-            # THE SUPERSEDE-NOT-OUTRANK GAP (operator ruling b5663511, PROJECT IDENTITY
-            # DRIFT, Thoth mail 12419/12413, the Marquee specimen live 2026-09-18:
-            # repo:dtfb renamed to "lotstretcher" at 0.95 confidence, then a mount 74
-            # SECONDS LATER from the SAME session re-derived the still-unmoved on-disk
-            # folder's basename and wrote "dtfb" back at DERIVED/0.4 — comment above
-            # already downgrades this write's own confidence so a CROSS-source
-            # confidence-ordered read would still favor the rename... but
-            # assert_property's supersession is SAME-SOURCE-ONLY (by design, every
-            # other write in this codebase depends on that), so a SAME-SOURCE write at
-            # ANY confidence SUPERSEDES that source's own prior current row outright —
-            # the rename's own assertion vanishes from current_assertions entirely, not
-            # merely loses a confidence contest. Scoped to same-source ONLY: a cross-
-            # source DERIVED write never erases anything (a different source's row is
-            # untouched by supersession), so the existing "still recorded, just
-            # outranked" behavior for THAT case (test_..._still_downgrades_a_genuine_
-            # unrelated_rename) stays exactly as it was. Extends the existing "skip the
-            # write entirely" structural fix (dead_husk_name, ruling a73aafa2) to this
-            # second shape: THIS source's own prior current row for this property
-            # already carries higher confidence than a DERIVED write would — skip,
-            # never write-and-erase it.
+            # The supersede-not-outrank gap, project identity drift: measured live, one
+            # project was renamed at 0.95 confidence, then a mount less than two minutes
+            # later from the same session re-derived the still-unmoved on-disk folder's
+            # basename and wrote the old name back at derived/0.4 confidence. The comment
+            # above already downgrades this write's own confidence so a cross-source
+            # confidence-ordered read would still favor the rename, but assert_property's
+            # supersession is same-source-only (by design; every other write in this
+            # codebase depends on that), so a same-source write at any confidence supersedes
+            # that source's own prior current row outright: the rename's own assertion
+            # vanishes from current_assertions entirely, not merely loses a confidence
+            # contest. Scoped to same-source only: a cross-source derived write never erases
+            # anything (a different source's row is untouched by supersession), so the
+            # existing "still recorded, just outranked" behavior for that case stays exactly
+            # as it was. Extends the existing "skip the write entirely" structural fix
+            # (dead_husk_name, above) to this second shape: this source's own prior current
+            # row for this property already carries higher confidence than a derived write
+            # would, so skip, never write-and-erase it.
             outranked = (existing_row is not None
                         and existing_row["confidence"] > confidence_for(EvidenceClass.DERIVED))
             if dead_husk_name:
-                pass  # a folded husk's own name resurrected by a stale pin — never written
+                pass  # a folded husk's own name resurrected by a stale pin: never written
             elif (existing_name is None
                     or existing_name.strip().casefold() == identity.project.strip().casefold()):
                 await actions.assert_property(proj, "name", identity.project, src, now, _CONF,
                                               evidence_class=_EC)
             elif outranked:
                 pass  # a higher-confidence current name already stands (a deliberate
-                # rename, most likely) — writing even a DERIVED-confidence value from
-                # THIS SAME source would supersede and erase it, not merely lose a
-                # confidence-ordered contest; skip rather than clobber
+                # rename, most likely); writing even a derived-confidence value from this
+                # same source would supersede and erase it, not merely lose a
+                # confidence-ordered contest, so skip rather than clobber
             else:
                 do = EvidenceClass.DERIVED
                 await actions.assert_property(proj, "name", identity.project, src, now,
@@ -4396,21 +4322,20 @@ async def register_agent(
                     actions, a, proj, identity.project, src, now)
             await _link_once(actions, a, proj, "works_in", src, now)
     if identity.cwd:
-        # the repo path — lets the trigger-hook resolve a project → where to wake
+        # The repo path, which lets the trigger hook resolve a project to where it wakes.
         await actions.assert_property(a, "cwd", identity.cwd, src, now, _CONF, evidence_class=_EC)
     principal = await actions.create_or_find_object("Person", f"principal:{actor}", src)
     await actions.assert_property(principal, "name", actor, src, now, _CONF, evidence_class=_EC)
     await _link_once(actions, a, principal, "acts_for", src, now)
-    # THE POST-MINT INVARIANT (Thoth's ruling, DM 9018/thread 9004): the Agent object
-    # mints under mint_lock above, but its works_in link (just above, when
-    # identity.project resolves at all) is a separate later write outside that lock — no
-    # single actions.atomic() block spans both, so #189's own refuse-and-rollback gate
-    # can't reach across the gap. This never refuses: a project-less mount (no cwd/seat
-    # ever resolved one) is a real, common, legitimate state, not a bug — it just
-    # confesses that gap the same honest way a caller's own unlinked_because would,
-    # once, idempotently, rather than leaving it silent. The heartbeat sub-sweep
-    # (seats.py's post_mint_orphan_sweep) catches whatever a crash between mint_lock and
-    # this line missed.
+    # The post-mint invariant: the Agent object mints under mint_lock above, but its
+    # works_in link (just above, when identity.project resolves at all) is a separate later
+    # write outside that lock; no single actions.atomic() block spans both, so an earlier
+    # refuse-and-rollback gate can't reach across the gap. This never refuses: a
+    # project-less mount (no cwd/seat ever resolved one) is a real, common, legitimate
+    # state, not a bug. It just confesses that gap the same honest way a caller's own
+    # unlinked_because would, once, idempotently, rather than leaving it silent. The
+    # heartbeat sub-sweep (seats.py's post_mint_orphan_sweep) catches whatever a crash
+    # between mint_lock and this line missed.
     from src.orchestrator.capture import confirm_or_confess_link
     await confirm_or_confess_link(
         actions, a, "works_in",
@@ -4423,17 +4348,16 @@ async def register_agent(
 
 
 async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
-    """WHO AM I, AND WHOSE JOB IS VACANT HERE? (Ra V, a-sibling, msg 384 — the gap that made
-    the whole ruling hollow.)
+    """Who am I, and whose job is vacant here? This closes a gap where the house/seat/holder
+    model stamped a seat in the graph, but orient() went on answering with a bare agent id and
+    nothing about the seat. The refusal to double-seat a house was fixed before this, but the
+    discovery wasn't: an agent would not be refused as an unrecognized session anymore, but it
+    would simply never learn that a named seat existed for it to claim. A fresh mind reads the
+    briefing and nothing else, so an inheritance nobody is told about is not an inheritance. It
+    protects a name the next holder will never reach for.
 
-    The HOUSE/SEAT/HOLDER ruling stamped his seat in the graph, and orient() went on answering
-    `"you": "agent:c7ef52a9-iii"`. His words: "The refusal is fixed; the DISCOVERY isn't. He will
-    not be refused as a stranger anymore. He will simply never learn the family name exists." A
-    fresh mind reads the briefing and NOTHING ELSE — so an inheritance nobody is told about is not
-    an inheritance. It protects a name the next holder will never reach for.
-
-    So the briefing now says it: your seat if you hold one; and if you are anonymous, the seats of
-    your house that are standing empty, with the verb that takes them."""
+    So the briefing now says it: your seat if you hold one; and if you are anonymous, the seats
+    of your house that are standing empty, with the verb that takes them."""
     seat = await pool.fetchrow(
         "SELECT "
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
@@ -4444,19 +4368,18 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
         " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=o.id "
         "   AND a.name='project' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1) AS house "
         "FROM objects o WHERE o.canonical=$1", agent_id)
-    # THE BINDING IS PART OF WHO YOU ARE (Phase B3, 5cef856b): a mind that actively HOLDS a
-    # Seat object is told so — whether or not it ever claim_named itself in the assertion
-    # world. An attached-at-birth mind that reads its own orient() and sees nothing was the
-    # discovery gap all over again (Ra V's grievance, one layer down).
+    # The binding is part of who you are: a mind that actively holds a Seat object is told
+    # so, whether or not it ever claimed a name for itself in the assertion world. An
+    # attached-at-birth mind that reads its own orient() and sees nothing was the discovery
+    # gap all over again, one layer down.
     from src.orchestrator.seats import held_seat
     bound = await held_seat(pool, agent_id)
     binding = {"seat_binding": bound} if bound else {}
-    # RULING 1 (decision 1db1ff41): a SEATED mind's house is DERIVED — held_seat already
-    # walked the managed_by chain to compute `binding`'s own seat_binding.house; this
-    # function used to ignore that and read the Agent's own raw `project` stamp instead (the
-    # same duplicate house_of() reads independently), the exact bypass orient() shipped
-    # through. An UNSEATED mind has no seat to walk, so the raw stamp remains its only
-    # signal — that branch is unchanged.
+    # A seated mind's house is derived: held_seat already walked the managed_by chain to
+    # compute `binding`'s own seat_binding.house; this function used to ignore that and read
+    # the Agent's own raw `project` stamp instead (the same duplicate house_of() reads
+    # independently), the exact bypass orient() shipped through. An unseated mind has no
+    # seat to walk, so the raw stamp remains its only signal; that branch is unchanged.
     house = bound["house"] if bound and bound.get("house") else (seat["house"] if seat else None)
     if seat and seat["handle"]:
         gen = int(seat["gen"]) if seat["gen"] else None
@@ -4465,7 +4388,7 @@ async def seat_bearings(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
 
     if not house:
         return binding
-    # anonymous: what jobs does this house have, and is anyone sitting in them?
+    # Anonymous: what jobs does this house have, and is anyone sitting in them?
     names = [r["handle"] for r in await pool.fetch(
         "SELECT DISTINCT (SELECT a.value #>> '{}' FROM current_assertions a "
         "  WHERE a.object_id=o.id AND a.name='handle' "
