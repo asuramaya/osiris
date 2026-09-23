@@ -68,7 +68,11 @@ _MARKER_RE = re.compile(r"#\s*unbounded-wait-ok\b")
 # both are safe, the wait_for-wrapped one just isn't textually markable without hiding
 # the real timeout value.
 _SUBPROCESS_BASELINE: dict[str, int] = {
-    "src/cli.py": 92,
+    # 92 -> 93: one new `asyncio.run(cmd_rehold(...))` dispatch line for the new
+    # `rehold` subcommand (obligation 9bab01db), same false-positive class as every
+    # other `asyncio.run(cmd_*)` dispatch line already counted here: the scanner's
+    # coarse name-match proxy matches `asyncio.run` the same as `subprocess.run`.
+    "src/cli.py": 93,
     "src/ingest/files.py": 3,
     "src/ingest/gitlog.py": 3,
     # src/ingest/sessions.py's count includes two `asyncio.run(...)` call sites added

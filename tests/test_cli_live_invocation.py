@@ -4,7 +4,7 @@ whoever runs it next. Same live-walk discipline test_cli_mcp_parity.py and
 test_cli_json_promise.py already hold: never by reading the code, by actually calling
 it.
 
-GATE 1 (--help, complete, all 63 subcommands): mechanical and fully safe, argparse
+GATE 1 (--help, complete, every subcommand the live parser has): mechanical and fully safe, argparse
 only, never touches a pool or a real process. Catches a broken subparser wiring
 (a bad `add_argument`, a dest typo) that a purely-static check would miss.
 
@@ -95,6 +95,7 @@ from src.cli import (
     cmd_rebind_seat,
     cmd_reconcile_merge,
     cmd_reconcile_seat_identity,
+    cmd_rehold,
     cmd_reissue_office,
     cmd_reissue_seat_dir,
     cmd_rematerialize,
@@ -234,6 +235,9 @@ NO_WRITE_INVOCATIONS: dict[str, Any] = {
         "no-such-handle", apply=False, pool=a.pool),
     "heal-seat-anchor": lambda a: cmd_heal_seat_anchor(
         "no-such-handle", because="test", apply=False, actor="operator", pool=a.pool),
+    "rehold": lambda a: cmd_rehold(
+        "seat:no-such-seat-anywhere", "agent:no-such-agent-anywhere", "test",
+        actor="operator", dry_run=True, pool=a.pool),
     "heal-seat-transcript": lambda a: cmd_heal_seat_transcript(
         "no-such-handle", ["/tmp/does-not-exist.jsonl"], apply=False, pool=a.pool),
     "backfill": lambda a: cmd_backfill(

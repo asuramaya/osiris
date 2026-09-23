@@ -6865,6 +6865,57 @@ async def cmd_bind_seat_tree(
     return 0
 
 
+async def cmd_rehold(
+    seat_id: str, agent_id: str, because: str, *, actor: str,
+    override_live: bool = False, dry_run: bool = True,
+    pool: asyncpg.Pool | None = None,
+) -> int:
+    """osiris rehold <seat> --agent <agent:id> --because <reason> [--override-live] [--apply]
+    [--actor W] - the console-script entry point onto orchestrator.seats.rehold_seat, the SAME
+    function the seat(action='rehold') MCP tool wraps. Third-party re-assignment of a seat's
+    holds link. Dry-run by default, matching the MCP tool's own default; --apply performs the
+    rebind. Refuses onto a live holder from a different lineage unless --override-live is
+    given."""
+    from src.actions.core import Actions
+    from src.orchestrator.seats import rehold_seat as _rehold_seat
+
+    owns_pool = pool is None
+    if pool is None:
+        from src.config.dev_env import apply_dev_fallback
+        from src.config.settings import get_settings
+        from src.db.pool import create_pool
+
+        apply_dev_fallback()
+        settings = get_settings()
+        try:
+            pool = await create_pool(
+                settings.database_url, min_size=1, max_size=4,
+                application_name="osiris-cli:rehold")
+        except Exception as exc:  # noqa: BLE001 - the CLI boundary: report, no raw traceback
+            print(f"osiris rehold: could not reach postgres at "
+                  f"{settings.database_url}: {exc}. Set DATABASE_URL, or start the dev "
+                  "instance.", file=sys.stderr)
+            return 1
+    try:
+        out = await _rehold_seat(Actions(pool), seat_id=seat_id, agent_id=agent_id,
+                                 because=because, actor=actor,
+                                 override_live=override_live, dry_run=dry_run)
+    finally:
+        if owns_pool:
+            await pool.close()
+    if "error" in out:
+        print(f"osiris rehold: refused: {out['error']}", file=sys.stderr)
+        return 1
+    if out.get("dry_run"):
+        print(f"PREVIEW ONLY: {seat_id} would move to {agent_id} (call again with "
+              "--apply to perform this rebind)")
+    else:
+        print(f"reheld {seat_id} -> {agent_id}")
+    for k, v in out.items():
+        print(f"  {k}: {v}")
+    return 0
+
+
 async def cmd_sweep_seat_disk(
     handle: str, dry_run: bool = True, because: str = "",
     pool: asyncpg.Pool | None = None,
@@ -7571,7 +7622,8 @@ COMMANDS, GROUPED BY WHAT YOU'RE TRYING TO DO:
                         rebind-seat, correct-pin-value, heal-seat-anchor,
                         transition-seat-project, correct-agent-project, reconcile-merge,
                         retire-agent, heal-seat-transcript, attach-seat, detach-seat,
-                        promote, vacate-seat, retire-seat, bind-seat-tree, sweep-seat-disk,
+                        promote, vacate-seat, retire-seat, bind-seat-tree, rehold,
+                        sweep-seat-disk,
                         sweep-seat-trees, rename-seat, set-seat-attended, reissue-seat-dir,
                         establish-seat-dir, resync-seat-project, reconcile-seat-identity,
                         reissue-office (deprecated alias for reissue-seat-dir, one release
@@ -9108,6 +9160,26 @@ def _build_parser() -> argparse.ArgumentParser:
                                   help=f"who is performing this act. Defaults to "
                                        f"{_CONSOLE_ACTOR!r}")
 
+    p_rehold = sub.add_parser(
+        "rehold", description=_d(
+            "Third-party re-assignment of a seat's holds link: the console entry point "
+            "onto the same underlying function the seat(action='rehold') tool wraps. "
+            "Refuses onto a seat with a live holder from a different lineage unless "
+            "--override-live is given. Dry-run by default."),
+        epilog="example: osiris rehold seat:e355913e --agent agent:ad1a1cb0 "
+               "--because \"lineage grafted onto the wrong sibling\" --apply")
+    p_rehold.add_argument("seat_id", help="the seat's own canonical id")
+    p_rehold.add_argument("--agent", dest="agent_id", required=True,
+                          help="the agent id to hold the seat instead")
+    p_rehold.add_argument("--because", required=True, help="why this seat is being reheld")
+    p_rehold.add_argument("--override-live", action="store_true",
+                          help="proceed even though the current holder is live, on a "
+                               "different lineage than --agent")
+    p_rehold.add_argument("--apply", action="store_true", dest="apply_",
+                          help="write; default is a dry-run preview")
+    p_rehold.add_argument("--actor", default=_CONSOLE_ACTOR,
+                          help=f"who is performing this act. Defaults to {_CONSOLE_ACTOR!r}")
+
     p_sweep_seat_disk = sub.add_parser(
         "sweep-seat-disk", description=_d(
             "Sweep a retired seat's directory and workspace off disk: the console "
@@ -9587,6 +9659,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "bind-seat-tree":
         return asyncio.run(cmd_bind_seat_tree(args.seat_id, args.tree_cwd, args.because,
                                               actor=args.actor))
+    if args.command == "rehold":
+        return asyncio.run(cmd_rehold(
+            args.seat_id, args.agent_id, args.because, actor=args.actor,
+            override_live=args.override_live, dry_run=not args.apply_))
     if args.command == "sweep-seat-disk":
         return asyncio.run(cmd_sweep_seat_disk(args.handle, dry_run=not args.apply_,
                                                because=args.because))
