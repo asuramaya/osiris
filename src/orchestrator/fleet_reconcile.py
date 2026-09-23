@@ -174,9 +174,9 @@ async def _ghost_flagged_agents(
     case where a presence check (the four buckets cover everything the sweep looks at) is
     mistaken for a coverage check (a row this sweep never looks at is invisible, not
     absent). fleet() already computes this exact signal (os_bodies/ghost_gap) at project
-    grain; here it is row-scoped by cwd, following the same doctrine used by the door
-    sweep: a mount may only be released on the word of the exact directory it opens into,
-    the same granularity a per-row bucket decision needs.
+    grain; here it is row-scoped by cwd, following the same doctrine used elsewhere in
+    this codebase: a mount may only be released on the word of the exact directory it
+    opens into, the same granularity a per-row bucket decision needs.
 
     Returns ({agent_id: ghost row}, blind). blind=True means the OS census itself could
     not run (pgrep unavailable). The caller owns the blindness check: a blind census must
@@ -208,7 +208,7 @@ async def _ghost_flagged_agents(
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
             "bucket": "ghost_gap",
             "rule": f"agent_mounts reads this row GRAPH-LIVE (last_seen within "
-                    f"{_LIVE_WINDOW_SECS}s) but no OS body backs cwd={r['cwd']!r} - "
+                    f"{_LIVE_WINDOW_SECS}s) but no OS process backs cwd={r['cwd']!r} - "
                     "never auto-acted on, always a human's judgment",
         }
     return ghosts, False
@@ -265,7 +265,7 @@ async def reconcile_dry_run(
     """The report reviewed before anything acts. Buckets every row currently reachable:
     the fold-candidate tray (refreshed by calling find_agent_fold_candidates, itself
     proposal-only and idempotent), the dead-project residue class the tray was never
-    built to see, and the ghost_gap class (a mount the graph calls live with no OS body
+    built to see, and the ghost_gap class (a mount the graph calls live with no OS process
     backing it), and names the rule that placed each one. Writes nothing except what
     find_agent_fold_candidates itself already writes (merge_candidates proposal rows,
     review-gated, never executed here). projects_root/jobs_home pass straight through to
@@ -325,7 +325,7 @@ async def reconcile_dry_run(
             buckets["ghost_gap"].append(row)
         elif target and score >= _HIGH_CONFIDENCE:
             rule = f"{cls} score {score} >= {_HIGH_CONFIDENCE} - the sweep's own " \
-                   "single-seat/no-body confidence bar"
+                   "single-seat/no-process confidence bar"
             if blind:
                 _held(buckets, row, f"[would be {target}] " + rule + " - HELD: OS census "
                       "is blind this tick, an auto-act bucket cannot be trusted without a "
@@ -582,7 +582,7 @@ async def reconcile_scheduled_tick(
     schedule and a human's own manual call are provably the same path, never two
     implementations that could drift.
 
-    settings is the injected test seam (matching the convention used elsewhere: st =
+    settings is the injected test override (matching the convention used elsewhere: st =
     settings or get_settings()) so a test can flip the flag without touching the real
     environment or monkeypatching get_settings.
 
@@ -631,7 +631,7 @@ async def reconcile_scheduled_tick(
         try:
             await resolve_thread(
                 actions, _BLIND_ALARM_SUMMARY,
-                because="census recovered - this tick's OS body check succeeded again",
+                because="census recovered - this tick's OS process check succeeded again",
                 source="cron:fleet_reconcile_heartbeat")
         except Exception:  # noqa: BLE001 - same discipline: never fail the tick over this
             pass

@@ -367,7 +367,7 @@ async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
 ) -> None:
     """The away-fold's warning is reserved for WITNESSED hands: when the only arrivals are
     unwitnessed harness sidechains, the note says so calmly instead of warning that another
-    hand may have worn your face, a false-alarm case seen in production."""
+    actor may have acted in your name, a false-alarm case seen in production."""
     since = datetime.now(UTC) - timedelta(hours=1)
     await actions.create_or_find_object("Agent", "agent:par00009", "agent:par00009")
     await register_spawn(Actions(actions.pool), "ghost0009", agent_type="claude",
@@ -378,7 +378,7 @@ async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
     (spawn,) = away["spawns"]
     assert spawn["agent"] == "agent:ghost0009"
     assert "unwitnessed" in spawn and "likely internal" in spawn["unwitnessed"]
-    assert "another hand" not in away["note"]
+    assert "another actor" not in away["note"]
     assert "unwitnessed harness sidechains" in away["note"]
     # a WITNESSED spawn arriving restores the full warning, and carries no ghost marker
     t = tmp_path / "agent-real0009.jsonl"
@@ -387,7 +387,7 @@ async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
     await register_spawn(Actions(actions.pool), "real0009", agent_type="Explore",
                          parent_agent="agent:par00009", project="demo-ghost", transcript=t)
     away2 = await mounts.while_away(actions.pool, "demo-ghost", "agent:par00009", since)
-    assert away2 is not None and "another hand" in away2["note"]
+    assert away2 is not None and "another actor" in away2["note"]
     by_id = {s["agent"]: s for s in away2["spawns"]}
     assert "unwitnessed" not in by_id["agent:real0009"]
     assert "unwitnessed" in by_id["agent:ghost0009"]

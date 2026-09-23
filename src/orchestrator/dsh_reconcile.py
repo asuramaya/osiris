@@ -203,7 +203,7 @@ async def reconcile(
     ever adds a lineage of its own. `dry_run=False` requires a non-blank `because`, the
     same discipline every repair action here holds."""
     if not dry_run and not (because or "").strip():
-        return {"error": "dry_run=False requires a non-blank `because` — retroactively "
+        return {"error": "dry_run=False requires a non-blank `because`: retroactively "
                          "minting an identity is a deliberate act on the record, never "
                          "silent"}
     measured = await measure(actions.pool, anchor_sid=anchor_sid, root_agent_id=root_agent_id,
@@ -230,7 +230,7 @@ async def reconcile(
             "generation": cur_canonical, "model": st["model"], "start": st["start"],
             "end": st["end"], "writes": st["writes"],
             "action": ("mint (root)" if i == 0 else "mint (heir)") if will_mint
-                     else "already minted — skip",
+                     else "already minted, skip",
         }
         plan.append(entry)
         if dry_run:
@@ -253,7 +253,7 @@ async def reconcile(
                 actions, ancestor_canonical, ancestor_oid, because="model-succession",
                 succession=f"{prev_model} → {st['model']}", now=now_i)
             assert heir_canon == cur_canonical, (
-                f"mint_heir produced {heir_canon!r}, expected {cur_canonical!r} — the "
+                f"mint_heir produced {heir_canon!r}, expected {cur_canonical!r}, the "
                 "numeral scheme drifted out from under this loop's own bookkeeping")
             cur_oid = heir_oid
         else:

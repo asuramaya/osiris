@@ -67,7 +67,7 @@ async def _dead_transcript_mounts(
     disk (the "dead transcript" class). Each session is named by its own job directory
     (~/.claude/jobs/<sid8>) as it starts, so a directory that no longer exists is
     unambiguous: nothing can re-attach to an address that no longer exists. exists_fn
-    is the injection seam: tests drive it with a fake population, never the real
+    is the injection point: tests drive it with a fake population, never the real
     filesystem, the same discipline census.py uses."""
     exists = exists_fn or (lambda p: Path(p).exists())
     rows = await pool.fetch(
@@ -83,7 +83,7 @@ async def _dead_transcript_mounts(
             "job_dir": job_dir,
             "last_seen": r["last_seen"].isoformat() if r["last_seen"] else None,
             "bucket": "dead_transcript",
-            "rule": f"job_dir {job_dir!r} no longer exists on disk — the session's own "
+            "rule": f"job_dir {job_dir!r} no longer exists on disk: the session's own "
                     "anchor directory is gone, the row is unreachable residue",
         })
     return out
@@ -116,8 +116,9 @@ async def _unclaimed_bodies(
         row: dict[str, Any] = {
             "session_id": r["session_id"], "pid": r.get("pid"), "cwd": cwd,
             "job_dir_key": r["job_dir_key"], "bucket": "unclaimed_body",
-            "rule": "a verified live OS body (harness + /proc confirmed, registry_census's "
-                    "own 'rowless' population) has no agent_mounts row at all",
+            "rule": "a verified live OS process (harness + /proc confirmed, "
+                    "registry_census's own 'rowless' population) has no agent_mounts "
+                    "row at all",
         }
         handle = await tree_seat_hint(pool, cwd=cwd) if cwd else None
         if handle:
@@ -189,14 +190,14 @@ async def prune_dry_run(
         "buckets": buckets, "counts": counts, "total": sum(counts.values()),
         "examined": examined, "census_blind": census_blind, "over_cap": over_cap,
         "reconciled": include_reconcile,
-        "note": ("MECHANICAL FLEET PRUNE — REPORT ONLY. fleet_reconcile's own five buckets "
+        "note": ("MECHANICAL FLEET PRUNE, REPORT ONLY. fleet_reconcile's own five buckets "
                 "plus dead_transcript and unclaimed_body; bulk_fold_swarm rows carry "
                 "swarm_root_retired when their own root has no live mount. Nothing here "
-                "acts on fleet_reconcile's own buckets — see prune_execute's docstring."
+                "acts on fleet_reconcile's own buckets, see prune_execute's docstring."
                 if include_reconcile else
-                "MECHANICAL FLEET PRUNE — REPORT ONLY, include_reconcile=False: the five "
+                "MECHANICAL FLEET PRUNE, REPORT ONLY, include_reconcile=False: the five "
                 "fleet_reconcile buckets were never computed this call (see this "
-                "function's own docstring) — only dead_transcript/unclaimed_body, the "
+                "function's own docstring), only dead_transcript/unclaimed_body, the "
                 "only two prune_execute ever acts on, are real."),
     }
 
@@ -254,7 +255,7 @@ async def prune_execute(
         "execute": execute,
     }
     if not execute:
-        plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        plan["note"] = "PLAN ONLY, call with execute=True to write. Nothing touched."
         return plan
 
     jobs_home = jobs_home or Path.home() / ".claude" / "jobs"
@@ -282,8 +283,8 @@ async def prune_execute(
             holder = (receipt or {}).get("holder")
             if not holder:
                 bound.append({**row, "bound": 0,
-                             "reason": f"seat {handle!r} is vacant — nothing to bind "
-                                       "the body to"})
+                             "reason": f"seat {handle!r} is vacant, nothing to bind "
+                                       "the process to"})
                 continue
             cwd = row.get("cwd")
             project = await project_name_for_disk_path(actions.pool, cwd) if cwd else None
@@ -303,7 +304,7 @@ async def prune_execute(
     plan.update({
         "dropped_transcripts": dropped, "bound": bound,
         "before_counts": report["counts"], "after_counts": after["counts"],
-        "note": "EXECUTED — before/after counts prove the acted rows left the tray; "
+        "note": "EXECUTED, before/after counts prove the acted rows left the tray; "
                 "fleet_reconcile's own buckets were never touched by this call.",
     })
     return plan

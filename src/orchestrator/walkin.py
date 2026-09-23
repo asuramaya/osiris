@@ -43,8 +43,8 @@ async def walk_in_named(
     naming which one fired."""
     handle = (handle or "").strip()
     if not handle:
-        return {"error": "a name is required — walk_in never guesses one (practice "
-                         "f39a9849); pass the name you want to claim"}
+        return {"error": "a name is required, walk_in never guesses one; pass the "
+                         "name you want to claim"}
 
     steps: dict[str, Any] = {}
     from src.orchestrator.offices import _handle_of
@@ -52,7 +52,7 @@ async def walk_in_named(
     if existing_handle:
         if existing_handle.strip().lower() != handle.lower():
             return {"error": f"{agent_id} already claimed a different name "
-                             f"({existing_handle!r}) — walk_in never renames; pass "
+                             f"({existing_handle!r}), walk_in never renames; pass "
                              f"handle={existing_handle!r} to proceed with the existing "
                              "name, or use rename_seat if you deliberately want to change it",
                     "step": "claim_name", "steps_so_far": steps}
@@ -72,7 +72,7 @@ async def walk_in_named(
     if not wants_office:
         steps["establish_office"] = {
             "ran": False,
-            "note": "wants_office=False — no office ceremony run; this identity stays a "
+            "note": "wants_office=False: no office setup run; this identity stays a "
                     "visitor, not a seated worker",
         }
     else:
@@ -87,9 +87,9 @@ async def walk_in_named(
     return {
         "agent": agent_id, "handle": final_handle, "wants_office": wants_office,
         **steps,
-        "note": ("each step above is exactly what it did this call — ran=false means "
+        "note": ("each step above is exactly what it did this call: ran=false means "
                 "genuinely already true before you called walk_in, never a disguised "
-                "success; ran=true carries that step's own real receipt verbatim, never "
+                "success; ran=true carries that step's own real result verbatim, never "
                 "a summary of it"),
     }
 
@@ -108,8 +108,8 @@ async def promote_visitor(
     operator or manager promotes by hand today: a session with real, repeated presence in
     the graph that has simply never claimed its own name.
 
-    Authorization is enforced, not merely named: a third-party act minting a stranger's
-    whole identity is not routine, so `actor` must resolve to a recognized operator
+    Authorization is enforced, not merely named: a third-party act minting a third
+    party's whole identity is not routine, so `actor` must resolve to a recognized operator
     identity (`charter.is_operator_actor`, a global recognition with no single project in
     scope for a whole-identity mint), or hold a seat that itself manages at least one
     worker (`seats.seats_managed_by`, a manager's word, the same shape of enforced check
@@ -123,18 +123,18 @@ async def promote_visitor(
     regardless, the same testimony discipline `charter_for`/`rename_seat` already run for
     a third-party act. This is the whole act's one and only authorization gate,
     deliberately not `charter_for` itself (see the note at its call site below: that
-    verb's own gate checks the target seat's manager, which cannot exist yet for a seat
+    call's own gate checks the target seat's manager, which cannot exist yet for a seat
     this same call is about to mint).
 
     Refuses on a target that isn't a genuine, known visitor: an `objects` row of type
     Agent already existing for `target` means this isn't a promotion; claim_name/
     establish_office/charter_for compose directly for an already-real identity, and
-    running this verb over one would silently redo work that already happened. A `target`
+    running this action over one would silently redo work that already happened. A `target`
     with no `agent_mounts` row at all is not a visitor either, it is nothing; this never
     mints a label invented on the spot, the anchor must be real.
 
     Order matters: claim_name mints the Agent object (and its seat); the charter write
-    runs before establish_office because `project_of`'s own resolution ladder (agents.py)
+    runs before establish_office because `project_of`'s own resolution order (agents.py)
     reads a seat's declared charter as its second tier, and establish_office refuses
     outright on an agent with no durable project label; reversing this order would make a
     visitor's own genuine, repeated cwd unusable as the source of its office. Stops on the
@@ -151,12 +151,11 @@ async def promote_visitor(
     target, handle = (target or "").strip(), (handle or "").strip()
     because = (because or "").strip()
     if not target:
-        return {"error": "a target is required — promote_visitor never guesses one"}
+        return {"error": "a target is required, promote_visitor never guesses one"}
     if not handle:
-        return {"error": "a name is required — promote_visitor never guesses one "
-                         "(practice f39a9849)"}
+        return {"error": "a name is required, promote_visitor never guesses one"}
     if not because:
-        return {"error": "because is required — promoting a stranger's whole identity "
+        return {"error": "because is required: promoting a third party's whole identity "
                          "on their behalf is testimony, same discipline charter_for and "
                          "rename_seat already run"}
 
@@ -176,7 +175,7 @@ async def promote_visitor(
     if not authorized:
         if ruling_check is not None:  # a ruling was cited but verify_ruling refused it,
             return {"error": ruling_check["error"]}  # so return its own reason, never re-derived
-        return {"error": f"{actor} is not authorized to promote {target!r} — this needs "
+        return {"error": f"{actor} is not authorized to promote {target!r}: this needs "
                          "the operator's word (an operator actor), a manager's word "
                          "(a seat that itself manages at least one worker), or a "
                          "`ruling=` citation naming a real Decision; none was found"}
@@ -184,14 +183,14 @@ async def promote_visitor(
     already = await pool.fetchval(
         "SELECT 1 FROM objects WHERE type='Agent' AND canonical=$1", target)
     if already:
-        return {"error": f"{target} already has an Agent object — this is not a "
-                         "visitor, and promote_visitor is not the door for an already-"
+        return {"error": f"{target} already has an Agent object: this is not a "
+                         "visitor, and promote_visitor is not the path for an already-"
                          "real identity; claim_name/establish_office/charter_for "
                          "compose directly for that instead"}
     seen = await pool.fetchval(
         "SELECT 1 FROM agent_mounts WHERE agent_id=$1 LIMIT 1", target)
     if not seen:
-        return {"error": f"{target} has never mounted — nothing to promote; "
+        return {"error": f"{target} has never mounted: nothing to promote; "
                          "promote_visitor never mints a label invented on the spot"}
 
     steps: dict[str, Any] = {}
@@ -202,7 +201,7 @@ async def promote_visitor(
     seat_id = claimed.get("seat_id")
     if not seat_id:
         return {"error": claimed.get("seat_error") or
-                         "claim_name minted no seat — nothing to charter or office",
+                         "claim_name minted no seat: nothing to charter or office",
                 "step": "claim_name", "steps_so_far": steps}
 
     final_repos = repos
@@ -212,7 +211,7 @@ async def promote_visitor(
             "ORDER BY last_seen DESC NULLS LAST LIMIT 1", target)] if p]
     if not final_repos:
         return {"error": f"no repos given and {target} carries no project on its own "
-                         "mount record — promote_visitor never guesses a charter; pass "
+                         "mount record, promote_visitor never guesses a charter; pass "
                          "repos= explicitly",
                 "step": "charter_for", "steps_so_far": steps}
     # `set_charter`, not `charter_for`, deliberately: charter_for runs its own separate
@@ -239,7 +238,7 @@ async def promote_visitor(
         **steps,
         "authorized_by": {"actor": actor, "because": because, "via": auth_note,
                           **({"ruling": ruling_id and str(ruling_id)} if ruling_id else {})},
-        "note": "target moved from a bare registry row (no Agent object) to a full "
-                "soul: claimed a name, was chartered over its repo, and now holds an "
-                "office+deed — the managed path's own end-state, in one act",
+        "note": "target moved from a bare registry row (no Agent object) to a fully "
+                "realized identity: claimed a name, was chartered over its repo, and "
+                "now holds an office+deed, the managed path's own end-state, in one act",
     }

@@ -242,7 +242,7 @@ async def test_a_graph_live_mount_with_no_os_body_lands_in_ghost_gap(actions: Ac
 
     mine = [r for r in out["buckets"]["ghost_gap"] if r["agent_id"] == "agent:phantom1"]
     assert mine, out["buckets"]
-    assert "no OS body" in mine[0]["rule"]
+    assert "no OS process" in mine[0]["rule"]
     assert out["census_blind"] is False
 
 

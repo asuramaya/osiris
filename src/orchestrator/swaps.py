@@ -104,16 +104,17 @@ def swap_banner(v: SwapVerdict) -> str | None:
     if v.within_session and v.deliberate:
         # the operator's own /model is on the record: this was a chosen swap, not a fault.
         # each segment was still run by a distinct model, but no confession is owed.
-        return (f"⇄ the OPERATOR changed the model THIS session (/model on the record) — seen "
+        return (f"⇄ the OPERATOR changed the model THIS session (/model on the record), seen "
                 f"[{', '.join(v.history)}], currently {cur}. A deliberate choice, not a "
                 "rug-pull: no confession owed; speak plainly as what you are.")
     if v.within_session:
-        intent = (f" — NOT your intended {v.expected}" if v.diverged_from_intent
+        intent = (f", NOT your intended {v.expected}" if v.diverged_from_intent
                   else f" (back on your intended {v.expected})")
-        return (f"⚠ warm model swap THIS session — seen [{', '.join(v.history)}], currently "
+        return (f"⚠ warm model swap THIS session: seen [{', '.join(v.history)}], currently "
                 f"{cur}{intent}. The harness swapped mid-run (a danger-sense tripwire); confess "
                 "it to the operator.")
-    return (f"⚠ model divergence: intended {v.expected}, running {cur} — either the harness "
+    return (f"⚠ model divergence: intended {v.expected}, running {cur}. Either the harness "
             "demoted this seat before its first turn (confess it to the operator), or the "
-            f"operator CHOSE {cur} for this repo — then the intent on file is what's wrong: "
-            f'declare model = "{cur}" in the repo\'s .osiris and this banner stands down.')
+            f"operator CHOSE {cur} for this repo, in which case the intent on file is what's "
+            f'wrong: declare model = "{cur}" in the repo\'s .osiris and this banner stands '
+            "down.")

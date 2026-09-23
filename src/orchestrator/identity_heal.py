@@ -76,7 +76,7 @@ async def detect_possibly_stale_seats(
     try:
         bare = (old_name or "").removeprefix("repo:").strip()
         if not bare:
-            return {"checked": False, "reason": "empty old_name — nothing to match"}
+            return {"checked": False, "reason": "empty old_name, nothing to match"}
         hits: list[dict[str, str]] = []
         house_rows = await pool.fetch(
             "SELECT s.canonical AS seat, a.value #>> '{}' AS value "
@@ -101,9 +101,9 @@ async def detect_possibly_stale_seats(
             "old_name": bare,
             "hits": hits[:cap],
             "truncated": len(hits) > cap,
-            "note": "heuristic name/basename match against the old name, never a verdict "
-                    "— a common old name over-matches; the .osiris pin file is NOT checked "
-                    "(off-graph, unsafe to read from a hot path)",
+            "note": "heuristic name/basename match against the old name, never a verdict. "
+                    "A common old name over-matches; the .osiris pin file is NOT checked "
+                    "(off-graph, unsafe to read from a frequently used call path)",
         }
     except Exception as exc:
         return {"checked": False, "error": str(exc)}
@@ -143,14 +143,14 @@ async def heal_contradicting_property(
             actions, ref=str(object_id), name=name, superseded_id=loser["id"],
             value=winner["value"], actor=actor,
             because=(
-                f"self-heal (fe8ec7ff mechanism 3, ruling df646654): newest-declared-wins "
-                f"on seat-identity property {name!r} — {winner['value']!r} "
+                f"self-heal (newest-declared-wins) on seat-identity property {name!r}: "
+                f"{winner['value']!r} "
                 f"(source={winner['source_id']}, {winner['observed_at'].isoformat()}) "
                 f"outvotes {loser['value']!r} (source={loser['source_id']}, "
                 f"{loser['observed_at'].isoformat()})"
-                + (f" — third-party correction: {reason}" if reason else
+                + (f"; third-party correction: {reason}" if reason else
                    ", never sign-off-gated for this property class")
-                + " — reversible via the retired assertion's own id"))
+                + "; reversible via the retired assertion's own id"))
         if "error" in result:
             superseded.append({"id": loser["id"], "value": loser["value"],
                                "error": result["error"]})
@@ -227,7 +227,7 @@ async def reconcile_seat_identity_third_party(
     because = (because or "").strip()
     if not because:
         return {"error": "a correction with no reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this rule refuses to allow"}
     return await reconcile_seat_identity(actions, seat_id=seat_id, agent_id=agent_id,
                                          actor=actor, reason=because)
 
@@ -328,15 +328,15 @@ async def heal_seat_anchor(
         return {"error": f"no active seat matches {seat_id!r}"}
     target = await seat_office_target(actions.pool, seat_id, office_root=office_root)
     if target is None:
-        return {"error": f"{seat_id} has no handle on record — cannot derive an office path"}
+        return {"error": f"{seat_id} has no handle on record, cannot derive an office path"}
     handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
         seat_row["id"])
     if not _office_dir_exists(target):
-        return {"error": f"{target!r} does not exist on disk — this healer re-asserts "
+        return {"error": f"{target!r} does not exist on disk. This healer re-asserts "
                          "identity at an office that already exists; establish_office "
-                         "scaffolds one, this verb never does"}
+                         "scaffolds one, this function never does"}
     current = await actions.pool.fetch(
         "SELECT value #>> '{}' AS v, source_id, observed_at FROM current_assertions "
         "WHERE object_id=$1 AND name='anchor_cwd' ORDER BY observed_at", seat_row["id"])
@@ -357,9 +357,9 @@ async def heal_seat_anchor(
         return receipt
     now = datetime.now(UTC)
     reason_text = (
-        "anchor invariant repair (ruling 23771416): asserting the office as the sole "
+        "anchor invariant repair: asserting the office as the sole "
         f"current anchor_cwd, collapsing {sorted(values - {target})!r}"
-        + (f" — {because}" if because else ""))
+        + (f"; {because}" if because else ""))
     await actions.assert_singular_property(
         seat_row["id"], "anchor_cwd", target, actor, now, _ANCHOR_CONF,
         evidence_class=_ANCHOR_EC, because=reason_text)
@@ -377,6 +377,6 @@ async def heal_seat_anchor_third_party(
     because = (because or "").strip()
     if not because:
         return {"error": "a correction with no reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this rule refuses to allow"}
     return await heal_seat_anchor(actions, seat_id=seat_id, actor=actor, because=because,
                                   office_root=office_root, dry_run=dry_run)

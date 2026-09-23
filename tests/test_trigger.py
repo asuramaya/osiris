@@ -1554,7 +1554,7 @@ async def test_the_wake_prompt_forbids_leaving_mail_unsettled() -> None:
     re-armed the wake. It needs the THIRD DOOR named, or a well-behaved agent keeps the loop
     alive by doing exactly what it was told."""
     assert "MUST NOT LEAVE MAIL UNSETTLED" in _WAKE_PROMPT
-    assert "THIRD DOOR" in _WAKE_PROMPT
+    assert "THIRD OPTION" in _WAKE_PROMPT
     assert "obligation" in _WAKE_PROMPT
 
 
@@ -2385,7 +2385,7 @@ async def test_the_daemon_reply_rung_leads_and_wears_the_envelope(
     assert f"DM #{msg_id}" in text                      # which message
     assert "agent:sender" in text                        # who
     assert "agent:abcd1234" in text                      # to whom
-    assert "ask — needs your reply or act" in text       # what grade
+    assert "ask: needs your reply or act" in text         # what grade
     assert "the colorbar shipped" in text                # the preview
     assert f"send(reply_to={msg_id})" in text            # how to settle
     assert await actions.pool.fetchval(
@@ -2806,7 +2806,7 @@ async def test_resume_guard_returns_gate_token_directly_not_prose_to_reparse(
         actions.pool, resume, "agent:abcd1234", seat_id=None, st=st)
     assert gate2 == "crossed-registry"
     assert detail2 is not None
-    assert "signed testimony names a different mind" in detail2
+    assert "signed testimony names a different agent" in detail2
 
 
 # ═══ THE CORROBORATION FALLBACK ══════════════════════
@@ -4211,7 +4211,7 @@ def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
                      "large; refused regardless of what its last recorded context "
                      "occupancy reads") == "ceiling"
     assert gate_name("no anchored transcript at all") == "no-anchor"
-    assert gate_name("retired — a deliberate close, never reanimated") == "retired"
+    assert gate_name("retired, a deliberate close, never reanimated") == "retired"
     assert gate_name("something nobody wrote yet") == "unknown"
 
 

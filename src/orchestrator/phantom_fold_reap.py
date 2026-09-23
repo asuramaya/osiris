@@ -193,8 +193,8 @@ async def _parallel_lives_rows(pool: asyncpg.Pool) -> list[dict[str, Any]]:
     return [
         {"agent_id": r["heir"], "door": r["door"], "pulse_at": r["pulse_at"],
          "because": r["because"], "bucket": "parallel_lives",
-         "rule": "parallel-lives — mint-time evidence a predecessor's own door held a "
-                 "live pulse; graph_lint's own law: verify by hand, never auto-fold"}
+         "rule": "parallel-lives: mint-time evidence a predecessor's own liveness window "
+                 "was still open; graph_lint's own rule: verify by hand, never auto-fold"}
         for r in rows
     ]
 
@@ -220,8 +220,8 @@ async def _half_healed_phantom_threads(pool: asyncpg.Pool) -> list[dict[str, Any
     return [
         {"thread_id": str(r["id"]), "created_at": r["created_at"].isoformat(),
          "summary": r["summary"], "bucket": "half_healed_phantom",
-         "rule": "half-healed phantom (source=half-heal-detect) — the code's own "
-                 "standing law: never auto-complete, a human must judge whether a real "
+         "rule": "half-healed phantom (source=half-heal-detect): the code's own "
+                 "standing rule, never auto-complete, a human must judge whether a real "
                  "successor now exists past the phantom"}
         for r in rows if r["st"] == "open"
     ]
@@ -259,26 +259,26 @@ async def phantom_fold_dry_run(
                                "harness_confirmed": r["harness_confirmed"]}
         if blind:
             _held(buckets, row, "[would be reinstate_false_mint_live] false_mint=true "
-                  "with a graph-live mount — HELD: OS census is blind this tick, cannot "
+                  "with a graph-live mount. HELD: OS census is blind this tick, cannot "
                   "corroborate before reinstating")
         elif r["bucket_eligible"]:
             row["rule"] = ("false_mint=true AND registry_census independently confirms "
-                           "a harness/proc-verified live body (not just agent_mounts "
-                           "freshness) — both signals agree")
+                           "a harness/proc-verified live process (not just agent_mounts "
+                           "freshness), both signals agree")
             row["bucket"] = "reinstate_false_mint_live"
             buckets["reinstate_false_mint_live"].append(row)
         else:
             _held(buckets, row, "false_mint=true with a graph-live mount, but "
                   "registry_census does NOT independently confirm a real harness/proc "
-                  "body — a graph-live claim alone is never proof (ghost_gap's own law); "
-                  "a human's eyes first")
+                  "process, a graph-live claim alone is never proof (ghost_gap's own "
+                  "rule); a human's eyes first")
 
     for r in dup_rows:
         row = {"agent_id": r["agent_id"], "projects": r["projects"]}
         if r["bucket_eligible"]:
             row["stale_project"] = r["stale_project"]
             row["rule"] = (f"{r['stale_project']!r} is the ONE non-active/non-merged "
-                           "live works_in target among this agent's duplicates — "
+                           "live works_in target among this agent's duplicates, "
                            "unambiguous residue (a merge is not a death, only status "
                            "NOT IN ('active','merged') counts)")
             row["bucket"] = "drop_dead_project_duplicate_works_in"
@@ -287,7 +287,7 @@ async def phantom_fold_dry_run(
             n_dead = len(r["dead_targets"])
             _held(buckets, row,
                   f"{n_dead} of {len(r['projects'])} live works_in targets are "
-                  "non-active/non-merged — invalidate_works_in needs exactly ONE "
+                  "non-active/non-merged, invalidate_works_in needs exactly ONE "
                   "unambiguous candidate, never guesses among several nor invents one "
                   "when all targets are still alive")
 
@@ -300,7 +300,7 @@ async def phantom_fold_dry_run(
         for name in _ACTIONABLE_BUCKETS:
             rows, buckets[name] = buckets[name], []
             for row in rows:
-                _held(buckets, row, f"[would be {row['bucket']}] {row['rule']} — HELD: "
+                _held(buckets, row, f"[would be {row['bucket']}] {row['rule']}. HELD: "
                       f"tick batch size {actionable_total} exceeds cap {_BATCH_CAP}, one "
                       "human look before bulk action")
 
@@ -308,13 +308,13 @@ async def phantom_fold_dry_run(
     return {
         "buckets": buckets, "counts": counts, "total": sum(counts.values()),
         "census_blind": blind, "over_cap": over_cap,
-        "note": ("REPORT ONLY — nothing reinstated, invalidated, folded, or resolved. "
+        "note": ("REPORT ONLY, nothing reinstated, invalidated, folded, or resolved. "
                  "Every row above names its own bucket and the rule that put it there." +
-                 (" OS CENSUS WAS BLIND THIS TICK — reinstate_false_mint_live rows are "
+                 (" OS CENSUS WAS BLIND THIS TICK. reinstate_false_mint_live rows are "
                   "held in leave_for_human instead; re-run once the census can see."
                   if blind else "") +
-                 (f" BATCH CAP EXCEEDED THIS TICK ({actionable_total} > {_BATCH_CAP}) — "
-                  "every row that would have auto-acted is held in leave_for_human "
+                 (f" BATCH CAP EXCEEDED THIS TICK ({actionable_total} > {_BATCH_CAP}). "
+                  "Every row that would have auto-acted is held in leave_for_human "
                   "instead; an anomalous batch needs a human's eyes before bulk action."
                   if over_cap else "")),
     }
@@ -367,11 +367,11 @@ async def phantom_fold_execute(
         "execute": execute,
     }
     if not execute:
-        plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        plan["note"] = "PLAN ONLY. Call with execute=True to write. Nothing touched."
         return plan
 
     if report["over_cap"]:
-        body = (f"PHANTOM-FOLD-REAP OVER CAP — a tick's actionable rows "
+        body = (f"PHANTOM-FOLD-REAP OVER CAP: a tick's actionable rows "
                 f"(reinstate_false_mint_live+drop_dead_project_duplicate_works_in) "
                 f"totaled more than the cap of {_BATCH_CAP}; the whole tick was held in "
                 f"leave_for_human rather than bulk-acting on an unreviewed anomaly. "
@@ -385,7 +385,7 @@ async def phantom_fold_execute(
         plan.update({
             "reinstated": [], "invalidated": [],
             "before_counts": report["counts"], "after_counts": report["counts"],
-            "note": ("OVER CAP — nothing acted this tick, everything held in "
+            "note": ("OVER CAP, nothing acted this tick, everything held in "
                      "leave_for_human, an operator decision brief was sent."),
         })
         return plan
@@ -396,8 +396,8 @@ async def phantom_fold_execute(
         try:
             out = await reinstate_generation(
                 actions, item["agent_id"],
-                because="phantom_fold_reap scheduled sweep — false_mint=true with a "
-                        "registry_census-confirmed live body", actor=actor)
+                because="phantom_fold_reap scheduled sweep: false_mint=true with a "
+                        "registry_census-confirmed live process", actor=actor)
         except Exception as exc:  # one bad row must not abort a correct batch
             out = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
         reinstated.append({**item, "result": out})
@@ -405,7 +405,7 @@ async def phantom_fold_execute(
         try:
             out = await invalidate_works_in(
                 actions, item["agent_id"], item["stale_project"],
-                because="phantom_fold_reap scheduled sweep — the sole non-active/"
+                because="phantom_fold_reap scheduled sweep: the sole non-active/"
                         "non-merged live works_in target among this agent's duplicates",
                 actor=actor)
         except Exception as exc:
@@ -417,7 +417,7 @@ async def phantom_fold_execute(
     plan.update({
         "reinstated": reinstated, "invalidated": invalidated,
         "before_counts": report["counts"], "after_counts": after["counts"],
-        "note": "EXECUTED — before/after counts prove the acted rows left the tray; "
+        "note": "EXECUTED: before/after counts prove the acted rows left the queue; "
                 "leave_for_human/parallel_lives/half_healed_phantom rows were never "
                 "touched.",
     })
@@ -425,7 +425,7 @@ async def phantom_fold_execute(
     acted_reinstate = sum(1 for r in reinstated if r["result"].get("ok"))
     acted_invalidate = sum(1 for r in invalidated if "error" not in r["result"])
     if acted_reinstate or acted_invalidate:
-        body = (f"PHANTOM-FOLD-REAP ACTED — reinstated {acted_reinstate}, invalidated "
+        body = (f"PHANTOM-FOLD-REAP ACTED: reinstated {acted_reinstate}, invalidated "
                 f"{acted_invalidate} (of {len(reinstated)} attempted reinstates, "
                 f"{len(invalidated)} attempted invalidations). "
                 f"before={report['counts']} after={after['counts']}. actor={actor!r}. "
@@ -445,10 +445,10 @@ async def phantom_fold_execute(
 # stable across calls (the canonical hash derives from it), or every tick would mint a
 # new thread instead of finding the one already open.
 _BLIND_ALARM_SUMMARY = (
-    "PHANTOM-FOLD-REAP'S SCHEDULED TICK WENT CENSUS-BLIND — the OS census failed this "
+    "PHANTOM-FOLD-REAP'S SCHEDULED TICK WENT CENSUS-BLIND. The OS census failed this "
     "tick, every reinstate_false_mint_live row was held in leave_for_human instead of "
     "trusted; if this persists across many ticks that auto-act path is silently dark. "
-    "This thread's own age is the duration — no separate counter exists. Auto-resolved "
+    "This thread's own age is the duration, no separate counter exists. Auto-resolved "
     "the next tick the census succeeds again."
 )
 
@@ -500,7 +500,7 @@ async def phantom_fold_scheduled_tick(
         try:
             await resolve_thread(
                 actions, _BLIND_ALARM_SUMMARY,
-                because="census recovered — this tick's OS body check succeeded again",
+                because="census recovered: this tick's OS process check succeeded again",
                 source="cron:phantom_fold_reap_heartbeat")
         except Exception:  # noqa: BLE001 - same discipline: never fail the tick over this
             pass

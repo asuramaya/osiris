@@ -172,13 +172,13 @@ def _quote_summary(item: dict[str, Any]) -> str:
     aged = f"{item['summary']!r}, unchanged for {age} day(s)" if age is not None \
         else f"{item['summary']!r}"
     if item.get("contested"):
-        aged = f"{aged} — CONTESTED: a newer note disputes this summary, unresolved"
+        aged = f"{aged}, CONTESTED: a newer note disputes this summary, unresolved"
     answers = item.get("answered_by") or []
     if answers:
         quoted = "; ".join(f"{a['id']} ({a['summary']!r})" for a in answers)
-        aged = f"{aged} — ALREADY ANSWERED by {len(answers)} decision(s): {quoted}"
+        aged = f"{aged}, ALREADY ANSWERED by {len(answers)} decision(s): {quoted}"
     else:
-        aged = f"{aged} — no recorded answer"
+        aged = f"{aged}, no recorded answer"
     return aged
 
 
@@ -214,7 +214,7 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
 
         if stage == "stale_candidate":
             buckets["no_action"].append({
-                **item, "reason": "already a stale-candidate — never re-classified, "
+                **item, "reason": "already a stale-candidate, never re-classified, "
                                    "never auto-resolved"})
             continue
 
@@ -228,7 +228,7 @@ async def hygiene_dry_run(pool: asyncpg.Pool, *, now: datetime | None = None) ->
                     buckets["would_stale_candidate"].append(item)
                     continue
             buckets["no_action"].append({
-                **item, "reason": "nudged — awaiting the N2 window or the owner's own "
+                **item, "reason": "nudged, awaiting the N2 window or the owner's own "
                                    "activity"})
             continue
 
@@ -276,7 +276,7 @@ async def _is_exactly_live(pool: asyncpg.Pool, agent_id: str) -> bool:
 
 
 async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[str, Any]:
-    """The owner-resolution ladder. An earlier measurement found the majority of nudges
+    """The owner-resolution sequence. An earlier measurement found the majority of nudges
     landing on the operator's desk because owners were project names or dead agents rather
     than resolvable live agents, which defeated the point of a desk fallback. Each rung
     below is tried in order before falling through to the desk; a rung is tried before
@@ -352,7 +352,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
                 return {"channel": "dm", "target": head, "reason": None}
             reason = f"seat {target!r} ({seat_id}) has no live holder right now"
         else:
-            reason = f"seat {target!r} ({seat_id}) is vacant — never held"
+            reason = f"seat {target!r} ({seat_id}) is vacant, never held"
         return {"channel": "desk", "target": None, "reason": reason}
 
     project = await _project_name_for(pool, target)
@@ -362,7 +362,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
 
         if agreement == "conflict" and len(matches) == 2:
             # Two resolutions roster itself never classifies, narrowly scoped to this
-            # ladder, never folded into roster's own `governed`/`conflict` split (that
+            # sequence, never folded into roster's own `governed`/`conflict` split (that
             # split is deliberately charter-manages-pin-specific, tested against the
             # reverse direction, see
             # test_roster_repo_lookup_stays_conflict_when_the_manager_edge_
@@ -380,7 +380,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
             # (a) the two matched seats are an active peer_of pair: never a conflict once
             # peered, whichever peer is live, both when both are (a peer pair is
             # recognized as shared ownership, not two rivals; silently picking one over
-            # the other would be exactly the guess this ladder refuses to make
+            # the other would be exactly the guess this sequence refuses to make
             # everywhere else).
             #
             # (b) one matched seat manages the other, regardless of which via-signal each
@@ -398,7 +398,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
                     return {"channel": "dm", "target": target_out, "reason": None}
                 return {"channel": "desk", "target": None,
                         "reason": f"peer pair for project {project!r} "
-                                  f"({seat_a}, {seat_b}) — neither peer is live"}
+                                  f"({seat_a}, {seat_b}), neither peer is live"}
             manager_seat = (
                 seat_b if await manager_of_seat(pool, seat_a) == seat_b else
                 seat_a if await manager_of_seat(pool, seat_b) == seat_a else None)
@@ -469,7 +469,7 @@ async def resolve_owner_target(pool: asyncpg.Pool, owner: str | None) -> dict[st
 async def _nudge_owner(
     pool: asyncpg.Pool, owner: str | None, *, actor: str, body: str,
 ) -> dict[str, Any]:
-    """Resolves via the owner-resolution ladder (`resolve_owner_target`), then sends
+    """Resolves via the owner-resolution sequence (`resolve_owner_target`), then sends
     against that verdict: a DM when a rung resolved (one send, except a live peer_of pair
     where both peers are live, in which case `target` is a list and each gets the same
     nudge, since a peer pair is shared ownership, never a coin flip), the operator's desk
@@ -518,18 +518,18 @@ async def hygiene_execute(
         "execute": execute,
     }
     if not execute:
-        plan["note"] = "PLAN ONLY — call with execute=True to write. Nothing touched."
+        plan["note"] = "PLAN ONLY: call with execute=True to write. Nothing touched."
         return plan
 
     nudged: list[dict[str, Any]] = []
     for item in plan["would_nudge"]:
         tid = uuid.UUID(item["thread_id"])
         project_note = (
-            f" This is project-owned (owner={item['owner']!r}) — your own threads() "
+            f" This is project-owned (owner={item['owner']!r}); your own threads() "
             "call will NOT show it; check the bar's `owe N (+M project)` figure or "
             "this project's own thread list directly." if item.get("project_owned") else "")
         body = (
-            f"OBLIGATION HYGIENE NUDGE — thread {item['thread_id'][:8]} has been idle "
+            f"OBLIGATION HYGIENE NUDGE: thread {item['thread_id'][:8]} has been idle "
             f"{N1_IDLE_DAYS}+ days ({_quote_summary(item)}).{project_note} Touch it "
             f"(annotate/resolve/reclassify) or it becomes a STALE-CANDIDATE on the "
             f"operator's desk after {N2_SILENCE_DAYS} more days of silence. Never "
@@ -552,9 +552,9 @@ async def hygiene_execute(
             tid, "hygiene_stage", "stale_candidate", actor, now, 0.9,
             evidence_class=_HYGIENE_EC)
         body = (
-            f"OBLIGATION STALE-CANDIDATE — thread {item['thread_id'][:8]} "
+            f"OBLIGATION STALE-CANDIDATE: thread {item['thread_id'][:8]} "
             f"(owner={item['owner']!r}, {_quote_summary(item)}) drew a nudge and "
-            f"{N2_SILENCE_DAYS}+ more days of silence since. NEVER auto-resolved — a "
+            f"{N2_SILENCE_DAYS}+ more days of silence since. NEVER auto-resolved: a "
             f"human call on whether it's still real.")
         try:
             from src.orchestrator.mailbox import send_message
@@ -567,7 +567,7 @@ async def hygiene_execute(
 
     plan.update({
         "nudged": nudged, "staled": staled,
-        "note": "EXECUTED — markers and mail attempted for every row named above.",
+        "note": "EXECUTED: markers and mail attempted for every row named above.",
     })
     return plan
 

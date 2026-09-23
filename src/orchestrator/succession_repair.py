@@ -85,5 +85,5 @@ async def unresumed_heads(
                 "detail": log[-1] if log else None,
             })
     return {"checked": checked, "found": found,
-            "note": "READ-ONLY — a finding here is a judgment call, never a mechanical "
+            "note": "READ-ONLY: a finding here is a judgment call, never a mechanical "
                     "fold; nothing here writes or resolves anything"}

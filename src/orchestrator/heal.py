@@ -1,7 +1,7 @@
 """Heals ACTLESS HUSK generations left behind by a 2026-07-14 onboarding defect.
 
-A HUSK is a generation the machinery minted at a handoff boundary that no mind ever
-inhabited: born of a `minted_because` stamp, with zero acts beyond its own mint
+A HUSK is a generation the machinery minted at a handoff boundary that no agent ever
+occupied: born of a `minted_because` stamp, with zero acts beyond its own mint
 bookkeeping, nothing sent, nothing settled. The automatic debounce retires this class
 when it catches one inside its window; the eight healed here escaped because the
 round-trip straddled two separate boundary observers racing each other. That race
@@ -84,7 +84,7 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
         return None, "already healed (false_mint stands)"
     because = await _prop(actions, oid, "minted_because")
     if not because:
-        return None, "not a machine mint (no minted_because) — healing it would be a judgement"
+        return None, "not a machine mint (no minted_because): healing it would be a judgement"
     ancestor = await _prop(actions, oid, "succeeded_from")
     anc_oid = await _oid(actions, ancestor) if ancestor else None
     exclude = [oid] + ([anc_oid] if anc_oid else [])
@@ -101,7 +101,7 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
         minted_at = await actions.pool.fetchval(
             "SELECT created_at FROM objects WHERE id=$1", oid)
     if await agent_has_acted(actions, canonical, exclude=exclude, settled_after=minted_at):
-        return None, "it ACTED — a mind lived here, however briefly; not ours to erase"
+        return None, "it ACTED, an agent lived here however briefly; not ours to erase"
     return oid, ""
 
 
@@ -151,16 +151,16 @@ async def heal_husks(
         "applied": False,
     }
     if not apply:
-        out["note"] = "REHEARSAL — nothing written; pass apply=True to heal"
+        out["note"] = "REHEARSAL: nothing written; pass apply=True to heal"
         return out
 
     for step in plan:
         h, oid = step["husk"], verified[step["husk"]]
         for k, v in (("false_mint", "true"), ("retired", "true"), ("retired_by", _SRC),
                      ("false_mint_because",
-                      "actless machine mint at an onboarding seam — the two seam observers "
-                      "ping-ponged (thread a3d49d91); healed at the operator's word, "
-                      "2026-07-14")):
+                      "actless machine mint at an onboarding boundary: the two boundary "
+                      "observers raced each other and both fired; healed at the operator's "
+                      "word, 2026-07-14")):
             await actions.assert_property(oid, k, v, _SRC, now, _CONF,
                                           evidence_class=_DO.value)
         if step["estate_to"]:

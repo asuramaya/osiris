@@ -136,7 +136,7 @@ async def retire_assertion(
     that object; it's already superseded by something else."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — a cross-source retirement must carry its "
+        return {"error": "because is required: a cross-source retirement must carry its "
                          "justification, not just a value"}
     name = (name or "").strip()
     if not name:
@@ -150,11 +150,11 @@ async def retire_assertion(
         superseded_id, object_id, name)
     if target is None:
         return {"error": f"assertion {superseded_id} is not a {name!r} assertion on "
-                         f"{ref!r} — check the id and the property name"}
+                         f"{ref!r}, check the id and the property name"}
     already = await pool.fetchval(
         "SELECT 1 FROM assertions WHERE supersedes=$1", superseded_id)
     if already:
-        return {"error": f"assertion {superseded_id} is already superseded — nothing to "
+        return {"error": f"assertion {superseded_id} is already superseded, nothing to "
                          "retire"}
     now = datetime.now(UTC)
     ec = EvidenceClass.SELF_DECLARED
@@ -174,7 +174,7 @@ async def retire_assertion(
 async def retire_link(
     actions: Actions, *, from_ref: str, to_ref: str, link_type: str, because: str, actor: str,
 ) -> dict[str, Any]:
-    """The missing verb: three independent live cases motivated this (a fuzzy-substring
+    """The missing operation: three independent live cases motivated this (a fuzzy-substring
     `resolves=` mis-citation, a `resolves=` mis-fire that closed the wrong Thread, and the
     original case that opened this gap). `retire_assertion` above covers the
     property-assertion half of "retract a wrongly-minted X" (confirmed already general to
@@ -198,7 +198,7 @@ async def retire_link(
     ref/type the same way a silent drop would)."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — retiring a link crosses the same "
+        return {"error": "because is required: retiring a link crosses the same "
                          "accountability line retire_assertion's own because already does"}
     link_type = (link_type or "").strip()
     if not link_type:
@@ -214,7 +214,7 @@ async def retire_link(
     n = await actions.invalidate_link(from_id, to_id, link_type, actor, now, reason=because)
     if n == 0:
         return {"error": f"no currently-active {link_type!r} link from {from_ref!r} to "
-                         f"{to_ref!r} — nothing to retire (check the refs and the type)"}
+                         f"{to_ref!r}, nothing to retire (check the refs and the type)"}
     return {"retired": {"from": from_ref, "to": to_ref, "type": link_type, "count": n},
            "because": because}
 
@@ -248,7 +248,7 @@ async def retire_bare_object(
     a delete."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — retiring a bare object is a "
+        return {"error": "because is required: retiring a bare object is a "
                          "deliberate act on the record"}
     pool = actions.pool
     object_id = await resolve_ref(pool, ref)
@@ -259,20 +259,20 @@ async def retire_bare_object(
     if row is None:
         return {"error": f"no object matches {ref!r}"}
     if row["status"] != "active":
-        return {"error": f"{row['canonical']} is already {row['status']} — nothing to "
+        return {"error": f"{row['canonical']} is already {row['status']}, nothing to "
                          "retire"}
     live_links = await pool.fetchval(
         "SELECT count(*) FROM links WHERE (from_id=$1 OR to_id=$1) "
         "AND (valid_until IS NULL OR valid_until > now())", object_id)
     if live_links:
-        return {"error": f"{row['canonical']} has {live_links} live link(s) touching it "
-                         "— live signal, retire_bare_object refuses"}
+        return {"error": f"{row['canonical']} has {live_links} live link(s) touching it, "
+                         "live signal, retire_bare_object refuses"}
     other_sources = await pool.fetchval(
         "SELECT count(*) FROM current_assertions WHERE object_id=$1 AND source_id <> $2",
         object_id, GRAPH_LAYOUT_SOURCE)
     if other_sources:
         return {"error": f"{row['canonical']} carries {other_sources} assertion(s) from a "
-                         "non-layout source — real evidence of content, retire_bare_object "
+                         "non-layout source, real evidence of content, retire_bare_object "
                          "refuses"}
     await actions.set_status(object_id, "retired", because, actor)
     return {"retired_object": row["canonical"], "id": str(object_id)[:8],

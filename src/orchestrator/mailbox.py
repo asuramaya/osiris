@@ -66,9 +66,9 @@ _HOLD_GRACE_SECS = 3600
 # own broadcast's fan-out (the DM path always had this predicate).
 # A SEAT ADDRESS IS READ BY ITS CURRENT HOLDER: mail stored with to_agent='seat:<id>'
 # is deliverable to whichever agent actively holds that seat at read time. The address
-# never dies with an agent, so a succession's estate-transfer update is simply
+# never dies with an agent, so a succession's records-transfer update is simply
 # unnecessary for it (the heir holds the seat, therefore the heir matches; nothing to
-# re-address). Agent-id DMs keep the exact-id match and the estate transfer, unchanged.
+# re-address). Agent-id DMs keep the exact-id match and the records transfer, unchanged.
 _READER_HOLDS_ADDR = (
     "(m.to_agent LIKE 'seat:%' AND EXISTS (SELECT 1 FROM links hl "
     "  JOIN objects hf ON hf.id=hl.from_id JOIN objects ht ON ht.id=hl.to_id "
@@ -79,7 +79,7 @@ _READER_HOLDS_ADDR = (
 # THE ROLLUP: mail addressed to a retired agent should roll up to that agent's
 # current lineage head. A reader drains its whole lineage's lanes: an exact-id DM
 # parked on any generation of the reader's own base is deliverable to whoever wears
-# the name at read time. Estate transfers and sweeps still converge the lanes; the
+# the name at read time. Records transfers and sweeps still converge the lanes; the
 # read no longer waits for them (observed once: the statusline counted a DM on an
 # older generation while the freshly minted new generation read an empty inbox: one
 # agent, two answers).
@@ -174,7 +174,7 @@ def _addressee_in_body(body: str) -> str | None:
 async def _dm_ineligibility(pool: asyncpg.Pool, agent_id: str) -> str | None:
     """Why may this id not receive a DM, or None if it may. The resolver-eligibility
     rule: a retired or false-mint agent is never a DM target: mail parked on a
-    phantom lane is a loss wearing a delivery receipt. 'unknown' = no active Agent
+    phantom lane is a loss that looks like a successful delivery. 'unknown' = no active Agent
     object (ineligible for the resolver lanes, but a direct DM to an id the graph
     merely hasn't met yet stays deliverable: registration can lag a living agent)."""
     row = await pool.fetchrow(
@@ -341,7 +341,7 @@ async def send_message(
             "SELECT 1 FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
             to_agent)
         if not exists:
-            raise ValueError(f"no such seat: '{to_agent}' — check fleet() or address by name")
+            raise ValueError(f"no such seat: '{to_agent}', check fleet() or address by name")
     elif to_agent and not to_agent.startswith("agent:"):
         # a DM addressed by human name: when the name resolves through a binding, the
         # seat is the stored address: it survives every succession, so the mail
@@ -361,15 +361,15 @@ async def send_message(
             # only place a fix here can land: both dm_to and lineage_head are computed
             # from that same fallback walk once it has run, so they agree with each
             # other while being wrong together: no post-hoc result check can catch this.
-            raise ValueError(f"undeliverable: {ineligible} — refusing rather than guessing; "
-                             "check fleet() for who actually holds the seat now, or address "
+            raise ValueError(f"undeliverable: {ineligible}, refusing rather than guessing. "
+                             "Check fleet() for who actually holds the seat now, or address "
                              "the seat directly (to_agent='seat:<id>') once a new holder "
                              "claims it.")
         from src.actions.core import Actions
         from src.orchestrator.agents import resolve_seat
         resolved = await resolve_seat(Actions(pool), to_agent)
         if resolved["agent"] is None:
-            raise ValueError(f"no agent named '{to_agent}' — check the name or DM by agent id")
+            raise ValueError(f"no agent named '{to_agent}', check the name or DM by agent id")
         to_agent = resolved.get("seat_id") or resolved["agent"]
     via_reply_routing = False  # set True only where `to_a` is copied from `ref`, below:
     # never for explicit to_agent=/to=, whose staleness stays an act of intent (see the
@@ -405,9 +405,9 @@ async def send_message(
                 if await seat_holder_ineligible(pool, to_project) is None:
                     maybe = await resolve_seat(Actions(pool), to_project)
                     if maybe["agent"] is not None:
-                        hint = f" — did you mean to_agent={to_project!r} instead of to=?"
+                        hint = f", did you mean to_agent={to_project!r} instead of to=?"
                 raise ValueError(
-                    f"no such project: {to_project!r} — nobody has ever mounted there, so "
+                    f"no such project: {to_project!r}, nobody has ever mounted there, so "
                     f"no inbox() call would ever see this broadcast{hint}")
             else:
                 # THE SEND-CALL ADDRESSING GUARD: a sender in one project once sent
@@ -444,7 +444,7 @@ async def send_message(
                         if holder_room and _norm(holder_room) != to_p:
                             raise ValueError(
                                 f"{candidate} is {bound['seat_id']} in project "
-                                f"{holder_room} — nobody in {to_p} is {candidate}; use "
+                                f"{holder_room}, nobody in {to_p} is {candidate}; use "
                                 f"to_agent={candidate!r} to reach them directly")
     elif ref is not None and await _addressed_to_me(pool, ref["to_agent"], from_agent):
         to_a, to_p = ref["from_agent"], ref["from_project"]  # a DM to me → DM back to its sender
@@ -596,13 +596,13 @@ async def send_message(
         holder = (sr or {}).get("holder")
         lineage = await lineage_head(pool, holder) if holder else None
         if require_seat and sr is None:
-            raise ValueError(f"require_seat: '{requested or to_a}' is not a living Seat — "
+            raise ValueError(f"require_seat: '{requested or to_a}' is not a living Seat, "
                              "refusing to dispatch blind.")
         if seat_placeholder_redirect and holder is None:
             raise ValueError(
                 f"undeliverable: '{requested}' is a seat's own placeholder identity "
                 f"(seat {to_a!r}{f', handle {seat!r}' if seat else ''}), and the seat is "
-                "currently vacant — refusing to queue a DM with nobody to read it. "
+                "currently vacant, refusing to queue a DM with nobody to read it. "
                 "Address the seat directly if you mean to wait for its next holder.")
     elif to_a:
         from src.orchestrator.agents import agent_seat, lineage_head
@@ -631,7 +631,7 @@ async def send_message(
                 else:
                     raise ValueError(
                         f"undeliverable: '{requested or to_a}' resolves to {lineage}, "
-                        f"whose lineage head is {why} — no eligible living head exists, "
+                        f"whose lineage head is {why}, no eligible living head exists, "
                         "so this DM would park on a phantom lane forever. Check fleet() "
                         "for who actually lives, or broadcast to the project room "
                         "instead.")
@@ -639,7 +639,7 @@ async def send_message(
         if require_seat and gate_seat is None:
             raise ValueError(
                 f"require_seat: '{requested or to_a}' resolved to {to_a}, which holds no "
-                "CLAIMED seat (no handle asserted) — refusing to dispatch blind. Check "
+                "CLAIMED seat (no handle asserted), refusing to dispatch blind. Check "
                 "fleet() for who actually holds a seat, or pass require_seat=False to send "
                 "anyway.")
         # THE RESULT'S OWN SEAT FIELD: a DM to a stale/retired ancestor id used to
@@ -658,8 +658,8 @@ async def send_message(
         if occupied_despite_flag is not None:
             redirect = {**(redirect or {"addressed": to_a, "delivered": lineage}),
                        "delivered_despite_flag": occupied_despite_flag,
-                       "delivered_despite_flag_reason": "a live, harness-confirmed body "
-                                                        "occupies this id — delivered "
+                       "delivered_despite_flag_reason": "a live, harness-confirmed session "
+                                                        "occupies this id, delivered "
                                                         "anyway rather than parked on a "
                                                         "belief the OS itself contradicts"}
     # OWNERSHIP STAMPED AT DISPATCH: resolved before any write, same rule as the
@@ -669,17 +669,17 @@ async def send_message(
     if threads:
         if not to_a:
             raise ValueError("threads=…: ownership transfer needs a single resolved "
-                             "addressee (to_agent=…) — a broadcast has no one to hand it to")
+                             "addressee (to_agent=…), a broadcast has no one to hand it to")
         from src.orchestrator.capture import RefAmbiguous, _find_thread
         for tref in threads:
             try:
                 tid = await _find_thread(pool, tref, require_identifier=True)
             except RefAmbiguous as exc:
                 raise ValueError(
-                    f"threads=…: {exc} — refusing to guess which Thread {tref!r} means "
+                    f"threads=…: {exc}, refusing to guess which Thread {tref!r} means "
                     "(named-enough-to-identify is not named-enough-to-auto-stamp)") from exc
             if tid is None:
-                raise ValueError(f"threads=…: no Thread matches {tref!r} — check the short "
+                raise ValueError(f"threads=…: no Thread matches {tref!r}, check the short "
                                  "id, or open it first")
             resolved_threads.append(tid)
     thread = (ref["thread_id"] or ref["id"]) if ref is not None else None
@@ -816,7 +816,7 @@ async def send_message(
                               # very NameError this class of bug produced.
         graphed = False
         _log.warning("send_message(%s): graph edge write failed, relational row %s "
-                    "already committed — %s", from_agent, mid, exc)
+                    "already committed: %s", from_agent, mid, exc)
     return {"id": mid, "to": to_p, "to_agent": to_a, "thread_id": thread, "dedup": False,
             **({} if graphed else {"graphed": False}),
             **({"seat": seat, "lineage_head": lineage} if to_a else {}),
@@ -890,7 +890,7 @@ async def unread_split(
     statusline carried its own stale copy of this predicate, with no lineage rollup and no
     hold grace, so its mail number quietly diverged from orient's).
 
-    An identity-less reader (no mount row yet) has no receipts, so per-reader semantics
+    An identity-less reader (no mount row yet) has no delivery records, so per-reader semantics
     would re-count the project's whole settled history; it falls back to project-open
     semantics: broadcasts nobody settled, dm 0, exactly the statusline's old honest
     fallback, now housed with the authority."""
@@ -1249,10 +1249,10 @@ async def dim_brief(
         "UPDATE fleet_messages SET moot_note=$2, moot_by=$3, moot_at=now() "
         "WHERE id=$1 AND to_project=$4 RETURNING id", message_id, because, by, OPERATOR_ADDR)
     if row is None:
-        raise ValueError(f"message {message_id} is not an operator-desk brief — dim only "
+        raise ValueError(f"message {message_id} is not an operator-desk brief, dim only "
                          "applies to the human's desk")
     return {"dimmed": message_id, "because": because, "by": by,
-            "note": "annotated, NOT settled — the brief stays the operator's to dismiss"}
+            "note": "annotated, NOT settled: the brief stays the operator's to dismiss"}
 
 
 async def _same_story_clusters(
@@ -1296,7 +1296,7 @@ async def _same_story_clusters(
                 "count": len(members),
                 "also": [{"id": m["id"], "from": m["from"], "project": m["from_project"]}
                          for m in members[1:]],
-                "note": "near-identical briefs folded — one condition, several witnesses; "
+                "note": "near-identical briefs folded: one condition, several witnesses; "
                         "the ids above settle with this one"}}
         out.append(lead)
     out.sort(key=lambda c: c["when"], reverse=True)
@@ -1409,7 +1409,7 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         if earlier:
             card["thread_folded"] = {
                 "count": len(earlier), "ids": [e["id"] for e in earlier],
-                "note": "earlier briefs in this thread — superseded by the one above"}
+                "note": "earlier briefs in this thread, superseded by the one above"}
         if lead["moot_note"]:
             dimmed.append({"id": card["id"], "from": card["from"],
                            "project": card["from_project"],
@@ -1449,18 +1449,18 @@ async def read_desk(pool: asyncpg.Pool, *, limit: int = 100) -> dict[str, Any]:
         **({"dimmed": dimmed} if dimmed else {}),
         **({"your_queue": {
             "threads": queue,
-            "note": "open threads a mind deliberately put on YOU (owner='operator', "
-                    "SELF_DECLARED) — the canonical waiting-on-your-hands list"}} if queue else {}),
+            "note": "open threads an agent deliberately put on YOU (owner='operator', "
+                    "SELF_DECLARED), the canonical waiting-on-your-hands list"}} if queue else {}),
         **({"miner_guesses": {
             "threads": guessed,
             "note": f"{len(guessed)} duties the MINER inferred you owe, from overhearing "
                     "conversation. Nobody asked you. They are NOT counted in `owed` and never "
-                    "go red — read them, then resolve or assign the ones that are real"}}
+                    "go red, read them, then resolve or assign the ones that are real"}}
            if guessed else {}),
         "by_project": _group_by_project(queue, bands["decision"] + bands["hands"]),
-        "note": "peek — nothing leased; settle only at your word (inbox(project='operator', "
+        "note": "peek: nothing leased; settle only at your word (inbox(project='operator', "
                 "ack=[ids])). Folded ids settle with their lead card. THE COUNT THAT MATTERS "
-                "is `owed` (debts a mind actually asked of you); `letters` carry no debt and "
+                "is `owed` (debts an agent actually asked of you); `letters` carry no debt and "
                 "clear in bulk; `miner_guesses` are inferences, not obligations.",
     }
 

@@ -336,8 +336,8 @@ async def _normalize_project_label_through_merge(
             "AND lower(canonical)=lower($1)", target_canon)
         if len(candidates) > 1:
             return label, (f"'{label}' matches {len(candidates)} SoftwareProjects that "
-                           "differ only by case — compared unnormalized rather than "
-                           "guessing which one this label means")
+                           "differ only by case, so it was compared unnormalized rather "
+                           "than guessing which one this label means")
         row = candidates[0] if candidates else None
     if row is None:
         # A RETIRED CANONICAL (object_aliases: a rename migrated the canonical): a stale
@@ -359,8 +359,8 @@ async def _normalize_project_label_through_merge(
         current = nxt
     else:
         return label, (f"merge chain for {label!r} could not be resolved (broken/cyclic "
-                       "merged_into edge) — compared unnormalized rather than guessing a "
-                       "winner")
+                       "merged_into edge), so it was compared unnormalized rather than "
+                       "guessing a winner")
     if winner == row["id"]:
         return await _live_label(conn_or_pool, winner, row["canonical"]), None
     canon = await conn_or_pool.fetchval("SELECT canonical FROM objects WHERE id=$1", winner)
@@ -722,8 +722,8 @@ async def _cascade_governing_seats(
         elif house != old_name:
             tiers["house"] = {"status": "already-correct",
                               "note": f"house={house!r} names neither {old_name!r} nor "
-                                      f"{new_name!r} — left untouched, not this cascade's "
-                                      "to guess"}
+                                      f"{new_name!r}, so it was left untouched; not this "
+                                      "cascade's to guess"}
         elif dry_run:
             tiers["house"] = {"status": "touched",
                               "plan": f"{old_name!r} -> {new_name!r}"}
@@ -841,9 +841,9 @@ async def _cascade_governing_seats(
                 tiers["charter"] = {"status": "not-evaluated",
                                     "note": "charter names neither the old nor the new "
                                             "label, and no entry resolved to this "
-                                            "project — left untouched; this should not "
-                                            "happen for a seat with an active governs "
-                                            "edge to the renamed project"}
+                                            "project, so it was left untouched; this "
+                                            "should not happen for a seat with an active "
+                                            "governs edge to the renamed project"}
         except Exception as exc:  # noqa: BLE001
             tiers["charter"] = {"status": "could-not", "detail": str(exc)}
 
@@ -901,14 +901,14 @@ async def _cascade_governing_seats(
                 tiers["tree"] = {
                     "status": "could-not",
                     "detail": f"tree_cwd {tree_cwd!r} no longer exists on disk and "
-                             f"{candidate!r} does — this cascade never rebinds a tree "
+                             f"{candidate!r} does. This cascade never rebinds a tree "
                              "automatically; confirm it, then call "
                              f"seat(action='bind_tree', seat_id={seat_id!r}, "
                              f"tree_cwd={candidate!r}) yourself"}
             else:
                 tiers["tree"] = {
                     "status": "could-not",
-                    "detail": f"tree_cwd {tree_cwd!r} references the old name — this "
+                    "detail": f"tree_cwd {tree_cwd!r} references the old name; this "
                              "cascade never moves or infers folders, only detects"}
         else:
             tiers["tree"] = {"status": "already-correct"}
@@ -939,7 +939,7 @@ async def _cascade_governing_seats(
         if not tree_cwd or not _dir_exists(tree_cwd):
             tiers["repo_root_osiris"] = {
                 "status": "could-not",
-                "detail": "no real tree_cwd on record for this seat — nothing to "
+                "detail": "no real tree_cwd on record for this seat; nothing to "
                          "check a repo-root .osiris pin against (see the tree tier "
                          "above)"}
         else:
@@ -965,7 +965,7 @@ async def _cascade_governing_seats(
                     and pin_detail["workspace"].get("path") == str(Path(tree_cwd) / ".osiris"))
                 tiers["repo_root_osiris"] = (
                     {"status": "touched",
-                     "detail": "corrected via the pin tier's own workspace copy — "
+                     "detail": "corrected via the pin tier's own workspace copy, "
                               "same tree_cwd path, one write not two"}
                     if via_pin else {"status": "already-correct"})
             elif dry_run:
@@ -994,7 +994,7 @@ async def _cascade_governing_seats(
         # don't already carry on their own.
         "could_not_reach": {
             "folder_path": "the project's on-disk directory is never moved or inferred "
-                           "by this verb, by design — see each seat's own 'tree' tier "
+                           "by this function, by design; see each seat's own 'tree' tier "
                            "for the real per-seat detection of whether a renamed path "
                            "already exists; mv it yourself first if the rename should "
                            "follow the code",
@@ -1062,15 +1062,15 @@ async def rename_project(
     is re-addressed old bare canonical -> new_name, so a fresh mount under the
     corrected name resolves cleanly.
 
-    THE CASCADE: this verb is no longer graph-only. Every SEAT governing this project
+    THE CASCADE: this function is no longer graph-only. Every SEAT governing this project
     (a live `governs` link) has its own pin/house/charter/office cascaded under this
-    verb's OWN elevated authority, see `_cascade_governing_seats`, rather than left to
+    function's OWN elevated authority, see `_cascade_governing_seats`, rather than left to
     drift the way earlier specimens did. The result's `manifest` names every tier
     `touched`/`already-correct`/`could-not`, per seat, so a partial cascade hands back
     the exact remainder rather than silence. OUT OF SCOPE, named honestly rather than
     silently skipped (the same discipline rename_seat holds for the harness window
     title it cannot reach): the project's own on-disk folder is never moved by any
-    Osiris verb, named in the manifest's own `could_not_reach`, though each governing
+    Osiris function, named in the manifest's own `could_not_reach`, though each governing
     seat's own `tree` tier still detects whether a renamed path already exists. The
     repo's own ROOT `.osiris` file (a third copy, distinct from any seat's own
     office/anchor/workspace pins) is NO LONGER out of scope: a real per-seat tier,
@@ -1090,7 +1090,7 @@ async def rename_project(
     does not land silently unread.
 
     Refuses LOUDLY on: a blank `new_name` or `because`; an unresolved or ambiguous
-    `project` ref (AmbiguousProjectRef, named exactly like every other project verb);
+    `project` ref (AmbiguousProjectRef, named exactly like every other project function);
     a non-active project; `new_name` already resolving to a DIFFERENT SoftwareProject
     that is active OR retired (a real collision either way, since retired is a dormant,
     revivable identity, not a dead one), unless `merge_into=True` is passed explicitly,
@@ -1101,7 +1101,7 @@ async def rename_project(
     dead identity is exactly what a rename is free to reclaim; `merge_into` is never
     needed for that case.
 
-    `dry_run=True` (the default, same convention as every other write verb in this
+    `dry_run=True` (the default, same convention as every other write function in this
     file) returns the exact plan: resolved project, old/new name, any collision found,
     without writing anything: no `assert_property`, no `agent_mounts` repoint, no
     prior-art search. Pass `dry_run=False` explicitly to actually rename.
@@ -1123,19 +1123,19 @@ async def rename_project(
     if not new_name:
         return {"error": "new_name is required"}
     if not because:
-        return {"error": "because is required — a rename is testimony; the reason it "
+        return {"error": "because is required: a rename is testimony; the reason it "
                          "changed must be on the record"}
     try:
         row = await _resolve_software_project(actions.pool, project)
     except AmbiguousProjectRef as amb:
-        return {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} active "
+        return {"error": f"{amb.ref!r} is ambiguous: {len(amb.candidates)} active "
                          f"SoftwareProjects answer to it: {', '.join(amb.candidates)}. "
-                         "Name the exact one (canonical or id) — rename_project never "
+                         "Name the exact one (canonical or id); rename_project never "
                          "guesses which."}
     if row is None:
         return {"error": f"no such SoftwareProject: {project!r}"}
     if row["status"] != "active":
-        return {"error": f"{row['canonical']} is {row['status']}, not active — nothing "
+        return {"error": f"{row['canonical']} is {row['status']}, not active; nothing "
                          "to rename"}
     # REFUSE RATHER THAN SILENTLY FALL BACK: a database that hasn't yet run alembic 0072
     # has no object_aliases table. `_resolve_software_project`'s own alias fallback (and
@@ -1144,7 +1144,7 @@ async def rename_project(
     # clear refusal instead of a raw asyncpg error. The deploy runs alembic before code
     # lands, so this should never fire live.
     if not await actions.pool.fetchval("SELECT to_regclass('object_aliases') IS NOT NULL"):
-        return {"error": "object_aliases does not exist on this database — run alembic "
+        return {"error": "object_aliases does not exist on this database; run alembic "
                          "upgrade (migration 0072) before renaming a project; a canonical "
                          "migration with nothing to alias the old string to would orphan it"}
     try:
@@ -1168,11 +1168,11 @@ async def rename_project(
     if (collide is not None and collide["id"] != row["id"] and collide["status"] != "merged"
             and not merge_into):
         return {"error": f"{new_name!r} already names a DIFFERENT project "
-                         f"({collide['canonical']}, status={collide['status']}) — "
+                         f"({collide['canonical']}, status={collide['status']}). "
                          "rename_project never collides two identities silently; pass "
                          "merge_into=True if this is deliberate (it only lifts this "
-                         "refusal, it does not itself merge the two objects — "
-                         "fold_project is the evidence-gated verb for that), or name a "
+                         "refusal, it does not itself merge the two objects; "
+                         "fold_project is the evidence-gated function for that), or name a "
                          "genuinely free new_name instead"}
     old_name = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -1190,7 +1190,7 @@ async def rename_project(
     canonical_skip: str | None = None
     if migrates:
         if not _REPO_NAME_RE.fullmatch(new_name):
-            return {"error": f"{new_name!r} cannot be a canonical — a rename now migrates "
+            return {"error": f"{new_name!r} cannot be a canonical: a rename now migrates "
                              "the canonical too, so new_name must be a bare project name "
                              "(the same shape capture's repo= accepts), never a path or "
                              "placeholder"}
@@ -1200,23 +1200,23 @@ async def rename_project(
         if holder is not None and holder["status"] != "merged":
             if not merge_into:
                 return {"error": f"{new_canonical} is already held by a "
-                                 f"{holder['status']} SoftwareProject — a canonical "
+                                 f"{holder['status']} SoftwareProject; a canonical "
                                  "cannot be shared; fold_project is the evidence-gated "
-                                 "verb for two live identities"}
+                                 "function for two live identities"}
             # merge_into=True is the caller's explicit "reuse the NAME anyway": a unique
             # canonical cannot be shared, so the name moves and the canonical stays put,
             # said plainly in the result rather than silently skipped.
             migrates = False
             canonical_skip = (f"{new_canonical} is held by a {holder['status']} "
                               "SoftwareProject (merge_into=True kept the name-only "
-                              "rename) — canonical NOT migrated")
+                              "rename); canonical NOT migrated")
             holder = None
         other_alias = await actions.pool.fetchval(
             "SELECT object_id FROM object_aliases WHERE type='SoftwareProject' AND alias=$1",
             new_canonical)
         if other_alias is not None and other_alias != row["id"]:
             return {"error": f"{new_canonical} is a retired canonical (alias) of a "
-                             "DIFFERENT project — refusing to steal an alias"}
+                             "DIFFERENT project: refusing to steal an alias"}
     old_labels = {old_canonical.removeprefix("repo:"), *([old_name] if old_name else [])}
     old_labels.discard(new_name)
     canonical_plan: dict[str, Any] = {
@@ -1228,8 +1228,8 @@ async def rename_project(
             if holder is not None else None),
         "off_graph_occurrences": await _canonical_occurrences(actions.pool, old_labels),
         "not_migrated": ["Agent `project` assertion values (each agent's own "
-                         "self-declaration — healed at its next mount/register_agent)",
-                         "the project's on-disk folder (never moved by any Osiris verb)"],
+                         "self-declaration; healed at its next mount/register_agent)",
+                         "the project's on-disk folder (never moved by any Osiris function)"],
     }
     if dry_run:
         manifest = await _cascade_governing_seats(
@@ -1238,13 +1238,13 @@ async def rename_project(
         return {"project": row["canonical"], "old_name": old_name, "new_name": new_name,
                 "canonical_migration": canonical_plan,
                 "because": because, "dry_run": True,
-                "collision": (f"{collide['canonical']} (status={collide['status']}) — "
+                "collision": (f"{collide['canonical']} (status={collide['status']}); "
                               f"would proceed only because merge_into={merge_into!r}"
                               if collide is not None and collide["id"] != row["id"]
                               and collide["status"] != "merged"
                               else None),
                 "manifest": manifest,
-                "note": "preview only — pass dry_run=False to actually rename"}
+                "note": "preview only; pass dry_run=False to actually rename"}
     now = datetime.now(UTC)
     # SINGULAR, NOT SAME-SOURCE-ONLY: an earlier live specimen showed a project's
     # dossier listing nine old name rows beside the new one as agreement=contradicting.
@@ -1273,7 +1273,7 @@ async def rename_project(
             because=f"rename_project: {because}", evidence_class=_EC)
     # THE POST-WRITE READ-BACK, PROJECT IDENTITY DRIFT: an earlier live specimen read
     # NINE current old-name values and none of the new name at all after an earlier
-    # rename. A write this verb just made is not proof the write STUCK: the same-source
+    # rename. A write this function just made is not proof the write STUCK: the same-source
     # clobber register_agent's own project-name guard could still (pre-fix) commit had
     # already erased a rename's own row before its writer ever checked. Reads back the
     # SAME confidence-ordered query every other "which name wins" reader in this
@@ -1288,7 +1288,7 @@ async def rename_project(
     if not rename_confirmed:
         logger.warning(
             "rename_project(%s): wrote name=%r but the confidence-ordered current "
-            "value reads %r immediately after — the write did not win",
+            "value reads %r immediately after; the write did not win",
             row["canonical"], new_name, current_name_after_write)
     bare_old = row["canonical"].removeprefix("repo:")
     off_graph_moved: dict[str, int] = {}
@@ -1321,8 +1321,8 @@ async def rename_project(
            "note": f"{old_canonical} -> {new_canonical}: the uuid and every edge stay (a "
                    "compensating canonical_changed event, the old canonical an ALIAS "
                    "that resolves forever); every GOVERNING SEAT's own pin/"
-                   "house/charter/office/repo-root-.osiris is cascaded (see manifest) "
-                   "— the project's own on-disk folder is not (manifest's own "
+                   "house/charter/office/repo-root-.osiris is cascaded (see manifest); "
+                   "the project's own on-disk folder is not (manifest's own "
                    "could_not_reach names why; each seat's own 'tree' tier still "
                    "detects whether a renamed path already exists)",
            "possibly_stale_seats": stale,
@@ -1334,9 +1334,9 @@ async def fork_project(
 ) -> dict[str, Any]:
     """FORK: an earlier project-split specimen established the shape: a new sibling
     project, with the original left untouched. TWO objects, BOTH already active
-    SoftwareProjects, this verb never mints either side, reusing fold_project's own
+    SoftwareProjects, this function never mints either side, reusing fold_project's own
     refusal shape deliberately (if the target doesn't exist yet, this is a RENAME, a
-    different verb for a different act). Mints ONE `forked_from` edge, `fork_into` ->
+    different function for a different act). Mints ONE `forked_from` edge, `fork_into` ->
     `project` (the successor names its ancestor, the same direction convention
     succeeded_from already holds for an Agent lineage: heir -> ancestor).
 
@@ -1359,20 +1359,20 @@ async def fork_project(
     fork_into = (fork_into or "").strip()
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — a fork is a declared act on the record"}
+        return {"error": "because is required: a fork is a declared act on the record"}
     if not project or not fork_into:
         return {"error": "fork_project needs both labels: project and fork_into"}
     if project == fork_into:
-        return {"error": "project and fork_into name the same label — nothing to fork"}
+        return {"error": "project and fork_into name the same label; nothing to fork"}
 
     async def _resolve(ref: str) -> tuple[Any, dict[str, Any] | None]:
         try:
             got = await _resolve_software_project(actions.pool, ref)
         except AmbiguousProjectRef as amb:
-            return None, {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} "
+            return None, {"error": f"{amb.ref!r} is ambiguous: {len(amb.candidates)} "
                                    f"active SoftwareProjects answer to it: "
                                    f"{', '.join(amb.candidates)}. Name the exact one "
-                                   "(canonical or id) — fork_project never guesses which."}
+                                   "(canonical or id); fork_project never guesses which."}
         return got, None
 
     proj_row, err = await _resolve(project)
@@ -1384,7 +1384,7 @@ async def fork_project(
     if proj_row is None or into_row is None:
         missing = [label for label, row in ((project, proj_row), (fork_into, into_row))
                   if row is None]
-        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)} — "
+        return {"error": f"unknown SoftwareProject(s): {', '.join(missing)}. "
                          "fork_project never invents either side; mint the successor as "
                          "a real project first before recording the succession"}
     if proj_row["status"] != "active":
@@ -1396,14 +1396,14 @@ async def fork_project(
         "AND (valid_until IS NULL OR valid_until > now())", into_row["id"], proj_row["id"])
     if exists:
         return {"error": f"{into_row['canonical']} already carries a live forked_from "
-                         f"edge to {proj_row['canonical']} — nothing to do"}
+                         f"edge to {proj_row['canonical']}; nothing to do"}
     now = datetime.now(UTC)
     await actions.create_link(into_row["id"], proj_row["id"], "forked_from", actor, now,
                               _CONF, properties={"because": because}, evidence_class=_EC)
     return {"forked_from": proj_row["canonical"], "into": into_row["canonical"],
            "because": because,
-           "note": "no estate moved — every existing in_repo/works_in/governs edge on "
-                   "both objects stays exactly where it is"}
+           "note": "no relationships moved: every existing in_repo/works_in/governs edge "
+                   "on both objects stays exactly where it is"}
 
 
 async def unfork_project(
@@ -1422,17 +1422,17 @@ async def unfork_project(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — unforking is a deliberate act on the "
+        return {"error": "because is required: unforking is a deliberate act on the "
                          "record"}
 
     async def _resolve(ref: str) -> tuple[Any, dict[str, Any] | None]:
         try:
             got = await _resolve_software_project(actions.pool, ref)
         except AmbiguousProjectRef as amb:
-            return None, {"error": f"{amb.ref!r} is ambiguous — {len(amb.candidates)} "
+            return None, {"error": f"{amb.ref!r} is ambiguous: {len(amb.candidates)} "
                                    f"active SoftwareProjects answer to it: "
                                    f"{', '.join(amb.candidates)}. Name the exact one "
-                                   "(canonical or id) — unfork_project never guesses "
+                                   "(canonical or id); unfork_project never guesses "
                                    "which."}
         return got, None
 
@@ -1452,14 +1452,14 @@ async def unfork_project(
         "AND (valid_until IS NULL OR valid_until > now())", into_row["id"], proj_row["id"])
     if link is None:
         return {"error": f"{into_row['canonical']} carries no live forked_from edge to "
-                         f"{proj_row['canonical']} — nothing to unfork"}
+                         f"{proj_row['canonical']}; nothing to unfork"}
     now = datetime.now(UTC)
     await actions.invalidate_link(link["from_id"], link["to_id"], "forked_from", actor, now)
     return {"unforked": proj_row["canonical"], "was_into": into_row["canonical"],
            "because": because}
 
 
-# --- create_project (the CREATE half of the project-identity verb set) -------------------
+# --- create_project (the CREATE half of the project-identity function set) --------------
 
 async def create_project(
     actions: Actions, *, name: str, because: str, actor: str,
@@ -1487,7 +1487,7 @@ async def create_project(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — creating a project is a deliberate act "
+        return {"error": "because is required: creating a project is a deliberate act "
                          "on the record"}
     raw = (name or "").strip()
     stripped = raw.removeprefix("repo:").strip()
@@ -1506,7 +1506,7 @@ async def create_project(
         row = await actions.pool.fetchrow("SELECT canonical FROM objects WHERE id=$1",
                                           existing)
         return {"canonical": row["canonical"], "created": False,
-                "note": "already exists — reused, never minted as a twin"}
+                "note": "already exists: reused, never minted as a duplicate"}
     now = datetime.now(UTC)
     proj = await actions.create_or_find_object("SoftwareProject", f"repo:{stripped}", actor)
     await actions.assert_property(proj, "name", stripped, actor, now, _CONF,
