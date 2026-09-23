@@ -282,6 +282,21 @@ export async function initSpace(container) {
   renderer.setSize(wrap.clientWidth, wrap.clientHeight);
   wrap.appendChild(renderer.domElement);
 
+  // A BLACK CANVAS IS NOT A LOADING STATE: the WebGL scene is a dark navy background
+  // (0x0d1219) whether it holds thousands of nodes or none at all, and a freshly
+  // installed graph's own objects are always unpositioned for the first few seconds
+  // (the layout worker's own startup batch, see the delta-handler comment below) --
+  // indistinguishable, to a newcomer's eye, from the product being simply broken. This
+  // overlay is the only visible difference between the two.
+  const emptyOverlay = document.createElement("div");
+  emptyOverlay.style.cssText = "position:absolute;inset:0;display:none;align-items:center;" +
+    "justify-content:center;text-align:center;padding:24px;pointer-events:none;" +
+    "color:var(--muted,#8b949e);font-size:13px;line-height:1.5";
+  emptyOverlay.textContent = "Positioning the graph… nodes appear here as the layout " +
+    "worker places them, usually within a few seconds of startup.";
+  wrap.appendChild(emptyOverlay);
+  function updateEmptyOverlay(count) { emptyOverlay.style.display = count ? "none" : "flex"; }
+
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x0d1219);
   const pickScene = new THREE.Scene();
@@ -1507,6 +1522,7 @@ export async function initSpace(container) {
   buildScene(nodes, edges);
   fitToNodes(nodes);
   setStatus(`${nodes.length} objects, ${edges.length} edges`);
+  updateEmptyOverlay(nodes.length);
   levelBadge.textContent = "whole graph";
 
   // THE LENS PANEL hash-restore bug, root cause: applyLensStateFromHash only ran once, at
@@ -1525,22 +1541,80 @@ export async function initSpace(container) {
     buildHighDegreeBadges();
   });
 
+  // THE OUTBOX NEVER HEARS ABOUT A LAYOUT TICK: graph_layout._bulk_assert_positions writes
+  // graph_x/graph_y/graph_layout_v with one raw multi-row UPDATE+INSERT per tick, straight
+  // against the assertions table, specifically BYPASSING actions.assert_property (the only
+  // thing that ever inserts an outbox row) for bulk-write efficiency at scale -- a
+  // deliberate, documented tradeoff (see that module's own WRITE PATH note), not a bug
+  // there. The practical effect here: the very first time this graph is ever positioned
+  // (every fresh install, since nothing has a graph_x/graph_y/graph_layout_v assertion
+  // until the layout worker's own startup batch runs), NO outbox event -- and therefore no
+  // '/graph/stream/deltas' message -- ever announces it, no matter how long this tab waits.
+  // The delta stream genuinely cannot self-heal an empty-at-load graph; only re-fetching
+  // the snapshot can. Polls only while the graph is still empty (a real graph, once
+  // populated, goes back to the ordinary delta-driven live view below); stops the moment a
+  // snapshot comes back non-empty or after a bounded number of tries, so a genuinely
+  // project-less install (no graph_layout_v ever wrote here) doesn't poll forever.
+  let nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
+  if (nodes.length === 0) {
+    let triesLeft = 40; // ~2 minutes at 3s, well past the worker's own startup-batch window
+    const pollTimer = setInterval(async () => {
+      if (--triesLeft <= 0) { clearInterval(pollTimer); return; }
+      let fresh;
+      try { fresh = await fetchStreamSnapshot(); } catch { return; }
+      if (!fresh.nodes.length) return;
+      clearInterval(pollTimer);
+      ({ nodes, edges, edgeClassByType, projectAggregates, communityAggregates } = fresh);
+      nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
+      applyLensStateFromHash();
+      buildProjectFillModel(projectAggregates, edges);
+      buildCommunityModel(communityAggregates);
+      buildScene(nodes, edges);
+      fitToNodes(nodes);
+      setStatus(`${nodes.length} objects, ${edges.length} edges`);
+      updateEmptyOverlay(nodes.length);
+    }, 3000);
+  }
+
   // ---- deltas: GET /graph/stream/deltas is an SSE poll-diff over the outbox, keyed by
   // object id (not array index, see the module docstring). Applied live so the canvas
   // never needs a full reload after the first snapshot; a 'retired' delta drops the node
   // from the next full rebuild rather than trying to hide a single InstancedMesh instance
   // (there is no per-instance visibility toggle cheaper than a rebuild at this node count).
-  let nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
+  // nodesById is declared above, next to the empty-graph poll that also needs it.
   let pendingRebuild = false;
+  // THE NEVER-APPEARS BUG: a 'moved' delta only ever carries {id, x, y} -- enough to
+  // reposition a node this tab already knows about, never enough to build a whole new one
+  // (type/project/degree/label all live in the snapshot's own typed arrays, not the delta
+  // wire format). Every object the layout worker positions for the FIRST time after this
+  // tab's initial snapshot loaded -- the entire graph, on a fresh install where the
+  // snapshot raced the worker's own startup batch and loaded empty -- used to arrive here
+  // as a 'moved' delta for an id `nodesById` had never seen, silently dropped by the old
+  // `if (nd && ...)` guard: the worker had genuinely finished, but the canvas stayed black
+  // forever, until a manual reload re-ran fetchStreamSnapshot() from scratch. A newly-seen
+  // id now sets needsFullResync instead of being dropped, and the debounced rebuild below
+  // re-fetches the whole snapshot (cheap and correct) rather than trying to fabricate a
+  // node from three numbers.
+  let needsFullResync = false;
   function scheduleRebuild() {
     if (pendingRebuild) return;
     pendingRebuild = true;
-    setTimeout(() => {
+    setTimeout(async () => {
       pendingRebuild = false;
-      nodes = Array.from(nodesById.values());
+      if (needsFullResync) {
+        needsFullResync = false;
+        ({ nodes, edges, edgeClassByType, projectAggregates, communityAggregates } =
+          await fetchStreamSnapshot());
+        nodesById = new Map(nodes.map((nd) => [nd.id, nd]));
+        buildProjectFillModel(projectAggregates, edges);
+        buildCommunityModel(communityAggregates);
+      } else {
+        nodes = Array.from(nodesById.values());
+      }
       buildScene(nodes, edges);
       if (pathFocusId || selectedId) applyDim();
       setStatus(`${nodes.length} objects, ${edges.length} edges (live)`);
+      updateEmptyOverlay(nodes.length);
     }, 250);
   }
   try {
@@ -1553,7 +1627,11 @@ export async function initSpace(container) {
         scheduleRebuild();
       } else if (delta.op === "moved") {
         const nd = nodesById.get(delta.id);
-        if (nd && delta.x != null && delta.y != null) { nd.x = delta.x; nd.y = delta.y; scheduleRebuild(); }
+        if (nd && delta.x != null && delta.y != null) {
+          nd.x = delta.x; nd.y = delta.y; scheduleRebuild();
+        } else if (!nd && delta.x != null && delta.y != null) {
+          needsFullResync = true; scheduleRebuild();
+        }
       }
     };
     es.onerror = () => { /* browser auto-reconnects an EventSource; nothing to do here */ };
