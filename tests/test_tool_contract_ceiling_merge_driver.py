@@ -147,8 +147,11 @@ def test_merge_order_a_then_b_resolves_to_the_true_combined_total(tmp_path: Path
     ratchet = _ceiling(repo, "int-order1")
     assert "<<<<<<<" not in ratchet
     assert "CEILING = 38" in ratchet
-    assert "alpha grew +7" in ratchet  # branch A's own narrative survived
-    assert "beta grew +11" in ratchet  # branch B's own narrative survived — never dropped
+    # the shared base comment survived on its own (identical on both sides, never part
+    # of the conflicting hunk at all); neither side's own DIVERGING prose survives the
+    # constant's own resolution -- this driver drops it rather than concatenating it.
+    assert "alpha grew +7" not in ratchet
+    assert "beta grew +11" not in ratchet
 
     assert _true_total(repo, "int-order1") == 38  # the independent oracle agrees exactly
 

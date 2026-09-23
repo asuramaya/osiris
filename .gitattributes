@@ -6,3 +6,13 @@
 # fresh clone) re-measures the merged tree instead of guessing between the two conflicting
 # values.
 tests/test_tool_contract_diet.py merge=tool_contract_ceiling
+
+# The product-voice and taxonomy-drift baselines regenerate in full on every lowering
+# tip, so two tips landing back to back conflict even when they never touch the same
+# source lines. The registered driver (scripts/reconcile_product_voice_baselines.py,
+# self-installed by tests/conftest.py's pytest_configure, same as the driver above)
+# resolves each key to the smaller of the two sides, which growth-only lint semantics
+# make always safe.
+tests/product_voice_baseline.json merge=product_voice_baseline_min
+tests/product_voice_tier2_baseline.json merge=product_voice_baseline_min
+tests/taxonomy_drift_baseline.json merge=product_voice_baseline_min

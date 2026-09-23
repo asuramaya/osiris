@@ -315,6 +315,33 @@ def _install_tool_contract_ceiling_merge_driver() -> None:
         print(f"tool-contract-ceiling merge driver NOT installed: {exc}", file=sys.stderr)
 
 
+def _install_product_voice_baseline_merge_driver() -> None:
+    """Same registration shape as `_install_tool_contract_ceiling_merge_driver` above,
+    for scripts/reconcile_product_voice_baselines.py (see that script's own docstring
+    for the per-key-minimum rationale). Idempotent, never fails the test run."""
+    import shlex
+    import subprocess
+
+    inner = (
+        'cd "$(git rev-parse --show-toplevel)" && '
+        'exec python3 scripts/reconcile_product_voice_baselines.py "$1" "$2" "$3" "$4"'
+    )
+    driver_cmd = f"sh -c {shlex.quote(inner)} -- %O %A %B %P"
+    try:
+        current = subprocess.run(
+            ["git", "config", "--local", "--get", "merge.product_voice_baseline_min.driver"],
+            capture_output=True, text=True,
+        ).stdout.strip()
+        if current != driver_cmd:
+            subprocess.run(
+                ["git", "config", "--local", "merge.product_voice_baseline_min.driver",
+                 driver_cmd],
+                check=True, capture_output=True,
+            )
+    except Exception as exc:  # pragma: no cover - defensive, see docstring
+        print(f"product-voice-baseline merge driver NOT installed: {exc}", file=sys.stderr)
+
+
 # AF_UNIX SOCKET PATH LENGTH: pytest's own default basetemp is
 # "/tmp/pytest-of-<user>/pytest-<N>/", N an ever-growing counter shared across every
 # pytest invocation on this box (already past 270 the night this was found, from
@@ -444,6 +471,7 @@ def pytest_configure(config: pytest.Config) -> None:
     threading.Thread(target=_watchdog_loop, name="osiris-session-watchdog",
                      daemon=True).start()
     _install_tool_contract_ceiling_merge_driver()
+    _install_product_voice_baseline_merge_driver()
     pg = PostgresContainer("postgres:16", username="test", password="test", dbname="test")
     pg.start()
     _CONTAINER["pg"] = pg
