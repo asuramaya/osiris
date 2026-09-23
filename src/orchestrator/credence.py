@@ -1,80 +1,86 @@
-"""Credence — the upstream dual of the authority chain (rulings 637a7213 / f3959906 / 108ff2e8).
+"""Credence: the upstream counterpart to the authority chain.
 
-Authority attenuates going DOWN the spawned_by tree — a child can't wield more than it was
-granted. Credence attenuates going UP it — a re-report can't carry more confidence than its
-source. The SAME tree that bounds delegation is, read upward, the INDEPENDENCE ORACLE: two agents
-asserting the same fact are either dependent (one is the other's ancestor — a relay, whose
-confidence must CLAMP to the origin) or independent (different subtrees — genuine corroboration
-that may stand). Naive grade-then-recency can't tell them apart, so a swarm could manufacture
-confidence by echo (spawn N children, feed them one leaf's guess, harvest N "independent"
-agreements = citogenesis).
+Authority attenuates going down the spawned_by tree: a child can't wield more than it was
+granted. Credence attenuates going up it: a re-report can't carry more confidence than its
+source. The same tree that bounds delegation is, read upward, the independence check: two
+agents asserting the same fact are either dependent (one is the other's ancestor, meaning a
+relay whose confidence must be clamped to the origin) or independent (different subtrees,
+meaning genuine corroboration that may stand). Naive grade-then-recency resolution can't tell
+these apart, so a swarm could manufacture confidence by echo (spawn N children, feed them one
+leaf's guess, and harvest N "independent" agreements, i.e. citogenesis).
 
-The resolution, per fact, keyed on STRUCTURE (the ancestry) — with a Tier-2 value check applied
-ONLY once structure has singled out an ancestor, to tell a relay from a dispute:
+The resolution, per fact, is keyed on structure (the ancestry), with a Tier-2 value check
+applied only once structure has singled out an ancestor, to tell a relay from a dispute:
 
-  * CLAMP    — an ANCESTOR that re-reported the SAME claim (Tier-2: its value matches its
-               subtree's origin after normalization, so a paraphrase dissolves) and never looked
-               is pure hearsay: its confidence for that fact is capped at what its subtree
-               established, so it can't win on an inflated grade. Processed DEEPEST-FIRST, so an
-               inner relay's inflation can't leak past its own clamp on the way up.
-  * DISPUTE  — an ancestor whose value MATERIALLY DIFFERS from its subtree's origin (Tier-2) is
-               not relaying, it is DISAGREEING. The value-blind clamp would falsely accuse it of
-               laundering and silently bury a real disagreement; instead we DON'T clamp, DON'T
-               flag, and surface the disagreeing (source, value, grade) tuples as a `disputes`
-               output — the membrane shows the tension instead of flattening it (rule #6).
-  * REBUTTAL — an ancestor that performed its OWN observation act (`backed_by_observation`, the
-               Tier-1 floor of the act-detection ladder, captured in lineage.py) is neither
-               clamped NOR disputed: it may have verified, and verification is corroboration, not
-               relay. Conservative — we only touch agents that provably never looked, so a
-               genuine double-check is never deflated (the failure the ladder exists to avoid).
-  * FLAG     — a pure-hearsay ancestor carrying the SAME claim ABOVE its origin's grade is
-               LAUNDERING ("claimed you looked, only heard") — surfaced, never silently (rule #6).
+  * CLAMP    - an ancestor that re-reported the same claim (Tier-2: its value matches its
+               subtree's origin after normalization, so a paraphrase dissolves) and never
+               looked is pure hearsay: its confidence for that fact is capped at what its
+               subtree established, so it can't win on an inflated grade. Processed
+               deepest-first, so an inner relay's inflation can't leak past its own clamp on
+               the way up.
+  * DISPUTE  - an ancestor whose value materially differs from its subtree's origin (Tier-2)
+               is not relaying, it is disagreeing. A value-blind clamp would falsely accuse
+               it of laundering and silently bury a real disagreement; instead the resolver
+               does not clamp, does not flag, and surfaces the disagreeing (source, value,
+               grade) tuples as a `disputes` output, so the tension is shown rather than
+               flattened.
+  * REBUTTAL - an ancestor that performed its own observation act (`backed_by_observation`,
+               the Tier-1 floor of the tiered observation-detection check captured in
+               lineage.py) is neither clamped nor disputed: it may have verified, and
+               verification is corroboration, not relay. Conservative: only agents that
+               provably never looked are touched, so a genuine double-check is never deflated
+               (the failure this tiered check exists to avoid).
+  * FLAG     - a pure-hearsay ancestor carrying the same claim above its origin's grade is
+               laundering ("claimed you looked, only heard"), and this is always surfaced,
+               never silent.
 
-A pure function (`resolve_credence`, trivially unit-testable) over a thin IO layer
-(`credence_props`, fetching current_assertions + the spawned_by forest). It returns a
-`CredenceResult` — the effective winners AND the disputes. A fact with NO ancestry among its
-sources resolves IDENTICALLY to winning_props (grade DESC, recency DESC) — this is a strict
-refinement that bites ONLY when a relay would otherwise out-rank its origin, or when an ancestor
-genuinely disagrees.
+A pure function (`resolve_credence`, trivially unit-testable) sits over a thin IO layer
+(`credence_props`, fetching current_assertions plus the spawned_by forest). It returns a
+`CredenceResult`: the effective winners and the disputes. A fact with no ancestry among its
+sources resolves identically to winning_props (grade descending, recency descending); this is
+a strict refinement that only changes the result when a relay would otherwise outrank its
+origin, or when an ancestor genuinely disagrees.
 
-SCOPE (v1): the clamp acts among AGENT sources (`agent:*`) related by spawned_by OR
-succeeded_from (PROVENANCE PIECE 3, ruling bb3e4422: "provenance by channel, not by
-text") — a minted successor is treated identically to a spawned sub-agent, since both
-edge types store the same `(child, parent)` shape and the pure resolver never inspects
-which one built its `parent_of` map: a successor restating its ancestor's claim is a
-relay (clamped unless it looked), a disagreeing successor is a dispute, and a successor
-with its own observation act stands. The
-session-miner (ingest/sessions.emit_yield, ruling ceae1604 — THE SPEAKER IS THE ADVERSARY, THE
-AGENT IS THE SUBJECT) now SOURCES every mined extraction to the literal actor `session-miner`
-itself, never to the originating agent's own canonical; the mined agent rides separately as
-`about_agent` (the subject the miner read, not the speaker). A mined fact's `source_id` is
-therefore never `agent:*` — it does NOT sit in the spawned_by/succeeded_from tree this clamp
-walks, and the clamp does not reach it today. (The miner-over-read feeder, f34c572c, closes a
-different way: the read-side write-time dedup already inside emit_yield, not via this clamp.)
+SCOPE (v1): the clamp acts among agent sources (`agent:*`) related by spawned_by or
+succeeded_from (provenance tracked by edge type, not by parsing text): a minted successor is
+treated identically to a spawned sub-agent, since both edge types store the same
+`(child, parent)` shape and the pure resolver never inspects which one built its `parent_of`
+map. A successor restating its ancestor's claim is a relay (clamped unless it looked), a
+disagreeing successor is a dispute, and a successor with its own observation act stands.
 
-CONSUMER AUDIT (the winning_props→credence convergence question, closed by classification):
-every remaining `winning_props` read was examined for whether agent sources can co-assert the
-fact it resolves — the only condition under which the plain grade-then-recency winner and the
-clamped winner can differ. All are ACCEPTED DIVERGENCES, each with a structural reason:
+The session-miner (ingest/sessions.emit_yield) sources every mined extraction to the literal
+actor `session-miner` itself, never to the originating agent's own canonical identity, on the
+principle that the speaker of a mined fact is not the same as its subject; the mined agent
+rides separately as `about_agent` (the subject the miner read, not the speaker). A mined
+fact's `source_id` is therefore never `agent:*`: it does not sit in the spawned_by/
+succeeded_from tree this clamp walks, and the clamp does not reach it today. (A related
+read-side concern, deduplicating the miner against a direct read of the same source, is
+handled separately by a write-time dedup already inside emit_yield, not via this clamp.)
 
-  * ingest/sessions.py + ingest/threads.py (miner self-heal status reads) — ownership-bounded:
-    the miner may only heal threads IT authored, so a cross-agent relay of the status it reads
-    cannot enter the window; also a batch EXISTS filter inside the tick's hot loop, where a
-    per-object Python roundtrip is real cost for zero reachable divergence.
-  * ingest/backfill_source_model.py — resolves an agent's OWN `source_model`: self-facts are
+CONSUMER AUDIT (the winning_props-to-credence convergence question, closed by
+classification): every remaining `winning_props` read was examined for whether agent sources
+can co-assert the fact it resolves, the only condition under which the plain
+grade-then-recency winner and the clamped winner can differ. All are accepted divergences,
+each with a structural reason:
+
+  * ingest/sessions.py and ingest/threads.py (miner self-heal status reads): ownership-bounded.
+    The miner may only heal threads it authored, so a cross-agent relay of the status it reads
+    cannot enter the window; also a batch EXISTS filter inside the tick's inner loop, where a
+    per-object Python round trip is real cost for zero reachable divergence.
+  * ingest/backfill_source_model.py: resolves an agent's own `source_model`. Self-facts are
     never relayed up an ancestry tree (an ancestor asserting a descendant's model would be a
     swap-detector event, not a credence event).
-  * orchestrator/compositions.py ×3 (object detail / watch read / batch briefing lists) —
-    render lenses over text, not confidence-bearing winner-picks; the one surface where a
-    clamped winner CHANGES what the operator concludes (laundering + disputes) already reads
-    through credence_props in the fleet digest, which is also where these lenses' consumers
-    are told a value is contested.
+  * orchestrator/compositions.py, three call sites (object detail, watch read, batch briefing
+    lists): render lenses over text, not confidence-bearing winner picks. The one surface
+    where a clamped winner changes what the operator concludes (laundering plus disputes)
+    already reads through credence_props in the fleet digest, which is also where these
+    lenses' consumers are told a value is contested.
 
-The invariant this preserves: credence_props is mandatory wherever a winner's GRADE is the
-message; winning_props remains legitimate where the winner's TEXT is the message and the
+The invariant this preserves: credence_props is mandatory wherever a winner's grade is the
+message; winning_props remains legitimate where the winner's text is the message and the
 source tree is structurally single-voiced. A new read path that lets agents co-assert must
-route through credence_props or add itself here with its reason (loop-pathology discipline,
-rule #7).
+route through credence_props, or be added to this list with its reason, to keep this audit
+current.
 """
 from __future__ import annotations
 
@@ -89,7 +95,7 @@ from src.actions.core import Actions
 
 @dataclass(frozen=True)
 class Claim:
-    """One asserter's latest word on a fact — the pure resolver's input row."""
+    """One asserter's latest word on a fact: the pure resolver's input row."""
 
     object_id: str
     name: str
@@ -110,17 +116,17 @@ class CredenceWinner:
     confidence: float
     source_id: str
     # sources flagged for carrying a fact ABOVE its origin grade (laundering). The winner is never
-    # itself a clamped source (proven by fuzz), so "was the winner clamped" would always be False —
-    # the meaningful group signal is simply `bool(laundering)`.
+    # itself a clamped source (proven by fuzz), so "was the winner clamped" would always be False,
+    # so the meaningful group signal is simply `bool(laundering)`.
     laundering: tuple[str, ...]
 
 
 @dataclass(frozen=True)
 class Dispute:
     """A genuine disagreement on one (object, name): an ancestor's value materially differs from
-    its subtree's origin (Tier-2), so it is DISPUTING, not relaying. `positions` are the
-    disagreeing (source_id, value, confidence) tuples — the poles the membrane must show rather
-    than clamp into a false certainty winner."""
+    its subtree's origin (Tier-2), so it is disputing, not relaying. `positions` are the
+    disagreeing (source_id, value, confidence) tuples: the poles that must be shown rather
+    than clamped into a false certainty winner."""
 
     object_id: str
     name: str
@@ -129,8 +135,8 @@ class Dispute:
 
 @dataclass(frozen=True)
 class CredenceResult:
-    """The whole lineage resolution: the effective `winners` (post-clamp) AND the `disputes` —
-    genuine disagreements that the value-blind clamp would have buried as false laundering."""
+    """The whole lineage resolution: the effective `winners` (post-clamp) and the `disputes`,
+    genuine disagreements that a value-blind clamp would have buried as false laundering."""
 
     winners: list[CredenceWinner]
     disputes: list[Dispute]
@@ -146,29 +152,30 @@ _PUNCT = re.compile(r"[^\w\s]|_")
 
 def _normalize(value: Any) -> str:
     """A value's comparison form: lowercased, punctuation dropped, whitespace collapsed. Cheap and
-    deterministic — no embedding, no model (that would be a Tier-3 hook)."""
+    deterministic, with no embedding and no model (that would be a Tier-3 hook)."""
     return " ".join(_PUNCT.sub(" ", str(value).lower()).split())
 
 
 def _same_claim(a: Any, b: Any, *, overlap: float = 0.7) -> bool:
-    """Tier-2: do two values assert the SAME claim (a relay) or materially differ (a dispute)?
-    SAME on equality after normalization (a paraphrase — case/punctuation), token containment (one
-    is a subset — a fuller re-statement), or high token overlap (Jaccard ≥ `overlap`); otherwise a
-    genuine disagreement. Conservative toward RELAY: the clamp is the status quo, so only a clearly
-    different value is promoted to a dispute (a near-match stays a relay and is still clamped)."""
+    """Tier-2: do two values assert the same claim (a relay) or materially differ (a dispute)?
+    Treated as the same on equality after normalization (a paraphrase, e.g. case or punctuation
+    only), on token containment (one is a subset, a fuller restatement), or on high token
+    overlap (Jaccard >= `overlap`); otherwise treated as a genuine disagreement. Conservative
+    toward relay: the clamp is the status quo, so only a clearly different value is promoted to
+    a dispute (a near-match stays a relay and is still clamped)."""
     na, nb = _normalize(a), _normalize(b)
     if na == nb:
         return True
     ta, tb = set(na.split()), set(nb.split())
     if not ta or not tb:
-        return na == nb  # an empty value is its own claim — never a subset-match of a real one
+        return na == nb  # an empty value is its own claim, never a subset-match of a real one
     if ta <= tb or tb <= ta:
         return True
     return len(ta & tb) / len(ta | tb) >= overlap
 
 
 def _ancestors(src: str, parent_of: Mapping[str, str]) -> set[str]:
-    """Every source reachable UP the spawned_by chain from `src` (cycle-guarded — a spawn tree is
+    """Every source reachable UP the spawned_by chain from `src` (cycle-guarded: a spawn tree is
     acyclic, but a corrupt edge must not loop the resolver)."""
     seen: set[str] = set()
     cur = parent_of.get(src)
@@ -187,11 +194,11 @@ def resolve_credence(
     parent_of: Mapping[str, str],
     looked: Mapping[str, bool],
 ) -> CredenceResult:
-    """Resolve each (object, name) to its lineage-aware winner AND surface genuine disputes.
-    `parent_of` is the spawned_by/succeeded_from child→parent map (PROVENANCE PIECE 3): a
-    minted successor sits in this same forest as an ordinary spawned sub-agent, so it is
-    resolved by identical structural rules. `looked` is backed_by_observation per agent
-    source (default False = the conservative "never looked", the only state we clamp/dispute)."""
+    """Resolve each (object, name) to its lineage-aware winner and surface genuine disputes.
+    `parent_of` is the spawned_by/succeeded_from child-to-parent map: a minted successor sits
+    in this same forest as an ordinary spawned sub-agent, so it is resolved by identical
+    structural rules. `looked` is backed_by_observation per agent source (default False, the
+    conservative "never looked", the only state that is clamped or disputed)."""
     groups: dict[tuple[str, str], list[Claim]] = {}
     for c in claims:
         groups.setdefault((c.object_id, c.name), []).append(c)
@@ -200,7 +207,7 @@ def resolve_credence(
     disputes: list[Dispute] = []
     for (oid, name), group in groups.items():
         # Deepest-first: a node's descendants are scored before it, so its cap reads their
-        # ALREADY-CLAMPED effective confidence — an inner relay's inflation can't leak upward.
+        # already-clamped effective confidence, so an inner relay's inflation can't leak upward.
         order = sorted(group, key=lambda r: _depth(r.source_id, parent_of), reverse=True)
         eff_by_src: dict[str, float] = {}
         laundering: list[str] = []
@@ -216,18 +223,18 @@ def resolve_credence(
                     if d.source_id != r.source_id and _is_agent(d.source_id)
                     and r.source_id in _ancestors(d.source_id, parent_of)
                 ]
-                if descs:  # r is an ancestor of an asserting subtree — a relay OR a disputant
+                if descs:  # r is an ancestor of an asserting subtree: a relay or a disputant
                     origin = max(descs, key=lambda d: eff_by_src.get(d.source_id, d.confidence))
                     origin_conf = eff_by_src.get(origin.source_id, origin.confidence)
                     if _same_claim(r.value, origin.value):
-                        # RELAY — the same claim reworded: clamp an inflated grade to the origin.
-                        if r.confidence > origin_conf:  # inflated past what the subtree established
+                        # RELAY: the same claim reworded, so clamp an inflated grade to the origin.
+                        if r.confidence > origin_conf:  # inflated past the established value
                             eff = origin_conf
                             clamped = True
                             laundering.append(r.source_id)
                     else:
-                        # DISPUTE — a materially different value up the line is a real
-                        # disagreement, not a relay: don't clamp, don't flag; surface both poles.
+                        # DISPUTE: a materially different value up the line is a real
+                        # disagreement, not a relay. Don't clamp, don't flag, surface both poles.
                         positions[r.source_id] = (r.value, r.confidence)
                         positions.setdefault(origin.source_id, (origin.value, origin_conf))
             eff_by_src[r.source_id] = eff
@@ -251,15 +258,15 @@ def resolve_credence(
 
 
 async def _parent_forest(actions: Actions) -> dict[str, str]:
-    """The whole child→parent map (canonical→canonical), `spawned_by` UNION `succeeded_from`
-    (PROVENANCE PIECE 3, ruling bb3e4422) — the independence oracle now treats a minted
-    successor exactly like a spawned sub-agent: both edge types store `from_id=child,
-    to_id=parent` (confirmed against agents.py's own mint path), so a successor restating its
-    ancestor's claim relays/clamps, a disagreeing successor disputes, and one with its own
-    `backed_by_observation` stands — the SAME three outcomes `resolve_credence` already proves
-    for spawned_by, since the pure resolver never inspects how `parent_of` was built. The
-    delegation+succession forest is small (one row per sub-agent or minted heir), so we load
-    it whole rather than walk per lookup."""
+    """The whole child-to-parent map (canonical to canonical), `spawned_by` union `succeeded_from`.
+    The independence check treats a minted successor exactly like a spawned sub-agent: both
+    edge types store `from_id=child, to_id=parent` (confirmed against agents.py's own mint
+    path), so a successor restating its ancestor's claim relays or clamps, a disagreeing
+    successor disputes, and one with its own `backed_by_observation` stands. These are the
+    same three outcomes `resolve_credence` already proves for spawned_by, since the pure
+    resolver never inspects how `parent_of` was built. The delegation-plus-succession forest
+    is small (one row per sub-agent or minted heir), so it is loaded whole rather than walked
+    per lookup."""
     rows = await actions.pool.fetch(
         "SELECT c.canonical AS child, p.canonical AS parent "
         "FROM links l JOIN objects c ON c.id = l.from_id JOIN objects p ON p.id = l.to_id "
@@ -281,11 +288,11 @@ async def _looked_map(actions: Actions, srcs: set[str]) -> dict[str, bool]:
 async def upstream_sets(
     actions: Actions, object_id: Any, source_ids: Sequence[str],
 ) -> dict[str, frozenset[str]]:
-    """PROVENANCE PIECE 1's own IO leg (thread da545039f2ba): for each of `source_ids`,
-    the set of `possible_upstream` targets (str object ids) it minted FROM `object_id` —
-    orthogonal to `_parent_forest`'s spawned_by ancestry, one query for every source on
-    this object at once (a dossier property view calls this per-object, not per-
-    property — reused across every property name that object carries)."""
+    """The IO step for one part of provenance tracking: for each of `source_ids`, the set of
+    `possible_upstream` targets (string object ids) it minted from `object_id`. This is
+    orthogonal to `_parent_forest`'s spawned_by ancestry; it runs one query for every source
+    on this object at once (a dossier property view calls this per object, not per property,
+    and reuses the result across every property name that object carries)."""
     if not source_ids:
         return {}
     rows = await actions.pool.fetch(
@@ -300,19 +307,20 @@ async def upstream_sets(
 def distinct_upstream_count(
     upstream_of: Mapping[str, frozenset[str]], looked: Mapping[str, bool] | None = None,
 ) -> int:
-    """Connected-components count over a (object,name) group's own sources, two sources
-    joined whenever they share ANY possible_upstream target (ruling bb3e4422: "used only
-    to withhold independence, never to grant it" — this count only ever goes DOWN from
-    len(upstream_of), never up; a source with an empty upstream set stays its own,
-    un-collapsed component).
+    """Connected-components count over a (object, name) group's own sources, with two sources
+    joined whenever they share any possible_upstream target (this signal is used only to
+    withhold independence, never to grant it: the count only ever goes down from
+    len(upstream_of), never up; a source with an empty upstream set stays its own, uncollapsed
+    component).
 
-    `looked` is the SAME Tier-1 rebuttal signal (`backed_by_observation`) resolve_credence
-    already exempts from the spawned_by clamp — a source that provably performed its own
-    observation act is NEVER collapsed into another's witness here either, even sharing a
-    possible_upstream target: it may have verified, and verification is corroboration, not
-    relay (resolve_credence's own docstring, applied identically to this second leg).
-    credence_props' own clamp/dispute/rebuttal MATH is untouched by this function — a
-    SEPARATE signal surfaced beside it, not folded into it."""
+    `looked` is the same Tier-1 rebuttal signal (`backed_by_observation`) that resolve_credence
+    already exempts from the spawned_by clamp. A source that provably performed its own
+    observation act is never collapsed into another source's component here either, even when
+    it shares a possible_upstream target: it may have verified, and verification is
+    corroboration, not relay (the same reasoning resolve_credence's own docstring gives,
+    applied identically to this second signal). credence_props' own clamp/dispute/rebuttal
+    calculation is untouched by this function: this is a separate signal surfaced beside it,
+    not folded into it."""
     looked = looked or {}
     sources = list(upstream_of)
     parent = {s: s for s in sources}
@@ -339,19 +347,19 @@ def distinct_upstream_count(
 async def property_signals(
     actions: Actions, object_id: Any, sources_by_name: Mapping[str, set[str]],
 ) -> dict[str, dict[str, Any]]:
-    """PROVENANCE PIECE 3(b) (thread b4477e9e, ruling bb3e4422)'s own shared leg: for
-    every property NAME on `object_id`, the three independence signals a caller (dossier.py's
-    `entity_dossier`, the plain `/objects/{id}` browse view) attaches beside its own
-    `agreement` field — `distinct_upstreams` (the connected-components collapse over that
-    property's own sources' possible_upstream targets, `upstream_sets` + `distinct_
-    upstream_count`), `disputed` (whether `resolve_credence` surfaced a genuine
-    disagreement on this exact (object_id, name), from the SAME independence oracle
-    `credence_props` runs elsewhere — never re-derived, only re-shaped per property name),
-    and `upstream_ids` (the UNION of the property's own sources' possible_upstream target
-    ids, sorted — the UI's own "who else read this upstream" expansion drives off these,
-    running `upstream_readers` (compositions.py) against one of them; the count alone
-    can't power a click-through). One `upstream_sets`/`credence_props` pass per object
-    regardless of how many property names it carries, reused across all of them."""
+    """The shared step behind provenance tracking: for every property name on `object_id`, the
+    three independence signals a caller (dossier.py's `entity_dossier`, the plain
+    `/objects/{id}` browse view) attaches beside its own `agreement` field: `distinct_
+    upstreams` (the connected-components collapse over that property's own sources'
+    possible_upstream targets, via `upstream_sets` plus `distinct_upstream_count`),
+    `disputed` (whether `resolve_credence` surfaced a genuine disagreement on this exact
+    (object_id, name), from the same independence check `credence_props` runs elsewhere,
+    never re-derived, only reshaped per property name), and `upstream_ids` (the union of the
+    property's own sources' possible_upstream target ids, sorted; the "who else read this
+    upstream" expansion in the UI runs off these, calling `upstream_readers`
+    (compositions.py) against one of them, since the count alone can't power a click-through).
+    This runs one `upstream_sets`/`credence_props` pass per object regardless of how many
+    property names it carries, and reuses the result across all of them."""
     all_srcs = {s for srcs in sources_by_name.values() for s in srcs}
     ups = await upstream_sets(actions, object_id, list(all_srcs))
     looked = await _looked_map(actions, {s for s in all_srcs if s.startswith("agent:")})
@@ -368,9 +376,9 @@ async def property_signals(
 
 
 async def credence_props(actions: Actions, oids: Sequence[Any]) -> CredenceResult:
-    """The lineage-aware resolution over `oids` — winning_props with the upstream credence
+    """The lineage-aware resolution over `oids`: winning_props with the upstream credence
     discipline layered on. Fetches the latest per-source assertions, the spawned_by forest, and
-    the observation-rebuttal signal, then resolves purely into winners AND disputes."""
+    the observation-rebuttal signal, then resolves purely into winners and disputes."""
     rows = await actions.pool.fetch(
         "SELECT object_id, name, value, source_id, confidence, observed_at "
         "FROM current_assertions WHERE object_id = ANY($1::uuid[])", list(oids))

@@ -1,111 +1,109 @@
-"""Thread closure derived from TOPOLOGY, not the `status` property (Phase 2, Thoth DM 2508,
-decision cb38d922) — the read side of the `thread_closure_edges` view (migration 0043,
-widened to its weak tier by 0044).
+"""Thread closure derived from TOPOLOGY, not the `status` property. This is the read side of
+the `thread_closure_edges` view (migration 0043, widened to its weak tier by migration 0044).
 
-THE ARGUMENT (measured, not assumed, cb38d922): a thread's `status` assertion can be written
-by more than one source (an agent opens, another resolves) and `assert_property` only
-supersedes WITHIN a source, so both rows stay live — three different queries against the
-same 737 threads gave three different open-counts the same night. `resolved_by`/`answers`
-edges either exist or they don't; they cannot disagree with themselves the way a multi-source
-property can. This module is the query-time home for that asymmetry: it reads the raw
-`thread_closure_edges` view (kept deliberately unopinionated — see 0043's own docstring) and
-turns it into the two judgment calls a caller actually needs, WITHOUT switching any existing
-read path over to it. Nothing here is wired into orient(), compile_handoff, or any MCP tool
-yet — that is Phase 2b, and it needs the closure-edge coverage this migration starts to widen
-first (see CALLERS TO MOVE below).
+THE ARGUMENT (measured, not assumed): a thread's `status` assertion can be written by more
+than one source (an agent opens, another resolves) and `assert_property` only supersedes
+WITHIN a source, so both rows stay live. Three different queries against the same 737 threads
+gave three different open-counts the same night. `resolved_by`/`answers` edges either exist or
+they don't; they cannot disagree with themselves the way a multi-source property can. This
+module is the query-time home for that asymmetry: it reads the raw `thread_closure_edges`
+view (kept deliberately unopinionated, see migration 0043's own docstring) and turns it into
+the two judgment calls a caller actually needs, without switching any existing read path over
+to it. Nothing here is wired into orient(), compile_handoff, or any MCP tool yet. That is
+later work, and it needs the closure-edge coverage this migration starts to widen first (see
+CALLERS TO MOVE below).
 
-`closed_by_topology=True` IS A GROUND-TRUTH POSITIVE — an edge exists, full stop.
-`closed_by_topology=False` IS NOT "CONFIRMED OPEN" — read this twice before wiring anything
-to it. Khnum's Phase 1a (commit 23c5991) made resolve_thread() mint a closure edge
-UNCONDITIONALLY going forward — `resolved_by` (strong) when `artifact` resolves, else
-`closed_by` (weak) to the resolving agent — so the artifact-less gap cb38d922 measured (the
+`closed_by_topology=True` IS A GROUND-TRUTH POSITIVE: an edge exists, full stop.
+`closed_by_topology=False` IS NOT "CONFIRMED OPEN". Read this twice before wiring anything to
+it. An earlier change (commit 23c5991) made resolve_thread() mint a closure edge
+UNCONDITIONALLY going forward: `resolved_by` (strong) when `artifact` resolves, else
+`closed_by` (weak) to the resolving agent, so the artifact-less gap measured earlier (the
 majority of resolve_thread() calls, 408-of-527) no longer widens. It does NOT retroactively
-heal it: every thread closed BEFORE that commit landed, by resolve_thread() with no
-artifact, still has NO closure edge at all — indistinguishable here from a thread nobody has
-ever touched. Until a historical backfill mints edges retroactively for those (a separate,
-not-yet-proposed piece), the only safe reading of a False row is "no closure edge found
-yet" — a caller that needs a real open/closed verdict today should still fall back to the
-`status` property for the False case, not treat this view as authoritative on its own for
-absence.
+heal it: every thread closed BEFORE that commit landed, by resolve_thread() with no artifact,
+still has NO closure edge at all, indistinguishable here from a thread nobody has ever
+touched. Until a historical backfill mints edges retroactively for those (a separate,
+not-yet-proposed piece), the only safe reading of a False row is "no closure edge found yet".
+A caller that needs a real open/closed verdict today should still fall back to the `status`
+property for the False case, not treat this view as authoritative on its own for absence.
 
-A SECOND, SHARPER REASON False IS NOT "OPEN" (Thoth's catch via Sekhmet's finding cf3dcd79,
-thread 6212d9f5, 2026-08-01): `_resolve_ref`'s short-id branch (`_find_thread` ->
-`_resolve_ref` in capture.py) LEFT JOINs `current_assertions` with NO source filter — and
-`current_assertions` legitimately yields one row PER SOURCE. A thread whose `summary` was
-touched by two different sources therefore produces two joined rows for the SAME object,
-`len(rows) > 1` fires, and `RefAmbiguous` refuses a resolve_thread/record_decision(resolves=)
-call against a real, UNIQUE short id — a miscount, not a genuine collision (verified by
-reading the exact SQL, not just taking the finding on trust). The refusal itself is safe (no
-partial write, confirmed by test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_
-mints_nothing) — but the TRIGGER is two agents having touched one thread's text, which is
-what active collaboration looks like here. Bites SHORT-ID resolution specifically (a full
-UUID ref short-circuits before ever reaching this branch); short ids are this fleet's
-dominant citation convention in resolves=/artifact=, so this is not a rare corner. Whether it
-becomes a PERMANENT gap depends on whether the caller retries with a full UUID after seeing
-the (self-revealing — both candidates share one id) RefAmbiguous, so this is a bias in
-closure LATENCY/likelihood, not an absolute guarantee — but it points the wrong way: the more
-agent attention a thread got, the likelier its next short-id close attempt gets refused, the
-likelier it still reads `closed_by_topology=False` here. Not this module's bug to fix
-(capture.py's `_resolve_ref` is a different file, different owner) — recorded here because a
-reader of this view is exactly who needs to know their "unclosed" count skews toward the
-threads the fleet worked on together, not away from them.
+A SECOND, SHARPER REASON False IS NOT "OPEN" (from a finding recorded 2026-08-01):
+`_resolve_ref`'s short-id branch (`_find_thread` -> `_resolve_ref` in capture.py) LEFT JOINs
+`current_assertions` with NO source filter, and `current_assertions` legitimately yields one
+row PER SOURCE. A thread whose `summary` was touched by two different sources therefore
+produces two joined rows for the SAME object, `len(rows) > 1` fires, and `RefAmbiguous`
+refuses a resolve_thread/record_decision(resolves=) call against a real, UNIQUE short id: a
+miscount, not a genuine collision (verified by reading the exact SQL, not just taking the
+finding on trust). The refusal itself is safe (no partial write, confirmed by
+test_resolve_thread_refuses_on_a_colliding_short_id_ref_and_mints_nothing), but the TRIGGER is
+two agents having touched one thread's text, which is what active collaboration looks like
+here. This bites SHORT-ID resolution specifically (a full UUID ref short-circuits before ever
+reaching this branch); short ids are this system's dominant citation convention in
+resolves=/artifact=, so this is not a rare corner. Whether it becomes a PERMANENT gap depends
+on whether the caller retries with a full UUID after seeing the (self-revealing, both
+candidates share one id) RefAmbiguous, so this is a bias in closure LATENCY/likelihood, not an
+absolute guarantee, but it points the wrong way: the more agent attention a thread got, the
+likelier its next short-id close attempt gets refused, the likelier it still reads
+`closed_by_topology=False` here. This is not this module's bug to fix (capture.py's
+`_resolve_ref` is a different file, different owner); it is recorded here because a reader of
+this view is exactly who needs to know their "unclosed" count skews toward the threads
+multiple agents worked on together, not away from them.
 
-THE TRANSITION-PERIOD DISAGREEMENT (Thoth's own framing, the interesting case): a thread can
-carry BOTH a closure edge AND a current status='open' assertion — a decision named it in
-`resolves=` (or resolve_thread(artifact=...) ran) while a separate source's 'open' write is
-still the freshest thing THAT source ever said. This module does not pick a winner — same
-law `_fn_lint`'s `land("contradiction", "warn", ...)` and fold_project's
-"refuse rather than destroy the disagreement" already follow (#102's standing machinery,
-cited by Thoth directly). `topology_property_disagreement=True` surfaces it; resolving it is
-a mind's job, same as every other contradiction this kernel already knows how to flag rather
-than silently arbitrate. The much more common inverse — an edge is absent but status says
-'resolved' — is NOT flagged: that is the well-understood, expected 408-shaped gap, not a
-live dispute, and flagging all of it would drown the one signal that's actually new.
+THE TRANSITION-PERIOD DISAGREEMENT (the interesting case): a thread can carry BOTH a closure
+edge AND a current status='open' assertion. A decision named it in `resolves=` (or
+resolve_thread(artifact=...) ran) while a separate source's 'open' write is still the
+freshest thing THAT source ever said. This module does not pick a winner, the same principle
+`_fn_lint`'s `land("contradiction", "warn", ...)` and fold_project's "refuse rather than
+destroy the disagreement" already follow (already-established machinery for handling this
+class of conflict). `topology_property_disagreement=True` surfaces it; resolving it is an
+agent's job, same as every other contradiction this system already knows how to flag rather
+than silently arbitrate. The much more common inverse, an edge is absent but status says
+'resolved', is NOT flagged: that is the well-understood, expected 408-shaped gap, not a live
+dispute, and flagging all of it would drown the one signal that's actually new.
 
-STRENGTH TIERS: `resolved_by` and `answers` are `strong` (artifact- or ruling-backed — the
-closing act named something a mind can go read). `closed_by` (Thread -> Agent, Khnum's
-Phase 1a, wired in by 0044) is `weak` — self-attested, WHO closed it rather than WHAT closed
-it, minted only when `resolved_by` does not land for that same closure (capture.py's
-resolve_thread mints exactly one closure edge per close, never both). Reading this module
-required NO code change to add the weak tier — the `strength` ranking below already carried
-a 'weak' entry, put there when the view could not yet produce one; extending the view was
-the whole one-line-UNION-ALL-arm point of building it this way.
+STRENGTH TIERS: `resolved_by` and `answers` are `strong` (artifact- or ruling-backed: the
+closing act named something an agent can go read). `closed_by` (Thread -> Agent, wired in by
+migration 0044) is `weak`: self-attested, WHO closed it rather than WHAT closed it, minted
+only when `resolved_by` does not land for that same closure (capture.py's resolve_thread
+mints exactly one closure edge per close, never both). Reading this module required NO code
+change to add the weak tier: the `strength` ranking below already carried a 'weak' entry, put
+there when the view could not yet produce one; extending the view was the whole
+one-line-UNION-ALL-arm point of building it this way.
 
-`answers` STOPPED MEANING ONLY "resolves= closed this" THE DAY `mint_bears_on` SHIPPED (0055,
-Thoth DM 6230/6234, decision 36cbec2f): that verb mints the identical `answers` edge for a
-citation that deliberately never closes anything (its own docstring: "this function touches
-only the `links` table, never `status`"). Measured live: 9 of closure_health's 10 repo=osiris
-`disagree` rows on one night were exactly this — a real edge, a correct property, and a view
-that could not tell a citation from a closure. 0055's view now requires a SAME-SOURCE
-status='resolved' write to exist anywhere in that thread's history before counting an
-`answers` edge as closure evidence at all — true retroactively for every genuine resolves=
-closure ever minted (same transaction, same source, no exceptions), false for every
-bears_on-only citation, no backfill and no new link property required. A caller of this
-module never sees the difference; a bears_on-only `answers` edge simply no longer appears in
-`thread_closure_edges` at all, so `closed_by_topology` reads False for it — the same honest
-"no closure edge found" state as any other untouched thread.
+`answers` STOPPED MEANING ONLY "resolves= closed this" once `mint_bears_on` shipped (migration
+0055): that action mints the identical `answers` edge for a citation that deliberately never
+closes anything (its own docstring: "this function touches only the `links` table, never
+`status`"). Measured live: 9 of closure_health's 10 repo=osiris `disagree` rows on one night
+were exactly this: a real edge, a correct property, and a view that could not tell a citation
+from a closure. Migration 0055's view now requires a SAME-SOURCE status='resolved' write to
+exist anywhere in that thread's history before counting an `answers` edge as closure evidence
+at all, true retroactively for every genuine resolves= closure ever minted (same transaction,
+same source, no exceptions), false for every bears_on-only citation, no backfill and no new
+link property required. A caller of this module never sees the difference; a bears_on-only
+`answers` edge simply no longer appears in `thread_closure_edges` at all, so
+`closed_by_topology` reads False for it, the same honest "no closure edge found" state as any
+other untouched thread.
 
 ONE NAMED IMPRECISION, not fixed because it never produces a wrong verdict: the check is
-scoped to (thread, source_id), not to the specific closing act — if the SAME source_id both
-bears_on's and later resolves= the SAME thread, the earlier bears_on edge is corroborated
-too (the status write it borrows really did land, just from a sibling decision, not itself).
+scoped to (thread, source_id), not to the specific closing act. If the SAME source_id both
+bears_on's and later resolves= the SAME thread, the earlier bears_on edge is corroborated too
+(the status write it borrows really did land, just from a sibling decision, not itself).
 `closed_by_topology`/`property_status` agreement stays correct either way (the thread
 genuinely is resolved by then); only `closure_edges`' list is imprecise about which specific
-edge did the closing. Every specimen measured tonight had DISTINCT source_ids on its
-bears_on and resolves= acts, so this coincidence did not occur in the wild.
+edge did the closing. Every specimen measured had DISTINCT source_ids on its bears_on and
+resolves= acts, so this coincidence did not occur in the observed data.
 
-CALLERS TO MOVE (Phase 2b, not this piece — named so the switch-over is cheap and obvious,
-per Thoth's explicit ask; grep `name='status'` + `type='Thread'` to re-verify this list
-against a later HEAD before acting on it):
-  - src/orchestrator/compositions.py: `open_thread_wall` (1779, THE central read — feeds
-    orient(), compile_handoff's `open` lens, and the chrome wall via `_fn_wall`),
-    `rank_open_threads` (1722, ranks whatever `open_thread_wall` hands it — no status read of
-    its own, but its INPUT changes if `open_thread_wall` moves), `_fn_echoes` (~1184),
-    `_fn_lint`'s status-regression + contradiction checks (~1389/1536/1567 — may become
-    partially redundant with `topology_property_disagreement` above), `_fn_roadmap_open`
-    (~2051).
+CALLERS TO MOVE (a later piece of work, not this one; named so the switch-over is cheap and
+obvious; grep `name='status'` + `type='Thread'` to re-verify this list against a later HEAD
+before acting on it):
+  - src/orchestrator/compositions.py: `open_thread_wall` (1779, the central read, feeds
+    orient(), compile_handoff's `open` lens, and the browser-facing thread wall via
+    `_fn_wall`), `rank_open_threads` (1722, ranks whatever `open_thread_wall` hands it, no
+    status read of its own, but its INPUT changes if `open_thread_wall` moves), `_fn_echoes`
+    (~1184), `_fn_lint`'s status-regression + contradiction checks (~1389/1536/1567, may
+    become partially redundant with `topology_property_disagreement` above),
+    `_fn_roadmap_open` (~2051).
   - src/mcp_server.py: `_owned_open_threads` (1817, an agent's own-open-threads for mount/
-    orient receipts), `orient` (2170, two separate winning-status reads).
+    orient results), `orient` (2170, two separate winning-status reads).
   - src/orchestrator/capture.py: `find_near_duplicate_open_thread` (720, scopes its dedup
     check to status='open' threads only).
   - src/orchestrator/mailbox.py: `_operator_queue` (769).
@@ -114,8 +112,8 @@ against a later HEAD before acting on it):
     (`automount`, `operator_debts`, `_neighborhoods`, the `candidates`/`dispose`/`orphans`
     shared WHERE clause, `_snapshot`, `_open_untouched_threads`, `_resolve_own_threads`/
     `_resolved_summaries`, `resolve_threads`).
-None of these are touched by this piece — this module only adds a new, unused-by-default
-read path alongside them.
+None of these are touched by this piece; this module only adds a new, unused-by-default read
+path alongside them.
 """
 from __future__ import annotations
 
@@ -129,18 +127,18 @@ async def thread_closure_status(
     pool: asyncpg.Pool, *, repo: uuid.UUID | None = None,
     thread_ids: list[uuid.UUID] | None = None,
 ) -> list[dict[str, Any]]:
-    """One row per active Thread in scope: `thread_id`, `closed_by_topology` (bool — True is
+    """One row per active Thread in scope: `thread_id`, `closed_by_topology` (bool, True is
     ground truth, False is NOT "confirmed open", see module docstring), `strength`
-    ('strong'|'weak'|None — the highest-strength closure edge found, None if none),
+    ('strong'|'weak'|None, the highest-strength closure edge found, None if none),
     `closure_edges` (every edge found, raw), `property_status` (the winning `status`
-    assertion today, exactly as every existing hand-rolled reader computes it — kept
+    assertion today, computed exactly as every existing hand-rolled reader computes it, kept
     alongside so a caller can cross-check without a second query), and
-    `topology_property_disagreement` (bool — an edge says closed while `property_status`
+    `topology_property_disagreement` (bool, an edge says closed while `property_status`
     says 'open'; never resolved here, only flagged).
 
     Scope is `repo` (an already-resolved SoftwareProject id, same shape
     `open_thread_wall(pool, proj)` takes), `thread_ids` (an explicit set), both together
-    (intersection), or neither (every active Thread fleet-wide — the same unscoped
+    (intersection), or neither (every active Thread system-wide, the same unscoped
     posture `current_assertions` itself has; scope it at the call site for anything
     latency-sensitive)."""
     where = ["o.type = 'Thread'", "o.status = 'active'", "o.merged_into IS NULL"]
@@ -201,20 +199,22 @@ async def thread_closure_status(
 
 
 async def closure_buckets(pool: asyncpg.Pool, *, repo: uuid.UUID | None = None) -> dict[str, Any]:
-    """The CHEAP HALF of compositions._fn_closure_health's five-way split — the same
+    """The CHEAP HALF of compositions._fn_closure_health's five-way split: the same
     mutually-exclusive, exhaustive classification over `thread_closure_status`'s own rows
-    (see that Function's own docstring for the full rationale on each bucket), with NONE of
+    (see that function's own docstring for the full rationale on each bucket), with NONE of
     `resolved_edgeless`'s per-thread artifact-resolution enrichment. That enrichment is an
-    N+1 `_find_artifact` call per edgeless-resolved thread — real cost for a mind auditing
-    the backlog, wrong cost for a caller on a HOT PATH (orient(), get_thread_list()) that
-    only needs the headline count (thread 0ae050d8, Thoth DM 6243: "a coordinator asks the
-    graph what is open and gets a flat count... roughly 4x the real one").
+    N+1 `_find_artifact` call per edgeless-resolved thread: real cost for an agent auditing
+    the backlog, wrong cost for a caller on a latency-sensitive call path (orient(),
+    get_thread_list()) that only needs the headline count. Paying that per-thread cost
+    unnecessarily on such a path was previously measured to make a simple open-count roughly
+    4x more expensive than it needed to be.
 
     Returns raw row LISTS per bucket (`retracted_or_no_status`, `disagree`,
-    `closed_by_topology`, `resolved_edgeless`, `open_both`), plus `total` — a caller wanting
+    `closed_by_topology`, `resolved_edgeless`, `open_both`), plus `total`. A caller wanting
     only counts takes `len(...)`; `_fn_closure_health` (compositions.py) composes this exact
-    function for its own cheap half rather than re-deriving the split a third time (#139,
-    one-shape-one-guard), then does its own richer enrichment on `resolved_edgeless` alone."""
+    function for its own cheap half rather than re-deriving the split a third time (the
+    one-shape-one-guard principle), then does its own richer enrichment on
+    `resolved_edgeless` alone."""
     rows = await thread_closure_status(pool, repo=repo)
     retracted_or_no_status: list[dict[str, Any]] = []
     disagree: list[dict[str, Any]] = []
@@ -247,39 +247,38 @@ async def enumerate_threads(
     pool: asyncpg.Pool, *, repo: uuid.UUID | None = None,
     limit: int = 500, after: uuid.UUID | None = None,
 ) -> dict[str, Any]:
-    """THE DOOR (Thoth DM 2566, Piece 1): a complete, paginated enumeration of active
-    threads with closure signals attached — the thing that does not exist anywhere in this
-    house today. orient() caps at ORIENT_OPEN_THREADS=25 and reports a bare count of what's
-    hidden; the roadmap composition renders 5 and confesses "N more not shown (ranked
-    lower)"; neither can produce the full set, so nobody has been ABLE to audit it even
-    wanting to. This has no ranking and no silent cap: every row in scope is reachable by
-    paging, `limit` is the caller's own choice (not a fixed constant), and the receipt
-    always says exactly what's on this page versus the total — the `_projected` convention
-    already used by run_composition/`_bound_items` (compositions.py), copied rather than
-    reinvented.
+    """A NEW CAPABILITY: a complete, paginated enumeration of active threads with closure
+    signals attached, something that did not exist anywhere in this system before. orient()
+    caps at ORIENT_OPEN_THREADS=25 and reports a bare count of what's hidden; the roadmap
+    composition renders 5 and reports "N more not shown (ranked lower)"; neither can produce
+    the full set, so nobody has been able to audit it even wanting to. This has no ranking
+    and no silent cap: every row in scope is reachable by paging, `limit` is the caller's own
+    choice (not a fixed constant), and the result always states exactly what's on this page
+    versus the total, the `_projected` convention already used by run_composition/
+    `_bound_items` (compositions.py), copied rather than reinvented.
 
     STABLE SORT, ON PURPOSE: pages are cursor-paginated by `o.id` (`after`, exclusive),
-    never by `last_touched`/`created_at`/an offset — a thread being touched between two
+    never by `last_touched`/`created_at`/an offset. A thread being touched between two
     page fetches must not reshuffle which rows page 2 shows, and offset pagination breaks
-    exactly that way under concurrent writes (this fleet's normal operating condition, per
-    every co-agent note in this reign). `id` is immutable and total order over a UUID
-    column is arbitrary but FIXED, which is the only property pagination needs.
+    exactly that way under concurrent writes, which is this system's normal operating
+    condition with multiple agents active at once. `id` is immutable and total order over a
+    UUID column is arbitrary but FIXED, which is the only property pagination needs.
 
     Each row: `thread_id`, `summary`, `property_status` (today's winning `status` read),
     `closed_by_topology`/`strength` (from `thread_closure_status`, composed rather than
-    re-derived — same reuse Imhotep's tranche-1 report already validated: extending this
-    module needed zero changes on his side), `last_touched`, `owner`, and `has_in_repo` —
-    the field Thoth asked for by name: whether ANY `in_repo` edge exists on this thread AT
+    re-derived, a prior review already confirmed this reuse: extending this module needed
+    zero changes on the consuming side), `last_touched`, `owner`, and `has_in_repo`, a field
+    included specifically to expose whether ANY `in_repo` edge exists on this thread AT
     ALL, independent of which project (if any) `repo` scoped this call to. That is the
     signal the roadmap composition cannot see (it only ever reads threads that already
-    carry an in_repo edge to begin with) — when `repo` is omitted (fleet-wide scope),
-    `has_in_repo=False` rows are exactly the threads invisible to every repo-scoped lens in
-    the house, roadmap included. When `repo` IS given, every row trivially has
-    `has_in_repo=True` (scope required it) — the field only does new work unscoped.
+    carry an in_repo edge to begin with); when `repo` is omitted (system-wide scope),
+    `has_in_repo=False` rows are exactly the threads invisible to every repo-scoped view in
+    the system, roadmap included. When `repo` IS given, every row trivially has
+    `has_in_repo=True` (scope required it), the field only does new work unscoped.
 
     Return shape: `{"rows": [...], "returned": len(rows), "next_after": <uuid or None>}`,
     plus `_projected` (only present when there IS a next page) naming `shown` (this page)
-    against `of` (the FULL scope's total, recomputed fresh each call, not cursor-limited —
+    against `of` (the FULL scope's total, recomputed fresh each call, not cursor-limited,
     so every page reports against the same denominator rather than a shrinking one a reader
     would have to reconstruct by hand)."""
     scope_where = ["o.type = 'Thread'", "o.status = 'active'", "o.merged_into IS NULL"]
@@ -309,7 +308,7 @@ async def enumerate_threads(
     )
     ids = [r["id"] for r in page_rows[:limit]]
     # next_after is the LAST id actually returned on this page, never the peeked
-    # (limit+1)-th row itself -- using the peek row's own id as the cursor would exclude
+    # (limit+1)-th row itself. Using the peek row's own id as the cursor would exclude
     # it from every subsequent page too (`o.id > cursor` where cursor == that row's own
     # id), silently dropping exactly one thread at every page boundary.
     next_after = ids[-1] if len(page_rows) > limit else None
