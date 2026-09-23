@@ -290,11 +290,11 @@ failing to load never blanks the other four.
 |---------|-------|-----------|
 | **Key** | soul-key status (present, storage method, path, age, recovery paths) plus Init, Rotate, Restore-drill, Recover, and Enroll-recovery buttons | see [`KEYS.md`](KEYS.md) |
 | **Backup & Offload** | the editable offload-targets panel plus a read-only view of backup status (timers, targets, presence, last successful offload) | see [`BACKUP.md`](BACKUP.md) |
+| **Readiness** | a hands-on-the-hardware checklist, described below | several read-only routes |
 | **Registry** | every registered setting, readable and writable | `GET /settings`, `POST /settings` |
 | **Operator Desk** | items grouped by urgency (needs a decision, blocked on a process, informational, your own queue, dismissed), each with an acknowledge action, and a reply box on the decision group; a fold-candidates group with a copy-pasteable merge command and a reject action (merges are never run automatically from this interface) | `GET /operator/desk`, `POST /operator/desk/reply`, `GET /merge-candidates` |
-| **The machine** | a hands-on-the-hardware readiness checklist, described below | several read-only routes |
 
-The machine section covers the physical computer Osiris actually runs on. Each row shows a
+The Readiness section covers the physical computer Osiris actually runs on. Each row shows a
 status light and a short detail line: a filled green circle means confirmed working, a
 faint hollow circle means confirmed not working, and a question mark means nothing has
 checked it live.
@@ -305,7 +305,7 @@ target has no expected mount point to check), one row per `restic` offload targe
 whether it's reachable (always shown as unknown, since reachability is never probed live;
 watch the last successful offload time in the Backup & Offload section instead), and one row
 confirming that the running code matches what was last deployed. See
-[`DEPLOY.md`](DEPLOY.md#the-deploy-snapshot-localbinosiris-never-runs-a-gates-candidate-tree)
+[`DEPLOY.md`](DEPLOY.md#the-deploy-snapshot-localbinosiris-never-runs-a-test-candidates-tree)
 for what that last check compares.
 
 ### REST API routes (operator console, local machine only)
@@ -325,10 +325,12 @@ from anywhere else, and none of them are exposed to an automated agent.
 | `/soul-key/recovery-blob` | GET | read the non-secret wrapped recovery data, to start a browser recovery |
 | `/soul-key/recover-from-browser` | POST | complete recovery after the browser unwraps the key locally |
 | `/restic-key/status` | GET | restic-password status facts, never the password |
+| `/restic-key/init` | POST | mint the restic password (`{backend?}`) |
 | `/deploy-status` | GET | `{running_sha, deploy_snapshot_sha, in_sync}`, comparing the running process against the pinned deployment snapshot |
 | `/operator/desk` | GET | the same data the desk page shows, in structured form |
 | `/operator/desk/reply` | POST | reply to a desk item (`{id, body}`); the sender is always fixed and never taken from the request |
 | `/backup-settings` | GET / POST | read/write the backup configuration, see [`BACKUP.md`](BACKUP.md) |
+| `/offload-runner/tick` | POST | run one offload attempt by hand against every enabled target, same as `osiris offload-runner tick` |
 | `/settings` | GET / POST | read/write the general settings registry |
 
 ## Repo map
