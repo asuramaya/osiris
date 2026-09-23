@@ -3817,6 +3817,39 @@ async def test_wake_authorizes_manager_to_worker_too(actions: Actions, tmp_path:
     assert d["status"] == "delivered" and d["seat"] == worker_seat and d["observed"] is True
 
 
+async def test_wake_polls_and_reports_observed_once_the_marker_lands_mid_window(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """DOOR 2 (thread 39741694 item 2), the happy path: unlike the test above (the marker
+    already landed BEFORE the call, so `_poll_landed_then_renudge`'s own first check
+    succeeds with no sleep at all), this stages the landing to happen DURING the second
+    poll — proof the bounded poll itself, not just its zero-wait edge case, is what
+    reports `observed: True`."""
+    sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
+    worker_seat, manager_seat = await _managed_pair(
+        actions, worker_agent="agent:abcd1234", manager_agent="agent:sender")
+    await _office(actions, worker_seat, "/repo/demo")
+    marker = _wake_marker("agent:sender", manager_seat, "Manager")
+
+    async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
+        pass  # the mocked spawn writes nothing real — staged below instead
+
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+        _land_marker(sense, marker)  # lands between the first miss and the second check
+
+    d = await wake_worker(actions, caller="agent:sender", target=worker_seat,
+                          message="status?",
+                          settings=_settings(enabled=True, sense=str(sense)),
+                          spawn=_spawn, windows=_no_windows, sleep=_fake_sleep,
+                          landed_poll_attempts=3, landed_poll_delay_secs=0.0)
+    assert d["status"] == "delivered" and d["observed"] is True
+    assert len(sleep_calls) == 1  # returned on the SECOND check, never waited out the rest
+    assert "renudge" not in d  # landed inside the window — no re-nudge was ever needed
+
+
 async def test_wake_is_FROZEN_when_the_flag_is_off(actions: Actions, tmp_path: Path) -> None:
     """THE HANDOFF'S DEPLOY BIND, CLOSED (Thoth LIII 2026-07-21). wake() rides the daemon reply
     lane — a confirmed RCE — so it ships FROZEN (osiris_wake_enabled=False). An AUTHORIZED pair,
@@ -3844,7 +3877,13 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
     """THE OUTCOME-READ'S WHOLE POINT (ruling 986b12f0): a daemon/resume success is a QUEUE
     success, not a SEEN one. When the marker never appears in the target's transcript (the
     ordinary case in these tests, since the mocked spawn/nudge writes nothing real), wake()
-    must NOT claim "delivered" — it downgrades honestly to "queued", unconfirmed."""
+    must NOT claim "delivered" — it downgrades honestly to "queued", unconfirmed.
+
+    DOOR 2 (thread 39741694 item 2): this now exercises `_poll_landed_then_renudge`'s own
+    BOUNDED poll (a fake `sleep`, never real time — same discipline launch()'s own w384
+    poll tests already use) rather than a single immediate check; the re-nudge at the end
+    of the window reaches the SAME injected `spawn`/`windows`, so it stays fully hermetic
+    even though it fires a second real `dispatch_dm` resolution."""
     sense = await _stale_resumable_owner(actions, tmp_path, bind_seat=False)
     # knock DOWN on a worker (abcd1234), the injectable direction — a manager target would be
     # pull-only by the human-attended guard and never reach the marker-downgrade path this pins.
@@ -3855,13 +3894,26 @@ async def test_wake_reports_queued_when_the_marker_never_lands(
     async def _spawn(repo: str, prompt: str, **kw: Any) -> None:
         pass  # never writes the marker anywhere — nothing "lands"
 
+    sleep_calls: list[float] = []
+
+    async def _fake_sleep(secs: float) -> None:
+        sleep_calls.append(secs)
+
     d = await wake_worker(actions, caller="agent:sender", target=worker_seat,
                           message="status?",
                           settings=_settings(enabled=True, sense=str(sense)),
-                          spawn=_spawn, windows=_no_windows)
+                          spawn=_spawn, windows=_no_windows, sleep=_fake_sleep,
+                          landed_poll_attempts=2, landed_poll_delay_secs=0.0)
     assert d["raw_mode"] == "resumed"  # dispatch_dm itself still reports success...
     assert d["status"] == "queued" and d["observed"] is False  # ...but wake() won't inherit it
     assert "not yet confirmed" in d["detail"].lower()
+    assert len(sleep_calls) == 2  # the full bounded window, never fewer, never more
+    # the re-nudge itself is HONESTLY reported even though dispatch_dm's own once-per-
+    # message brake refuses it (the first call already recorded a dm-resume ledger row
+    # for this exact msg_id) — a genuinely useful finding, not a broken test: the system
+    # correctly never double-wakes the identical message, and the receipt says so rather
+    # than pretending a second push happened.
+    assert d["renudge"]["mode"] == "skipped-once-per-message"
 
 
 async def test_wake_never_calls_mid_turn_delivered(
@@ -4343,6 +4395,116 @@ async def test_launch_refuses_a_second_body_on_a_seat_a_live_body_already_occupi
     assert d["status"] == "already-live"
     assert d["holder"] == "agent:occ01"
     assert d["body_exists"] is True and d["can_receive"] is True
+
+
+async def test_launch_delivers_the_message_when_already_live_and_the_nudge_lands(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DOOR 1 (thread 39741694 item 1, Nebbercracker's finding ec7167a7): the twin
+    refusal above is correct, but a caller-supplied `message` used to just vanish here —
+    same already-live setup (a real `agent_mounts` row, `agent_liveness` says live), with
+    a `message` this time. `dispatch_dm` mocked to confirm a genuine live injection."""
+    from src.orchestrator.mounts import save_mount
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:occ02", manager_agent="agent:occm02",
+        worker_handle="Halcyon-Msg", house="osiris")
+    await _office(actions, worker_seat, "/tmp/halcyon-msg")
+    await save_mount(actions.pool, job_dir="/jobs/occ02", agent_id="agent:occ02",
+                     project="osiris", cwd="/tmp/halcyon-msg", model="claude-sonnet-5",
+                     session_key=None)
+
+    nudge_calls: list[dict[str, Any]] = []
+
+    async def _fake_dispatch_dm(pool: Any, **kw: Any) -> dict[str, Any]:
+        nudge_calls.append(kw)
+        return {"mode": "nudged"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _fake_dispatch_dm)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:occm02", target=worker_seat, message="status update?",
+        spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "already-live"
+    assert d["brief_delivery"] == {"delivered_via": "dm", "message_id": nudge_calls[0]["msg_id"]}
+    assert nudge_calls[0]["addressee"] == worker_seat
+    row = await actions.pool.fetchrow(
+        "SELECT to_agent, grade, body FROM fleet_messages WHERE id=$1",
+        nudge_calls[0]["msg_id"])
+    assert row["to_agent"] == worker_seat and row["grade"] == "ask"
+    assert row["body"] == "status update?"
+
+
+async def test_launch_reports_brief_dropped_when_already_live_and_the_nudge_fails(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """DOOR 1, the honest-failure shape: never a success-shaped receipt over an
+    undelivered brief — a nudge outcome that does NOT confirm a live injection (here,
+    the daemon accepted the envelope but no session-shaped body confirms it) is reported
+    as `brief_dropped`, naming why, never smoothed into a false `delivered_via`."""
+    from src.orchestrator.mounts import save_mount
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:occ03", manager_agent="agent:occm03",
+        worker_handle="Halcyon-Drop", house="osiris")
+    await _office(actions, worker_seat, "/tmp/halcyon-drop")
+    await save_mount(actions.pool, job_dir="/jobs/occ03", agent_id="agent:occ03",
+                     project="osiris", cwd="/tmp/halcyon-drop", model="claude-sonnet-5",
+                     session_key=None)
+
+    async def _fake_dispatch_dm(pool: Any, **kw: Any) -> dict[str, Any]:
+        return {"mode": "queued-no-listener", "detail": "nobody home"}
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _fake_dispatch_dm)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:occm03", target=worker_seat, message="status update?",
+        spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "already-live"
+    assert d["brief_delivery"]["brief_dropped"] is True
+    assert d["brief_delivery"]["why"] == "nobody home"
+    assert "message_id" in d["brief_delivery"]
+
+
+async def test_launch_already_live_with_no_message_never_touches_mail(
+    actions: Actions, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No caller-supplied `message` at all — the already-live path must stay the pure,
+    side-effect-free idempotent return it always was; `brief_delivery` is absent
+    entirely (never a spurious empty-body DM)."""
+    from src.orchestrator.mounts import save_mount
+
+    worker_seat, _manager_seat = await _managed_pair(
+        actions, worker_agent="agent:occ04", manager_agent="agent:occm04",
+        worker_handle="Halcyon-Quiet", house="osiris")
+    await _office(actions, worker_seat, "/tmp/halcyon-quiet")
+    await save_mount(actions.pool, job_dir="/jobs/occ04", agent_id="agent:occ04",
+                     project="osiris", cwd="/tmp/halcyon-quiet", model="claude-sonnet-5",
+                     session_key=None)
+
+    async def _boom_dispatch(*a: Any, **kw: Any) -> None:
+        raise AssertionError("no message means nothing to dispatch")
+
+    monkeypatch.setattr(trigger_module, "dispatch_dm", _boom_dispatch)
+
+    async def _boom(*a: Any, **kw: Any) -> None:
+        raise AssertionError("a refused launch must spawn nothing")
+
+    d = await trigger_module.launch_seat(
+        actions, caller="agent:occm04", target=worker_seat,
+        spawn=_boom, agents_json=_fake_agents_json([[]]))
+
+    assert d["status"] == "already-live"
+    assert "brief_delivery" not in d
+    assert await actions.pool.fetchval("SELECT count(*) FROM fleet_messages") == 0
 
 
 async def test_resume_refuses_occupied_when_agent_liveness_says_live(

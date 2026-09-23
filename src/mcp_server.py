@@ -6173,13 +6173,12 @@ async def launch(target: str, message: str = "", model: str | None = None,
     Downward-only — you may only body a seat you MANAGE. Creates a new session, never
     injects into an existing one. Default substrate is a harness-native `claude --bg`
     background session (self-binds via its own first turn: mount() then claim_name);
-    the old PTY-broker lane survives only as an explicit fallback
-    (`osiris_launch_substrate`). No operator override param, deliberately: the
-    operator's real hand stays out-of-band.
+    the old PTY-broker lane survives as an explicit fallback (`osiris_launch_substrate`).
+    No operator override param — that hand stays out-of-band.
 
     Idempotent — a live body already holding the seat is returned, never twinned.
-    `message` delivers as the opening brief, only on the `launched` path (dropped on
-    `already-live` — use wake() instead).
+    `message` delivers as the opening brief when launched, or nudges the live body as
+    a DM on `already-live` — `brief_delivery` names the outcome either way.
 
     `body_exists` (window created) and `can_receive` (independently confirmed live) are
     separate — a fresh spawn usually returns body_exists=true, can_receive=false for a
