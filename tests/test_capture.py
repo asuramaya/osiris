@@ -945,35 +945,54 @@ async def test_a_superseded_decision_is_never_a_dedup_target(actions: Actions) -
         actions.pool, summary, repo="dedupproj") is None
 
 
-async def test_record_decision_reuses_the_near_dup_object_not_a_twin(
+async def test_record_decision_reuses_a_normalized_exact_match_not_a_twin(
     actions: Actions,
 ) -> None:
-    """The guard wired into `record_decision` itself, not just the bare finder: a retry with
-    a one-word reword under the same repo must land on the SAME object, count stays 1."""
+    """The guard wired into `record_decision` itself, not just the bare finder: a retry
+    whose summary differs only in case/punctuation/whitespace (a normalized-exact match)
+    must land on the SAME object, count stays 1."""
     d1 = await record_decision(actions, "order is load-bearing, never reorder the steps",
                                repo="dedupproj")
-    d2 = await record_decision(actions, "order is load-bearing, never reorder these steps",
+    d2 = await record_decision(actions, "Order is load-bearing, never reorder the steps.",
                                repo="dedupproj")
     assert d1 == d2
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='Decision'") == 1
 
 
+async def test_record_decision_mints_distinct_on_a_one_word_reword(
+    actions: Actions,
+) -> None:
+    """THE FIX: a one-word reword scores above the similarity bar
+    without being a normalized-exact match, so `record_decision` now mints its own
+    object rather than reusing the first call's, the accepted tradeoff for never again
+    silently overwriting a genuinely distinct decision that happened to score similar.
+    Both decisions survive, each carrying its own words."""
+    d1 = await record_decision(actions, "order is load-bearing, never reorder the steps",
+                               repo="dedupproj")
+    d2 = await record_decision(actions, "order is load-bearing, never reorder these steps",
+                               repo="dedupproj")
+    assert d1 != d2
+    assert await actions.pool.fetchval(
+        "SELECT count(*) FROM objects WHERE type='Decision'") == 2
+
+
 async def test_record_decision_still_runs_supersedes_through_a_dedup_hit(
     actions: Actions,
 ) -> None:
     """The near-dup guard reuses the OBJECT, never swallows a structural side effect: even
-    when this call's own summary near-dups an unrelated existing decision, `supersedes`
-    must still bury its named target, a genuinely new ruling must never be silently
-    dropped just because its wording resembles something else on the wall."""
+    when this call's own summary is a normalized-exact match of an unrelated existing
+    decision, `supersedes` must still bury its named target, a genuinely new ruling must
+    never be silently dropped just because its wording resembles something else on the
+    wall."""
     target = await record_decision(actions, "the old onboarding flow is retired",
                                    repo="dedupproj")
     near = await record_decision(actions, "order is load-bearing, never reorder the steps",
                                  repo="dedupproj")
     again = await record_decision(
-        actions, "order is load-bearing, never reorder these steps",
+        actions, "Order is load-bearing, never reorder the steps.",
         repo="dedupproj", supersedes=str(target))
-    assert again == near  # still deduped onto the near-identical live decision
+    assert again == near  # still deduped onto the normalized-exact-match live decision
     superseded_by = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='superseded_by'", target)
@@ -995,18 +1014,15 @@ async def test_decision_snapshot_reads_the_current_summary_and_rationale(
                     "rationale": "found live, 2026-08-03"}
 
 
-async def test_record_decision_near_dup_reuse_silently_overwrites_without_the_fix(
+async def test_record_decision_near_dup_no_longer_overwrites_at_the_capture_layer(
     actions: Actions,
 ) -> None:
-    """NEGATIVE CONTROL BY CONSTRUCTION, at the layer the bug actually lives: this is
-    `capture.record_decision` itself (never touched by this fix, the MCP wrapper is
-    where the receipt honesty was added), reproducing a real observed shape:
+    """THE FIX, at the layer the bug actually lived: this is
+    `capture.record_decision` itself, not the MCP wrapper (which only ever added
+    disclosure, never fixed the underlying reuse), reproducing the real observed shape:
     two retries used the same template, "Rename MCP verb X -> Y (naming-sweep phase
-    6)", differing only in the verb pair. Two GENUINELY DIFFERENT rulings collide onto
-    ONE object, and the first ruling's own rationale is GONE from the current view,
-    proving the underlying overwrite this fix makes visible, not fixes away (the
-    reuse+overwrite design is intentional for a genuine retry; only the SILENCE was
-    the defect)."""
+    6)", differing only in the verb pair. Two GENUINELY DIFFERENT rulings must now mint
+    two objects; the first ruling's own words stay exactly where they landed."""
     first = await record_decision(
         actions,
         "Rename MCP verb lap -> provenance (naming-sweep phase 6, filed under the same "
@@ -1019,21 +1035,30 @@ async def test_record_decision_near_dup_reuse_silently_overwrites_without_the_fi
         "rename-dispatch tracking note)",
         rationale="doors collided with resolve_identity; whois has no such collision.",
         repo="renameproj")
-    assert first == second  # the collision itself: one object wearing two rulings' words
-    snap = await _decision_snapshot(actions.pool, first)
-    assert snap["rationale"] == (
+    assert first != second  # two distinct rulings, not a merge
+    first_snap = await _decision_snapshot(actions.pool, first)
+    assert first_snap["rationale"] == (
+        "lap scored #6 on the intent-search axis; provenance is unambiguous.")
+    assert "lap" in (first_snap["summary"] or "")
+    second_snap = await _decision_snapshot(actions.pool, second)
+    assert second_snap["rationale"] == (
         "doors collided with resolve_identity; whois has no such collision.")
-    assert "lap" not in (snap["summary"] or "")  # the first ruling's own words are gone
+    assert "doors" in (second_snap["summary"] or "")
 
 
-async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content(
+async def test_record_decision_tool_mints_distinct_on_a_similarity_only_match(
     actions: Actions,
 ) -> None:
-    """THE FIX: the MCP wrapper's receipt now says plainly when a call landed on an
-    existing decision instead of minting a fresh one, and shows exactly what is about to
-    be overwritten, the same 'receipt echo' principle Jordan's design constraint named for
-    `resolves`, extended to this silent-merge specimen. Same real summaries as the unit
-    test above."""
+    """THE FIX: two consecutive gate-style summaries that share a
+    fixed boilerplate opener ("Rename MCP verb X -> Y (naming-sweep phase 6, filed under
+    the same rename-dispatch tracking note)") but name a genuinely different rename each
+    time used to score above the similarity bar and reuse the first call's object,
+    silently overwriting its summary/rationale with the second call's unrelated content,
+    a real testimony loss a caller could only recover from by noticing
+    `reused_existing_decision` in the receipt and running `amend_decision` by hand. A
+    similarity-only match (not a normalized-exact one) now mints its own object instead:
+    the two rename rulings both survive as distinct decisions, and the first one's
+    original content is never touched by the second call."""
     from src import mcp_server as srv
 
     saved_pool = srv._pool
@@ -1052,13 +1077,20 @@ async def test_record_decision_tool_names_a_near_dup_reuse_and_its_prior_content
     finally:
         srv._pool = saved_pool
 
-    assert second["id"] == first["id"]  # same underlying collision as the unit test above
-    assert second["reused_existing_decision"] is True
-    assert second["prior_content"]["summary"] == (
+    assert second["id"] != first["id"]  # a distinct ruling, not a merge onto the first
+    assert "reused_existing_decision" not in second
+
+    first_current = await _decision_snapshot(actions.pool, uuid.UUID(first["id"]))
+    assert first_current["summary"] == (
         "Rename MCP verb lap -> provenance (naming-sweep phase 6, filed under the same "
         "rename-dispatch tracking note)")
-    assert second["prior_content"]["rationale"] == "lap scored #6 on the intent-search axis."
-    assert "false positive" in second["note"]
+    assert first_current["rationale"] == "lap scored #6 on the intent-search axis."
+
+    second_current = await _decision_snapshot(actions.pool, uuid.UUID(second["id"]))
+    assert second_current["summary"] == (
+        "Rename MCP verb doors -> whois (naming-sweep phase 6, filed under the same "
+        "rename-dispatch tracking note)")
+    assert second_current["rationale"] == "doors collided with resolve_identity."
 
 
 async def test_record_decision_tool_receipt_names_the_prose_derived_decided_in(
