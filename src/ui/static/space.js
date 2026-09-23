@@ -1135,7 +1135,7 @@ export async function initSpace(container) {
     const visible = edgeList.filter((e) => {
       if (PROJECT_FILL_TYPES.has(e.type)) return false;
       const lm = highDegreeTargets[e.type];
-      // WAVE 27, THE LENS PANEL: hiding the badge falls through to an ordinary line, never
+      // THE LENS PANEL: hiding the badge falls through to an ordinary line, never
       // to the project/community ribbon logic below (a high-degree type's edges were never
       // part of any ribbon aggregate -- computeRibbons excludes them unconditionally, badge
       // shown or not -- so routing them through that swap here would misclassify them).
@@ -1152,7 +1152,7 @@ export async function initSpace(container) {
         if (!ribbonsResolvedKeys.has(`${a}|${b}|${e.type}`)) return false;
       } else if (communityRegionsVisible && na && nb && na.project === nb.project &&
         na.communityCode && nb.communityCode && na.communityCode !== nb.communityCode) {
-        // WAVE 26, PIECE 2: a same-project edge refines one level further once the
+        // A same-project edge refines one level further once the
         // reader is zoomed to community scale -- the same "line unless the ribbon hasn't
         // resolved" swap, one level down, only checked at all when communities are
         // actually showing (never below mid zoom, where the plain same-project line
