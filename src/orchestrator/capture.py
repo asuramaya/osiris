@@ -2286,12 +2286,17 @@ async def record_decision(
     any commit sha already named in `summary`/`rationale`/`protocol` ("commit 238b48f") is
     resolved by prefix against an ingested Commit and linked automatically, silently
     skipped, never guessed, when the sha doesn't (yet) match anything. Idempotent on the
-    summary hash, and, when `repo` is
-    given, on a near-duplicate reword of it too (fixing a retry-after-
-    ambiguous-failure bug: a rejected-but-actually-committed call, retried with the summary
-    reworded by one word, minted a duplicate). `find_near_duplicate_decision` runs first; a hit
-    reuses that live decision's id instead of minting, exactly as `find_near_duplicate_open_
-    thread` does for threads. The decision named by `supersedes` is excluded from that
+    summary hash: `find_near_duplicate_decision` runs first (`exact_only=True`, when
+    `repo` is given) and a normalized-exact match (case/punctuation/whitespace/a
+    recognized boilerplate opener stripped, otherwise identical) reuses that live
+    decision's id instead of minting, exactly as `find_near_duplicate_open_thread` does
+    for threads. A summary that only scores similar, without matching exactly, mints its
+    own object rather than reusing one: two rulings sharing a fixed boilerplate opener
+    but different substance used to make the second call silently overwrite the first
+    one's summary/rationale, only recoverable by noticing the disclosed
+    `reused_existing_decision` result and running `amend_decision` by hand, see
+    `find_near_duplicate_decision`'s own docstring on `exact_only` for the fix and the
+    reasoning behind it. The decision named by `supersedes` is excluded from that
     lookup: a correction restates its subject by nature, so it
     is the highest-risk case for this guard, not the lowest, see find_near_duplicate_
     decision's own docstring for the failure this exclusion prevents. Returns the id.
@@ -2375,8 +2380,13 @@ async def record_decision(
     # only the object itself is deduped, never the structural side effects a caller depends on.
     # `exclude=old`: `supersedes` names the one decision this call must never dedup onto,
     # see find_near_duplicate_decision's docstring for why a correction is the highest-risk
-    # case, not a low one.
-    dup = (await find_near_duplicate_decision(actions.pool, summary, repo=repo, exclude=old)
+    # case, not a low one. `exact_only=True`: this is the write path, not a caller asking
+    # "does anything similar exist"; only a normalized-exact match is safe to REUSE (and so
+    # overwrite), a mere similarity hit mints its own object instead, per
+    # find_near_duplicate_decision's own docstring on why a merge, not a duplicate, is the
+    # dangerous failure mode.
+    dup = (await find_near_duplicate_decision(actions.pool, summary, repo=repo, exclude=old,
+                                              exact_only=True)
            if repo else None)
     # ONE transaction: the Decision, its summary/kind/rationale, and the repo link either all
     # land or none do: a process death mid-sequence can no longer leave a summary-less husk.
@@ -3062,7 +3072,14 @@ async def ingest_reference(
 # manual merge afterward. Shared by `find_near_duplicate_open_thread` (threads) and
 # `find_near_duplicate_decision` (decisions, below): one algorithm, one threshold, two mint
 # sites. Conservative on purpose: a false merge silently drops testimony, which is worse
-# than a duplicate a human can fold.
+# than a duplicate a human can fold. Decisions take that one step further than threads:
+# `record_decision` only ever REUSES a decision on a normalized-EXACT match
+# (`find_near_duplicate_decision(..., exact_only=True)`); a mere similarity hit, the case
+# this comment's own measured incident actually needed, now mints its own object instead
+# of overwriting the earlier one's summary/rationale. A one-word-reworded retry can once
+# again land as a second decision rather than being silently merged, the accepted tradeoff
+# for never again overwriting a genuinely distinct ruling that happened to share a
+# boilerplate opener.
 _DEDUP_SIM = 0.60  # first-pass estimate (no live baseline to calibrate against yet, unlike
                     # the similar 0.30 "same story" bar used elsewhere); recalibrate if it
                     # over/under-fires.
@@ -3165,6 +3182,7 @@ async def find_near_duplicate_open_thread(
 
 async def find_near_duplicate_decision(
     pool: asyncpg.Pool, summary: str, *, repo: str | None, exclude: uuid.UUID | None = None,
+    exact_only: bool = False,
 ) -> uuid.UUID | None:
     """An existing live Decision on this project that is the same ruling as `summary`,
     reworded, or None. `record_decision` checks this before minting (mirrors
@@ -3197,7 +3215,23 @@ async def find_near_duplicate_decision(
     the correction's words land on the old object, superseded_by never gets asserted, and
     the wrong ruling ends up wearing the right one's words. A stated intent ("supersede
     this one") outranks any similarity score, so the caller resolves `old` first and
-    passes it here: an exclusion, not a heuristic."""
+    passes it here: an exclusion, not a heuristic.
+
+    `exact_only`: skip the similarity/trigram fallback entirely and return a hit only
+    from the normalized-exact-match tier (case/punctuation/whitespace/boilerplate
+    stripped, otherwise identical). `record_decision` passes this when deciding
+    whether to REUSE the matched object: two summaries sharing enough boilerplate to
+    clear the similarity bar without describing the same ruling used to make the
+    second call silently overwrite the first one's summary/rationale, a real
+    testimony loss a caller could only recover from by noticing the disclosed
+    `reused_existing_decision` result and running `amend_decision` by hand. An exact
+    match after normalization is a genuine retry (the same words, differently cased
+    or trivially punctuated) and stays safe to reuse; a mere similarity match is not,
+    so it now mints its own object instead, same governing principle this function's
+    own module comment already states: a false merge silently drops testimony, which
+    is worse than a duplicate a human can fold. The full similarity search still runs
+    by default (`exact_only=False`) for callers that only want to know a near match
+    exists, never reuse it."""
     if not repo:
         return None
     proj = await _resolve_repo(pool, repo.removeprefix("repo:").strip())
@@ -3228,6 +3262,8 @@ async def find_near_duplicate_decision(
     for did, cand in candidates:
         if _normalize_for_dedup(_strip_dedup_boilerplate(cand)) == norm_new:
             return uuid.UUID(str(did))
+    if exact_only:
+        return None
     if await _pg_trgm_enabled(pool):
         ids = [did for did, _ in candidates]
         bodies = [_strip_dedup_boilerplate(cand) for _, cand in candidates]
