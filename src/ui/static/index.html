@@ -15,8 +15,7 @@
          padding: 1px 4px; border-radius: 3px; transform: translate(-50%, -140%);
          white-space: nowrap; pointer-events: none; }
   .lbl.lit { color: #f0f6fc; background: rgba(35,55,80,0.9); font-weight: 600; }
-  /* THE UNMISTAKABLE FOCUS (operator ruling, grounds 5b37d219, Thoth mail 11272 item 2):
-     "the clicked object is unmistakable: a ring or halo, its label pinned and larger."
+  /* The clicked object must be unmistakable: a ring or halo, its label pinned and larger.
      focus-label is strictly bigger than even a lit label (not just bolder) and is never
      subject to positionLabels' own overlapsPlaced declutter -- it always shows. */
   .lbl.focus-label { font-size: 13px; padding: 2px 6px; }
@@ -27,24 +26,23 @@
   .focus-ring { position: absolute; border: 2px solid #58a6ff; border-radius: 50%;
                 transform: translate(-50%, -50%); pointer-events: none;
                 box-shadow: 0 0 8px rgba(88,166,255,0.6); }
-  /* THE LEGIBILITY PASS, TIP 3 (Thoth mail 10930): the LOD glyph's own label -- a project
-     or type summary ("name (count)") shown only at the far/mid zoom tiers, styled bigger
-     and bolder than a plain node .lbl since it's standing in for a whole group, not one
-     object. */
+  /* The LOD glyph's own label: a project or type summary ("name (count)") shown only at
+     the far/mid zoom tiers, styled bigger and bolder than a plain node .lbl since it's
+     standing in for a whole group, not one object. */
   .lod-glyph-label { position: absolute; font-size: 12px; font-weight: 700; color: #f0f6fc;
                       background: rgba(13,18,25,0.82); padding: 2px 7px; border-radius: 4px;
                       transform: translate(-50%, -50%); white-space: nowrap; pointer-events: none;
                       letter-spacing: 0.2px; }
-  /* THE DRILL (ruling d7d55257, Thoth mail 11048): a container's own type/"more" nodes and
-     a cross-project anchor are genuinely clickable (expand, page, drill, or re-focus) --
-     pointer-events: auto overrides the plain tier label's own none, plus a left accent so
-     a reader can tell "this one does something" from "this one is just a name." */
+  /* A container's own type/"more" nodes and a cross-project anchor are genuinely clickable
+     (expand, page, drill, or re-focus): pointer-events: auto overrides the plain tier
+     label's own none, plus a left accent so a reader can tell "this one does something"
+     from "this one is just a name." */
   .ego-drill-label { pointer-events: auto; border-left: 2px solid #58a6ff; }
   .storyline-axis-label { color: #8b949e; font-weight: 400; font-size: 10px;
                            background: rgba(13,18,25,0.6); border-top: 1px solid #30363d; }
-  /* THE LEGIBILITY PASS, TIP 1(f) (ruling e1cb9e3b): the table drawer owns the bottom edge
-     now -- nothing floats in its collapsed 34px handle band any more (Thoth's own
-     screenshot showed the canvas controls colliding with it there). */
+  /* The table drawer owns the bottom edge now -- nothing floats in its collapsed 34px
+     handle band any more (a screenshot showed the canvas controls colliding with it
+     there). */
   #space-status-line { position: absolute; bottom: 44px; left: 14px; z-index: 10;
                         font-size: 11px; color: var(--muted); }
   .hover-card { position: absolute; z-index: 12; pointer-events: none; max-width: 260px;
@@ -69,7 +67,7 @@
   .table-drawer.open .table-drawer-chevron { transform: rotate(180deg); }
   #browse-table { display: none; height: 100%; overflow: auto; padding: 12px 16px 24px; }
   .table-drawer.open #browse-table { display: block; }
-  /* the browse drawer only ever makes sense alongside the space canvas — hidden whenever
+  /* the browse drawer only ever makes sense alongside the space canvas: hidden whenever
      a non-browse surface takes over #result via the pre-existing #stage.panel toggle. */
   #stage.panel .table-drawer { display: none; }
   .legend-panel { position: absolute; top: 52px; right: 14px; z-index: 11; max-height: 60%;
@@ -128,9 +126,8 @@
     </div>
     <div class="bar-right">
       <span id="syncbadge" class="sync-indicator"></span>
-      <!-- THE SETTINGS PANE (Thoth mail 13350): "a top-level 'Settings' entry (palette
-           + a header link)" -- this is the header half; POWER_TOOLS carries the palette
-           entry (console.js). -->
+      <!-- The header half of the top-level Settings entry (palette + a header link);
+           POWER_TOOLS carries the palette entry (console.js). -->
       <button class="nav-btn" onclick="renderSettingsPane()" title="Settings">
         <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor"><path d="M8 4.754a3.246 3.246 0 1 0 0 6.492 3.246 3.246 0 0 0 0-6.492ZM5.754 8a2.246 2.246 0 1 1 4.492 0 2.246 2.246 0 0 1-4.492 0Z"/><path d="M9.796 1.343c-.527-1.79-3.065-1.79-3.592 0l-.094.319a.873.873 0 0 1-1.255.52l-.292-.16c-1.64-.892-3.433.902-2.54 2.541l.159.292a.873.873 0 0 1-.52 1.255l-.319.094c-1.79.527-1.79 3.065 0 3.592l.319.094a.873.873 0 0 1 .52 1.255l-.16.292c-.892 1.64.901 3.434 2.541 2.54l.292-.159a.873.873 0 0 1 1.255.52l.094.319c.527 1.79 3.065 1.79 3.592 0l.094-.319a.873.873 0 0 1 1.255-.52l.292.16c1.64.893 3.434-.902 2.54-2.541l-.159-.292a.873.873 0 0 1 .52-1.255l.319-.094c1.79-.527 1.79-3.065 0-3.592l-.319-.094a.873.873 0 0 1-.52-1.255l.16-.292c.893-1.64-.902-3.433-2.541-2.54l-.292.159a.873.873 0 0 1-1.255-.52l-.094-.319Z"/></svg>
       </button>
@@ -198,8 +195,7 @@
 <script src="/ui/osiris.js"></script>
 <script src="/ui/console.js"></script>
 <script type="module">
-  // NAVIGABLE SPACE, INTEGRATION (decision "NAVIGABLE SPACE, INTEGRATION SHAPE", mail 10550):
-  // mounts the three.js renderer into #cy in place of the old cytoscape whole-graph/
+  // Mounts the three.js renderer into #cy in place of the old cytoscape whole-graph/
   // focus content it replaces. window.__spaceReady lets console.js (a classic script,
   // loaded first, can't import this module) await the instance before wiring it up.
   import { initSpace } from "/ui/space.js";
