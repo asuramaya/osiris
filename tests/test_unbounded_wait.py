@@ -81,7 +81,10 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     "src/ingest/sessions.py": 5,
     "src/orchestrator/deploy_guard.py": 3,
     "src/orchestrator/pulse.py": 3,
-    "tests/conftest.py": 2,
+    # 2 -> 4: _install_product_voice_baseline_merge_driver mirrors
+    # _install_tool_contract_ceiling_merge_driver's own two short, local `git config`
+    # reads/writes -- same bounded-in-practice shape already baselined for that function.
+    "tests/conftest.py": 4,
     "tests/test_blob_content_sweep.py": 2,
     "tests/test_bodies.py": 1,
     # tests/test_cli.py's count includes one `asyncio.run(probe())` call in
@@ -112,6 +115,9 @@ _SUBPROCESS_BASELINE: dict[str, int] = {
     "tests/test_preflight.py": 2,
     "tests/test_project_identity.py": 2,
     "tests/test_project_of.py": 6,
+    # same shape as tests/test_tool_contract_ceiling_merge_driver.py's own baseline: a
+    # single `_git()` helper wrapping subprocess.run for a short, local git command.
+    "tests/test_product_voice_baseline_merge_driver.py": 1,
     "tests/test_pulse.py": 2,
     "tests/test_push_guard.py": 11,
     "tests/test_resolve_fleet_projects.py": 6,

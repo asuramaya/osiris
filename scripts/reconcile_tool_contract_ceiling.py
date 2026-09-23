@@ -53,11 +53,19 @@ have happened with no custom driver at all, so the fallback path (see FAILS LOUD
 never worse than the status quo. Its output already carries standard conflict markers
 around anything it couldn't reconcile, normally the changelog paragraph both branches
 append plus the constant reassignment, all one hunk since they're textually adjacent. Any
-conflict block that contains this constant on BOTH sides gets rewritten: each side's own
-prose is kept (both authors' narratives survive, concatenated ours-then-theirs), the raw
-constant lines are dropped from each side, and one arithmetically resolved line replaces
-them. Everything else in the file, including any OTHER conflict this driver doesn't
-recognize, is left exactly as git's own merge produced it.
+conflict block that contains this constant on BOTH sides gets rewritten to exactly the
+one arithmetically resolved constant line, with no surrounding prose kept from either
+side: an earlier version of this driver concatenated both sides' own prose, which
+silently reintroduced retired narrative content whenever one side had condensed a verbose
+changelog and the other side's own conflicting hunk still carried it (measured live: a
+product-voice cleanup pass on this exact file regrew from 0 to 482 flagged violations on
+its very next rebase, purely from this driver's own prose-preserving behavior). The
+changelog convention this file's own module docstring already states elsewhere
+("history... tracked in the commit log, not repeated here") makes dropping the prose
+entirely the correct default, not a loss: nothing here was ever meant to survive as
+in-file narrative past the commit that landed it. Everything else in the file, including
+any OTHER conflict this driver doesn't recognize, is left exactly as git's own merge
+produced it.
 
 FAILS LOUD, NEVER GUESSES: if the constant is missing from any of %O/%A/%B, or doesn't
 appear on both sides of exactly the shape this driver expects, this leaves git's own
@@ -146,11 +154,8 @@ def _reconcile(text: str, name: str, resolved: int) -> tuple[str, bool]:
         ours, theirs = m.group("ours"), m.group("theirs")
         if not (const_re.search(ours) and const_re.search(theirs)):
             return m.group(0)  # not this collision's shape, leave untouched
-        ours_prose = const_re.sub("", ours).strip("\n")
-        theirs_prose = const_re.sub("", theirs).strip("\n")
-        parts = [p for p in (ours_prose, theirs_prose) if p]
         fixed = True
-        return "\n".join([*parts, resolved_line]) + "\n"
+        return resolved_line + "\n"
 
     new_text = _BLOCK_RE.sub(_rewrite_block, text)
 
