@@ -1,0 +1,12 @@
+{
+  "docs": 667,
+  "scripts": 1527,
+  "src/api": 395,
+  "src/cli.py": 1575,
+  "src/config": 2,
+  "src/ingest": 1596,
+  "src/mcp_server.py": 2313,
+  "src/orchestrator": 13264,
+  "src/ui/static": 692,
+  "tests": 16870
+}
