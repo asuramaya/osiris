@@ -1,16 +1,15 @@
-"""The fleet trigger-hook — the mailbox's alarm clock.
+"""The fleet trigger hook: the mailbox's alarm clock.
 
-The mailbox is PULL-based (Osiris has no hands): an agent perceives mail only when it takes a
+The mailbox is pull-based (Osiris has no hands): an agent perceives mail only when it takes a
 turn, so coordination waits for the operator to hand-trigger the recipient. This closes that gap
-WITHOUT giving Osiris hands: the WORKER (the sanctioned alarm clock / tripwire, rule #2) spawns
-`claude -p` in a recipient project's repo when it has unread mail; Claude — the intelligence —
-then mounts, reads its inbox, and decides. The membrane (rule #6): the loop may close, but never
-silently and never irreversibly.
+without giving Osiris hands. A worker process spawns `claude -p` in a recipient project's repo
+when it has unread mail; Claude, the intelligence, then mounts, reads its inbox, and decides.
+The safeguard: the loop may close, but never silently and never irreversibly.
 
-The named danger is the A↔B ping-pong (recursion). It is bounded by a per-project RATE CAP: at
-most `rate_cap` wakes per project per `window` — each side of a loop hits its own cap and halts,
-no cross-process depth-propagation needed. Every wake is recorded in agent_wakes (the visible
-chain), and the whole thing is OFF unless osiris_trigger_enabled (the kill switch). Conservative
+The named danger is the A-to-B ping-pong (recursion). It is bounded by a per-project rate cap: at
+most `rate_cap` wakes per project per `window`, so each side of a loop hits its own cap and halts,
+with no cross-process depth-propagation needed. Every wake is recorded in agent_wakes (the visible
+chain), and the whole thing is off unless osiris_trigger_enabled (the kill switch). Conservative
 by construction: bounded, visible, killable.
 """
 from __future__ import annotations
@@ -47,21 +46,22 @@ from src.orchestrator.signatures import (
 
 # Where a wake drops the CLI's own cost envelope (`--output-format json` -> total_cost_usd).
 # Outside the transcript tree ON PURPOSE: everything under ~/.claude/projects is read by the
-# liveness observer, the orphan reaper and the adversary, and a receipt landing in there would
-# be Osiris sensing its own exhaust — the loop-pathology class, and the exact shape of the bug
-# where the miner mined its own alarm clock.
+# liveness observer, the orphan reaper and the adversary, and a result landing in there would
+# be Osiris sensing its own exhaust, the exact kind of feedback loop where the system ends up
+# reacting to its own output.
 RECEIPTS = Path.home() / ".osiris" / "wake-receipts"
 
 _log = logging.getLogger("osiris.trigger")
 
-# the trigger speaks in its own name when it gives up — never in an agent's
+# the trigger speaks in its own name when it gives up, never in an agent's
 _TRIGGER_AGENT = "agent:osiris-trigger"
 
 # Where a spawned wake's synthesized CLAUDE_JOB_DIR lives. A triggered `claude -p` inherits no
 # job dir from any harness, so the woken agent has no durable identity anchor and mounts by
-# GUESSING off the box's hottest transcript (a co-tenant's). We hand it one: `<base>/jobs/wake-<id>`
-# — the literal 'jobs' segment is what _job_id parses, so mount(job_dir=$CLAUDE_JOB_DIR) resolves a
-# stable, distinct agent:wake-<id> instead. Under the system temp: ephemeral, no cleanup owed.
+# guessing off the most recently modified transcript on the machine, which may belong to a
+# different process. We hand it one instead: `<base>/jobs/wake-<id>`. The literal 'jobs' segment
+# is what _job_id parses, so mount(job_dir=$CLAUDE_JOB_DIR) resolves a stable, distinct
+# agent:wake-<id> instead. Under the system temp dir: ephemeral, no cleanup owed.
 _WAKE_JOB_ROOT = Path(tempfile.gettempdir()) / "osiris-wakes"
 
 _WAKE_PROMPT = (
@@ -99,10 +99,10 @@ _WAKE_PROMPT = (
 )
 
 
-# WAKE ECONOMICS (obligation 4e52af7e): defer non-urgent wakes when the fleet-wide hourly
-# spend nears its ceiling. The scheduler now reads the SAME ledger the chrome displays
-# ('wakes N/h') instead of ignoring it. Urgent mail (the operator's word, or mail old
-# enough that deferral would become starvation) rides through until the hard ceiling.
+# WAKE ECONOMICS: defer non-urgent wakes when the fleet-wide hourly spend nears its ceiling.
+# The scheduler now reads the same ledger the status display shows ('wakes N/h') instead of
+# ignoring it. Urgent mail (the operator's word, or mail old enough that deferral would become
+# starvation) rides through until the hard ceiling.
 _BUDGET_DEFER_AT = 0.8      # the soft ceiling: past this share, only urgent mail wakes
 _URGENT_AGE_SECS = 3600     # deferred this long, mail is urgent by starvation
 
@@ -112,25 +112,25 @@ def should_wake(
     hourly_wakes: int = 0, hourly_budget: int = 0, urgent: bool = False,
     attempts: int = 0, attempt_limit: int = 0,
 ) -> str | None:
-    """The bounded decision (pure). Returns a SKIP REASON, or None to WAKE.
+    """The bounded decision (pure). Returns a skip reason, or None to wake.
 
-    A RATE IS NOT A BOUND. Every other guard here — the per-project cap, the hourly budget, the
-    grace — measures wakes over a SLIDING WINDOW, so every one of them RESETS and the wake fires
-    again. On 2026-07-12 that let ONE unread letter ("to whoever mounts <project> next") spawn
-    79 `claude -p` sessions over 18 hours on a project the operator had not opened in two days,
-    minting a fresh agent every ~32 minutes, at exactly the cap. The cap was working perfectly.
-    THAT WAS THE BUG: it capped the RATE and nothing capped the TOTAL, so a message that could
-    never be settled became a permanent alarm clock ticking at the legal limit.
+    A rate is not a bound. Every other guard here (the per-project cap, the hourly budget, the
+    grace period) measures wakes over a sliding window, so every one of them resets and the wake
+    fires again. On 2026-07-12 that let one unread letter ("to whoever mounts <project> next")
+    spawn 79 `claude -p` sessions over 18 hours on a project the operator had not opened in two
+    days, minting a fresh agent every ~32 minutes, at exactly the cap. The cap was working
+    perfectly. That was the bug: it capped the rate and nothing capped the total, so a message
+    that could never be settled became a permanent alarm clock ticking at the legal limit.
 
-    `attempts` is the lifetime count of wakes on THIS MESSAGE and `attempt_limit` bounds it — a
-    TOTAL, which never resets. It is checked FIRST and `urgent` cannot override it: a message that
-    has failed three times is still failing, and urgency is not a reason to keep failing louder.
-    A retry that has failed 79 times is not a retry, it is a leak. When the limit is hit the
-    caller must ESCALATE to the human and stop (the membrane: a loop may close, but never
-    silently — and this one never closed at all).
+    `attempts` is the lifetime count of wakes on this message, and `attempt_limit` bounds it: a
+    total, which never resets. It is checked first, and `urgent` cannot override it: a message
+    that has failed three times is still failing, and urgency is not a reason to keep failing
+    louder. A retry that has failed 79 times is not a retry, it is a leak. When the limit is hit,
+    the caller must escalate to the human and stop: the loop may close, but never silently, and
+    this one never closed at all.
 
-    (The DM lane already knew this — "one resume attempt per message: a resume that didn't settle
-    it is not looped". The broadcast lane simply never learned it.)
+    (The DM lane already knew this: "one resume attempt per message, a resume that didn't settle
+    it is not looped." The broadcast lane simply never learned it.)
     """
     if not enabled:
         return "disabled"
@@ -151,12 +151,11 @@ async def _projects_with_unread(
     pool: asyncpg.Pool, lease_secs: int
 ) -> list[tuple[str, int, str | None, float]]:
     """(project, oldest_deliverable_message_id, its_sender, age_secs) for every project with
-    deliverable
-    BROADCAST mail. DELIVERABLE = no recipient has settled it AND none holds a live lease (mail
-    being processed right now would double-spawn if re-woken; lease expiry re-arms). Broadcasts
-    only: the wake ensures SOMEONE in the project looks, and a broadcast read by one agent still
-    shows in the others' inboxes. DMs dispatch per-message through dispatch_dm (the
-    background-session adapter). The operator desk is skipped — never woken."""
+    deliverable broadcast mail. Deliverable means no recipient has settled it and none holds a
+    live lease (mail being processed right now would double-spawn if re-woken; lease expiry
+    re-arms). Broadcasts only: the wake ensures someone in the project looks, and a broadcast
+    read by one agent still shows in the others' inboxes. DMs dispatch per-message through
+    dispatch_dm (the background-session adapter). The operator desk is skipped, never woken."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_project) m.to_project, m.id, m.from_agent, "
         " extract(epoch FROM (now() - m.created_at)) AS age_secs FROM fleet_messages m "
@@ -180,14 +179,14 @@ async def _recent_wakes_for_pair(
     pool: asyncpg.Pool, *, base_a: str, seat_a: str | None, base_b: str,
     seat_b: str | None, window_secs: int,
 ) -> int:
-    """Wakes in EITHER direction between two seats within the window — the ping-pong hazard
-    the rate cap exists to bound (should_wake's own docstring: 'the A↔B ping-pong') is a
-    property of the PAIR, not the project it happens to share (msg 984, 2026-07-21: two
-    capped nudges in ten minutes, on the two most important messages of the day, both
-    rescued by the operator by hand — a project-wide cap makes ordinary house growth
-    indistinguishable from a runaway loop). Matched by current lineage base (a wake's
-    from_agent may wear an older generation's suffix — the same LIKE-prefix shape
-    _seat_wakes already uses for to_agent) OR a seat address, whichever the message wore."""
+    """Wakes in either direction between two seats within the window: the ping-pong hazard the
+    rate cap exists to bound (should_wake's own docstring calls it "the A-to-B ping-pong") is a
+    property of the pair, not the project it happens to share. On 2026-07-21 two capped nudges
+    landed in ten minutes, on the two most important messages of the day, both rescued by the
+    operator by hand: a project-wide cap makes ordinary project growth indistinguishable from a
+    runaway loop. Matched by current lineage base (a wake's from_agent may wear an older
+    generation's suffix, the same LIKE-prefix shape _seat_wakes already uses for to_agent) or a
+    seat address, whichever the message wore."""
     n = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes aw JOIN fleet_messages fm ON fm.id=aw.message_id "
         "WHERE aw.woke_at > now() - make_interval(secs => $1) AND ("
@@ -215,19 +214,19 @@ async def _attempts_on(pool: asyncpg.Pool, message_id: int) -> int:
 async def _abandon(
     pool: asyncpg.Pool, project: str, message_id: int, sender: str | None, attempts: int,
 ) -> bool:
-    """GIVE UP, AND SAY SO. The loop may close, but never silently — and a wake loop that simply
+    """Give up, and say so. The loop may close, but never silently, and a wake loop that simply
     kept firing never closed at all.
 
-    Some mail CANNOT be settled by a triage wake, and no number of retries will change that. The
-    letter that caused the 2026-07-12 storm was addressed "to whoever mounts <project> next" —
-    a message for a future full session. Every wake read it, correctly judged it was not FYI it
-    could ack, left it unsettled exactly as instructed... and thereby summoned its replacement.
-    THE LETTER'S OWN POLITENESS WAS THE FUEL. Every agent in that chain behaved perfectly and the
+    Some mail cannot be settled by a triage wake, and no number of retries will change that. The
+    letter that caused the 2026-07-12 storm was addressed "to whoever mounts <project> next," a
+    message for a future full session. Every wake read it, correctly judged it was not FYI it
+    could ack, left it unsettled exactly as instructed, and thereby summoned its replacement. The
+    letter's own politeness was the fuel. Every agent in that chain behaved perfectly and the
     machine still burned for 18 hours.
 
-    So after `attempt_limit` tries we stop waking on this message FOREVER (the 'abandoned' row is
+    So after `attempt_limit` tries we stop waking on this message forever (the 'abandoned' row is
     the tombstone, and it is excluded from the attempt count so it cannot re-arm anything) and we
-    hand it to the one reader who can actually act: the human. Idempotent — one brief, not one per
+    hand it to the one reader who can actually act: the human. Idempotent: one brief, not one per
     tick. Returns True when this call is the one that abandoned it."""
     already = await pool.fetchval(
         "SELECT 1 FROM agent_wakes WHERE message_id=$1 AND mode='abandoned'", message_id)
@@ -257,7 +256,7 @@ async def _abandon(
 
 
 async def _woken_within(pool: asyncpg.Pool, project: str, grace_secs: int) -> bool:
-    """True if this project was woken within the last `grace_secs` — a wake still in flight (the
+    """True if this project was woken within the last `grace_secs`: a wake still in flight (the
     agent is spawning/mounting/leasing, ~100s+). grace_secs<=0 disables the grace (only the rate
     cap bounds then). Reads the same ledger as the cap, on a shorter, per-message-latency window."""
     if grace_secs <= 0:
@@ -268,21 +267,22 @@ async def _woken_within(pool: asyncpg.Pool, project: str, grace_secs: int) -> bo
 
 
 def _wake_job_dir(project: str) -> str:
-    """ONE GHOST PER PROJECT, reused forever — not one per wake.
+    """One identity per project, reused forever, not one per wake.
 
-    This was keyed on the WAKE ROW ID, so every wake resolved to a brand-new agent:wake-<id>: the
-    trigger minted 463 identities over the fleet's life and the roster filled with strangers the
-    operator never started (48 on ONE project alone, which he had not opened in two days).
-    A wake is not a new MIND, it is the same errand run again — so it gets one stable name per
-    house, `agent:wake-<project>`, and re-wearing it is the whole point.
+    This was keyed on the wake row id, so every wake resolved to a brand-new agent:wake-<id>: the
+    trigger minted 463 identities over the fleet's life and the roster filled with sessions the
+    operator never started (48 on one project alone, which he had not opened in two days).
+    A wake is not a new mind, it is the same errand run again, so it gets one stable name per
+    project, `agent:wake-<project>`, and re-using it is the whole point.
 
     Worse, none of it ever ran: the anchor was handed to the agent as the literal text
-    `$CLAUDE_JOB_DIR` inside a PROMPT, and a woken agent has no shell to expand it with (its
+    `$CLAUDE_JOB_DIR` inside a prompt, and a woken agent has no shell to expand it with (its
     tools are `mcp__osiris` only). The mount-anchor hook rightly refuses a `$`-bearing path and
-    fell back to deriving one from the SESSION id — fresh for every `claude -p` — so all 463
-    mints got a new identity and the stable anchor was never used once. Ruling 40faa5e6 had
-    already fixed this exact bug for the SessionStart whisper ("tell the agent the literal path,
-    never $CLAUDE_JOB_DIR") and nobody carried it here. The prompt now carries the real path.
+    fell back to deriving one from the session id, fresh for every `claude -p`, so all 463 mints
+    got a new identity and the stable anchor was never used once. This same bug had already been
+    fixed elsewhere for the greeting sent at session start ("tell the agent the literal path,
+    never $CLAUDE_JOB_DIR") and nobody carried the fix here. The prompt now carries the real
+    path.
 
     The literal 'jobs' segment is exactly what _job_id parses to that token.
     """
@@ -293,28 +293,27 @@ def _wake_job_dir(project: str) -> str:
 
 
 async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
-    """What the trigger would do for this project right now — the sender-visible signal
+    """What the trigger would do for this project right now: the sender-visible signal
     (send() surfaces it so 'busy listener' is distinguishable from 'feature off'). The
     operator address is a desk, not a repo: 'operator (read at the desk, never woken)'.
 
-    THE POKE-ONLY HONESTY FIX (thread aa58c1e4): a BROADCAST has NO daemon-reply lane at
-    all (that hop is dispatch_dm-only, targeted DMs exclusively) — its only push path is
-    owner-live -> poke -> resume/mint, and osiris_trigger_poke_only=1 (a live, standing
-    config) makes the ladder terminate at a permanent 'held' for any project with no open
-    manager-hosted window: no resume, no mint, ever, no matter how long the sweep keeps
-    retrying every ~60s. This used to fall through to the same generic 'armed' every DM
-    gets — the exact lying-receipt shape a live incident exposed (the operator watched 23
-    minutes of apparent silence and concluded the messages didn't land; measured diagnosis:
-    decision 636c8abd — the daemon hop itself is near-instant, 0.32s in the one case
-    checked; the broadcast simply had no push mechanism available under this config at
-    all). Checked ONLY when it would otherwise say 'armed' (an extra manager round-trip on
-    every other verdict would be spent on an answer nobody needed)."""
+    THE POKE-ONLY HONESTY FIX: a broadcast has no daemon-reply lane at all (that hop is
+    dispatch_dm-only, targeted DMs exclusively). Its only push path is owner-live -> poke ->
+    resume/mint, and osiris_trigger_poke_only=1 (a live, standing config) makes the ladder
+    terminate at a permanent 'held' for any project with no open manager-hosted window: no
+    resume, no mint, ever, no matter how long the sweep keeps retrying every ~60s. This used to
+    fall through to the same generic 'armed' every DM gets, the exact lying-status shape a live
+    incident exposed (the operator watched 23 minutes of apparent silence and concluded the
+    messages didn't land; measured diagnosis: the daemon hop itself is near-instant, 0.32s in
+    the one case checked, and the broadcast simply had no push mechanism available under this
+    config at all). Checked only when it would otherwise say 'armed' (an extra manager
+    round-trip on every other verdict would be spent on an answer nobody needed)."""
     if project == OPERATOR_ADDR:
         return "operator (read at the desk, never woken)"
     allow = {p.strip() for p in st.osiris_trigger_projects.split(",") if p.strip()}
     if st.osiris_trigger_enabled and allow and project not in allow:
-        # the sender must see the SCOPED truth: "armed" for a project outside a scoped
-        # re-arm would be the same false witness the mcp-unit mirror was built to kill
+        # the sender must see the scoped truth: reporting "armed" for a project outside a
+        # scoped re-arm would be a false status, exactly what this check exists to prevent
         return f"scoped-out (this re-arm names only: {', '.join(sorted(allow))})"
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
@@ -328,12 +327,12 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
         return "budget-deferred (non-urgent near the hourly ceiling — urgent mail and " \
                "aged mail still wake)"
     if reason == "disabled":
-        # NOT a transient brake — the kill switch itself is off; no autonomous retry ever
+        # not a transient brake: the kill switch itself is off; no autonomous retry ever
         # fires until a human re-enables osiris_trigger_enabled, so no cadence applies
         return "disabled"
     if reason is not None:
         # rate-capped / budget-exhausted / wake-grace: genuinely transient sliding-window
-        # brakes the sweep re-checks and clears on its own — attempts/attempt_limit are
+        # brakes the sweep re-checks and clears on its own. attempts/attempt_limit are
         # never passed here, so should_wake can't return 'unsettleable' from this call site
         return f"{reason} (the sweep runs every ~60s and retries once it clears)"
     if st.osiris_trigger_poke_only:
@@ -351,7 +350,7 @@ async def wake_status(pool: asyncpg.Pool, project: str, st: Settings) -> str:
 
 
 async def _repo_path(pool: asyncpg.Pool, project: str) -> str | None:
-    """The recipient project's on-disk repo — the cwd of a registered Agent that works there
+    """The recipient project's on-disk repo: the cwd of a registered Agent that works there
     (stored at mount). None if unknown (then we can't spawn; the mail stays pull-only)."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT cw.value #>> '{}' FROM objects o "
@@ -383,8 +382,8 @@ _DM_RESUME_PROMPT = (
 )
 
 
-# The POKE prompts are the resume prompts' cheaper cousins: the mind's context is LIVE in
-# its own window (nothing was resumed, nothing re-ingested) — the message only has to say
+# The POKE prompts are the resume prompts' cheaper cousins: the mind's context is live in
+# its own window (nothing was resumed, nothing re-ingested); the message only has to say
 # "check your box and settle", then hand the window back to whatever it was doing.
 _POKE_PROMPT = (
     "[osiris] New mail for your project, delivered to your OPEN window — your context is "
@@ -401,8 +400,8 @@ _DM_POKE_PROMPT = (
 
 
 async def _manager_windows() -> list[dict[str, Any]]:
-    """The manager's window roster ([{name, alive, idle_seconds, job_dir?, seat_id?}, ...]) —
-    [] when the daemon is down, absent, or slow: the poke lane fails OPEN into the resume
+    """The manager's window roster ([{name, alive, idle_seconds, job_dir?, seat_id?}, ...]).
+    [] when the daemon is down, absent, or slow: the poke lane fails open into the resume
     lane; the trigger never dies of the manager."""
     from src.manager.client import manager_call
     try:
@@ -414,7 +413,7 @@ async def _manager_windows() -> list[dict[str, Any]]:
 
 
 async def _poke_window(name: str, text: str, *, dedup: str, min_idle: int) -> dict[str, Any]:
-    """One pty_poke through the control socket — the daemon owns the idle gate and the
+    """One pty_poke through the control socket. The daemon owns the idle gate and the
     dedup memory; failures come back as {'error': ...} instead of raising (the caller's
     ladder falls through on anything that is not a clean 'poked')."""
     from src.manager.client import manager_call
@@ -442,11 +441,11 @@ async def _dms_with_unread(
     pool: asyncpg.Pool, lease_secs: int
 ) -> list[tuple[str, int, str | None]]:
     """(addressee, oldest deliverable DM id, sender) for every agent with unsettled DM mail.
-    Each row feeds dispatch_dm (the background-session adapter, 6c4d0b62): deliver a mid-turn
-    addressee, poke an open manager window, RESUME the backgrounded session — and there is NO
-    mint lane — a fresh twin is not the addressee, and a private message must never be
-    delivered to a stranger. Undeliverable DMs stay pull-only (and follow the seat at the
-    next mint — the estate)."""
+    Each row feeds dispatch_dm (the background-session adapter): deliver to a mid-turn
+    addressee, poke an open manager window, resume the backgrounded session. There is no mint
+    lane: a freshly spawned copy is not the addressee, and a private message must never be
+    delivered to the wrong session. Undeliverable DMs stay pull-only (and follow the seat to
+    its next spawned session)."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (m.to_agent) m.to_agent, m.id, m.from_agent FROM fleet_messages m "
         "WHERE m.to_agent IS NOT NULL AND m.to_agent <> $1 AND m.read_at IS NULL "
@@ -462,23 +461,22 @@ async def _stuck_wake_in_flight_asks(
     pool: asyncpg.Pool, grace_secs: int
 ) -> list[tuple[str, int, str | None]]:
     """(addressee, message id, sender) for every ASK DM last dispatched
-    'queued-wake-in-flight' whose own grace window has since elapsed (thread 33749ffc,
-    Thoth mail 12907) — the sibling `_dms_with_unread`'s own per-addressee DISTINCT ON
-    can never reach these: a message that already spent its one-time wake (wall #4's
-    own once-per-message brake) but stays `read_at IS NULL` forever (push delivery —
-    nudge/poke — never marks it, never rows message_recipients either) permanently
-    occupies the head of that query's per-addressee slot, so anything queued behind it
-    for the SAME addressee — including a genuinely-still-pending ask riding an unrelated
-    wake — never gets re-examined by the sweep again. This query goes straight at
-    `dispatch_mode` instead, no per-addressee throttle, so it can reach every one of
-    them regardless of queue position.
+    'queued-wake-in-flight' whose own grace window has since elapsed. The sibling
+    `_dms_with_unread`'s own per-addressee DISTINCT ON can never reach these: a message that
+    already spent its one-time wake (the once-per-message rate brake) but stays `read_at IS
+    NULL` forever (push delivery, nudge/poke, never marks it, never rows message_recipients
+    either) permanently occupies the head of that query's per-addressee slot, so anything
+    queued behind it for the same addressee, including a genuinely-still-pending ask riding an
+    unrelated wake, never gets re-examined by the sweep again. This query goes straight at
+    `dispatch_mode` instead, with no per-addressee throttle, so it can reach every one of them
+    regardless of queue position.
 
-    `grade='ask'` only — an ungraded or fyi message never blocks anyone by design
-    (dispatch_dm's own queued-fyi terminator), so there is nothing here worth escalating
-    for those grades. `dispatch_mode_at < now() - grace_secs` avoids re-poking a message
-    whose in-flight window (whatever wake it is honestly still riding) has not yet had a
-    chance to resolve — the same window `_seat_wakes` itself uses to decide 'in flight',
-    so a plain re-dispatch is the correct next check, never a separate probe."""
+    `grade='ask'` only: an ungraded or fyi message never blocks anyone by design (dispatch_dm's
+    own queued-fyi terminator), so there is nothing here worth escalating for those grades.
+    `dispatch_mode_at < now() - grace_secs` avoids re-poking a message whose in-flight window
+    (whatever wake it is honestly still riding) has not yet had a chance to resolve, the same
+    window `_seat_wakes` itself uses to decide 'in flight', so a plain re-dispatch is the
+    correct next check, never a separate probe."""
     rows = await pool.fetch(
         "SELECT to_agent, id, from_agent FROM fleet_messages "
         "WHERE to_agent IS NOT NULL AND to_agent <> $1 AND read_at IS NULL "
@@ -494,11 +492,11 @@ async def _stuck_wake_in_flight_asks(
 async def _agent_resumable(
     pool: asyncpg.Pool, agent_id: str, st: Settings
 ) -> tuple[str, str, float, str] | None:
-    """(session_id, repo_cwd, mtime, job_dir) to resume the ADDRESSEE's own session, else
-    None — the same checks as the project ladder (not retired, own anchored transcript,
-    below the context ceiling) scoped to one agent's mounts. `job_dir` (thread 25943031,
-    the resident-guard corroboration fallback) is the SPECIFIC registry row this hit came
-    from — existing callers all index resume[0]/resume[1], never destructure the full
+    """(session_id, repo_cwd, mtime, job_dir) to resume the addressee's own session, else
+    None. The same checks as the project ladder (not retired, own anchored transcript,
+    below the context ceiling) scoped to one agent's mounts. `job_dir` (used by the
+    resident-guard corroboration fallback) is the specific registry row this hit came
+    from. Existing callers all index resume[0]/resume[1], never destructure the full
     tuple, so appending it here is additive, not a breaking change."""
     if await _retired(pool, agent_id):
         return None
@@ -516,14 +514,14 @@ async def _agent_resumable(
 
 
 async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Settings) -> str:
-    """Only called after _agent_resumable already returned None for this SAME agent_id —
-    re-walks its own three early-exit shapes (retired, no mounts at all, no anchored
+    """Only called after _agent_resumable already returned None for this same agent_id.
+    Re-walks its own three early-exit shapes (retired, no mounts at all, no anchored
     transcript among its mounts) plus _resume_miss_reason's ceiling distinction, to name
-    WHICH one fired. A second pass rather than threading a reason through
+    which one fired. A second pass rather than threading a reason through
     _agent_resumable's own return, so every existing caller's tuple-or-None contract stays
-    exactly as it was (dispatch_dm's mid-turn check, _transcript_activity) — this only
-    runs on the refusal path dispatch_dm's message needed distinguished (Thoth's ruling,
-    2026-08-03, #135/#136), never the hot path."""
+    exactly as it was (dispatch_dm's mid-turn check, _transcript_activity). This only
+    runs on the refusal path dispatch_dm's message needed distinguished, never the hot
+    path."""
     if await _retired(pool, agent_id):
         return "retired — a deliberate close, never reanimated"
     rows = await pool.fetch(
@@ -540,16 +538,17 @@ async def _agent_resume_miss_reason(pool: asyncpg.Pool, agent_id: str, st: Setti
 
 
 async def _owner_live(pool: asyncpg.Pool, project: str, within_secs: int) -> bool:
-    """A mount fresher than the liveness window = an awake owner. DELIVER, don't spawn: its
-    own chrome/orient shows the mail; waking a twin beside a live owner is the fragmentation
-    a sibling project reported (thread 9f2ddb44 — 'strangers worked in my name')."""
+    """A mount fresher than the liveness window means an awake owner. Deliver, don't spawn:
+    its own status display or orient() shows the mail; waking a duplicate session beside a
+    live owner causes the kind of fragmentation a sibling project reported, where a spawned
+    duplicate did work under the same identity unexpectedly."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM agent_mounts WHERE project=$1 "
         "AND last_seen > now() - make_interval(secs => $2) LIMIT 1", project, within_secs))
 
 
 async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
-    """True if the agent carries a winning retired=true — a deliberate close (operator's or its
+    """True if the agent carries a winning retired=true: a deliberate close (operator's or its
     own farewell). The trigger must never reanimate what was deliberately closed."""
     v = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -559,42 +558,39 @@ async def _retired(pool: asyncpg.Pool, agent_canonical: str) -> bool:
 
 
 def _resume_candidate_verdict(t: Path, ceiling_bytes: int, min_tail_bytes: int) -> str | None:
-    """The dispatch-layer's thin wrapper over `sessions.resume_verdict` — kept here (not
-    just calling that function directly at every site) because THIS is where Settings
+    """The dispatch-layer's thin wrapper over `sessions.resume_verdict`, kept here (not
+    just calling that function directly at every site) because this is where Settings
     already lives and every caller in this file already imports from here. The verdict
-    ITSELF (#156's rebuild, 2026-08-09, the operator's own correction: "closed at exactly
-    the compaction seam is a rare special case" — a minimum-tail-bytes floor replaces the
-    old compaction-COUNT gate; see `resume_diagnostics`'s own docstring in
-    src/ingest/sessions.py for the full finding, including sekhmet's live specimen the old
-    gate got wrong) lives in ONE place so `_pick_resumable_sync` (the hot path) and
-    `_resume_miss_reason` (the refusal-message path) can never independently drift —
-    closed by construction. That drift already happened once: eebeb1f (Sekhmet's #136)
-    shipped a byte-for-byte duplicate of this function's OLD raw-size check (Thoth's
-    ruling, 2026-08-03 — "that is 38c71544 exactly"). Raises OSError on an unreadable
-    transcript; both callers handle it the same way (skip this candidate).
+    itself (a minimum-tail-bytes floor replaces the old compaction-count gate; see
+    `resume_diagnostics`'s own docstring in src/ingest/sessions.py for the full finding)
+    lives in one place so `_pick_resumable_sync` (the hot path) and `_resume_miss_reason`
+    (the refusal-message path) can never independently drift: closed by construction. That
+    drift already happened once, when a later change shipped a byte-for-byte duplicate of
+    this function's old raw-size check. Raises OSError on an unreadable transcript; both
+    callers handle it the same way (skip this candidate).
 
-    BOTH GATES MUST PASS, CHECKED INDEPENDENTLY: don't reanimate a generation that already
-    retired via legitimate succession is ALREADY `_retired()`'s job, checked first by
-    every caller here, authoritatively — not this function's concern. This function
+    Both gates must pass, checked independently: not reanimating a generation that already
+    retired via legitimate succession is already `_retired()`'s job, checked first by
+    every caller here, authoritatively, not this function's concern. This function
     answers a narrower question: would a resume return something worth having."""
     return resume_verdict(t, ceiling_bytes=ceiling_bytes, min_tail_bytes=min_tail_bytes)
 
 
 def _spawn_cwd_for(t: Path, candidates: list[str | None]) -> tuple[str | None, str]:
-    """THE SPAWN MUST HAPPEN WHERE THE HARNESS WILL LOOK (operator, 2026-09-02: "something
-    about the resume id that it finds is disconnected from what can actually be resumed").
+    """The spawn must happen where the harness will look: the resume id it finds must match
+    what can actually be resumed.
 
     `claude --resume <sid>` reads exactly one path: ~/.claude/projects/<slug-of-its-own-
-    cwd>/<sid>.jsonl. Osiris's own finder is slug-IMMUNE — it globs every project directory
-    and anchors on the job/session id — so it routinely LOCATES a transcript under one slug
+    cwd>/<sid>.jsonl. Osiris's own finder is slug-immune (it globs every project directory
+    and anchors on the job/session id), so it routinely locates a transcript under one slug
     and then handed the caller's `launch_cwd` to the spawn, a different directory entirely.
-    Three live failures in one night (chad, marquee, jesus) all reduced to that: the finder
-    answers "where is the best copy?", the spawner answers "where does this seat live?", and
-    nothing checked they were the same place. Decisions de70e54d / 2e05d662.
+    Several live failures in one night all reduced to that: the finder answers "where is the
+    best copy?", the spawner answers "where does this seat live?", and nothing checked they
+    were the same place.
 
     Returns (cwd, note). `cwd` is the first candidate whose harness slug equals the located
-    transcript's own parent directory — i.e. the one place the harness can actually read it
-    from. None when no candidate matches: the caller must REFUSE rather than spawn blind,
+    transcript's own parent directory, i.e. the one place the harness can actually read it
+    from. None when no candidate matches: the caller must refuse rather than spawn blind,
     because a spawn at a non-matching cwd cannot succeed and fails as an opaque
     "source session not found" with no indication which layer was wrong."""
     from src.orchestrator.mounts import _harness_slug
@@ -618,13 +614,13 @@ def _spawn_cwd_for(t: Path, candidates: list[str | None]) -> tuple[str | None, s
 def _pick_resumable_sync(
     cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, min_tail_bytes: int = 0,
 ) -> tuple[str, str, float, str] | None:
-    """The disk half of resume-resolution (sync — called via to_thread): for each candidate
+    """The disk half of resume-resolution (sync, called via to_thread): for each candidate
     (job_dir, cwd), anchor its transcript and run `_resume_candidate_verdict`. Returns
     (full_session_id, cwd, transcript_mtime, job_dir) for the first resumable owner. The
-    transcript stem IS the session id `claude --resume` takes. The mtime rides along as
-    the ONE honest mid-turn signal: a turn writes the transcript; nothing else does (the
-    statusline-heartbeat superstition, killed 2026-07-20 — see dispatch_dm). `job_dir`
-    (thread 25943031) rides along too, additive — see _agent_resumable's own docstring."""
+    transcript stem is the session id `claude --resume` takes. The mtime rides along as
+    the one honest mid-turn signal: a turn writes the transcript; nothing else does (the
+    statusline-heartbeat superstition, disproven 2026-07-20, see dispatch_dm). `job_dir`
+    rides along too, additive; see _agent_resumable's own docstring."""
     for job_dir, cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
@@ -643,17 +639,16 @@ def _pick_resumable_sync(
 def _resume_miss_reason(
     cands: list[tuple[str, str]], root: Path, ceiling_bytes: int, min_tail_bytes: int = 0,
 ) -> str:
-    """Why _pick_resumable_sync came back empty for these SAME candidates — the two
-    opposite shapes dispatch_dm's refusal message used to collapse into one identical
-    sentence (Thoth's ruling, 2026-08-03, #135/#136): 'no anchored transcript at all'
-    (nothing ever mounted here, or never wrote one) is not the same situation as 'found
-    a real session, disqualified by ceiling or compaction depth' — the first means there
-    is genuinely nothing to wait for; the second means a mind exists but a resume of it
-    would not be worth having. Never called on the hot path — only after resume-
-    resolution already returned None, to name which of the two it was. Reads the SAME
-    `_resume_candidate_verdict` `_pick_resumable_sync` does, so the two can never
-    disagree on why a candidate was skipped; an unreadable transcript (OSError) counts
-    as not-anchored here too, the same as it does there."""
+    """Why _pick_resumable_sync came back empty for these same candidates. Fixes a bug where
+    two opposite shapes of failure used to collapse into one identical refusal sentence:
+    'no anchored transcript at all' (nothing ever mounted here, or never wrote one) is not
+    the same situation as 'found a real session, disqualified by ceiling or compaction
+    depth.' The first means there is genuinely nothing to wait for; the second means a
+    mind exists but a resume of it would not be worth having. Never called on the hot
+    path, only after resume-resolution already returned None, to name which of the two it
+    was. Reads the same `_resume_candidate_verdict` `_pick_resumable_sync` does, so the
+    two can never disagree on why a candidate was skipped; an unreadable transcript
+    (OSError) counts as not-anchored here too, the same as it does there."""
     for job_dir, _cwd in cands:
         t = locate_current_transcript(root, job_dir, anchored_only=True)
         if t is None:
@@ -690,41 +685,39 @@ async def _resumable_owner(
 
 
 async def _last_wake_mode(pool: asyncpg.Pool, project: str, message_id: int) -> str | None:
-    """How the LAST wake for this exact message dispatched — the alternation guard's input:
-    a resume that never leased its mail (still deliverable past grace) is not retried; the
+    """How the last wake for this exact message dispatched: the alternation guard's input.
+    A resume that never leased its mail (still deliverable past grace) is not retried; the
     next wake mints. Never two consecutive resume attempts on one undelivered message."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT mode FROM agent_wakes WHERE to_project=$1 AND message_id=$2 "
         "ORDER BY woke_at DESC LIMIT 1", project, message_id)
 
 
-# ══════════════════════ THE BACKGROUND-SESSION ADAPTER (ruling 6c4d0b62) ══════════════════════
-# The fleet runs as harness-backgrounded sessions under ONE spawner pty: no pty fd to poke,
-# no turn in flight for a stop-hook to decorate. RESUME is therefore the DM lane's PRIMARY
-# push — and it dispatches PER MESSAGE, on arrival (send() calls dispatch_dm directly; the
-# worker tick calls the same function as the backstop that drains queues). The four walls:
-# immediate (an event, never a clock), gated (needs-input / explicit pause — mail queues, it
-# never interrupts a mind that asked the human), FLAT (every seat equal; hierarchy is
+# ══════════════════════ THE BACKGROUND-SESSION ADAPTER ══════════════════════
+# The fleet runs as harness-backgrounded sessions under one spawner pty: no pty fd to poke,
+# no turn in flight for a stop-hook to decorate. Resume is therefore the DM lane's primary
+# push, and it dispatches per message, on arrival (send() calls dispatch_dm directly; the
+# worker tick calls the same function as the backstop that drains queues). The four rules:
+# immediate (an event, never a clock), gated (needs-input / explicit pause: mail queues, it
+# never interrupts a mind that asked the human), flat (every seat equal; hierarchy is
 # convention in who-mails-whom, never privilege in this code), braked (per-message dedup +
-# per-seat rate + fleet budget + the daily dollar ceiling). Every dispatch returns a RECEIPT
-# {mode, detail} the sender sees in send()'s echo — a hop is visible or it did not happen.
+# per-seat rate + fleet budget + the daily dollar ceiling). Every dispatch returns a result
+# {mode, detail} the sender sees in send()'s echo: a hop is visible or it did not happen.
 
 _ASK_SLACK_SECS = 900  # a turn may run this long past its own desk brief before going quiet
-# THE 47-DAY BRAKE (Alfred's post-reboot finding 3, msg 7462, thread ee412c7e): an
-# undismissed desk brief from 2026-07-20 braked a September peer DM as "queued-needs-
-# input" — the "kept working since" check below is itself reboot-fragile (agent_mounts
-# can read `last=None` for a lineage that hasn't remounted yet this boot, even though it
-# plainly worked for weeks after the old ask), so a brief old enough is dropped as a gate
-# outright rather than trusted to that check alone. 7 days, per Thoth's own proposed
-# default (msg 7542 item 4) — long enough that no genuinely-live ask-then-silence should
-# ever still be sitting here, short enough that a truly abandoned brief cannot hold
-# unrelated mail hostage for a month and a half.
+# THE 7-DAY BRAKE: an undismissed desk brief from 2026-07-20 braked a September peer DM
+# as "queued-needs-input." The "kept working since" check below is itself reboot-fragile
+# (agent_mounts can read `last=None` for a lineage that hasn't remounted yet this boot,
+# even though it plainly worked for weeks after the old ask), so a brief old enough is
+# dropped as a gate outright rather than trusted to that check alone. 7 days: long enough
+# that no genuinely-live ask-then-silence should ever still be sitting here, short enough
+# that a truly abandoned brief cannot hold unrelated mail hostage for a month and a half.
 _ASK_BRAKE_MAX_AGE_SECS = 7 * 86400
 
 
 async def _last_wake_mode_msg(pool: asyncpg.Pool, message_id: int) -> str | None:
     """The DM alternation guard's input, message-scoped (a DM's ledger rows may span the
-    addressee's projects): one dm-resume per message, ever — a resume that did not settle
+    addressee's projects): one dm-resume per message, ever. A resume that did not settle
     its mail is not looped."""
     return await pool.fetchval(  # type: ignore[no-any-return]
         "SELECT mode FROM agent_wakes WHERE message_id=$1 ORDER BY woke_at DESC LIMIT 1",
@@ -732,10 +725,11 @@ async def _last_wake_mode_msg(pool: asyncpg.Pool, message_id: int) -> str | None
 
 
 async def _paused(pool: asyncpg.Pool, canonicals: list[str]) -> str | None:
-    """The explicit per-seat PAUSE wall (6c4d0b62 wall #2): the newest `paused` assertion
-    per object wins (a control lever is latest-word, not highest-grade); returns the id
-    that carries a winning paused=true, else None. Checked across the addressee's faces —
-    the seat outlives successions, the agent covers the unbound."""
+    """The explicit per-seat pause flag: the newest `paused` assertion per object wins
+    (a control lever is latest-word, not highest-grade); returns the id that carries a
+    winning paused=true, else None. Checked across every identity the addressee has used:
+    the seat outlives successions, and the agent id covers the case where no seat is
+    bound."""
     rows = await pool.fetch(
         "SELECT DISTINCT ON (o.canonical) o.canonical, a.value #>> '{}' AS v "
         "FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -748,9 +742,9 @@ async def _paused(pool: asyncpg.Pool, canonicals: list[str]) -> str | None:
 
 
 async def _awaiting_operator(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any] | None:
-    """The NEEDS-INPUT wall (6c4d0b62 wall #2): a seat whose last act was asking the human —
-    an undismissed lead desk brief of kind decision/hands, with the seat QUIET since — is
-    not peer-resumable; its mail queues until the operator's word. The quiet check is what
+    """The needs-input gate: a seat whose last act was asking the human, an undismissed
+    lead desk brief of kind decision/hands, with the seat quiet since, is not
+    peer-resumable; its mail queues until the operator's word. The quiet check is what
     keeps this honest: a seat that briefed the desk and kept working was never halted by its
     own ask (most briefs are filed mid-stride), so only ask-then-silence gates. Release is
     the human's act by construction: dismissing the brief empties the predicate, and
@@ -772,17 +766,17 @@ async def _awaiting_operator(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any
         "SELECT max(last_seen) FROM agent_mounts WHERE agent_id=$1 "
         "OR agent_id LIKE $1 || '-%'", base)
     if last is not None and (last - row["created_at"]).total_seconds() > _ASK_SLACK_SECS:
-        return None  # it kept working well past the ask — the brief did not halt it
+        return None  # it kept working well past the ask, the brief did not halt it
     return {"desk": str(row["desk_kind"]), "since": str(row["created_at"])}
 
 
 async def _seat_wakes(
     pool: asyncpg.Pool, agent_id: str, seat_id: str | None, window_secs: int
 ) -> int:
-    """DM wakes landed on THIS addressee (lineage-wide, seat address included) within the
-    window — the per-seat rate brake's numerator (wall #4). Distinct from _recent_wakes,
-    which counts a PROJECT's wakes: an A<->B ping-pong inside one project would sail past
-    the project cap while each seat burns."""
+    """DM wakes landed on this addressee (lineage-wide, seat address included) within the
+    window: the per-seat rate brake's numerator. Distinct from _recent_wakes, which counts
+    a project's wakes: an A-to-B ping-pong inside one project would sail past the project
+    cap while each seat burns."""
     from src.orchestrator.agents import _generation
     base = _generation(agent_id)[0]
     n: int | None = await pool.fetchval(
@@ -795,43 +789,42 @@ async def _seat_wakes(
     return n or 0
 
 
-# THE RESIDENT'S SIGNATURE — who actually lives in a session (the leak fix, operator's
-# question 2026-07-20: 'how can it resolve the current agent I'm speaking with?').
-# NOT by registry timestamp: the statusline pump bumps last_seen by job_dir, so a stale
-# claimant row on a live job is kept eternally fresh by the RESIDENT's own chrome, and the
-# one-row-per-door upsert erases history. The honest witness is the transcript: every
-# osiris act a session performs leaves a SIGNED receipt in its own append-only JSONL —
+# THE RESIDENT'S SIGNATURE: who actually lives in a session. This answers the question of
+# how to resolve the current agent a message is actually reaching.
+# Not by registry timestamp: the statusline pump bumps last_seen by job_dir, so a stale
+# claimant row on a live job is kept eternally fresh by the resident's own status display,
+# and the one-row-per-door upsert erases history. The honest witness is the transcript:
+# every osiris act a session performs leaves a signed entry in its own append-only JSONL,
 # a send's {"sent":N,"from":"agent:…"}, a mount's {"agent":"agent:…","project":…}, the
-# whisper's "knows you as agent:…" at first breath. The newest signature in the tail IS
-# the resident. The chrome cannot pollute this file; only turns write it.
-# receipts appear JSON-escaped inside transcript lines (\"from\":\"agent:…\") and
-# occasionally plain — the optional backslashes cover both encodings
+# startup greeting's "knows you as agent:…" at session start. The newest signature in the
+# tail is the resident. The status display cannot pollute this file; only turns write it.
+# entries appear JSON-escaped inside transcript lines (\"from\":\"agent:…\") and
+# occasionally plain; the optional backslashes cover both encodings
 _RESIDENT_TAIL_BYTES = 400_000
-# THE CORROBORATION FALLBACK (thread 25943031, halcyon's own stranding, design approved
-# Thoth DM 1825): how many further 400KB windows the deeper scan reads BEHIND the tail
-# already checked, on a tail miss only. Bounds total scan cost regardless of file size —
-# 4 extra windows is ~1.6MB beyond the tail's own 400KB, ~2MB worst case per dispatch.
+# THE CORROBORATION FALLBACK: how many further 400KB windows the deeper scan reads behind
+# the tail already checked, on a tail miss only. Bounds total scan cost regardless of file
+# size: 4 extra windows is ~1.6MB beyond the tail's own 400KB, ~2MB worst case per dispatch.
 _RESIDENT_DEEP_WINDOWS = 4
 
 
 def _resident_of_sync(root: Path, sid: str) -> str | None:
-    """Sync (runs via to_thread): the agent id of the NEWEST signed osiris act in session
-    `sid`'s transcript, or None when the session has never signed anything (no whisper, no
-    mount, no send — a stranger this dispatcher must not address).
+    """Sync (runs via to_thread): the agent id of the newest signed osiris act in session
+    `sid`'s transcript, or None when the session has never signed anything (no greeting, no
+    mount, no send: an unidentified session this dispatcher must not address).
 
-    ANCHORED (the same fix as `_turn_fresh_sync`'s own, decision pending, msg 6653):
-    a bare `next(iter(root.glob(f"*/{sid}.jsonl")), None)` assumes exactly one file on
-    disk carries this session id — false the instant the materializer (ruling d161a156)
-    writes a second, static copy under the seat's own office slug. This is the CROSSED-
-    REGISTRY identity check itself — reading the wrong copy here doesn't just misjudge
-    liveness, it can miss real signed testimony the live file carries, or read stale
-    testimony a materialized snapshot happens to predate. Anchored on `f"jobs/{sid}"`
-    directly — `sid` is already the exact, authoritative session id (that's what the old
-    glob matched exactly on too), so synthesizing beats trusting a CALLER-supplied
-    job_dir hint that may not even be a real job_dir path (`_resume_guard`'s own
-    `job_dir_hint` can be a bare id, not a path — `_job_id` finds no anchor in that shape
-    at all). Among genuinely anchored matches, `locate_current_transcript` picks the
-    freshest by mtime — the live file, never a static copy."""
+    Anchored (the same fix as `_turn_fresh_sync`'s own): a bare
+    `next(iter(root.glob(f"*/{sid}.jsonl")), None)` assumes exactly one file on disk
+    carries this session id, which is false the instant the materializer writes a
+    second, static copy under the seat's own office slug. This is the crossed-registry
+    identity check itself: reading the wrong copy here doesn't just misjudge liveness, it
+    can miss real signed testimony the live file carries, or read stale testimony a
+    materialized snapshot happens to predate. Anchored on `f"jobs/{sid}"` directly:
+    `sid` is already the exact, authoritative session id (that's what the old glob matched
+    exactly on too), so synthesizing beats trusting a caller-supplied job_dir hint that
+    may not even be a real job_dir path (`_resume_guard`'s own `job_dir_hint` can be a
+    bare id, not a path; `_job_id` finds no anchor in that shape at all). Among genuinely
+    anchored matches, `locate_current_transcript` picks the freshest by mtime, the live
+    file, never a static copy."""
     if not sid:
         return None
     t = locate_current_transcript(root, f"jobs/{sid}", anchored_only=True)
@@ -849,8 +842,8 @@ def _resident_of_sync(root: Path, sid: str) -> str | None:
 
 
 def _resident_tail_signatures_sync(root: Path, sid: str) -> tuple[str | None, str | None]:
-    """`_resident_of_sync`'s two halves kept apart — (newest act, newest greeting) in the
-    tail — so `_resident_verdict` can tell testimony from hearsay. Same anchored file,
+    """`_resident_of_sync`'s two halves kept apart: (newest act, newest greeting) in the
+    tail, so `_resident_verdict` can tell testimony from hearsay. Same anchored file,
     same window."""
     if not sid:
         return None, None
@@ -871,17 +864,18 @@ def _resident_of_deeper_sync(
     root: Path, sid: str, *, extra_windows: int = _RESIDENT_DEEP_WINDOWS,
     acts_only: bool = False,
 ) -> tuple[str | None, Path | None]:
-    """Sync (runs via to_thread): called ONLY after `_resident_of_sync`'s own tail check
-    already returned None (thread 25943031 — halcyon's last 400KB was all unsigned harness
-    noise — away summaries, chrome — even though every signature further back in the SAME
-    file was its own lineage). Reads up to `extra_windows` further 400KB windows strictly
-    BEHIND the tail already checked (never re-reading it), stopping at the first signed
-    act found or the front of the file. Returns (resident_agent_id, transcript_path) — the
-    path rides along even on a signature MISS, so `_resident_disagrees` can reason about
-    the file for the registry corroboration step without a second glob. Bounded: total
-    cost never exceeds `extra_windows` chunks regardless of how large the file is.
+    """Sync (runs via to_thread): called only after `_resident_of_sync`'s own tail check
+    already returned None (one real specimen: a session's last 400KB was all unsigned
+    harness noise, away summaries, status-display updates, even though every signature
+    further back in the same file was its own lineage). Reads up to `extra_windows`
+    further 400KB windows strictly behind the tail already checked (never re-reading it),
+    stopping at the first signed act found or the front of the file. Returns
+    (resident_agent_id, transcript_path); the path rides along even on a signature miss,
+    so `_resident_disagrees` can reason about the file for the registry corroboration step
+    without a second glob. Bounded: total cost never exceeds `extra_windows` chunks
+    regardless of how large the file is.
 
-    ANCHORED, matching `_resident_of_sync`'s own fix immediately above — same reasoning,
+    Anchored, matching `_resident_of_sync`'s own fix immediately above: same reasoning,
     same `f"jobs/{sid}"` synthesis, so both halves of one scan always agree on which file
     they read."""
     if not sid:
@@ -893,7 +887,7 @@ def _resident_of_deeper_sync(
         size = t.stat().st_size
     except OSError:
         return None, t
-    end = max(0, size - _RESIDENT_TAIL_BYTES)  # the tail's own start — never overlap it
+    end = max(0, size - _RESIDENT_TAIL_BYTES)  # the tail's own start, never overlap it
     for _ in range(extra_windows):
         if end <= 0:
             break
@@ -917,24 +911,24 @@ async def _registry_corroborates(
     pool: asyncpg.Pool, job_dir_hint: str, transcript: Path, base: str, *,
     seat_id: str | None,
 ) -> bool:
-    """A FRESH registry read (thread 25943031 — never reused state from candidate
-    selection) for the SPECIFIC job_dir this candidate came from: never a cwd-wide search
-    (a cwd is not unique across job_dirs by design — two generations of one lineage
-    legitimately share one, which a slug-first lookup would misread as ambiguous). Three
-    checks, ALL required: (1) the row's agent_id is this lineage's base or a later
-    generation; (2) the row's own cwd, SLUGIFIED (never the transcript's directory name
-    DEcoded — slugification is lossy to invert, lossless to apply; Thoth's own instruction,
-    DM 1825), matches the directory the transcript ACTUALLY sits in — a registry row whose
-    cwd field has drifted from disk reality fails here rather than passing on trust alone;
-    (3) when the addressee holds a seat, the row's seat_id agrees (a null seat_id is not
-    itself suspicious — not every agent holds one). `job_dir_hint` may be a full job_dir
-    (the resume lane already knows it exactly) or a bare basename (the daemon lane's own
-    job['short']) — matched either way against agent_mounts.job_dir, its own primary key.
+    """A fresh registry read (never reused state from candidate selection) for the
+    specific job_dir this candidate came from: never a cwd-wide search (a cwd is not
+    unique across job_dirs by design; two generations of one lineage legitimately share
+    one, which a slug-first lookup would misread as ambiguous). Three checks, all
+    required: (1) the row's agent_id is this lineage's base or a later generation; (2) the
+    row's own cwd, slugified (never the transcript's directory name decoded;
+    slugification is lossy to invert, lossless to apply), matches the directory the
+    transcript actually sits in, so a registry row whose cwd field has drifted from disk
+    reality fails here rather than passing on trust alone; (3) when the addressee holds a
+    seat, the row's seat_id agrees (a null seat_id is not itself suspicious; not every
+    agent holds one). `job_dir_hint` may be a full job_dir (the resume lane already knows
+    it exactly) or a bare basename (the daemon lane's own job['short']), matched either
+    way against agent_mounts.job_dir, its own primary key.
 
-    A SLUG COLLISION — some OTHER live door's cwd ALSO slugifying to this exact directory
-    name (dashes AND dots both fold to '-' under _harness_slug, so this is a real, not
-    hypothetical, case) — is corroboration FAILURE, the guard's existing conservative
-    bias: a coincidental string match is ambiguous evidence, never proof."""
+    A slug collision, some other live session's cwd also slugifying to this exact
+    directory name (dashes and dots both fold to '-' under _harness_slug, so this is a
+    real, not hypothetical, case), is corroboration failure, the guard's existing
+    conservative bias: a coincidental string match is ambiguous evidence, never proof."""
     from src.orchestrator.agents import _generation
     from src.orchestrator.mounts import _harness_slug, _legacy_slug
 
@@ -948,58 +942,56 @@ async def _registry_corroborates(
     slug = transcript.parent.name
     if _harness_slug(row["cwd"]) != slug and _legacy_slug(row["cwd"]) != slug:
         return False
-    # #184 Leg 1 follow-on, live-reproduced (metron): a collision candidate must be a
-    # DIFFERENT lineage — one of THIS lineage's own earlier, stale rows (a durable
-    # per-seat anchor from a prior generation, never swept) shares this exact cwd by
-    # construction, every time a seat re-mounts. That is corroborating evidence, not
-    # ambiguity; only another LINEAGE'S row landing on the same slug is a real collision.
+    # A collision candidate must be a different lineage: one of this lineage's own
+    # earlier, stale rows (a durable per-seat anchor from a prior generation, never
+    # swept) shares this exact cwd by construction, every time a seat re-mounts. That is
+    # corroborating evidence, not ambiguity; only another lineage's row landing on the
+    # same slug is a real collision.
     others = await pool.fetch(
         "SELECT cwd, agent_id FROM agent_mounts WHERE job_dir != $1", row["job_dir"])
     if any((_harness_slug(r["cwd"]) == slug or _legacy_slug(r["cwd"]) == slug)
            and _generation(r["agent_id"])[0] != base for r in others):
-        return False  # a slug collision — refuse rather than trust a coincidental match
+        return False  # a slug collision, refuse rather than trust a coincidental match
     return seat_id is None or row["seat_id"] is None or row["seat_id"] == seat_id
 
 
 def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") -> bool:
-    """Sync (runs via to_thread): is a TURN genuinely in flight in session `sid` — by the
-    transcript's own newest timestamped line, never the inode. AWAKE and ASLEEP are
-    different states and must not be confounded (operator, 2026-07-21, the Aegis phantom:
-    a session 13 hours dead wore a seconds-old mtime — something in the chrome/daemon
-    touches the file without writing). A turn appends timestamped records; a toucher
-    cannot. No timestamp in the tail = not moving.
+    """Sync (runs via to_thread): is a turn genuinely in flight in session `sid`, by the
+    transcript's own newest timestamped line, never the inode. Awake and asleep are
+    different states and must not be confounded: one incident found a session 13 hours
+    dead wearing a seconds-old mtime, because something in the status display or daemon
+    touches the file without writing. A turn appends timestamped records; a toucher
+    cannot. No timestamp in the tail means not moving.
 
-    A TIMESTAMP ALONE IS NOT A TURN (thread bc6a5d455da2, the 2026-09-13 17:26 CDT
-    reboot specimen): a daemon resume appears to append its own fresh-timestamped
-    housekeeping line (`type: system`) as part of restoring a backgrounded body — not a
-    conversational turn — and that line is otherwise indistinguishable by timestamp alone
-    from a real one. Only `type: user`/`assistant` counts; every other type is skipped as
-    if it carried no timestamp at all, so a resumed-but-idle body reads idle, not mid-turn.
+    A timestamp alone is not a turn (the 2026-09-13 17:26 CDT reboot specimen): a daemon
+    resume appears to append its own fresh-timestamped housekeeping line (`type: system`)
+    as part of restoring a backgrounded session, not a conversational turn, and that line
+    is otherwise indistinguishable by timestamp alone from a real one. Only
+    `type: user`/`assistant` counts; every other type is skipped as if it carried no
+    timestamp at all, so a resumed-but-idle session reads idle, not mid-turn.
 
-    ANCHORED, NEVER GLOBBED (the wire-resume-to-store finding, decision pending, msg
-    6653/Thoth: "the same disease we just spent the night removing, one function over"):
-    used to be `next(iter(root.glob(f"*/{sid}.jsonl")), None)` — an UNANCHORED search
-    assuming exactly one file on disk carries this session id, silently returning
-    "whichever the filesystem handed me first" when that assumption breaks. The
-    materializer (ruling d161a156) now routinely writes a SECOND copy of a session's
-    transcript under the seat's own office slug, so the assumption was already false the
-    instant that landed — a live, still-growing transcript and a static materialized copy
-    can share one stem. `locate_current_transcript(root, job_dir, anchored_only=True)` asks
-    the answerable question instead: the file at the address already known (the job_dir's
-    own anchor), and among genuinely anchored matches picks the FRESHEST by mtime — which
-    is exactly the live, still-being-written file, never a static copy sitting still.
-    `job_dir` defaults to `""`, synthesizing `f"jobs/{sid}"` below (the SAME convention
+    Anchored, never globbed: used to be
+    `next(iter(root.glob(f"*/{sid}.jsonl")), None)`, an unanchored search assuming exactly
+    one file on disk carries this session id, silently returning "whichever the
+    filesystem handed me first" when that assumption breaks. The materializer now
+    routinely writes a second copy of a session's transcript under the seat's own office
+    slug, so the assumption was already false the instant that landed: a live,
+    still-growing transcript and a static materialized copy can share one stem.
+    `locate_current_transcript(root, job_dir, anchored_only=True)` asks the answerable
+    question instead: the file at the address already known (the job_dir's own anchor),
+    and among genuinely anchored matches picks the freshest by mtime, which is exactly
+    the live, still-being-written file, never a static copy sitting still. `job_dir`
+    defaults to `""`, synthesizing `f"jobs/{sid}"` below (the same convention
     `_lineage_resume_candidate` used before its own rewrite) when a caller has no real
-    per-hop anchor to pass — a real job_dir, when the caller has one, is always preferred.
+    per-hop anchor to pass; a real job_dir, when the caller has one, is always preferred.
 
-    TRACED (thread 04c651ce item 3, Thoth dispatch msg 9123): the file-read's own `except
-    OSError: return False` collapses "confirmed not mid-turn" and "couldn't read the
-    transcript at all" into the same False, same disease shape as `_confirm_listener`/
-    `_clear_stale_stopped_record` below. Named safe, not fixed, because both live callers
-    already treat False as "assume asleep, fall through to the wake path" — the SAFE
-    default either way (waking a genuinely-busy agent costs a redundant nudge; failing to
-    wake a genuinely-idle one is the worse failure), never a claim this function could not
-    actually verify."""
+    The file-read's own `except OSError: return False` collapses "confirmed not
+    mid-turn" and "couldn't read the transcript at all" into the same False, the same
+    failure shape as `_confirm_listener`/`_clear_stale_stopped_record` below. Named safe,
+    not fixed, because both live callers already treat False as "assume asleep, fall
+    through to the wake path": the safe default either way (waking a genuinely-busy
+    agent costs a redundant nudge; failing to wake a genuinely-idle one is the worse
+    failure), never a claim this function could not actually verify."""
     if not sid:
         return False
     t = locate_current_transcript(root, job_dir or f"jobs/{sid}", anchored_only=True)
@@ -1019,16 +1011,16 @@ def _turn_fresh_sync(root: Path, sid: str, active_secs: int, job_dir: str = "") 
             continue
         if not isinstance(d, dict):
             continue
-        # A REAL TURN ONLY (thread bc6a5d455da2, the reboot specimen): a daemon resume
-        # appends its own fresh-timestamped housekeeping line — `type: system`, no
-        # different in shape from the `turn_duration`/`stop_hook_summary` lines a real
-        # turn also leaves behind — and the OLD check here counted ANY recent timestamp,
-        # never what kind of line carried it, so a resumed-but-idle body read as
-        # genuinely mid-turn and its mail held for as long as nothing else touched the
-        # file. Only `type: user`/`assistant` is a conversational turn (the same
-        # convention sessions.py/soul_store.py/context_lens.py/stophook_logic.py already
-        # use to tell content from housekeeping) — a system/summary/hook line is skipped
-        # here exactly as if it carried no timestamp at all, never read as a turn.
+        # A real turn only (the reboot specimen): a daemon resume appends its own
+        # fresh-timestamped housekeeping line, `type: system`, no different in shape from
+        # the `turn_duration`/`stop_hook_summary` lines a real turn also leaves behind,
+        # and the old check here counted any recent timestamp, never what kind of line
+        # carried it, so a resumed-but-idle session read as genuinely mid-turn and its
+        # mail held for as long as nothing else touched the file. Only
+        # `type: user`/`assistant` is a conversational turn (the same convention
+        # sessions.py/soul_store.py/context_lens.py/stophook_logic.py already use to tell
+        # content from housekeeping); a system/summary/hook line is skipped here exactly
+        # as if it carried no timestamp at all, never read as a turn.
         if d.get("type") not in ("user", "assistant"):
             continue
         ts = d.get("timestamp")
@@ -1050,72 +1042,72 @@ async def _resident_verdict(
     job_dir_hint: str = "", seat_id: str | None = None,
 ) -> ResidentVerdict:
     """Does the session's own signed testimony agree with the addressee? Three answers,
-    not two (ruling f624d114 — the 18th specimen of 60bc15db: a function that could not
-    say "I don't know" and reported "no" instead). "mismatch" is a POSITIVE finding — a
-    signed act was found and it names a different lineage than `base`, the crossed-
-    registry class (thread 0100a35e, the Ra misdelivery). "unknown" is an ABSENCE of
-    evidence — nothing signed was found anywhere in the scan, or there was nothing left
-    to corroborate against — and must never be rendered with the same words as a found
-    disagreement: an ignorance dressed as a finding is exactly what cost the fleet its
-    coordination lane (Cupid's measurement, obligation 94dc4aae). Both non-"match"
-    verdicts still refuse a nudge/resume the same way (the addressee's mail must never
-    land in a foreign or unverified window) — only the CALLER'S WORDING differs now.
+    not two: a function that could not say "I don't know" and reported "no" instead once
+    caused real harm. "mismatch" is a positive finding: a signed act was found and it
+    names a different lineage than `base`, the crossed-registry class (one real specimen
+    was a misdelivery to the wrong session). "unknown" is an absence of evidence: nothing
+    signed was found anywhere in the scan, or there was nothing left to corroborate
+    against, and must never be rendered with the same words as a found disagreement. An
+    ignorance dressed as a finding once cost the fleet its coordination lane entirely.
+    Both non-"match" verdicts still refuse a nudge/resume the same way (the addressee's
+    mail must never land in a foreign or unverified session); only the caller's wording
+    differs now.
 
-    THE DIFFERENT-MIND ARM IS UNCONDITIONAL (thread 25943031, halcyon's own stranding —
-    the fix for the OTHER arm never touches this one): any signed act found, whether in
-    the tail or the deeper fallback scan below, is compared directly against `base`; no
-    corroboration check ever runs on a found disagreement, let alone overrides one.
+    The different-mind arm is unconditional (the fix for the other arm never touches this
+    one): any signed act found, whether in the tail or the deeper fallback scan below, is
+    compared directly against `base`; no corroboration check ever runs on a found
+    disagreement, let alone overrides one.
 
-    THE UNSIGNED-TAIL ARM alone gets the fallback: on a total tail MISS (nothing signed in
-    the last 400KB), a lineage-correct body whose last activity happened to be unsigned
-    harness noise (away summaries, chrome) must not read as a stranger just because it
-    hasn't SAID anything recently. Before refusing, scan further back in the SAME file
-    (bounded, `_resident_of_deeper_sync`) for the newest signed act; accept the session as
-    the addressee's ONLY when that act's lineage matches AND a fresh registry read
-    corroborates (`_registry_corroborates`) — either alone is insufficient. Still nothing
-    found anywhere within the scan cap, or the deeper act names someone else, or the
-    registry doesn't corroborate: "unknown" (or "mismatch" if a lineage was positively
-    named), exactly the refusal shape from before this fix — only the label is honest now.
+    The unsigned-tail arm alone gets the fallback: on a total tail miss (nothing signed
+    in the last 400KB), a lineage-correct session whose last activity happened to be
+    unsigned harness noise (away summaries, status-display updates) must not read as an
+    unrelated identity just because it hasn't signed anything recently. Before refusing,
+    scan further back in the same file (bounded, `_resident_of_deeper_sync`) for the
+    newest signed act; accept the session as the addressee's only when that act's lineage
+    matches and a fresh registry read corroborates (`_registry_corroborates`); either
+    alone is insufficient. Still nothing found anywhere within the scan cap, or the deeper
+    act names someone else, or the registry doesn't corroborate: "unknown" (or "mismatch"
+    if a lineage was positively named), exactly the refusal shape from before this fix,
+    only the label is honest now.
 
-    A TOTAL MISS (no signed act ANYWHERE, tail or deep scan both empty) gets the SAME
-    registry-corroboration fallback (#184 Leg 1 follow-on, live-reproduced: metron/deckard,
-    both genuinely-live seats refused for lack of RECENT osiris tool chatter — busy coding
-    sessions that simply hadn't called mount/send/whisper within the ~2MB scanned) — but
-    ONLY when `job_dir_hint`'s own registry row is the FRESHEST mount anywhere in this
-    lineage (no other row for the same lineage carries a later `last_seen`). Without this,
-    the fallback would corroborate a STALE ancestor whose own successor has since taken
-    over — the registry row genuinely IS the ancestor's, but a fresher successor's mount
-    means resuming/nudging the old one is a different question the registry alone cannot
-    answer (`test_an_absent_transcript_refuses_as_unknown_never_as_a_found_mismatch`'s own
-    shape: a declared-but-never-mounted successor `abcd1234-ii` still mounts its OWN row —
-    same "most recently mounted wins" comparison `wakeable_identity` itself already uses —
-    with a fresher `last_seen` than `abcd1234`'s, and must still win over trusting
-    `abcd1234`'s own genuinely-corroborated but superseded door). A `last_seen`
-    comparison, not a generation-number one, because this fallback is ALSO reachable from
-    `dispatch_dm`'s own daemon-reply/nudge lane (`_resident_disagrees`) with no hop or
-    target-generation context threaded at all — freshness is the one signal every caller
-    already has (it is `wakeable_identity`'s own tiebreak)."""
+    A total miss (no signed act anywhere, tail or deep scan both empty) gets the same
+    registry-corroboration fallback (found live in genuinely-live seats refused for lack
+    of recent osiris tool chatter: busy coding sessions that simply hadn't called
+    mount/send/greet within the ~2MB scanned), but only when `job_dir_hint`'s own registry
+    row is the freshest mount anywhere in this lineage (no other row for the same lineage
+    carries a later `last_seen`). Without this, the fallback would corroborate a stale
+    ancestor whose own successor has since taken over: the registry row genuinely is the
+    ancestor's, but a fresher successor's mount means resuming/nudging the old one is a
+    different question the registry alone cannot answer (a declared-but-never-mounted
+    successor still mounts its own row, the same "most recently mounted wins" comparison
+    `wakeable_identity` itself already uses, with a fresher `last_seen` than its
+    predecessor's, and must still win over trusting the predecessor's own
+    genuinely-corroborated but superseded mount record). A `last_seen` comparison, not a
+    generation-number one, because this fallback is also reachable from `dispatch_dm`'s
+    own daemon-reply/nudge lane (`_resident_disagrees`) with no hop or target-generation
+    context threaded at all: freshness is the one signal every caller already has (it is
+    `wakeable_identity`'s own tiebreak)."""
     from src.orchestrator.agents import _generation
     act, whisper = await asyncio.to_thread(_resident_tail_signatures_sync, root, sid)
     if act is not None:
         act_base = _generation(act)[0]
         if whisper is not None and act_base == base and _generation(whisper)[0] != base:
-            # `whisper` is only ever recorded when it is NEWER than the act (see
+            # `whisper` is only ever recorded when it is newer than the act (see
             # `_newest_signatures`): the addressee's own last act, then a greeting naming
-            # someone else, then silence — hearsay over the addressee's own session.
+            # someone else, then silence, hearsay over the addressee's own session.
             return "unknown"
         return "mismatch" if act_base != base else "match"
     if whisper is not None:
         if _generation(whisper)[0] == base:
             return "match"
-        # HEARSAY DISAGREEMENT (see `_SIGNED_WHISPERS`): the newest thing in the tail is
-        # the server's own greeting naming another lineage, and no mind has ACTED since.
+        # Hearsay disagreement (see `_SIGNED_WHISPERS`): the newest thing in the tail is
+        # the server's own greeting naming another lineage, and no mind has acted since.
         # Look deeper for the newest act. An act by another lineage: a real mismatch. An
         # act by the addressee's own lineage: the greeting was a misresolution over the
-        # addressee's own session — "unknown", never "match" (the greeting is still a
+        # addressee's own session, "unknown", never "match" (the greeting is still a
         # disagreement on the record) and never "mismatch" (nothing signed names a
         # different mind). A nudge stays refused on "unknown"; a resume can still clear
-        # it through `_zero_hop_graph_corroborates`'s own narrow door.
+        # it through `_zero_hop_graph_corroborates`'s own narrow exception path.
         deep_act, _ = await asyncio.to_thread(
             _resident_of_deeper_sync, root, sid, acts_only=True)
         if deep_act is None or _generation(deep_act)[0] != base:
@@ -1123,13 +1115,13 @@ async def _resident_verdict(
         return "unknown"
     deep_resident, transcript = await asyncio.to_thread(_resident_of_deeper_sync, root, sid)
     if transcript is None:
-        return "unknown"  # the transcript itself is unreadable — nothing left to check
+        return "unknown"  # the transcript itself is unreadable, nothing left to check
     if deep_resident is None:
-        # #184 Leg 1 follow-on, live-reproduced (metron/deckard, both currently-live
-        # seats refused for lack of RECENT osiris tool chatter): nothing signed in ~2MB
-        # is genuine silence for a session doing other work, not evidence of a stranger —
-        # try the SAME registry corroboration the deeper-signed-act branch below already
-        # uses, rather than giving up the instant no signature exists to re-check.
+        # Nothing signed in ~2MB is genuine silence for a session doing other work, not
+        # evidence of an unrelated identity (found live in two currently-live seats
+        # refused for lack of recent osiris tool chatter): try the same registry
+        # corroboration the deeper-signed-act branch below already uses, rather than
+        # giving up the instant no signature exists to re-check.
         if job_dir_hint:
             fresher = await pool.fetchval(
                 "SELECT 1 FROM agent_mounts a WHERE (a.agent_id=$1 OR a.agent_id LIKE $1 || '-%') "
@@ -1141,11 +1133,11 @@ async def _resident_verdict(
                     pool, job_dir_hint, transcript, base, seat_id=seat_id)
                 if corroborates:
                     return "match"
-        return "unknown"  # nothing signed found anywhere in the scan — ignorance, not a finding
+        return "unknown"  # nothing signed found anywhere in the scan, ignorance, not a finding
     if _generation(deep_resident)[0] != base:
         return "mismatch"
     if not job_dir_hint:
-        return "unknown"  # no candidate to corroborate against — refuse, never guess one
+        return "unknown"  # no candidate to corroborate against, refuse, never guess one
     corroborates = await _registry_corroborates(
         pool, job_dir_hint, transcript, base, seat_id=seat_id)
     return "match" if corroborates else "unknown"
@@ -1155,11 +1147,11 @@ async def _resident_disagrees(
     pool: asyncpg.Pool, root: Path, sid: str, base: str, *,
     job_dir_hint: str = "", seat_id: str | None = None,
 ) -> bool:
-    """True when the door should NOT be trusted — either a positive mismatch or an
+    """True when the session should not be trusted: either a positive mismatch or an
     unresolved unknown (both refuse a nudge/resume the same way). Thin bool wrapper over
     `_resident_verdict` for callers that only ever silently drop a candidate and never
     render the reason as prose (a silent drop cannot misrepresent an unknown as a
-    finding, so collapsing the two here is safe) — callers that DO render a reason to a
+    finding, so collapsing the two here is safe). Callers that do render a reason to a
     human must call `_resident_verdict` directly instead, so "mismatch" and "unknown"
     stay distinguishable at the point the words get written."""
     return await _resident_verdict(
@@ -1169,34 +1161,35 @@ async def _resident_disagrees(
 def _zero_hop_graph_corroborates(
     resume: tuple[str, str, float, str], *, hop: int | None, launch_cwd: str | None,
 ) -> bool:
-    """A NAMED third verdict alongside `_resident_verdict`'s match/mismatch/unknown (#173a,
-    the ferryman incident 2026-08-18 00:41Z: `osiris launch` FOUND d8727352 — gen 8, 0
-    hops, resumable — and the resident-unknown guard REFUSED it, because no signed osiris
-    act had been written into that transcript yet; the operator resumed it by hand anyway,
-    correctly, since it plainly WAS ferryman's own session). NEVER a loosening of
-    `_resident_verdict` itself (that function, and its three verdicts, are untouched) —
-    this is a wholly separate, narrower door that opens ONLY for `_lineage_resume_
-    candidate`'s own first hop (`hop == 0`, i.e. the lineage HEAD's own current session,
-    never an ancestor's): the session id found there came straight off the GRAPH's own
-    `session` property (succession_chain's fresh read of this exact lineage head's own
-    mount-time stamp), not from re-scanning a transcript for testimony it may not have
-    written yet.
+    """A named third verdict alongside `_resident_verdict`'s match/mismatch/unknown (one
+    real incident, 2026-08-18 00:41Z: `osiris launch` found a resumable session at
+    generation 8, 0 hops, and the resident-unknown guard refused it, because no signed
+    osiris act had been written into that transcript yet; the operator resumed it by hand
+    anyway, correctly, since it plainly was the addressee's own session). Never a
+    loosening of `_resident_verdict` itself (that function, and its three verdicts, are
+    untouched): this is a wholly separate, narrower exception path that opens only for
+    `_lineage_resume_candidate`'s own first hop (`hop == 0`, i.e. the lineage head's own
+    current session, never an ancestor's): the session id found there came straight off
+    the graph's own `session` property (succession_chain's fresh read of this exact
+    lineage head's own mount-time stamp), not from re-scanning a transcript for testimony
+    it may not have written yet.
 
-    REVIEW NOTE (Sekhmet XXI, reviewing this branch as a stranger's per Thoth's own
-    instruction): `resume[1]` is NOT independent evidence — trace `_lineage_resume_
-    candidate`'s own return (`(session, repo, mtime, "")`, `repo` being that function's
-    OWN `repo` KEYWORD ARGUMENT), and `launch_seat`'s one call site (`repo=launch_cwd`,
-    then `_resume_guard(..., launch_cwd=launch_cwd)`): `resume[1]` and `launch_cwd` are
-    the SAME value threaded through, so `resume[1] == launch_cwd` is true by construction
-    for every existing caller — never a real second signal, whatever this docstring used
-    to claim. Left in (rather than silently dropped) as a documented invariant a future
+    REVIEW NOTE (from an independent review of this branch): `resume[1]` is not
+    independent evidence. Tracing `_lineage_resume_candidate`'s own return
+    (`(session, repo, mtime, "")`, `repo` being that function's own `repo` keyword
+    argument), and `launch_seat`'s one call site (`repo=launch_cwd`, then
+    `_resume_guard(..., launch_cwd=launch_cwd)`): `resume[1]` and `launch_cwd` are the
+    same value threaded through, so `resume[1] == launch_cwd` is true by construction for
+    every existing caller, never a real second signal, whatever this docstring used to
+    claim. Left in (rather than silently dropped) as a documented invariant a future
     caller could violate by wiring `resume`/`launch_cwd` from different sources; the
-    ACTUAL gate here is just `hop == 0` — trusting the graph's own `session` pointer for
+    actual gate here is just `hop == 0`, trusting the graph's own `session` pointer for
     the lineage head's own current generation, once a launch location is known.
-    A GENUINE second signal (e.g. a fresh `agent_mounts` row for this exact holder whose
-    own `cwd` agrees) is possible and may be worth adding — flagged to Thoth rather than
-    redesigned here, mid-incident, in a branch under active review. Callers outside the
-    lineage-walk lane never pass `hop`/`launch_cwd` — this always returns False for them,
+    A genuine second signal (e.g. a fresh `agent_mounts` row for this exact holder whose
+    own `cwd` agrees) is possible and may be worth adding, but was left for later rather
+    than redesigned here, mid-incident, in a branch under active review. Callers outside
+    the lineage-walk lane never pass `hop`/`launch_cwd`; this always returns False for
+    them,
     so `_resume_guard` behaves exactly as before wherever this new context is
     unavailable."""
     return hop == 0 and launch_cwd is not None and resume[1] == launch_cwd
@@ -1207,27 +1200,26 @@ async def _resume_guard(
     seat_id: str | None, st: Settings, hop: int | None = None,
     launch_cwd: str | None = None,
 ) -> tuple[str | None, str | None]:
-    """The resident-identity gate (0100a35e) an already-found `_agent_resumable` result
-    must clear before ANY caller continues someone else's session — shared by
-    dispatch_dm's DM-resume branch, launch_seat's launch-resume branch, and
-    wake_gate_preflight so the check cannot drift between them the way eebeb1f's byte-
-    for-byte copy of the OLD ceiling check did (Thoth's ruling, 2026-08-04, decision
-    a829a15d: "reuse it, do not reimplement it").
+    """The resident-identity gate an already-found `_agent_resumable` result must clear
+    before any caller continues someone else's session, shared by dispatch_dm's
+    DM-resume branch, launch_seat's launch-resume branch, and wake_gate_preflight so the
+    check cannot drift between them the way an earlier byte-for-byte copy of the old
+    ceiling check once did.
 
     Returns `(gate, detail)`: `(None, None)` means the resume may proceed. Otherwise
-    `gate` is a stable short token the caller uses DIRECTLY for its mode/status string —
-    "crossed-registry" for a POSITIVELY found different mind, "resident-unknown" for an
-    absence of evidence either way (ruling f624d114: these used to be the same bool and
-    the same rendered sentence; a caller that string-matched `detail` to recover the
-    distinction would just reinvent that bug one layer up, so this returns the token
-    itself instead of prose to be re-parsed).
+    `gate` is a stable short token the caller uses directly for its mode/status string:
+    "crossed-registry" for a positively found different mind, "resident-unknown" for an
+    absence of evidence either way (these used to be the same bool and the same rendered
+    sentence; a caller that string-matched `detail` to recover the distinction would just
+    reinvent that bug one layer up, so this returns the token itself instead of prose to
+    be re-parsed).
 
-    `hop`/`launch_cwd` (#173a): only `launch_seat`'s own lineage-walk branch has this
-    context (`_lineage_resume_candidate`'s hop count and the seat's own launch location);
-    every other caller omits both and gets identical behavior to before this addition —
-    see `_zero_hop_graph_corroborates`'s own docstring for what this narrow extra door is
-    and, just as importantly, is NOT (it never runs when the testimony arm found a
-    positive mismatch — that arm stays unconditional)."""
+    `hop`/`launch_cwd`: only `launch_seat`'s own lineage-walk branch has this context
+    (`_lineage_resume_candidate`'s hop count and the seat's own launch location); every
+    other caller omits both and gets identical behavior to before this addition. See
+    `_zero_hop_graph_corroborates`'s own docstring for what this narrow extra exception
+    path is and, just as importantly, is not (it never runs when the testimony arm found
+    a positive mismatch: that arm stays unconditional)."""
     root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
         else Path.home() / ".claude" / "projects"
     verdict = await _resident_verdict(pool, root, resume[0], base, job_dir_hint=resume[3],
@@ -1248,34 +1240,34 @@ async def _resume_guard(
 
 
 def _gate_name(detail: str) -> str:
-    """A stable, short token for WHICH named gate refused a resume (#156.2, Thoth's own
-    ask: 'refused-by-<named-gate>', not a bare 'refused'). Reads the SAME prose
-    `_resume_candidate_verdict` / `_resume_miss_reason` already produce for humans —
-    never a second source of truth to drift from. A string it doesn't recognize names
-    itself 'unknown' rather than guessing: the whole point of this function is to never
-    relabel a refusal as something it wasn't.
+    """A stable, short token for which named gate refused a resume ('refused-by-<named-
+    gate>', not a bare 'refused'). Reads the same prose `_resume_candidate_verdict` /
+    `_resume_miss_reason` already produce for humans, never a second source of truth to
+    drift from. A string it doesn't recognize names itself 'unknown' rather than
+    guessing: the whole point of this function is to never relabel a refusal as something
+    it wasn't.
 
-    NEVER FED `_resume_guard`'s output (ruling f624d114): that gate now returns its
-    token directly — "crossed-registry" or "resident-unknown" — precisely so nothing
-    downstream has to re-derive a mismatch/unknown distinction by string-matching
-    rendered prose, which is the same shape of bug this function's own docstring above
-    already warns against for every OTHER gate it names."""
+    Never fed `_resume_guard`'s output: that gate now returns its token directly,
+    "crossed-registry" or "resident-unknown", precisely so nothing downstream has to
+    re-derive a mismatch/unknown distinction by string-matching rendered prose, which is
+    the same shape of bug this function's own docstring above already warns against for
+    every other gate it names."""
     if "seam itself" in detail:
         return "compaction"
-    # CORRECTED 2026-09-08 (operator dispatch, the anubis specimen): the ceiling refusal's
-    # own prose no longer says "context ceiling" — it names either the occupancy read
-    # (`_occupancy_ceiling_verdict`, the primary ceiling now) or the catastrophic-corruption
-    # sanity bound (`_verdict_from_diagnostics`'s narrowed ceiling check). Both still name
-    # the SAME gate here — a caller asking "which named gate refused this" does not need to
-    # tell the two apart, only that it was a ceiling-shaped refusal, not the floor or a
+    # CORRECTED 2026-09-08: the ceiling refusal's own prose no longer says "context
+    # ceiling." It names either the occupancy read (`_occupancy_ceiling_verdict`, the
+    # primary ceiling now) or the catastrophic-corruption sanity bound
+    # (`_verdict_from_diagnostics`'s narrowed ceiling check). Both still name the same
+    # gate here; a caller asking "which named gate refused this" does not need to tell
+    # the two apart, only that it was a ceiling-shaped refusal, not the floor or a
     # missing-anchor one.
     if "context occupancy" in detail or "catastrophic-corruption sanity bound" in detail:
         return "ceiling"
     if "no anchored transcript" in detail:
         return "no-anchor"
-    # `_lineage_resume_candidate`'s OWN log wording (task #178) — the same "nothing to
-    # resume at this hop" fact, phrased differently because it comes from a lineage-walk
-    # entry, never from `_resume_miss_reason`'s single-mount-row prose.
+    # `_lineage_resume_candidate`'s own log wording: the same "nothing to resume at this
+    # hop" fact, phrased differently because it comes from a lineage-walk entry, never
+    # from `_resume_miss_reason`'s single-mount-row prose.
     if "no transcript found on disk" in detail:
         return "no-anchor"
     if "never mounted, no session to check" in detail:
@@ -1286,25 +1278,24 @@ def _gate_name(detail: str) -> str:
 
 
 async def _unresolved_wake_receipt(pool: asyncpg.Pool, target: str) -> dict[str, str]:
-    """THE LOOKUP-BEFORE-CLASSIFIER FIX (threads 94dc4aae + 27917f1f, Ra XXXV's specimen
-    msg 4901): `wakeable_identity` returning None means agent_mounts has no row matching
-    `target`'s lineage — it does NOT mean the mind never mounted. Before Ra's specimen,
-    that None fell straight into mode="never-mounted", a POSITIVE claim of absence
-    manufactured from a lookup miss, even while fleet()/job_for's own registry (agent_
-    liveness, the SAME freshest-of-mount-and-last_active signal fleet() renders as
-    live:true) showed the addressee live seconds ago. Consulted here, BEFORE the
-    classifier speaks: live → the honest word is 'could not resolve a session for a live
-    mind', an outcome (mail queues, reads at its own next turn), never a failure; dead →
-    'never mounted' remains true and is said plainly, unchanged from before this fix.
+    """THE LOOKUP-BEFORE-CLASSIFIER FIX: `wakeable_identity` returning None means
+    agent_mounts has no row matching `target`'s lineage; it does not mean the mind never
+    mounted. Before this fix, that None fell straight into mode="never-mounted", a
+    positive claim of absence manufactured from a lookup miss, even while fleet()/job_for's
+    own registry (agent_liveness, the same freshest-of-mount-and-last_active signal
+    fleet() renders as live:true) showed the addressee live seconds ago. Consulted here,
+    before the classifier speaks: live gets the honest word 'could not resolve a session
+    for a live mind,' an outcome (mail queues, reads at its own next turn), never a
+    failure; dead means 'never mounted' remains true and is said plainly, unchanged from
+    before this fix.
 
-    THE REBOOT-STALE 'never-mounted' LIE (Alfred's post-reboot finding 2, msg 7462,
-    thread ee412c7e): `liveness['live']` alone answers "live RIGHT NOW", which reads
-    False for every mind in the minutes after a reboot — including one that mounted and
-    sent DMs that same morning. A bare not-live used to fall straight to 'never
-    mounted', conflating that reboot-window silence with a positive claim this identity
-    has no mount history at all. `agent_liveness`'s own `ever_mounted` (mount_seen is
-    not None — a real row exists, however stale) tells the two apart: mounted-before-
-    but-cold gets its own honest 'cold-mounted-before' label instead."""
+    THE REBOOT-STALE 'NEVER-MOUNTED' LIE: `liveness['live']` alone answers "live right
+    now," which reads False for every mind in the minutes after a reboot, including one
+    that mounted and sent DMs that same morning. A bare not-live used to fall straight to
+    'never mounted,' conflating that reboot-window silence with a positive claim this
+    identity has no mount history at all. `agent_liveness`'s own `ever_mounted`
+    (mount_seen is not None: a real row exists, however stale) tells the two apart:
+    mounted-before-but-cold gets its own honest 'cold-mounted-before' label instead."""
     from src.orchestrator import mounts
 
     liveness = await mounts.agent_liveness(pool, target)
@@ -1329,43 +1320,42 @@ async def wake_gate_preflight(
     pool: asyncpg.Pool, target: str, *, seat_id: str | None = None,
     settings: Settings | None = None,
 ) -> dict[str, Any]:
-    """Answer the FOUR RESUME GATES (compaction/ceiling/no-anchor/crossed-registry)
-    BEFORE an attempt, not discovered as a wall after (#156.4, Thoth msg 3823: '#153
-    fixed the rendering; this is the query'). Reuses the EXACT functions dispatch_dm's
-    own refusal path already calls (`_agent_resumable`, `_lineage_resume_candidate`,
-    `_resume_guard`, `_gate_name`) — never a second copy of the gate logic, only a
-    read-only entry point into it.
+    """Answer the four resume gates (compaction/ceiling/no-anchor/crossed-registry)
+    before an attempt, not discovered as a failure after. Reuses the exact functions
+    dispatch_dm's own refusal path already calls (`_agent_resumable`,
+    `_lineage_resume_candidate`, `_resume_guard`, `_gate_name`), never a second copy of
+    the gate logic, only a read-only entry point into it.
 
-    THE LINEAGE WALK RUNS UNCONDITIONALLY WHEN THE MOUNT-KEYED LOOKUP MISSES (fixed
-    live-fire defect, Alfred's fulcrum specimen, Thoth msg 5852): a prior version gated
-    the `_lineage_resume_candidate` attempt on the mount-keyed miss reason naming
-    "compaction" specifically, which meant a genuinely EMPTY `agent_mounts` row for a
+    THE LINEAGE WALK RUNS UNCONDITIONALLY WHEN THE MOUNT-KEYED LOOKUP MISSES (fix for a
+    live-fire defect found in one specimen): a prior version gated the
+    `_lineage_resume_candidate` attempt on the mount-keyed miss reason naming
+    "compaction" specifically, which meant a genuinely empty `agent_mounts` row for a
     `--bg`-launched seat's current generation (the shared-anchor collapse
     `_lineage_resume_candidate`'s own docstring documents) reported a confident
-    `resume-refused-no-anchor` even when the lineage walk — the SAME primitive `launch()`
-    always tries — would have found a real, resumable session. Fixed by matching
+    `resume-refused-no-anchor` even when the lineage walk, the same primitive `launch()`
+    always tries, would have found a real, resumable session. Fixed by matching
     dispatch_dm's actual precedence exactly: the walk is attempted for every mount-keyed
-    miss, and only the FRESH-HEIR MINT decision (never the walk attempt itself) stays
+    miss, and only the fresh-heir mint decision (never the walk attempt itself) stays
     scoped to a compaction-specific miss. This is now genuinely faithful to what a real
     wake would find, not merely documented as such.
 
-    SCOPED TO THE RESUME GATES ON PURPOSE, not dispatch_dm's full mail-routing sequence
-    (vacant/paused/human-attended/awaiting-operator) — those are each a one-line graph
+    Scoped to the resume gates on purpose, not dispatch_dm's full mail-routing sequence
+    (vacant/paused/human-attended/awaiting-operator): those are each a one-line graph
     read already cheap enough to check directly (fleet(), dossier(), seat_receipt()).
     The four gates here are the expensive ones: they walk a lineage and read real
     transcripts off disk, which is the actual cost worth answering up front.
 
-    `target` must already be a RESOLVED agent id (a lineage head — e.g. from
-    succession_chain, dossier, or wakeable_identity) — this does not itself walk
-    seat -> holder -> living head the way dispatch_dm/wake_worker do; a caller that
+    `target` must already be a resolved agent id (a lineage head, e.g. from
+    succession_chain, dossier, or wakeable_identity); this does not itself walk
+    seat -> holder -> living head the way dispatch_dm/wake_worker do, so a caller that
     only has a seat or handle should resolve first. `seat_id`, if known, sharpens the
     crossed-registry check's unsigned-tail corroboration fallback (`_resume_guard`'s own
-    docstring) — omitting it narrows that one fallback path, never the other three
-    gates, and is disclosed here rather than silently changing the answer.
+    docstring); omitting it narrows that one fallback path, never the other three gates,
+    and is disclosed here rather than silently changing the answer.
 
-    Returns the SAME vocabulary #156.2 built for wake() (no-live-body / refused-<gate>),
-    plus a state dispatch_dm itself never needs to say aloud: 'resumable' — every gate
-    clears, a real wake would resume this addressee now."""
+    Returns the same vocabulary built for wake() (no-live-body / refused-<gate>), plus a
+    state dispatch_dm itself never needs to say aloud: 'resumable', meaning every gate
+    clears and a real wake would resume this addressee now."""
     from src.orchestrator.folds import wakeable_identity
 
     st = settings or get_settings()
@@ -1382,26 +1372,26 @@ async def wake_gate_preflight(
         from src.orchestrator.agents import _generation
         from src.orchestrator.seats import seat_facts
 
-        # THE LINEAGE WALK RUNS UNCONDITIONALLY NOW — live defect, Alfred's fulcrum
-        # specimen (Thoth msg 5852): `_agent_resumable` is agent_mounts-keyed, the exact
-        # shared-anchor blind spot `_lineage_resume_candidate`'s own docstring documents
-        # for a `--bg`-launched seat (one durable per-seat mount row, overwritten by
-        # whichever generation mounts most recently — a genuinely EMPTY row for the
-        # current generation reads as "no anchored transcript at all", not compaction).
-        # The OLD code here gated the walk ATTEMPT itself on `gate == "compaction"`,
-        # conflating "which gate permits minting a fresh heir" (dispatch_dm's own
-        # compaction-only scoping, preserved below) with "whether the walk is worth
-        # trying at all" — dispatch_dm never makes that second conflation: it tries the
-        # walk for EVERY mount-keyed miss reason, unconditionally, and only asks which
-        # gate AFTER the walk itself has also failed. fulcrum's own case (gen 10, a real
-        # 5MB resumable session, 0 hops back) was gate="no-anchor" from the narrow mount
-        # check, so the walk never ran and preflight reported a confident false absence
-        # while `launch()` — which always tries the walk — resumed it correctly.
+        # THE LINEAGE WALK RUNS UNCONDITIONALLY NOW: fix for a live defect found in one
+        # specimen. `_agent_resumable` is agent_mounts-keyed, the exact shared-anchor
+        # blind spot `_lineage_resume_candidate`'s own docstring documents for a
+        # `--bg`-launched seat (one durable per-seat mount row, overwritten by whichever
+        # generation mounts most recently, so a genuinely empty row for the current
+        # generation reads as "no anchored transcript at all," not compaction). The old
+        # code here gated the walk attempt itself on `gate == "compaction"`, conflating
+        # "which gate permits minting a fresh heir" (dispatch_dm's own compaction-only
+        # scoping, preserved below) with "whether the walk is worth trying at all."
+        # dispatch_dm never makes that second conflation: it tries the walk for every
+        # mount-keyed miss reason, unconditionally, and only asks which gate after the
+        # walk itself has also failed. In the specimen case (gen 10, a real 5MB resumable
+        # session, 0 hops back) the gate was "no-anchor" from the narrow mount check, so
+        # the walk never ran and preflight reported a confident false absence while
+        # `launch()`, which always tries the walk, resumed it correctly.
         facts = await seat_facts(pool, seat_id) if seat_id is not None else None
         launch_cwd = (facts["tree_cwd"] or facts["anchor_cwd"]) if facts else None
         if launch_cwd:
-            # materialize=False: this function is a READ-ONLY entry point (its own
-            # docstring's promise) — it answers "would a resume succeed", never spawns,
+            # materialize=False: this function is a read-only entry point (its own
+            # docstring's promise). It answers "would a resume succeed", never spawns,
             # so it must never emit a materialized transcript as a side effect.
             graph_outcome = await _lineage_resume_candidate(
                 pool, wake_target, st, repo=launch_cwd, seat_id=seat_id, materialize=False)
@@ -1422,21 +1412,22 @@ async def wake_gate_preflight(
                                       "graph did not)"}
                 return {"mode": f"resume-refused-{g_gate}", "status": f"refused-{g_gate}",
                         "detail": g_refusal}
-            # THE WALK ALSO FOUND NOTHING — the FINAL reported reason is sourced from
-            # its OWN log tail (dispatch_dm's identical precedence), never re-derived
-            # from the earlier, narrower mount-keyed reason: the two must report the
-            # SAME failure for the SAME lineage, or this function is lying about which
-            # primitive it actually consulted last.
+            # The lineage walk also found nothing. Report the final reason from its own
+            # log tail (the same precedence dispatch_dm uses), never re-derived from the
+            # earlier, narrower mount-keyed reason: both must report the same failure for
+            # the same lineage, or this function is lying about which check it actually
+            # consulted last.
             miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
         else:
-            # no seat/office known at all — the walk was never attemptable; the mount-
-            # keyed reason is the only one there is to report.
+            # No seat or office is known at all, so the walk was never attemptable; the
+            # mount-keyed reason is the only one there is to report.
             miss_reason = await _agent_resume_miss_reason(pool, wake_target, st)
         gate = _gate_name(miss_reason)
-        # FRESH-HEIR, SCOPED TO COMPACTION ONLY (ruling 94c2e7e8) — every other gate
-        # (ceiling/no-anchor/crossed-registry/resident-unknown) is a genuine "who this
-        # even is" uncertainty; minting on top of that repeats the stranger-over-a-live-
-        # head class dispatch_dm's own docstring names.
+        # Fresh-heir is scoped to compaction only. Every other gate (ceiling/no-anchor/
+        # crossed-registry/resident-unknown) is a genuine "who this even is" uncertainty;
+        # minting a new session on top of that would repeat the class of bug where a
+        # stranger replaces a still-live identity, which dispatch_dm's own docstring warns
+        # against.
         if (gate == "compaction" and seat_id is not None and launch_cwd
                 and facts and facts.get("handle") and facts.get("anchor_cwd")):
             return {"mode": "fresh-heir-available", "status": "fresh-heir-available",
@@ -1446,11 +1437,11 @@ async def wake_gate_preflight(
         return {"mode": f"resume-refused-{gate}", "status": f"refused-{gate}",
                 "detail": miss_reason}
     from src.orchestrator.agents import _generation
-    # a DISTINCT name from `gate` above (never the same variable retyped): that one is a
-    # refusal gate `_gate_name` guarantees is always `str`; this one is a guard verdict
-    # that is legitimately `str | None` — mypy caught the two uses colliding on one name
-    # at the merge point (Thoth's finding), and widening `gate`'s type to fix it would
-    # have let a genuine absence leak into a path that currently guarantees a name.
+    # Uses a distinct name from `gate` above, never the same variable retyped: that one is
+    # a refusal gate `_gate_name` guarantees is always `str`; this one is a guard verdict
+    # that is legitimately `str | None`. Type checking caught the two uses colliding on one
+    # name at the merge point, and widening `gate`'s type to fix it would have let a
+    # genuine absence leak into a path that currently guarantees a name.
     guard_gate, refusal = await _resume_guard(
         pool, resume, _generation(target)[0], seat_id=seat_id, st=st)
     if guard_gate is not None:
@@ -1463,16 +1454,17 @@ async def wake_gate_preflight(
 async def _resume_office(
     pool: asyncpg.Pool, seat_id: str | None, *, fallback: str | None,
 ) -> str:
-    """WHERE A RESUME SPAWNS when the materializer had nothing to write (operator, 2026-09-03:
-    "~/.osiris is where osiris agents get their identity and meta from"): the seat's own
-    DERIVED office (`offices.seat_office_target`, the anchor invariant's own address — the
-    same target the materializer emits into), falling back to the recorded anchor only
-    when no office can be derived. Never the caller's tree/launch cwd: the harness resumes
-    whichever copy of a session id sits in the SPAWN cwd's own slug (measured live on
-    2.1.259 — a cwd whose slug held a stale 20KB partial resumed THAT over a fuller copy one
-    slug over, and a cwd holding no copy found nothing once two copies existed), so a
-    spawn anywhere the canon was not emitted continues a stale partial. One helper for all
-    three resume doors (cli.py, dispatch_dm, launch_seat), so the rule cannot drift."""
+    """Where a resume spawns when the materializer had nothing to write. `~/.osiris` is
+    where osiris agents get their identity and metadata from, so this uses the seat's own
+    derived office (`offices.seat_office_target`, the same address the materializer emits
+    into), falling back to the recorded anchor only when no office can be derived. It never
+    uses the caller's tree/launch cwd: the harness resumes whichever copy of a session id
+    sits in the spawn cwd's own slug. Measured on harness version 2.1.259, a cwd whose slug
+    held a stale 20KB partial resumed that over a fuller copy one slug over, and a cwd
+    holding no copy found nothing once two copies existed - so a spawn anywhere the current
+    data was not emitted continues a stale partial. This is one shared helper for all three
+    resume call sites (cli.py, dispatch_dm, launch_seat), so the rule cannot drift between
+    them."""
     from src.orchestrator.offices import seat_office_target
     office = await seat_office_target(pool, seat_id) if seat_id else None
     return office or fallback or ""
@@ -1482,22 +1474,24 @@ async def _adopt_resumed_body(
     pool: asyncpg.Pool, *, agents_json: Any, office: str, requested_sid: str,
     holder: str, project: str | None, attempts: int = 6, delay: float = 2.0,
 ) -> dict[str, Any]:
-    """WHAT THE HARNESS ACTUALLY STARTED (measured live, 2026-09-03, harness 2.1.259):
-    `claude --bg --resume <id>` continues the session under its own id — OR, when any
-    background record for it still exists (a `claude stop` leaves a "stopped" one),
-    "starts a copy and says so": a NEW session id whose window carries the old
-    conversation but whose file and whisper are a stranger's. Three copies of Chad in a
-    row tonight, each minted a fresh root by the whisper and reported by osiris as
-    "resumed 7451509a" — the receipt lying by omission, the 5d31762a class again.
+    """What the harness actually started, measured directly against harness version
+    2.1.259: `claude --bg --resume <id>` continues the session under its own id, OR, when
+    any background record for it still exists (a `claude stop` leaves a "stopped" one), it
+    starts a copy instead: a new session id whose window carries the old conversation but
+    whose file and background record belong to a new, unrelated identity. This has been
+    observed to happen multiple times in a row for the same seat, each minting a fresh
+    root and getting reported by osiris as "resumed <id>" - a receipt that lies by
+    omission about the copy.
 
-    Polls `claude agents --json` for the body at `office`, then: the requested id came
-    back → `copied: False`, nothing to do. A different id → `copied: True`, and the copy
-    is ADOPTED as the seat's own continuation before its first act can mint a stranger:
-    the session ledger files the copy's sid under `holder` (`record_session_anchor`, whose
-    own transcript guard still applies) and the copy's registry row (the whisper's own
-    provisional row, keyed on jobs/<copy8>) is rebound to `holder` — the same two facts
-    a `--fork-session` copy resolves through. No body found within the window →
-    `session_id: None`, confessed, never assumed. Every caller prints what happened."""
+    This polls `claude agents --json` for the body at `office`. If the requested id comes
+    back, `copied: False`, nothing to do. If a different id comes back, `copied: True`,
+    and the copy is adopted as the seat's own continuation before its first act can mint an
+    unrelated identity: the session ledger files the copy's session id under `holder`
+    (`record_session_anchor`, whose own transcript guard still applies) and the copy's
+    registry row (the provisional row keyed on jobs/<copy8>) is rebound to `holder` - the
+    same two facts a `--fork-session` copy resolves through. If no body is found within the
+    window, this returns `session_id: None`, reported honestly rather than assumed. Every
+    caller prints what happened."""
     from src.actions.core import Actions
     from src.orchestrator.handshake import record_session_anchor
     from src.orchestrator.mounts import save_mount
@@ -1531,105 +1525,100 @@ async def _lineage_resume_candidate(
     pool: asyncpg.Pool, holder: str, st: Settings, *, repo: str,
     seat_id: str | None = None, materialize: bool = True,
 ) -> tuple[tuple[str, str, float, str, str | None, int], list[str]] | list[str]:
-    """THE STRUCTURAL FIX for a live-fire defect (Thoth, 2026-08-04, msg 3691 — Sekhmet):
-    `_agent_resumable`/`wakeable_identity` resolve a resume candidate through
-    `agent_mounts.job_dir`, which works for a `-p --resume`-triggered wake (a fresh,
-    session-specific job_dir every time) but NOT for a `--bg`-launched seat: `_launch_anchor`
-    gives EVERY generation of one seat the SAME durable per-seat anchor
-    (".../jobs/<seat-id>"), set once in CLAUDE_JOB_DIR at process spawn and unchanged for
-    that process's entire life — so agent_mounts' one shared row for that anchor NEVER
-    encodes a real session id, only whichever generation most recently mounted (confirmed
-    live against Sekhmet's own data: her 32MB, 12-compaction gen-11 session, d80350e5, has
-    NO agent_mounts row at all — it was overwritten the instant gen 12 mounted, even though
-    gen 12's own body never ran a single turn). This is not a zero-turn-generation edge
-    case alone; it is the whole `--bg`-anchor scheme colliding with a job-dir-keyed lookup,
-    for EVERY generation in a self-compacting lineage, not only a stillborn one.
+    """The structural fix for a live-fire defect: `_agent_resumable`/`wakeable_identity`
+    resolve a resume candidate through `agent_mounts.job_dir`, which works for a
+    `-p --resume`-triggered wake (a fresh, session-specific job_dir every time) but not for
+    a `--bg`-launched seat. `_launch_anchor` gives every generation of one seat the same
+    durable per-seat anchor (".../jobs/<seat-id>"), set once in CLAUDE_JOB_DIR at process
+    spawn and unchanged for that process's entire life - so agent_mounts' one shared row
+    for that anchor never encodes a real session id, only whichever generation most
+    recently mounted. Confirmed live against one seat's own data: a 32MB, 12-compaction
+    generation-11 session had no agent_mounts row at all - it was overwritten the instant
+    generation 12 mounted, even though generation 12's own body never ran a single turn.
+    This is not a zero-turn-generation edge case alone; it is the whole `--bg`-anchor
+    scheme colliding with a job-dir-keyed lookup, for every generation in a self-compacting
+    lineage, not only a stillborn one.
 
-    THE FIX: walk `succession_chain` (reused, not reimplemented — it already returns the
-    one thing agent_mounts cannot: `session`, a GRAPH property register_agent stamps on
+    The fix: walk `succession_chain` (reused, not reimplemented - it already returns the
+    one thing agent_mounts cannot: `session`, a graph property `register_agent` stamps on
     every mount, per Agent object, immune to the shared-anchor collapse) from `holder`
-    backward, and for each hop with a session, apply the IDENTICAL gate
-    `_agent_resumable`'s own hot path uses (`_resume_candidate_verdict` — so the compaction
-    +ceiling gates can never drift between the two lookup strategies). Bounded by
+    backward, and for each hop with a session, apply the identical gate
+    `_agent_resumable`'s own hot path uses (`_resume_candidate_verdict`, so the compaction
+    and ceiling gates can never drift between the two lookup strategies). Bounded by
     succession_chain's own MAX_SUCCESSION_HOPS, the same "a walk never widens unbounded"
     discipline as every other resume check in this file.
 
-    THE INVERSION (ruling d161a156/d63b2ca6, Thoth dispatch 6620): this used to HUNT —
-    `locate_current_transcript` on disk, then `_spawn_cwd_for` to guess which candidate
-    cwd matched wherever the hunt landed. It now MATERIALIZES: per hop, ENSURE the session
-    is in the soul store (`SoulStore.ensure_ingested`, the same harness-adapter discovery
-    the old hunt used, just feeding the store instead of a direct disk read), then check
-    the verdict against the STORE's own tail measurement (`SoulStore.resume_diagnostics`
-    — never a disk stat; the load-bearing move: today's verdict was a measurement of
-    whatever file the hunt happened to land on, confidently wrong ABOUT THE WRONG FILE
-    when the hunt landed wrong, de70e54d's exact specimen). On the winning hop, when
-    `materialize` is true, EMIT via `rematerialize_to_disk` to the seat's own office
-    (`offices.seat_office_target`, the SAME derivation the anchor invariant heals toward —
-    never an independently-typed copy) — "elsewhere" cannot exist once nothing reads what
-    is already on disk.
+    This used to hunt: `locate_current_transcript` on disk, then `_spawn_cwd_for` to guess
+    which candidate cwd matched wherever the hunt landed. It now materializes instead: per
+    hop, ensure the session is in the soul store (`SoulStore.ensure_ingested`, the same
+    harness-adapter discovery the old hunt used, just feeding the store instead of a direct
+    disk read), then check the verdict against the store's own tail measurement
+    (`SoulStore.resume_diagnostics`, never a disk stat). This matters because the old
+    verdict was a measurement of whatever file the hunt happened to land on, confidently
+    wrong about the wrong file when the hunt landed wrong. On the winning hop, when
+    `materialize` is true, emit via `rematerialize_to_disk` to the seat's own office
+    (`offices.seat_office_target`, the same derivation the anchor invariant heals toward,
+    never an independently-typed copy) - nothing should read stale data once nothing reads
+    what is already on disk.
 
-    `materialize` DEFAULTS TRUE for the real resume-spawn callers (cli.py, dispatch_dm,
-    launch_seat — the majority) but MUST be passed `False` by a caller that only checks
-    resumability without ever spawning (`wake_gate_preflight`'s own docstring promises
-    "a read-only entry point"; `succession_repair.unresumed_heads`'s own docstring promises
-    "read-only, proposes nothing, writes nothing") — `rematerialize_to_disk` already
-    refuses to clobber a live transcript (mtime-vs-last_ingested_at guard) so a stray
-    materialize would rarely corrupt anything, but a "read-only" function that silently
-    writes files is a broken promise regardless of whether the write was safe.
+    `materialize` defaults true for the real resume-spawn callers (cli.py, dispatch_dm,
+    launch_seat, the majority) but must be passed `False` by a caller that only checks
+    resumability without ever spawning (`wake_gate_preflight`'s own docstring promises "a
+    read-only entry point"; `succession_repair.unresumed_heads`'s own docstring promises
+    "read-only, proposes nothing, writes nothing"). `rematerialize_to_disk` already refuses
+    to clobber a live transcript (an mtime-vs-last_ingested_at guard) so a stray materialize
+    would rarely corrupt anything, but a "read-only" function that silently writes files is
+    a broken promise regardless of whether the write was safe.
 
-    A NAMED ORDERING GAP, DISCLOSED RATHER THAN SILENT: the emit happens HERE, inside
-    candidate-finding, before any caller's own `_resume_occupancy_gate` check runs — so
-    THE PEN RULE's occupancy re-verification (agents-json + /proc, "at the moment of the
-    write") does not, today, gate this specific write. The write's own safety instead
-    rests entirely on `rematerialize_to_disk`'s existing, independently-reviewed guard
-    (refuses whenever the target's mtime is newer than the store's own last_ingested_at —
+    A named ordering gap, disclosed rather than silent: the emit happens here, inside
+    candidate-finding, before any caller's own `_resume_occupancy_gate` check runs - so the
+    occupancy re-verification (agents-json plus /proc, checked at the moment of the write)
+    does not, today, gate this specific write. The write's own safety instead rests
+    entirely on `rematerialize_to_disk`'s existing, independently-reviewed guard (it
+    refuses whenever the target's mtime is newer than the store's own last_ingested_at,
     i.e. something wrote to it more recently than the store has seen, the honest signature
-    of a live writer). Moving the occupancy check to run BEFORE this emit would need
-    `agents_json` threaded into this function, a real restructure — named here rather than
+    of a live writer). Moving the occupancy check to run before this emit would need
+    `agents_json` threaded into this function, a real restructure - named here rather than
     silently done, so a reviewer can decide whether the existing mtime guard is enough or
     the occupancy check needs to move.
 
     Returns ((session_id, repo, mtime, job_dir="", materialized_at, hop), log) on the first
-    hop that clears both gates. `session_id` IS THE FULL HARNESS ID, NEVER THE GRAPH'S OWN
-    TRUNCATED `session` PROPERTY (operator's own live catch, 2026-09-03, decision 5d31762a):
-    the graph stores an 8-char prefix by convention (`sid[:8]`, agents.py), which matches
-    nothing in the harness's own `--resume` index — passing it through unchanged silently
-    minted a fresh, disposable session on every "successful" resume this whole scheme ever
-    reported, never actually continuing anything, undetected because nothing checked the
-    SPAWNED PROCESS's own transcript. Read directly off the discovered file's own stem
-    (`ensure_ingested`'s winning `soul_sessions.source_path`) — a positive property of the
-    file itself, never inferred from the graph's shorter key. A hop whose only discoverable
-    file has NO fuller id than the bare anchor (e.g. an earlier materialize wrote its own
-    destination by the truncated value, the same bug one door over, also fixed here) is
-    refused rather than handed back a value already known unusable.
+    hop that clears both gates. `session_id` is the full harness id, never the graph's own
+    truncated `session` property: the graph stores an 8-char prefix by convention
+    (`sid[:8]`, agents.py), which matches nothing in the harness's own `--resume` index -
+    passing it through unchanged silently minted a fresh, disposable session on every
+    "successful" resume this whole scheme ever reported, never actually continuing
+    anything, undetected because nothing checked the spawned process's own transcript.
+    Read directly off the discovered file's own stem (`ensure_ingested`'s winning
+    `soul_sessions.source_path`), a positive property of the file itself, never inferred
+    from the graph's shorter key. A hop whose only discoverable file has no fuller id than
+    the bare anchor (e.g. an earlier materialize wrote its own destination by the
+    truncated value, the same bug one call site over, also fixed here) is refused rather
+    than handed back a value already known unusable.
 
-    `hop` IS THE EXPLICIT COUNT OF ENTRIES IN `log` BEFORE the
-    winning hop's own success line (task #200 residual, Thoth dispatch 6786/6792: a caller
-    used to derive this by `len(log) - 1`, on the documented assumption the log always ends
-    with exactly one success entry — a false assumption whenever this function itself
-    appends a SECOND line after the success line for the same hop, e.g. a materialize
-    refusal below. That miscounted a genuine hop-0 candidate as hop 1, which silently denies
-    it `_zero_hop_graph_corroborates`'s own zero-hop fallback and forces a resident-unknown
-    refusal on a session that IS the lineage head's own current, real transcript — the exact
-    live specimen: Marquee, `agent:38cf08a9-xi`, decision 6a0b1236). Read `hop` directly;
-    never re-derive it from `len(log)`.
+    `hop` is the explicit count of entries in `log` before the winning hop's own success
+    line. A caller used to derive this by `len(log) - 1`, on the assumption the log always
+    ends with exactly one success entry - a false assumption whenever this function itself
+    appends a second line after the success line for the same hop, e.g. a materialize
+    refusal below. That miscounted a genuine hop-0 candidate as hop 1, which silently
+    denied it the zero-hop fallback in `_zero_hop_graph_corroborates` and forced a
+    resident-unknown refusal on a session that is the lineage head's own current, real
+    transcript. Read `hop` directly; never re-derive it from `len(log)`.
 
-    `repo` is UNCHANGED IN MEANING from before this rewrite — the
-    CALLER's own `launch_cwd`, since `_zero_hop_graph_corroborates`'s `resume[1] ==
-    launch_cwd` invariant depends on it staying exactly that (Thoth's explicit ruling: do
-    NOT smuggle the office into this field — the anchor_cwd/tree_cwd fusion, #103/#141, is
-    the exact bug that reinterpreting a field silently produces). `materialized_at` is the
-    NEW, own-named 5th field — WHERE rematerialize_to_disk actually wrote (or attempted to
-    write), None when `materialize=False` or when no seat office target could be derived —
-    the actual spawn cwd a caller that intends to spawn must use, never `repo`. `job_dir=""`
-    because no per-hop anchor is available for `_resume_guard`'s corroboration fallback —
-    a known, disclosed narrowing (see the caller's own receipt/report), not a silent one.
-    Returns the bare `log` (no candidate) when NOTHING in the walk clears both gates — each
-    entry names the generation, its session's STORE TAIL size (was "transcript size" before
-    this rewrite — the store, not a disk stat, is what's being measured now), and the
-    SPECIFIC gate that refused it (numbers, not adjectives — Thoth's own explicit
-    requirement), so a caller's receipt can read one line instead of a human re-running
-    succession_chain by hand."""
+    `repo` is unchanged in meaning from before this rewrite: it is the caller's own
+    `launch_cwd`, since `_zero_hop_graph_corroborates`'s `resume[1] == launch_cwd`
+    invariant depends on it staying exactly that. Do not smuggle the office into this
+    field; the anchor_cwd/tree_cwd fusion is the exact bug that reinterpreting a field
+    silently produces. `materialized_at` is the new, separately-named 5th field: where
+    `rematerialize_to_disk` actually wrote (or attempted to write), None when
+    `materialize=False` or when no seat office target could be derived - the actual spawn
+    cwd a caller that intends to spawn must use, never `repo`. `job_dir=""` because no
+    per-hop anchor is available for `_resume_guard`'s corroboration fallback, a known,
+    disclosed narrowing, not a silent one. Returns the bare `log` (no candidate) when
+    nothing in the walk clears both gates - each entry names the generation, its session's
+    store tail size (measured against the store, not a disk stat), and the specific gate
+    that refused it (numbers, not adjectives), so a caller's receipt can read one line
+    instead of a human re-running succession_chain by hand."""
     from src.ingest.sessions import _occupancy_ceiling_verdict, _verdict_from_diagnostics
     from src.ingest.soul_crypto import SoulKeyMissing, _key_file_path
     from src.ingest.soul_store import SoulStore
@@ -1658,37 +1647,36 @@ async def _lineage_resume_candidate(
             "SELECT last_ingested_at, source_path FROM soul_sessions "
             "WHERE harness='claude-code' AND anchor_sid=$1", anchor_sid)
         last_ingested = soul_row["last_ingested_at"] if soul_row else None
-        # THE FULL SESSION ID, NEVER THE GRAPH'S OWN TRUNCATED `session` (operator's own
-        # live catch, 2026-09-03: `claude --bg --resume <8-char-anchor>` matches nothing in
-        # the harness's own index — it silently mints a fresh, disposable session instead
-        # of erroring, so every resume this scheme ever reported "success" on may have been
-        # a false positive nobody checked the SPAWNED PROCESS's own transcript for). The
+        # Use the full session id, never the graph's own truncated `session` property:
+        # `claude --bg --resume <8-char-anchor>` matches nothing in the harness's own
+        # index. It silently mints a fresh, disposable session instead of erroring, so
+        # every resume this scheme ever reported "success" on may have been a false
+        # positive, because nothing checked the spawned process's own transcript. The
         # graph's `session` property is a deliberate 8-char truncation (this module's own
-        # `sid[:8]` convention) — fine for graph matching, NEVER valid as a harness CLI
-        # argument. `ensure_ingested`'s own discovered file's stem IS the harness's real id
-        # (ClaudeJsonlAdapter.discover: `session_id=stem`, `anchor_sid=stem.split("-")[0]`)
-        # — read it directly off disk here (a positive property of the file itself, never
+        # `sid[:8]` convention), fine for graph matching, never valid as a harness CLI
+        # argument. `ensure_ingested`'s own discovered file's stem is the harness's real id
+        # (ClaudeJsonlAdapter.discover: `session_id=stem`, `anchor_sid=stem.split("-")[0]`).
+        # Read it directly off disk here (a positive property of the file itself, never
         # inferred from the graph's own shorter key) rather than widen ensure_ingested's own
         # return contract, which every other caller already depends on staying anchor_sid.
         full_sid = Path(soul_row["source_path"]).stem if soul_row else None
         if not full_sid or full_sid == anchor_sid:
-            # The winning discovered file's own stem IS just the bare anchor — e.g. an
-            # earlier rematerialize wrote its destination as f"{session}.jsonl" (the SAME
-            # truncation bug, one door over: fixed below) and that stub, not a genuine
-            # harness transcript, won the anchored mtime race. Resuming into a value that
-            # can never match the harness's own index is worse than refusing this hop
-            # honestly — never silently hand back a value already known to be unusable.
+            # The winning discovered file's own stem is just the bare anchor - e.g. an
+            # earlier rematerialize wrote its destination as f"{session}.jsonl" (the same
+            # truncation bug, fixed below) and that stub, not a genuine harness transcript,
+            # won the anchored mtime race. Resuming into a value that can never match the
+            # harness's own index is worse than refusing this hop honestly; never silently
+            # hand back a value already known to be unusable.
             log.append(f"gen {gen} (session {session[:8]}): only a truncated/synthetic "
                        "transcript on disk — no genuine full session id to resume into")
             continue
         try:
             diagnostics = await store.resume_diagnostics(anchor_sid)
         except SoulKeyMissing:
-            # THE KEY DOOR, defect 2 (operator's own live hit, Thoth mail 12830): a
-            # missing soul-store key is a WRITE-time refusal for the worker/MCP boot
-            # (ruled, unchanged) but this is a READ path -- `osiris resume` degrades
-            # to naming the fix and keeps walking the rest of the chain, never aborts
-            # the whole resume over one hop's diagnostics being unreadable.
+            # A missing soul-store key is a write-time refusal for the worker/MCP boot
+            # (unchanged) but this is a read path: `osiris resume` degrades to naming the
+            # fix and keeps walking the rest of the chain, never aborts the whole resume
+            # over one hop's diagnostics being unreadable.
             log.append(f"gen {gen} (session {session[:8]}): soul store locked, key "
                        f"missing at {_key_file_path()}; run osiris soul-key init")
             continue
@@ -1702,20 +1690,20 @@ async def _lineage_resume_candidate(
             tail_bytes, tail_lines, ceiling_bytes=st.osiris_resume_ceiling_bytes,
             min_tail_bytes=st.osiris_resume_min_tail_bytes)
         if verdict is None:
-            # THE OCCUPANCY CEILING, STORE SIDE (2026-09-08, operator dispatch, the anubis
-            # specimen — see sessions.py's `_occupancy_ceiling_verdict` for the full
-            # mechanics): this loop has no transcript Path to hand `context_lens.last_usage`
-            # (its own read is entirely `SoulStore`-mediated, keyed on `anchor_sid`), so the
-            # store-side symmetry `context_lens._usage_from_store` was built for is used
-            # instead — `TranscriptStore.last_usage_of_session` reads the SAME harness's
-            # most recent recorded usage row from `harness_turns` (a sibling store to
-            # `soul_lines`, populated off the same transcripts) and `_usage_from_store`
-            # adapts its {input, output, cache_*} shape to what `occupancy()` expects.
-            # `None` (no usage row for this anchor_sid — e.g. a harness that never recorded
-            # per-turn tokens, or a session `TranscriptStore` has not itself ingested) falls
-            # through to `_occupancy_ceiling_verdict`'s own None-passes fallback, same as the
-            # disk path's "no usage block in the tail" case — never a spurious refusal for
-            # want of a reading this loop cannot always get.
+            # The occupancy ceiling, store side: see sessions.py's
+            # `_occupancy_ceiling_verdict` for the full mechanics. This loop has no
+            # transcript Path to hand `context_lens.last_usage` (its own read is entirely
+            # `SoulStore`-mediated, keyed on `anchor_sid`), so the store-side symmetry
+            # `context_lens._usage_from_store` was built for is used instead -
+            # `TranscriptStore.last_usage_of_session` reads the same harness's most recent
+            # recorded usage row from `harness_turns` (a sibling store to `soul_lines`,
+            # populated off the same transcripts) and `_usage_from_store` adapts its
+            # {input, output, cache_*} shape to what `occupancy()` expects. `None` (no usage
+            # row for this anchor_sid - e.g. a harness that never recorded per-turn tokens,
+            # or a session `TranscriptStore` has not itself ingested) falls through to
+            # `_occupancy_ceiling_verdict`'s own None-passes fallback, same as the disk
+            # path's "no usage block in the tail" case - never a spurious refusal for want
+            # of a reading this loop cannot always get.
             usage_row = await TranscriptStore(pool).last_usage_of_session(
                 "claude-code", anchor_sid)
             usage = _usage_from_store(usage_row) if usage_row is not None else None
@@ -1735,9 +1723,9 @@ async def _lineage_resume_candidate(
                            "materialize into — resumable, but nowhere to emit it")
             else:
                 from src.orchestrator.mounts import _harness_slug
-                # `full_sid`, never truncated `session` — naming the destination by the
-                # graph's own 8-char value is exactly how today's stray stub got created
-                # in the first place, and how it went on to shadow the real transcript in
+                # Use `full_sid`, never truncated `session`: naming the destination by the
+                # graph's own 8-char value is exactly how a stray stub could get created in
+                # the first place, and how it could go on to shadow the real transcript in
                 # the next anchored discovery (mtime-max among same-prefix files).
                 dest = str(sense_root / _harness_slug(office) / f"{full_sid}.jsonl")
                 receipt = await store.rematerialize_to_disk(anchor_sid, dest=dest)
@@ -1745,15 +1733,15 @@ async def _lineage_resume_candidate(
                     log.append(f"gen {gen} (session {session[:8]}): materialize refused — "
                                f"{receipt['error']}")
                 else:
-                    # `materialized_at` is the OFFICE (a real cwd), not `dest` (the jsonl
-                    # file the office's own harness slug resolves to) — a spawn's `cwd`
-                    # argument is a directory the harness derives its OWN slug from, the
+                    # `materialized_at` is the office (a real cwd), not `dest` (the jsonl
+                    # file the office's own harness slug resolves to). A spawn's `cwd`
+                    # argument is a directory the harness derives its own slug from, the
                     # same convention `resume_spawn`/`_spawn_claude_bg` already use for
                     # `repo`; handing back the file path here would make every caller
                     # re-derive the office from it instead of just using what it got.
                     materialized_at = office
         mtime = last_ingested.timestamp() if last_ingested is not None else time.time()
-        # `full_sid`, not the graph's own truncated `session` — this is what a caller
+        # Use `full_sid`, not the graph's own truncated `session`: this is what a caller
         # hands to resume_spawn/_spawn_claude_bg as `resume_session`, and the harness's
         # `--resume` flag needs the exact id it knows itself by, never an 8-char prefix.
         return (full_sid, repo, mtime, "", materialized_at, hop_num), log
@@ -1762,20 +1750,19 @@ async def _lineage_resume_candidate(
 
 def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
                    grade: str | None, preview: str) -> str:
-    """The nudge as a CUTE LITTLE MAIL (operator, 2026-07-20: 'formatting is important so
-    the logs know who did what at the transcript level'). The injected turn IS a transcript
-    record — it carries full attribution (who, to whom, which message, what grade) so a log
-    reader, the miner, or the operator scrolling a window sees the hop's provenance without
-    leaving the line. The envelope is the KNOCK, never the letter's authority: the addressee
-    still reads and settles through the box.
+    """Formats the nudge as a small, self-describing mail notice. Formatting matters here
+    so the logs show who did what at the transcript level. The injected turn is itself a
+    transcript record: it carries full attribution (who, to whom, which message, what
+    grade) so a log reader, an automated reviewer, or a person scrolling a window sees the
+    hop's provenance without leaving the line. The notice is only an announcement, never
+    the message's own authority: the addressee still reads and settles the real message
+    through the inbox.
 
-    THE FIRST-BREATH READ LAW'S OWN DISCLOSURE (thread afd27e1a, Thoth mail 13003, item
-    2): `« preview »` below is exactly that — a preview, never a substitute for reading
-    it. Said explicitly, not left implicit, because it's now also enforced: `inbox`
-    itself refuses `ack=[id]` for an id this generation has never returned through a
-    real inbox() call (provenance.unread_message_ids) — an heir acking straight off
-    this envelope, never having read the message itself, is refused, not silently
-    accepted."""
+    `« preview »` below is exactly that, a preview, never a substitute for reading the
+    message. This is stated explicitly because it is also enforced: `inbox` itself refuses
+    `ack=[id]` for an id this generation has never returned through a real inbox() call
+    (provenance.unread_message_ids). A successor acking straight off this notice, never
+    having read the message itself, is refused, not silently accepted."""
     g = {"ask": "ask — needs your reply or act",
          "fyi": "fyi — an ack settles it"}.get(grade or "", grade or "ungraded")
     return (
@@ -1792,12 +1779,12 @@ def _mail_envelope(msg_id: int, *, sender_label: str, addressee_label: str,
 async def _resolve_wake_address(
     pool: asyncpg.Pool, addressee: str,
 ) -> tuple[str, str | None] | dict[str, str]:
-    """The address resolution dispatch_dm's own first hop shares with wake_gate_preflight's
-    MCP surface (#156.4): seat -> current holder -> living head (folds). Returns
-    (resolved_agent_id, seat_id) on success, or a terminal {mode, detail} dict on a vacant
-    seat — the one early-exit this resolution step can produce on its own, before any gate
-    runs. Extracted so the two callers can never independently drift on HOW an address
-    becomes a mind (38c71544's own class of bug, applied to itself)."""
+    """The address resolution that dispatch_dm's own first step shares with
+    wake_gate_preflight's MCP surface: seat -> current holder -> living head (folds).
+    Returns (resolved_agent_id, seat_id) on success, or a terminal {mode, detail} dict on a
+    vacant seat - the one early-exit this resolution step can produce on its own, before
+    any gate runs. Extracted so the two callers can never independently drift on how an
+    address resolves to a live identity."""
     from src.orchestrator.folds import canonical_agent, living_head
     from src.orchestrator.seats import held_seat, seat_receipt
 
@@ -1818,16 +1805,16 @@ async def _resolve_wake_address(
 
 
 async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
-    """A session-shaped body actually backs `job`, confirmed against `claude agents --json`
-    — the harness's own front-end view, which shows every live body BY CONSTRUCTION
-    (`_claude_agents_json`'s own docstring). The daemon's {ok:true} on `nudge` means it
-    ACCEPTED the envelope into its own queue, never that a live reader is there to receive
-    it: a job the daemon still lists after its own body already exited, or one whose body
-    outlived the daemon's own GENERATION (a respawned daemon does not always inherit every
-    prior job cleanly), both accept without anyone home. Matched the same way
-    `claude_daemon.job_for` matches a job to an identity (short id, full session id, or its
-    8-char prefix) so the two never drift. Fails open to False (never raises) — an
-    `agents_json` read failure reads as 'cannot confirm', never as a false positive."""
+    """Confirms that a session-shaped body actually backs `job`, checked against
+    `claude agents --json` - the harness's own front-end view, which shows every live body
+    by construction (see `_claude_agents_json`'s own docstring). The daemon's {ok:true} on
+    `nudge` means it accepted the notice into its own queue, never that a live reader is
+    there to receive it: a job the daemon still lists after its own body already exited, or
+    one whose body outlived the daemon's own generation (a respawned daemon does not always
+    inherit every prior job cleanly), can both accept without anyone home. Matched the same
+    way `claude_daemon.job_for` matches a job to an identity (short id, full session id, or
+    its 8-char prefix) so the two never drift. Fails open to False (never raises): an
+    `agents_json` read failure reads as "cannot confirm," never as a false positive."""
     sid = str(job.get("sessionId") or "")
     short = str(job.get("short") or "")
     ids = {i for i in (short, sid, sid[:8] if sid else "") if i}
@@ -1850,54 +1837,50 @@ async def _confirm_listener(job: dict[str, Any], agents_json: Any) -> bool:
 async def _resume_occupancy_gate(
     resume: tuple[str, str, float, str], *, agents_json: Any, spawn_cwd: str | None = None,
 ) -> tuple[str, str] | None:
-    """IDENTITY vs OCCUPANCY (task #178, the ferryman/sekhmet wave, operator's tonight-law:
-    mechanisms not patches, 7d6815bb/df646654): `_lineage_resume_candidate` (and
-    `_resume_guard` beside it) answer IDENTITY — whose session, graph-truth, via
-    `succession_chain`. Neither answers OCCUPANCY — whether a body is ACTUALLY SITTING
+    """Identity versus occupancy. `_lineage_resume_candidate` (and `_resume_guard` beside
+    it) answer identity: whose session, established from the graph via
+    `succession_chain`. Neither answers occupancy: whether a body is actually sitting
     there right now. A `-p --resume` fired beside a live body forks the mind into two
     processes both claiming the same identity; nothing upstream of this call catches
-    that, because nothing upstream asks the occupancy question at all. This is the ask,
-    right before ANY resume-spawn — two independent signals, matched differently on
+    that, because nothing upstream asks the occupancy question at all. This check runs
+    right before any resume-spawn, using two independent signals, matched differently on
     purpose (a live body can be found by either without being findable by both):
 
-    `_confirm_listener` (task #176's own primitive, reused verbatim, never a second
-    matcher) checks BY SESSION ID against `claude agents --json` — catches a body the
-    graph's own candidate session id already names, wherever `_lineage_resume_candidate`
-    found it, at any hop. `census.live_bodies_by_cwd` checks BY OFFICE DIRECTORY via
-    /proc — catches a live claude process sitting in the exact office this resume would
-    land in, whatever session id it thinks it has (a manually-run `claude` that hasn't
-    self-mounted yet is invisible to the first signal, visible to this one).
+    `_confirm_listener` (a shared primitive, reused verbatim, never a second matcher)
+    checks by session id against `claude agents --json`, catching a body the graph's own
+    candidate session id already names, wherever `_lineage_resume_candidate` found it, at
+    any hop. `census.live_bodies_by_cwd` checks by office directory via /proc, catching a
+    live claude process sitting in the exact office this resume would land in, whatever
+    session id it thinks it has (a manually-run `claude` that hasn't self-mounted yet is
+    invisible to the first signal, visible to this one).
 
-    Either signal firing refuses the RESUME. They are NOT the same finding and this
-    returns `(which, reason)` so the caller can never flatten them again (the collapse
-    fixed 2026-08-28; ruling f624d114's law one turn further down the ladder — an
-    ignorance must never wear the same status as a finding, and here a POSITIVE
-    IDENTIFICATION OF THE RIGHT MIND had been wearing the same status as an
-    unidentified process):
+    Either signal firing refuses the resume. They are not the same finding, and this
+    returns `(which, reason)` so the caller can never flatten them again: an absence of
+    evidence must never wear the same status as a positive finding, and here a positive
+    identification of the right mind had been wearing the same status as an unidentified
+    process:
 
-      'self'    — `_confirm_listener` matched THIS RESUME'S OWN SESSION ID. The
+      'self'    - `_confirm_listener` matched this resume's own session id. The
                   addressee itself is live and holding the very session the mail is
                   addressed to. It reads this from its own inbox at its next turn.
-                  NOTHING IS LOST AND NOTHING IS OWED — an OUTCOME, never a failure
-                  (the `queued-live-unresolved` class, whose own comment records
-                  Alfred concluding a reachable seat was unreachable and retracting).
-      'foreign' — only `live_bodies_by_cwd` matched: a claude process sits in the
-                  office, identity UNKNOWN — a stranger, a manual run that has not
-                  self-mounted, or another lineage entirely. Whether anyone ever reads
-                  this mail is genuinely unknown, and the receipt must say so.
+                  Nothing is lost and nothing is owed: this is an outcome, never a
+                  failure.
+      'foreign' - only `live_bodies_by_cwd` matched: a claude process sits in the
+                  office, identity unknown - an unrelated process, a manual run that has
+                  not self-mounted, or another lineage entirely. Whether anyone ever
+                  reads this mail is genuinely unknown, and the receipt must say so.
 
-    Returns None when neither finds anybody home (safe to resume) — never a silent
-    block; the caller's own receipt names exactly which signal fired and what it means.
+    Returns None when neither finds anybody home (safe to resume), never a silent block;
+    the caller's own receipt names exactly which signal fired and what it means.
 
-    `spawn_cwd` (the wire-resume-to-store rewrite, ruling d161a156/d63b2ca6): the ACTUAL
-    directory the resume is about to spawn into and materialize onto — the office, once a
-    caller has one, never `resume[1]` (`repo`, which stays the work-tree/launch_cwd value
-    by contract and is no longer where the transcript lands). Defaults to `resume[1]` for
-    a caller with no office yet, unchanged from before this parameter existed. THE PEN
-    RULE (4d6844bc) is exactly why this must check the SPAWN target, not the launch_cwd
-    the old hunt happened to use: a live body sitting in the office — about to have its
-    own transcript overwritten by `rematerialize_to_disk` — must refuse, not go
-    undetected because the check looked at the wrong directory."""
+    `spawn_cwd` is the actual directory the resume is about to spawn into and materialize
+    onto: the office, once a caller has one, never `resume[1]` (`repo`, which stays the
+    work-tree/launch_cwd value by contract and is no longer where the transcript lands).
+    Defaults to `resume[1]` for a caller with no office yet, unchanged from before this
+    parameter existed. This must check the spawn target, not the launch_cwd an older
+    version used, because a live body sitting in the office - about to have its own
+    transcript overwritten by `rematerialize_to_disk` - must refuse, not go undetected
+    because the check looked at the wrong directory."""
     session_id, repo = resume[0], resume[1]
     check_cwd = spawn_cwd or repo
     if await _confirm_listener({"sessionId": session_id, "short": ""}, agents_json):
@@ -1921,14 +1904,14 @@ async def dispatch_dm(
     fresh_spawn: Any = None,
 ) -> dict[str, str]:
     """Thin wrapper around `_dispatch_dm_body`: persists the verdict it returns onto the
-    message (WAVE 27 BUG 3, DM 11799/11853, thread bc517864) before handing it back — one
-    write site instead of duplicating it onto every one of the body's ~20 return points.
-    `dispatch_mode`/`dispatch_mode_at` are audit-only (never read back to gate anything);
-    the re-dispatch itself already works without them — the ~60s backstop sweep
-    (trigger_mail_tick) calls this same function fresh every tick, and a mid-turn
-    addressee's own transcript-freshness check naturally falls open into a real nudge the
-    moment its turn actually ends. What was missing was a durable answer to "was this
-    message caught mid-turn, and when did we last check" — this closes that, nothing else."""
+    message before handing it back, one write site instead of duplicating it onto every
+    one of the body's roughly 20 return points. `dispatch_mode`/`dispatch_mode_at` are
+    audit-only (never read back to gate anything); the re-dispatch itself already works
+    without them - the roughly 60-second backstop sweep (trigger_mail_tick) calls this
+    same function fresh every tick, and a mid-turn addressee's own transcript-freshness
+    check naturally falls open into a real nudge the moment its turn actually ends. What
+    was missing was a durable answer to "was this message caught mid-turn, and when did we
+    last check" - this closes that, nothing else."""
     result = await _dispatch_dm_body(
         pool, addressee=addressee, msg_id=msg_id, sender=sender, settings=settings,
         spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge,
@@ -1945,40 +1928,39 @@ async def _dispatch_dm_body(
     poke: Any = None, jobs: Any = None, nudge: Any = None, agents_json: Any = None,
     fresh_spawn: Any = None,
 ) -> dict[str, str]:
-    """Dispatch ONE DM — the adapter's whole grammar in one function, shared verbatim by
-    send()'s immediate leg and the worker tick's backstop sweep (two callers, one law: the
-    lanes must never drift). Returns the per-hop RECEIPT {mode, detail}:
+    """Dispatch one DM: the whole delivery grammar in one function, shared verbatim by
+    send()'s immediate leg and the worker tick's backstop sweep (two callers, one rule: the
+    two paths must never drift). Returns the per-hop receipt {mode, detail}:
 
-      nudged             — the mail envelope was injected into the addressee's live
-                           backgrounded session via the HARNESS DAEMON (the visible hop:
-                           the operator's front renders daemon-owned turns natively —
-                           thread 4261a0d8, the ghost problem's fix) AND a matching
-                           session-shaped body is confirmed live in `claude agents --json`
-      queued-no-listener — the daemon ACCEPTED the envelope ({ok:true}) but no
-                           session-shaped body confirms it in `claude agents --json` — a
+      nudged             - the mail notice was injected into the addressee's live
+                           backgrounded session via the harness daemon (the visible hop:
+                           the operator's front end renders daemon-owned turns natively)
+                           and a matching session-shaped body is confirmed live in
+                           `claude agents --json`
+      queued-no-listener - the daemon accepted the notice ({ok:true}) but no
+                           session-shaped body confirms it in `claude agents --json` - a
                            job the daemon still lists after its body exited, or one that
                            outlived the daemon's own generation, can both accept without
-                           anyone home (task #176, practice 2c45d78e: UNKNOWN, never
-                           smoothed into either 'nudged' or a resolved failure). Queue
-                           semantics are UNCHANGED — the backstop sweep still retries
-                           at-least-once, exactly as before this verdict existed
-      resumed            — the addressee's own session was continued with the mail as its
+                           anyone home (reported as unknown, never smoothed into either
+                           'nudged' or a resolved failure). Queue semantics are unchanged:
+                           the backstop sweep still retries at-least-once, exactly as
+                           before this verdict existed
+      resumed            - the addressee's own session was continued with the mail as its
                            next turn (the fallback push when the daemon doesn't hold it)
-      poked              — typed into the addressee's manager-hosted OPEN window (rare now)
-      mid-turn           — the addressee is MID-TURN; its own turn's end surfaces the DM
-                           (renamed from the old, misleading "delivered" — 5af93c89: the
-                           addressee has NOT read it yet, and the word must never claim
-                           otherwise)
-      queued-fyi         — grade='fyi' never wakes: the grammar's loop terminator (an ack at
-                           the addressee's next natural turn settles it, no turn minted)
-      queued-paused      — an explicit pause holds the seat; mail waits in the box
-      queued-needs-input — the addressee asked the operator and went quiet; the human's word
+      poked              - typed into the addressee's manager-hosted open window (rare now)
+      mid-turn           - the addressee is mid-turn; its own turn's end surfaces the DM
+                           (this replaced the old, misleading "delivered": the addressee
+                           has not read it yet, and the word must never claim otherwise)
+      queued-fyi         - grade='fyi' never wakes: the loop terminator (an ack at the
+                           addressee's next natural turn settles it, no turn minted)
+      queued-paused      - an explicit pause holds the seat; mail waits in the box
+      queued-needs-input - the addressee asked the operator and went quiet; the human's word
                            is the release, peer mail must not preempt it
-      queued-wake-in-flight / braked / skipped-* / held / pull-only / refused — the brakes,
+      queued-wake-in-flight / braked / skipped-* / held / pull-only / refused - the brakes,
                            each detail saying exactly which one and why.
 
-    A wake carries ONE nudge and no spawn authority (--allowedTools mcp__osiris); the
-    ledger row is written under an advisory lock BEFORE the spend, so two dispatchers (the
+    A wake carries one nudge and no spawn authority (--allowedTools mcp__osiris); the
+    ledger row is written under an advisory lock before the spend, so two dispatchers (the
     send leg and a concurrent tick) can never double-fire one message."""
     st = settings or get_settings()
     spawn = spawn or _spawn_claude
@@ -1987,13 +1969,12 @@ async def _dispatch_dm_body(
     poke = poke or _poke_window
     agents_json = agents_json or _claude_agents_json
     if jobs is None or nudge is None:
-        # THE INJECT SEAM (ruling 85fba696, superseding 482c3d0f): `nudge` defaults to
-        # claude_daemon.reply — the daemon turn-injection channel, disclosed to Anthropic and
-        # deemed INTENDED DESIGN, so the old "do not build new machinery on the default" bar is
-        # WITHDRAWN. `nudge` stays a parameter anyway: the lane is an undocumented internal free
-        # to break without notice, so this is the swap seam for whatever replaces it — kept as
-        # operational insurance now rather than legal cover. `jobs` (job_for) is a benign READ
-        # of daemon liveness (the authoritative state Ra's reachability read consults).
+        # The injection seam: `nudge` defaults to claude_daemon.reply, the daemon
+        # turn-injection channel, disclosed to Anthropic and confirmed as intended design.
+        # `nudge` stays a parameter anyway: the channel is an undocumented internal free to
+        # break without notice, so this is the swap seam for whatever replaces it, kept as
+        # operational insurance. `jobs` (job_for) is a benign read of daemon liveness (the
+        # authoritative state a reachability check consults).
         from src.ingest.harness import claude_daemon
         jobs = jobs or claude_daemon.job_for
         nudge = nudge or claude_daemon.reply
@@ -2007,35 +1988,34 @@ async def _dispatch_dm_body(
         return {"mode": "queued-fyi",
                 "detail": "an fyi never wakes — the addressee acks it at its own next turn "
                           "(the loop terminator)"}
-    # resolve the address to a living mind: seat → current holder → living head (folds).
-    # THE SEAT GAP this closes: name-addressed mail stores the SEAT id (B2), and the old DM
-    # lane matched it against agent_mounts verbatim — so every seat-bound addressee (the
-    # whole charter pattern) was silently pull-only.
+    # Resolve the address to a living identity: seat -> current holder -> living head
+    # (folds). The gap this closes: name-addressed mail stores the seat id, and the old
+    # DM path matched it against agent_mounts verbatim - so every seat-bound addressee
+    # (the whole charter pattern) was silently pull-only.
     from src.orchestrator.folds import wakeable_identity
     from src.orchestrator.seats import held_seat
     resolved = await _resolve_wake_address(pool, addressee)
     if isinstance(resolved, dict):
         return resolved
     target, seat_id = resolved
-    # THE HUMAN-ATTENDED GUARD (Thoth LIII 2026-07-21, ruling d8a77f80; the proxy REPLACED by
-    # thread 96f62338). The daemon reply lane FORGES a human turn (the confirmed RCE), so a
-    # nudge/poke into a session the operator drives lands in the operator's OWN input turn —
-    # caught live. The ORIGINAL guard read 'seat manages someone' as 'a human drives this
-    # session' — true only while Thoth was the sole manager, and broken the day workers started
-    # minting sub-workers and test seats of their own (Imhotep's own flip-test mints made him a
-    # manager; alfred's #50-pilot workers did too — both silently lost their push lane forever).
-    # THE REAL SIGNAL now: `_is_human_attended` reads the seat's own explicit `attended`
-    # property (set_seat_attended, operator-approved to change) — never infers it from the org
-    # chart. This yields the same asymmetry the guard always wanted (manager→worker injects,
-    # worker→manager waits in the box) but keyed on WHO IS ATTENDED, not who manages. It runs
-    # EVEN WITH the trigger on — a human-attended seat is never a nudge target, period.
+    # The human-attended guard. The daemon reply channel forges a human turn, so a
+    # nudge/poke into a session the operator drives would land in the operator's own input
+    # turn - caught live in practice. An earlier version of this guard read "seat manages
+    # someone" as "a human drives this session" - true only while there was a single
+    # manager, and broken the day workers started minting sub-workers and test seats of
+    # their own (each such worker silently lost its push lane forever). The real signal
+    # now: `_is_human_attended` reads the seat's own explicit `attended` property
+    # (set_seat_attended), never infers it from the org chart. This yields the same
+    # asymmetry the guard always wanted (manager to worker injects, worker to manager waits
+    # in the box) but keyed on who is attended, not who manages. It runs even with the
+    # trigger on - a human-attended seat is never a nudge target, period.
     if seat_id and await _is_human_attended(pool, seat_id):
         return {"mode": "queued-human",
                 "detail": f"{target} is a human-attended seat — the daemon never injects a "
                           "human's live turn; the mail waits in its box and surfaces on its "
                           "next turn (perceived by pull, not a forged injection)"}
     faces = [c for c in {addressee, target, seat_id} if c]
-    # wall #2 — the gate: an explicit pause, or needs-input (ask-then-silence)
+    # Gate check: an explicit pause, or needs-input (ask-then-silence)
     paused_on = await _paused(pool, faces)
     if paused_on:
         return {"mode": "queued-paused",
@@ -2051,12 +2031,11 @@ async def _dispatch_dm_body(
         return {"mode": "retired",
                 "detail": f"{target} is retired — the trigger never reanimates a deliberate "
                           "close; the estate carries the mail to the next mint"}
-    # ALREADY SETTLED BY THE LINEAGE (the per-agent-id read-state class, bug 00378259 —
-    # its third bite of the day, this one on the trigger's own deliverable query: it keys
-    # settlement on the EXACT addressed id, so mail acked by a successor generation reads
-    # deliverable forever and earns a phantom nudge. Caught live when the lane's first
-    # unsolicited delivery knocked on THIS builder's window with mail its own lineage
-    # settled days earlier.)
+    # Already settled by the lineage. This is the per-agent-id read-state class of bug: it
+    # keys settlement on the exact addressed id, so mail acked by a successor generation
+    # reads deliverable forever and earns a phantom nudge. Caught live when this path's
+    # first unsolicited delivery knocked with mail its own lineage had already settled
+    # days earlier.
     from src.orchestrator.agents import _generation
     base = _generation(target)[0]
     if await pool.fetchval(
@@ -2067,7 +2046,7 @@ async def _dispatch_dm_body(
                 "detail": "already settled by the addressee's lineage — the deliverable "
                           "query lags on cross-generation read-state (00378259); "
                           "nothing to wake"}
-    # wall #4 — the brakes, cheapest first
+    # The rate brakes, cheapest first
     if await _last_wake_mode_msg(pool, msg_id) in ("dm-reply", "dm-resume", "dm-poke"):
         return {"mode": "skipped-once-per-message",
                 "detail": "this message already got its one wake and did not settle — "
@@ -2083,12 +2062,12 @@ async def _dispatch_dm_body(
                 "detail": f"the per-seat rate brake: {cap} wakes/h already landed on this "
                           "addressee — the backstop sweep runs every ~60s and retries once "
                           "the hourly window clears"}
-    # WAKE'S OWN QUESTION (thread 28842543): `target` above is DELIVERY's answer — the
-    # declared lineage head, trusted even past a successor that never actually mounted.
-    # A bare mount lookup on `target` alone reproduces the exact defect (a live agent
+    # Wake asks its own question here: `target` above is delivery's answer, the declared
+    # lineage head, trusted even past a successor that never actually mounted. A bare
+    # mount lookup on `target` alone reproduces a real defect seen live (a live agent
     # under an earlier generation reported "has never mounted" beside its own fresh
-    # last_seen, in the SAME receipt). wake_target is the most recently mounted id
-    # anywhere in `target`'s lineage — None only when NOTHING there has ever mounted, in
+    # last_seen, in the same receipt). wake_target is the most recently mounted id
+    # anywhere in `target`'s lineage - None only when nothing there has ever mounted, in
     # which case `target` (the declared name) is still the honest thing to name below.
     wake_target = await wakeable_identity(pool, target)
     if wake_target is None:
@@ -2098,14 +2077,15 @@ async def _dispatch_dm_body(
         "ORDER BY last_seen DESC LIMIT 1", wake_target))
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
-    # THE RATE CAP'S UNIT (msg 984, 2026-07-21): the ping-pong hazard this brake bounds is a
-    # property of a PAIR, not a project — a project-wide cap makes ordinary house growth
+    # The rate cap's unit: the ping-pong hazard this brake bounds is a property of a pair,
+    # not a project - a project-wide cap makes ordinary growth in the number of agents
     # indistinguishable from a runaway loop (measured live: two capped nudges in ten
-    # minutes, on the two most important messages of the day, both rescued by the operator
-    # by hand). When sender and target share an active managed_by edge, scope the cap to
-    # that pair; anything else (a peer DM, an unseated party) keeps the original project
-    # brake — the aggregate/cost hazard already has its own dedicated guard (may_spend,
-    # below), so the rate cap does not need to double as one and can stay narrow.
+    # minutes, on the two most important messages of the day, both had to be rescued by
+    # the operator by hand). When sender and target share an active managed_by edge, scope
+    # the cap to that pair; anything else (a peer DM, an unseated party) keeps the
+    # original project-wide brake - the aggregate cost hazard already has its own
+    # dedicated guard (may_spend, below), so the rate cap does not need to double as one
+    # and can stay narrow.
     sender_seat = ((await held_seat(pool, sender)) or {}).get("seat_id") if sender else None
     if sender and seat_id and sender_seat and await _managed_edge(pool, seat_id, sender_seat):
         recent = await _recent_wakes_for_pair(
@@ -2122,25 +2102,25 @@ async def _dispatch_dm_body(
         return {"mode": "skipped-" + reason,
                 "detail": f"the fleet's own brakes held it ({reason}) — the backstop sweep "
                           "runs every ~60s and retries once the brake clears"}
-    # the dollar wall: a resume is a real turn — but only a BILLED one. On a subscription the
-    # CLI's cost is notional and this gate is inert (spend_is_metered=False); it bites only when
-    # Osiris runs on a keyed API backend.
+    # The budget check: a resume is a real turn, but only a billed one matters here. On a
+    # subscription the CLI's cost is notional and this gate is inert (spend_is_metered=False);
+    # it bites only when Osiris runs on a keyed API backend.
     ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
     if not ok:
         return {"mode": "refused", "detail": str(why)}
-    # MID-TURN MEANS THE TRANSCRIPT IS MOVING — nothing else (the statusline-heartbeat
-    # superstition, killed 2026-07-20 at the operator's first live round-trip ask: the
-    # statusline bumps agent_mounts.last_seen every few seconds FOR BACKGROUNDED SESSIONS
-    # TOO, so by that field every seated idle agent read as permanently working and this
-    # gate could never open. A turn WRITES the transcript; a chrome render does not. The
-    # heartbeat keeps its own job — the minting guard — it just no longer testifies here.)
-    # AND THE INODE IS NOT THE TRANSCRIPT (the Aegis phantom, 2026-07-21: a session 13h
-    # dead on a 401 — size unchanged the whole time — wore an mtime seconds old, bumped
-    # by something in the chrome/daemon, and this gate read the corpse as a working mind.
-    # The operator's ruling: AWAKE and ASLEEP must never be confounded — 'waking them up
-    # to run jobs is one thing, waiting for them to awake is another'.) mtime is only the
-    # cheap pre-filter; the WITNESS is the newest timestamped line — a TURN writes those,
-    # a toucher cannot.
+    # Mid-turn means the transcript is moving, nothing else. An earlier version of this
+    # check trusted the statusline's own heartbeat, which turned out to be wrong: the
+    # statusline bumps agent_mounts.last_seen every few seconds for backgrounded sessions
+    # too, so by that field every seated idle agent read as permanently working and this
+    # gate could never open. A turn writes the transcript; a status-line render does not.
+    # The heartbeat keeps its own job, the minting guard, it just no longer testifies here.
+    # Also, a file's mtime is not the transcript: a session found dead on an auth error 13
+    # hours earlier, size unchanged the whole time, still wore an mtime seconds old,
+    # bumped by something in the rendering/daemon layer, and this gate read the corpse as
+    # a working mind. Awake and asleep must never be confounded: waking an agent up to run
+    # a job is one thing, waiting for it to wake up on its own is another. mtime is only
+    # the cheap pre-filter; the real check is the newest timestamped line - a turn writes
+    # those, a passive touch cannot.
     resume = await _agent_resumable(pool, wake_target, st)
     if resume is not None and time.time() - resume[2] < st.osiris_dm_active_secs:
         root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
@@ -2151,37 +2131,36 @@ async def _dispatch_dm_body(
                     "detail": "the addressee's transcript is moving right now (genuinely "
                               "mid-turn) — its own turn's end surfaces the DM; no second "
                               "process beside a working mind"}
-        # a fresh inode with no fresh TURN is an ASLEEP addressee — fall through and wake
+        # A fresh inode with no fresh turn means the addressee is asleep; fall through and wake
     from src.orchestrator.mounts import is_live
 
     door_rows = await pool.fetch(
         "SELECT job_dir, last_seen FROM agent_mounts WHERE (agent_id=$1 "
         "OR agent_id LIKE $1 || '-%') AND job_dir IS NOT NULL", base)
     doors = {Path(r["job_dir"]).name for r in door_rows}
-    # THE DAEMON-REPLY RUNG LEADS — the VISIBLE hop (thread 4261a0d8; the ghost problem,
-    # operator-confirmed solved 2026-07-20): the front renders the harness DAEMON's job
-    # stream, so a daemon-owned turn is the one push the operator actually SEES. The
-    # daemon's own list is also the address book for LIVE jobs (no door-row dependency —
-    # bug b6a64207 shrinks to the daemon-dark case). Every failure falls OPEN into
-    # poke/resume: undocumented internals never get to strand a message.
+    # The daemon-reply path leads, since it is the visible hop: the operator's front end
+    # renders the harness daemon's job stream, so a daemon-owned turn is the one push the
+    # operator actually sees. The daemon's own list is also the address book for live
+    # jobs (no door-row dependency). Every failure falls open into poke/resume:
+    # undocumented internals never get to strand a message.
     #
-    # THE FRESHNESS FILTER (thread 962f32e2, Khnum's independent measurement 2c4a82de):
-    # `doors` above stays UNFILTERED — the poke lane below (`_window_for`) also reads it
-    # to match against the harness's own live WINDOW list, which is itself the liveness
-    # signal there (a provisional/spare mount can carry a null last_seen and still name a
-    # genuinely live window, mounts.save_mount's own docstring: "a heartbeat must be
-    # earned by an act, never granted by a greeting" — the window list is that act's own
-    # witness, agent_mounts.last_seen is not the only one). The DAEMON rung is different:
-    # `jobs(ids)` below asks an out-of-band oracle (the harness daemon's own registry)
-    # whether an id is a live job, with no independent liveness witness of its own for
-    # this dispatcher to cross-check — so a long-dead mount row (this agent_id's or an
-    # earlier generation's) handing its job_dir into `ids` risks wrong-body delivery if
-    # the daemon separately still lists a session under that same id (a zombie, a reused
-    # slot, an unrelated body sharing an 8-hex prefix) — the message lands on a body that
-    # is not the addressee's own live one, while a liveness PROBE elsewhere reports null
-    # for the actual head. `is_live()` (mounts.py's own shared liveness window,
-    # LIVENESS_WINDOW_MINUTES) is the same test `agent_liveness`/the launch-twin guard
-    # already trust for exactly this question — reused here, never a second window.
+    # The freshness filter: `doors` above stays unfiltered, because the poke path below
+    # (`_window_for`) also reads it to match against the harness's own live window list,
+    # which is itself the liveness signal there (a provisional/spare mount can carry a
+    # null last_seen and still name a genuinely live window - a heartbeat must be earned
+    # by an act, never granted by a greeting, per mounts.save_mount's own docstring; the
+    # window list is that act's own witness, agent_mounts.last_seen is not the only one).
+    # The daemon path is different: `jobs(ids)` below asks an out-of-band oracle (the
+    # harness daemon's own registry) whether an id is a live job, with no independent
+    # liveness witness of its own for this dispatcher to cross-check - so a long-dead
+    # mount row (this agent_id's or an earlier generation's) handing its job_dir into
+    # `ids` risks wrong-body delivery if the daemon separately still lists a session under
+    # that same id (a zombie, a reused slot, an unrelated body sharing an 8-hex prefix):
+    # the message would land on a body that is not the addressee's own live one, while a
+    # liveness probe elsewhere reports null for the actual head. `is_live()` (mounts.py's
+    # own shared liveness window, LIVENESS_WINDOW_MINUTES) is the same test other liveness
+    # checks in this codebase already trust for exactly this question, reused here, never
+    # a second window.
     live_doors = {Path(r["job_dir"]).name for r in door_rows if is_live(r["last_seen"])}
     ids = live_doors | {d[:8] for d in live_doors}
     if resume is not None:
@@ -2192,8 +2171,8 @@ async def _dispatch_dm_body(
     if job is not None and await _resident_disagrees(
             pool, root, str(job.get("sessionId") or ""), base,
             job_dir_hint=str(job.get("short") or ""), seat_id=seat_id):
-        # the crossed-registry class (0100a35e): the registry pointed here, the session's
-        # own signed testimony names someone else (or nobody) — never leak the envelope
+        # The crossed-registry case: the registry pointed here, but the session's own
+        # signed testimony names someone else (or nobody). Never leak the notice.
         job = None
     if job is not None:
         s_handle = ((await held_seat(pool, sender)) or {}).get("handle") if sender else None
@@ -2220,24 +2199,24 @@ async def _dispatch_dm_body(
                     "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ($1,$2,$3,'dm-reply')", project, sender, msg_id)
         if nudged:
-            # RECEIPT HONESTY (thread aa58c1e4): 'nudged' means the daemon ACCEPTED the
-            # injection ({ok:true} on its own control socket) — the confirmed hop, not an
-            # observed one (ruling 986b12f0's own distinction: reply() returning True means
-            # QUEUED, not SEEN). Measured empirically (decision 636c8abd): this hop lands as
-            # an actually-submitted turn in ~0.3s in the one case checked — fast enough that
-            # 'nudged' stays the honest label for it — but the wording no longer claims the
-            # turn already happened, only that the daemon took it.
+            # Receipt honesty: 'nudged' means the daemon accepted the injection ({ok:true}
+            # on its own control socket), the confirmed hop, not an observed one (reply()
+            # returning True means queued, not seen). Measured empirically: this hop lands
+            # as an actually-submitted turn in about 0.3s in the one case checked, fast
+            # enough that 'nudged' stays the honest label for it, but the wording no longer
+            # claims the turn already happened, only that the daemon took it.
             #
-            # THE THIRD STATE (task #176, 2026-08-18, practice 2c45d78e): {ok:true} still
-            # cannot distinguish "injected into a live reader" from "handed to a daemon with
-            # nobody home" — a job the daemon still lists after its own body exited, or one
-            # that outlived the daemon's own GENERATION, both accept without anyone there to
-            # receive it. `_confirm_listener` cross-checks `claude agents --json` (the
-            # harness's own front-end view, which shows every live body BY CONSTRUCTION) for
-            # a session-shaped body actually matching this job. QUEUE SEMANTICS UNCHANGED:
-            # the agent_wakes row above is written the SAME WAY regardless of this check
-            # (at-least-once across successions stays correct) — this only decides what the
-            # RECEIPT honestly claims, never whether or how the message redelivers.
+            # The third state: {ok:true} still cannot distinguish "injected into a live
+            # reader" from "handed to a daemon with nobody home" - a job the daemon still
+            # lists after its own body exited, or one that outlived the daemon's own
+            # generation, can both accept without anyone there to receive it.
+            # `_confirm_listener` cross-checks `claude agents --json` (the harness's own
+            # front-end view, which shows every live body by construction) for a
+            # session-shaped body actually matching this job. Queue semantics are
+            # unchanged: the agent_wakes row above is written the same way regardless of
+            # this check (at-least-once across successions stays correct) - this only
+            # decides what the receipt honestly claims, never whether or how the message
+            # redelivers.
             shown = job.get("name") or job.get("short") or "the job"
             if not await _confirm_listener(job, agents_json):
                 return {"mode": "queued-no-listener",
@@ -2253,9 +2232,9 @@ async def _dispatch_dm_body(
                               "live in `claude agents --json` (typically lands within a "
                               "second or two, per measurement — visible live in the agents "
                               "view once it does)"}
-        # the daemon refused (version seam, dead socket, missing key) — fall open
-    # the poke lane: a manager-hosted OPEN window holding this lineage's session gets
-    # the mail typed in as a turn — never a second process beside an open window
+        # The daemon refused (version mismatch, dead socket, missing key). Fall open.
+    # The poke path: a manager-hosted open window holding this lineage's session gets
+    # the mail typed in as a turn, never a second process beside an open window.
     wins = await windows()
     if wins:
         wname = _window_for(wins, {d[:8] for d in doors})
@@ -2275,23 +2254,22 @@ async def _dispatch_dm_body(
     if not st.osiris_dm_resume:
         return {"mode": "held",
                 "detail": "the DM resume arm is dark (osiris_dm_resume=0) — pull-only"}
-    # THE SELECTION SWAP (task #178, Seshat's own specimen tonight — an old generation's
-    # 103MB transcript picked over her real, current session): `resume` above (from
-    # `_agent_resumable`) is `agent_mounts`-keyed, freshest-mounted-row-wins — the exact
-    # shared-anchor defect `_lineage_resume_candidate`'s own docstring documents for a
-    # `--bg`-launched seat (one durable per-seat mount row, overwritten by whichever
-    # generation mounts most recently, blind to which one is the TRUE current lineage
-    # head). It stays correct for the MID-TURN check above (an activity probe, not an
-    # identity claim) but must never pick WHICH session `-p --resume` actually targets.
-    # From here down, `_lineage_resume_candidate` — the SAME graph-truth primitive
-    # launch_seat already uses — walks `succession_chain`'s own `session` property
-    # instead: identity from the graph, never the registry's own amnesia. Started from
-    # `wake_target`, NOT `target`: `target` is living_head's DECLARED successor, which
-    # can be a real, active, but never-mounted Agent object with no `succeeded_from`
-    # backward link for `succession_chain` to walk at all (thread 28842543's own shape,
-    # the reason `wake_target` exists) — `wake_target` is wake's own already-resolved
-    # answer to "which identity can actually be resumed", the correct root for this walk
-    # exactly as `_agent_resumable` above was rooted on it too.
+    # The selection swap. A real specimen showed an old generation's 103MB transcript
+    # picked over the real, current session. `resume` above (from `_agent_resumable`) is
+    # `agent_mounts`-keyed, freshest-mounted-row-wins - the exact shared-anchor defect
+    # `_lineage_resume_candidate`'s own docstring documents for a `--bg`-launched seat (one
+    # durable per-seat mount row, overwritten by whichever generation mounts most
+    # recently, blind to which one is the true current lineage head). It stays correct for
+    # the mid-turn check above (an activity probe, not an identity claim) but must never
+    # pick which session `-p --resume` actually targets. From here down,
+    # `_lineage_resume_candidate` - the same graph-truth check launch_seat already uses -
+    # walks `succession_chain`'s own `session` property instead: identity from the graph,
+    # never the registry's own amnesia. Started from `wake_target`, not `target`: `target`
+    # is living_head's declared successor, which can be a real, active, but never-mounted
+    # Agent object with no `succeeded_from` backward link for `succession_chain` to walk
+    # at all - the reason `wake_target` exists. `wake_target` is wake's own already-
+    # resolved answer to "which identity can actually be resumed," the correct root for
+    # this walk exactly as `_agent_resumable` above was rooted on it too.
     from src.orchestrator.seats import seat_facts
     launch_cwd = None
     facts: dict[str, Any] | None = None
@@ -2308,28 +2286,28 @@ async def _dispatch_dm_body(
             f"{target} (its own live mount, {wake_target}, checked too)")
         miss_reason = graph_log[-1] if graph_log else "no resumable generation found"
         miss_gate = _gate_name(miss_reason)
-        # THE FRESH-HEIR FALLBACK (ruling 94c2e7e8, dispatch 5398 leg 1 — "the zero-
-        # tolerance compaction gate is the bug, not the seats"): resume / nudge /
-        # fresh-heir are the three outcomes every seat must land in, never a fourth
-        # silent wall. A generation whose OWN transcript sits too close to its own
-        # compaction seam to resume (resume_verdict's honest "nothing real to resume
-        # into") still has a real graph identity and a real office — SCOPED TO
-        # COMPACTION ONLY: the other gates (ceiling/no-anchor/crossed-registry/
-        # resident-unknown) are each a genuine "who this even is" uncertainty, and
-        # minting on top of THAT would repeat the exact stranger-over-a-live-head class
-        # Leg 3 just closed. Boots the SUCCESSOR at the seat's own launch location.
+        # The fresh-heir fallback: the zero-tolerance compaction gate was found to be the
+        # bug, not the seats. Resume, nudge, and fresh-heir are the three outcomes every
+        # seat must land in, never a fourth silent wall. A generation whose own transcript
+        # sits too close to its own compaction seam to resume (resume_verdict's honest
+        # "nothing real to resume into") still has a real graph identity and a real
+        # office. This is scoped to compaction only: the other gates
+        # (ceiling/no-anchor/crossed-registry/resident-unknown) are each a genuine "who
+        # this even is" uncertainty, and minting a new session on top of that would repeat
+        # the exact class of bug where a stranger replaces a still-live identity. Boots the
+        # successor at the seat's own launch location.
         handle = facts.get("handle") if facts else None
         office = facts.get("anchor_cwd") if facts else None
         house = facts.get("house") if facts else None
         if (miss_gate == "compaction" and seat_id is not None and launch_cwd
                 and handle and office):
             anchor = _launch_anchor(seat_id)
-            # THE LEDGER ROW GOES IN UNDER AN ADVISORY LOCK, BEFORE THE MINT (matching
+            # The ledger row goes in under an advisory lock, before the mint, matching
             # dispatch_dm's own established discipline elsewhere in this function: two
-            # dispatchers — send()'s immediate leg and a concurrent worker-tick sweep —
-            # can both reach here for one message, and only one may spend). The bind-
-            # before-spawn write below is exactly a spend (it mints a heir), so it must
-            # not run before this gate decides which dispatcher, if either, gets to.
+            # dispatchers - send()'s immediate leg and a concurrent worker-tick sweep -
+            # can both reach here for one message, and only one may spend. The bind-
+            # before-spawn write below is exactly a spend (it mints a successor), so it
+            # must not run before this gate decides which dispatcher, if either, gets to.
             async with pool.acquire() as conn, conn.transaction():
                 await conn.execute(
                     "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, "
@@ -2344,20 +2322,18 @@ async def _dispatch_dm_body(
                 await conn.execute(
                     "INSERT INTO agent_wakes (to_project, from_agent, message_id, mode) "
                     "VALUES ($1,$2,$3,'dm-fresh-heir')", project, sender, msg_id)
-            # BOUND BEFORE SPAWN, HERE TOO (Thoth dispatch 6713, closing the hole above
-            # Khnum's own claim_name backstop, 2c65c6d): this fallback used to hand a
-            # fresh body `_bg_boot_prompt`'s INSTRUCTION-shaped text ("claim_name
-            # yourself") — Sekhmet's Piece 1 (msg 6692/6694) fixed launch_seat's own
-            # fresh-mint fallthrough the same way this fixes dispatch_dm's: identity
-            # is a fact the server already holds (office/handle/house all came off
-            # `seat_facts` above), not a re-derivation to hand a fresh session through
-            # a fallible tool call it might refuse and then route around (the Marquee
-            # specimen, one path over). `current_holder=target`: `target` IS this
-            # seat's own declared living head — the identity whose compaction seam
-            # triggered this fallback in the first place — used only as
-            # `_bind_before_spawn`'s OWN fallback (its real ancestor resolution reads
-            # the seat's lineage first, never the `holds` edge, same as launch_seat's
-            # own call).
+            # Bound before spawn, here too, closing the same hole a previous fix closed
+            # elsewhere: this fallback used to hand a fresh body an instruction-shaped
+            # prompt ("claim_name yourself"). A prior fix corrected launch_seat's own
+            # fresh-mint fallthrough the same way this fixes dispatch_dm's: identity is a
+            # fact the server already holds (office/handle/house all came off
+            # `seat_facts` above), not a re-derivation to hand a fresh session through a
+            # fallible tool call it might refuse and then route around.
+            # `current_holder=target`: `target` is this seat's own declared living head,
+            # the identity whose compaction seam triggered this fallback in the first
+            # place, used only as `_bind_before_spawn`'s own fallback (its real ancestor
+            # resolution reads the seat's lineage first, never the `holds` edge, same as
+            # launch_seat's own call).
             bound = await _bind_before_spawn(
                 Actions(pool), target_seat=seat_id, handle=handle, house=house,
                 current_holder=target, office=office, anchor=anchor,
@@ -2383,15 +2359,15 @@ async def _dispatch_dm_body(
                 "detail": f"{who} has no resumable session ({miss_reason}) — a private "
                           "message is never handed to a fresh twin"}
     session_id, repo, materialized_at = graph_resume[0], graph_resume[1], graph_resume[4]
-    # THE SPAWN CWD IS THE OFFICE, ALWAYS (operator, 2026-09-03: "~/.osiris is where osiris
-    # agents get their identity and meta from, and cannot drift from the db state"): the
-    # materializer emits the store's canon into the OFFICE slug, and the harness resumes
-    # whichever copy of a session id sits in the SPAWN cwd's own slug (measured live,
-    # 2.1.259: a cwd whose slug held a stale 20KB partial resumed THAT, not the fuller copy
-    # one slug over; cross-slug lookup found nothing at all once two copies existed). The
-    # old `or repo` fallback therefore spawned at a stale copy whenever the emit was
-    # declined — Chad's exact 2026-09-03 shape. `repo` stays in the tuple untouched for
-    # `_zero_hop_graph_corroborates`'s own invariant; it is the spawn location ONLY as
+    # The spawn cwd is always the office: `~/.osiris` is where osiris agents get their
+    # identity and metadata from, and it cannot drift from the database state. The
+    # materializer emits the store's current data into the office slug, and the harness
+    # resumes whichever copy of a session id sits in the spawn cwd's own slug. Measured
+    # live against harness 2.1.259: a cwd whose slug held a stale 20KB partial resumed
+    # that, not the fuller copy one slug over; a cross-slug lookup found nothing at all
+    # once two copies existed. The old `or repo` fallback therefore spawned at a stale
+    # copy whenever the emit was declined. `repo` stays in the tuple untouched for
+    # `_zero_hop_graph_corroborates`'s own invariant; it is the spawn location only as
     # the last-resort fallback for a seatless lineage whose office cannot be derived.
     spawn_cwd = materialized_at or await _resume_office(pool, seat_id, fallback=repo)
     hop = graph_resume[5]
@@ -2402,26 +2378,26 @@ async def _dispatch_dm_body(
         return {"mode": f"resume-refused-{gate}",
                 "detail": f"{refusal} — refusing both nudge and resume; the mail "
                           "stays pull-only for now"}
-    # OCCUPANCY, THE OTHER HALF (task #178): identity above says WHOSE session this is;
-    # this asks whether anybody is ALREADY SITTING there. A `-p --resume` beside a live
-    # body forks the mind — refuse it here, before the spend, never after.
+    # Occupancy, the other half: identity above says whose session this is; this asks
+    # whether anybody is already sitting there. A `-p --resume` beside a live body forks
+    # the mind - refuse it here, before the spend, never after.
     occupied = await _resume_occupancy_gate(
         (graph_resume[0], graph_resume[1], graph_resume[2], graph_resume[3]),
         agents_json=agents_json, spawn_cwd=spawn_cwd)
     if occupied is not None:
         which, reason = occupied
         if which == "self":
-            # NOT A FAILURE — the addressee is live and holds this exact session; a resume
+            # Not a failure: the addressee is live and holds this exact session; a resume
             # would fork the mind for no gain, so we never spend one. But "it reads this at
-            # its next turn" is only true for a body with a NEXT TURN COMING: a genuinely
-            # mid-turn addressee earns that on its own, while an IDLE `claude --bg` body
+            # its next turn" is only true for a body with a next turn coming: a genuinely
+            # mid-turn addressee earns that on its own, while an idle `claude --bg` body
             # (compacted, or simply between turns) has no next turn until something pokes
-            # it — thread 78f5a39e, operator "imhotep dispatch failed, why?": Thoth's
-            # dispatch 7882 sat unread 70 minutes in Imhotep's idle session while three
-            # sibling sends the same minute were nudged and read within seconds. The daemon
-            # reply lane (job_for + reply, the SAME lane the earlier daemon-nudge rung and
-            # wake()/self-compaction already use) pokes an idle body without forking it —
-            # `-p --resume` is the only thing that forks a mind, and this never calls it.
+            # it. This was caught live: a message sat unread 70 minutes in one worker's
+            # idle session while three sibling sends the same minute were nudged and read
+            # within seconds. The daemon reply path (job_for + reply, the same path the
+            # earlier daemon-nudge rung and wake()/self-compaction already use) pokes an
+            # idle body without forking it - `-p --resume` is the only thing that forks a
+            # mind, and this never calls it.
             root = Path(st.osiris_sense_sessions) if st.osiris_sense_sessions \
                 else Path.home() / ".claude" / "projects"
             busy = await asyncio.to_thread(
@@ -2465,8 +2441,8 @@ async def _dispatch_dm_body(
                                          "through the daemon reply lane instead of "
                                          "waiting on an unscheduled next turn; no fork, "
                                          "no resume"}
-            # busy (a turn is genuinely moving), or the daemon has no matching job, or the
-            # poke itself failed — every one of those falls back to the honest pull-only
+            # Busy (a turn is genuinely moving), or the daemon has no matching job, or the
+            # poke itself failed - every one of those falls back to the honest pull-only
             # outcome, exactly as before this fix existed.
             return {"mode": "queued-live-holder",
                     "detail": f"{reason} — it reads this from its own inbox at its next "
@@ -2476,9 +2452,9 @@ async def _dispatch_dm_body(
                 "detail": f"{reason} — refusing to fork a second mind beside it; whether "
                           "that body ever reads this mail is UNKNOWN, never a resolved "
                           "delivery (practice 2c45d78e)"}
-    # the ledger row goes in UNDER AN ADVISORY LOCK, before the spawn: two dispatchers
-    # (send's immediate leg + a concurrent tick) can both reach here for one message —
-    # exactly one of them may spend
+    # The ledger row goes in under an advisory lock, before the spawn: two dispatchers
+    # (send's immediate leg and a concurrent tick) can both reach here for one message -
+    # exactly one of them may spend.
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('osiris-dm-' || $1, 7445))",
@@ -2500,20 +2476,20 @@ async def _dispatch_dm_body(
                       "this mail as its next turn — watch the hop in the agents view"}
 
 
-# ═══ THE KNOCK — wake(), thread 9f566244 piece D, ruling 16722273 ═══════════════════════
-# A manager or worker rousing the OTHER half of its own managed_by pair — never a peer.
-# Gated on the seat graph alone: dispatch_dm above already IS the resolver (handle → seat →
-# living holder → daemon short, with the crossed-registry guard, the real mid-turn check,
-# and every rate brake this file owns) — duplicating it would drift the instant either copy
-# was touched. wake() adds only the authority gate in front of it and an honest vocabulary
-# behind it (dispatch_dm's own "delivered" mode actually means mid-turn and unread — the
-# lying receipt, thread 5af93c89 — this layer never repeats it).
+# ═══ wake() ═══════════════════════════════════════════════════════════════════════════
+# A manager or worker rousing the other half of its own managed_by pair, never a peer.
+# Gated on the seat graph alone: dispatch_dm above already is the resolver (handle -> seat
+# -> living holder -> daemon short, with the crossed-registry guard, the real mid-turn
+# check, and every rate brake this file owns) - duplicating it would drift the instant
+# either copy was touched. wake() adds only the authority gate in front of it and an
+# honest vocabulary behind it (dispatch_dm's own "delivered" mode actually means mid-turn
+# and unread, a receipt that used to lie about that - this layer never repeats it).
 
 
 async def _seat_for_target(actions: Actions, target: str) -> str | None:
-    """The Seat addressed by `target` — a raw seat id, a raw agent id, or a claimed handle —
-    or None (a legacy unbound agent, or nobody). managed_by is Seat-to-Seat; a target with no
-    seat of its own cannot be arbitrated by it, gated or not."""
+    """The Seat addressed by `target`, which may be a raw seat id, a raw agent id, or a
+    claimed handle, or None (a legacy unbound agent, or nobody). managed_by is Seat-to-Seat;
+    a target with no seat of its own cannot be arbitrated by it, gated or not."""
     target = (target or "").strip()
     if target.startswith("seat:"):
         exists = await actions.pool.fetchval(
@@ -2524,14 +2500,15 @@ async def _seat_for_target(actions: Actions, target: str) -> str | None:
     if target.startswith("agent:"):
         held = await held_seat(actions.pool, target)
         return held["seat_id"] if held else None
-    # THE VACANT-SEAT FIX (task #68): resolve_seat below is AGENT-centric — it walks Agent
-    # objects that claimed a handle, so a freshly minted, never-launched seat (no Agent has
-    # ever attached to it) was unresolvable by its own handle, and launch() could never body
-    # it. The Seat object itself already carries the handle mint_seat/ensure_seat stamped;
-    # try that FIRST. An unambiguous hit is the same seat_id the occupied-case fallback below
-    # would find anyway (one seat, one handle), so this changes nothing for the already-
-    # working case — it only adds the vacant one. A twin handle (2+ matches) falls through to
-    # the legacy resolver rather than guessing which one the caller meant.
+    # The vacant-seat fix: resolve_seat below is agent-centric - it walks Agent objects
+    # that claimed a handle, so a freshly minted, never-launched seat (no Agent has ever
+    # attached to it) was unresolvable by its own handle, and launch() could never give it
+    # a body. The Seat object itself already carries the handle mint_seat/ensure_seat
+    # stamped; try that first. An unambiguous hit is the same seat_id the occupied-case
+    # fallback below would find anyway (one seat, one handle), so this changes nothing for
+    # the already-working case - it only adds the vacant one. A duplicate handle (2+
+    # matches) falls through to the legacy resolver rather than guessing which one the
+    # caller meant.
     by_handle = await seats_by_handle(actions.pool, target)
     if len(by_handle) == 1:
         return by_handle[0]
@@ -2541,13 +2518,14 @@ async def _seat_for_target(actions: Actions, target: str) -> str | None:
 
 
 async def _manages_someone(pool: asyncpg.Pool, seat_id: str) -> bool:
-    """True if this seat is the MANAGER side of an active managed_by edge — managed_by is
-    minted worker→manager (mintseat.py), so a manager is the TO-side: workers point up to it.
+    """True if this seat is the manager side of an active managed_by edge. managed_by is
+    minted worker-to-manager (mintseat.py), so a manager is the to-side: workers point up
+    to it.
 
-    NO LONGER dispatch_dm's human-attended proxy (thread 96f62338 replaced it — 'manages
-    someone' stopped meaning 'a human drives this session' the day workers started minting
+    No longer used as dispatch_dm's human-attended proxy (replaced because "manages
+    someone" stopped meaning "a human drives this session" the day workers started minting
     their own sub-workers and test seats; see `_is_human_attended`). Still a correct, plain
-    org-chart predicate in its own right — kept for whatever else asks "does X manage Y"."""
+    org-chart predicate in its own right, kept for whatever else asks "does X manage Y"."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects t ON t.id=l.to_id "
         "WHERE t.canonical=$1 AND l.type='managed_by' "
@@ -2556,8 +2534,8 @@ async def _manages_someone(pool: asyncpg.Pool, seat_id: str) -> bool:
 
 async def _seat_attendance(pool: asyncpg.Pool, seat_id: str) -> str | None:
     """A seat's own explicit `attended` stamp ('human' or 'worker'), or None if it has never
-    been stamped — the common case today, since rollout is deliberate and per-seat
-    (set_seat_attended, thread 96f62338)."""
+    been stamped - the common case today, since rollout is deliberate and per-seat
+    (set_seat_attended)."""
     value = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND o.status='active' AND a.name='attended' "
@@ -2566,18 +2544,19 @@ async def _seat_attendance(pool: asyncpg.Pool, seat_id: str) -> str | None:
 
 
 async def _is_human_attended(pool: asyncpg.Pool, seat_id: str) -> bool:
-    """THE HUMAN-ATTENDED GUARD'S REAL SIGNAL (thread 96f62338, replacing ruling d8a77f80's
-    broken `_manages_someone` proxy). Reads the seat's own explicit `attended` property
-    first — no more inference from the org chart, so a worker that mints a test seat or a
-    sub-worker of its own no longer silently loses its push lane forever (Imhotep's own
-    flip-test mints, alfred's #50-pilot workers — both hit exactly this).
+    """The human-attended guard's real signal, replacing an earlier, broken proxy based on
+    `_manages_someone`. Reads the seat's own explicit `attended` property first, no more
+    inference from the org chart, so a worker that mints a test seat or a sub-worker of
+    its own no longer silently loses its push lane forever (this was observed to happen to
+    real workers doing exactly this).
 
-    NO PROPERTY YET (the rollout is deliberate, most seats are never stamped) falls back
-    CLOSED — human-attended — ONLY for thoth's own seat (belt while the rollout is
-    incomplete: never silently start injecting into the one seat that IS actually
-    operator-driven just because nobody has stamped it yet) and OPEN for everyone else —
-    the actual fix: a seat that merely manages a sub-worker or a test seat is no longer
-    misclassified."""
+    If no property is stamped yet (the rollout is deliberate, most seats are never
+    stamped), this falls back closed - treated as human-attended - only for the one
+    seat that is designated as the primary operator-driven seat (a safety margin while the
+    rollout is incomplete: never silently start injecting into the one seat that is
+    actually operator-driven just because nobody has stamped it yet) and open for everyone
+    else. The actual fix: a seat that merely manages a sub-worker or a test seat is no
+    longer misclassified."""
     attended = await _seat_attendance(pool, seat_id)
     if attended is not None:
         return attended == "human"
@@ -2587,11 +2566,11 @@ async def _is_human_attended(pool: asyncpg.Pool, seat_id: str) -> bool:
 
 
 async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:
-    """An ACTIVE managed_by edge between two seats, in EITHER direction (ruling 16722273: a
-    wake is a knock, not a killing — gating it downward-only like compaction disenfranchises
-    the worker, who holds the freshest information and the blocking question). Peers and
-    cross-house traffic still refuse; only a live manager<->worker pair may knock on each
-    other."""
+    """An active managed_by edge between two seats, in either direction. A wake is meant to
+    be a light notification, not a forced takeover - gating it downward-only, the way
+    compaction is gated, would disenfranchise the worker, who holds the freshest
+    information and the blocking question. Peers and cross-house traffic still refuse;
+    only a live manager-worker pair may wake each other."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -2599,16 +2578,16 @@ async def _managed_edge(pool: asyncpg.Pool, seat_a: str, seat_b: str) -> bool:
         seat_a, seat_b))
 
 
-# THE PROVENANCE MARKER (ruling 986b12f0): the harness stamps EVERY arrival in a session's
-# input buffer origin.kind='human', regardless of who actually wrote it — an agent's
-# injection and a person's typing share one socket and one key, with no technical mark
-# distinguishing them. wake() is the choke point every future knock in this house passes
-# through, so the marker is minted HERE, once, rather than trusted to each caller.
+# The provenance marker: the harness stamps every arrival in a session's input buffer
+# origin.kind='human', regardless of who actually wrote it - an agent's injection and a
+# person's typing share one socket and one key, with no technical mark distinguishing
+# them. wake() is the choke point every future wake passes through, so the marker is
+# minted here, once, rather than trusted to each caller.
 _WAKE_MARKER_FMT = "[osiris-wake from={who} seat={seat}]"
 
 
 def _wake_marker(caller: str, caller_seat: str, caller_handle: str | None) -> str:
-    """A single, stable, machine-parseable first line naming who actually wrote this turn —
+    """A single, stable, machine-parseable first line naming who actually wrote this turn,
     never the harness's own label, which cannot tell an agent's hand from a person's."""
     who = f"{caller_handle} ({caller})" if caller_handle else caller
     return _WAKE_MARKER_FMT.format(who=who, seat=caller_seat)
@@ -2618,29 +2597,28 @@ _MARKER_TAIL_BYTES = 65_536
 
 
 def _marker_landed_sync(root: Path, sid_prefix: str, marker: str) -> bool:
-    """Sync (runs via to_thread): has `marker` landed as a SUBMITTED user turn anywhere
-    under `sid_prefix`'s transcript(s) — never assumed from a queue op (ruling 986b12f0:
-    reply() returning True means QUEUED, not SEEN; the operator has watched an injected
-    turn erased by a keystroke before it ever submitted). Only a "type":"user" line whose
-    OWN content carries the marker counts.
+    """Synchronous (runs via to_thread): has `marker` landed as a submitted user turn
+    anywhere under `sid_prefix`'s transcript(s)? Never assumed from a queue operation
+    (reply() returning True means queued, not seen; an injected turn has been observed
+    erased by a keystroke before it ever submitted). Only a "type":"user" line whose own
+    content carries the marker counts.
 
-    RE-DERIVED, NOT INHERITED (Thoth dispatch 6715): Khnum's own survey found this glob's
-    shape (`*/{sid_prefix}*.jsonl`, a substring match) but had previously cleared it as
-    safe-by-construction because it scans EVERY match rather than trusting the first —
-    true when he said it, and it STAYS true even now that the materializer writes second
-    copies: scanning more physical copies of the SAME session's real content can only ever
-    ADD a confirmation, never suppress one (an `or` across matches has no failure mode
-    where MORE true matches makes the answer wrong). What duplicates change is the
-    UNRELATED risk this function shares with the old `forks._find` (also fixed this
-    dispatch): an unanchored substring match can catch a LOOK-ALIKE filename that merely
-    CONTAINS `sid_prefix`, never at the very start — and more files on disk (duplicates
-    included) is more surface for that pre-existing look-alike risk to fire. The fix here
-    is narrower than `_find`'s: this function's whole SAFETY PROPERTY depends on scanning
-    every genuine copy, so collapsing to `locate_current_transcript`'s single newest-
-    anchored file (as `_find` now does) would be a REAL regression — the marker landing in
-    a copy other than the newest would then read as a false negative, and `wake()`'s own
-    caller re-injects a turn that already landed. So: anchor the MATCH (stem-prefix, same
-    rule `locate_current_transcript` uses) while keeping the loop over every match."""
+    A prior survey found this glob's shape (`*/{sid_prefix}*.jsonl`, a substring match)
+    safe-by-construction because it scans every match rather than trusting the first -
+    true then, and it stays true even now that the materializer writes second copies:
+    scanning more physical copies of the same session's real content can only ever add a
+    confirmation, never suppress one (an `or` across matches has no failure mode where
+    more true matches makes the answer wrong). What duplicates change is an unrelated risk
+    this function shares with the old `forks._find` (also fixed at the same time): an
+    unanchored substring match can catch a look-alike filename that merely contains
+    `sid_prefix`, never at the very start, and more files on disk (duplicates included) is
+    more surface for that pre-existing look-alike risk to fire. The fix here is narrower
+    than `_find`'s: this function's whole safety property depends on scanning every
+    genuine copy, so collapsing to `locate_current_transcript`'s single newest-anchored
+    file (as `_find` now does) would be a real regression - the marker landing in a copy
+    other than the newest would then read as a false negative, and `wake()`'s own caller
+    would re-inject a turn that already landed. So: anchor the match (stem-prefix, the
+    same rule `locate_current_transcript` uses) while keeping the loop over every match."""
     if not sid_prefix or not marker:
         return False
     for t in root.expanduser().glob("*/*.jsonl"):
@@ -2674,41 +2652,39 @@ async def _poll_landed_then_renudge(
     spawn: Any = None, windows: Any = None, poke: Any = None, jobs: Any = None,
     nudge: Any = None,
 ) -> dict[str, Any]:
-    """DOOR 2 (thread 39741694 item 2, Nebbercracker's finding ec7167a7): wake()'s own
-    outcome-read used to be a SINGLE immediate check — a marker not yet in the transcript
-    the instant `dispatch_dm` returned reported honestly as "queued ... NOT YET
-    CONFIRMED", but nothing ever looked again. The brief could land a second later and
+    """wake()'s own outcome-read used to be a single immediate check: a marker not yet in
+    the transcript the instant `dispatch_dm` returned reported honestly as "queued ... not
+    yet confirmed," but nothing ever looked again. The brief could land a second later and
     the receipt would never know; it could also genuinely stall forever with nobody
-    telling the caller a second push was worth trying. Same law as launch()'s own
-    `_verify_brief_reached_a_turn` (w384): a BOUNDED poll (never unbounded — `sleep` is
-    injected, same as every other harness wait in this file), and if the window closes
-    with nothing landed, ONE re-nudge through the SAME `dispatch_dm` mail ladder every
-    other DM escalation here already uses — never a second, differently-shaped push.
+    telling the caller a second push was worth trying. Same approach as launch()'s own
+    `_verify_brief_reached_a_turn`: a bounded poll (never unbounded - `sleep` is injected,
+    same as every other harness wait in this file), and if the window closes with nothing
+    landed, one re-nudge through the same `dispatch_dm` mail ladder every other DM
+    escalation here already uses, never a second, differently-shaped push.
     `spawn`/`windows`/`poke`/`jobs`/`nudge` are forwarded straight through to that
-    re-nudge's own `dispatch_dm` call, the SAME injectables `wake_worker`'s own FIRST
-    dispatch_dm call already takes — a test hermetic for the first nudge must stay
+    re-nudge's own `dispatch_dm` call, the same injectables `wake_worker`'s own first
+    dispatch_dm call already takes - a test hermetic for the first nudge must stay
     hermetic for the second one too, never fall through to a real subprocess spawn.
 
     Returns `{"observed": True}` the moment `_verify_landed` sees the marker land. Still
     absent after `attempts`: re-nudges and returns `{"observed": False, "renudge":
-    <dispatch_dm's own receipt>}` — honest about what was tried, never a claim of
-    delivery this function did not confirm.
+    <dispatch_dm's own receipt>}`, honest about what was tried, never a claim of delivery
+    this function did not confirm.
 
-    A DISCLOSED ASYMMETRY WITH LAUNCH'S OWN VERSION: launch's opening brief rides the
-    passive mail→poke lane (never actively dispatched before its own nudge), so w384's
-    `_verify_brief_reached_a_turn` re-nudge is genuinely that message's FIRST live push.
-    `wake_worker` calls `dispatch_dm` on `msg_id` unconditionally at the top, BEFORE this
-    function ever runs — so by the time `status == "delivered"` (the only case this
+    A disclosed asymmetry with launch's own version: launch's opening brief rides the
+    passive mail-to-poke path (never actively dispatched before its own nudge), so
+    `_verify_brief_reached_a_turn`'s re-nudge is genuinely that message's first live push.
+    `wake_worker` calls `dispatch_dm` on `msg_id` unconditionally at the top, before this
+    function ever runs - so by the time `status == "delivered"` (the only case this
     function is called for), a `dm-reply`/`dm-resume`/`dm-poke` ledger row already exists
     for `msg_id`, and `dispatch_dm`'s own once-per-message brake (`agent_wakes`) will
-    refuse this re-nudge outright (`mode: "skipped-once-per-message"`) — proven live by
-    `test_wake_reports_queued_when_the_marker_never_lands`. That refusal is still real,
-    still useful signal (the system correctly never double-wakes the identical message —
-    a "not yet observed" here means the marker's write is merely lagging its own already-
-    confirmed push, never that nothing was ever tried), and still reported honestly rather
-    than silently dropped or smoothed into a fake retry — which is what this function
-    actually promises: an honest account of what was tried, not a guarantee the nudge
-    landed on fresh ground."""
+    refuse this re-nudge outright (`mode: "skipped-once-per-message"`), proven by a test
+    covering exactly this case. That refusal is still real, still useful signal (the
+    system correctly never double-wakes the identical message; a "not yet observed" here
+    means the marker's write is merely lagging its own already-confirmed push, never that
+    nothing was ever tried), and still reported honestly rather than silently dropped or
+    smoothed into a fake retry - which is what this function actually promises: an honest
+    account of what was tried, not a guarantee the nudge landed on fresh ground."""
     for _ in range(attempts):
         if await _verify_landed(pool, target_seat, marker, settings):
             return {"observed": True}
@@ -2722,11 +2698,11 @@ async def _poll_landed_then_renudge(
 async def _verify_landed(
     pool: asyncpg.Pool, target_seat: str, marker: str, settings: Settings | None,
 ) -> bool:
-    """Best-effort OUTCOME-READ (ruling 986b12f0: never let a receipt claim an effect nobody
-    observed). A narrow, READ-ONLY re-check of the already-resolved holder's newest
-    transcript — not a second resolver: dispatch_dm's own resolution walk (rate brakes, the
-    crossed-registry guard, the daemon job listing) is never repeated here, only the marker's
-    actual arrival is confirmed."""
+    """Best-effort outcome-read: never let a receipt claim an effect nobody observed. A
+    narrow, read-only re-check of the already-resolved holder's newest transcript, not a
+    second resolver: dispatch_dm's own resolution walk (rate brakes, the crossed-registry
+    guard, the daemon job listing) is never repeated here, only the marker's actual
+    arrival is confirmed."""
     from src.orchestrator.seats import seat_receipt
 
     st = settings or get_settings()
@@ -2744,68 +2720,69 @@ async def _verify_landed(
     return await asyncio.to_thread(_marker_landed_sync, root, sid_prefix, marker)
 
 
-# dispatch_dm's mode → wake()'s honest vocabulary. THREE BUCKETS (#156.2, Thoth msg 3823):
-# not-injectable (push is unavailable for a SYSTEM/CONFIG reason — nothing wrong with the
-# addressee, the mail is queued and WILL be pulled), no-live-body (there is definitively
-# nobody to wake — vacant, retired, or never mounted), refused-<gate> (a body/session DOES
-# exist but a NAMED gate refused to use it). The OLD single "pull-only" -> "no-live-body"
-# mapping was a LIE for two of its six call sites (trigger-dark, held): mail filed there
-# WILL be pulled, nothing is missing — Alfred hit this live, concluded a reachable seat was
-# unreachable, escalated, then retracted after testing delivery instead of trusting the
-# string (60bc15db). Anything still not named here (queued-*, braked, skipped-*, settled,
-# window-busy) is a rate brake, a pause, or an in-flight wake already covering it — all
-# genuinely "queued" via the dict's own default — and `detail`/`raw_mode` carry the specific
-# reason so nothing is lost to the bucket.
+# dispatch_dm's mode maps to wake()'s honest vocabulary, in three buckets: not-injectable
+# (push is unavailable for a system/config reason - nothing wrong with the addressee, the
+# mail is queued and will be pulled), no-live-body (there is definitively nobody to wake -
+# vacant, retired, or never mounted), refused-<gate> (a body/session does exist but a
+# named gate refused to use it). The old single "pull-only" -> "no-live-body" mapping was
+# a lie for two of its six call sites (trigger-dark, held): mail filed there will be
+# pulled, nothing is missing. This was hit live once: someone concluded a reachable seat
+# was unreachable, escalated, then retracted after testing delivery instead of trusting
+# the string. Anything still not named here (queued-*, braked, skipped-*, settled,
+# window-busy) is a rate brake, a pause, or an in-flight wake already covering it, all
+# genuinely "queued" via the dict's own default, and `detail`/`raw_mode` carry the
+# specific reason so nothing is lost to the bucket.
 _WAKE_STATUS = {
     "nudged": "delivered", "resumed": "delivered", "poked": "delivered",
-    # a seat past its own compaction seam wakes as its successor rather than staying
-    # unreachable (ruling 94c2e7e8, dispatch 5398 leg 1) — the fresh body's first turn
-    # is its own inbox() read, the same "next turn" framing "resumed" already carries.
+    # A seat past its own compaction seam wakes as its successor rather than staying
+    # unreachable - the fresh body's first turn is its own inbox() read, the same
+    # "next turn" framing "resumed" already carries.
     "fresh-heir": "delivered",
-    # wave 16 item 2 (5af93c89): dispatch_dm's own raw mode is named "mid-turn" directly
-    # now (it used to be the literal word "delivered", which lied about an unread DM) —
-    # this entry is the identity mapping, kept explicit rather than falling through to
-    # the dict's own "queued" default, since "mid-turn" is its own distinct external
-    # status, not a queue state.
+    # dispatch_dm's own raw mode is named "mid-turn" directly now (it used to be the
+    # literal word "delivered", which lied about an unread DM). This entry is the
+    # identity mapping, kept explicit rather than falling through to the dict's own
+    # "queued" default, since "mid-turn" is its own distinct external status, not a
+    # queue state.
     "mid-turn": "mid-turn",
     "trigger-dark": "not-injectable", "held": "not-injectable",
     "seat-vacant": "no-live-body", "retired": "no-live-body",
     "never-mounted": "no-live-body",
-    # a real mount row exists (however stale) — genuinely no-live-body right now, same
+    # A real mount row exists (however stale): genuinely no-live-body right now, same
     # practical handling as never-mounted, but the wording no longer lies about there
-    # being zero history for this identity (thread ee412c7e).
+    # being zero history for this identity.
     "cold-mounted-before": "no-live-body",
-    # live by the SAME registry fleet() trusts, but no OS session could be resolved for
-    # it — an outcome (mail queues, reads at its own next turn), never a failure; must
+    # Live by the same registry fleet() trusts, but no OS session could be resolved for
+    # it - an outcome (mail queues, reads at its own next turn), never a failure; must
     # never collapse into "no-live-body", which is the false-absence class this fixes.
     "queued-live-unresolved": "queued",
     "resume-refused-compaction": "refused-compaction",
     "resume-refused-ceiling": "refused-ceiling",
     "resume-refused-no-anchor": "refused-no-anchor",
     "resume-refused-crossed-registry": "refused-crossed-registry",
-    # a POSITIVE mismatch (found a different mind) and an ABSENCE of evidence either way
-    # are no longer the same bucket (ruling f624d114) — an ignorance must never wear the
-    # same status as a finding, even at the bucket level.
+    # A positive mismatch (found a different mind) and an absence of evidence either way
+    # are no longer the same bucket: an ignorance must never wear the same status as a
+    # finding, even at the bucket level.
     "resume-refused-resident-unknown": "refused-resident-unknown",
     "resume-refused-unknown": "refused-unknown",
-    # OCCUPANCY, SPLIT (2026-08-28). #178 added `resume-refused-occupied` and never added
-    # it here, so it rode an unnamed default written for rate-brakes and pauses. Worse, it
-    # answered two different findings with one word. Both arms are named now:
-    # the addressee's OWN live session is a DELIVERY OUTCOME (it reads at its next turn,
-    # exactly what `queued-live-unresolved` above exists to stop mislabelling)...
+    # Occupancy, split. `resume-refused-occupied` was added once and never added here, so
+    # it rode an unnamed default written for rate-brakes and pauses. Worse, it answered
+    # two different findings with one word. Both arms are named now: the addressee's own
+    # live session is a delivery outcome (it reads at its next turn, exactly what
+    # `queued-live-unresolved` above exists to stop mislabelling)...
     "queued-live-holder": "queued",
-    # thread 78f5a39e: the self-branch's own idle case actually POKES the addressee via
-    # the daemon reply lane (no fork) — a real delivery, same bucket as "nudged", not the
-    # unscheduled-pull-only wording "queued-live-holder" still carries for a busy addressee.
+    # The self-branch's own idle case actually pokes the addressee via the daemon reply
+    # path (no fork) - a real delivery, same bucket as "nudged", not the
+    # unscheduled-pull-only wording "queued-live-holder" still carries for a busy
+    # addressee.
     "nudged-live-holder": "delivered",
     # ...while an unidentified body in the office is a real refusal with an unknown reader.
     "resume-refused-occupied-foreign": "refused-occupied-foreign",
-    # the pre-split mode, kept mapped so stored receipts never fall to a default.
+    # The pre-split mode, kept mapped so stored receipts never fall to a default.
     "resume-refused-occupied": "queued",
-    # a manager is a LIVE human body, not a missing one — the human-attended guard queues the
-    # knock in its box (perceived by pull), it does not forge the human's live turn (d8a77f80).
+    # A manager is a live human body, not a missing one - the human-attended guard queues
+    # the knock in its box (perceived by pull), it does not forge the human's live turn.
     "queued-human": "queued-human-attended",
-    "refused": "refused-budget",  # the dollar wall, distinct from the authority refusal below
+    "refused": "refused-budget",  # the budget wall, distinct from the authority refusal below
 }
 
 
@@ -2815,30 +2792,26 @@ async def wake_worker(
     poke: Any = None, jobs: Any = None, nudge: Any = None, sleep: Any = None,
     landed_poll_attempts: int = 3, landed_poll_delay_secs: float = 2.0,
 ) -> dict[str, Any]:
-    """Knock on the other half of `caller`'s OWN managed_by pair. Refuses LOUDLY (nothing
-    sent) when no active managed_by edge exists between the two seats in either direction —
+    """Knock on the other half of `caller`'s own managed_by pair. Refuses loudly (nothing
+    sent) when no active managed_by edge exists between the two seats in either direction:
     peers and cross-house calls route through a manager or the operator's desk instead.
-    THE OPERATOR NEVER CALLS THIS: there is no operator parameter and none should ever be
-    added — an override a caller can assert in an argument is an override that can be forged;
-    the operator's real override stays out-of-band, their own hand in the window (Thoth,
-    msg 989).
+    The operator never calls this: there is no operator parameter and none should ever be
+    added, since an override a caller can assert in an argument is an override that can be
+    forged. The operator's real override stays out-of-band, in their own hand in the window.
 
-    On authorization, this posts `message` — prefixed with a self-identifying provenance
-    marker (ruling 986b12f0: the harness cannot tell an agent's injection from a person's
-    typing, so this refuses to hide behind that label) — as a graded ask (a wake IS a
-    request for attention) addressed to the target's SEAT, and dispatches it through
+    On authorization, this posts `message`, prefixed with a self-identifying marker showing
+    this is an agent's injection rather than a person's typing, as a graded ask (a wake IS a
+    request for attention) addressed to the target's seat, and dispatches it through
     dispatch_dm, the exact path send() uses for every DM. A "delivered" status is only ever
-    returned once the marker is CONFIRMED landed as a submitted turn in the target's own
-    transcript — a queued injection that hasn't (yet, or ever) been seen reports honestly
+    returned once the marker is confirmed landed as a submitted turn in the target's own
+    transcript: a queued injection that hasn't (yet, or ever) been seen reports honestly
     as "queued", never as an effect nobody observed.
 
-    DOOR 2 (thread 39741694 item 2, Nebbercracker's finding ec7167a7): a dispatch_dm mode
-    that counted as "delivered" used to get exactly ONE immediate landing check —
-    `_poll_landed_then_renudge` now gives it the SAME bounded-poll-then-nudge shape
-    launch()'s own opening brief got in w384 (never unbounded; `sleep` is injected).
-    `observed` in the receipt names the FINAL outcome after that window, and `renudge`
-    (present only when the window closed with nothing landed) carries the second
-    dispatch_dm attempt's own receipt — honest about what was tried, never a claim of
+    The delivery check does a bounded poll for the marker's own landing, then one re-nudge
+    if the window closes with nothing landed, never a single immediate check that then goes
+    silent. `observed` in the receipt names the final outcome after that window, and
+    `renudge` (present only when the window closed with nothing landed) carries the second
+    dispatch_dm attempt's own receipt: honest about what was tried, never a claim of
     delivery this function did not confirm."""
     from src.orchestrator.agents import project_of
     from src.orchestrator.seats import held_seat
@@ -2863,19 +2836,18 @@ async def wake_worker(
                           "in either direction — wake() only knocks within a manager<->worker "
                           "pair; peers and cross-house traffic route through a manager or the "
                           "operator's desk"}
-    # THE LANE SWITCH (osiris_wake_enabled, default True since ruling 85fba696 — Anthropic
-    # reviewed the disclosure and deemed the daemon reply lane INTENDED DESIGN, withdrawing
-    # 482c3d0f's quarantine). It stays a SWITCH rather than becoming unconditional: the lane is
+    # The lane switch (osiris_wake_enabled, default True): the daemon reply lane is treated
+    # as intended design. It stays a switch rather than becoming unconditional: the lane is
     # an undocumented internal that can break without notice, and an operator may want it dark
-    # for a run. The check sits here, PAST authorization, so a refusal says honestly "you're
-    # allowed, the lane is off" rather than a blanket "verb off" — and so no marker/DM is ever
-    # minted when it is. Do not move it above the managed_by gate.
-    # #aedf2aab: `st` is the ONE resolved settings object this call uses from here on —
-    # the raw `settings` param (often None) must never be re-passed downstream once `st`
-    # exists, or a caller wired to `settings_with_overlay()`'s own result would see that
-    # override read here but silently dropped past this point (get_settings() is not
-    # memoized — dispatch_dm's own internal `settings or get_settings()` would re-resolve
-    # bare instead of reusing this exact snapshot).
+    # for a run. The check sits here, past authorization, so a refusal says honestly "you're
+    # allowed, the lane is off" rather than a blanket "verb off", and so no marker or DM is
+    # ever minted when it is off. Do not move it above the managed_by gate.
+    # `st` is the one resolved settings object this call uses from here on: the raw
+    # `settings` param (often None) must never be re-passed downstream once `st` exists, or a
+    # caller wired to `settings_with_overlay()`'s own result would see that override read
+    # here but silently dropped past this point (get_settings() is not memoized, so
+    # dispatch_dm's own internal `settings or get_settings()` would re-resolve bare instead
+    # of reusing this exact snapshot).
     st = settings or get_settings()
     if not st.osiris_wake_enabled:
         return {"mode": "refused-wake-frozen",
@@ -2894,10 +2866,10 @@ async def wake_worker(
     out: dict[str, Any] = {"message_id": res["id"], "seat": target_seat, "raw_mode": mode,
                            "status": status, "detail": d.get("detail", mode)}
     if status == "delivered":
-        # DOOR 2 (thread 39741694 item 2): a bounded poll for the marker's own landing,
-        # then ONE re-nudge if the window closes with nothing seen — never a single
-        # immediate check that then goes silent. `st`, not the raw `settings` param, per
-        # the SAME #aedf2aab law this file's own dispatch_dm call above already follows.
+        # A bounded poll for the marker's own landing, then one re-nudge if the window
+        # closes with nothing seen, never a single immediate check that then goes silent.
+        # Uses `st`, not the raw `settings` param, following the same rule the dispatch_dm
+        # call above already follows.
         followup = await _poll_landed_then_renudge(
             pool, target_seat=target_seat, marker=marker, msg_id=res["id"], sender=caller,
             settings=st, sleep=sleep, attempts=landed_poll_attempts,
@@ -2915,25 +2887,25 @@ async def wake_worker(
     return out
 
 
-# ═══ launch() — THE BODY VERB (thread 9f566244 piece D; ruling 43b84c5e) ══════════════════════
-# wake() speaks to a body that already EXISTS; launch() CREATES one. It is a thin authority
+# ═══ launch(): the body-creation verb ══════════════════════
+# wake() speaks to a session that already exists; launch() creates one. It is a thin authority
 # layer over the manager daemon's pty_spawn (src/manager/daemon.py), which already does the hard
-# parts: identity-at-birth (the seat's one-time attach token in the child env, so it self-binds
-# before its first breath — §4.2/5cef856b), the cgroup envelope (born bounded or not at all),
-# window metadata for mail-routing, the lease gate, and the room-busy advisory. This verb adds
-# only what pty_spawn deliberately lacks: (1) a managed_by authority gate, DOWNWARD-ONLY — a
-# manager bodies a seat it manages; a worker may wake its manager (16722273) but never spawn one
-# a body (78e3734e); (2) the [TAG] Handle naming; (3) idempotency (a live body is RETURNED, never
-# twinned); (4) Ra's honest receipt (53ae1a87): body_exists and can_receive are SEPARATE states,
-# each an independent READ, never one collapsed boolean. Creating a body is NOT the frozen reply
-# lane — pty_spawn spawns a fresh `claude`, the same act the MINT lane already performs; it
-# injects no turn into anyone's live session.
+# parts: identity at birth (the seat's one-time attach token in the child env, so it self-binds
+# before its first turn), the cgroup envelope (born bounded or not at all), window metadata for
+# mail-routing, the lease gate, and the room-busy advisory. This verb adds only what pty_spawn
+# deliberately lacks: (1) a managed_by authority gate, downward-only: a manager can start a
+# session for a seat it manages; a worker may wake its manager but never spawn one a session;
+# (2) the [TAG] Handle naming; (3) idempotency (a live session is returned, never duplicated);
+# (4) an honest receipt: body_exists and can_receive are separate states, each an independent
+# read, never one collapsed boolean. Creating a session is not the frozen reply lane: pty_spawn
+# spawns a fresh `claude`, the same act the mint lane already performs; it injects no turn into
+# anyone's live session.
 
 
 async def _manages(pool: asyncpg.Pool, manager_seat: str, worker_seat: str) -> bool:
-    """DOWNWARD authority (78e3734e): an active managed_by edge FROM worker TO manager
-    (managed_by is minted worker→manager, mintseat.py). launch() is downward-only — a birth is
-    not a knock: a worker may wake its manager but may never spawn it a body."""
+    """Downward authority: an active managed_by edge from worker to manager (managed_by is
+    minted worker to manager, in mintseat.py). launch() is downward-only: creating a session
+    is not a knock, so a worker may wake its manager but may never spawn it a session."""
     return bool(await pool.fetchval(
         "SELECT 1 FROM links l JOIN objects f ON f.id=l.from_id JOIN objects t ON t.id=l.to_id "
         "WHERE l.type='managed_by' AND (l.valid_until IS NULL OR l.valid_until > now()) "
@@ -2941,25 +2913,25 @@ async def _manages(pool: asyncpg.Pool, manager_seat: str, worker_seat: str) -> b
 
 
 async def _manager_control(req: dict[str, Any]) -> dict[str, Any]:
-    """One manager control op (the injectable default; tests supply their own). Raises on a dark
-    daemon — launch_seat catches it and reports 'manager-cold' honestly, never a false success."""
+    """One manager control op (the injectable default; tests supply their own). Raises when the
+    daemon is unreachable; launch_seat catches it and reports 'manager-cold' honestly, never a
+    false success."""
     from src.manager.client import manager_call
     return await manager_call(req)
 
 
 async def _explicit_window_tag(pool: asyncpg.Pool, label: str) -> str | None:
-    """The persisted `window_tag` override for the SoftwareProject `label` resolves to
-    (task: window-tag-gets-an-owner, decision 26f4f825's corollary) — checked BEFORE
-    `_house_tag`'s derived first-two-letters ever fires. Reuses `_resolve_repo`
-    (capture.py), the same canonical-or-name resolver every other project lookup in this
-    house already shares — no second resolver written for this.
+    """Resolves the persisted `window_tag` override for the SoftwareProject named `label`,
+    checked before `_house_tag`'s derived first-two-letters ever fires. Reuses
+    `_resolve_repo` (capture.py), the same canonical-or-name resolver every other project
+    lookup in this codebase already shares, so no second resolver was written for this.
 
-    None (never a raise) when `label` resolves to no SoftwareProject, or the project
-    carries no `window_tag` assertion — both are exactly the cases the derived fallback
-    below exists for. Deliberately NOT the generic `tag` property: `tag` already names a
-    completely different, additive/multi-valued property on arbitrary objects (frontier.
-    py's/dossier.py's case-subject marking, `{"tag": "subject"}`) — reusing that name here
-    would silently collide two unrelated meanings under one property."""
+    Returns None (never raises) when `label` resolves to no SoftwareProject, or the project
+    carries no `window_tag` assertion; both are exactly the cases the derived fallback below
+    exists for. Deliberately not the generic `tag` property: `tag` already names a completely
+    different, additive/multi-valued property on arbitrary objects (frontier.py's/dossier.
+    py's case-subject marking, `{"tag": "subject"}`), and reusing that name here would
+    silently collide two unrelated meanings under one property."""
     from src.orchestrator.capture import _resolve_repo
     proj_id = await _resolve_repo(pool, label)
     if proj_id is None:
@@ -2972,20 +2944,21 @@ async def _explicit_window_tag(pool: asyncpg.Pool, label: str) -> str | None:
 
 
 async def _house_tag(pool: asyncpg.Pool, house: str | None, project: str | None = None) -> str:
-    """The window's [TAG] prefix — the operator's front-door naming ('[OS] Thoth', c8da5a52).
-    An explicit `window_tag` assertion on the resolving SoftwareProject wins when one
-    exists (`set_tag`, project(action='set_tag') — the operator's own declared code, e.g.
-    "MH" for monsterhouse instead of the derived "MO"); otherwise a simple short code
-    (osiris→OS) derived fresh from the label's own first two letters, same as always.
+    """The window's [TAG] prefix, used in the front-door naming convention (e.g. "[OS] handle").
+    An explicit `window_tag` assertion on the resolving SoftwareProject wins when one exists
+    (set via `project(action='set_tag')`, an explicitly declared code, e.g. "MH" for
+    monsterhouse instead of the derived "MO"); otherwise a simple short code (osiris to OS)
+    is derived fresh from the label's own first two letters, same as always.
 
-    NEVER "OS" AS A FALLBACK (operator 2026-09-06, ruling 860b0306: a house is OPTIONAL — a
-    single-repo seat carries none). An empty house used to render as osiris's own tag, so
-    "[OS] Lilguy" sat in the agents list beside the real osiris seats. Now: the house's
-    code when present, else the governed PROJECT's code, else "" — and `_window_name`
-    drops the brackets entirely when there is no code, so a bare `Lilguy` is honest.
+    Never falls back to "OS": a house is optional, and a single-repo seat carries none. An
+    empty house used to render as osiris's own tag, so a seat with no house at all still
+    showed an "[OS]" prefix alongside real osiris seats. Now: the house's code when present,
+    else the governed project's code, else "". `_window_name` drops the brackets entirely
+    when there is no code, so a bare handle is honest.
 
-    ASYNC NOW (was a pure sync function): reading a persisted assertion is a DB read: every
-    caller of `_house_tag`/`_window_name` was updated to await it and pass its pool."""
+    This is async (it used to be a pure sync function) because reading a persisted assertion
+    is a DB read: every caller of `_house_tag`/`_window_name` was updated to await it and
+    pass its pool."""
     for label in (house, project):
         h = (label or "").strip()
         if h:
@@ -3004,10 +2977,9 @@ async def _window_name(pool: asyncpg.Pool, house: str | None, handle: str | None
 async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None,
                                  *, cwd: str | None = None) -> str | None:
     """The single project this seat governs (its `governs` edge target's winning name), else
-    the project the seat's own pin declares at `cwd` (read_project_label, the seat's own
-    hand — correct_own_pin_value fixes a wrong tag from inside the seat), else None. The
-    window tag's fallback when the seat has no house (ruling 860b0306). One read; never a
-    mint."""
+    the project the seat's own pin declares at `cwd` (read_project_label; correction tooling
+    fixes a wrong tag from inside the seat), else None. The window tag's fallback when the
+    seat has no house. One read, never a write."""
     if not seat_id:
         from src.orchestrator.agents import read_project_label
         return read_project_label(cwd) if cwd else None
@@ -3026,34 +2998,32 @@ async def _governed_project_name(pool: asyncpg.Pool, seat_id: str | None,
 
 
 def _tree_exists(tree_cwd: str) -> bool:
-    """A plain sync helper (ASYNC240: file I/O stays out of async function bodies, same
-    convention src/ingest/reference.py documents) — launch_seat's one filesystem check that
-    a bound tree_cwd is actually there, never provisioned by osiris itself (ff3bdc37)."""
+    """A plain sync helper (file I/O stays out of async function bodies, same convention
+    src/ingest/reference.py documents): launch_seat's one filesystem check that a bound
+    tree_cwd actually exists. This never provisions the directory itself."""
     return Path(tree_cwd).is_dir()
 
 
 def _is_git_tree(path: str) -> bool:
-    """Sync helper, same ASYNC240 reasoning as `_tree_exists`: does `path` hold a git
-    checkout (a `.git` directory or worktree file)? A bound tree that does NOT is not
-    proof of anything by itself — but paired with a charter that governs a real tree
-    elsewhere, it is the #199 fabrication's exact signature."""
+    """Sync helper, same reasoning as `_tree_exists`: does `path` hold a git checkout (a
+    `.git` directory or worktree file)? A bound tree that does not is not proof of anything
+    by itself, but paired with a charter that governs a real tree elsewhere, it is the exact
+    signature of a mint-time fabrication."""
     return (Path(path) / ".git").exists()
 
 
 async def fabricated_tree_verdict(
     pool: asyncpg.Pool, seat_id: str, tree_cwd: str,
 ) -> tuple[str, str] | None:
-    """THE #199 MINT-TIME FABRICATION, caught at the launch door (operator, 2026-09-03:
-    "launch has a bug that lands the agent in the wrong cwd" — Jesus and Chad were both
-    bound at mint to a convention-derived ~/code/<handle> holding nothing but a `.osiris`
-    pin, while their charters governed the real trees at ~/code/REPOS/Godel and
-    ~/code/cdking, where every real session had actually worked). Returns
-    `(repo, real_path)` when `tree_cwd` holds no git tree AND the seat's charter governs a
-    project whose recorded on_disk_path IS a git tree somewhere else — the one shape where
-    "spawn where the graph says" is knowably wrong. None otherwise: a tree with a `.git`
-    is trusted as bound (a non-git workspace with no chartered tree elsewhere is a
-    legitimate state, never refused). Shared by BOTH launch doors (cli.py and
-    launch_seat), one implementation — the guard-symmetry rule (983ec87a)."""
+    """Catches a mint-time fabrication at the launch step: some seats were bound at mint
+    time to a convention-derived ~/code/<handle> holding nothing but a `.osiris` pin, while
+    their charters governed the real trees elsewhere, where every real session had actually
+    worked. Returns `(repo, real_path)` when `tree_cwd` holds no git tree and the seat's
+    charter governs a project whose recorded on_disk_path is a git tree somewhere else: the
+    one shape where "spawn where the graph says" is knowably wrong. Returns None otherwise:
+    a tree with a `.git` is trusted as bound (a non-git workspace with no chartered tree
+    elsewhere is a legitimate state, never refused). Shared by both launch entry points
+    (cli.py and launch_seat) as one implementation, so both stay in sync."""
     from src.orchestrator.charter import governed_trees
     if _is_git_tree(tree_cwd):
         return None
@@ -3064,43 +3034,42 @@ async def fabricated_tree_verdict(
 
 
 def _launch_anchor(seat_id: str) -> str:
-    """A STABLE durable anchor per SEAT (not per launch) — a re-launched seat re-wears its own
-    anchor, the same 'one ghost, re-worn' discipline _wake_job_dir uses per project. The seat
-    (via its attach token) is the true identity; this is the session anchor the trigger keys
-    its mail-window routing on, so it must match the window's own job_dir metadata."""
+    """A stable durable anchor per seat, not per launch: a re-launched seat reuses its own
+    anchor, the same per-project discipline _wake_job_dir applies. The seat (via its attach
+    token) is the true identity; this is the session anchor the trigger keys its mail-window
+    routing on, so it must match the window's own job_dir metadata."""
     return str(Path.home() / ".claude" / "jobs" / seat_id.replace(":", "-"))
 
 
 async def _trustworthy_fallback_ancestor(
     pool: asyncpg.Pool, agent_id: str, target_seat: str,
 ) -> bool:
-    """Is `agent_id` a REAL prior identity — worth `_bind_before_spawn` inheriting a
-    lineage from — or actually SOMEONE ELSE'S session/job id, wearing this seat's
-    `holds` edge by mistake (the jenny/dustin crossing, Nebbercracker findings
-    ab59c731/a0fd7e5b — live specimen: jenny's seat resolved `current_holder` to
-    `agent:9c9a534f`, which is not a real identity at all, it is DUSTIN's own harness
-    session id, bare, no `agent:` prefix on the session itself, just a string that
-    happens to collide with an agent canonical shape)?
+    """Is `agent_id` a real prior identity, worth `_bind_before_spawn` inheriting a lineage
+    from, or actually someone else's session/job id, wearing this seat's `holds` edge by
+    mistake? This shape was caught from a live specimen: one seat's `current_holder`
+    resolved to an id that was not a real identity at all, but another agent's own harness
+    session id, bare, with no `agent:` prefix on the session itself, just a string that
+    happened to collide with an agent canonical shape.
 
-    THE FINGERPRINT, measured against the live specimen directly rather than guessed:
-    `agent:9c9a534f` itself holds no OTHER seat (Dustin's own seat is held by his real
-    canonical, `agent:77afe60a-xv`, a different string) — so checking "is this id
-    itself another seat's current holder" finds nothing. What DOES distinguish it: a
-    LIVE `agent_mounts` row exists whose `job_dir` basename is this exact bare id, and
-    whose OWN `agent_id` is a DIFFERENT canonical — proof this string is borrowed from
-    a real, currently-mounted OTHER mind, never minted as an identity of its own. A
-    genuine pre-Seat-object holder (the one legitimate case this fallback exists for,
-    however sparse its own provenance) never collides with another agent's live
-    job_dir this way, so this check refuses only the borrowed-id shape and nothing
-    else — it deliberately does NOT require `agent_id` to carry any provenance of its
-    own (minted_because/handle/succeeded_from), since a real historical holder can
-    genuinely have none and still be exactly who the seat's own `holds` edge says.
+    The fingerprint, measured against that live specimen directly rather than guessed: the
+    borrowed id itself held no other seat (the other agent's own seat was held by its real,
+    different canonical), so checking "is this id itself another seat's current holder"
+    finds nothing. What does distinguish it: a live `agent_mounts` row exists whose
+    `job_dir` basename is this exact bare id, and whose own `agent_id` is a different
+    canonical, proof this string is borrowed from a real, currently-mounted other session,
+    never minted as an identity of its own. A genuine pre-Seat-object holder (the one
+    legitimate case this fallback exists for, however sparse its own provenance) never
+    collides with another agent's live job_dir this way, so this check refuses only the
+    borrowed-id shape and nothing else. It deliberately does not require `agent_id` to carry
+    any provenance of its own (minted_because/handle/succeeded_from), since a real
+    historical holder can genuinely have none and still be exactly who the seat's own
+    `holds` edge says.
 
-    THE BORROWED-JOB_DIR CHECK ITSELF now lives in mounts.borrowed_job_dir_owner (moved
-    there, thread b33fa26b, so `seats.rehold_seat` and `compositions.seat_holder_census`
-    share the one fingerprint instead of three independently-drifting copies — the
-    jenny/dustin crossing kept recurring THROUGH THIS DOOR'S OWN FIX because the same
-    borrowed-id shape reaches a seat's holds edge through rehold_seat too, unguarded)."""
+    The borrowed-job_dir check itself now lives in mounts.borrowed_job_dir_owner, so
+    `seats.rehold_seat` and `compositions.seat_holder_census` share the one fingerprint
+    instead of three independently-drifting copies. This kind of identity crossing kept
+    recurring through this function's own fix because the same borrowed-id shape reaches a
+    seat's holds edge through rehold_seat too, unguarded."""
     from src.orchestrator.mounts import borrowed_job_dir_owner
 
     if await borrowed_job_dir_owner(pool, agent_id) is not None:
@@ -3119,93 +3088,87 @@ async def _bind_before_spawn(
     current_holder: str | None, office: str, anchor: str, source: str,
     resolved_project: str | None = None,
 ) -> dict[str, Any]:
-    """PIECE 1 (Thoth dispatch, msg 6692, d161a156 one layer up): mint and bind the seat's
-    next generation SERVER-SIDE, before the body exists — the identity `launch_seat` already
-    holds at prompt-construction time (office, handle, house, and everything generation math
-    needs) written as a fact instead of serialized into English and handed to a fresh
-    session to re-derive through a fallible tool call. THE LIVE SPECIMEN: Marquee's own
-    `claim_name` refused (the name was held by an unrelated lineage, seat:bdbe031e's actual
-    recorded holder) and the session's own autonomy clause — "never park on a question typed
-    into this empty room" — converted that refusal into a phantom mint: a stranger Agent
-    ("Awning"), a stray Seat, an orphan SoftwareProject. The agent behaved correctly; the
-    machinery asked it to do something that could fail and gave it no way back once it did.
+    """Mints and binds the seat's next generation server-side, before the session exists:
+    the identity `launch_seat` already holds at prompt-construction time (office, handle,
+    house, and everything generation math needs) is written as a fact instead of serialized
+    into English and handed to a fresh session to re-derive through a fallible tool call.
+    This closes a real gap: a session's own `claim_name` once refused because the name was
+    held by an unrelated lineage, and the session's own autonomy rule (act instead of asking
+    an empty room) converted that refusal into a phantom mint: a stray Agent, a stray Seat,
+    an orphan SoftwareProject. The session behaved correctly; the machinery asked it to do
+    something that could fail and gave it no way back once it did.
 
-    ANCESTOR CASE (the ordinary one): reuses `mint_heir` outright rather than duplicating
-    its own hard-won mechanics — grave-avoidance, the succeeded_by/succeeded_from chain,
-    handle inheritance. The ancestor is resolved from THE SEAT'S OWN LINEAGE, never from
-    `current_holder` (the `holds` edge) directly (Thoth's own correction, msg 6694, measured
-    against Marquee: 11 generations of the seat's own substantive properties — handle,
-    house, intended_model — all sourced from lineage agent:38cf08a9, and exactly ONE
-    disagreeing edge, `holds`, naming an unrelated agent that built none of the rest). A
-    COLD seat's `holds` edge can go stale without the seat itself being wrong — the defect
-    is resolving generation math FROM that edge instead of walking the lineage that actually
-    built the seat. `_seat_lineage_ancestor` reads the seat's own `handle` assertion's
-    SOURCE (the property least likely to ever be written by a lineage that isn't genuinely
-    this seat's own) and walks it forward via `lineage_head` to the TRUE current generation
-    — the same succeeded_by walk fork resolution and mailbox routing already trust. Falls
-    back to `current_holder` only when the seat has no handle assertion at all (nothing
-    lineage-side to read yet — a seat still using the pre-Seat-object binding, or a launch
-    racing its own first-ever claim). Either way, `bind_holder` is called EXPLICITLY below,
-    never left to mint_heir's own `follow_binding` alone — a corrected-lineage ancestor may
-    not itself hold `target_seat` (Marquee's own 38cf08a9-xi doesn't; 226a2695-ii does), so
-    follow_binding would move nothing. This is deliberately the SAME act that corrects a
-    stale `holds` edge, sequenced to happen only when a real launch actually runs, through
-    this named verb, with the reasoning recorded on the heir — never a hand-write.
+    Ancestor case (the ordinary one): reuses `mint_heir` outright rather than duplicating
+    its own hard-won mechanics: grave-avoidance, the succeeded_by/succeeded_from chain,
+    handle inheritance. The ancestor is resolved from the seat's own lineage, never from
+    `current_holder` (the `holds` edge) directly. Measured against a real case: 11
+    generations of a seat's own substantive properties (handle, house, intended_model) all
+    sourced from one lineage, and exactly one disagreeing edge, `holds`, naming an unrelated
+    agent that built none of the rest. A cold seat's `holds` edge can go stale without the
+    seat itself being wrong; the defect is resolving generation math from that edge instead
+    of walking the lineage that actually built the seat. `_seat_lineage_ancestor` reads the
+    seat's own `handle` assertion's source (the property least likely to ever be written by
+    a lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
+    to the true current generation, the same succeeded_by walk fork resolution and mailbox
+    routing already trust. Falls back to `current_holder` only when the seat has no handle
+    assertion at all (nothing lineage-side to read yet: a seat still using the pre-Seat-
+    object binding, or a launch racing its own first-ever claim). Either way, `bind_holder`
+    is called explicitly below, never left to mint_heir's own `follow_binding` alone, since
+    a corrected-lineage ancestor may not itself hold `target_seat`, so follow_binding would
+    move nothing. This is deliberately the same act that corrects a stale `holds` edge,
+    sequenced to happen only when a real launch actually runs, through this named verb, with
+    the reasoning recorded on the heir, never a hand-write.
 
-    NO-ANCESTOR CASE (a seat truly never described, no handle assertion, no holder): mints
+    No-ancestor case (a seat truly never described, no handle assertion, no holder): mints
     a bare first generation directly, under the same `agent:seat-<id>` root every pure-seat-
-    office lineage already carries (my own root, `agent:seat-af50a33e`, is one) — a
-    deterministic, collision-free identity derived from the seat itself, never invented from
-    a transcript that does not exist yet.
+    office lineage already carries, a deterministic, collision-free identity derived from
+    the seat itself, never invented from a transcript that does not exist yet.
 
-    HOUSE, NOT GOVERNS (Thoth's own flag, msg 6694, a separate axis, not this dispatch's to
-    chase): a seat's `house` property can be stale label residue after a project fold
-    (Marquee's own case: `house`='dealer-to-fb', `governs`->'dtfb', the merged live name) —
-    `house` here is `launch_seat`'s own caller-supplied param, unchanged from before this
-    dispatch; this function does not re-derive it, on purpose, so it carries forward exactly
-    whatever staleness already existed rather than silently fixing a different bug in passing.
+    House, not governs: a seat's `house` property can be stale label residue after a project
+    fold. `house` here is `launch_seat`'s own caller-supplied param, unchanged from before
+    this call; this function does not re-derive it, on purpose, so it carries forward
+    exactly whatever staleness already existed rather than silently fixing a different bug
+    in passing.
 
-    `resolved_project` (task #204's launch-identity fix, Thoth msg 6935/6949, decision
-    68fba2e4): the caller's own PRE-COMPUTED `project_of()` resolution (pin -> charter ->
-    lineage_works_in, never house) — the exact fix for the operator's own "chad spawned in
-    project chad" specimen, where this function used to stamp the pre-registered
-    agent_mounts row's `project` column with `house` (the fabricated handle-named house for
-    a self-managed seat), which the spawned session's own automount() then re-attached
-    through UNCHANGED (never re-derived, by the pre-registration door's own design) — so the
-    whisper and statusline both showed the fabrication forever, not just at mint. Falls back
-    to `house` only when the caller has nothing resolved (never breaks an existing caller).
+    `resolved_project`: the caller's own pre-computed `project_of()` resolution (pin, then
+    charter, then lineage_works_in, never house). This is the fix for a real specimen where
+    an agent spawned into a project named after itself, because this function used to stamp
+    the pre-registered agent_mounts row's `project` column with `house` (a fabricated
+    handle-named house for a self-managed seat), which the spawned session's own automount()
+    then re-attached through unchanged (never re-derived, by the pre-registration step's own
+    design), so downstream displays showed the fabrication forever, not just at mint. Falls
+    back to `house` only when the caller has nothing resolved (never breaks an existing
+    caller).
 
-    THE PRE-REGISTRATION IS WHAT MAKES claim_name UNNECESSARY: `save_mount(..., alive=False)`
-    seeds the launch anchor's own durable row BEFORE the process exists, so the spawned
-    session's own `mount(cwd=office, job_dir=anchor)` call re-attaches through the EXISTING
-    durable-row door (`mounts.find_mount`) instead of falling through to a fresh identity
-    resolution — the same "seated the moment you exist; a heartbeat is earned by an act,
-    never granted by a greeting" discipline `save_mount`'s own docstring already describes
-    for an heir minted at ordinary succession time, fired one step earlier than usual: before
-    the body exists, not at its first call."""
+    The pre-registration is what makes claim_name unnecessary: `save_mount(..., alive=False)`
+    seeds the launch anchor's own durable row before the process exists, so the spawned
+    session's own `mount(cwd=office, job_dir=anchor)` call re-attaches through the existing
+    durable-row path (`mounts.find_mount`) instead of falling through to a fresh identity
+    resolution. This is the same discipline `save_mount`'s own docstring already describes
+    for an heir minted at ordinary succession time (a session is seated the moment it
+    exists), fired one step earlier than usual: before the session exists, not at its first
+    call."""
     from src.orchestrator.agents import _generation, mint_heir
     from src.orchestrator.mounts import save_mount
     from src.orchestrator.seats import bind_holder
 
     now = datetime.now(UTC)
     lineage_ancestor = await _seat_lineage_ancestor(actions.pool, target_seat)
-    # NEVER TRUST A BARE FALLBACK ANCESTOR (thread <jenny/dustin crossing>, Nebbercracker
-    # findings ab59c731/a0fd7e5b, live specimen): `current_holder` is the seat's own
-    # `holds` edge, read as-is by `_launch_target_setup` — a legitimate source for a seat
-    # that predates the Seat-object convention (this docstring's own "no handle
-    # assertion at all" case), but exactly as trusting of whatever garbage sits on that
-    # edge as any other unverified read. Live: jenny's seat resolved `current_holder` to
-    # `agent:9c9a534f` — an id equal to DUSTIN's own harness session, with zero real
-    # provenance of its own (no minted_because, no handle, no succeeded_from — never
-    # actually minted through any door, just a bare string an occupancy misread handed
-    # back) — and this function faithfully bound jenny's seat to it, no mint_heir call
-    # even reached (mint_heir mints the HEIR, never asserts anything on the ancestor it
-    # inherits from). `_seat_lineage_ancestor` itself stays trusted — it resolves the
-    # seat's OWN handle-sourced lineage and was not implicated in this specimen; only
-    # the RAW fallback to `current_holder` is checked, and only refused when it has no
-    # provenance of its own OR is live under a DIFFERENT seat right now — a real
-    # pre-Seat-object holder has one or the other; a job-id/session-shaped phantom has
-    # neither.
+    # Never trust a bare fallback ancestor. `current_holder` is the seat's own `holds`
+    # edge, read as-is by `_launch_target_setup`: a legitimate source for a seat that
+    # predates the Seat-object convention (this docstring's own "no handle assertion at
+    # all" case), but exactly as trusting of whatever garbage sits on that edge as any
+    # other unverified read. In a real specimen, one seat resolved `current_holder` to an
+    # id that was actually another agent's own harness session, with zero real provenance
+    # of its own (no minted_because, no handle, no succeeded_from: never actually minted
+    # through any door, just a bare string an occupancy misread handed back), and this
+    # function faithfully bound the seat to it, with no mint_heir call even reached
+    # (mint_heir mints the heir, never asserts anything on the ancestor it inherits from).
+    # `_seat_lineage_ancestor` itself stays trusted: it resolves the seat's own
+    # handle-sourced lineage and was not implicated in this specimen; only the raw fallback
+    # to `current_holder` is checked, and only refused when it has no provenance of its own
+    # or is live under a different seat right now. A real pre-Seat-object holder has one or
+    # the other; a job-id/session-shaped phantom has neither.
     ancestor = lineage_ancestor
     if ancestor is None and current_holder:
         ancestor = (current_holder
@@ -3237,17 +3200,17 @@ async def _bind_before_spawn(
                                       evidence_class=do.value)
         await actions.assert_property(heir_oid, "seat_generation", "1", source, now, conf,
                                       evidence_class=do.value)
-    # THE HOLDS-SANDWICH FIX: bind the REAL holder, never the fresh bookkeeping heir — the
-    # heir has done no work yet and may never do any (a resume/launch outcome can supersede
-    # it within seconds), so opening the seat's own holds window on it would leave a
-    # phantom sandwiched inside a real generation's continuous tenure the instant anything
-    # reverts. The ancestor case binds `ancestor` (never `heir_id`, and mint_heir was called
-    # above with bind_seat=False so it never touched holds either) — EXPLICIT, ALWAYS, never
-    # left to mint_heir's own follow_binding alone (see its docstring: a corrected-lineage
-    # ancestor may not itself hold `target_seat` yet). The no-ancestor case has no continuous
-    # tenure to protect (the seat was genuinely vacant) — heir_id becomes the real first
-    # holder directly. Idempotent either way (bind_holder checks for an already-live
-    # identical link before writing).
+    # Binds the real holder, never the fresh bookkeeping heir. The heir has done no work
+    # yet and may never do any (a resume/launch outcome can supersede it within seconds),
+    # so opening the seat's own holds window on it would leave a phantom sandwiched inside
+    # a real generation's continuous tenure the instant anything reverts. The ancestor case
+    # binds `ancestor` (never `heir_id`, and mint_heir was called above with
+    # bind_seat=False so it never touched holds either), explicit, always, never left to
+    # mint_heir's own follow_binding alone (see its docstring: a corrected-lineage ancestor
+    # may not itself hold `target_seat` yet). The no-ancestor case has no continuous tenure
+    # to protect (the seat was genuinely vacant), so heir_id becomes the real first holder
+    # directly. Idempotent either way (bind_holder checks for an already-live identical
+    # link before writing).
     await bind_holder(actions, seat_id=target_seat, agent_id=(ancestor or heir_id),
                       source=source)
     await save_mount(actions.pool, job_dir=anchor, agent_id=heir_id,
@@ -3264,11 +3227,11 @@ async def _resolve_launch_model(
     settings: Any,
 ) -> tuple[str | None, str]:
     """(model, where it came from) for a launch/resume spawn. Precedence: the caller's own
-    explicit param -> the seat's stamped `intended_model` -> the model the seat's LAST
-    holder actually ran on (`source_model` on the newest generation that ever held it) ->
-    the trigger's global `osiris_wake_model`. Alfred's post-reboot finding (msg 7462): till
-    and werner ran Sonnet 5 for their whole lineage and came back on the haiku default
-    because neither seat carried an `intended_model` stamp — a seat's model is sticky across
+    explicit param, then the seat's stamped `intended_model`, then the model the seat's last
+    holder actually ran on (`source_model` on the newest generation that ever held it), then
+    the trigger's global `osiris_wake_model`. This closes a real gap: two seats ran a
+    specific model for their whole lineage and came back on the default model after a reboot
+    because neither seat carried an `intended_model` stamp. A seat's model is sticky across
     successions, and the receipt (`model_source`) now says which leg supplied it."""
     if model:
         return model, "explicit"
@@ -3288,41 +3251,37 @@ async def _resolve_launch_model(
 
 
 async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None:
-    """The generation to mint `_bind_before_spawn`'s heir OF — resolved from the seat's OWN
-    lineage: TENURE first (a lineage that held the seat across 2+ generations, OR a single
-    generation with real occupancy evidence behind it — see the inline note), then the
-    handle assertion's source (Thoth's correction, msg 6694), never a lone `holds` edge with
-    nothing else to back it. The handle-source leg reads the seat's own
-    `handle` assertion's source_id (the property least likely to ever be written by a
-    lineage that isn't genuinely this seat's own) and walks it forward via `lineage_head`
-    (agents.py — the same succeeded_by walk fork resolution and mailbox routing already
-    trust) to the TRUE current generation. None when the seat carries no handle assertion at
-    all — nothing lineage-side to read yet.
+    """The generation to mint `_bind_before_spawn`'s heir of, resolved from the seat's own
+    lineage: tenure first (a lineage that held the seat across 2+ generations, or a single
+    generation with real occupancy evidence behind it, see the inline note), then the handle
+    assertion's source, never a lone `holds` edge with nothing else to back it. The
+    handle-source leg reads the seat's own `handle` assertion's source_id (the property
+    least likely to ever be written by a lineage that isn't genuinely this seat's own) and
+    walks it forward via `lineage_head` (agents.py, the same succeeded_by walk fork
+    resolution and mailbox routing already trust) to the true current generation. Returns
+    None when the seat carries no handle assertion at all: nothing lineage-side to read yet.
 
-    THE CONSOLE-ANCESTOR DEFECT (operator's own live catch, 2026-09-03, Chad's own seat):
-    "least likely to ever be written by a lineage that isn't genuinely this seat's own" was
-    still wrong for a seat established DIRECTLY by a human at the CLI — Chad's own genesis
-    `handle` assertion has ALWAYS carried `source_id='console'` (`seats.py`'s own
-    `_OPERATOR_ACTORS` sentinel, never an agent canonical), from before any lineage of its
-    own ever mounted. `osiris launch chad` fed that source straight into `lineage_head`,
-    which found no succeeded_by chain to walk and returned "console" unchanged — a
-    non-agent CLI actor label treated as a real ancestor, minting a phantom `console`/
-    `console-ii` "lineage" and REBINDING CHAD'S SEAT TO IT (agents.py's own `holds` edge,
-    2026-09-03 20:13:29). `_OPERATOR_ACTORS` is EXCLUDED HERE, never treated as a genuine
-    ancestor — falls through the SAME safe path as "no handle assertion at all" (the
-    caller's own `or current_holder` fallback), because a CLI actor sentinel is exactly
-    that: a label for WHO deliberately typed a command, never a fact about which agent
-    lineage built this seat."""
+    A console-ancestor defect this handles: "least likely to ever be written by a lineage
+    that isn't genuinely this seat's own" was still wrong for a seat established directly by
+    a human at the CLI. One such seat's genesis `handle` assertion had always carried
+    `source_id='console'` (`seats.py`'s own `_OPERATOR_ACTORS` sentinel, never an agent
+    canonical), from before any lineage of its own ever mounted. Launching that seat fed
+    that source straight into `lineage_head`, which found no succeeded_by chain to walk and
+    returned "console" unchanged: a non-agent CLI actor label treated as a real ancestor,
+    minting a phantom "console" lineage and rebinding the seat to it. `_OPERATOR_ACTORS` is
+    excluded here, never treated as a genuine ancestor: it falls through the same safe path
+    as "no handle assertion at all" (the caller's own `or current_holder` fallback), because
+    a CLI actor sentinel is exactly that: a label for who deliberately typed a command,
+    never a fact about which agent lineage built this seat."""
     from src.orchestrator.agents import _generation, lineage_head
     from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
 
-    # TENURE FIRST (the werner/till specimen, 2026-09-05, decision fb85dd4f): a lineage that
-    # has held this seat across TWO OR MORE generations IS the seat's own lineage — one
-    # stale `holds` edge (Marquee's unrelated staleholder) cannot fake tenure, while the
-    # handle assertion's author CAN be a founder who never sat here (Thoth XIII wrote
-    # werner's and till's handles when it founded those seats; msg 7059's "confess, never
-    # change" ruling let Alfred's post-reboot launches mint both bodies as Thoth's own
-    # generations 37 and 38). Most generations wins; the most recent hold breaks a tie.
+    # Tenure first: a lineage that has held this seat across two or more generations is the
+    # seat's own lineage. One stale `holds` edge from an unrelated agent cannot fake tenure,
+    # while the handle assertion's author can be a founder who never sat here (a founding
+    # seat wrote another seat's handle when it founded it, and a later "confess, never
+    # change" rule let post-reboot launches mint both as the founder's own later
+    # generations). Most generations wins; the most recent hold breaks a tie.
     rows = await pool.fetch(
         "SELECT f.canonical, l.id FROM links l JOIN objects f ON f.id=l.from_id "
         "JOIN objects t ON t.id=l.to_id WHERE t.canonical=$1 AND l.type='holds' "
@@ -3335,20 +3294,18 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
         tenured.sort(reverse=True)
         return await lineage_head(pool, tenured[0][2])
 
-    # ONE GENERATION CAN STILL BE TENURE, WITH REAL OCCUPANCY EVIDENCE BEHIND IT (msg
-    # 7540, closing 24f4ac4c as a code fix): "prefer resume" alone left cassandra/jenny/
-    # khepri/nebbercracker exposed to the same founder-side mis-mint werner/till hit,
-    # because a founder-side `osiris launch` never even reaches this branch's caller
-    # (`_bind_before_spawn` runs unconditionally). The threshold stays 2+ generations —
-    # lowering it would readmit the Marquee specimen (one stray `holds` edge is not
-    # tenure) — but a SINGLE real holder earns the same trust a second generation would
-    # if it left a mount trace: a row in `agent_mounts` (current or past — the table is
-    # the durable registry either way, never a second "is it live" check) whose `cwd`
-    # is the seat's own office (`anchor_cwd`), or whose `seat_id` names this seat
-    # directly (stamped once at `claim_name`, seats.py's own binding act). Marquee's
-    # staleholder never mounted into anything and never claimed the seat — it cannot
-    # produce either row and never will. Ties broken the same way tenure is: most
-    # recent hold first.
+    # One generation can still be tenure, with real occupancy evidence behind it:
+    # "prefer resume" alone left several seats exposed to the same founder-side mis-mint
+    # described above, because a founder-side launch never even reaches this branch's
+    # caller (`_bind_before_spawn` runs unconditionally). The threshold stays 2+
+    # generations (lowering it would readmit the stray-edge case: one stray `holds` edge
+    # is not tenure), but a single real holder earns the same trust a second generation
+    # would if it left a mount trace: a row in `agent_mounts` (current or past, the table
+    # is the durable registry either way, never a second "is it live" check) whose `cwd`
+    # is the seat's own office (`anchor_cwd`), or whose `seat_id` names this seat directly
+    # (stamped once at `claim_name`, seats.py's own binding act). A stray holder that never
+    # mounted into anything and never claimed the seat cannot produce either row and never
+    # will. Ties broken the same way tenure is: most recent hold first.
     singles = [(v[-1], b) for b, v in tenure.items() if len(v) == 1]
     if singles:
         anchor_cwd = await pool.fetchval(
@@ -3369,12 +3326,12 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
                 base, seat_id, anchor_cwd)
             if occupied:
                 return await lineage_head(pool, base)
-            # THE GRAPH, NOT THE CACHE (jenny/nebbercracker, 2026-09-05 16:52Z): agent_mounts
-            # is swept, so a real single holder whose rows aged out looked like Marquee's
-            # stray edge and the founder's lineage won again — minutes after the cache-only
-            # leg deployed. The holder's own self-declared `cwd` (== the seat's office) or
-            # `handle` (== the seat's handle) are graph assertions, never swept, and a stray
-            # edge's agent never wrote either about THIS seat.
+            # The graph, not the cache: agent_mounts is swept, so a real single holder
+            # whose rows aged out looked like a stray edge and the founder's lineage won
+            # again, minutes after the cache-only check deployed. The holder's own
+            # self-declared `cwd` (matching the seat's office) or `handle` (matching the
+            # seat's handle) are graph assertions, never swept, and a stray edge's agent
+            # never wrote either about this seat.
             named = await pool.fetchval(
                 "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
                 "WHERE o.type='Agent' AND (o.canonical=$1 OR o.canonical LIKE $1 || '-%') "
@@ -3391,18 +3348,16 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
         "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
     if not source:
         return None
-    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): a
-    # historical-attribution exclusion (an operator sentinel stamped as a handle
-    # assertion's source is never a real prior Agent generation), not a live
-    # authorization gate — no project to scope a charter check against.
+    # Reviewed and left alone as a historical-attribution exclusion: an operator sentinel
+    # stamped as a handle assertion's source is never a real prior Agent generation, not a
+    # live authorization gate, and there is no project to scope a charter check against.
     if source in _OPERATOR_ACTORS:
         return None
-    # LINEAGE IS PER SEAT, NOT PER ACTOR (ruling 004cc8d8 item 4, obligation e6ac651d):
-    # found_seat stamps this prefix + the seat's own globally-unique handle as the
-    # source precisely so it can never be mistaken for a real predecessor generation
-    # here — the same exclusion _OPERATOR_ACTORS already gets, for the same reason
-    # (an attribution label, never a lineage fact). Falls through to the caller's own
-    # `current_holder` fallback, same as no handle assertion at all.
+    # Lineage is per seat, not per actor: found_seat stamps this prefix plus the seat's
+    # own globally-unique handle as the source precisely so it can never be mistaken for a
+    # real predecessor generation here, the same exclusion _OPERATOR_ACTORS already gets,
+    # for the same reason (an attribution label, never a lineage fact). Falls through to
+    # the caller's own `current_holder` fallback, same as no handle assertion at all.
     if str(source).startswith(_FOUNDER_SOURCE_PREFIX):
         return None
     base = _generation(str(source))[0]
@@ -3412,27 +3367,25 @@ async def _seat_lineage_ancestor(pool: asyncpg.Pool, seat_id: str) -> str | None
 async def _legacy_lineage_confession(
     pool: asyncpg.Pool, seat_id: str, lineage_ancestor: str,
 ) -> str | None:
-    """A ONE-LINE, RECEIPT-ONLY WARNING, never a refusal, never a behavior change (msg
-    7059's own ruling): 17 real managed seats, minted before `_FOUNDER_SOURCE_PREFIX`
-    existed, still carry their minting manager's own agent id as their `handle`
-    assertion's source — the same actor-as-lineage shape e6ac651d fixed for new mints,
-    left DELIBERATELY untouched here for seats that already exist (existing chains are
-    not rewritten without a further ruling). Every one of them measured correct today
-    (each resolves to its own real, distinct lineage) purely because none has gone
-    through this exact ancestor branch on a genuine first-ever launch since msg 6692
-    landed — a fact about their history, not a guarantee. This confesses the exposure
-    on the receipt whenever it's actually exercised, so a human watching launches can
-    catch a legacy seat before it silently inherits the wrong lineage, without this
-    function refusing or altering anything about the mint itself."""
+    """A one-line, receipt-only warning, never a refusal, never a behavior change: some real
+    managed seats, minted before the founder-source-prefix convention existed, still carry
+    their minting manager's own agent id as their `handle` assertion's source, the same
+    actor-as-lineage shape fixed for new mints, left deliberately untouched here for seats
+    that already exist (existing chains are not rewritten without a further decision). Every
+    one of them measures correct today (each resolves to its own real, distinct lineage)
+    purely because none has gone through this exact ancestor branch on a genuine first-ever
+    launch since the fix landed, a fact about their history, not a guarantee. This confesses
+    the exposure on the receipt whenever it's actually exercised, so someone watching
+    launches can catch a legacy seat before it silently inherits the wrong lineage, without
+    this function refusing or altering anything about the mint itself."""
     from src.orchestrator.seats import _FOUNDER_SOURCE_PREFIX, _OPERATOR_ACTORS
 
     source = await pool.fetchval(
         "SELECT h.source_id FROM current_assertions h JOIN objects o ON o.id=h.object_id "
         "WHERE o.canonical=$1 AND o.type='Seat' AND h.name='handle' "
         "ORDER BY h.confidence DESC, h.observed_at DESC LIMIT 1", seat_id)
-    # BUCKET C, reviewed and left alone (thread 1d5b9773, "authority by charter"): same
-    # historical-attribution exclusion as the sibling check above — not live
-    # authorization, no project in scope.
+    # Reviewed and left alone: same historical-attribution exclusion as the sibling check
+    # above, not live authorization, no project in scope.
     if not source or source in _OPERATOR_ACTORS or str(source).startswith(_FOUNDER_SOURCE_PREFIX):
         return None
     return (f"legacy lineage source: {seat_id}'s ancestor ({lineage_ancestor!r}) was "
@@ -3446,22 +3399,22 @@ async def _legacy_lineage_confession(
 async def _resolve_launch_project(
     pool: asyncpg.Pool, *, seat_id: str, office: str, ancestor: str | None,
 ) -> dict[str, Any]:
-    """Resolve project THE SAME WAY MOUNT WILL, BEFORE ANY WRITE — the shared decision both
-    launch doors (trigger.launch_seat's harness lane, cli.py's `_cmd_launch_harness`) need
-    (task #204, Thoth msg 6935/6949, decision 68fba2e4: the operator's own "chad spawned in
-    project chad" specimen). `project_of()` (agents.py) itself needs an ALREADY-BOUND agent
-    to find its seat via `held_seat` — exactly what does not exist yet at this point in a
+    """Resolves the project the same way mount will, before any write: the shared decision
+    both launch entry points (trigger.launch_seat's harness lane, cli.py's
+    `_cmd_launch_harness`) need, fixing a real specimen where a seat launched into a project
+    named after itself. `project_of()` (agents.py) itself needs an already-bound agent to
+    find its seat via `held_seat`, exactly what does not exist yet at this point in a
     launch, the whole reason this wrapper exists rather than calling project_of() directly
     pre-bind. `ancestor` (the seat's own current holder, or the lineage generation about to
-    be re-adopted — never required) supplies lineage_works_in continuity when one exists;
+    be re-adopted, never required) supplies lineage_works_in continuity when one exists;
     its absence (a seat's genuinely first-ever launch) is not an error, just one fewer rung.
 
     Returns `{"project": ..., "refuse": None}` when safe to proceed, or
     `{"project": None, "refuse": {...}}` when the seat's own charter names exactly one real
-    repo that DISAGREES with what this launch would otherwise resolve — the exact
-    fabricated-handle-project shape (Chad/Jesus) this whole fix exists to catch, caught
-    BEFORE `_bind_before_spawn` writes anything. A charter with zero or more-than-one repo
-    is never this function's call to break (project_of()'s own ambiguity law) — it resolves
+    repo that disagrees with what this launch would otherwise resolve: the exact
+    fabricated-handle-project shape this fix exists to catch, caught before
+    `_bind_before_spawn` writes anything. A charter with zero or more than one repo is
+    never this function's call to break (project_of()'s own ambiguity rule); it resolves
     whatever project_of()'s own chain would, unchecked."""
     from src.orchestrator.agents import project_of, read_project_label
     from src.orchestrator.charter import charter_of
@@ -3474,8 +3427,8 @@ async def _resolve_launch_project(
         if candidate is not None and candidate != charter_repos[0]:
             return {"project": None, "refuse": {
                 "charter_project": charter_repos[0], "resolved_project": candidate}}
-        # nothing else resolved (a fresh seat, no ancestor, no pin) — the charter's own
-        # single repo IS what project_of() will land on the instant this generation is
+        # Nothing else resolved (a fresh seat, no ancestor, no pin): the charter's own
+        # single repo is what project_of() will land on the instant this generation is
         # bound and re-mounts, so use it now rather than leave a resolvable case as None.
         return {"project": candidate or charter_repos[0], "refuse": None}
     return {"project": candidate, "refuse": None}
@@ -3483,20 +3436,19 @@ async def _resolve_launch_project(
 
 def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
                           generation: int, resolved_project: str | None = None) -> str:
-    """PIECE 1's boot prompt: a STATEMENT, not an instruction (Thoth's acceptance criterion,
-    msg 6692 — `claim_name` disappears from this text; if it survives, the inversion did not
-    happen). The session's identity is already written (`_bind_before_spawn`, run just before
-    this); mount() re-attaches to it through the pre-registered anchor row, nothing left to
-    negotiate or re-derive. THE ONLY BOOT PROMPT NOW (Thoth dispatch 6713): the unbound
-    `_bg_boot_prompt` this function was deliberately kept separate from — dispatch_dm's own
-    fresh-heir fallback was its last caller — is gone; dispatch_dm now binds before spawn
-    the same way launch_seat does, through this function.
+    """The bound-identity boot prompt: a statement, not an instruction; `claim_name` never
+    appears in this text, since the session's identity is already written
+    (`_bind_before_spawn`, run just before this). mount() re-attaches to it through the
+    pre-registered anchor row, nothing left to negotiate or re-derive. This is now the only
+    boot prompt path: the older unbound prompt builder this function was deliberately kept
+    separate from is gone; dispatch_dm now binds before spawn the same way launch_seat does,
+    through this function.
 
-    `resolved_project` (task #204's launch-identity fix, msg 6935): names the seat's own
-    project_of()-resolved project explicitly in the very first turn — "working <project>" —
-    so the mind never has to rationalize house vs. project from whatever mount()'s own
-    later re-derivation happens to say. Omitted entirely (never a guess) when unresolved —
-    df646654/68fba2e4: homeless is a legal state, not something to paper over with a name."""
+    `resolved_project` names the seat's own project_of()-resolved project explicitly in the
+    very first turn ("working <project>"), so the session never has to rationalize house vs.
+    project from whatever mount()'s own later re-derivation happens to say. Omitted entirely
+    (never a guess) when unresolved: having no project is a legal state, not something to
+    paper over with a name."""
     from src.orchestrator.agents import _to_roman
 
     label = f"{handle} {_to_roman(generation)}" if generation > 1 else handle
@@ -3512,25 +3464,24 @@ def _bg_boot_prompt_bound(*, office: str, anchor: str, handle: str, agent: str,
 
 
 def _harness_row_is_live(row: dict[str, Any], *, read_cmdline: Any = None) -> bool:
-    """A `claude agents --json` row counts as a genuinely live body only when its own
-    `state` is not failed/completed AND (when the row names one) its own `pid` is
-    actually alive on THIS box — checked against `/proc`, never assumed from a static
-    roster line (Nebbercracker's monsterhouse report, DM 13237/13239): chowder's own
-    row for session aa64c831 kept naming `"status": "idle", "state": "failed"`, pid
-    2025736 long dead, and NEVER left the harness's own roster — so `_launch_twin_check`
-    kept refusing every relaunch as `already-live` forever, off a process that no
-    longer existed. A row with no `pid` at all (a harness version that doesn't report
-    one) is trusted on `state` alone, never refused for a signal it never carried.
+    """A `claude agents --json` row counts as a genuinely live session only when its own
+    `state` is not failed/completed and (when the row names one) its own `pid` is actually
+    alive on this box, checked against `/proc`, never assumed from a static roster line.
+    This fixes a real specimen: one row for a session kept naming `"status": "idle",
+    "state": "failed"`, its pid long dead, and never left the harness's own roster, so
+    `_launch_twin_check` kept refusing every relaunch as `already-live` forever, off a
+    process that no longer existed. A row with no `pid` at all (a harness version that
+    doesn't report one) is trusted on `state` alone, never refused for a signal it never
+    carried.
 
-    A BG-SPARE IS NEVER A BODY, REGARDLESS OF STATE (the same report's own addendum,
-    DM 13240): chowder's own dead pid's argv turned out to be `claude bg-spare
-    --bg-spare <sock>` — a warm-spare claim process, real and exe-verified but never a
-    conversational body, THE LIVENESS CONVERGENCE FIX's own PIECE B2
-    (`census._is_bg_spare`) already refuses to count for `registry_census`. Reused
-    here verbatim — never a second classification rule — via the SAME `b"bg-spare" in
-    cmdline` probe over `/proc/<pid>/cmdline` (`census._proc_cmdline`, injectable as
-    `read_cmdline` exactly like `registry_census`'s own `read_exe`/`read_cwd` seam, so
-    no test here ever touches a real `/proc`)."""
+    A background-spare process is never a real session, regardless of state: one dead pid's
+    argv turned out to be a warm-spare claim process (`claude bg-spare --bg-spare <sock>`),
+    real and exe-verified but never a conversational session. `registry_census` already
+    refuses to count this shape (`census._is_bg_spare`). Reused here verbatim, never a
+    second classification rule, via the same `b"bg-spare" in cmdline` probe over
+    `/proc/<pid>/cmdline` (`census._proc_cmdline`, injectable as `read_cmdline` exactly like
+    `registry_census`'s own `read_exe`/`read_cwd` seam, so no test here ever touches a real
+    `/proc`)."""
     if row.get("state") in ("failed", "completed"):
         return False
     pid = row.get("pid")
@@ -3552,66 +3503,61 @@ async def _launch_twin_check(
     pool: asyncpg.Pool, agents_json: Any, launch_cwd: str, *, seat_id: str | None = None,
     read_cmdline: Any = None,
 ) -> dict[str, Any]:
-    """THE SHARED TWIN GUARD, reused by BOTH launch doors (ruling 983ec87a, "two doors, one
-    receipt") — the harness-native launch lane's own idempotency check used to consult ONLY
-    `claude agents --json`, the harness's own `--bg` roster, which is INVISIBLE TO A RESUMED
-    (`-p --resume`) BODY BY CONSTRUCTION (this file's own launch_seat docstring, decision
-    536de12f). A live resumed session sitting at `launch_cwd` was therefore invisible to this
-    guard — not an audit gap, a real double-mint collision risk (task #148's contested seam
-    4). Reads BOTH halves of "what is running" and refuses on EITHER: `claude agents --json`
-    (the harness's own, known-incomplete) AND `agent_mounts` (osiris's own registry, which a
-    resumed body's mid-turn mount() call DOES reach). NEVER FIXES the harness roster's own
-    incompleteness (that is THEIRS, per #148's ruling) — only stops trusting it ALONE.
+    """The shared twin guard, reused by both launch entry points: the harness-native launch
+    lane's own idempotency check used to consult only `claude agents --json`, the harness's
+    own `--bg` roster, which is invisible to a resumed (`-p --resume`) session by
+    construction. A live resumed session sitting at `launch_cwd` was therefore invisible to
+    this guard, not an audit gap but a real double-mint collision risk. This reads both
+    halves of "what is running" and refuses on either: `claude agents --json` (the
+    harness's own, known-incomplete) and `agent_mounts` (osiris's own registry, which a
+    resumed session's mid-turn mount() call does reach). This never fixes the harness
+    roster's own incompleteness (that lives upstream); it only stops trusting it alone.
 
-    ALWAYS RETURNS A DICT NOW (never bare None — Nebbercracker's monsterhouse report, DM
-    13237/13239, the follow-up to the mounts-side fix above): `harness` (the matching
+    Always returns a dict now (never bare None): `harness` (the matching
     `claude agents --json` row, or None) and `mounts` (the matching agent_mounts row, or
-    None) name EXACTLY which source(s) fired (577988ed: a guard that wrongly blocks a
-    legitimate launch is worse than the disease it prevents — a caller must be able to see
-    and judge WHY this refused, never just that it did); a caller refuses on EITHER being
-    non-None, exactly as it did on a non-None return before this. Both present is not
+    None) name exactly which source(s) fired, since a guard that wrongly blocks a
+    legitimate launch is worse than the disease it prevents, and a caller must be able to
+    see and judge why this refused, never just that it did. A caller refuses on either
+    being non-None, exactly as it did on a non-None return before this. Both present is not
     treated as more ambiguous than either alone: two live-looking signals for the same cwd
     both mean the same thing (don't mint), so both are reported and both refuse the same
-    way — there is no genuinely ambiguous case here to invent a third verdict for, only
-    ONE OR THE OTHER OR NEITHER, and this reports exactly which. A THIRD key,
+    way; there is no genuinely ambiguous case here to invent a third verdict for, only one
+    or the other or neither, and this reports exactly which. A third key,
     `stale_harness_row`, is independent of whether a real twin was found: a cwd/session
-    match against `claude agents --json` is filtered through `_harness_row_is_live`
-    before it can ever become `harness` — chowder's own row for session aa64c831 kept
-    naming `state: "failed"`, pid 2025736 long dead, and never left the harness's own
-    roster, so this guard kept refusing every relaunch as already-live forever off a
-    process that no longer existed. A filtered-out row lands in `stale_harness_row`
-    (None when none was seen) so a caller can report it rather than silently discard the
-    evidence — present whether or not `harness`/`mounts` ALSO found a genuine twin.
+    match against `claude agents --json` is filtered through `_harness_row_is_live` before
+    it can ever become `harness`. One real specimen row for a session kept naming
+    `state: "failed"`, its pid long dead, and never left the harness's own roster, so this
+    guard kept refusing every relaunch as already-live forever off a process that no
+    longer existed. A filtered-out row lands in `stale_harness_row` (None when none was
+    seen) so a caller can report it rather than silently discard the evidence, present
+    whether or not `harness`/`mounts` also found a genuine twin.
 
-    BY LINEAGE TOO, NOT ONLY BY CWD (operator, 2026-09-03 — the office ruling's own
-    hazard): the moment a seat's spawn location moves (tree_cwd rebound off a fabricated
-    ~/code/<handle>, resume now spawning at the office), a body of the SAME seat still
-    sitting at the OLD cwd is invisible to a cwd-keyed check, and the next launch/resume
-    forks the mind. With `seat_id`, this also reads the seat's current holder lineage:
-    any harness row whose sessionId is one of the lineage's own graph sessions, or any
-    live agent_mounts row for the lineage, at ANY cwd, refuses the same way. Jesus's live
-    shape tonight: its real mind sat at ~/code/jesus while the seat's launch cwd had just
-    become ~/code/REPOS/Godel — the cwd check saw nothing there.
+    By lineage too, not only by cwd: the moment a seat's spawn location moves (tree_cwd
+    rebound off a fabricated per-handle path, resume now spawning at the office), a session
+    of the same seat still sitting at the old cwd is invisible to a cwd-keyed check, and the
+    next launch/resume forks the mind. With `seat_id`, this also reads the seat's current
+    holder lineage: any harness row whose sessionId is one of the lineage's own graph
+    sessions, or any live agent_mounts row for the lineage, at any cwd, refuses the same
+    way. One real specimen: a seat's real session sat at one cwd while the seat's launch
+    cwd had just moved to another location, so the cwd check alone saw nothing there.
 
-    A CWD IS NOT UNIQUE TO ONE SEAT, SO A MOUNTS HIT MUST BE OWNED, NOT JUST PRESENT
-    (Nebbercracker's monsterhouse report, DM 13152/13157 — the sweep-seat-trees hazard,
-    w329/w331: two seats can share one tree_cwd by design). The old `agent_mounts WHERE
-    cwd=$1 LIMIT 1` query returned the single freshest live row at that cwd from ANY
-    agent, no matter whose lineage it belonged to — chowder's own holder was stopped,
-    but Dustin's live mount at the SAME shared tree_cwd (chowder's and monsterhouse's
-    other worker seats all bound to one tree) still read as "already-live" for chowder,
+    A cwd is not unique to one seat, so a mounts hit must be owned, not just present: two
+    seats can share one tree_cwd by design. The old `agent_mounts WHERE cwd=$1 LIMIT 1`
+    query returned the single freshest live row at that cwd from any agent, no matter whose
+    lineage it belonged to, so one seat's holder was stopped while a different seat's live
+    mount at the same shared tree_cwd still read as "already-live" for the first seat,
     exactly the two-body-problem class this file's own registry_census docstring warns
-    against (ruling 719ed5b1: occupancy is not identity). With `seat_id`, every candidate
-    row at `launch_cwd` is walked newest-first through `held_seat` (the SAME lineage-wide
-    holds-link authority `identify_agent`'s own doors.py already trusts — never a second
-    copy of that predicate) and REJECTED ONLY ON A POSITIVE MISMATCH — the candidate's own
-    agent confirmed to hold a DIFFERENT seat. A candidate holding no seat AT ALL (no
-    `holds` link ever recorded — the ordinary shape of a first-ever resume whose mount
-    landed before its own claim_name, task #148's contested seam 4's own test) is not
-    evidence it belongs to anybody else, so it still counts as this seat's own body,
-    exactly as before this fix; only a genuinely different seat's holder is skipped.
-    `seat_id=None` (no seat to own the row) keeps the old best-effort freshest-row
-    reading — a caller with no seat has no lineage to check a hit against."""
+    against (occupancy is not identity). With `seat_id`, every candidate row at
+    `launch_cwd` is walked newest-first through `held_seat` (the same lineage-wide
+    holds-link authority `identify_agent`'s own doors.py already trusts, never a second
+    copy of that predicate) and rejected only on a positive mismatch: the candidate's own
+    agent confirmed to hold a different seat. A candidate holding no seat at all (no
+    `holds` link ever recorded, the ordinary shape of a first-ever resume whose mount
+    landed before its own claim_name) is not evidence it belongs to anybody else, so it
+    still counts as this seat's own session, exactly as before this fix; only a genuinely
+    different seat's holder is skipped. `seat_id=None` (no seat to own the row) keeps the
+    old best-effort freshest-row reading, since a caller with no seat has no lineage to
+    check a hit against."""
     from src.orchestrator.mounts import is_live
 
     try:
@@ -3638,13 +3584,13 @@ async def _launch_twin_check(
             if cand["last_seen"] is None or not is_live(cand["last_seen"]):
                 continue
             held = await held_seat(pool, cand["agent_id"])
-            # REJECT ONLY A POSITIVE MISMATCH (some OTHER seat's own holder), never an
-            # UNKNOWN one: a mind that holds no seat at all yet (no `holds` link ever
-            # recorded — the ordinary shape of a first-ever resume racing its own
-            # claim_name) is not evidence it belongs to anybody else, so it still
-            # counts as this seat's own body, exactly as before this fix. Only
-            # `held["seat_id"]` naming a DIFFERENT seat is the actual signal Dustin's
-            # specimen turns on.
+            # Reject only a positive mismatch (some other seat's own holder), never an
+            # unknown one: a session that holds no seat at all yet (no `holds` link ever
+            # recorded, the ordinary shape of a first-ever resume racing its own
+            # claim_name) is not evidence it belongs to anybody else, so it still counts
+            # as this seat's own session, exactly as before this fix. Only
+            # `held["seat_id"]` naming a different seat is the actual signal this check
+            # is looking for.
             if held is not None and held.get("seat_id") != seat_id:
                 continue
             from_mounts = {"agent_id": cand["agent_id"],
@@ -3697,28 +3643,26 @@ async def _launch_target_setup(
     actions: Actions, *, caller: str, target: str, agents_json: Any,
     operator_authorized: bool = False, occupied_status: str = "refused-occupied",
 ) -> dict[str, Any]:
-    """THE GATE + FACTS SHARED BY BOTH launch_seat AND resume_seat (extracted, task #199
-    lane 3C, ruling 41a41437/msgs 6823/6831: "one shared orchestration shell, the
-    managed_by-vs-operator gate as the single irreducible branch" — this is that shell's
-    MCP-agent half; the caller-trust gate below is the one piece that genuinely differs
-    from the CLI's own operator door and stays irreducible on purpose, not collapsed).
+    """The gate and facts shared by both launch_seat and resume_seat: one shared
+    orchestration shell, with the managed_by-vs-operator gate as the single irreducible
+    branch. This is that shell's MCP-agent half; the caller-trust gate below is the one
+    piece that genuinely differs from the CLI's own operator entry point and stays
+    irreducible on purpose, not collapsed.
 
     Runs the managed_by trust gate, resolves seat_facts/tree_cwd, builds the attach line,
-    and enforces ONE SEAT, ONE LIVE LINEAGE HEAD (ruling 921eabcf item 1) — checked here,
-    once, so neither launch nor resume can ever fork a second eligible head.
+    and enforces one seat, one live lineage head, checked here, once, so neither launch nor
+    resume can ever fork a second eligible head.
 
-    `operator_authorized` (WAVE 21 item 3, mail 9869 a793b01b, "UNIFY LAUNCH" — same
-    self-declared-act convention as record_decision's own `operator_authorized`, decision
-    12efe065): SKIPS the managed_by trust gate entirely, never widens it. Set ONLY by
-    `osiris launch`'s own CLI door (cli.py's `main()`, a local-execution trust boundary no
-    network caller can reach) — the ONE flag genuinely different from a forgeable `caller`
-    override: it names no seat, asserts no delegated authority, just states outright that
-    THIS caller IS the operator's own hand, out-of-band, exactly as `launch_seat`'s own
-    docstring already required before this flag existed. An MCP agent caller can never set
-    this (mcp_server.py's own `seat()` dispatcher never threads it through) — the boolean is
-    the boundary, not a value inside `caller`.
+    `operator_authorized` skips the managed_by trust gate entirely, never widens it. Set
+    only by `osiris launch`'s own CLI entry point (cli.py's `main()`, a local-execution
+    trust boundary no network caller can reach): the one flag genuinely different from a
+    forgeable `caller` override. It names no seat, asserts no delegated authority, just
+    states outright that this caller is the operator's own hand, out-of-band, exactly as
+    `launch_seat`'s own docstring already required before this flag existed. An MCP agent
+    caller can never set this (mcp_server.py's own `seat()` dispatcher never threads it
+    through): the boolean is the boundary, not a value inside `caller`.
 
-    A dict with NO `target_seat` key is an ERROR — return it to the caller UNCHANGED.
+    A dict with no `target_seat` key is an error; return it to the caller unchanged.
     Otherwise every field a launch or resume decision needs is resolved and ready:
     target_seat, handle, house, office, tree_cwd, launch_cwd, attach, anchor,
     current_holder, facts."""
@@ -3792,26 +3736,25 @@ async def _launch_target_setup(
     attach = {"office": office, "tree_cwd": tree_cwd, "session_anchor": anchor,
              "command": f'python -m src.manager.attach "{name}"'}
 
-    # THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
-    # was `agents.is_occupied_by_a_live_body` (registry_census's own harness+/proc
-    # cross-check) -- a real, /proc-VERIFIED signal, but a DIFFERENT one from what
-    # team()/vacate_dead_seat trust, and the three disagreeing in production (a body the
-    # census confirmed live moments after team() read it cold from a stale mount row) is
-    # exactly the operator's own bug report. `mounts.agent_liveness` is now THE single
-    # source for this gate too -- coarser (agent_mounts.last_seen + transcript-mtime
-    # fallback, a 15-minute cache window, never a live /proc read) but the SAME instrument
-    # `team()` and `vacate_dead_seat` now answer with, so a seat never reads occupied to
-    # one reader and vacant to another. `current_holder` dead under this source now falls
-    # straight through to a fresh mint below -- NO separate vacate_seat step required.
+    # This closes a liveness convergence gap: the previous occupancy check used a
+    # real, /proc-verified signal, but a different one from what team()/vacate_dead_seat
+    # trusted, and the two disagreeing in production (a session the census confirmed live
+    # moments after team() read it cold from a stale mount row) caused real confusion.
+    # `mounts.agent_liveness` is now the single source for this gate too: coarser
+    # (agent_mounts.last_seen plus a transcript-mtime fallback, a 15-minute cache window,
+    # never a live /proc read) but the same instrument `team()` and `vacate_dead_seat` now
+    # answer with, so a seat never reads occupied to one reader and vacant to another.
+    # `current_holder` dead under this source now falls straight through to a fresh mint
+    # below, with no separate vacate_seat step required.
     #
-    # `occupied_status` (launch_seat passes "already-live"): the shared gate's LOGIC is
-    # one instrument for both callers, but its LABEL is not -- cli.py's own launch door
-    # treats "already-live" as THE GOAL STATE (exit 0, "nothing to do", never a refusal:
-    # see _cmd_launch_harness's own docstring/comment), while resume's occupancy gate
-    # means a genuine conflict (a caller trying to fork a second live head) and must stay
-    # "refused-occupied". Same detection, different meaning to each caller's own contract
-    # -- collapsing the label too would make `osiris launch` exit 1 for a state that was
-    # never an error.
+    # `occupied_status` (launch_seat passes "already-live"): the shared gate's logic is one
+    # instrument for both callers, but its label is not. cli.py's own launch entry point
+    # treats "already-live" as the goal state (exit 0, "nothing to do", never a refusal:
+    # see _cmd_launch_harness's own docstring/comment), while resume's occupancy gate means
+    # a genuine conflict (a caller trying to fork a second live head) and must stay
+    # "refused-occupied". Same detection, different meaning to each caller's own contract;
+    # collapsing the label too would make `osiris launch` exit 1 for a state that was never
+    # an error.
     from src.orchestrator.mounts import agent_liveness
     current_holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
     liveness_verdict = await agent_liveness(pool, current_holder) if current_holder else None
@@ -3838,23 +3781,22 @@ async def _launch_target_setup(
 async def _deliver_brief_to_live_seat(
     pool: asyncpg.Pool, *, target_seat: str, message: str, sender: str, settings: Settings,
 ) -> dict[str, Any]:
-    """DOOR 1 (thread 39741694 item 1, Nebbercracker's finding ec7167a7): `launch_seat`'s
-    already-live path used to return straight from `_launch_target_setup` — the twin
-    refusal itself is correct (never minting a second body over a live one), but any
-    `message` the caller passed simply vanished, with no record it was ever tried. Sends
-    it as an ordinary grade='ask' DM (`send_message`, `to_agent=target_seat` — mail
-    addressed to a seat auto-resolves to its current holder, the same shape the fresh-
-    mint opening brief above already uses) then immediately pushes it through
-    `dispatch_dm` — the SAME mail ladder every other DM escalation in this house already
-    uses, never a second, differently-shaped nudge mechanism.
+    """`launch_seat`'s already-live path used to return straight from
+    `_launch_target_setup`: the twin refusal itself is correct (never minting a second
+    session over a live one), but any `message` the caller passed simply vanished, with no
+    record it was ever tried. This sends it as an ordinary grade='ask' DM (`send_message`,
+    `to_agent=target_seat`; mail addressed to a seat auto-resolves to its current holder,
+    the same shape the fresh-mint opening brief above already uses), then immediately
+    pushes it through `dispatch_dm`, the same mail ladder every other DM escalation in this
+    codebase already uses, never a second, differently-shaped nudge mechanism.
 
-    Reports `{"delivered_via": "dm", "message_id": ...}` only when `dispatch_dm`'s own
-    mode confirms a genuine live injection (`nudged`, `resumed`, or `poked` —
-    `_dispatch_dm_body`'s own docstring names these the three positively-confirmed
-    shapes). Every other mode (queued-*, mid-turn, braked, skipped-*, held, pull-only,
-    refused, trigger-dark, queued-human) is honestly reported as `{"brief_dropped":
-    True, "message_id": ..., "why": <dispatch_dm's own detail>}` — never smoothed into a
-    success-shaped claim this function did not confirm."""
+    Reports `{"delivered_via": "dm", "message_id": ...}` only when `dispatch_dm`'s own mode
+    confirms a genuine live injection (`nudged`, `resumed`, or `poked`; `_dispatch_dm_body`'s
+    own docstring names these the three positively-confirmed shapes). Every other mode
+    (queued-*, mid-turn, braked, skipped-*, held, pull-only, refused, trigger-dark,
+    queued-human) is honestly reported as `{"brief_dropped": True, "message_id": ...,
+    "why": <dispatch_dm's own detail>}`, never smoothed into a success-shaped claim this
+    function did not confirm."""
     from src.orchestrator.agents import project_of
 
     sent = await send_message(
@@ -3879,37 +3821,36 @@ async def launch_seat(
     operator_authorized: bool = False, sleep: Any = None, read_cmdline: Any = None,
     brief_poll_attempts: int = 3, brief_poll_delay_secs: float = 2.0,
 ) -> dict[str, Any]:
-    """Give a seat a BODY. Downward-only, managed_by-gated (a manager bodies a seat it manages) —
-    UNLESS `operator_authorized=True` (WAVE 21 item 3, a793b01b, "UNIFY LAUNCH"). Idempotent: a
-    live window for the seat is RETURNED, never twinned. The receipt reports body_exists and
-    can_receive SEPARATELY, each from an independent read — Ra's requirement (53ae1a87): a launch
-    that returns success must mean a body exists AND can receive, and where those are separable
-    states the verb must not collapse them into one lying boolean.
+    """Gives a seat a session. Downward-only, managed_by-gated (a manager can start a session
+    for a seat it manages), unless `operator_authorized=True`. Idempotent: a live window for
+    the seat is returned, never duplicated. The receipt reports body_exists and can_receive
+    separately, each from an independent read, since a launch that returns success must mean
+    a session exists and can receive, and where those are separable states the verb must not
+    collapse them into one lying boolean.
 
-    NO MCP AGENT CALLER CAN EVER SET `operator_authorized` (no operator param on the MCP `seat()`
-    dispatcher, exactly like wake): an override a caller can assert in an argument passed over
-    the wire is an override that can be forged. `osiris launch`'s own CLI door is the ONE caller
-    that sets it — a local-execution trust boundary, the operator's own hand, out-of-band by
-    construction (see `_launch_target_setup`'s own docstring for the full reasoning) — replacing
-    that door's former SEPARATE reimplementation of this entire function (#48's "two doors, one
-    receipt" lesson, finally closed for launch itself, not just its sub-pieces).
+    No MCP agent caller can ever set `operator_authorized` (no operator param on the MCP
+    `seat()` dispatcher, exactly like wake): an override a caller can assert in an argument
+    passed over the wire is an override that can be forged. `osiris launch`'s own CLI entry
+    point is the one caller that sets it, a local-execution trust boundary, the operator's
+    own hand, out-of-band by construction (see `_launch_target_setup`'s own docstring for the
+    full reasoning), replacing that entry point's former separate reimplementation of this
+    entire function.
 
-    SUBSTRATE (the default flip, task #68 wave, rulings 0fe36e59 + 33d6a2eb clause 3): `substrate`
-    picks the spawn lane — an explicit argument wins, then `osiris_launch_substrate`
-    (default 'harness'). 'harness' bodies the seat as a `claude --bg` background session
-    (visible in `claude agents --json` BY CONSTRUCTION); 'pty' keeps the original osiris
-    PTY-broker lane alive as an explicit, vendor-neutral fallback. `manager`/`windows` are
-    injected for the PTY lane's tests; `spawn`/`agents_json`/`cost_reader` for the harness
-    lane's — either way, without a live daemon or a live `claude` binary.
+    Substrate: `substrate` picks the spawn lane. An explicit argument wins, then
+    `osiris_launch_substrate` (default 'harness'). 'harness' starts the seat as a
+    `claude --bg` background session (visible in `claude agents --json` by construction);
+    'pty' keeps the original osiris PTY-broker lane alive as an explicit, vendor-neutral
+    fallback. `manager`/`windows` are injected for the PTY lane's tests;
+    `spawn`/`agents_json`/`cost_reader` for the harness lane's, either way, without a live
+    daemon or a live `claude` binary.
 
-    ALWAYS A FRESH MINT NOW, NEVER AN AUTOMATIC RESUME (ruling 41a41437, task #199 lane 3C,
-    mirroring the CLI's own ruling 60c78788 exactly — "the verb IS the property, no flag,
-    no automatic guess"). This lane used to check the seat's own lineage for a resumable
-    session before minting fresh — that automatic branch is GONE. Continuing a dormant
+    Always a fresh mint now, never an automatic resume: "the verb is the property, no flag,
+    no automatic guess." This lane used to check the seat's own lineage for a resumable
+    session before minting fresh; that automatic branch is gone. Continuing a dormant
     session is now `resume_seat`'s own, separate job (right below this function); its own
     docstring carries the full history this one used to (the lineage walk, the resident-
     unknown refusal, the one-shot `-p --resume` shape, the receipt's decision-naming
-    discipline) — read it there, not here, if that is what you are looking for."""
+    discipline). Read it there, not here, if that is what you are looking for."""
     pool = actions.pool
     from src.orchestrator.agents import project_of
     manager = manager or _manager_control
@@ -3924,12 +3865,12 @@ async def launch_seat(
         actions, caller=caller, target=target, agents_json=agents_json,
         operator_authorized=operator_authorized, occupied_status="already-live")
     if "target_seat" not in setup:
-        # DOOR 1 (thread 39741694 item 1): the twin refusal above is correct — a live
-        # body already holds this seat, never mint a second one — but a caller-supplied
-        # `message` used to just vanish here, with nothing in the receipt disclosing it
-        # was ever dropped. `setup["seat"]` is this branch's own resolved seat id (the
-        # already-live receipt shape uses "seat", never "target_seat" — see
-        # `_launch_target_setup`'s own already-live return).
+        # The twin refusal above is correct: a live session already holds this seat,
+        # never mint a second one, but a caller-supplied `message` used to just vanish
+        # here, with nothing in the receipt disclosing it was ever dropped.
+        # `setup["seat"]` is this branch's own resolved seat id (the already-live receipt
+        # shape uses "seat", never "target_seat"; see `_launch_target_setup`'s own
+        # already-live return).
         if setup.get("status") == "already-live" and message.strip():
             setup["brief_delivery"] = await _deliver_brief_to_live_seat(
                 pool, target_seat=setup["seat"], message=message, sender=caller,
@@ -3942,34 +3883,32 @@ async def launch_seat(
 
     st = settings or get_settings()
     lane = (substrate or st.osiris_launch_substrate or "harness").strip().lower()
-    # MODEL PRECEDENCE (task #68, finding #7, thread 20e4feb6): an explicit caller param wins,
-    # then the SEAT'S OWN stamped intended_model (mint_seat's pin — the whole point of naming
-    # a model per worker), and only then the trigger's own global default. The old order
-    # skipped the stamp entirely, which is why a seat pinned to sonnet-5 could spawn on
-    # whatever osiris_wake_model happened to be that day, silently.
+    # Model precedence: an explicit caller param wins, then the seat's own stamped
+    # intended_model (mint_seat's pin, the whole point of naming a model per worker), and
+    # only then the trigger's own global default. The old order skipped the stamp
+    # entirely, which is why a seat pinned to a specific model could spawn on whatever
+    # osiris_wake_model happened to be that day, silently.
     argv_model, model_source = await _resolve_launch_model(
         actions.pool, target_seat, model=model, facts=facts, settings=st)
     name = await _window_name(actions.pool, house, handle,
                               await _governed_project_name(actions.pool, target_seat))
 
     out: dict[str, Any]
-    # LAW (b)'s own addressee (Nebbercracker's monsterhouse report, DM 13214/13218,
-    # finding ba304fe0): only the harness-native lane mints and binds a fresh heir
-    # (`_bind_before_spawn`, above) with a known agent id BEFORE the body exists — the
-    # PTY lane's identity emerges later, from the child's own env-based claim, so it has
-    # nothing yet to verify a first turn against. Stays None there; the brief-
-    # verification step below is skipped whenever it is None, never guessed at.
+    # Only the harness-native lane mints and binds a fresh heir (`_bind_before_spawn`,
+    # above) with a known agent id before the session exists. The PTY lane's identity
+    # emerges later, from the child's own env-based claim, so it has nothing yet to verify
+    # a first turn against. Stays None there; the brief-verification step below is
+    # skipped whenever it is None, never guessed at.
     heir_agent_id: str | None = None
     if lane == "pty":
-        # ═══ THE OSIRIS PTY-BROKER LANE — the ORIGINAL substrate, kept alive as an explicit,
-        # vendor-neutral FALLBACK (rulings 0fe36e59 + 33d6a2eb clause 3) for an incident, or a
-        # harness build with no --bg. No longer the default; a caller (or the settings knob)
-        # must ask for it by name.
+        # ═══ The osiris PTY-broker lane, the original substrate, kept alive as an explicit,
+        # vendor-neutral fallback for an incident, or a harness build with no --bg. No
+        # longer the default; a caller (or the settings knob) must ask for it by name.
         #
-        # IDEMPOTENCY — a live window already holding this seat is RETURNED, never twinned
-        # (the one-body-at-a-time discipline; Ra's stale-liveness collision, b3a86a7d).
-        # Fail-open on a dark daemon: an empty roster means nothing to collide with, and the
-        # spawn below reports its own state.
+        # Idempotency: a live window already holding this seat is returned, never
+        # duplicated (one session at a time). Fail-open on a dark daemon: an empty
+        # roster means nothing to collide with, and the spawn below reports its own
+        # state.
         try:
             roster = await windows()
         except (OSError, TimeoutError, ValueError):
@@ -3980,20 +3919,19 @@ async def launch_seat(
                         "body_exists": True, "can_receive": True, "attach": attach,
                         "detail": f"a live body already holds {handle} — not minting a twin"}
 
-        # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d): a
-        # NEW body is a real turn, same as a wake/resume — gated here AFTER the idempotency
-        # check above (an "already-live" return costs nothing new, so it must never be
-        # refused for budget) but BEFORE the actual spawn, same dollar wall dispatch_dm/
-        # wake_worker already stand behind. Inert on a subscription (spend_is_metered=False);
-        # bites only on a keyed API backend.
+        # The spend gap: a new session is a real turn, same as a wake/resume, gated here
+        # after the idempotency check above (an "already-live" return costs nothing new,
+        # so it must never be refused for budget) but before the actual spawn, same
+        # dollar wall dispatch_dm/wake_worker already stand behind. Inert on a
+        # subscription (spend_is_metered=False); bites only on a keyed API backend.
         ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
         if not ok:
             return {"status": "refused-budget", "seat": target_seat, "detail": str(why)}
 
         from src.orchestrator.harness_process import claude_pty_argv
         argv = claude_pty_argv(argv_model)
-        # A FULL env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor — the
-        # collision class, 2294e95d), plus the body's own stable anchor so it matches the
+        # A full env, minus the launcher's own CLAUDE_JOB_DIR (never inherit an anchor, to
+        # avoid a collision class), plus the session's own stable anchor so it matches the
         # window's own job_dir metadata. pty_spawn adds OSIRIS_SEAT_ID + OSIRIS_ATTACH_TOKEN
         # on top (identity at birth); a child with only those two vars has no PATH, so the
         # real environ is the base.
@@ -4015,9 +3953,9 @@ async def launch_seat(
                     or "the manager refused the spawn"}
 
         spawned = res.get("spawned")
-        # RA'S RECEIPT (53ae1a87): body_exists is the spawn's own word; can_receive is a
-        # SEPARATE, independent READ. A fresh claude takes seconds to boot and self-mount, so
-        # at THIS instant the window exists but is almost never live yet.
+        # body_exists is the spawn's own word; can_receive is a separate, independent
+        # read. A fresh claude takes seconds to boot and self-mount, so at this instant
+        # the window exists but is almost never live yet.
         alive = False
         try:
             for w in await windows():
@@ -4041,21 +3979,21 @@ async def launch_seat(
             if res.get("room_busy_note"):
                 out["room_busy_note"] = res["room_busy_note"]
     else:
-        # ═══ THE HARNESS-NATIVE LANE (the default flip, task #68 wave) — `claude --bg` +
-        # `claude agents --json` instead of the manager daemon's PTY broker + claim-socket.
-        # Every body this creates is visible in the operator's own `claude agents` list BY
-        # CONSTRUCTION (clause 3, "front end wide open", made mechanical instead of patched
-        # around) — see the spike verdict f2dc98549521 and _spawn_claude_bg's own docstring.
+        # ═══ The harness-native lane (the default): `claude --bg` plus
+        # `claude agents --json` instead of the manager daemon's PTY broker and claim-socket.
+        # Every session this creates is visible in `claude agents` by construction, made
+        # mechanical instead of patched around. See _spawn_claude_bg's own docstring.
         #
-        # IDEMPOTENCY MATCHES ON THE SEAT'S OWN LAUNCH CWD, NOT A SESSION ID (live finding,
-        # 2026-07-27, replacing the original design): `claude --bg` MANAGES ITS OWN SESSION ID
-        # and silently ignores an explicit `--session-id` ("warning: --bg manages the session
-        # id; ignoring --session-id" on stderr, which a fire-and-forget spawn never reads) —
+        # Idempotency matches on the seat's own launch cwd, not a session id, replacing
+        # the original design: `claude --bg` manages its own session id and silently
+        # ignores an explicit `--session-id` ("warning: --bg manages the session id;
+        # ignoring --session-id" on stderr, which a fire-and-forget spawn never reads),
         # confirmed against a real spawn, not assumed. A seat's launch location (office, or
-        # tree_cwd when bound — #103) is 1:1 with the seat by construction, so any live
-        # process already sitting there IS its body, whatever session id the harness gave it.
-        # MUST be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits at
-        # tree_cwd, and matching on `office` alone would never find it, twinning on relaunch.
+        # tree_cwd when bound) is 1:1 with the seat by construction, so any live process
+        # already sitting there is its session, whatever session id the harness gave it.
+        # Must be `launch_cwd`, never bare `office`: a tree-bound seat's live process sits
+        # at tree_cwd, and matching on `office` alone would never find it, duplicating on
+        # relaunch.
         twin = await _launch_twin_check(pool, agents_json, launch_cwd, seat_id=target_seat,
                                         read_cmdline=read_cmdline)
         stale_harness_row = twin.get("stale_harness_row")
@@ -4073,23 +4011,23 @@ async def launch_seat(
                     "detail": f"a live body already holds {handle} — not minting a twin "
                               f"(seen via {', '.join(seen_via)})"}
 
-        # THE SPEND GAP (Thoth dispatch 9378, lane B design's own finding on 9d2aaf4d) — see
-        # the pty lane's own comment on this same check, above. Same gate, same placement
-        # (after idempotency, before the real spawn), the other substrate.
+        # The spend gap, see the pty lane's own comment on this same check, above. Same
+        # gate, same placement (after idempotency, before the real spawn), the other
+        # substrate.
         ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
         if not ok:
             return {"status": "refused-budget", "seat": target_seat, "detail": str(why)}
 
-        # NO RESUME CHECK HERE, DELIBERATELY (ruling 41a41437/60c78788, task #199 lane 3C):
-        # launch ALWAYS mints fresh now, mirroring the CLI's own osiris launch exactly — the
-        # resume-lineage walk this lane used to run first (and the receipt's resume_check
-        # field explaining "why booted fresh") moved wholesale to resume_seat below, which
-        # owns that decision now. Continuing a dormant session is resume_seat's job, never
-        # an automatic branch inside launch again.
+        # No resume check here, deliberately: launch always mints fresh now, mirroring
+        # the CLI's own osiris launch exactly. The resume-lineage walk this lane used to
+        # run first (and the receipt's resume_check field explaining "why booted fresh")
+        # moved wholesale to resume_seat below, which owns that decision now. Continuing
+        # a dormant session is resume_seat's job, never an automatic branch inside launch
+        # again.
 
-        # RESOLVE PROJECT THE SAME WAY MOUNT WILL, BEFORE BINDING (task #204's launch-
-        # identity fix, Thoth msg 6935/6949, decision 68fba2e4 — the operator's own "chad
-        # spawned in project chad" specimen). See _resolve_launch_project's own docstring.
+        # Resolve the project the same way mount will, before binding. Fixes a real
+        # specimen where a seat launched into a project named after itself. See
+        # _resolve_launch_project's own docstring.
         ancestor_for_resolve = await _seat_lineage_ancestor(pool, target_seat) or current_holder
         resolution = await _resolve_launch_project(
             pool, seat_id=target_seat, office=office, ancestor=ancestor_for_resolve)
@@ -4106,44 +4044,43 @@ async def launch_seat(
             }
         resolved_project = resolution["project"]
 
-        # IDENTITY IS BOUND HERE, BEFORE THE BODY EXISTS (Piece 1, Thoth dispatch msg 6692,
-        # d161a156 one layer up — replacing the prior design, which told the session to
-        # re-derive its own binding via mount()+claim_name() through its first turn). THE
-        # LIVE SPECIMEN: Marquee's own claim_name refused (the name was held by an unrelated
-        # lineage) and the session's own autonomy clause converted that refusal into a
-        # phantom mint rather than parking on the question — the agent behaved correctly,
-        # the machinery handed it a fallible re-derivation to do instead of a fact.
-        # `launch_seat` already holds everything generation math needs (office, handle,
-        # house, `current_holder` from the occupancy check above) — `_bind_before_spawn`
-        # writes that identity NOW, deterministically, server-side.
+        # Identity is bound here, before the session exists, replacing the prior design,
+        # which told the session to re-derive its own binding via mount()+claim_name()
+        # through its first turn. This closes a real gap: one session's own claim_name
+        # refused (the name was held by an unrelated lineage) and the session's own
+        # autonomy rule converted that refusal into a phantom mint rather than parking on
+        # the question. The session behaved correctly; the machinery handed it a fallible
+        # re-derivation to do instead of a fact. `launch_seat` already holds everything
+        # generation math needs (office, handle, house, `current_holder` from the
+        # occupancy check above); `_bind_before_spawn` writes that identity now,
+        # deterministically, server-side.
         bound = await _bind_before_spawn(
             actions, target_seat=target_seat, handle=handle, house=house,
             current_holder=current_holder, office=office, anchor=anchor, source=caller,
             resolved_project=resolved_project)
-        # THE BOOT PROMPT ANCHORS mount() AT THE OFFICE, ALWAYS — never `launch_cwd`. Identity
-        # lives at the office regardless of where the process's own cwd happens to sit (#103's
-        # whole point); a tree-bound seat's session boots WITH its shell cwd at tree_cwd (the
-        # `spawn(launch_cwd, ...)` below) but is told to mount(cwd=office) all the same, the
-        # identical pattern every seat in this house already follows by hand. It is now a
-        # STATEMENT, not an instruction — claim_name does not appear (Thoth's acceptance
-        # criterion, msg 6692): mount() re-attaches to the identity `_bind_before_spawn` just
-        # wrote, through the pre-registered anchor row, nothing left to negotiate.
+        # The boot prompt anchors mount() at the office, always, never `launch_cwd`.
+        # Identity lives at the office regardless of where the process's own cwd happens
+        # to sit; a tree-bound seat's session boots with its shell cwd at tree_cwd (the
+        # `spawn(launch_cwd, ...)` below) but is told to mount(cwd=office) all the same,
+        # the identical pattern every seat in this codebase already follows by hand. It is
+        # now a statement, not an instruction: claim_name does not appear, since mount()
+        # re-attaches to the identity `_bind_before_spawn` just wrote, through the
+        # pre-registered anchor row, nothing left to negotiate.
         boot_prompt = _bg_boot_prompt_bound(
             office=office, anchor=anchor, handle=handle, agent=bound["agent"],
             generation=bound["generation"], resolved_project=resolved_project)
 
-        # THE DORMANT-HISTORY CONFESSION (thread fc69b9b4, Ooblek specimen 2026-08-02): a
-        # fresh mind can land on a transcript full of history it cannot read — `--bg` picks
-        # its own session id (the finding two comments up), so this side of the call cannot
-        # know or prevent a reuse, only NAME what's already sitting at launch_cwd before it
-        # happens. Checked pre-spawn on purpose, same "tell the truth at launch time" framing
-        # as the rest of this lane's receipt.
+        # The dormant-history confession: a fresh session can land on a transcript full of
+        # history it cannot read. `--bg` picks its own session id (the finding two
+        # comments up), so this side of the call cannot know or prevent a reuse, only name
+        # what's already sitting at launch_cwd before it happens. Checked pre-spawn on
+        # purpose, same "tell the truth at launch time" framing as the rest of this lane's
+        # receipt.
         #
-        # BOTH SLUGS, ALWAYS (task #135/#136, 2026-08-03): office and tree_cwd are two
-        # DIFFERENT slugs by design (#103) — checking only `launch_cwd` missed whichever one
-        # this particular launch was NOT spawning into. A dormant transcript can sit under
-        # either, so both are checked regardless of which one launch_cwd resolved to; the
-        # freshest match is confessed.
+        # Both slugs, always: office and tree_cwd are two different slugs by design, so
+        # checking only `launch_cwd` missed whichever one this particular launch was not
+        # spawning into. A dormant transcript can sit under either, so both are checked
+        # regardless of which one launch_cwd resolved to; the freshest match is confessed.
         from src.ingest.sessions import dormant_history_confession
         dormant = dormant_history_confession(
             office, *([tree_cwd] if tree_cwd else []),
@@ -4156,42 +4093,40 @@ async def launch_seat(
             return {"status": "refused-spawn", "seat": target_seat,
                     "detail": f"claude --bg failed to start ({exc}); NOTHING was spawned"}
 
-        # LAW (a) — THE GRAPH HEAD IS THE RUNNING BODY, BEFORE ITS FIRST TURN
-        # (Nebbercracker's monsterhouse report, DM 13214/13218, finding ba304fe0):
-        # `_bind_before_spawn` above deliberately does NOT move the seat's own `holds`
-        # edge onto the fresh heir in the ancestor case (THE HOLDS-SANDWICH FIX, that
-        # function's own docstring) — a heir that has done no work yet and may never
-        # boot must not sandwich a phantom inside a real generation's continuous
-        # tenure. But once the OS-level spawn command has been ACCEPTED (no OSError —
-        # the harness took the process, whatever happens to it next), that risk is
-        # gone the other way: chowder's own holder was stopped, its `holds` edge stayed
-        # on the pre-stop generation (agent:7806f810-xi, since retired), and a genuinely
-        # live `claude --bg` body sat unaddressable while mail to the seat kept routing
-        # into a retired estate. `bind_holder` is idempotent (checks for an
-        # already-live identical link before writing) — a no-op in the no-ancestor
-        # case (heir_id was already bound), and the real promotion in the ancestor
-        # case, right here, deterministically, before the spawned body's own first turn
-        # can even begin.
+        # The graph head must be the running session, before its first turn:
+        # `_bind_before_spawn` above deliberately does not move the seat's own `holds`
+        # edge onto the fresh heir in the ancestor case (see that function's own
+        # docstring), since a heir that has done no work yet and may never boot must not
+        # sandwich a phantom inside a real generation's continuous tenure. But once the
+        # OS-level spawn command has been accepted (no OSError; the harness took the
+        # process, whatever happens to it next), that risk is gone the other way: in one
+        # real specimen, a seat's holder was stopped, its `holds` edge stayed on the
+        # pre-stop generation (since retired), and a genuinely live `claude --bg` session
+        # sat unaddressable while mail to the seat kept routing into a retired identity.
+        # `bind_holder` is idempotent (checks for an already-live identical link before
+        # writing): a no-op in the no-ancestor case (heir_id was already bound), and the
+        # real promotion in the ancestor case, right here, deterministically, before the
+        # spawned session's own first turn can even begin.
         from src.orchestrator.seats import bind_holder
 
         await bind_holder(actions, seat_id=target_seat, agent_id=bound["agent"],
                           source=caller)
         heir_agent_id = bound["agent"]
 
-        # RA'S RECEIPT (53ae1a87), same law as the PTY lane: body_exists is the spawn's own
-        # word; can_receive is a SEPARATE, independent read — `claude --bg` returns as soon as
-        # the harness's own background-agent daemon takes the session over, which can be
-        # seconds before it necessarily shows up in `claude agents --json`.
+        # Same rule as the PTY lane: body_exists is the spawn's own word; can_receive is a
+        # separate, independent read. `claude --bg` returns as soon as the harness's own
+        # background-agent daemon takes the session over, which can be seconds before it
+        # necessarily shows up in `claude agents --json`.
         alive_row: dict[str, Any] | None = None
         try:
             alive_row = next((r for r in await agents_json(cwd=launch_cwd)
                               if isinstance(r, dict) and r.get("cwd") == launch_cwd), None)
         except (OSError, TimeoutError, ValueError):
             pass
-        # NO resume_check FIELD HERE ANYMORE (ruling 41a41437): there is no resume decision
-        # for this receipt to name — launch never walks the lineage now, it just mints. Use
-        # resume() to continue a dormant session; its own receipt carries this same kind of
-        # decision-naming discipline for the question it actually answers.
+        # No resume_check field here anymore: there is no resume decision for this
+        # receipt to name, since launch never walks the lineage now, it just mints. Use
+        # resume() to continue a dormant session; its own receipt carries this same kind
+        # of decision-naming discipline for the question it actually answers.
         out = {
             "status": "launched", "window": name, "seat": target_seat,
             "body_exists": True, "can_receive": alive_row is not None,
@@ -4205,22 +4140,21 @@ async def launch_seat(
         if dormant is not None:
             out["dormant_history"] = dormant
         if stale_harness_row is not None:
-            # A DEAD ROW THE TWIN GUARD SAW AND IGNORED (Nebbercracker's monsterhouse
-            # report, DM 13237/13239) — surfaced, never silently discarded, so a caller
-            # can see the harness's own roster still hasn't reaped it even though this
-            # launch proceeded correctly around it.
+            # A dead row the twin guard saw and ignored, surfaced, never silently
+            # discarded, so a caller can see the harness's own roster still hasn't
+            # reaped it even though this launch proceeded correctly around it.
             out["stale_harness_row"] = stale_harness_row
-        # THE CEILING'S READ PATH (task #8, unblocked by the binding leg): a --bg body is a
-        # real billed session on a metered backend, same as any other one — recorded into
-        # llm_usage or the ceiling never learns it happened (the ghost-farm disease,
-        # wake_cost's own doctrine: "a hand you cannot cost is a hand you cannot govern").
-        # _bg_session_cost never fabricates: a real cost_usd if the harness ever grows one,
-        # the honest UNPRICED/blind class today (confirmed live, 2026-07-27 — no cost field
-        # exists on this surface at all) — never folded into 0, which the ceiling would
-        # silently read as a free call. Fail-open: a metering failure must never cost a launch.
-        # Needs the REAL session id the harness assigned (the live roster row, just read for
-        # can_receive) — a launch not yet visible there has nothing to look up YET; it is
-        # simply not metered this cycle rather than metered on a guessed id.
+        # The ceiling's read path: a --bg session is a real billed session on a metered
+        # backend, same as any other one; otherwise it gets recorded into llm_usage and
+        # the ceiling never learns it happened, so cost stops being governable.
+        # _bg_session_cost never fabricates: a real cost_usd if the harness ever grows
+        # one, the honest unpriced/blind class today (confirmed live: no cost field
+        # exists on this surface at all), never folded into 0, which the ceiling would
+        # silently read as a free call. Fail-open: a metering failure must never cost a
+        # launch. Needs the real session id the harness assigned (the live roster row,
+        # just read for can_receive); a launch not yet visible there has nothing to look
+        # up yet, so it is simply not metered this cycle rather than metered on a guessed
+        # id.
         real_session_id = (alive_row or {}).get("sessionId")
         if real_session_id:
             try:
@@ -4232,26 +4166,26 @@ async def launch_seat(
                     usage=Usage(model=argv_model or "unknown",
                                cost_usd=(priced.get("cost_usd")
                                          if priced.get("priced") else None)))
-            except Exception:  # noqa: BLE001 — a metering failure must never cost a launch
+            except Exception:  # noqa: BLE001 - a metering failure must never cost a launch
                 _log.debug("launch cost-metering failed for %s", real_session_id,
                           exc_info=True)
 
-    # THE OPENING BRIEF rides the ordinary mail→poke lane, never a hand-forged turn: sent as a
-    # graded ask to the new seat, the trigger types it into the fresh window once it is alive.
+    # The opening brief rides the ordinary mail-to-poke lane, never a hand-forged turn:
+    # sent as a graded ask to the new seat, the trigger types it into the fresh window
+    # once it is alive.
     brief_id: int | None = None
     if message.strip():
         sent = await send_message(
             pool, from_agent=caller, from_project=await project_of(pool, caller),
             to_agent=target_seat, body=message, grade="ask")
         brief_id = sent.get("id")
-        # LAW (b) — "BRIEF CREATED" IS NOT "BRIEF DELIVERED AS A TURN" (Nebbercracker's
-        # monsterhouse report, DM 13214/13218, finding ba304fe0): chowder's own opening
-        # brief (brief_message_id 13199) never became the spawned body's first turn —
-        # its transcript held only the boot ritual, nothing after, for 20+ minutes,
-        # with nothing in the old receipt distinguishing "a mail row exists" from "the
-        # body actually turned on it". Only checked when the harness-native lane bound
-        # a known fresh heir above (`heir_agent_id`) — the PTY lane has no addressee
-        # yet to verify a turn against.
+        # "Brief created" is not "brief delivered as a turn": in one real specimen, an
+        # opening brief never became the spawned session's first turn. Its transcript
+        # held only the boot ritual, nothing after, for 20+ minutes, with nothing in the
+        # old receipt distinguishing "a mail row exists" from "the session actually
+        # turned on it". Only checked when the harness-native lane bound a known fresh
+        # heir above (`heir_agent_id`); the PTY lane has no addressee yet to verify a
+        # turn against.
         if heir_agent_id is not None and brief_id is not None:
             out["brief_delivery"] = await _verify_brief_reached_a_turn(
                 pool, msg_id=brief_id, addressee=heir_agent_id, sender=caller,
@@ -4272,49 +4206,43 @@ async def _verify_brief_reached_a_turn(
     pool: asyncpg.Pool, *, msg_id: int, addressee: str, sender: str,
     settings: Settings, sleep: Any, attempts: int = 3, delay_secs: float = 2.0,
 ) -> dict[str, Any]:
-    """LAW (b) (Nebbercracker's monsterhouse report, DM 13214/13218, finding ba304fe0):
-    a launch's own opening brief used to ride the ordinary mail lane with no check that
-    it ever actually became the fresh body's first turn — a body can boot, run its own
-    mount() call, and then stall before ever reaching inbox() (chowder's own specimen,
-    the second witness of ec7167a7 that night), with the old receipt unable to tell
-    "a mail row exists" from "the body turned on it".
+    """A launch's opening brief used to ride the ordinary mail lane with no check that
+    it ever actually became the fresh body's first turn. A body can boot, run its own
+    mount() call, and then stall before ever reaching inbox(), and the old receipt
+    could not tell "a mail row exists" from "the body turned on it".
 
-    Polls a BOUNDED number of times (`attempts`, never unbounded — `sleep` is injected
-    so a test never waits in real time) for `msg_id`'s own read state — either
+    Polls a bounded number of times (`attempts`, never unbounded; `sleep` is injected
+    so a test never waits in real time) for `msg_id`'s own read state landing, either
     `fleet_messages.read_at` (the legacy single-reader shape) or a `message_recipients`
-    row's `read_at` (the modern per-recipient shape) — landing. inbox()'s own act on a
-    fresh body's genuine first turn is exactly what sets either. Returns
+    row's `read_at` (the modern per-recipient shape). inbox()'s own act on a fresh
+    body's genuine first turn is exactly what sets either. Returns
     `{"delivered": True}` the moment either is seen.
 
-    Still unread after the window: nudges through the SAME mail ladder every other DM
-    escalation already uses (`dispatch_dm` — never a second, differently-shaped nudge
-    mechanism) addressed to `addressee` (the fresh heir `_bind_before_spawn`/LAW (a)
-    already bound this seat's `holds` edge to, so the ladder's own occupancy reads find
-    the right generation) and returns `{"delivered": False, "nudge": <dispatch_dm's own
-    receipt>}` — honest about what was tried and what it found, never a claim of
-    delivery this function never confirmed.
+    Still unread after the window: nudges through the same mail ladder every other DM
+    escalation already uses (`dispatch_dm`, never a second, differently-shaped nudge
+    mechanism) addressed to `addressee` (the fresh heir that `_bind_before_spawn`
+    already bound this seat's `holds` edge to, so the ladder's own occupancy reads
+    find the right generation), and returns `{"delivered": False, "nudge":
+    <dispatch_dm's own receipt>}`. Honest about what was tried and what it found,
+    never a claim of delivery this function never confirmed.
 
-    `delivered_via` (thread 209d55f6, Nebbercracker DM 13255/13284): chowder's own live
-    specimen proved the nudge can genuinely deliver the brief while landing on a
-    DIFFERENT harness session than the one launch just spawned — dispatch_dm's own
-    `mode: "resumed"` continues the addressee's dormant LINEAGE session via `-p
-    --resume`, which is not necessarily the freshest one (Nebbercracker's own empirical
-    check: session 7806f810's transcript grew 69MB two seconds after the nudge — the
-    brief genuinely reached chowder, through his lineage, not a lost delivery). THE
-    DESIGN DECISION THIS FIELD RECORDS: "mint a body, deliver through the lineage" is
-    the accepted shape (dispatch_dm's own lineage-walk resume is exactly the resilient,
-    already-proven mechanism every other DM escalation in this house relies on — forcing
-    delivery onto the literal freshest spawned session instead would fight that
-    mechanism, not improve on it, and this house's own identity model is lineage-based
-    everywhere else too: held_seat/seat_receipt never pin to one generation's session
-    either). So the receipt NAMES which path fired rather than pretending session-exact
-    precision it cannot promise: `"lineage"` when `dispatch_dm`'s own `mode` is
-    `"resumed"` (a dormant, possibly-older session in this SAME lineage, continued);
-    `"direct"` when its `mode` is `"nudged"` (mail injected into an ALREADY-LIVE, still-
-    mounted session — immediately after a fresh launch, that is ordinarily the just-
-    spawned body itself, though this field does not itself re-verify which); omitted
-    (never guessed) for any other outcome (queued/refused/skipped), where delivery did
-    not actually happen through either concrete path."""
+    `delivered_via`: the nudge can genuinely deliver the brief while landing on a
+    different harness session than the one launch just spawned. dispatch_dm's own
+    `mode: "resumed"` continues the addressee's dormant lineage session via `-p
+    --resume`, which is not necessarily the freshest one. The design choice this
+    field records: minting a body and delivering through the lineage is the accepted
+    shape, since dispatch_dm's own lineage-walk resume is the same resilient
+    mechanism every other DM escalation in this house relies on, and this house's
+    identity model is lineage-based everywhere else too (held_seat/seat_receipt never
+    pin to one generation's session either). So the receipt names which path fired
+    rather than pretending session-exact precision it cannot promise: `"lineage"`
+    when `dispatch_dm`'s own `mode` is `"resumed"` (a dormant, possibly-older session
+    in the same lineage, continued); `"direct"` when its `mode` is `"nudged"` (mail
+    injected into an already-live, still-mounted session; immediately after a fresh
+    launch, that is ordinarily the just-spawned body itself, though this field does
+    not itself re-verify which); omitted (never guessed) for any other outcome
+    (queued/refused/skipped), where delivery did not actually happen through either
+    concrete path."""
     for _ in range(attempts):
         read = await pool.fetchval(
             "SELECT (m.read_at IS NOT NULL) OR EXISTS ("
@@ -4341,57 +4269,53 @@ async def resume_seat(
     agents_json: Any = None, resume_spawn: Any = None,
     clear_stale_record: Any = None,
 ) -> dict[str, Any]:
-    """Continue a seat's own DORMANT session — `launch_seat`'s former auto-resume branch,
-    now its own verb (ruling 41a41437, task #199 lane 3C, mirroring the CLI's own
-    ruling 60c78788: launch always mints fresh, resume always continues, no flag, no
-    automatic guess — the VERB is the property). Same managed_by gate and seat/occupancy
-    facts as launch_seat (`_launch_target_setup`, the one shared shell), then walks the
-    seat's own LINEAGE for a resumable session and either continues it or REFUSES —
-    NEVER falls through to a fresh mint, mirroring the CLI's own `_cmd_resume_harness`
-    exactly: minting on this door is `launch_seat`'s job alone, never resume's.
+    """Continue a seat's own dormant session. This used to be `launch_seat`'s auto-resume
+    branch and is now its own verb: launch always mints fresh, resume always continues,
+    no flag, no automatic guess. The verb itself carries that meaning. Uses the same
+    managed_by gate and seat/occupancy facts as launch_seat (`_launch_target_setup`, the
+    one shared shell), then walks the seat's own lineage for a resumable session and
+    either continues it or refuses. It never falls through to a fresh mint: minting on
+    this door is `launch_seat`'s job alone, never resume's.
 
-    WALKS THE LINEAGE (`_lineage_resume_candidate`, not the plain agent_mounts-keyed
-    `_agent_resumable`/`wakeable_identity` dispatch_dm's DM lane uses) — a `--bg`-launched
-    seat's every generation shares ONE durable per-seat mount anchor (`_launch_anchor`),
-    fixed in CLAUDE_JOB_DIR for that OS process's entire life, so `agent_mounts`' one
-    shared row for it NEVER encodes a real session id, only whichever generation most
-    recently mounted. `_lineage_resume_candidate` reads `session` instead — a GRAPH
-    property, immune to the shared-anchor collapse (live-fire finding, 2026-08-04, Thoth
-    msg 3691, Sekhmet) — and the receipt NAMES the decision every time (which generation,
-    how many hops back, the actual transcript size and gate numbers), never a silent
-    correct-by-accident refusal (4ef68cfe).
+    Walks the lineage (`_lineage_resume_candidate`, not the plain agent_mounts-keyed
+    `_agent_resumable`/`wakeable_identity` that dispatch_dm's DM lane uses). A
+    `--bg`-launched seat's every generation shares one durable per-seat mount anchor
+    (`_launch_anchor`), fixed in CLAUDE_JOB_DIR for that OS process's entire life, so
+    `agent_mounts`' one shared row for it never encodes a real session id, only
+    whichever generation most recently mounted. `_lineage_resume_candidate` reads
+    `session` instead, a graph property immune to that shared-anchor collapse, and the
+    receipt names the decision every time (which generation, how many hops back, the
+    actual transcript size and gate numbers), never a silent correct-by-accident
+    refusal.
 
-    ONE-SHOT, DELIBERATELY, not a standing window: a `-p --resume` body runs its one turn
-    and exits (confirmed live: `claude agents --json --all` cannot retain it even when the
-    body itself calls mount() mid-turn — a harness fact, not ours to fix, decision
-    a829a15d). This is not a downgrade from `--bg`'s persistent window — it is
-    RE-SUMMONABLE, not unreachable: dispatch_dm's own resume lane wakes the same session
-    again on the next mail, so a standing window here would be a SECOND mechanism doing a
-    job dispatch_dm's resume lane already does (38c71544's shape). Decision 696d302c named
-    "the launch window is a property of launch, not a per-launch question" as the general
-    rule for this whole class of recurring coordinator decisions, and this function already
-    lives that rule. `resume_spawn` injects `_spawn_claude` (the `-p --resume` lane) for
-    tests, parallel to `agents_json` above.
+    One-shot, deliberately, not a standing window: a `-p --resume` body runs its one
+    turn and exits (`claude agents --json --all` cannot retain it even when the body
+    itself calls mount() mid-turn, a harness fact, not ours to fix). This is not a
+    downgrade from `--bg`'s persistent window: it is re-summonable, not unreachable.
+    dispatch_dm's own resume lane wakes the same session again on the next mail, so a
+    standing window here would be a second mechanism doing a job dispatch_dm's resume
+    lane already does. The launch window is a property of launch, not a per-launch
+    question, and this function already lives that rule. `resume_spawn` injects
+    `_spawn_claude` (the `-p --resume` lane) for tests, parallel to `agents_json` above.
 
-    CLEARS A STALE STOPPED RECORD BEFORE SPAWNING, NOT JUST AFTER (the copy-quirk's own
-    pre-emption, Thoth dispatch 7543 item 1): `_clear_stale_stopped_record` runs right
-    before `resume_spawn`, so a leftover harness "stopped" record (a `claude stop` whose
-    `osiris stop`-side rm never landed, or one that predates that fix) is cleared before
-    the harness ever gets a chance to mint a copy — not merely adopted as one after the
-    fact. `_adopt_resumed_body`'s own post-spawn detection stays as the safety net for
-    whatever this pre-emptive clear misses. `clear_stale_record` injects
+    Clears a stale stopped record before spawning, not just after: `_clear_stale_stopped_record`
+    runs right before `resume_spawn`, so a leftover harness "stopped" record (a `claude
+    stop` whose `osiris stop`-side rm never landed, or one that predates that fix) is
+    cleared before the harness ever gets a chance to mint a copy, not merely adopted as
+    one after the fact. `_adopt_resumed_body`'s own post-spawn detection stays as the
+    safety net for whatever this pre-emptive clear misses. `clear_stale_record` injects
     `_clear_stale_stopped_record` for tests, same convention as `agents_json`/
     `resume_spawn` above.
 
-    THE UNKNOWN ARM NEVER MINTS A STRANGER (thread ef88e2bb, operator, 2026-08-17, ruling
-    7d6815bb): a `resident-unknown` gate is an ABSENCE of signed testimony, not a positive
-    finding of a different mind — it used to fall through to a fresh mint (back when this
-    logic lived inside launch_seat) the same as a real `crossed-registry` finding, minting
-    strangers over ferryman's and halcyon's actually-resumable heads. It refuses the WHOLE
-    resume (`status: refused-resume-unknown`), spawning nothing, naming the exact
-    `claude -p --resume <sid>` a human can run by hand. `crossed-registry` REFUSES here too
-    now (`status: refused-nothing-to-resume`) — that session was never this seat's, and
-    resume has nothing left to fall through TO; the caller wants `launch` instead."""
+    The unknown arm never mints a stranger: a `resident-unknown` gate is an absence of
+    signed testimony, not a positive finding of a different mind. It used to fall
+    through to a fresh mint (back when this logic lived inside launch_seat) the same as
+    a real `crossed-registry` finding, minting strangers over actually-resumable heads.
+    It refuses the whole resume (`status: refused-resume-unknown`), spawning nothing,
+    naming the exact `claude -p --resume <sid>` a human can run by hand.
+    `crossed-registry` refuses here too now (`status: refused-nothing-to-resume`): that
+    session was never this seat's, and resume has nothing left to fall through to; the
+    caller wants `launch` instead."""
     pool = actions.pool
     from src.orchestrator.agents import _generation, project_of
     from src.orchestrator.seats import seat_receipt
@@ -4411,10 +4335,10 @@ async def resume_seat(
     argv_model, model_source = await _resolve_launch_model(
         actions.pool, target_seat, model=model, facts=facts, settings=st)
 
-    # THE RESUME LANE (mechanism moved verbatim from launch_seat's own former harness
-    # branch, task #199 lane 3C — behavior UNCHANGED, only where it lives). `holder` (not
-    # `target_seat`) is the identity `_lineage_resume_candidate`/`_resume_guard` need — a
-    # Seat is never itself an Agent lineage.
+    # The resume lane (mechanism moved verbatim from launch_seat's own former harness
+    # branch, behavior unchanged, only where it lives). `holder` (not `target_seat`) is
+    # the identity `_lineage_resume_candidate`/`_resume_guard` need: a Seat is never
+    # itself an Agent lineage.
     holder = ((await seat_receipt(pool, target_seat)) or {}).get("holder")
     resume_outcome = await _lineage_resume_candidate(
         pool, holder, st, repo=launch_cwd, seat_id=target_seat,
@@ -4423,8 +4347,7 @@ async def resume_seat(
     resume = resume_outcome[0] if isinstance(resume_outcome, tuple) else None
     if resume is not None:
         assert holder is not None
-        # hop count (#173a): READ DIRECTLY off `resume`'s own 6th field (task #200
-        # residual, decision 6a0b1236/6d6bf4e8) — never re-derived from
+        # Hop count: read directly off `resume`'s own 6th field, never re-derived from
         # `len(resume_log) - 1`, which silently miscounts whenever
         # `_lineage_resume_candidate` appends a second log line for the winning hop.
         gate, refusal = await _resume_guard(
@@ -4442,10 +4365,10 @@ async def resume_seat(
             resume = None
 
     if resume is None:
-        # NEVER FALLS THROUGH TO A FRESH MINT (the one deliberate behavior change from
-        # launch_seat's former combined lane, per ruling 41a41437/_cmd_resume_harness's
-        # own precedent): resume answers ONE question, and "nothing to resume" is a real
-        # answer to it, not an invitation to do launch's job instead.
+        # Never falls through to a fresh mint (the one deliberate behavior change from
+        # launch_seat's former combined lane): resume answers one question, and
+        # "nothing to resume" is a real answer to it, not an invitation to do launch's
+        # job instead.
         return {"status": "refused-nothing-to-resume", "seat": target_seat,
                 "body_exists": False, "can_receive": False, "resume_check": resume_log,
                 "detail": f"no resumable session found for {handle} ({'; '.join(resume_log)}) "
@@ -4454,14 +4377,14 @@ async def resume_seat(
                           "use launch() to mint a fresh body instead"}
 
     session_id, materialized_at = resume[0], resume[4]
-    # office, never the resume candidate's own repo field — see dispatch_dm's own
-    # identical line for why.
+    # Use the office, never the resume candidate's own repo field; see dispatch_dm's
+    # own identical line for why.
     spawn_cwd = materialized_at or await _resume_office(pool, target_seat, fallback=office)
-    # THE MESSAGE LANDS BEFORE THE SPAWN, deliberately unlike launch's fresh-mint lane
-    # (which sends its brief AFTER spawning): a fresh `--bg` body takes seconds to boot,
+    # The message lands before the spawn, deliberately unlike launch's fresh-mint lane
+    # (which sends its brief after spawning): a fresh `--bg` body takes seconds to boot,
     # mount, and claim_name before its first inbox() call, so send-after-spawn there is
-    # safely ordered by the boot lag alone. A RESUMED body has no such lag — its first
-    # turn IS the inbox() check (_DM_RESUME_PROMPT) — so the mail row must exist first,
+    # safely ordered by the boot lag alone. A resumed body has no such lag: its first
+    # turn is the inbox() check (_DM_RESUME_PROMPT), so the mail row must exist first,
     # the same "ledger before spawn" discipline dispatch_dm's own resume branch follows.
     resume_brief_id: int | None = None
     if message.strip():
@@ -4504,29 +4427,28 @@ async def resume_seat(
 
 
 async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
-    """PREFER THE HARNESS'S OWN `claude stop <id>` — live-reproduced, Wave 6 (thread 6002,
-    Thoth's follow-up dispatch): a raw SIGTERM to the inner process of a `--bg`-substrate
-    body (the DEFAULT launch lane, `osiris_launch_substrate="harness"`) gets SILENTLY
-    RESPAWNED by the harness's own background-agent daemon within about a minute — the
-    daemon reads an unexpected process exit as a crash to heal, re-resuming the SAME named
-    window onto a fresh pid, not as a stop request. `stop_seat` reported `status="stopped"`
-    while the body kept coming back — the exact false-clean reading the operator's own
-    standing instruction on spawn/stop hygiene warns against ("a stop verb that reports
-    success while leaving a body is strictly worse than no stop verb"). `claude stop <id>`
-    is the daemon-aware verb ("Its conversation is kept... `claude --resume` works once it
-    is stopped" — the harness's own `stop|kill` help text) and does NOT trigger that
-    auto-heal; `job_dir_key` (registry_census's own field, identical to `claude agents
-    --json`'s own `id`) is already resolved by every caller of this function, so no new
-    lookup is needed to use it.
+    """Prefer the harness's own `claude stop <id>`. Live-reproduced: a raw SIGTERM to the
+    inner process of a `--bg`-substrate body (the default launch lane,
+    `osiris_launch_substrate="harness"`) gets silently respawned by the harness's own
+    background-agent daemon within about a minute. The daemon reads an unexpected
+    process exit as a crash to heal, re-resuming the same named window onto a fresh
+    pid, not as a stop request. `stop_seat` reported `status="stopped"` while the body
+    kept coming back, a false-clean reading a stop verb must never give. `claude stop
+    <id>` is the daemon-aware verb (the harness's own `stop|kill` help text: "Its
+    conversation is kept... `claude --resume` works once it is stopped") and does not
+    trigger that auto-heal; `job_dir_key` (registry_census's own field, identical to
+    `claude agents --json`'s own `id`) is already resolved by every caller of this
+    function, so no new lookup is needed to use it.
 
-    FALLS BACK to a raw SIGTERM only when no harness-tracked id exists at all — the PTY-
-    broker fallback lane (`osiris_launch_substrate="pty"`), which the harness's own daemon
-    never sees and so cannot auto-heal; a graceful ask there, not SIGKILL, exactly as
-    before. Also falls back if `claude stop` itself exits non-zero (an unknown id, a dark
-    daemon), OR if the binary isn't even installed (thread e7f173a6 — the same graceful-
-    degrade fix as `_clear_stale_stopped_record`'s own OSError guard: a harness that
-    genuinely isn't there is exactly the "no harness-tracked id reachable" case this
-    fallback already exists for) — better an ordinary SIGTERM than an uncaught crash.
+    Falls back to a raw SIGTERM only when no harness-tracked id exists at all: the
+    PTY-broker fallback lane (`osiris_launch_substrate="pty"`), which the harness's own
+    daemon never sees and so cannot auto-heal; a graceful ask there, not SIGKILL,
+    exactly as before. Also falls back if `claude stop` itself exits non-zero (an
+    unknown id, a dark daemon), or if the binary isn't even installed (the same
+    graceful-degrade fix as `_clear_stale_stopped_record`'s own OSError guard: a
+    harness that genuinely isn't there is exactly the "no harness-tracked id reachable"
+    case this fallback already exists for). Better an ordinary SIGTERM than an
+    uncaught crash.
 
     Injectable so no test ever touches a real process or spawns a real subprocess."""
     if job_dir_key:
@@ -4538,13 +4460,12 @@ async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
         except OSError:
             stopped = False
         if stopped:
-            # THEN REMOVE THE STOPPED RECORD (measured live, 2026-09-03, harness 2.1.259):
-            # `claude stop` leaves a "stopped" background record, and `claude --bg
-            # --resume <id>` against a session that still has ANY record "starts a copy
-            # and says so" (the harness's own --bg help text) — a NEW session id, a fresh
-            # transcript, and osiris's whisper meeting a stranger. Three copies of Chad in
-            # a row tonight (092b7418, 5f54e1fc, a9d4118e) until the record was removed;
-            # with it removed, `--bg --resume` continued 7451509a under its own id.
+            # Then remove the stopped record: `claude stop` leaves a "stopped"
+            # background record, and `claude --bg --resume <id>` against a session
+            # that still has any record "starts a copy and says so" (the harness's own
+            # --bg help text): a new session id, a fresh transcript, disconnected from
+            # the intended continuation. This was observed repeatedly until the record
+            # was removed; with it removed, `--bg --resume` continued under its own id.
             await _clear_stale_stopped_record(job_dir_key)
             return
     import signal
@@ -4552,31 +4473,32 @@ async def _real_kill_pid(pid: int, job_dir_key: str | None) -> None:
 
 
 async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
-    """`claude rm <id>` — best-effort, factored out of `_real_kill_pid`'s own post-stop
-    cleanup so `resume_seat`/`_cmd_resume_harness` can run the SAME removal PRE-EMPTIVELY,
-    right before spawning, instead of only after a stop. Any stale "stopped" background
-    record left on file (a prior `claude stop`, or a body that exited on its own before
-    this house's stop-fix landed) makes `claude --bg --resume <id>` "start a copy and say
-    so" (the harness's own --bg help text) — a NEW session id, a fresh transcript, and
-    osiris's whisper meeting a stranger. `claude rm` "deletes a background session and its
-    worktree" — the RECORD, never the transcript (Chad's own three-copies-in-a-row
-    incident: all three transcripts stayed on disk) — so clearing it first pre-empts the
-    copy rather than merely adopting one after the harness has already minted it.
+    """`claude rm <id>`, best-effort, factored out of `_real_kill_pid`'s own post-stop
+    cleanup so `resume_seat`/`_cmd_resume_harness` can run the same removal
+    pre-emptively, right before spawning, instead of only after a stop. Any stale
+    "stopped" background record left on file (a prior `claude stop`, or a body that
+    exited on its own before this house's stop-fix landed) makes `claude --bg --resume
+    <id>` "start a copy and say so" (the harness's own --bg help text): a new session
+    id and a fresh transcript, disconnected from the intended continuation. `claude
+    rm` "deletes a background session and its worktree", the record, never the
+    transcript, so clearing it first pre-empts the copy rather than merely adopting
+    one after the harness has already minted it.
 
-    Returns whether a record actually existed and was cleared (rm exit 0) — informational
-    only, NEVER gates the spawn that follows: a failed/no-op rm (nothing was there to
-    clear) leaves exactly the pre-fix state, and `_adopt_resumed_body`'s own post-spawn
-    copy detection still catches anything this pre-emptive clear missed.
+    Returns whether a record actually existed and was cleared (rm exit 0). This is
+    informational only and never gates the spawn that follows: a failed/no-op rm
+    (nothing was there to clear) leaves exactly the pre-fix state, and
+    `_adopt_resumed_body`'s own post-spawn copy detection still catches anything this
+    pre-emptive clear missed.
 
     Injectable so no test ever spawns a real subprocess.
 
-    TOLERATES A MISSING BINARY (thread e7f173a6, found live by the stranger_test proof:
-    retire_agent's own "best-effort, never blocks the retirement itself" claim was FALSE
-    on a box with no `claude` at all — create_subprocess_exec's own FileNotFoundError
-    propagated uncaught through every caller, crashing an otherwise-harmless third-party
-    agent retirement). A harness that genuinely isn't installed has no stopped-record to
-    clear by construction — this degrades to the same "nothing was there" False every
-    other no-op path already returns, never a raised exception."""
+    Tolerates a missing binary: retire_agent's own "best-effort, never blocks the
+    retirement itself" claim was false on a box with no `claude` at all, since
+    create_subprocess_exec's own FileNotFoundError propagated uncaught through every
+    caller, crashing an otherwise-harmless third-party agent retirement. A harness
+    that genuinely isn't installed has no stopped-record to clear by construction, so
+    this degrades to the same "nothing was there" False every other no-op path
+    already returns, never a raised exception."""
     try:
         proc = await asyncio.create_subprocess_exec(
             "claude", "rm", job_dir_key,
@@ -4586,9 +4508,10 @@ async def _clear_stale_stopped_record(job_dir_key: str) -> bool:
     return await proc.wait() == 0
 
 
-# The human's own address, reused from the mailbox rather than invented here — one notion
-# of "the operator" in the codebase, never a second (task #82's lesson: a third copy of the
-# operator-actor list was exactly how 'analyst:operator' went missing from one of them).
+# The human's own address, reused from the mailbox rather than invented here: one
+# notion of "the operator" in the codebase, never a second. A duplicated copy of the
+# operator-actor list is exactly how an alias can silently go missing from one of
+# them.
 _OPERATOR_CALLER = "operator"
 
 
@@ -4596,25 +4519,25 @@ async def _stop_orphan_harness_body(
     pool: asyncpg.Pool, *, target_seat: str, kill: Any, agents_json: Any,
     read_cmdline: Any = None,
 ) -> dict[str, Any]:
-    """THE ORPHAN PATH (Nebbercracker's monsterhouse report, DM 13214/13218/13239):
-    `stop_seat`'s own graph-bound path above requires a `holds` edge to exist at all —
-    but the harness's own roster can still be running a real body under this seat's
-    own window name (chowder's own "[MO] chowder") that the graph never bound a holder
-    for (LAW (a)'s own fix promotes `holds` to a fresh heir at spawn-return, but a body
-    launched some other way, or whose binding write was lost, has no such edge to walk
-    at all). A manager needs to be able to stop THAT, not just a graph-bound one — this
-    is the one place `stop_seat` consults the harness roster BY NAME instead of by
-    lineage, and only as a fallback, never in place of the graph-bound path.
+    """The orphan path: `stop_seat`'s own graph-bound path above requires a `holds` edge
+    to exist at all, but the harness's own roster can still be running a real body
+    under this seat's own window name that the graph never bound a holder for (the
+    fix that promotes `holds` to a fresh heir at spawn-return only covers a body
+    launched through that path; one launched some other way, or whose binding write
+    was lost, has no such edge to walk at all). A manager needs to be able to stop
+    that too, not just a graph-bound one. This is the one place `stop_seat` consults
+    the harness roster by name instead of by lineage, and only as a fallback, never
+    in place of the graph-bound path.
 
-    NAMED, NOT PATTERN-KILLED: matches on the row's own `name` against
-    `_window_name`'s own construction (the SAME function launch_seat builds a spawn's
-    window name with — never a second, differently-shaped name-building rule), then
-    REFUSES unless the row's own `cwd` is genuinely this seat's own tree_cwd or
-    anchor_cwd — a name collision across houses/handles (two seats both named
-    "Chowder" in different projects) is not evidence enough to kill someone else's
-    process. Kills by PID (`_real_kill_pid`'s own job_dir_key-preferring, harness-
-    aware shape — never a raw pattern match against `pkill`/`ps` output, which could
-    as easily hit an unrelated process sharing a substring of the name)."""
+    Named, not pattern-killed: matches on the row's own `name` against
+    `_window_name`'s own construction (the same function launch_seat builds a spawn's
+    window name with, never a second, differently-shaped name-building rule), then
+    refuses unless the row's own `cwd` is genuinely this seat's own tree_cwd or
+    anchor_cwd. A name collision across houses/handles (two seats with the same name
+    in different projects) is not evidence enough to kill someone else's process.
+    Kills by PID (`_real_kill_pid`'s own job_dir_key-preferring, harness-aware shape,
+    never a raw pattern match against `pkill`/`ps` output, which could as easily hit
+    an unrelated process sharing a substring of the name)."""
     from src.orchestrator.seats import seat_facts
 
     facts = await seat_facts(pool, target_seat)
@@ -4662,71 +4585,72 @@ async def stop_seat(
     kill: Any = None, agents_json: Any = None, read_exe: Any = None, read_cwd: Any = None,
     read_cmdline: Any = None,
 ) -> dict[str, Any]:
-    """STOP — the process-lifecycle inverse of launch_seat (#156's held half, ruling
-    94c2e7e8 leg 2: "reachable and stoppable are the same lane's two directions"). Ends a
-    LIVE body's own OS process (SIGTERM) — nothing more. Deliberately NOT a symmetric
-    'sleep' (the operator's own naming ruling, b3ccd3f6: no promised thaw-where-you-left-
-    off — a `stop`/`wake` pair would promise a resume nobody can guarantee across an
-    arbitrary gap). NEITHER does this gate future reachability on some new flag of its
-    own: the SAME occupancy authority (`is_occupied_by_a_live_body` / `registry_census`)
-    that already governs launch/fold/reanimation/send() reads the real OS state, so the
-    instant this process actually exits, that authority sees it gone — a later wake() or
-    launch() boots a fresh successor with no separate 'unstop' step to remember, ONE
-    occupancy authority for every door, never a second notion of it (ruling 921eabcf).
+    """Stop: the process-lifecycle inverse of launch_seat ("reachable and stoppable are
+    the same lane's two directions"). Ends a live body's own OS process (SIGTERM),
+    nothing more. Deliberately not a symmetric "sleep": there is no promised
+    thaw-where-you-left-off, since a `stop`/`wake` pair would promise a resume nobody
+    can guarantee across an arbitrary gap. Neither does this gate future reachability
+    on some new flag of its own: the same occupancy authority
+    (`is_occupied_by_a_live_body` / `registry_census`) that already governs
+    launch/fold/reanimation/send() reads the real OS state, so the instant this
+    process actually exits, that authority sees it gone. A later wake() or launch()
+    boots a fresh successor with no separate "unstop" step to remember: one occupancy
+    authority for every door, never a second notion of it.
 
-    DOWNWARD-ONLY, mirroring launch_seat's own authority (a manager stops a seat it
-    manages) — a worker may never stop its own manager's body. `target=None` always
-    allowed (going quiet on purpose, pause_seat's own precedent) — the one case
+    Downward-only, mirroring launch_seat's own authority (a manager stops a seat it
+    manages): a worker may never stop its own manager's body. `target=None` is always
+    allowed (going quiet on purpose, pause_seat's own precedent), the one case
     authority never needs to arbitrate.
 
-    Refuses (nothing signaled) on: no seat, no managed_by edge (`refused-not-your-
-    worker`), or no harness/proc-CONFIRMED live body for the seat's current holder
-    (`no-live-body` — a stale mount row, or an already-dead process, is not something to
-    signal). `stopped_at`/`stopped_reason` land on the seat object (survives succession —
-    it names an EVENT, not a gate on the chair) as a plain, append-only assertion, never a
-    boolean flag a later caller has to remember to clear.
+    Refuses (nothing signaled) on: no seat, no managed_by edge
+    (`refused-not-your-worker`), or no harness/proc-confirmed live body for the seat's
+    current holder (`no-live-body`; a stale mount row, or an already-dead process, is
+    not something to signal). `stopped_at`/`stopped_reason` land on the seat object
+    (survives succession, since it names an event, not a gate on the chair) as a
+    plain, append-only assertion, never a boolean flag a later caller has to remember
+    to clear.
 
-    RELEASES THE SIGNAL IT OWNS (thread 1e07af65, obligation a14f1528's own live finding):
-    a killed process's `agent_mounts` row used to survive the kill untouched, reading as
-    live to `_launch_twin_check`'s `is_live()` for a full LIVENESS_WINDOW_MINUTES (15) —
-    stop made a signal it never cleaned up, so an immediate resume()/launch() right after
-    a genuine stop saw a body that was already gone. SUSPENDS, never deletes (#178's own
-    law — `mounts.release_session_mounts`, the epoch sentinel), every row this LINEAGE'S
-    OWN sessions could be filed under, not just the matched one — the same "any
-    generation, not just today's exact label" widening the lineage-fallback match above
-    already needed, for the identical staleness reason.
+    Releases the signal it owns: a killed process's `agent_mounts` row used to survive
+    the kill untouched, reading as live to `_launch_twin_check`'s `is_live()` for a
+    full LIVENESS_WINDOW_MINUTES (15). Stop made a signal it never cleaned up, so an
+    immediate resume()/launch() right after a genuine stop saw a body that was already
+    gone. Suspends, never deletes (`mounts.release_session_mounts`, the epoch
+    sentinel), every row this lineage's own sessions could be filed under, not just
+    the matched one: the same "any generation, not just today's exact label" widening
+    the lineage-fallback match above already needed, for the identical staleness
+    reason.
 
-    ALSO RELEASES FORK/SPAWN CHILDREN (thread b0699dcc, Thoth mail 9873/9896, under-
-    reported released_mounts): a `--fork-session` child mounts under its OWN agent_id at
-    its OWN job_dir — `spawned_by`-linked to its parent generation, never a
-    `succeeded_from` member of `succession_chain`, so neither release pass above ever
-    reached it. Every child of ANY generation in this lineage's chain (holder included)
-    is suspended too (`mounts.suspend_mounts_for_agents`, agent-id-scoped), and counted
-    into the same `released_mounts` receipt.
+    Also releases fork/spawn children, previously under-reported in `released_mounts`:
+    a `--fork-session` child mounts under its own agent_id at its own job_dir,
+    `spawned_by`-linked to its parent generation, never a `succeeded_from` member of
+    `succession_chain`, so neither release pass above ever reached it. Every child of
+    any generation in this lineage's chain (holder included) is suspended too
+    (`mounts.suspend_mounts_for_agents`, agent-id-scoped), and counted into the same
+    `released_mounts` receipt.
 
-    MATCHES BY LINEAGE TOO, NOT ONLY BY EXACT HOLDER ID (obligation 2e110f63, the same
-    branch `_launch_twin_check` already carries): `registry_census`'s own `matched` list
+    Matches by lineage too, not only by exact holder id, the same branch
+    `_launch_twin_check` already carries: `registry_census`'s own `matched` list
     reconciles a live body to whatever `agent_mounts.agent_id` its job_dir cache last
-    recorded — a CACHE that can lag the seat's current holder generation (Jesus's own
-    live shape: the seat succeeded, the live body's own mount row hadn't caught up yet).
-    A holder that misses THAT check falls back to the graph directly: any of this
-    lineage's own `succession_chain` sessions, /proc-verified live in the census, is the
-    same body wearing a different label — never declared `no-live-body` just because the
-    cache is stale.
+    recorded, a cache that can lag the seat's current holder generation (a live case
+    seen in practice: the seat succeeded, the live body's own mount row hadn't caught
+    up yet). A holder that misses that check falls back to the graph directly: any of
+    this lineage's own `succession_chain` sessions, /proc-verified live in the census,
+    is the same body wearing a different label, never declared `no-live-body` just
+    because the cache is stale.
 
-    RECORDS THE SESSION ANCHOR BEFORE THE KILL (Khnum's #201 acceptance finding b, Thoth
-    dispatch 6928): a clean-lineage holder — mounted once, never compacted — carries no
-    graph `session` property register_agent would otherwise stamp at a second mount, so
-    a plain SIGTERM used to leave resume() nothing to find (`refused-nothing-to-resume`
-    even though the body just died). Calls `handshake.record_session_anchor` on the
-    census-matched session id, ambient (never blocks or fails the kill on a ledger-write
-    error) — `session_anchor_recorded` on the receipt names whether it actually landed.
+    Records the session anchor before the kill: a clean-lineage holder, mounted once,
+    never compacted, carries no graph `session` property register_agent would
+    otherwise stamp at a second mount, so a plain SIGTERM used to leave resume()
+    nothing to find (`refused-nothing-to-resume` even though the body just died).
+    Calls `handshake.record_session_anchor` on the census-matched session id, ambient
+    (never blocks or fails the kill on a ledger-write error); `session_anchor_recorded`
+    on the receipt names whether it actually landed.
 
-    NO HOLDER AT ALL falls to `_stop_orphan_harness_body` (Nebbercracker's monsterhouse
-    report, DM 13214/13218/13239) instead of refusing outright — a body the graph never
-    bound a holder for is still stoppable if the harness's own roster names a live row
-    under this seat's own window name at this seat's own cwd (`orphan: true` on the
-    receipt, never silent about which path fired)."""
+    No holder at all falls to `_stop_orphan_harness_body` instead of refusing
+    outright: a body the graph never bound a holder for is still stoppable if the
+    harness's own roster names a live row under this seat's own window name at this
+    seat's own cwd (`orphan: true` on the receipt, never silent about which path
+    fired)."""
     pool = actions.pool
     from src.orchestrator.mounts import registry_census
     from src.orchestrator.seats import held_seat, seat_receipt
@@ -4738,18 +4662,17 @@ async def stop_seat(
             return {"status": "refused-no-seat",
                     "detail": f"{caller} holds no seat — nothing to stop"}
     elif caller == _OPERATOR_CALLER:
-        # THE OPERATOR'S OWN HAND (Thoth LXXXVII, 2026-08-28, operator's instruction "make
-        # sure to also build the other end of stopping and cleaning up"). DOWNWARD-ONLY
-        # exists to stop AGENTS reaching sideways or upward at each other; the human at a
-        # terminal is not a peer in that chart, he is above all of it — and `osiris launch`
-        # has had a terminal door since #72 while stop had none, so a body could be started
-        # from the shell and never ended from it. That asymmetry is the whole defect.
+        # The operator's own hand: downward-only exists to stop agents reaching
+        # sideways or upward at each other. The human at a terminal is not a peer in
+        # that chart, they are above all of it, and `osiris launch` has had a
+        # terminal door while stop had none, so a body could be started from the
+        # shell and never ended from it. That asymmetry is the defect this fixes.
         #
-        # NOTHING ELSE IS RELAXED: the seat must resolve, it must have a real holder, and
-        # the body must be /proc-CONFIRMED by the same registry_census every other door
-        # reads. This skips ONE check — the managed_by edge — and says so in the receipt
-        # (`authority: "operator"`), because an authority that is not visible in the record
-        # is indistinguishable from a missing check.
+        # Nothing else is relaxed: the seat must resolve, it must have a real holder,
+        # and the body must be /proc-confirmed by the same registry_census every
+        # other door reads. This skips one check, the managed_by edge, and says so in
+        # the receipt (`authority: "operator"`), because an authority that is not
+        # visible in the record is indistinguishable from a missing check.
         assert target is not None
         target_seat = await _seat_for_target(actions, target)
         if target_seat is None:
@@ -4781,27 +4704,27 @@ async def stop_seat(
     census = await registry_census(
         pool, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
     match = next((m for m in census.get("matched", []) if m.get("agent_id") == holder), None)
-    # THE LINEAGE'S OWN SESSIONS, ALWAYS COMPUTED (not just on a match miss): the match
-    # fallback below needs it, and so does the release step after a successful kill — the
-    # SAME "any generation, not just today's exact label" reasoning applies to both, since
-    # a stale mount row can be filed under any ancestor generation's own session, not only
-    # the current holder's.
+    # The lineage's own sessions, always computed (not just on a match miss): the
+    # match fallback below needs it, and so does the release step after a successful
+    # kill. The same "any generation, not just today's exact label" reasoning applies
+    # to both, since a stale mount row can be filed under any ancestor generation's
+    # own session, not only the current holder's.
     from src.orchestrator.succession import succession_chain
     chain = await succession_chain(pool, holder)
     sessions = {str(h["session"]) for h in chain if h.get("session")}
-    # THE CHAIN'S OWN AGENT CANONICALS (thread b0699dcc, Thoth mail 9873/9896): every
-    # generation's own id, holder included (succession_chain starts there) — the release
-    # step below needs the full chain, not just the subset that happened to log a
-    # session, to find every fork/spawn CHILD of any of them.
+    # The chain's own agent canonicals: every generation's own id, holder included
+    # (succession_chain starts there). The release step below needs the full chain,
+    # not just the subset that happened to log a session, to find every fork/spawn
+    # child of any of them.
     chain_agent_ids = [str(h["agent_id"]) for h in chain]
     if match is None:
-        # THE LINEAGE FALLBACK (obligation 2e110f63, the same branch _launch_twin_check
-        # already carries): `matched` reconciles by job_dir -> agent_mounts.agent_id, a
-        # CACHE that can lag the seat's own current holder generation (Jesus's own live
-        # shape) — a body genuinely IS this lineage's own, /proc-confirmed right now,
-        # just filed under a stale label the exact-equality check above never finds. Ask
-        # the graph directly: any of this lineage's own succession_chain sessions,
-        # verified live in the census, is the same body under a different name.
+        # The lineage fallback, the same branch _launch_twin_check already carries:
+        # `matched` reconciles by job_dir -> agent_mounts.agent_id, a cache that can
+        # lag the seat's own current holder generation. A body genuinely is this
+        # lineage's own, /proc-confirmed right now, just filed under a stale label the
+        # exact-equality check above never finds. Ask the graph directly: any of this
+        # lineage's own succession_chain sessions, verified live in the census, is the
+        # same body under a different name.
         if sessions:
             match = next(
                 (v for v in census.get("verified", [])
@@ -4813,28 +4736,28 @@ async def stop_seat(
         return {"status": "no-live-body", "seat": target_seat, "holder": holder,
                 "detail": f"{holder} carries no harness/proc-confirmed live body right "
                           "now — nothing to signal (already dead, or never really live)"}
-    # THE SESSION ANCHOR, BEFORE THE KILL (Khnum's own #201 acceptance finding b, Thoth
-    # dispatch 6928): a plain SIGTERM used to leave NO graph session property for a
-    # clean-lineage holder — register_agent's own BIRTH-TIME WRITE (agents.py) skips the
-    # `session` assert on a `--bg` seat's FIRST-EVER mount, deliberately: `identity.
-    # session` falls back to the seat's stable anchor slug at that point, not a real
-    # session id yet, so writing it would plant a confident lie. The property is meant
-    # to get filled in LATER, by a heartbeat/live_succession mount or a fresh
-    # resolve_identity once the transcript exists — a body killed before that ever fires
-    # dies with the gap still open, and `_lineage_resume_candidate`'s own succession_
-    # chain walk (which reads exactly this `session` property, verified by reading both
-    # succession.py's query and _lineage_resume_candidate's own hop loop) finds nothing,
-    # reporting `refused-nothing-to-resume` on a lineage that never actually compacted.
+    # The session anchor, before the kill: a plain SIGTERM used to leave no graph
+    # session property for a clean-lineage holder. register_agent's own birth-time
+    # write (agents.py) skips the `session` assert on a `--bg` seat's first-ever
+    # mount, deliberately: `identity.session` falls back to the seat's stable anchor
+    # slug at that point, not a real session id yet, so writing it would plant a
+    # confident lie. The property is meant to get filled in later, by a
+    # heartbeat/live_succession mount or a fresh resolve_identity once the transcript
+    # exists. A body killed before that ever fires dies with the gap still open, and
+    # `_lineage_resume_candidate`'s own succession_chain walk (which reads exactly
+    # this `session` property) finds nothing, reporting `refused-nothing-to-resume`
+    # on a lineage that never actually compacted.
     #
-    # stop_seat is the one caller left holding GROUND TRUTH about which session this
-    # process actually was — registry_census's own /proc-confirmed match, not a guess —
-    # so this is the last point anything can still write it. Two writes, same session id,
-    # two different readers: the plain `session` property (register_agent's own shape,
-    # `_looks_like_a_real_session`-gated, truncated to 8 chars — what succession_chain/
-    # _lineage_resume_candidate actually read) closes THIS gap; record_session_anchor
-    # (the sid->soul ledger, handshake.py) closes the SIBLING gap for the session
-    # resume() eventually spawns, once IT mounts and needs to resolve its own identity
-    # from a sid the ledger's other lanes cannot re-derive alone.
+    # stop_seat is the one caller left holding ground truth about which session this
+    # process actually was, registry_census's own /proc-confirmed match, not a guess,
+    # so this is the last point anything can still write it. Two writes, same session
+    # id, two different readers: the plain `session` property (register_agent's own
+    # shape, `_looks_like_a_real_session`-gated, truncated to 8 chars; what
+    # succession_chain/_lineage_resume_candidate actually read) closes this gap;
+    # record_session_anchor (the session-id-to-identity ledger, handshake.py) closes
+    # the sibling gap for the session resume() eventually spawns, once it mounts and
+    # needs to resolve its own identity from a session id the ledger's other lanes
+    # cannot re-derive alone.
     from src.orchestrator.agents import _looks_like_a_real_session
     from src.orchestrator.handshake import record_session_anchor
     session_id = str((match or {}).get("session_id") or "")
@@ -4850,7 +4773,7 @@ async def stop_seat(
                     evidence_class="direct_observation")
             session_anchor_recorded = await record_session_anchor(
                 actions, agent_id=holder, session_id=session_id, actor=caller)
-        except Exception:  # noqa: BLE001 — ambient: a kill signal must never wait on, or
+        except Exception:  # noqa: BLE001 ambient: a kill signal must never wait on, or
             # be blocked by, a best-effort ledger write; reported False, never silent
             session_anchor_recorded = False
     try:
@@ -4862,28 +4785,28 @@ async def stop_seat(
         return {"status": "refused-signal", "seat": target_seat, "holder": holder, "pid": pid,
                 "detail": f"the stop signal itself failed ({exc}) — nothing else changed"}
 
-    # RELEASE THE SIGNAL STOP ITSELF OWNS (thread 1e07af65): suspend (never delete, #178's
-    # own law) every agent_mounts row this lineage's own sessions could be filed under —
-    # not just the matched one — so `_launch_twin_check`'s is_live() stops reading a dead
-    # body for LIVENESS_WINDOW_MINUTES after a genuine, successful kill.
+    # Release the signal stop itself owns: suspend (never delete) every agent_mounts
+    # row this lineage's own sessions could be filed under, not just the matched one,
+    # so `_launch_twin_check`'s is_live() stops reading a dead body for
+    # LIVENESS_WINDOW_MINUTES after a genuine, successful kill.
     #
-    # THE STABLE PER-SEAT ANCHOR FIRST, ALWAYS (live-fire correction, obligation a14f1528's
-    # own re-run: a first attempt here derived job_dir from the session id alone and left
-    # the REAL row untouched — resume still saw "already-live" immediately after stop).
-    # `_launch_anchor(target_seat)` is a `--bg`-launched seat's own DURABLE per-seat mount
-    # point (launch_seat's own docstring: "every generation shares ONE durable per-seat
-    # mount anchor") — the boot prompt tells every generation to mount() there, never at a
-    # session-id-derived path, so THAT is where the live row actually sits.
+    # The stable per-seat anchor first, always: an earlier attempt here derived
+    # job_dir from the session id alone and left the real row untouched, so resume
+    # still saw "already-live" immediately after stop. `_launch_anchor(target_seat)`
+    # is a `--bg`-launched seat's own durable per-seat mount point (every generation
+    # shares one durable per-seat mount anchor). The boot prompt tells every
+    # generation to mount() there, never at a session-id-derived path, so that is
+    # where the live row actually sits.
     from src.orchestrator.mounts import release_session_mounts
     matched_sid = str((match or {}).get("session_id") or "")
     released_mounts = await release_session_mounts(
         pool, job_dir=_launch_anchor(target_seat), session_id=matched_sid)
-    # THEN every lineage session's OWN job_dir, derived the same way SessionEnd's handler
-    # already does (handshake._derive_job_dir) — covers a `-p --resume` session
-    # materialized to disk at a session-id-keyed path, the one shape the stable anchor
-    # above does not reach. release_session_mounts's own `job_dir=$1 OR session_key=$2`
-    # clause still finds the right row via session_key alone even when a derived job_dir
-    # is stale or wrong.
+    # Then every lineage session's own job_dir, derived the same way SessionEnd's
+    # handler already does (handshake._derive_job_dir). This covers a `-p --resume`
+    # session materialized to disk at a session-id-keyed path, the one shape the
+    # stable anchor above does not reach. release_session_mounts's own `job_dir=$1 OR
+    # session_key=$2` clause still finds the right row via session_key alone even
+    # when a derived job_dir is stale or wrong.
     from src.orchestrator.handshake import _derive_job_dir
     release_ids = set(sessions) | ({matched_sid} if matched_sid else set())
     for sid in release_ids:
@@ -4892,14 +4815,13 @@ async def stop_seat(
             released_mounts += await release_session_mounts(
                 pool, job_dir=jd, session_id=sid)
 
-    # FORK/SPAWN CHILDREN, ALSO RELEASED (thread b0699dcc, Thoth mail 9873/9896): a
-    # `--fork-session` child (`_fork_child`, mail 9241/commit 75ee6ea) mounts its OWN
-    # row, under its OWN agent_id, at its OWN job_dir — a genuinely separate live process
-    # the two release passes above never reach, since a fork is `spawned_by`-linked to
-    # its parent generation, never a `succeeded_from` member of `succession_chain`. A
-    # fork under a stopped seat used to stay falsely 'live' indefinitely. Scoped to
-    # children of ANY generation in this lineage's own chain (holder included), never
-    # widened past that.
+    # Fork/spawn children, also released: a `--fork-session` child (`_fork_child`)
+    # mounts its own row, under its own agent_id, at its own job_dir: a genuinely
+    # separate live process the two release passes above never reach, since a fork is
+    # `spawned_by`-linked to its parent generation, never a `succeeded_from` member of
+    # `succession_chain`. A fork under a stopped seat used to stay falsely "live"
+    # indefinitely. Scoped to children of any generation in this lineage's own chain
+    # (holder included), never widened past that.
     from src.orchestrator.mounts import suspend_mounts_for_agents
     fork_children = [str(r["canonical"]) for r in await pool.fetch(
         "SELECT DISTINCT f.canonical FROM links l "
@@ -4932,12 +4854,13 @@ async def stop_seat(
 async def _transcript_activity(
     pool: asyncpg.Pool, holder: str, st: Settings,
 ) -> tuple[bool, bool]:
-    """(transcript_checked, fresh) for `holder`'s own resumable session, by the transcript's
-    newest TIMESTAMPED line — never mtime (the Aegis phantom: a session 13h dead wore a
-    seconds-old mtime, bumped by something in the chrome/daemon that is not a turn). The
-    same `_turn_fresh_sync` reads dispatch_dm's own mid-turn gate already trusts. No
-    findable transcript at all → (False, False): not evidence of life, just nothing more
-    to check beyond the roster."""
+    """(transcript_checked, fresh) for `holder`'s own resumable session, by the
+    transcript's newest timestamped line, never mtime (a session that had been dead
+    for 13 hours once wore a seconds-old mtime, bumped by something in the UI or
+    daemon that is not a turn). The same `_turn_fresh_sync` reads dispatch_dm's own
+    mid-turn gate already trusts. No findable transcript at all returns
+    (False, False): not evidence of life, just nothing more to check beyond the
+    roster."""
     resume = await _agent_resumable(pool, holder, st)
     if resume is None:
         return False, False
@@ -4952,30 +4875,28 @@ async def vacate_dead_seat(
     actions: Actions, *, seat_id: str, actor: str, because: str,
     liveness_fn: Any = None,
 ) -> dict[str, Any]:
-    """THE VACATE-DEAD-HOLDER VERB (thread 445a7356, Thoth's ruling msg 1611) — the
-    evidence-gathering complement to seats.vacate_holder's bare write, and to
-    seats.retire_seat's stale-holder refusal (never its bypass: that refusal stays
-    exactly as-is, correctly declining to evict a live mind — this exists for the one
-    case it correctly can't resolve alone, a holder whose PROCESS actually died without
-    ever calling retire() on itself; found live during task #68's acceptance demo).
+    """The vacate-dead-holder verb: the evidence-gathering complement to
+    seats.vacate_holder's bare write, and to seats.retire_seat's stale-holder refusal
+    (never its bypass; that refusal stays exactly as-is, correctly declining to evict
+    a live mind). This exists for the one case it correctly can't resolve alone: a
+    holder whose process actually died without ever calling retire() on itself.
 
-    THE LIVENESS CONVERGENCE FIX (Nebbercracker's monsterhouse report, DM 11747/11760):
-    was its OWN two-signal check (the harness roster conjunctively with a transcript's
-    newest timestamped line) — a real, careful design, but a THIRD independent liveness
-    mechanism disagreeing with `team()`/resume's occupancy gate in production is exactly
-    the operator's own bug report (team() read a seat cold from a stale mount row while
-    the harness roster confirmed it live moments earlier; this verb then read the SAME
-    seat dead by its own two signals). `mounts.agent_liveness` is now THE single source
-    for every one of these readers — a seat vacates only when the SAME instrument that
-    refuses `resume` and reports `team()`'s `live` column already says this holder is
-    dead, never a fourth opinion. The old "refused-ambiguous" state (an unreadable
-    harness roster) is gone with it — `agent_liveness` never fails to answer, it just
-    answers from a cache (agent_mounts.last_seen, transcript-mtime fallback) rather than
-    a live process read, so there is nothing left to be ambiguous about.
+    The liveness convergence fix: this verb used to run its own two-signal check (the
+    harness roster conjunctively with a transcript's newest timestamped line), a real,
+    careful design, but a third independent liveness mechanism disagreeing with
+    `team()`/resume's occupancy gate in production caused a real bug (team() read a
+    seat cold from a stale mount row while the harness roster confirmed it live
+    moments earlier, and this verb then read the same seat dead by its own two
+    signals). `mounts.agent_liveness` is now the single source for every one of these
+    readers: a seat vacates only when the same instrument that refuses `resume` and
+    reports `team()`'s `live` column already says this holder is dead, never a fourth
+    opinion. The old "refused-ambiguous" state (an unreadable harness roster) is gone
+    with it: `agent_liveness` never fails to answer, it just answers from a cache
+    (agent_mounts.last_seen, transcript-mtime fallback) rather than a live process
+    read, so there is nothing left to be ambiguous about.
 
-    AUTO-INVOCATION IS OUT OF SCOPE (reaper #59, stays operator-gated per Thoth's
-    ruling) — this is for a deliberate hand, called once on a specific seat, never a
-    sweep."""
+    Auto-invocation is out of scope and stays operator-gated: this is for a
+    deliberate hand, called once on a specific seat, never a sweep."""
     from src.orchestrator.mounts import agent_liveness
     liveness_fn = liveness_fn or agent_liveness
     pool = actions.pool
@@ -5009,9 +4930,9 @@ async def vacate_dead_seat(
 
 
 def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | None:
-    """Where this wake drops the CLI's cost envelope. None when we have nowhere to put it — and
-    a wake with nowhere to put its receipt is a wake nobody can ever cost, which the log says
-    out loud rather than letting it pass for free."""
+    """Where this wake drops the CLI's cost envelope. None when there is nowhere to put
+    it, and a wake with nowhere to put its receipt is a wake nobody can ever cost,
+    which the log says out loud rather than letting it pass for free."""
     stem = None
     if job_dir:
         stem = Path(job_dir).name
@@ -5023,11 +4944,11 @@ def _receipt_path(job_dir: str | None, resume_session: str | None) -> Path | Non
 
 
 async def _room_parent(pool: asyncpg.Pool, project: str) -> str | None:
-    """The seat a wake-child belongs to (operator ruling 2026-07-17: wake mints are
-    CHILDREN, denominated roman.arabic — 'orphans like that are structurally impossible
-    going forward'): the project's freshest NAMED lineage, resolved to its living head.
-    None in a seatless room — such a mint stays anonymous, and the archaeologist's
-    `seatless` key names the room for the visitor sweep."""
+    """The seat a wake-child belongs to: wake mints are children, denominated with a
+    generation number so an orphaned mint is structurally impossible. Resolves to the
+    project's freshest named lineage, resolved to its living head. Returns None in a
+    seatless room; such a mint stays anonymous, and a `seatless` key names the room
+    for later cleanup."""
     named = await pool.fetchval(
         "SELECT m.agent_id FROM agent_mounts m WHERE m.project=$1 AND EXISTS ("
         "  SELECT 1 FROM current_assertions h JOIN objects ho ON ho.id=h.object_id "
@@ -5045,34 +4966,35 @@ async def _spawn_claude(
     model: str | None = None, allowed_tools: str | None = None,
     spawn_parent: str | None = None,
 ) -> None:
-    """Wake an agent: a detached `claude -p` in the repo. RESUME lane: `--resume <session>`
-    continues the owner's own session — it pays only for the new mail, not a fresh cosmology
-    (thread 9f2ddb44). MINT lane: a fresh process with a synthesized CLAUDE_JOB_DIR — the
-    durable identity anchor a triggered `claude -p` gets from no harness. Fire-and-forget.
-    `allowed_tools` (thread ba73c0c8): headless -p cannot answer permission prompts — the
-    spawner pre-authorizes the graph tools, or the wake is born with its hands tied.
+    """Wake an agent: a detached `claude -p` in the repo. Resume lane: `--resume
+    <session>` continues the owner's own session, so it pays only for the new mail,
+    not a fresh context load. Mint lane: a fresh process with a synthesized
+    CLAUDE_JOB_DIR, the durable identity anchor a triggered `claude -p` gets from no
+    harness otherwise. Fire-and-forget. `allowed_tools`: headless -p cannot answer
+    permission prompts, so the spawner pre-authorizes the graph tools, or the wake is
+    born with its hands tied.
 
-    THE BACKSTOP (decision 27259e4d, thread bc11a2d3): `repo` becomes `cwd=` on the
-    subprocess call below with no existence check of its own — `osiris launch`'s own CLI
-    caller now refuses loudly, by name, before ever reaching this function, but every OTHER
-    caller (a daemon wake, a triage trigger) resolves its own `repo` and has no such
-    pre-check. Same fire-and-forget discipline the receipt-open failure just above already
-    follows: a bad `repo` here degrades to a logged no-op, never a raised, uncaught
-    FileNotFoundError out of create_subprocess_exec — this function's own callers already
-    assume it never raises for a wake attempt, same as they assume a full disk or an
-    unwritable receipt directory doesn't crash them either."""
+    The backstop: `repo` becomes `cwd=` on the subprocess call below with no
+    existence check of its own. `osiris launch`'s own CLI caller now refuses loudly,
+    by name, before ever reaching this function, but every other caller (a daemon
+    wake, a triage trigger) resolves its own `repo` and has no such pre-check. Same
+    fire-and-forget discipline the receipt-open failure just above already follows: a
+    bad `repo` here degrades to a logged no-op, never a raised, uncaught
+    FileNotFoundError out of create_subprocess_exec. This function's own callers
+    already assume it never raises for a wake attempt, same as they assume a full
+    disk or an unwritable receipt directory doesn't crash them either."""
     if not _tree_exists(repo):
         _log.error("trigger: _spawn_claude refused — repo=%r does not exist on disk, "
                    "no subprocess spawned (job_dir=%s, resume_session=%s)",
                    repo, job_dir, resume_session)
         return
     env = os.environ.copy()
-    # the spawner's own anchor must never leak into a child: an inherited CLAUDE_JOB_DIR
-    # hands the wake the SPAWNER'S identity (the anchor-collision class, 2294e95d) — a
-    # child's anchor is the one minted for it below, or none at all.
+    # The spawner's own anchor must never leak into a child: an inherited
+    # CLAUDE_JOB_DIR hands the wake the spawner's identity. A child's anchor is the
+    # one minted for it below, or none at all.
     env.pop("CLAUDE_JOB_DIR", None)
     cmd = ["claude", "-p", "--output-format", "json"]
-    if model:  # wake economics: triage wakes on a cheaper model; the prompt escalates real work
+    if model:  # Wake economics: triage wakes on a cheaper model; the prompt escalates real work
         cmd += ["--model", model]
     if allowed_tools:
         cmd += ["--allowedTools", allowed_tools]
@@ -5080,49 +5002,53 @@ async def _spawn_claude(
         cmd += ["--resume", resume_session]
     if job_dir:
         env["CLAUDE_JOB_DIR"] = job_dir
-    # THE DECLARED CHILD (the wake-orphan cure, operator ruling 2026-07-17): a MINT is
-    # born already claimed — the whisper reads this env and registers a denominated child
-    # (spawned_by the room's seat, roman.arabic), never an anonymous stranger the
-    # archaeologist must dig up later. A resume is not a birth; it exports nothing.
+    # The declared child (the wake-orphan cure): a mint is born already claimed. The
+    # registration process reads this env and registers a numbered child (spawned_by
+    # the room's seat), never an anonymous stranger someone has to dig up later. A
+    # resume is not a birth; it exports nothing.
     if spawn_parent and not resume_session:
         env["OSIRIS_SPAWNED_BY"] = spawn_parent
         env["OSIRIS_SPAWN_TYPE"] = "wake-triage"
     cmd.append(prompt)
 
-    # THE RECEIPT (21a99136). This was `stdout=DEVNULL`, and so Osiris's single most expensive act
-    # — an entire Claude session, with tools, in a repo, on the operator's card — threw away the
-    # vendor's own price for itself on every one of 463 spawns. `--output-format json` makes the
-    # CLI print an envelope carrying `total_cost_usd`: authoritative, free, volunteered. It is
-    # exactly where the miner's $40.49-to-the-cent comes from. We were binning it.
+    # The receipt. This used to be `stdout=DEVNULL`, so this system's single most
+    # expensive act, an entire Claude session, with tools, in a repo, on the
+    # operator's card, threw away the vendor's own price for itself on every spawn.
+    # `--output-format json` makes the CLI print an envelope carrying
+    # `total_cost_usd`: authoritative, free, volunteered. Capturing it is what makes
+    # accurate cost reporting possible; it was being discarded before.
     #
-    # STILL FIRE-AND-FORGET: the receipt goes to a FILE, and NOTHING HERE AWAITS THE PROCESS. That
-    # is not laziness, it is B1's scar — an arq timeout that abandoned a live billing `claude -p`
-    # is precisely how the worker wedged itself with ten 290MB children against a 2G cap. A
-    # separate free observer (ingest/wake_cost.meter_wakes) reads these envelopes after the fact.
+    # Still fire-and-forget: the receipt goes to a file, and nothing here awaits the
+    # process. That is deliberate: an earlier timeout that abandoned a live billing
+    # `claude -p` is precisely how a worker once wedged itself with several oversized
+    # children against a memory cap. A separate free observer
+    # (ingest/wake_cost.meter_wakes) reads these envelopes after the fact.
     #
-    #   A HAND YOU CANNOT COST IS A HAND YOU CANNOT GOVERN — and the cost was being handed to us.
+    # A spawn you cannot cost is a spawn you cannot govern, and the cost was being
+    # thrown away.
     receipt = _receipt_path(job_dir, resume_session)
     out: Any = asyncio.subprocess.DEVNULL
     if receipt is not None:
         try:
             receipt.parent.mkdir(parents=True, exist_ok=True)
             out = receipt.open("wb")
-        except OSError:  # an unwritable receipt must never stop the wake — degrade, don't die
+        except OSError:  # An unwritable receipt must never stop the wake: degrade, don't die.
             out = asyncio.subprocess.DEVNULL
             receipt = None
     proc = await asyncio.create_subprocess_exec(
         *cmd, cwd=repo, env=env, stdout=out, stderr=asyncio.subprocess.DEVNULL,
     )
     if receipt is not None and out is not asyncio.subprocess.DEVNULL:
-        out.close()  # the child holds the fd; the parent must not, or the file never closes
+        out.close()  # The child holds the fd; the parent must not, or the file never closes.
     _log.info("trigger: woke %s in %s (pid %s, receipt %s)",
               f"resume:{resume_session}" if resume_session else f"mint:{job_dir}",
               repo, proc.pid, receipt or "NONE — this wake will be invisible in the ledger")
 
 
-# The body lane's default envelope (doctrine 2's ceiling knob, no metering-policy attached
-# yet — §0.2 wires the daily ceiling into `budget_usd`). 2GiB: the same cap providers.py's
-# extractor already lives inside, so one wake body costs no more headroom than one extractor.
+# The body lane's default envelope (a ceiling knob, no metering policy attached yet;
+# a later phase wires the daily ceiling into `budget_usd`). 2GiB: the same cap
+# providers.py's extractor already lives inside, so one wake body costs no more
+# headroom than one extractor.
 _BODY_DEFAULT_RAM_BYTES = 2 * 2**30
 
 
@@ -5132,23 +5058,26 @@ async def _spawn_in_body(
     provider: BodyProvider | None = None, ram_bytes: int = _BODY_DEFAULT_RAM_BYTES,
     cores: int | None = None, budget_usd: float | None = None,
 ) -> str:
-    """The body-lane twin of `_spawn_claude` (doctrine 2, ruling `7ff54707`: LOCAL is the
-    default product tier, not a test double). SAME env/anchor discipline as `_spawn_claude` —
-    CLAUDE_JOB_DIR, --model, --allowedTools, --resume — only the substrate changes: the process
-    runs inside a metered `BodyProvider` body instead of a bare child of this one.
+    """The body-lane twin of `_spawn_claude`: local execution is the default product
+    tier, not a test double. Same env/anchor discipline as `_spawn_claude`
+    (CLAUDE_JOB_DIR, --model, --allowedTools, --resume); only the substrate changes,
+    since the process runs inside a metered `BodyProvider` body instead of a bare
+    child of this one.
 
-    THE WAKE PROTOCOL ITSELF IS UNCHANGED: nothing calls this yet, and it does not replace
-    `_spawn_claude` — it sits beside it, dark, until Phase 1's daemon routes real wakes through
-    a body. Returns the body's HANDLE (not a pid): unlike `_spawn_claude`'s fire-and-forget, the
-    caller owns dissolve(handle) — that is where the receipt is minted, not here.
+    The wake protocol itself is unchanged: nothing calls this yet, and it does not
+    replace `_spawn_claude`. It sits beside it, dark, until a later daemon phase
+    routes real wakes through a body. Returns the body's handle (not a pid): unlike
+    `_spawn_claude`'s fire-and-forget, the caller owns dissolve(handle), which is
+    where the receipt is minted, not here.
 
-    The CLI's own per-call dollar receipt (`_spawn_claude`'s `total_cost_usd` capture) is a
-    SEPARATE concern from the body's resource receipt (core/ram-seconds, minted by the provider
-    at dissolve) — folding the two into one ledger is §0.2's job, not this one's.
+    The CLI's own per-call dollar receipt (`_spawn_claude`'s `total_cost_usd`
+    capture) is a separate concern from the body's resource receipt (core/ram-seconds,
+    minted by the provider at dissolve); folding the two into one ledger is a later
+    job, not this one's.
     """
     provider = provider or LocalProvider()
     env = os.environ.copy()
-    env.pop("CLAUDE_JOB_DIR", None)  # same anchor discipline as _spawn_claude: never inherited
+    env.pop("CLAUDE_JOB_DIR", None)  # Same anchor discipline as _spawn_claude: never inherited.
     cmd = ["claude", "-p", "--output-format", "json"]
     if model:
         cmd += ["--model", model]
@@ -5160,10 +5089,11 @@ async def _spawn_in_body(
         env["CLAUDE_JOB_DIR"] = job_dir
     cmd.append(prompt)
 
-    # The seat's durable anchor (§2's "identity at birth"): job_dir when minting, the resumed
-    # session's own id otherwise. NEVER the bare repo path — path=identity is the root bug this
-    # whole spec exists to kill (dd47c1da), and two bodies in one repo would share an accounting
-    # identity. A summon with no anchor is a caller error, refused loudly.
+    # The seat's durable anchor ("identity at birth"): job_dir when minting, the
+    # resumed session's own id otherwise. Never the bare repo path: path-as-identity
+    # is the root bug this design exists to avoid, and two bodies in one repo would
+    # share an accounting identity. A summon with no anchor is a caller error, refused
+    # loudly.
     seat_anchor = job_dir or resume_session
     if seat_anchor is None:
         raise ValueError("_spawn_in_body needs an anchor: job_dir or resume_session")
@@ -5174,88 +5104,86 @@ async def _spawn_in_body(
     return handle
 
 
-# --- THE HARNESS-NATIVE SUBSTRATE (task #68 item 9, ruling 33d6a2eb clause 3; spike verdict
-# f2dc98549521) --------------------------------------------------------------------------------
+# --- The harness-native substrate ---------------------------------------------------
 #
-# A third sibling to _spawn_claude/_spawn_in_body: `claude --bg` + `claude agents --json`
-# instead of a bare -p child, a metered body, or the manager daemon's PTY broker + claim-socket.
-# The spike verified live (claude --help + a real `claude agents --json` sample against the
-# fleet's own running sessions) that these documented, sanctioned flags already cover both
-# halves launch() needs — documented flags beat a hand-rolled client against the undocumented
-# daemon spare-pool claim-socket protocol, and that preference SURVIVES ruling 85fba696 (which
-# withdrew 482c3d0f's do-not-build bar): the lane being sanctioned makes it permitted, not
-# preferable — a documented flag still can't break under us silently. Every spawned
-# session is visible in `claude agents --json` BY CONSTRUCTION — clause 3 ("front end wide
-# open") made mechanical, not patched around (contrast the attach-line receipt, part 2 of this
-# task, which is an interim fix for the OLD substrate's blind spot, not a replacement for this).
+# A third sibling to _spawn_claude/_spawn_in_body: `claude --bg` + `claude agents
+# --json` instead of a bare -p child, a metered body, or the manager daemon's PTY
+# broker + claim-socket. Verified live (claude --help plus a real `claude agents
+# --json` sample against real running sessions) that these documented, sanctioned
+# flags already cover both halves launch() needs. Documented flags beat a hand-rolled
+# client against the undocumented daemon spare-pool claim-socket protocol: a
+# documented flag still can't break silently. Every spawned session is visible in
+# `claude agents --json` by construction, a real front-end view made mechanical, not
+# patched around (contrast the attach-line receipt, which is an interim fix for the
+# old substrate's blind spot, not a replacement for this).
 
 async def _spawn_claude_bg(
     repo: str, *, name: str | None = None, model: str | None = None,
     prompt: str | None = None, allowed_tools: str | None = None,
     resume_session: str | None = None,
 ) -> None:
-    """`claude --bg` in `repo` — the harness's own documented background-session surface.
-    SAME fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (B1's scar: an arq
-    timeout that awaited a live billing `claude -p` once wedged the whole worker) — `--bg`
-    itself returns almost immediately once the harness's background-agent daemon has taken
-    the session over, so this call confirms only that the command was ISSUED, never that the
-    session completed; poll `_claude_agents_json` for that, the same surface the operator's
-    own front end reads.
+    """`claude --bg` in `repo`: the harness's own documented background-session
+    surface. Same fire-and-forget discipline as `_spawn_claude`/`_spawn_in_body` (a
+    timeout that once awaited a live billing `claude -p` wedged a whole worker
+    process): `--bg` itself returns almost immediately once the harness's
+    background-agent daemon has taken the session over, so this call confirms only
+    that the command was issued, never that the session completed. Poll
+    `_claude_agents_json` for that, the same surface the operator's own front end
+    reads.
 
-    NO ENV-VAR IDENTITY CHANNEL (the default-flip's live correction, task #68 wave,
-    2026-07-27): an earlier build of this primitive (commit 33b3984) set CLAUDE_JOB_DIR /
-    OSIRIS_SEAT_ID / OSIRIS_ATTACH_TOKEN here and presented a deterministic
-    `--session-id`, on the theory that a spawned child inherits this call's env like any
-    other subprocess. A real spawn proved that wrong on BOTH counts: `--bg` claims a
-    PRE-FORKED spare off a claim-socket (confirmed via `ps`/a real spare's own
-    `/proc/<pid>/environ` — its env was fixed at fork time, long before this call, and NONE
-    of those three vars ever reached it) and separately ignores an explicit `--session-id`
-    outright ('warning: --bg manages the session id; ignoring --session-id' on stderr,
-    which this fire-and-forget spawn never reads). Neither env vars nor a chosen session id
-    are a working channel into a `--bg` session's identity.
+    No env-var identity channel: an earlier build of this primitive set
+    CLAUDE_JOB_DIR / OSIRIS_SEAT_ID / OSIRIS_ATTACH_TOKEN here and presented a
+    deterministic `--session-id`, on the theory that a spawned child inherits this
+    call's env like any other subprocess. A real spawn proved that wrong on both
+    counts: `--bg` claims a pre-forked spare off a claim-socket (confirmed via
+    `ps`/a real spare's own `/proc/<pid>/environ`: its env was fixed at fork time,
+    long before this call, and none of those three vars ever reached it) and
+    separately ignores an explicit `--session-id` outright ("warning: --bg manages
+    the session id; ignoring --session-id" on stderr, which this fire-and-forget
+    spawn never reads). Neither env vars nor a chosen session id are a working
+    channel into a `--bg` session's identity.
 
-    `prompt` IS a working channel — `claude [options] [prompt]` delivers a trailing
-    positional prompt as the session's genuine first turn (confirmed live) — so
-    launch_seat now hands the session its own boot instruction there (mount + claim_name,
-    with cwd/job_dir as literal strings in the text, needing no env passthrough at all) and
-    idempotency matches on the seat's own office cwd instead of a session id (see
-    launch_seat's harness-lane comment).
+    `prompt` is a working channel: `claude [options] [prompt]` delivers a trailing
+    positional prompt as the session's genuine first turn (confirmed live), so
+    launch_seat now hands the session its own boot instruction there (mount +
+    claim_name, with cwd/job_dir as literal strings in the text, needing no env
+    passthrough at all) and idempotency matches on the seat's own office cwd instead
+    of a session id (see launch_seat's harness-lane comment).
 
-    OWN PROCESS GROUP, ALWAYS (#156, Thoth's own ruling: 'ship it independently, it is
-    already a bug today'): `start_new_session=True` makes the spawned body its own
-    session/group leader (POSIX `setsid()`, `pgid == pid`) — the same discipline
-    `pty_broker.py`'s own children already carry, this lane just never had it. Without it,
-    a seat's Bash-tool children share OSIRIS'S OWN process group and can outlive their
-    parent with nobody owning them — the exact shape of the two leaked spares found and
-    killed by hand this afternoon (#156.5's own investigation; live proof, not a theory).
-    THE NAMED LIMIT: this only isolates bodies spawned AFTER this lands — every session
-    already alive when this code deploys was started without it and stays in the shared
-    group until it naturally cycles. A future group-based kill must check for this rather
-    than assume it; a kill verb that silently behaves differently for old and new bodies
+    Own process group, always: `start_new_session=True` makes the spawned body its
+    own session/group leader (POSIX `setsid()`, `pgid == pid`), the same discipline
+    `pty_broker.py`'s own children already carry, that this lane just never had.
+    Without it, a seat's Bash-tool children share this process's own process group
+    and can outlive their parent with nobody owning them, the exact shape of leaked
+    spare processes found and killed by hand previously. The named limit: this only
+    isolates bodies spawned after this lands; every session already alive when this
+    code deploys was started without it and stays in the shared group until it
+    naturally cycles. A future group-based kill must check for this rather than
+    assume it; a kill verb that silently behaves differently for old and new bodies
     is worse than one that refuses cleanly on the old ones.
 
-    SAME BACKSTOP AS `_spawn_claude` (decision 27259e4d, thread bc11a2d3): `repo` reaches
-    create_subprocess_exec's `cwd=` with no existence check of its own; refused here as a
-    logged no-op, never a raised, uncaught FileNotFoundError.
+    Same backstop as `_spawn_claude`: `repo` reaches create_subprocess_exec's `cwd=`
+    with no existence check of its own; refused here as a logged no-op, never a
+    raised, uncaught FileNotFoundError.
 
-    `resume_session` (Thoth dispatch 6484/6515, the operator's own "impossible to actually
-    resume agents" complaint): #173's premise — "claude --bg silently ignores --resume" —
-    was TRUE on the harness version it was measured against and is FALSE now, confirmed
-    live against the currently installed harness (2.1.258): `claude --bg --resume
-    <session-id> <prompt>` genuinely continues that session under the SAME background id,
-    writes to the SAME transcript, and reappears in `claude agents --json` afterward —
-    verified with a real disposable probe session before this code was written, not
-    inferred from `--help` text alone. `osiris resume` now rides this instead of the old
-    one-shot `-p --resume` lane, closing the exact gap Jesus's specimen showed: a resumed
-    session that ran its turn and then vanished from the operator's own roster."""
+    `resume_session`: the earlier premise that "claude --bg silently ignores
+    --resume" was true on the harness version it was measured against and is false
+    now, confirmed live against the currently installed harness: `claude --bg
+    --resume <session-id> <prompt>` genuinely continues that session under the same
+    background id, writes to the same transcript, and reappears in `claude agents
+    --json` afterward, verified with a real disposable probe session before this
+    code was written, not inferred from `--help` text alone. `osiris resume` now
+    rides this instead of the old one-shot `-p --resume` lane, closing the gap where
+    a resumed session ran its turn and then vanished from the operator's own
+    roster."""
     if not _tree_exists(repo):
         _log.error("trigger: _spawn_claude_bg refused — repo=%r does not exist on disk, "
                    "no subprocess spawned (name=%s)", repo, name)
         return
     env = os.environ.copy()
-    # same anchor discipline as _spawn_claude: a spawner's own anchor must never leak into
-    # the child (the anchor-collision class, 2294e95d) — inert for --bg today (env vars
-    # don't reach the claimed spare either way) but cheap and harmless to keep scrubbed.
+    # Same anchor discipline as _spawn_claude: a spawner's own anchor must never leak
+    # into the child. Inert for --bg today (env vars don't reach the claimed spare
+    # either way) but cheap and harmless to keep scrubbed.
     env.pop("CLAUDE_JOB_DIR", None)
     cmd = ["claude", "--bg"]
     if resume_session:
@@ -5277,10 +5205,10 @@ async def _spawn_claude_bg(
 async def _claude_agents_json(
     *, cwd: str | None = None, include_completed: bool = False,
 ) -> list[dict[str, Any]]:
-    """`claude agents --json` — the harness's own front-end view (clause 3: a body this
-    cannot show is an orphan by definition). Fails open to `[]` on any error, the same
-    discipline `_manager_windows` uses: a status read must never break a caller that only
-    wants a roster."""
+    """`claude agents --json`: the harness's own front-end view (a body this cannot
+    show is an orphan by definition). Fails open to `[]` on any error, the same
+    discipline `_manager_windows` uses: a status read must never break a caller that
+    only wants a roster."""
     cmd = ["claude", "agents", "--json"]
     if cwd:
         cmd += ["--cwd", cwd]
@@ -5302,13 +5230,14 @@ async def _claude_agents_json(
 async def _bg_session_cost(
     session_id: str, *, cwd: str | None = None,
 ) -> dict[str, Any]:
-    """The spike's own open question, answered honestly: `claude agents --json` carries no
-    cost/usage field for any session — confirmed live, 2026-07-27, across busy/idle/done
-    states alike. A `--bg`-spawned session's spend is therefore structurally UNPRICED from
-    this surface, same doctrine as the subscription-lane blind spot (osiris cannot recover
-    the marginal joule from outside the vendor's own dashboard). Never fabricates a number:
-    reports `{'priced': False, ...}` rather than a guess — if a future harness version adds
-    a cost field, this starts reporting it (`cost_usd`/`total_cost_usd`, checked first)."""
+    """An open question, answered honestly: `claude agents --json` carries no
+    cost/usage field for any session, confirmed live across busy/idle/done states
+    alike. A `--bg`-spawned session's spend is therefore structurally unpriced from
+    this surface, the same blind spot as any other subscription-lane cost that isn't
+    visible outside the vendor's own dashboard. Never fabricates a number: reports
+    `{'priced': False, ...}` rather than a guess. If a future harness version adds a
+    cost field, this starts reporting it (`cost_usd`/`total_cost_usd`, checked
+    first)."""
     for row in await _claude_agents_json(cwd=cwd, include_completed=True):
         if row.get("sessionId") == session_id or row.get("id") == session_id[:8]:
             cost = row.get("cost_usd") or row.get("total_cost_usd")
@@ -5325,50 +5254,53 @@ async def dispatch_broadcast(
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
     poke: Any = None, hourly_wakes: int | None = None,
 ) -> dict[str, str]:
-    """Dispatch ONE broadcast to its project — dispatch_dm's own grammar, finally applied to
-    the surface it was missing from (task #151; ruling 60bc15db, the mail layer's own
-    specimen). Before this, send(to=<project>) filed a message and computed wake_status (a
-    STATUS STRING, no dispatch) — the only push a broadcast ever got was the worker tick's
-    sweep, up to ~60s later, and under the standing osiris_trigger_poke_only arm a project
-    with no open manager window got NONE, ever. That is how Thoth LXXII's commit-freeze
-    broadcast reached nobody the night of the second history rewrite (Imhotep, msg 3707:
-    "sent individual DMs since the freeze broadcast never reached anyone") — four agents
-    held live worktrees and the channel built for reaching all of them at once was silent.
+    """Dispatch one broadcast to its project: dispatch_dm's own grammar, finally
+    applied to the surface it was missing from. Before this, send(to=<project>) filed
+    a message and computed wake_status (a status string, no dispatch), so the only
+    push a broadcast ever got was the worker tick's sweep, up to ~60s later, and
+    under the standing osiris_trigger_poke_only arm a project with no open manager
+    window got none, ever. That gap once meant an urgent broadcast reached nobody:
+    several agents held live worktrees and the channel built for reaching all of
+    them at once was silent.
 
-    Shared verbatim by send()'s immediate leg and the worker tick's backstop sweep — two
-    callers, one law, no drift (dispatch_dm's own principle: "(The DM lane already knew
-    this... The broadcast lane simply never learned it.)"). Returns the per-hop RECEIPT
-    {mode, detail}:
+    Shared verbatim by send()'s immediate leg and the worker tick's backstop sweep:
+    two callers, one law, no drift. Returns the per-hop receipt {mode, detail}:
 
-      queued-fyi      — grade='fyi' never wakes: the DM lane's own loop terminator (line
-                        ~1204 above), extended here rather than re-invented. CONFIRMED, not
-                        assumed, that grade previously had zero effect on broadcast dispatch
-                        before this — it only ever reached mount()/orient()'s unread count.
-      delivered       — the project's own owner is live right now; reads its own box
-      poked           — typed into a manager-hosted OPEN window holding this project
-      window-busy     — that window is mid-turn; the mail waits, nothing spent
-      resumed         — an owner's own session was continued with the mail as its next turn
-      woke            — no live/resumable owner; a fresh session was minted
-      poke-only-held  — the ladder ends at poke (osiris_trigger_poke_only=1, the operator's
-                        standing arm): no resume, no mint, ever. Held mail stays pull-only.
-      skipped-*       — the fleet's own brakes (rate-capped / budget-* / wake-grace)
-      abandoned       — failed its lifetime attempt limit; escalated to the human, the
-                        trigger stops trying rather than loop forever
-      no-repo         — no known repo to spawn into; stays pull-only
-      trigger-dark / scoped-out — the kill switch, or a scoped re-arm naming other projects
+      queued-fyi      -- grade='fyi' never wakes: the DM lane's own loop terminator,
+                         extended here rather than re-invented. Confirmed, not
+                         assumed, that grade previously had zero effect on broadcast
+                         dispatch before this; it only ever reached mount()/orient()'s
+                         unread count.
+      delivered       -- the project's own owner is live right now; reads its own box
+      poked           -- typed into a manager-hosted open window holding this project
+      window-busy     -- that window is mid-turn; the mail waits, nothing spent
+      resumed         -- an owner's own session was continued with the mail as its
+                         next turn
+      woke            -- no live/resumable owner; a fresh session was minted
+      poke-only-held  -- the ladder ends at poke (osiris_trigger_poke_only=1, a
+                         standing operator arm): no resume, no mint, ever. Held mail
+                         stays pull-only.
+      skipped-*       -- the fleet's own brakes (rate-capped / budget-* / wake-grace)
+      abandoned       -- failed its lifetime attempt limit; escalated to the human,
+                         the trigger stops trying rather than loop forever
+      no-repo         -- no known repo to spawn into; stays pull-only
+      trigger-dark / scoped-out -- the kill switch, or a scoped re-arm naming other
+                         projects
 
-    `hourly_wakes` lets the sweep pass its OWN running total (hourly DB count + wakes already
-    fired earlier in the SAME tick) so a burst of messages in one tick can't each read a
-    stale pre-burst count and collectively blow past the hourly budget — the exact correction
-    the sweep's inline loop already made before this was extracted. `None` (send()'s
-    immediate leg, a single isolated call) reads a fresh count.
+    `hourly_wakes` lets the sweep pass its own running total (hourly DB count plus
+    wakes already fired earlier in the same tick) so a burst of messages in one tick
+    can't each read a stale pre-burst count and collectively blow past the hourly
+    budget, the exact correction the sweep's inline loop already made before this was
+    extracted. `None` (send()'s immediate leg, a single isolated call) reads a fresh
+    count.
 
-    THE RACE THIS FUNCTION MUST NOT LOSE: with two callers, a message arriving at the same
-    moment the sweep is mid-tick could be dispatched by both. The poke step trusts `poke`'s
-    own dedup (`dedup=f"msg:{msg_id}"`, the same guarantee the old sweep-only code already
-    relied on); resume/mint claim the ledger row under an advisory transaction lock BEFORE
-    spawning, exactly as dispatch_dm's own resume arm does — the second caller finds the row
-    already there and stops rather than double-spawning."""
+    The race this function must not lose: with two callers, a message arriving at the
+    same moment the sweep is mid-tick could be dispatched by both. The poke step
+    trusts `poke`'s own dedup (`dedup=f"msg:{msg_id}"`, the same guarantee the old
+    sweep-only code already relied on); resume/mint claim the ledger row under an
+    advisory transaction lock before spawning, exactly as dispatch_dm's own resume
+    arm does. The second caller finds the row already there and stops rather than
+    double-spawning."""
     st = settings or get_settings()
     spawn = spawn or _spawn_claude
     windows = windows or _manager_windows
@@ -5442,15 +5374,15 @@ async def dispatch_broadcast(
                 "detail": "the ladder ends at poke (osiris_trigger_poke_only=1, the "
                           "operator's standing arm) — no resume, no mint, ever; held mail "
                           "stays pull-only"}
-    # THE LOCK IS FOR THE RACE, NOT FOR MEMORY: unlike a DM (one resume attempt EVER — a
-    # resume that didn't settle it is not looped), a broadcast RETRIES across ticks up to
-    # `attempt_limit`, already enforced above via _attempts_on/should_wake. This lock only
-    # keeps two near-simultaneous dispatchers (send()'s immediate leg + a sweep tick landing
-    # in the same instant) from both reading "not yet resumed this tick" and both spawning —
-    # it must never become a second, broader "already woke, ever" gate, or attempt_limit's
-    # own retry ladder breaks (measured live: an earlier draft of this check did exactly
-    # that and silently capped every retry at one, killing the abandon-after-N-attempts path
-    # the ghost-farm fix depends on).
+    # The lock is for the race, not for memory: unlike a DM (one resume attempt ever;
+    # a resume that didn't settle it is not looped), a broadcast retries across ticks
+    # up to `attempt_limit`, already enforced above via _attempts_on/should_wake. This
+    # lock only keeps two near-simultaneous dispatchers (send()'s immediate leg and a
+    # sweep tick landing in the same instant) from both reading "not yet resumed this
+    # tick" and both spawning. It must never become a second, broader "already woke,
+    # ever" gate, or attempt_limit's own retry ladder breaks (measured live: an
+    # earlier draft of this check did exactly that and silently capped every retry at
+    # one, breaking the abandon-after-N-attempts path a later fix depends on).
     async with pool.acquire() as conn, conn.transaction():
         await conn.execute(
             "SELECT pg_advisory_xact_lock(hashtextextended('osiris-bc-' || $1, 7445))",
@@ -5492,27 +5424,29 @@ async def trigger_mail_tick(
     actions: Actions, *, settings: Settings | None = None, spawn: Any = _spawn_claude,
     windows: Any = None, poke: Any = None,
 ) -> dict[str, int]:
-    """One trigger pass — the dispatch order is DELIVER → POKE → RESUME → MINT (thread
-    9f2ddb44 + the wake law): a live owner just gets its mail (no spawn); a manager-hosted
-    window already holding the addressee's session gets the mail TYPED INTO IT as its next
-    turn (the wake law — no second process ever resumes a session whose window is still
-    open); a resumable owner is CONTINUED via its own session (cheap — no re-ingestion, no
-    twin, no succession seam); only otherwise is a fresh twin minted (succession-stamped at
-    mount, 88ca0a1). `spawn`/`windows`/`poke` are injected so tests assert the DECISION
-    without launching a process or a daemon. The wake is RECORDED (with its mode) before the
-    spawn — the ledger is the rate limiter, the chain, and the alternation guard."""
+    """One trigger pass. The dispatch order is deliver, then poke, then resume, then
+    mint: a live owner just gets its mail (no spawn); a manager-hosted window already
+    holding the addressee's session gets the mail typed into it as its next turn (no
+    second process ever resumes a session whose window is still open); a resumable
+    owner is continued via its own session (cheap: no re-ingestion, no duplicate
+    process, no succession seam); only otherwise is a fresh successor minted
+    (succession-stamped at mount). `spawn`/`windows`/`poke` are injected so tests
+    assert the decision without launching a process or a daemon. The wake is recorded
+    (with its mode) before the spawn: the ledger is the rate limiter, the chain, and
+    the alternation guard."""
     st = settings or get_settings()
     pool = actions.pool
     report = {"woke": 0, "resumed": 0, "poked": 0, "window_busy": 0, "skipped": 0,
               "owner_live": 0, "abandoned": 0, "scoped_out": 0, "poke_only_held": 0,
               "fyi_queued": 0}
 
-    # THE CEILING — and this is the producer it was built for. A wake is not a token, it is an
-    # entire Claude session with tools, in a repo, on the operator's card. 463 of them were minted
-    # on projects he had not opened in days, and NOT ONE was ever in the ledger, because the
-    # spawner throws the vendor's own receipt at /dev/null (21a99136). Every other guard here is a
-    # RATE (wakes per hour, attempts per message) — and a rate is not a bound: the storm ran for
-    # days at a perfectly legal 5/hr. THIS is the bound.
+    # The ceiling, and this is the producer it was built for. A wake is not a token,
+    # it is an entire Claude session with tools, in a repo, on the operator's card.
+    # Hundreds of them were once minted on projects nobody had opened in days, and
+    # not one was ever in the ledger, because the spawner threw the vendor's own
+    # receipt at /dev/null. Every other guard here is a rate (wakes per hour,
+    # attempts per message), and a rate is not a bound: that storm ran for days at a
+    # perfectly legal rate. This is the bound.
     ok, why = await may_spend(pool, cap=st.osiris_daily_usd, metered=spend_is_metered(st))
     if not ok:
         report["refused"] = 1
@@ -5520,18 +5454,18 @@ async def trigger_mail_tick(
         _log.warning("the trigger is refusing to spend: %s", why)
         return report
 
-    # the fleet-wide hourly spend — the SAME number the chrome renders as 'wakes N/h'
+    # The fleet-wide hourly spend: the same number the UI renders as "wakes N/h".
     hourly = await pool.fetchval(
         "SELECT count(*) FROM agent_wakes WHERE woke_at > now() - interval '1 hour'")
-    # None defaults resolve LATE (module attribute, not a bound default) so tests can
+    # None defaults resolve late (module attribute, not a bound default) so tests can
     # darken the manager for the whole module with one monkeypatch.
     windows = windows or _manager_windows
     poke = poke or _poke_window
-    # THE BROADCAST LANE (task #151, dispatch_broadcast's own docstring has the full ladder
-    # and the incident that demanded it): this loop is now the BACKSTOP sweep, the exact
-    # role the DM lane below already had — send()'s immediate leg dispatches on arrival
-    # through the very same dispatch_broadcast, this drains what arrived gated or ran before
-    # the trigger was armed. Two callers, one law, no drift.
+    # The broadcast lane (dispatch_broadcast's own docstring has the full ladder and
+    # the incident that demanded it): this loop is now the backstop sweep, the exact
+    # role the DM lane below already had. send()'s immediate leg dispatches on
+    # arrival through the very same dispatch_broadcast; this drains what arrived
+    # gated or ran before the trigger was armed. Two callers, one law, no drift.
     for project, msg_id, sender, _age in await _projects_with_unread(
             pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
@@ -5565,12 +5499,12 @@ async def trigger_mail_tick(
         else:  # trigger-dark / skipped-* / no-repo / skipped-once-per-message
             report["skipped"] += 1
 
-    # THE DM LANE — the background-session adapter's BACKSTOP sweep (ruling 6c4d0b62):
-    # send() dispatches each DM on arrival through the very same dispatch_dm; this loop
-    # exists to DRAIN THE QUEUES — mail that arrived gated (paused / needs-input / braked /
-    # mid-turn) retries here once the gate lifts. Two callers, one grammar, no drift. No
-    # mint, ever — a private message is never handed to a stranger; an unresumable
-    # addressee's DM stays pull-only and follows the seat at the next mint (the estate).
+    # The DM lane: the background-session adapter's backstop sweep. send() dispatches
+    # each DM on arrival through the very same dispatch_dm; this loop exists to drain
+    # the queues, since mail that arrived gated (paused / needs-input / braked /
+    # mid-turn) retries here once the gate lifts. Two callers, one grammar, no drift.
+    # No mint, ever: a private message is never handed to a stranger. An unresumable
+    # addressee's DM stays pull-only and follows the seat at the next mint.
     for agent_id, msg_id, sender in await _dms_with_unread(pool, st.osiris_mail_lease_secs):
         if not st.osiris_trigger_enabled:
             report["skipped"] += 1
@@ -5594,34 +5528,35 @@ async def trigger_mail_tick(
         elif mode.startswith("queued"):
             report["dm_queued"] = report.get("dm_queued", 0) + 1
         elif mode == "held":
-            report["poke_only_held"] += 1  # the resume arm is dark: held, same book
+            report["poke_only_held"] += 1  # The resume arm is dark: held, same book.
         else:  # skipped-*, braked, pull-only, refused
             report["skipped"] += 1
 
-    # THE QUEUED-WAKE-IN-FLIGHT LANE (thread 33749ffc, Thoth mail 12907): the DM lane
-    # above (_dms_with_unread) surfaces only the SINGLE OLDEST unread DM per addressee
-    # (its own DISTINCT ON) — a message that already spent its one-time wake (wall #4's
-    # own once-per-message brake, `skipped-once-per-message`, by design "never loops")
-    # but still reads `read_at IS NULL` (a push delivery — nudge/poke — never marks
-    # fleet_messages.read_at, and never rows message_recipients either) sits at the head
-    # of that per-addressee queue FOREVER, silently starving every genuinely-still-
-    # pending message behind it from ever reaching the sweep at all. Sekhmet's own live
-    # specimen (DM 12079, mail 12079/12190): dispatched 'queued-wake-in-flight' once, on
-    # arrival, riding an unrelated wake that landed on an OLDER, already-exhausted
-    # message (12070) — from then on the sweep kept re-selecting 12070 (a one-line,
-    # already-settled no-op) and never saw 12079 again for 2h55m, until a BRAND NEW
-    # message arrived and was dispatched fresh by send()'s own immediate leg (which
-    # never goes through _dms_with_unread's per-addressee gate at all).
+    # The queued-wake-in-flight lane: the DM lane above (_dms_with_unread) surfaces
+    # only the single oldest unread DM per addressee (its own DISTINCT ON). A message
+    # that already spent its one-time wake (the once-per-message brake,
+    # `skipped-once-per-message`, by design "never loops") but still reads `read_at
+    # IS NULL` (a push delivery, nudge/poke, never marks fleet_messages.read_at, and
+    # never rows message_recipients either) sits at the head of that per-addressee
+    # queue forever, silently starving every genuinely-still-pending message behind
+    # it from ever reaching the sweep at all. This was observed live: a message
+    # dispatched 'queued-wake-in-flight' once, on arrival, riding an unrelated wake
+    # that landed on an older, already-exhausted message. From then on the sweep
+    # kept re-selecting that older message (a one-line, already-settled no-op) and
+    # never saw the real one again for almost three hours, until a brand new message
+    # arrived and was dispatched fresh by send()'s own immediate leg (which never
+    # goes through _dms_with_unread's per-addressee gate at all).
     #
-    # This lane queries `dispatch_mode` DIRECTLY — no DISTINCT ON, no per-addressee
-    # throttle — so it can reach every such message regardless of queue position.
-    # `dispatch_mode_at < now() - grace` is the "wake no longer live" test operationalized:
-    # the SAME window `_seat_wakes` itself uses to decide "in flight" — once it has
-    # elapsed, a plain re-dispatch naturally either escalates to a real nudge (the wake
-    # it rode has aged out, `_seat_wakes` now reads 0) or, honestly, reports still-in-
-    # flight again (a genuinely fresh wake landed since) — no separate liveness probe
-    # needed; dispatch_dm's own ladder (jobs/nudge/poke/resume) already answers "is
-    # there a live listener" the same way every other lane's dispatch does.
+    # This lane queries `dispatch_mode` directly, no DISTINCT ON, no per-addressee
+    # throttle, so it can reach every such message regardless of queue position.
+    # `dispatch_mode_at < now() - grace` is the "wake no longer live" test
+    # operationalized: the same window `_seat_wakes` itself uses to decide "in
+    # flight". Once it has elapsed, a plain re-dispatch naturally either escalates to
+    # a real nudge (the wake it rode has aged out, `_seat_wakes` now reads 0) or,
+    # honestly, reports still-in-flight again (a genuinely fresh wake landed since),
+    # with no separate liveness probe needed; dispatch_dm's own ladder
+    # (jobs/nudge/poke/resume) already answers "is there a live listener" the same
+    # way every other lane's dispatch does.
     grace = st.osiris_trigger_grace_secs
     for agent_id, msg_id, sender in await _stuck_wake_in_flight_asks(pool, grace):
         if not st.osiris_trigger_enabled:
