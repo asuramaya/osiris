@@ -409,6 +409,52 @@ this is a CLI-side call over the Function, same NO_MCP_EQUIVALENT shape as `lint
 `audit` above). `--vault`/`--backups` override the production paths, for a test or a
 non-standard layout.
 
+## `osiris soul-key <status|init|rotate|restore-drill|enroll-recovery|recover> [flags]`
+
+THE KEY DOOR (ruling e0b98ff2) — mint, inspect, rotate, or recover the soul-store
+encryption key; also drills an off-box backup's own restorability. Full mechanism,
+custody ladder, every flag, and exact terminal output for each action:
+[`KEYS.md`](KEYS.md#everyday-operation). `status`/`init`/`rotate`/`restore-drill` are
+also exposed over the console's own REST doors (localhost-only); `enroll-recovery`/
+`recover` stay CLI-only by design — no action under this door is ever an MCP tool.
+
+```
+osiris soul-key init
+osiris soul-key init --restart
+osiris soul-key status
+osiris soul-key enroll-recovery
+osiris soul-key rotate
+osiris soul-key rotate --finish
+osiris soul-key recover
+osiris soul-key restore-drill
+```
+
+## `osiris restic-key <status|init> [--path P] [--backend host-cred|host+tpm2|file] [--json]`
+
+The offload runner's own credential door (ruling e0b98ff2, "same shape for the restic
+repository password") — a SEPARATE secret from the soul key, protecting the restic
+repository's own encryption rather than the soul store. `status`/`init` only; no
+`rotate`/`enroll-recovery`/`recover` yet (rotating a restic password additionally needs a
+`restic key add`/`remove` pass against the live repository — a deliberate scope cut for
+this first cut). See [`KEYS.md`](KEYS.md#the-restic-password).
+
+```
+osiris restic-key init
+osiris restic-key status
+```
+
+## `osiris offload-runner tick [--vault P] [--json]`
+
+Runs one pass of the opportunistic offload runner over every enabled
+`backup.offload_targets` row: an absent `local` target (drive unplugged) is skipped
+silently, a present `local` target or any `restic` target gets a real `restic backup`
+(initializing the repository first if it looks uninitialized). Writes a per-target
+receipt (`last_successful_offload`/`last_attempt_at`/`last_error`) that `osiris
+backup-status` reads back. Meant as `osiris-offload.timer`'s own `ExecStart` (every 15
+minutes) but safe to run by hand any time. Refuses with one clear error, doing nothing
+per-target, if `osiris restic-key init` was never run. See
+[`BACKUP.md`](BACKUP.md#the-opportunistic-offload-runner).
+
 ## `scripts/osiris_prune_ladder.py [--manifest | --apply-if-clear | --apply]` — the retention ladder
 
 Not an `osiris` subcommand (no console-script door onto it yet) — a standalone script, run
