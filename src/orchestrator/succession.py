@@ -1,26 +1,26 @@
-"""succession — the full generation-CHAIN walk (task #64, ruling ad19a779: "the real gap is
-the chain as one bounded read: lineage(agent|seat, depth<=N) -> [{generation,
-minted_because, wrote_anything}] per hop"). Thoth's own turn needed this and fell to raw
-SQL: dossier() already answers succeeded_from/minted_because for ONE hop, but walking N
+"""succession: the full generation-chain walk. The gap this closes: the chain as one
+bounded read, lineage(agent|seat, depth<=N) -> [{generation, minted_because,
+wrote_anything}] per hop. A prior session needed this and fell back to raw SQL:
+dossier() already answers succeeded_from/minted_because for one hop, but walking N
 generations back needed N calls.
 
-NOT named lineage.py — that module already exists and means something else entirely (the
-SWARM lineage: sub-agent spawn-tree reconstruction from harness transcripts, spawned_by/
-acts_for edges). This is about agent GENERATIONS succeeding each other within one seat
-(succeeded_from, seat_generation) — a different axis, caught by Read-before-Write before
-it clobbered a real, unrelated, load-bearing module.
+Not named lineage.py: that module already exists and means something else entirely (the
+swarm lineage, i.e. sub-agent spawn-tree reconstruction from harness transcripts,
+spawned_by/acts_for edges). This is about agent generations succeeding each other within
+one seat (succeeded_from, seat_generation), a different axis, caught by reading the
+existing module before writing a new one so it didn't clobber a real, unrelated,
+load-bearing module.
 
-Complementary to, not a duplicate of, `agents.nearest_handoff_ancestor` (Khnum, thread
-e749036e, same day) — that one JUMPS to the nearest ancestor bearing a real handoff, for
-orient()'s own inheritance fallback; this one WALKS and reports every hop, for a caller
-asking "show me the whole chain". Different questions, coordinated via mail (msg
-1419/1423/1431) before either was built so neither duplicated the other's actual job.
+Complementary to, not a duplicate of, `agents.nearest_handoff_ancestor`: that one jumps to
+the nearest ancestor bearing a real handoff, for orient()'s own inheritance fallback; this
+one walks and reports every hop, for a caller asking to see the whole chain. Different
+questions, coordinated between the two implementations before either was built so neither
+duplicated the other's job.
 
-Kept in its own module rather than inside agents.py deliberately: agents.py is Khnum's live
-territory this campaign (the collision-watch discipline every wave this session has held
-to), and the one succeeded_from hop-step this needs is small enough to stand alone rather
-than force a refactor of code that just landed. One-verb-one-module, matching doors.py/
-describe.py/recall.py/smoke.py's own precedent."""
+Kept in its own module rather than inside agents.py deliberately: agents.py was another
+session's active work at the time, and the one succeeded_from hop-step this needs is small
+enough to stand alone rather than force a refactor of code that had just landed.
+One-verb-one-module, matching doors.py/describe.py/recall.py/smoke.py's own precedent."""
 from __future__ import annotations
 
 from typing import Any
@@ -29,7 +29,7 @@ import asyncpg
 
 from src.orchestrator.compositions import resolve_ref
 
-MAX_SUCCESSION_HOPS = 10  # mint_heir's own kind of bound — a chain walk never widens unbounded
+MAX_SUCCESSION_HOPS = 10  # mint_heir's own kind of bound: a chain walk never widens unbounded
 
 
 async def succession_chain(
@@ -37,27 +37,25 @@ async def succession_chain(
 ) -> list[dict[str, Any]]:
     """Walk an Agent's `succeeded_from` chain backward, one entry per hop:
     {agent_id, generation, minted_because, wrote_anything, session}. `ref` accepts anything
-    resolve_ref does (UUID, 8-char short id, canonical, or name) for the STARTING agent;
-    each subsequent hop follows `succeeded_from`'s own stored canonical directly (the shape
-    it's actually asserted in — no re-resolution needed hop to hop). Stops at a root (no
+    resolve_ref does (UUID, 8-char short id, canonical, or name) for the starting agent; each
+    subsequent hop follows `succeeded_from`'s own stored canonical directly (the shape it's
+    actually asserted in, so no re-resolution is needed hop to hop). Stops at a root (no
     predecessor) or `max_hops`, never widening into an unbounded search. `wrote_anything`
-    checks for an assertion on some OTHER object (a Thread, a Decision — real work) or a
-    sent message, same spirit as agents.agent_has_acted's own act-detection — NOT a bare
-    "any self_declared assertion", which would be wrong: seat_generation/minted_because are
-    THEMSELVES self_declared, stamped by the mint process on every agent regardless of
-    whether it ever did anything (caught live by this module's own test — a zero-write
-    phantom's OWN mint-time bookkeeping made the naive check read as work). Deliberately
-    simpler than agent_has_acted's own debounce-specific exclude-PAIR logic, which doesn't
-    fit a walk visiting many hops with no single fixed pair to exclude.
+    checks for an assertion on some other object (a Thread, a Decision, i.e. real work) or a
+    sent message, in the same spirit as agents.agent_has_acted's own act-detection, not a
+    bare "any self_declared assertion", which would be wrong: seat_generation/minted_because
+    are themselves self_declared, stamped by the mint process on every agent regardless of
+    whether it ever did anything (caught live by this module's own test: a zero-write agent's
+    own mint-time bookkeeping made the naive check read as work). Deliberately simpler than
+    agent_has_acted's own debounce-specific exclude-pair logic, which doesn't fit a walk
+    visiting many hops with no single fixed pair to exclude.
 
-    `session` (the operator's own question, "how can you reliably tell the latest
-    transcript?", ruling 7fa4b599's named additive step, task #135/#136 point 4, 2026-08-04):
-    NOT a new write — `register_agent` already asserts this on every mount() call
-    (agents.py, `assert_property(a, "session", identity.session, ...)`), SELF_DECLARED, the
-    harness session id that IS the transcript filename's own stem. This walker already read
+    `session`: not a new write. `register_agent` already asserts this on every mount() call
+    (agents.py, `assert_property(a, "session", identity.session, ...)`), self_declared, the
+    harness session id that is the transcript filename's own stem. This walker already read
     three sibling properties off the identical `current_assertions` row; it was simply never
-    asked for the fourth. 1973d46f's shape — the record already existed, only the reader
-    didn't reach it — confirmed by reading source, not guessed."""
+    asked for the fourth. The record already existed, only the reader didn't reach it,
+    confirmed by reading the source rather than guessed."""
     start = await resolve_ref(pool, ref)
     if start is None:
         return []

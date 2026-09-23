@@ -1,20 +1,23 @@
-"""Healing ACTLESS HUSK generations — the onboarding clusterfuck's remains (2026-07-14).
+"""Heals ACTLESS HUSK generations left behind by a 2026-07-14 onboarding defect.
 
-A HUSK is a generation the machinery minted at a seam that no mind ever inhabited: born of a
-`minted_because` stamp, zero acts beyond its own mint bookkeeping, nothing sent, nothing
-settled. The seam debounce retires this class automatically when it catches one inside its
-window; the eight healed here escaped because the round-trip straddled the two seam observers
-(the ping-pong, thread a3d49d91) — cured at the source in the same change that ships this.
+A HUSK is a generation the machinery minted at a handoff boundary that no mind ever
+inhabited: born of a `minted_because` stamp, with zero acts beyond its own mint
+bookkeeping, nothing sent, nothing settled. The automatic debounce retires this class
+when it catches one inside its window; the eight healed here escaped because the
+round-trip straddled two separate boundary observers racing each other. That race
+condition was fixed at the source in the same change that ships this module.
 
-THE HEAL IS THE DEBOUNCE'S, APPLIED LATE: compensating events only (false_mint + retired,
-constitution 3 — never DELETE), unread mail re-addressed to the mind that actually holds the
-seat, mount rows re-pointed the same way. A name is testimony and an identity merge is the
-operator's (constitution 1) — but these carry only INHERITED handles stamped by mint_heir's
-own hand, the machine un-doing the machine, and the operator greenlit this batch explicitly.
+THIS HEAL APPLIES THE SAME LOGIC THE DEBOUNCE USES, LATE: compensating events only
+(false_mint + retired, constitution 3, never DELETE), unread mail re-addressed to the
+agent that actually holds the seat, and mount rows re-pointed the same way. Naming an
+identity and merging one are decisions reserved for a human operator (constitution 1),
+but these events carry only INHERITED handles stamped by mint_heir's own logic, the
+machine correcting its own bookkeeping, and this batch was explicitly approved before
+running.
 
-EVERY CANDIDATE IS RE-VERIFIED AT HEAL TIME, never trusted from the ticket: an agent that
-acted since diagnosis is refused with its reason. A resemblance must not speak in the voice
-of a fact.
+EVERY CANDIDATE IS RE-VERIFIED AT HEAL TIME rather than trusted from the original
+diagnosis: an agent that has acted since diagnosis is refused, with the reason
+recorded. A resemblance to a husk is not treated as proof of one.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ _SRC = "husk-heal"
 _DO = EvidenceClass.DIRECT_OBSERVATION
 _CONF = confidence_for(_DO)
 
-# the eight of 2026-07-14 (ruling f7a715a1) — the default batch the script rehearses
+# The eight husks identified on 2026-07-14; the default batch this script rehearses.
 HUSKS_2026_07_14 = [
     "agent:628ef839-vi", "agent:628ef839-vii", "agent:628ef839-viii", "agent:628ef839-ix",
     "agent:c9b710cb-vi", "agent:ad1a1cb0-xxx", "agent:7118bf41-v", "agent:7118bf41-vi",
@@ -72,7 +75,8 @@ async def _chain(actions: Actions, member: str) -> list[str]:
 
 async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | None, str]:
     """(oid, '') when `canonical` is verifiably a husk NOW; (None, why) when refused. The
-    ticket's diagnosis is re-derived at heal time — an agent that acted since is a mind."""
+    original diagnosis is re-derived at heal time: an agent that has acted since is a
+    live occupant, not a husk."""
     oid = await _oid(actions, canonical)
     if oid is None:
         return None, "no such active Agent"
@@ -84,10 +88,12 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
     ancestor = await _prop(actions, oid, "succeeded_from")
     anc_oid = await _oid(actions, ancestor) if ancestor else None
     exclude = [oid] + ([anc_oid] if anc_oid else [])
-    # mail read-state is INHERITED at mint (mint_heir copies the ancestor's recipient rows —
-    # the heir literally remembers reading them), so only a settle AFTER its own birth is the
-    # heir's act. The first rehearsal ran with settled_after=None and refused all eight husks
-    # for their ancestors' memories — caught only by RUNNING it, which is what dry-run is for.
+    # Mail read-state is INHERITED at mint time (mint_heir copies the ancestor's recipient
+    # rows, so the heir already appears to have read them). Only a settle event AFTER its
+    # own creation counts as the heir's own act. An earlier rehearsal run with
+    # settled_after=None incorrectly refused all eight husks based on their ancestors'
+    # read history; this was caught only by running the rehearsal, which is the purpose
+    # of the dry-run step.
     minted_at = await actions.pool.fetchval(
         "SELECT observed_at FROM current_assertions WHERE object_id=$1 "
         "AND name='succeeded_from' ORDER BY confidence DESC, observed_at DESC LIMIT 1", oid)
@@ -102,9 +108,10 @@ async def _verify_husk(actions: Actions, canonical: str) -> tuple[uuid.UUID | No
 async def heal_husks(
     actions: Actions, husks: list[str], *, apply: bool = False,
 ) -> dict[str, Any]:
-    """Rehearse (default) or apply the heal. Returns the full plan either way: what was
-    verified, what was refused and why, where each husk's estate goes, and which chain tails
-    get unwound. Idempotent — a healed husk re-runs as a refusal."""
+    """Rehearses the heal by default, or applies it when `apply=True`. Returns the full
+    plan either way: what was verified, what was refused and why, where each husk's
+    records are reassigned, and which chain tails get unwound. Idempotent: a husk that
+    has already been healed re-runs as a refusal."""
     now = datetime.now(UTC)
     verified: dict[str, uuid.UUID] = {}
     refused: dict[str, str] = {}
@@ -128,10 +135,11 @@ async def heal_husks(
             target = successor or ancestor
             plan.append({"husk": h, "estate_to": target,
                          "note": "unread mail + mount rows follow the target"})
-        # THE TAIL UNWIND: when every generation past the last real mind is a husk, the head-
-        # walk would still land on a corpse (lineage_head reads succeeded_by, not false_mint).
-        # Clearing the last real mind's forward pointer restores it as the head — the same
-        # compensating stamp the debounce writes, never a delete.
+        # TAIL UNWIND: when every generation after the last genuine agent is a husk, a
+        # lookup for the current lineage head would still land on a retired husk
+        # (lineage_head reads succeeded_by, not false_mint). Clearing the last genuine
+        # agent's forward pointer restores it as the head, using the same
+        # compensating-event pattern the debounce writes, never a delete.
         if real:
             last_real = real[-1]
             j = chain.index(last_real)
