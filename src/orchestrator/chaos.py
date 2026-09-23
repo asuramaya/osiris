@@ -1,65 +1,65 @@
-"""CRASH REPLAY AS A GATE (Thoth msg 5338, 2026-08-18) — #178's own residual was "the
-first real test is the next daemon restart"; this stops waiting for one. Composes a real
-crash (SIGKILL, never a graceful `systemctl restart`) with a concurrent session-end
-STORM, then asserts the exact invariants the #178 arc (launch/dispatch graph-truth
-selection, the occupancy gate, suspend-never-delete, registry_census) now claims to hold
-under real failure, not just in a unit test's own fakes.
+"""CRASH REPLAY AS A GATE. An earlier fix's own residual note was "the first real test is
+the next daemon restart"; this stops waiting for one. Composes a real crash (SIGKILL,
+never a graceful `systemctl restart`) with a concurrent session-end STORM, then asserts
+the exact invariants that earlier work (launch/dispatch graph-truth selection, the
+occupancy gate, suspend-never-delete, registry_census) now claims to hold under real
+failure, not just in a unit test's own fakes.
 
 FIVE INVARIANTS, each independently checkable, each NAMED in the report whether it holds
 or not (never a bare pass/fail with no evidence):
-  1. NO STRANGER MINTED OVER A LISTED BODY — every seat that had a LIVE, harness-confirmed
+  1. NO STRANGER MINTED OVER A LISTED BODY: every seat that had a LIVE, harness-confirmed
      body (`registry_census`'s own `matched` set) immediately before the kill still holds
-     that EXACT agent identity afterward (`seats.held_seat`/`seat_receipt`) — the #178
+     that EXACT agent identity afterward (`seats.held_seat`/`seat_receipt`). The
      launch/dispatch gates must have refused any fork attempt that raced the crash window,
      not merely in their own mocked tests.
-  2. ZERO SURVIVING ADVISORY LOCKS (BEYOND A SMALL NOISE MARGIN) — every lock this
-     codebase takes is xact-scoped (`pg_advisory_xact_lock`, #172's own fix) so a killed
-     backend's locks release with its connection; a post-recovery count higher than the
-     pre-kill baseline BY MORE THAN `ADVISORY_LOCK_NOISE_TOLERANCE` is a real leak, not a
-     timing artifact (see `_advisory_lock_count`'s own docstring for the one honest caveat
-     this specific check carries, and `ADVISORY_LOCK_NOISE_TOLERANCE`'s own docstring for
-     the measured cross-worker sampling race the margin exists to absorb).
-  3. ROWLESS BODIES NEVER GROW (registry_census's own `rowless_count`) — the storm fires
-     while a body's own `agent_mounts` row may be mid-suspend (#178a); if the self-restore
-     path (#178b, `_reattach`) is doing its job, a body that WAS matched before the kill is
-     matched again after, never left permanently rowless.
-  4. /automount RECOVERS CLEAN, NEVER FLAPS — polled concurrently with the kill+storm+
-     restart, not just once after recovery. SPLIT (Thoth's ruling, msg 5702, 2026-08-26):
-     failures BEFORE the first confirmed recovery are expected, bounded unavailability —
-     no un-replicated process (this module's own isolated test pair, or the real systemd
-     units) can guarantee zero downtime across a real SIGKILL, and invariant #5 already
-     tracks and bounds exactly how long that's tolerated. Failures AFTER the first
-     confirmed recovery are a different animal — the backend already proved itself up, so
-     going back down is FLAPPING, the same silent-failure shape task #179 already fixed
-     once (33a3573), and THAT is what this invariant exists to catch a regression of.
-  5. BACKENDS RECOVER WITHIN A BOUND — the same bounded-backoff discipline `cmd_deploy`'s
+  2. ZERO SURVIVING ADVISORY LOCKS (BEYOND A SMALL NOISE MARGIN): every lock this
+     codebase takes is xact-scoped (`pg_advisory_xact_lock`), so a killed backend's locks
+     release with its connection; a post-recovery count higher than the pre-kill baseline
+     BY MORE THAN `ADVISORY_LOCK_NOISE_TOLERANCE` is a real leak, not a timing artifact
+     (see `_advisory_lock_count`'s own docstring for the one honest caveat this specific
+     check carries, and `ADVISORY_LOCK_NOISE_TOLERANCE`'s own docstring for the measured
+     cross-worker sampling race the margin exists to absorb).
+  3. ROWLESS BODIES NEVER GROW (registry_census's own `rowless_count`): the storm fires
+     while a body's own `agent_mounts` row may be mid-suspend; if the self-restore path
+     (`_reattach`) is doing its job, a body that WAS matched before the kill is matched
+     again after, never left permanently rowless.
+  4. /automount RECOVERS CLEAN, NEVER FLAPS: polled concurrently with the kill+storm+
+     restart, not just once after recovery. SPLIT: failures BEFORE the first confirmed
+     recovery are expected, bounded unavailability. No un-replicated process (this
+     module's own isolated test pair, or the real systemd units) can guarantee zero
+     downtime across a real SIGKILL, and invariant #5 already tracks and bounds exactly
+     how long that's tolerated. Failures AFTER the first confirmed recovery are a
+     different animal: the backend already proved itself up, so going back down is
+     FLAPPING, the same silent-failure shape fixed once before, and THAT is what this
+     invariant exists to catch a regression of.
+  5. BACKENDS RECOVER WITHIN A BOUND: the same bounded-backoff discipline `cmd_deploy`'s
      own `_wait_for_health`/`_wait_for_smoke` already use, reused here rather than a second
      polling loop invented from scratch.
 
 EVERY SIDE EFFECT IS INJECTABLE (`kill`, `restart`, `fire_storm`, `automount_probe`,
-`agents_json`/`read_exe`/`read_cwd`) — same discipline as `cmd_deploy`'s own
+`agents_json`/`read_exe`/`read_cwd`), the same discipline as `cmd_deploy`'s own
 `RestartServices`/`WaitForHealth` seams (src/cli.py): a test exercising this module's own
 control flow (what it checks, in what order, how a partial failure is reported) has no
-business paying for — or risking — a real SIGKILL against a live daemon. The REAL defaults
+business paying for, or risking, a real SIGKILL against a live daemon. The REAL defaults
 (`_real_kill_units`, `_real_fire_storm`) are the only place this module ever actually kills
 a process or writes throwaway rows; `osiris smoke --chaos` and `cmd_deploy`'s own chaos
 gate are the only two callers permitted to use them un-injected.
 
 THE STORM ITSELF IS SYNTHETIC AND SELF-CLEANING (`_real_fire_storm`): it seeds N
 throwaway `agent_mounts` rows under a `chaos-replay` project (never a real seat's own
-row — this must never be the thing that causes the incident it's testing for), fires
+row: this must never be the thing that causes the incident it's testing for), fires
 `release_session_mounts` against all of them CONCURRENTLY with the kill (the actual race
 shape a SessionEnd storm crossing a restart produces), then deletes every row it created,
 pass or fail. NAMED, NOT HIDDEN: this exercises the DB-layer race (advisory locks, the
-suspend sentinel) directly, never through the HTTP `/session-end` route itself — a route-
+suspend sentinel) directly, never through the HTTP `/session-end` route itself. A route-
 layer race (an in-flight request mid-restart) is a DIFFERENT, unbuilt surface; see
 `_real_fire_storm`'s own docstring for exactly where that line sits.
 
-FAIL-LOUD ON A REAL FINDING, NEVER SILENT (577988ed's OTHER half — that ruling's fail-open
-clause is for infrastructure this module cannot control, e.g. a `/automount` probe that
+FAIL-LOUD ON A REAL FINDING, NEVER SILENT (the fail-open discipline used elsewhere in this
+codebase is for infrastructure this module cannot control, e.g. a `/automount` probe that
 itself cannot reach the network; a genuine invariant violation is the ONE thing this whole
 module exists to make loud). `cmd_deploy`'s own chaos gate refuses the deploy outright on
-any finding — this is a GATE, not read-only corroboration."""
+any finding; this is a GATE, not read-only corroboration."""
 from __future__ import annotations
 
 import asyncio
@@ -78,35 +78,35 @@ AutomountProbe = Callable[[], Awaitable[tuple[bool, str]]]
 DEFAULT_CHAOS_UNITS = ("osiris-mcp", "osiris-worker")
 
 ADVISORY_LOCK_NOISE_TOLERANCE = 2
-"""Measured, not guessed (#186 flake trace, Thoth msg 5702, 2026-08-26): under this
-suite's own `-n4` xdist parallelism every worker shares ONE physical Postgres instance
-(`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring already names this —
+"""Measured, not guessed: under this suite's own `-n4` xdist parallelism every worker
+shares ONE physical Postgres instance
+(`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring already names this:
 `pg_locks` is server-wide, never scoped per worker database). A killed-and-restarted
 daemon pair's own teardown/startup housekeeping, or simply an unrelated worker's ordinary
 transient lock, can land inside a single sampling instant and read as
 `post_locks > baseline_locks` even though nothing leaked.
 
-THIS TOLERANCE ALONE WAS NOT THE FIX — reproduced live a second time under real
-contention (2/6 runs, Thoth msg 5799, 2026-08-27) even with this margin in place, because
-widening a count-based tolerance cannot distinguish a genuine leak from noise; it can only
-make both harder to see. `_stable_advisory_lock_count` (below) is the actual mechanism fix
-— every lock this codebase takes is xact-scoped, so a real leak is still held on the NEXT
-sample and the one after that, while an unrelated worker's transient lock clears within
-its own short transaction and is gone by the next sample; taking the MIN across a few
-gapped samples removes that class of noise directly instead of papering over it with a
-bigger number. This tolerance now only absorbs whatever tiny residual asymmetry survives
-that resampling (e.g. baseline and post are not sampled under IDENTICAL conditions —
-post follows strictly more wall-clock and a live restart), not the bulk of the noise
+THIS TOLERANCE ALONE WAS NOT THE FIX: it reproduced live a second time under real
+contention (2 of 6 runs) even with this margin in place, because widening a count-based
+tolerance cannot distinguish a genuine leak from noise; it can only make both harder to
+see. `_stable_advisory_lock_count` (below) is the actual mechanism fix: every lock this
+codebase takes is xact-scoped, so a real leak is still held on the NEXT sample and the
+one after that, while an unrelated worker's transient lock clears within its own short
+transaction and is gone by the next sample; taking the MIN across a few gapped samples
+removes that class of noise directly instead of papering over it with a bigger number.
+This tolerance now only absorbs whatever tiny residual asymmetry survives that
+resampling (baseline and post are not sampled under IDENTICAL conditions, since post
+follows strictly more wall-clock and a live restart), not the bulk of the noise
 `_stable_advisory_lock_count` already filters. Sized well below the leak-reproduction
 test's own deliberate 10-key signal so it stays reliably caught."""
 
 
 async def _real_kill_units(units: list[str]) -> tuple[int, str]:
-    """The one place this module ever actually SIGKILLs a service — `systemctl --user kill
+    """The one place this module ever actually SIGKILLs a service: `systemctl --user kill
     -s SIGKILL`, deliberately harsher than `cmd_deploy`'s own graceful `restart` (a clean
     SIGTERM stop+start never exercises the crash-recovery paths this whole module exists
-    to test — a body that shuts down cleanly never leaves a dangling advisory lock or a
-    suspended-not-restored mount row in the first place)."""
+    to test, since a body that shuts down cleanly never leaves a dangling advisory lock or
+    a suspended-not-restored mount row in the first place)."""
     proc = await asyncio.create_subprocess_exec(
         "systemctl", "--user", "kill", "-s", "SIGKILL", *units,
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT)
@@ -116,18 +116,18 @@ async def _real_kill_units(units: list[str]) -> tuple[int, str]:
 
 async def _real_fire_storm(pool: asyncpg.Pool, *, n: int = 25) -> int:
     """Seeds `n` THROWAWAY `agent_mounts` rows (project='chaos-replay', never a real seat's
-    own row) then fires `release_session_mounts` against all of them CONCURRENTLY — the DB-
+    own row) then fires `release_session_mounts` against all of them CONCURRENTLY: the DB-
     layer shape of N SessionEnd hooks landing at once while a restart is also in flight,
-    the exact race #172's xact-scoped advisory locks exist to survive. Self-cleaning: every
-    seeded row is DELETEd before this returns, pass or fail (a `finally`, not an afterthought
-    — this storm must never be the reason a later census reads dirty). Returns `n` on
+    the exact race the xact-scoped advisory locks exist to survive. Self-cleaning: every
+    seeded row is DELETEd before this returns, pass or fail (a `finally`, not an afterthought,
+    since this storm must never be the reason a later census reads dirty). Returns `n` on
     success; the seed/cleanup themselves are best-effort against a DEAD osiris-mcp backend
     (this pool is the caller's OWN connection, independent of the daemon being killed, so it
-    keeps working through the kill window by design — this is what makes firing the storm
+    keeps working through the kill window by design, which is what makes firing the storm
     CONCURRENTLY WITH the kill possible at all).
 
     NAMED, NOT HIDDEN: this races the DB layer directly (`release_session_mounts`), never
-    the HTTP `/session-end` route — an in-flight HTTP request mid-restart is a materially
+    the HTTP `/session-end` route. An in-flight HTTP request mid-restart is a materially
     different race (connection reset mid-body, a partial write) this specific storm does
     not exercise; `automount_probe`'s own concurrent polling is this module's only HTTP-
     layer witness during the window."""
@@ -154,12 +154,13 @@ async def _real_fire_storm(pool: asyncpg.Pool, *, n: int = 25) -> int:
 
 async def _advisory_lock_count(pool: asyncpg.Pool) -> int:
     """A raw `pg_locks` read, deliberately NOT scoped to this codebase's own known lock
-    keys — the honest caveat this check carries (named, not hidden): on a box with other
-    LIVE co-agents doing ordinary work, a lock held by an UNRELATED concurrent transaction
-    at the exact sampling instant would count here too. `chaos_replay` compares this
-    against its own BASELINE (taken before the kill, same live-fleet conditions) rather
-    than asserting an absolute zero, which is the honest way to filter that noise without
-    hard-coding this house's own lock key strings into a general-purpose census."""
+    keys: the honest caveat this check carries (named, not hidden) is that on a box with
+    other LIVE co-agents doing ordinary work, a lock held by an UNRELATED concurrent
+    transaction at the exact sampling instant would count here too. `chaos_replay`
+    compares this against its own BASELINE (taken before the kill, same live-fleet
+    conditions) rather than asserting an absolute zero, which is the honest way to filter
+    that noise without hard-coding this house's own lock key strings into a
+    general-purpose census."""
     return int(await pool.fetchval("SELECT count(*) FROM pg_locks WHERE locktype='advisory'"))
 
 
@@ -167,24 +168,24 @@ async def _stable_advisory_lock_count(
     pool: asyncpg.Pool, *, samples: int = 3, gap_secs: float = 0.2,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> int:
-    """THE ACTUAL FIX for the #186-followup flake (2/6 runs under real `-n4` contention,
-    tolerance=2 not enough — Thoth msg 5799, 2026-08-27), a MECHANISM change, not a wider
-    tolerance: every lock THIS codebase takes is xact-scoped (`pg_advisory_xact_lock`,
-    #172), so a genuine leak is held by a connection that never commits/rolls back/closes
-    — it is still there on the NEXT sample, and the one after that. An unrelated worker's
-    own transient advisory-lock traffic (`test_seats.py`'s wedge-cancellation specimens,
-    named in `_advisory_lock_count`'s own docstring) is xact-scoped too, on someone else's
-    connection, and clears within its own short transaction — gone by the next sample. So
+    """THE ACTUAL FIX for a flake reproduced in 2 of 6 runs under real `-n4` contention,
+    where a tolerance of 2 was not enough: a MECHANISM change, not a wider tolerance.
+    Every lock THIS codebase takes is xact-scoped (`pg_advisory_xact_lock`), so a genuine
+    leak is held by a connection that never commits/rolls back/closes: it is still there
+    on the NEXT sample, and the one after that. An unrelated worker's own transient
+    advisory-lock traffic (`test_seats.py`'s wedge-cancellation specimens, named in
+    `_advisory_lock_count`'s own docstring) is xact-scoped too, on someone else's
+    connection, and clears within its own short transaction, gone by the next sample. So
     a single point-in-time count cannot tell the two apart; taking the MINIMUM across a
     few samples spaced `gap_secs` apart can, because only a count that survives EVERY
-    sample was actually still held at the last one — a transient blip that inflated one
+    sample was actually still held at the last one: a transient blip that inflated one
     sample never survives to inflate the min. `gap_secs=0.2` is comfortably above the
     lifetime of an ordinary test's own advisory-lock xact (typically single-digit
     milliseconds) and comfortably below anything a real leak would need to survive.
     `_baseline_seat_map`/deliberate-leak specimens are unaffected: a genuinely held lock
     (the leak-reproduction test's own 10 keys, held on a connection that never
     unlocks/releases until the test's own cleanup) reads the same on every sample, so the
-    min equals the raw count — this changes NOTHING for a real leak, only removes false
+    min equals the raw count: this changes NOTHING for a real leak, only removes false
     positives from a transient one."""
     counts = [await _advisory_lock_count(pool)]
     for _ in range(samples - 1):
@@ -197,10 +198,10 @@ async def _baseline_seat_map(
     pool: asyncpg.Pool, baseline_matched: list[dict[str, Any]],
 ) -> dict[str, str]:
     """`{agent_id: seat_id}` for every body `registry_census` confirmed LIVE (harness +
-    /proc both agree) immediately BEFORE the kill — resolved at baseline time, deliberately,
-    never re-derived afterward: once a stranger has actually taken the seat, the ORIGINAL
+    /proc both agree) immediately BEFORE the kill: resolved at baseline time, deliberately,
+    never re-derived afterward. Once a stranger has actually taken the seat, the ORIGINAL
     agent's own `held_seat` reverses to None (its `holds` link is exactly what
-    `bind_holder` invalidates on a takeover) — asking `held_seat` again post-hoc would
+    `bind_holder` invalidates on a takeover), so asking `held_seat` again post-hoc would
     silently SKIP the very specimen this check exists to catch. A body with no seat at all
     is simply absent from the map, never a finding."""
     from src.orchestrator.seats import held_seat
@@ -220,8 +221,8 @@ async def _baseline_seat_map(
 async def _stranger_mints(pool: asyncpg.Pool, baseline_seats: dict[str, str]) -> list[str]:
     """For every `{agent_id: seat_id}` resolved at BASELINE time (`_baseline_seat_map`,
     before the kill), checks the seat's CURRENT holder (`seat_receipt`) still names that
-    same agent_id. A live body's seat quietly changing hands during the chaos window — the
-    #178 incident's own shape — is named here explicitly, never inferred from a bare
+    same agent_id. A live body's seat quietly changing hands during the chaos window, the
+    shape of a real prior incident, is named here explicitly, never inferred from a bare
     object count. This checks IDENTITY CONTINUITY against the baseline snapshot, never
     re-resolves the ORIGINAL agent's own current seat (see `_baseline_seat_map`'s own
     docstring for why that specific re-derivation is the wrong direction to check in)."""
@@ -253,12 +254,12 @@ async def chaos_replay(
     recovery_ceiling_secs: float = 60.0,
     sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
 ) -> dict[str, Any]:
-    """The orchestrator: baseline → kill (SIGKILL) + storm CONCURRENTLY, polling
-    `/automount` throughout → restart → bounded wait for recovery → re-measure every
-    invariant. Returns `{"ok": bool, "findings": [...], ...numbers...}` — `findings` empty
-    means every invariant held; a non-empty list names EXACTLY which one(s) didn't and why,
-    never a bare False. Every side effect is injected — see this module's own docstring for
-    which callers are permitted to pass the real ones."""
+    """The orchestrator: baseline, then kill (SIGKILL) + storm CONCURRENTLY while polling
+    `/automount` throughout, then restart, then a bounded wait for recovery, then
+    re-measure every invariant. Returns `{"ok": bool, "findings": [...], ...numbers...}`;
+    `findings` empty means every invariant held, a non-empty list names EXACTLY which
+    one(s) didn't and why, never a bare False. Every side effect is injected; see this
+    module's own docstring for which callers are permitted to pass the real ones."""
     from src.orchestrator.mounts import registry_census
 
     started_at = datetime.now(UTC)
@@ -275,7 +276,7 @@ async def chaos_replay(
             ts = asyncio.get_running_loop().time()
             try:
                 ok, detail = await automount_probe()
-            except Exception as exc:  # noqa: BLE001 — a probe crash IS a finding, not a poller crash
+            except Exception as exc:  # noqa: BLE001 - a probe crash IS a finding, not a poller crash
                 ok, detail = False, f"automount probe raised: {exc}"
             automount_results.append((ts, ok, detail))
             try:
@@ -300,14 +301,13 @@ async def chaos_replay(
             recovered_ok, recovered_detail = await automount_probe()
         if recovered_ok:
             first_recovery_at = asyncio.get_running_loop().time()
-            # INVARIANT #4'S OWN SPLIT (Thoth's ruling, msg 5702, 2026-08-26, adopting
-            # this module's own proposal): a window before first confirmed recovery is
+            # INVARIANT #4'S OWN SPLIT: a window before first confirmed recovery is
             # EXPECTED, bounded unavailability (invariant #5 already tracks and tolerates
-            # that bound) — "/automount 200 throughout, unconditional" asserted a
-            # guarantee no un-replicated process ever provided. A window AFTER recovery
-            # is different in kind: the backend has already proven itself up, so a
-            # failure there is FLAPPING, a real regression. This short extra poll window
-            # is what makes that distinction observable at all — without it every sample
+            # that bound). Asserting "/automount 200 throughout, unconditional" would
+            # claim a guarantee no un-replicated process ever provided. A window AFTER
+            # recovery is different in kind: the backend has already proven itself up, so
+            # a failure there is FLAPPING, a real regression. This short extra poll window
+            # is what makes that distinction observable at all: without it every sample
             # would land before `stop.set()` fires right on recovery's heels.
             await sleep(min(poll_interval_secs * 3, 4.0))
     finally:

@@ -233,7 +233,7 @@ async def _resolve_cited_object(
     try:
         hit = await finder(pool, short_id, require_identifier=True)
     except RefAmbiguous:
-        return None, f"ambiguous — {short_id} matches more than one {claimed_type}"
+        return None, f"ambiguous: {short_id} matches more than one {claimed_type}"
     if hit is not None:
         return hit, None
     other_type = "Thread" if claimed_type == "Decision" else "Decision"
@@ -244,7 +244,7 @@ async def _resolve_cited_object(
         other_hit = None
     if other_hit is not None:
         return None, (f"qualifier said {claimed_type} but {short_id} resolves to a "
-                      f"{other_type} instead — skipped, never guessed")
+                      f"{other_type} instead, skipped, never guessed")
     return None, f"{short_id} not found as a {claimed_type} (or any other known type)"
 
 
@@ -608,7 +608,7 @@ async def backfill_lineage_repo_links(
     a repeat call finds nothing to scan once an object is linked, and re-abstaining just
     re-asserts the same fact."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(
@@ -691,7 +691,7 @@ async def backfill_lineage_repo_links_at_write_time(
     the same reason the sibling lane is: a repeat call finds nothing left to scan once an
     object is linked, and re-abstaining just re-asserts the same fact."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.agents import lineage_works_in_at
 
@@ -776,7 +776,7 @@ async def backfill_boot_alarm_commit_links(
     `derive_or_abstain` checks the link doesn't already exist before minting, and a repeat
     call over an already-abstained thread simply re-asserts the same abstention fact."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     threads = await pool.fetch(
@@ -872,7 +872,7 @@ async def resolve_agent_orphans(
     live abstention that `derive_or_abstain` itself dedupes against; `assert_property`'s
     own within-source supersession makes a repeat hatch write equally safe."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.lineage import _project_of, _session_dirs
 
@@ -967,7 +967,7 @@ async def resolve_reference_orphans(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once an object is linked."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     projects = await pool.fetch(
@@ -1047,7 +1047,7 @@ async def resolve_practice_orphans(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once an object is linked."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(
@@ -1115,7 +1115,7 @@ async def resolve_superstition_orphans(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once an object is linked."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(
@@ -1200,7 +1200,7 @@ async def resolve_seat_orphans(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds nothing to scan once a Seat is held or already confessed."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     rows = await actions.pool.fetch(
         "SELECT o.id, o.canonical FROM objects o WHERE o.type='Seat' AND o.status='active' "
@@ -1262,7 +1262,7 @@ async def resolve_project_orphans(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     `confirm_or_confess_link` itself skips an already-linked or already-confessed row."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(
@@ -1625,7 +1625,7 @@ async def retry_ambiguous_abstentions(
     a repeat call finds nothing to retry once minted (the abstention is superseded, so
     `retryable_ambiguous_abstentions` no longer names it)."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     rows = await _ambiguous_survivor_rows(actions.pool, link_type, 1_000_000)
     plan: list[dict[str, Any]] = []
@@ -1790,7 +1790,7 @@ def _validate_repo_name(name: str, raw: str) -> None:
     to an empty `name`)."""
     if not _REPO_NAME_RE.fullmatch(name):
         raise ValueError(
-            f"repo must be a bare project name, not {raw!r} — pass the project's own name "
+            f"repo must be a bare project name, not {raw!r}. Pass the project's own name "
             "(e.g. its directory basename), never a filesystem path or a placeholder; "
             "find-or-create refuses anything that isn't a well-formed project ref"
         )
@@ -2171,9 +2171,9 @@ async def _enforce_required_links(
         return
     raise ValueError(
         f"{type_name} refused: none of its required link kinds ({', '.join(required)}) "
-        "were declared (a link a caller ASSERTED, not one this server derived/observed) "
-        "— link one, or pass unlinked_because=<reason> to record the gap as a countable "
-        "fact instead of a silent hole (task #189, decision 7ea187b9).")
+        "were declared (a link a caller ASSERTED, not one this server derived/observed). "
+        "Link one, or pass unlinked_because=<reason> to record the gap as a countable "
+        "fact instead of a silent hole.")
 
 
 async def record_decision(
@@ -2351,9 +2351,9 @@ async def record_decision(
         # fleet-wide rather than fall through to a prose/summary-substring match.
         old = await _find_decision(actions.pool, supersedes, require_identifier=True)
         if old is None:
-            raise ValueError(f"supersedes matched no decision: {supersedes!r} — quote its "
+            raise ValueError(f"supersedes matched no decision: {supersedes!r}. Quote its "
                              "UUID, canonical, or 8-char short id (no longer a prose "
-                             "match — an addressing act refuses rather than guesses)")
+                             "match: an addressing act refuses rather than guesses)")
     answered: list[uuid.UUID] = []
     if isinstance(resolves, list):
         for thread_ref in resolves:
@@ -2363,9 +2363,9 @@ async def record_decision(
     elif resolves:
         single = await _find_thread(actions.pool, resolves, require_identifier=True)
         if single is None:
-            raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
+            raise ValueError(f"resolves matched no thread: {resolves!r}. Quote its UUID, "
                              "canonical, or 8-char short id (a prose/summary match no "
-                             "longer resolves here — an addressing act refuses rather "
+                             "longer resolves here: an addressing act refuses rather "
                              "than guesses)")
         answered.append(single)
     # The near-dup lookup, like `_find_decision`/`_find_thread` just above, reads outside the
@@ -2561,8 +2561,8 @@ class RefAmbiguous(Exception):
         self.type_ = type_
         self.candidates = candidates
         super().__init__(
-            f"{ref!r} matches {len(candidates)} {type_} objects by short-id prefix — "
-            "quote more characters, or the full UUID, to disambiguate")
+            f"{ref!r} matches {len(candidates)} {type_} objects by short-id prefix. "
+            "Quote more characters, or the full UUID, to disambiguate")
 
 
 async def _resolve_ref(
@@ -2706,7 +2706,7 @@ async def verify_ruling(
     did = await _find_decision(pool, ruling_ref)
     if did is None:
         return {"ok": False,
-                "error": f"no such decision: {ruling_ref!r} — a ruling citation must "
+                "error": f"no such decision: {ruling_ref!r}. A ruling citation must "
                         "resolve to a real Decision"}
     kind = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -2714,13 +2714,13 @@ async def verify_ruling(
     if kind != "ruling":
         return {"ok": False,
                 "error": f"{ruling_ref!r} resolves to a decision of kind {kind!r}, not "
-                        "a ruling — only a ruling is standing authority to act under"}
+                        "a ruling: only a ruling is standing authority to act under"}
     snap = await _decision_snapshot(pool, did)
     text = f"{snap.get('summary') or ''} {snap.get('rationale') or ''}".lower()
     if write_name.lower() not in text:
         return {"ok": False,
                 "error": f"the ruling at {ruling_ref!r} does not name {write_name!r} in "
-                        "its own summary or rationale — citing a ruling to act under "
+                        "its own summary or rationale. Citing a ruling to act under "
                         "operator authority requires the ruling's own text to actually "
                         "authorize THIS write, never inferred from context"}
     return {"ok": True, "ruling_id": did, "summary": snap.get("summary")}
@@ -2930,7 +2930,7 @@ async def property_prior_art(
         "prior_art": prior,
         "prior_art_flag": (
             f"a standing ruling ({top['id']}) may already cover {subject_canonical}'s "
-            f"{field!r} — read it before this value stands as the final word"),
+            f"{field!r}. Read it before this value stands as the final word"),
     }
 
 
@@ -3266,46 +3266,46 @@ ARCS = ("Identity-Succession", "Compaction-Resilience", "Model-Identity", "Token
 # set); this is reference text for a human choosing an arc, not a second schema.
 ARC_DEFINITIONS: dict[str, str] = {
     "Identity-Succession": (
-        "An AGENT or SEAT's own identity crossing a generation — minting, lineage, "
+        "An AGENT or SEAT's own identity crossing a generation: minting, lineage, "
         "charter, handles, and the board-state/handoff note a SPECIFIC succession event "
         "produces. NOT a SoftwareProject's identity (dedup, case-collision, fork "
-        "detection) — that has no arc yet, a named gap, not this one's job to cover."
+        "detection), that has no arc yet, a named gap, not this one's job to cover."
     ),
     "Compaction-Resilience": (
-        "The GENERAL mechanism that lets ANY session survive losing its context window — "
+        "The GENERAL mechanism that lets ANY session survive losing its context window: "
         "the offload ritual, resumability, transcript/session persistence infrastructure. "
         "NOT one particular lineage's own handoff note (that's Identity-Succession); this "
         "is the machinery, not an instance of using it."
     ),
     "Model-Identity": (
         "Which MODEL an agent is actually running as, and the harness silently swapping "
-        "or degrading it. NOT the rest of a seat's pin file — house/seat/project belong "
+        "or degrading it. NOT the rest of a seat's pin file: house/seat/project belong "
         "to Identity-Succession; this is the model field and its precedence alone."
     ),
     "Token-Cost": (
-        "Spend and budget — what a session or the fleet actually burns, including the "
+        "Spend and budget: what a session or the fleet actually burns, including the "
         "unpriced-subscription-lane gap where no local meter can see the true number."
     ),
     "Surfaces-Roadmap-Docs": (
-        "The fleet's own outward-facing text — CLI/MCP vocabulary alignment, docs, and "
+        "The fleet's own outward-facing text: CLI/MCP vocabulary alignment, docs, and "
         "the roadmap/board rendering itself, not the underlying work those surfaces show."
     ),
     "Fleet-Hygiene": (
-        "Tool/ledger/graph reliability bugs — a verb that silently drops data, a lint "
+        "Tool/ledger/graph reliability bugs: a verb that silently drops data, a lint "
         "check, a stale-obligation sweep. The machinery's own correctness, not what it "
         "was used to build."
     ),
     "Security": (
         "Vulnerabilities, credential handling, and PII/secret exposure. Rare by design "
-        "in an internal coordination tool, not proven dead weight — no evidence either "
-        "way yet (decision 42433f6e/608b0e14)."
+        "in an internal coordination tool, not proven dead weight: no evidence either "
+        "way yet."
     ),
     "Graph-Engineering": (
         "First-class work-lineage node/edge types (AgentRun, Artifact, Evaluation, "
         "Metric; produced/derived_from/evaluated_by/revises) and the write- and "
         "read-invariants that keep every output traceable to its run, plan, source and "
         "evaluator. NOT the knowledge-lineage machinery itself (Decision/Thread/"
-        "supersedes — ordinary graph work) and NOT a lint check's own correctness bug "
+        "supersedes, ordinary graph work) and NOT a lint check's own correctness bug "
         "once these types exist (that's Fleet-Hygiene)."
     ),
 }
@@ -3327,7 +3327,7 @@ def arc_definition(arc: str) -> str | None:
 # an arc-less thread under that exact word on the read side, so a caller who sees this in
 # their own receipt and later finds it grouped "unsorted" on the roadmap recognizes the
 # same fact stated twice, not two different ones.
-_ARC_UNSORTED = "unsorted — arc was left unset (capture.ARCS names the taxonomy)"
+_ARC_UNSORTED = "unsorted: arc was left unset (capture.ARCS names the taxonomy)"
 
 # THE REPO GATE: ARCS is an osiris-coordination taxonomy, not a general one. 506 of 661
 # fleet-wide arc-null threads trace to 37 distinct non-osiris projects whose work
@@ -3395,7 +3395,7 @@ async def arc_in_scope_for_thread(pool: asyncpg.Pool, thread_id: uuid.UUID) -> b
 def _arc_out_of_scope_note(label: str) -> str:
     """The receipt-only sentinel for an out-of-scope `arc`, same shape as _ARC_UNSORTED
     and offices._CHARTER_UNDECLARED: never persisted, never a refusal, always visible."""
-    return (f"osiris-scoped — {label} is not the osiris project, so this thread will not "
+    return (f"osiris-scoped: {label} is not the osiris project, so this thread will not "
             "carry an arc (capture.ARCS names osiris's own roadmap taxonomy only)")
 
 
@@ -3533,8 +3533,8 @@ async def open_thread(
     elif resolves:
         single = await _find_thread(actions.pool, resolves, require_identifier=True)
         if single is None:
-            raise ValueError(f"resolves matched no thread: {resolves!r} — quote its UUID, "
-                             "canonical, or 8-char short id (no prose match — an "
+            raise ValueError(f"resolves matched no thread: {resolves!r}. Quote its UUID, "
+                             "canonical, or 8-char short id (no prose match: an "
                              "addressing act refuses rather than guesses)")
         to_resolve.append(single)
     # ONE transaction (see record_decision): Thread + summary + status(+kind)(+repo) atomic,
@@ -4060,7 +4060,7 @@ async def resolve_threads_bulk(
     if unresolved or duplicates:
         return {
             "ok": False,
-            "reason": "refusing the whole batch — not every ref resolved to exactly one "
+            "reason": "refusing the whole batch: not every ref resolved to exactly one "
                       "distinct thread; same posture as _retire_handoff_backlog, nothing "
                       "written",
             "unresolved": unresolved,
@@ -4148,7 +4148,7 @@ async def backfill_closed_by_real_sources(
     DRY RUN IS THE DEFAULT. `dry_run=False` requires a non-blank `because`. Idempotent: a
     repeat call finds no placeholder-targeted closed_by edges left once the fold is done."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.seats import _OPERATOR_ACTORS
 
@@ -4179,7 +4179,7 @@ async def backfill_closed_by_real_sources(
                         "placeholder": row["placeholder_canonical"],
                         "verdict": "abstain",
                         "reason": f"edge source_id {source!r} is neither the operator-"
-                                  "attribution family nor the module default — cannot "
+                                  "attribution family nor the module default, cannot "
                                   "map to a real target without guessing"})
             continue
         entry = {"thread": str(row["thread_id"])[:8], "placeholder": row["placeholder_canonical"],
@@ -4235,7 +4235,7 @@ async def backfill_operator_charter(
     for an explicit `dry_run=False` call naming why, same discipline every backfill in
     this file already keeps."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair: cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.charter import operator_charter_of
 
@@ -4436,7 +4436,7 @@ async def record_hook_failure(actions: Actions, *, surface: str, cannot_see: str
 # into a log line nobody watches. `smoke.embed_health` is this surface's own read side,
 # same shape as `whisper_health`.
 EMBED_ALARM_SURFACE = "embed/model2vec-load"
-_EMBED_ALARM_VERIFY_WITH = ("journalctl --user -u osiris-worker | grep -i embed_pass — the "
+_EMBED_ALARM_VERIFY_WITH = ("journalctl --user -u osiris-worker | grep -i embed_pass: the "
                             "cron logs the real exception on every failed tick too")
 
 
@@ -4735,8 +4735,8 @@ async def record_evaluation(
     collide."""
     if not rubric or not rubric.strip():
         raise ValueError(
-            "Evaluation refused: rubric is mandatory (Graph-Engineering arc, thread "
-            "7f547426) — name the standard/check being applied, never a blank verdict.")
+            "Evaluation refused: rubric is mandatory. Name the standard/check being "
+            "applied, never a blank verdict.")
     observed = measured_at or datetime.now(UTC)
     canon = _canon("evaluation", f"{subject}:{rubric}:{uuid.uuid4().hex}")
     async with actions.atomic() as a:
@@ -4856,16 +4856,16 @@ async def _verify_transcript_line(
             "SELECT line_hash FROM soul_lines WHERE harness=$1 AND anchor_sid=$2 "
             "AND line_idx=$3", harness, anchor_sid, line_idx - 1)
         if prior_hash is None:
-            return {"verified": False, "reason": f"chain broken — no row at line_idx "
+            return {"verified": False, "reason": f"chain broken: no row at line_idx "
                     f"{line_idx - 1}, this line's own prev_hash cannot be checked"}
         if row["prev_hash"] != prior_hash:
-            return {"verified": False, "reason": "chain broken — prev_hash does not "
+            return {"verified": False, "reason": "chain broken: prev_hash does not "
                     "match the preceding line's own hash (tampered or a gap)"}
     elif row["prev_hash"] is not None:
-        return {"verified": False, "reason": "chain broken — line 0 must carry a null "
+        return {"verified": False, "reason": "chain broken: line 0 must carry a null "
                 "prev_hash"}
     if _chain_hash(row["prev_hash"], raw_line) != row["line_hash"]:
-        return {"verified": False, "reason": "chain broken — stored line_hash does not "
+        return {"verified": False, "reason": "chain broken: stored line_hash does not "
                 "match this line's own content (tampered or corrupted)"}
     return {"verified": True, "raw_line": raw_line.decode("utf-8", errors="replace"),
             "line_hash": row["line_hash"], "said_at": row["ingested_at"], "reason": None}
@@ -4893,20 +4893,20 @@ async def mint_transcript_citation(
     represents a human is ever typed Agent in this graph."""
     if not because or not because.strip():
         raise ValueError("mint_transcript_citation refused: `because` is mandatory and "
-                          "non-blank — a citation is a deliberate act with a reason, "
+                          "non-blank. A citation is a deliberate act with a reason, "
                           "never inferred from prose")
     agent_id = await _resolve_ref(actions.pool, "Agent", agent_ref, text_field="name",
                                   require_identifier=True)
     if agent_id is None:
         raise ValueError(f"mint_transcript_citation refused: {agent_ref!r} does not "
-                          "resolve to a real Agent generation — a citation never "
+                          "resolve to a real Agent generation. A citation never "
                           "targets a human/operator node or anything else")
     session = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='session'", agent_id)
     if not session:
         raise ValueError(f"mint_transcript_citation refused: Agent {agent_ref!r} "
-                          "carries no `session` property — nothing to cite")
+                          "carries no `session` property, nothing to cite")
     verification = await _verify_transcript_line(actions.pool, harness, str(session),
                                                  line_idx)
     if not verification["verified"]:
@@ -4948,7 +4948,7 @@ async def read_transcript_citation(
     line_idx = props.get("line_idx")
     if line_idx is None:
         raise ValueError("read_transcript_citation refused: the citation edge carries "
-                          "no line_idx — not a transcript citation")
+                          "no line_idx, not a transcript citation")
     session = await pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a "
         "WHERE a.object_id=$1 AND a.name='session'", agent_id)
@@ -4957,13 +4957,13 @@ async def read_transcript_citation(
                           "carries no `session` property")
     verification = await _verify_transcript_line(pool, harness, str(session), line_idx)
     if not verification["verified"]:
-        raise ValueError(f"read_transcript_citation refused: {verification['reason']} "
-                          "— the cited line no longer verifies against the soul "
+        raise ValueError(f"read_transcript_citation refused: {verification['reason']}, "
+                          "the cited line no longer verifies against the soul "
                           "store's own chain")
     if verification["line_hash"] != props.get("line_hash"):
         raise ValueError("read_transcript_citation refused: the citation's own "
                           "recorded line_hash does not match the store's current "
-                          "line_hash — tampering or a stale citation")
+                          "line_hash: tampering or a stale citation")
     return {"line_idx": line_idx, "raw_line": verification["raw_line"],
             "line_hash": verification["line_hash"], "said_at": props.get("said_at")}
 
@@ -5224,7 +5224,7 @@ async def amend_practice(
     `amend_decision`/`resolve_thread`). Raises ValueError on a blank amendment."""
     amendment = amendment.strip()
     if not amendment:
-        raise ValueError("amendment must not be blank — an empty addition is not testimony")
+        raise ValueError("amendment must not be blank: an empty addition is not testimony")
     pid = await _find_practice(actions.pool, ref)
     if pid is None:
         return None
@@ -5235,7 +5235,7 @@ async def amend_practice(
     )
     if refuted_by:
         raise ValueError(
-            f"practice {ref!r} is already refuted (killed_by {str(refuted_by)[:8]}) — a "
+            f"practice {ref!r} is already refuted (killed_by {str(refuted_by)[:8]}). A "
             "dead lesson does not grow new guidance; amend_practice only ever adds to a "
             "practice still standing")
     observed = datetime.now(UTC)
@@ -5471,7 +5471,7 @@ async def annotate_thread(
     an empty addition is not testimony."""
     note = note.strip()
     if not note:
-        raise ValueError("note must not be blank — an empty addition is not testimony")
+        raise ValueError("note must not be blank: an empty addition is not testimony")
     tid = await _find_thread(actions.pool, ref)
     if tid is None:
         return None
@@ -5549,7 +5549,7 @@ async def open_or_annotate_persisting_alarm(
         tid = await annotate_thread(
             actions, canon,
             f"still present at {datetime.now(UTC).isoformat()}: this alarm's own "
-            "condition has not cleared. Resolved once already — re-opening it is a "
+            "condition has not cleared. Resolved once already, re-opening it is a "
             "human's call, not this sweep's.",
             source=source)
         return str(tid) if tid is not None else canon
@@ -5648,7 +5648,7 @@ async def _write_corrected_summary(
     corrected_summary = corrected_summary.strip()
     if not corrected_summary:
         raise ValueError(
-            "corrected_summary must not be blank — an empty correction is not testimony")
+            "corrected_summary must not be blank: an empty correction is not testimony")
     await actions.assert_property(tid, "corrected_summary", corrected_summary, source, observed,
                                   _CONF, evidence_class=_EC)
     if because:
@@ -5681,7 +5681,7 @@ async def amend_decision(
     `resolve_thread`). Raises ValueError on a blank addendum."""
     addendum = addendum.strip()
     if not addendum:
-        raise ValueError("addendum must not be blank — an empty addition is not testimony")
+        raise ValueError("addendum must not be blank: an empty addition is not testimony")
     did = await _find_decision(actions.pool, ref)
     if did is None:
         return None
@@ -5692,7 +5692,7 @@ async def amend_decision(
     )
     if superseded_by:
         raise ValueError(
-            f"decision {ref!r} is already superseded by {str(superseded_by)[:8]} — amend "
+            f"decision {ref!r} is already superseded by {str(superseded_by)[:8]}. Amend "
             "the successor, or use record_decision(supersedes=...) if you mean a correction; "
             "amend_decision only ever adds to a ruling still standing")
     observed = datetime.now(UTC)

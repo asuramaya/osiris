@@ -2327,7 +2327,7 @@ async def test_roster_names_a_pin_that_matches_a_name_not_a_canonical(
     assert row["pin"]["name_resolution"] == {
         "resolved_by": "name", "canonical": "repo:tony",
         "note": ("this pin's value matches an existing object's current NAME, not its "
-                 "canonical suffix — a pin should hold the canonical (stable across a "
+                 "canonical suffix. A pin should hold the canonical (stable across a "
                  "rename), never a display name; correct the pin to the canonical shown "
                  "here, never to the name it currently holds"),
     }
@@ -2756,7 +2756,7 @@ async def test_reachability_has_nothing_to_ask_about_an_unmounted_lineage(
     out = await reachability(actions.pool, "agent:reach0003")
 
     assert out == {"reachable": False, "via": "none", "job": None,
-                   "detail": "no known job_dir for this lineage — nothing to ask the "
+                   "detail": "no known job_dir for this lineage, nothing to ask the "
                              "daemon about"}
 
 
@@ -6164,7 +6164,7 @@ async def test_pause_seat_or_agent_is_directly_callable_outside_the_mcp_dispatch
     out = await seats_mod.pause_seat_or_agent(
         actions, who=seat_id, paused=True, reason="deep work", actor="agent:pauser")
     assert out == {"paused": seat_id, "by": "agent:pauser", "reason": "deep work",
-                   "note": "the DM push lane now queues this seat's mail — release with "
+                   "note": "the DM push lane now queues this seat's mail, release with "
                           "seat(action='pause', paused=False, target=...)"}
     stamped = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a JOIN objects o ON o.id=a.object_id "
@@ -6196,4 +6196,4 @@ async def test_pause_seat_or_agent_refuses_an_ineligible_bare_name(
     out = await seats_mod.pause_seat_or_agent(
         actions, who="PauseGhostExtract", paused=True, reason="", actor="agent:pauser")
     assert "cannot pause" in out.get("error", "")
-    assert "address the seat directly" in out["error"]
+    assert "Address the seat directly" in out["error"]

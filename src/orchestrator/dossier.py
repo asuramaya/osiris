@@ -1,10 +1,10 @@
-"""Entity dossier — the 'who is this?' read model for a FEDERATED entity.
+"""Entity dossier: the 'who is this?' read model for a FEDERATED entity.
 
 `frontier.subject_report` answers 'who is this?' for a crawled *footprint*: it
 buckets identity fragments by confidence tier (verified / corroborated / speculative).
 That lens is wrong for an entity ingested from an open base (OpenSanctions, EDGAR,
-Wikidata): every fact is AUTHORITATIVE_API, so the tiers collapse and the substance —
-the ownership / family / director *network* — never surfaces.
+Wikidata): every fact is AUTHORITATIVE_API, so the tiers collapse and the substance,
+the ownership / family / director *network*, never surfaces.
 
 This is the complementary read model: given an object, return its identity
 properties (multi-source aware) plus its relationships grouped by direction and type,
@@ -33,66 +33,64 @@ async def entity_dossier(
     """Identity properties + named relationship network for one entity. Returns {}
     if the object does not exist (the endpoint maps that to 404).
 
-    RECEIPT DIET (context-bloat round 2, Thoth DM 7649): relationships measured at 76%
-    of this verb's own bytes/call (decision a065171f, a live cupid specimen returning
-    ~100 rows) — unlike orient()'s blind_spots (an aside), this IS the requested
-    content, so a bare want_* suppress would leave the default caller with nothing.
-    Default collapses to a per-type count plus the first 10 rows (still useful without
-    a second call); `want_relationships=True` returns every row, unchanged from before
-    this diet.
+    RECEIPT DIET: relationships were measured at roughly three quarters of this verb's own
+    bytes per call on a live specimen returning around 100 rows. Unlike orient()'s
+    blind_spots (an aside), this IS the requested content, so a bare want_* suppress would
+    leave the default caller with nothing. The default collapses to a per-type count plus
+    the first 10 rows (still useful without a second call); `want_relationships=True`
+    returns every row, unchanged from before this diet.
 
-    Task #97 workstream 3 (ruling 52daab71): both this entity's own `name` and every
-    neighbor's name used to check ONLY the `name` property — an entity/neighbor whose
-    real identity lives in title/summary/statement/surface/handle (a Practice, a
-    BlindSpot, an unclaimed Agent) rendered its raw canonical hash here even though the
-    graph/table views of the SAME object already resolved it correctly. Both now share
-    `resolve_label`, the one canonical answer every other consumer uses.
+    Both this entity's own `name` and every neighbor's name used to check ONLY the `name`
+    property: an entity or neighbor whose real identity lives in title/summary/statement/
+    surface/handle (a Practice, a BlindSpot, an unclaimed Agent) rendered its raw canonical
+    hash here even though the graph/table views of the SAME object already resolved it
+    correctly. Both now share `resolve_label`, the one canonical answer every other
+    consumer uses.
 
-    Task #114 (thread 7b258b5f, found by Thoth closing #99): the relationship listing
-    used to carry NO `valid_until` filter at all — an INVALIDATED link (unpeer/
-    detach_seat's own write) rendered identically to a live one, which is exactly what
-    produced a false-urgent reading published as fact (a managed_by edge read as active
-    a full day after it was invalidated). derive_role/manager_of_seat (seats.py) already
-    filter on `valid_until`; this was the read-side gap sitting beside their write-side
-    correctness — same (l.valid_until IS NULL OR l.valid_until > now()) predicate used
-    everywhere else in this codebase, applied here for the first time.
+    The relationship listing used to carry NO `valid_until` filter at all: an INVALIDATED
+    link (unpeer/detach_seat's own write) rendered identically to a live one, which is
+    exactly what produced a false-urgent reading published as fact (a managed_by edge read
+    as active a full day after it was invalidated). derive_role/manager_of_seat (seats.py)
+    already filter on `valid_until`; this was the read-side gap sitting beside their
+    write-side correctness, using the same (l.valid_until IS NULL OR l.valid_until >
+    now()) predicate used everywhere else in this codebase, applied here for the first
+    time.
 
-    Task #102 (operator's principle, via Thoth's dispatch DM 2279 — "disagreement is just
-    more data; it does not have to be collapsed into resolution, it merely has to be
-    MARKED AS DISAGREEMENT"): `current_assertions` (alembic 0001/0005) already coexists
-    two sources' differing values on the same property — nobody superseded either, so both
-    stay current by design. The `properties` query below already read that whole
-    multi-source set (verified, not assumed — see
+    Disagreement between sources is just more data: it does not have to be collapsed into
+    resolution, it only has to be MARKED AS DISAGREEMENT. `current_assertions` (alembic
+    0001/0005) already lets two sources' differing values on the same property coexist:
+    nobody superseded either, so both stay current by design. The `properties` query below
+    already read that whole multi-source set (verified, not assumed, see
     test_dossier_already_surfaced_both_sides_of_a_contradiction_before_marking); what it
     never did is NAME whether the set it returns agrees or genuinely contradicts. Each
-    property entry now carries `agreement`: "single"
-    (one source), "agreeing" (multiple sources, same value), or "contradicting" (multiple
-    sources, different values) — the three epistemic states a reader could not tell apart
-    before. MARK, never resolve: no value is dropped, ranked, or picked as a winner.
+    property entry now carries `agreement`: "single" (one source), "agreeing" (multiple
+    sources, same value), or "contradicting" (multiple sources, different values), the
+    three epistemic states a reader could not tell apart before. MARK, never resolve: no
+    value is dropped, ranked, or picked as a winner.
 
-    "THE GRAPH KNOWS AND THE DISPLAY LIES" (thread 6212d9f5's 5th sighting, Thoth DM 2746,
-    Imhotep's finding on b318a9d3): the OLD top-level `"status"` key here was `obj["status"]`
-    — the `objects` table's own LIFECYCLE projection (active/merged/archived/draft, set by
-    `Actions.set_status`/`merge_objects`) — a completely different axis from a Thread's
-    (or Decision's) semantic `status` PROPERTY (open/resolved/retracted, set by
-    `resolve_thread`). Both happen to be named "status", so a caller reading the prominent
-    top-level field for "is this open or resolved" got the WRONG, unrelated answer — always
-    "active" for any non-merged Thread, regardless of what resolve_thread had actually
-    recorded — while the correct, resolvable answer sat one level down in `properties`,
-    unresolved, as a multi-source set the caller had to collapse by hand. Not a query bug:
-    every other read site in this codebase (winning_props, migration 0015; grounds
-    e68d8b46) already resolves this correctly — this was a field NAME collision between two
-    genuinely different concepts, not a resolution bug in this function's own SQL.
+    THE GRAPH KNOWS AND THE DISPLAY CAN LIE: the OLD top-level `"status"` key here was
+    `obj["status"]`, the `objects` table's own LIFECYCLE projection (active/merged/
+    archived/draft, set by `Actions.set_status`/`merge_objects`), a completely different
+    axis from a Thread's (or Decision's) semantic `status` PROPERTY (open/resolved/
+    retracted, set by `resolve_thread`). Both happen to be named "status", so a caller
+    reading the prominent top-level field for "is this open or resolved" got the WRONG,
+    unrelated answer, always "active" for any non-merged Thread, regardless of what
+    resolve_thread had actually recorded, while the correct, resolvable answer sat one
+    level down in `properties`, unresolved, as a multi-source set the caller had to
+    collapse by hand. Not a query bug: every other read site in this codebase
+    (winning_props, migration 0015) already resolves this correctly; this was a field NAME
+    collision between two genuinely different concepts, not a resolution bug in this
+    function's own SQL.
 
     Fixed by SPLITTING the collision, not by repurposing the ambiguous key silently: the
     object's own lifecycle now renders as `"object_status"` (unambiguous), and a NEW
-    `"status"` key carries the WINNING status-property value — same ordering `winning_props`
-    itself uses (confidence DESC, then observed_at DESC) — or `None` when this object type
-    carries no `status` assertion at all (most types besides Thread/Decision never do).
-    `properties` is UNCHANGED: the full multi-source "contradicting"/"agreeing"/"single" view
-    from #102 still shows every source's own word, never collapsed — `status` is a
-    COMPLEMENT to that list for a reader who wants the graph's own resolved answer at a
-    glance, not a replacement for the epistemic detail."""
+    `"status"` key carries the WINNING status-property value, using the same ordering
+    `winning_props` itself uses (confidence DESC, then observed_at DESC), or `None` when
+    this object type carries no `status` assertion at all (most types besides Thread/
+    Decision never do). `properties` is UNCHANGED: the full multi-source "contradicting"/
+    "agreeing"/"single" view still shows every source's own word, never collapsed;
+    `status` is a COMPLEMENT to that list for a reader who wants the graph's own resolved
+    answer at a glance, not a replacement for the epistemic detail."""
     obj = await pool.fetchrow(
         "SELECT id, type, canonical, status FROM objects WHERE id=$1", object_id
     )
@@ -105,26 +103,26 @@ async def entity_dossier(
     # properties as the multi-source set: one entry per property name, carrying each
     # source's value + how it was obtained (evidence_class) + confidence. Ordered by
     # confidence DESC, THEN observed_at DESC (winning_props' own tiebreaker, migration
-    # 0015) — the FIRST row per name under this exact order is that property's WINNER,
+    # 0015): the FIRST row per name under this exact order is that property's WINNER,
     # captured below into `winners` as we go, with no second query.
     #
-    # `name` JOINS THIS SET (task #170's neighbour, the name-property gap, Thoth msg 4292 —
-    # Sekhmet's find, decision 7960db40): it is an ordinary assertion, same table, same
-    # write path, same coexistence rules as anything else — the old `NOT IN ('name', ...)`
-    # exclusion was never structural, it was a UI-dedup call (don't show the top-level
-    # `name` field's own fact a second time) made before #102's agreement law existed, and
-    # #102 later reused this query without revisiting whether that exclusion should ALSO
-    # make disagreement itself unrecoverable. It shouldn't. The top-level `name` field two
-    # returns down (via resolve_label/fetch_label_props, #97/ruling 52daab71) answers "what
-    # should I display" — a silent winner-pick across a 6-property fallback chain; THIS
-    # list answers "do sources disagree," and marks, never resolves, exactly like every
-    # other property. Live acceptance test at build time: repo:bytebye (3 distinct values —
-    # bytebye/ByeByte/byebyte) and repo:tony (2 — "tony" vs a live, unmarked "cultural-
-    # infrastructure" rename) both now read `contradicting` from THIS surface.
+    # `name` JOINS THIS SET: it is an ordinary assertion, same table, same write path,
+    # same coexistence rules as anything else. The old `NOT IN ('name', ...)` exclusion
+    # was never structural, it was a UI-dedup call (don't show the top-level `name`
+    # field's own fact a second time) made before the agreement-marking rule below
+    # existed, and that rule was later applied to this query without revisiting whether
+    # that exclusion should ALSO make disagreement itself unrecoverable. It shouldn't.
+    # The top-level `name` field two returns down (via resolve_label/fetch_label_props)
+    # answers "what should I display", a silent winner-pick across a 6-property fallback
+    # chain; THIS list answers "do sources disagree," and marks, never resolves, exactly
+    # like every other property. Live acceptance test at build time: repo:bytebye (3
+    # distinct values, bytebye/ByeByte/byebyte) and repo:tony (2, "tony" vs a live,
+    # unmarked "cultural-infrastructure" rename) both now read `contradicting` from THIS
+    # surface.
     #
     # `tag` stays excluded on its own, separate, still-correct grounds: additive/multi-
     # valued by design (assert_property explicitly allows many simultaneously-true tags
-    # per object) — no winner concept and no disagreement concept applies to it the way it
+    # per object), no winner concept and no disagreement concept applies to it the way it
     # does to a single-fact property.
     prop_rows = await pool.fetch(
         "SELECT name, value #>> '{}' AS value, source_id, evidence_class, confidence "
@@ -144,23 +142,21 @@ async def entity_dossier(
             "evidence_class": r["evidence_class"],
             "confidence": r["confidence"],
         })
-    # PROVENANCE PIECE 1 (thread da545039f2ba), FACT-SCOPED (Thoth's own follow-up,
-    # mail 10405): possible_upstream edges for EVERY source that has touched THIS
-    # object — agent or not — fetched once and sliced per-property below. Piece 2's
-    # own mined facts are sourced to the literal "session-miner" constant, never
-    # agent:-prefixed (ingest/sessions.py emit_yield, ruling ceae1604) — an earlier
-    # cut of this scoped to agent:-prefixed sources only, which meant a mined fact
-    # and an agent's own restatement of the same read could never collapse even
-    # though their possible_upstream edges genuinely agreed. `upstream_sets` already
-    # scopes its query to THIS object_id (from_id=$1), so widening the source set
-    # here never reaches into an unrelated object's own mined facts. A second,
-    # orthogonal independence signal beside `agreement`'s own raw value-count
-    # (agreement asks "did they say the same thing"; distinct_upstreams asks "even
-    # where they disagree or agree, how many of them could plausibly trace to the
-    # same upstream read, rather than being genuinely separate witnesses").
-    # PROVENANCE PIECE 3(b) (thread b4477e9e): `disputed` joins `distinct_upstreams` as a
-    # second independence signal, both from the SAME shared helper `/objects/{id}`'s own
-    # plain browse view now calls too (credence.property_signals) — never re-derived here.
+    # PROVENANCE, FACT-SCOPED: possible_upstream edges for EVERY source that has touched
+    # THIS object, agent or not, fetched once and sliced per-property below. Mined facts
+    # are sourced to the literal "session-miner" constant, never agent:-prefixed
+    # (ingest/sessions.py emit_yield); an earlier cut of this scoped to agent:-prefixed
+    # sources only, which meant a mined fact and an agent's own restatement of the same
+    # read could never collapse even though their possible_upstream edges genuinely
+    # agreed. `upstream_sets` already scopes its query to THIS object_id (from_id=$1), so
+    # widening the source set here never reaches into an unrelated object's own mined
+    # facts. This is a second, orthogonal independence signal beside `agreement`'s own raw
+    # value-count: agreement asks "did they say the same thing"; distinct_upstreams asks
+    # "even where they disagree or agree, how many of them could plausibly trace to the
+    # same upstream read, rather than being genuinely separate witnesses".
+    # `disputed` joins `distinct_upstreams` as a second independence signal, both from the
+    # SAME shared helper `/objects/{id}`'s own plain browse view now calls too
+    # (credence.property_signals), never re-derived here.
     sources_by_name = {
         pname: {v["source"] for v in entry["values"]} for pname, entry in properties.items()
     }
@@ -246,9 +242,8 @@ async def entity_dossier(
 
 def _jsonb(value: Any) -> dict[str, Any]:
     """asyncpg hands back jsonb as a dict when the pool's own codec is registered, a
-    raw JSON string otherwise (thread 8542ee89's own lesson) — accept either, same
-    defensive check monitor.py's own event reader already uses for this exact
-    object_events.payload column."""
+    raw JSON string otherwise: accept either, the same defensive check monitor.py's own
+    event reader already uses for this exact object_events.payload column."""
     if isinstance(value, str):
         import json
         return dict(json.loads(value)) if value else {}
@@ -260,17 +255,16 @@ async def object_events(
 ) -> dict[str, Any]:
     """Read-only witness surface for one object: every object_events row that
     touches it, plus every same_as/not_same_as link naming it, plus its own current
-    status/merged_into projection. Filed per thread 085039cc (Thoth DM 2469):
-    dossier() deliberately treats same_as/not_same_as as identity bookkeeping, not
-    the entity's own network (`_HIDDEN_LINK_TYPES` above), and describe() is
-    schema-only — neither could show a caller a LIVE merge/unmerge witness for a real
-    object, which is exactly what blocked independently verifying two production
-    folds' own reversibility (Ruling 4 half (b): "not because they don't exist, but
-    because nothing in the standing read surface can show a live instance of one").
+    status/merged_into projection. dossier() deliberately treats same_as/not_same_as as
+    identity bookkeeping, not the entity's own network (`_HIDDEN_LINK_TYPES` above), and
+    describe() is schema-only, so neither could show a caller a LIVE merge/unmerge
+    witness for a real object, which is exactly what blocked independently verifying
+    production folds' own reversibility, not because such witnesses don't exist, but
+    because nothing in the standing read surface could show a live instance of one.
 
     A merge event's own subject/related columns are ASYMMETRIC with an unmerge's
     (merge stores object_id=winner/related_id=loser; unmerge stores object_id=loser/
-    related_id=winner, matching Actions.merge_objects/unmerge_objects exactly) — so
+    related_id=winner, matching Actions.merge_objects/unmerge_objects exactly), so
     "everything that ever happened to this object" means checking BOTH columns, never
     object_id alone. Returns {} if the object does not exist, the same 404-mapping
     convention entity_dossier already uses."""

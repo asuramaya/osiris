@@ -118,7 +118,7 @@ async def _seat_lock(pool: asyncpg.Pool, house: str, handle: str) -> AsyncIterat
             await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
         except asyncpg.exceptions.LockNotAvailableError as exc:
             raise LockWedged(
-                f"_seat_lock: {key!r} still held past {_LOCK_TIMEOUT} — another "
+                f"_seat_lock: {key!r} still held past {_LOCK_TIMEOUT}, another "
                 "ensure_seat is genuinely in flight (or wedged)") from exc
         yield
 
@@ -141,7 +141,7 @@ async def _peer_lock(pool: asyncpg.Pool, *canonicals: str) -> AsyncIterator[None
                 await conn.execute("SELECT pg_advisory_xact_lock(hashtext($1))", key)
             except asyncpg.exceptions.LockNotAvailableError as exc:
                 raise LockWedged(
-                    f"_peer_lock: {key!r} still held past {_LOCK_TIMEOUT} — another "
+                    f"_peer_lock: {key!r} still held past {_LOCK_TIMEOUT}, another "
                     "peer_seats is genuinely in flight (or wedged)") from exc
         yield
 
@@ -554,7 +554,7 @@ async def seat_occupancy(
     call it with the seat about to be launched into, before launching."""
     if live_secs != _LIVE_SECS:
         raise ValueError(
-            f"seat_occupancy no longer supports a custom live_secs ({live_secs!r}) — "
+            f"seat_occupancy no longer supports a custom live_secs ({live_secs!r}), "
             "liveness is delegated to mounts.agent_liveness()'s own shared window "
             f"(LIVENESS_WINDOW_MINUTES) so every reader agrees; the default ({_LIVE_SECS}) "
             "already matches it. A genuine need for a different window is a design "
@@ -606,60 +606,59 @@ async def fleet_occupancy(
 _ROSTER_CAVEATS = (
     "chartered_repos and pin.declared are reported as-is, never certified canonical: minting "
     "a SoftwareProject is cheap and mostly ungated, so a name resolving to a real graph object "
-    "proves the object exists, not that it is the current or correct name for a repo — near-"
+    "proves the object exists, not that it is the current or correct name for a repo. Near-"
     "duplicate variants (the bytebye/byebyte history is the live example) can each "
-    "independently look valid here. Canonicalizing project names is task #137/#152's lane, "
-    "not this verb's — a caller that needs 'which of these names is right' asks there, not here.",
+    "independently look valid here. Canonicalizing project names is a separate concern, "
+    "not this verb's: a caller that needs 'which of these names is right' asks there, not here.",
     "pin is read from anchor_cwd's own .osiris, or, when anchor_cwd is not recorded, from the "
     "conventional ~/.osiris/seats/<handle>/.osiris path when that probe finds one "
-    "(probed_anchor_cwd names which). A seat with a distinct tree_cwd (task #103's office/"
-    "tree split) may carry its own, possibly different, .osiris there — this does not read "
+    "(probed_anchor_cwd names which). A seat with a distinct tree_cwd (the office/"
+    "tree split) may carry its own, possibly different, .osiris there. This does not read "
     "it, and does not check the two agree.",
     "office_exists is a plain directory-existence check on anchor_cwd (or the probed "
-    "conventional path when anchor_cwd is absent), nothing more — it does not mean the "
+    "conventional path when anchor_cwd is absent), nothing more. It does not mean the "
     "office's CLAUDE.md/charter.md content is actually being loaded by a live session. That "
-    "question is separate and, as of ruling on Imhotep's #141 scope (msg 3812, 2026-08-08), "
-    "the office-content mechanism is mid-migration — a seat can read office_exists=true with "
-    "orphaned office content.",
+    "question is separate: the office-content mechanism is mid-migration, so "
+    "a seat can read office_exists=true with orphaned office content.",
     "the conventional-path probe (pin.state=\"unknown-office\" on a miss) checks exactly one "
-    "path — ~/.osiris/seats/<handle>/ — nothing more. A miss means neither the recorded "
+    "path, ~/.osiris/seats/<handle>/, nothing more. A miss means neither the recorded "
     "anchor_cwd nor that one convention found an office; it is not a claim that no office "
-    "exists anywhere (Alfred's live review, thread 3806, msg 4066).",
+    "exists anywhere.",
     "live_cwd (the current holder's own agent_mounts row, when occupied) can differ from both "
-    "anchor_cwd and tree_cwd with nothing wrong on the launch path — Imhotep's #141 scope found "
-    "khnum and sekhmet both bound to a tree_cwd while their live sessions sit at the office cwd. "
+    "anchor_cwd and tree_cwd with nothing wrong on the launch path: seats have been found "
+    "bound to a tree_cwd while their live sessions sit at the office cwd. "
     "The three are reported separately on purpose; none is silently treated as 'the' cwd.",
-    "pin.triage_bucket only ever looks up repo:<pin.declared> — it inherits every one of "
+    "pin.triage_bucket only ever looks up repo:<pin.declared>. It inherits every one of "
     "pin's own blind spots above (not certified canonical, anchor_cwd-only) plus one more: "
     "a bucket reflects a single triage snapshot taken once per roster() call, not a live "
     "join, so it can go stale the instant something else in the graph changes after this "
     "call returns.",
-    "pin.triage_bucket=='duplicate_suspect' is a PER-OBJECT condition (#102, ruling 8cdf905 "
-    "— pure marks, no winner ever picked), not a verdict on the SEAT's own pin: it fires "
+    "pin.triage_bucket=='duplicate_suspect' is a PER-OBJECT condition (pure marks, no winner "
+    "ever picked), not a verdict on the SEAT's own pin: it fires "
     "whenever ANY object shares this one's case-folded basename, even when the seat's own "
     "declared object is the real, populated one and the sibling is an empty, unrelated "
-    "phantom (task #152's werner/maat/till/aegis specimens — maat/till/aegis confirmed this "
-    "shape live). `pin.duplicate_siblings` (present only on this bucket) lists each "
+    "phantom (confirmed live with a werner/maat/till/aegis specimen). `pin.duplicate_siblings` "
+    "(present only on this bucket) lists each "
     "colliding object's own canonical and agent_count SO A READER CAN JUDGE THE COLLISION "
-    "THEMSELVES — it never picks a winner among them, it only stops attributing a sibling's "
+    "THEMSELVES. It never picks a winner among them, it only stops attributing a sibling's "
     "emptiness to a seat whose own pin may be perfectly fine.",
-    "pin.triage_bucket=='no-such-project' can carry `pin.name_resolution` — DIAGNOSTIC ONLY, "
+    "pin.triage_bucket=='no-such-project' can carry `pin.name_resolution`, DIAGNOSTIC ONLY, "
     "never a resolution. A seat's `project` pin is the CANONICAL SUFFIX by system-wide "
     "contract (every mint/lookup path outside this note builds repo:<value> and mints a NEW "
-    "object on a mismatch, task #152/#157's own khepri specimen — decisions 126210f0/"
-    "23b667d0); if the declared value instead matches some OTHER object's current NAME (a "
+    "object on a mismatch, as the khepri specimen confirmed); if the declared value instead "
+    "matches some OTHER object's current NAME (a "
     "post-rename display name, not its canonical), that is worth saying but never worth "
-    "silently trusting — `resolved_by:'name'` with a `canonical` names what the pin SHOULD "
+    "silently trusting. `resolved_by:'name'` with a `canonical` names what the pin SHOULD "
     "be corrected to; `ambiguous:true` with `candidates` means it matches more than one "
-    "object's name and picks none of them (#102's law, generalized). Absence of this field "
-    "on a no-such-project pin means the value matches nothing at all — a genuinely dead pin.",
+    "object's name and picks none of them (a general rule). Absence of this field "
+    "on a no-such-project pin means the value matches nothing at all, a genuinely dead pin.",
     "pin_charter_agreement compares only pin.declared against chartered_repos, and inherits "
     "every caveat above (not certified canonical, anchor_cwd-only, single snapshot). "
     "'disagree' names a conflict for a mind to resolve (rebind_seat/correct_pin_value/"
-    "set_charter), it never picks which side is right (#102's law, same as triage_bucket "
-    "above) - a seat legitimately holding one pin while its charter covers several OTHER "
+    "set_charter), it never picks which side is right (the same rule as triage_bucket "
+    "above), a seat legitimately holding one pin while its charter covers several OTHER "
     "repos too still reads 'agree' as long as the pin's own value is among them. 'n/a' means "
-    "there was nothing to compare (pin not declared, or no charter at all) - never conflate "
+    "there was nothing to compare (pin not declared, or no charter at all), never conflate "
     "with 'disagree'.",
 )
 
@@ -767,7 +766,7 @@ async def _pin_name_resolution_note(pool: asyncpg.Pool, pin_value: str,
     return {
         "resolved_by": "name", "canonical": canonical,
         "note": ("this pin's value matches an existing object's current NAME, not its "
-                 "canonical suffix — a pin should hold the canonical (stable across a "
+                 "canonical suffix. A pin should hold the canonical (stable across a "
                  "rename), never a display name; correct the pin to the canonical shown "
                  "here, never to the name it currently holds"),
     }
@@ -783,7 +782,7 @@ def _roster_caveats_out(caveats: list[str], want_caveats: bool) -> dict[str, Any
     return {
         "caveats_count": len(caveats),
         "caveats_note": (
-            f"{len(caveats)} standing caveat(s) about this function's own blind spots — "
+            f"{len(caveats)} standing caveat(s) about this function's own blind spots, "
             "pass want_caveats=True for the full text"),
     }
 
@@ -1053,7 +1052,7 @@ async def roster(
     caveats = list(_ROSTER_CAVEATS)
     if agreement == "no-match":
         caveats.append(
-            "no-match means neither a seat's charter nor its current pin names this repo — "
+            "no-match means neither a seat's charter nor its current pin names this repo, "
             "not that the repo has no owner. It may be owned by a seat whose pin this "
             "function cannot read, chartered under a name this repo string doesn't exactly "
             "match, or simply not yet declared anywhere this function looks.")
@@ -1107,31 +1106,31 @@ _GENERIC_PATH_BASENAMES = frozenset({
 })
 
 _TREE_LEDGER_CAVEATS = (
-    "project_ledger covers every ACTIVE SoftwareProject (58 today, measured) — durable "
-    "graph state — but by construction can only see a phantom that accumulated at least "
+    "project_ledger covers every ACTIVE SoftwareProject (58 today, measured), durable "
+    "graph state, but by construction can only see a phantom that accumulated at least "
     "one works_in edge; a tree that mounted, produced nothing, and left is invisible to "
     "this whole class of instrument, not just this one field.",
     "live_cwd_ledger's own non-durability caveat (agent_mounts is a live/recent registry, "
-    "not history) is stated in ITS OWN section, not only here (Thoth's instruction, msg "
-    "3920 — 'nobody reads the bottom'); see its `note` field, not just this list.",
-    "phantom_verdict is a JUDGMENT, not a proof, ported from Sekhmet's own rule (msg 3906) "
-    "— 'declared' trusts any seat's pin OR a Seat-origin governs edge, never an Agent-"
-    "origin one (thread 20af2c95's succession-leak class is evidence FOR phantom, not "
+    "not history) is stated in ITS OWN section, not only here (nobody reads the bottom); "
+    "see its `note` field, not just this list.",
+    "phantom_verdict is a JUDGMENT, not a proof: "
+    "'declared' trusts any seat's pin OR a Seat-origin governs edge, never an Agent-"
+    "origin one (a known succession-leak class is evidence FOR phantom, not "
     "against it). project_ledger's own `phantom_verdict_basis`/`note` fields carry the "
-    "editable basename list and the mechanical-vs-hand-judgment distinction directly — see "
+    "editable basename list and the mechanical-vs-hand-judgment distinction directly, see "
     "those, not just this line.",
-    "the pin's own seat/house/kind fields (Imhotep's schema addition, ruling 719ed5b1) read "
-    "almost universally absent as of this build — his migration/writer is still landing "
-    "(msg 3909/3915). That is the honest starting state, not a defect in this report's "
-    "first pass; nothing here consumes those fields for a verdict yet, matching his own "
+    "the pin's own seat/house/kind fields (a later schema addition) read "
+    "almost universally absent as of this build: the migration/writer is still landing. "
+    "That is the honest starting state, not a defect in this report's "
+    "first pass; nothing here consumes those fields for a verdict yet, matching the same "
     "note that nothing else does either.",
     "READ-ONLY: this reports disagreements and phantom suspicions, it never repairs, folds, "
-    "or merges anything — repo:code's disposition is Sekhmet's design, not this verb's.",
-    "A GAP IN THE CANONICAL READER ITSELF, FLAGGED NOT FIXED (Thoth's catch, msg 3928): "
+    "or merges anything; repo:code's disposition is a separate design decision, not this verb's.",
+    "A GAP IN THE CANONICAL READER ITSELF, FLAGGED NOT FIXED: "
     "`_read_osiris_key` (agents.py, used unmodified by this report and by every other "
-    "caller — roster(), resolve_identity, project_identity_evidence) climbs `cwd` and its "
+    "caller, roster(), resolve_identity, project_identity_evidence) climbs `cwd` and its "
     "parents for `.osiris` but never checks whether `cwd` ITSELF exists, so a query against "
-    "a DELETED directory silently returns whatever an ancestor's pin says instead — this "
+    "a DELETED directory silently returns whatever an ancestor's pin says instead. This "
     "instrument works around it locally (`directory_exists`, checked before trusting the "
     "pin) but the canonical reader's own three-state model (OsirisKeyRead) is still missing "
     "a fourth state for this, everywhere else it's called too.",
@@ -1229,16 +1228,16 @@ async def project_ledger(pool: asyncpg.Pool, *, limit: int = 200, offset: int = 
         },
         "note": ("phantom-suspect is MECHANICAL and WEAKER than a hand-verified judgment: "
                 "it fires only when a project's name matches the editable list above AND "
-                "no seat declares it — it is an operationalization of Sekhmet's own "
-                "name-shape test (msg 3906) that survives the originating cwd being long "
-                "gone, not a replacement for her looking at one directly. undetermined "
-                "means neither test fired — a real disagreement for a human, never a "
+                "no seat declares it. It is an operationalization of a "
+                "name-shape test that survives the originating cwd being long "
+                "gone, not a replacement for looking at one directly. undetermined "
+                "means neither test fired, a real disagreement for a human, never a "
                 "confirmation the project is legitimate. `declared` IS ALSO NOT A REALNESS "
-                "CHECK (Thoth's own catch, msg 3928, live specimens climintworker1/"
-                "inferredworker1's own pins declaring cliproj1/soleseathouse — debugging "
+                "CHECK (confirmed by live specimens climintworker1/"
+                "inferredworker1's own pins declaring cliproj1/soleseathouse, debugging "
                 "artifacts, correctly self-declared): this bucket answers 'does some seat's "
                 "own declaration claim this name', never 'is this a genuine, intentional "
-                "project' — a fake project that correctly declares itself is "
+                "project'. A fake project that correctly declares itself is "
                 "indistinguishable from a real one by declaration alone."),
     }
 
@@ -1346,13 +1345,13 @@ async def live_cwd_ledger(pool: asyncpg.Pool) -> dict[str, Any]:
         })
     return {
         "cwds": cwds, "total": len(cwds),
-        "note": ("NOT A HISTORICAL LEDGER (Thoth's own instruction, msg 3920: this belongs "
-                "where a reader hits it, not at the bottom): this section's population is "
+        "note": ("NOT A HISTORICAL LEDGER (stated here, where a reader hits it, not at "
+                "the bottom): this section's population is "
                 "TODAY's agent_mounts table only, a live/recent registry keyed on job_dir "
                 "that EVICTS old rows (measured live: 37 total rows / 32 distinct cwd "
                 "against thousands of historical agents). A phantom whose originating "
                 "sessions have already ended and been evicted from agent_mounts will NEVER "
-                "appear here — only in project_ledger, which reads durable graph state "
+                "appear here, only in project_ledger, which reads durable graph state "
                 "instead."),
     }
 
@@ -1418,13 +1417,13 @@ async def reachability(pool: asyncpg.Pool, agent_id: str) -> dict[str, Any]:
     doors = {Path(r["job_dir"]).name for r in rows if r["job_dir"]}
     if not doors:
         return {"reachable": False, "via": "none", "job": None,
-                "detail": "no known job_dir for this lineage — nothing to ask the daemon "
+                "detail": "no known job_dir for this lineage, nothing to ask the daemon "
                           "about"}
     ids = doors | {d[:8] for d in doors}
     job = await job_for(ids)
     if job is None:
         return {"reachable": False, "via": "none", "job": None,
-                "detail": "the daemon holds no job for this lineage right now — dark or "
+                "detail": "the daemon holds no job for this lineage right now, dark or "
                           "genuinely not running; never treated as proof of death"}
     shown = job.get("short") or job.get("sessionId") or "its job"
     return {"reachable": True, "via": "daemon-job", "job": job,
@@ -1819,7 +1818,7 @@ async def set_seat_attended(
         return {"error": f"attended must be one of {sorted(_ATTENDED_VALUES)}, not "
                          f"{attended!r}"}
     if not because.strip():
-        return {"error": "because is required — a seat's attendance signal gates a safety "
+        return {"error": "because is required: a seat's attendance signal gates a safety "
                          "guard (dispatch_dm's human-attended check); the reason it changed "
                          "must be on the record"}
     from src.orchestrator.charter import is_operator_actor
@@ -1833,7 +1832,7 @@ async def set_seat_attended(
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
             return {"error": f"{caller_desc} is not authorized to set attendance on "
-                             f"{seat_id} — its manager is {manager_desc}, and {actor} is "
+                             f"{seat_id}: its manager is {manager_desc}, and {actor} is "
                              "neither the manager nor the operator"}
     row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", seat_id)
@@ -1843,13 +1842,13 @@ async def set_seat_attended(
         "SELECT 1 FROM current_assertions a WHERE a.object_id=$1 AND a.name='retired' "
         "AND a.value #>> '{}' = 'true'", row["id"])
     if retired:
-        return {"error": f"{seat_id} is retired — cannot stamp attendance on a retired seat"}
+        return {"error": f"{seat_id} is retired, cannot stamp attendance on a retired seat"}
     # A status-gap fix: retire_seat now flips objects.status too, so a retired seat's
     # status is no longer 'active'. The lookup above must not filter on it up front, or
     # a retired seat reads as "no such seat" instead of the specific message above. A
     # merged seat (fold_seat) hits this same non-active branch, a pre-existing gap.
     if row["status"] != "active":
-        return {"error": f"{seat_id} is {row['status']}, not active — nothing to stamp"}
+        return {"error": f"{seat_id} is {row['status']}, not active, nothing to stamp"}
     now = datetime.now(UTC)
     await actions.assert_property(row["id"], "attended", attended, actor, now, _CONF,
                                   evidence_class=_EC)
@@ -1898,7 +1897,7 @@ async def rename_seat(
     if not new_handle or len(new_handle) > 40:
         return {"error": "pick a short handle (1-40 chars)"}
     if not because.strip():
-        return {"error": "because is required — a rename is testimony; the reason it "
+        return {"error": "because is required: a rename is testimony; the reason it "
                          "changed must be on the record"}
     self_authorized = False
     from src.orchestrator.charter import is_operator_actor
@@ -1914,7 +1913,7 @@ async def rename_seat(
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
-            return {"error": f"{caller_desc} is not authorized to rename {seat_id} — its "
+            return {"error": f"{caller_desc} is not authorized to rename {seat_id}: its "
                              f"manager is {manager_desc}, and {actor} is neither the "
                              "manager nor the operator"}
     row = await actions.pool.fetchrow(
@@ -1925,7 +1924,7 @@ async def rename_seat(
     collisions = [s for s in await seats_by_handle(actions.pool, new_handle) if s != seat_id]
     if collisions:
         return {"error": f"'{new_handle}' is already claimed by {collisions[0]} "
-                         "(case-insensitive) — a name belongs to one seat forever"}
+                         "(case-insensitive), a name belongs to one seat forever"}
     old_handle = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='handle' ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1",
@@ -1992,7 +1991,7 @@ async def bind_seat_tree(
     if not tree_cwd:
         return {"error": "bind_seat_tree needs a tree_cwd"}
     if not because.strip():
-        return {"error": "because is required — a tree binding is testimony; the reason "
+        return {"error": "because is required: a tree binding is testimony; the reason "
                          "it changed must be on the record"}
     self_authorized = False
     from src.orchestrator.charter import is_operator_actor
@@ -2017,7 +2016,7 @@ async def bind_seat_tree(
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             manager_desc = manager_seat_id or "no manager on record"
-            return {"error": f"{caller_desc} is not authorized to bind {seat_id}'s tree — "
+            return {"error": f"{caller_desc} is not authorized to bind {seat_id}'s tree: "
                              f"its manager is {manager_desc}, and {actor} is neither the "
                              "manager nor the operator"}
     row = await actions.pool.fetchrow(
@@ -2042,11 +2041,11 @@ async def bind_seat_tree(
     await actions.assert_singular_property(
         row["id"], "tree_cwd", tree_cwd, actor, datetime.now(UTC), _CONF,
         because=f"{because} (bind_seat_tree: tree_cwd is single-valued per seat, "
-                "cross-source collapse, ruling 1335332e)",
+                "cross-source collapse)",
         evidence_class=_EC)
     out = {"seat": seat_id, "old_tree_cwd": old_tree, "tree_cwd": tree_cwd,
            "because": because,
-           "note": "recorded — osiris never provisions the directory itself; launch_seat "
+           "note": "recorded, osiris never provisions the directory itself; launch_seat "
                    "checks it exists before trusting it"}
     if self_authorized:
         out["authorization"] = "self-authorized, no manager on record"
@@ -2260,7 +2259,7 @@ async def rehold_seat(
     because = (because or "").strip()
     if not because:
         return {"error": "a rehold with no stated reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this system rules against, refusing"}
     seat_row = await actions.pool.fetchrow(
         "SELECT id, canonical FROM objects WHERE canonical=$1 AND type='Seat' "
         "AND status='active'", seat_id)
@@ -2270,8 +2269,8 @@ async def rehold_seat(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Agent'", agent_id)
     if agent_row is None:
         return {"error": f"no such agent: {agent_id!r}"}
-    # NEVER REHOLD ONTO A BORROWED JOB_DIR (thread b33fa26b/17819e83, jenny/dustin
-    # Never rehold onto a borrowed job_dir: the exact route that kept re-corrupting a
+    # NEVER REHOLD ONTO A BORROWED JOB_DIR (a live specimen involving jenny/dustin):
+    # never rehold onto a borrowed job_dir: the exact route that kept re-corrupting a
     # seat's binding after an equivalent guard shipped for _bind_before_spawn. A caller
     # (human or script) explicitly reholding a seat onto whatever the newest live
     # session in a project happens to be, not realizing that session's own
@@ -2283,7 +2282,7 @@ async def rehold_seat(
 
     borrowed_from = await borrowed_job_dir_owner(actions.pool, agent_id)
     if borrowed_from is not None:
-        return {"error": f"{agent_id!r} is not a real identity — it is {borrowed_from}'s "
+        return {"error": f"{agent_id!r} is not a real identity, it is {borrowed_from}'s "
                          "own live job_dir slug, borrowed. A rehold must name the seat's "
                          "actual lineage (its own succeeded_from chain), never a fresh "
                          "session's job-id-derived id."}
@@ -2296,13 +2295,13 @@ async def rehold_seat(
             and _generation(old_holder)[0] != _generation(agent_id)[0]):
         return {
             "error": f"{seat_id} has a LIVE holder ({old_holder}) from a different "
-                     f"lineage than {agent_id!r} — refusing without override_live=True",
+                     f"lineage than {agent_id!r}, refusing without override_live=True",
             "old_holder": old_holder, "live": True,
         }
     if dry_run:
         return {"dry_run": True, "seat_id": seat_id, "old_holder": old_holder,
                 "new_holder": agent_id, "because": because,
-                "detail": "PREVIEW ONLY — every guard above passed and nothing was "
+                "detail": "PREVIEW ONLY: every guard above passed and nothing was "
                           "written; call again with dry_run=False to perform this rebind"}
     now = datetime.now(UTC)
     await bind_holder(actions, seat_id=seat_id, agent_id=agent_id, source=actor)
@@ -2358,7 +2357,7 @@ async def backfill_unbound_seats(
         seat_id, handle, house = row["seat_id"], row["handle"], row["house"]
         if not handle:
             plan.append({"seat_id": seat_id, "handle": None, "house": house, "holder": None,
-                        "note": "no handle asserted on this seat — nothing to resolve by"})
+                        "note": "no handle asserted on this seat, nothing to resolve by"})
             continue
         resolved = await resolve_seat(
             actions, handle, agents_json=agents_json, read_exe=read_exe, read_cwd=read_cwd)
@@ -2366,7 +2365,7 @@ async def backfill_unbound_seats(
         item: dict[str, Any] = {"seat_id": seat_id, "handle": handle, "house": house,
                                 "holder": holder, "live": resolved.get("live", False)}
         if not holder:
-            item["note"] = "no resolvable holder in the assertion world — skipped"
+            item["note"] = "no resolvable holder in the assertion world, skipped"
         elif resolved.get("warning"):
             item["note"] = resolved["warning"]
         plan.append(item)
@@ -2502,7 +2501,7 @@ async def seat_holder_ineligible(pool: asyncpg.Pool, name: str) -> str | None:
         f"{r['canonical']} ({'marked retired/false_mint' if r['marked'] else 'a visitor spawn'})"
         for r in rows)
     why = f"every active holder is ineligible ({names})"
-    return (f"{seats[0]} is the unique living seat for {name!r}, but {why} — "
+    return (f"{seats[0]} is the unique living seat for {name!r}, but {why}, "
             "no eligible holder exists")
 
 
@@ -2529,7 +2528,7 @@ async def pause_seat_or_agent(
 
     if who.startswith("seat:"):
         if await seat_receipt(pool, who) is None:
-            return {"error": f"no such living seat: '{who}' — check fleet()"}
+            return {"error": f"no such living seat: '{who}', check fleet()"}
         stamp_on = who
     elif who.startswith("agent:"):
         head = await living_head(pool, await canonical_agent(pool, who))
@@ -2538,13 +2537,13 @@ async def pause_seat_or_agent(
     else:  # a plain name: resolve like a DM address does
         ineligible = await seat_holder_ineligible(pool, who)
         if ineligible is not None:
-            return {"error": f"cannot pause '{who}': {ineligible} — address the seat "
+            return {"error": f"cannot pause '{who}': {ineligible}. Address the seat "
                              "directly (target='seat:<id>') once a new holder claims "
                              "it, or pause the seat id itself if you mean to gate the "
                              "chair."}
         resolved = await resolve_seat(actions, who)
         if resolved["agent"] is None:
-            return {"error": f"no seat or agent named '{who}' — check fleet()"}
+            return {"error": f"no seat or agent named '{who}', check fleet()"}
         stamp_on = resolved.get("seat_id") or resolved["agent"]
     obj_type = "Seat" if stamp_on.startswith("seat:") else "Agent"
     oid = await actions.create_or_find_object(obj_type, stamp_on, actor)
@@ -2563,7 +2562,7 @@ async def pause_seat_or_agent(
     return {"paused" if paused else "released": stamp_on, "by": actor,
            **({"reason": reason} if reason else {}),
            **({"queued_dms": queued} if queued else {}),
-           "note": ("the DM push lane now queues this seat's mail — release with "
+           "note": ("the DM push lane now queues this seat's mail, release with "
                     "seat(action='pause', paused=False, target=...)" if paused else
                     "the queue drains on the next dispatch (a fresh send, or the "
                     "worker sweep within the minute)")}
@@ -2595,20 +2594,20 @@ async def attach_session(
     row = await pool.fetchrow(
         "SELECT seat_id, used_by, used_at FROM seat_tokens WHERE token=$1", token)
     if row is None:
-        return {"error": "ATTACH REFUSED — unknown attach token: nothing was bound. "
+        return {"error": "ATTACH REFUSED, unknown attach token: nothing was bound. "
                          "The token in this environment matches no mint on record."}
     if row["seat_id"] != seat_id:
-        return {"error": f"ATTACH REFUSED — token/seat mismatch: this token was minted for "
+        return {"error": f"ATTACH REFUSED: token/seat mismatch: this token was minted for "
                          f"{row['seat_id']}, not {seat_id}. A stale or foreign environment; "
                          "nothing was bound."}
     display = await _seat_display(pool, seat_id)
     if not display:
-        return {"error": f"ATTACH REFUSED — {seat_id} is not a living Seat in the graph; "
+        return {"error": f"ATTACH REFUSED: {seat_id} is not a living Seat in the graph; "
                          "nothing was bound."}
     if row["used_at"] is not None and row["used_by"] != job_dir:
         # Refuses both the env-inheritance leak and the collision class in one breath:
         # the first presenter owns the token, forever.
-        return {"error": f"ATTACH REFUSED — this token was already used by another session "
+        return {"error": f"ATTACH REFUSED: this token was already used by another session "
                          f"({row['used_by']}). A one-time token binds to its first "
                          "presenter; a second presentation is an inherited environment or a "
                          "collision, never a resume. Nothing was bound."}
@@ -2619,7 +2618,7 @@ async def attach_session(
         "JOIN objects p ON p.id=l.to_id "
         "WHERE f.canonical=$1 AND l.type='spawned_by' LIMIT 1", agent_id)
     if spawner:
-        return {"error": f"ATTACH REFUSED — {agent_id} is a VISITOR (spawned_by {spawner}); "
+        return {"error": f"ATTACH REFUSED: {agent_id} is a VISITOR (spawned_by {spawner}); "
                          "a sub-agent never holds a seat. Nothing was bound."}
     fresh_use = row["used_at"] is None
     if fresh_use:
@@ -2628,7 +2627,7 @@ async def attach_session(
             "AND last_seen > now() - make_interval(secs => $3) "
             "ORDER BY last_seen DESC LIMIT 1", seat_id, job_dir, live_secs)
         if holder is not None:
-            return {"error": f"ATTACH REFUSED — {seat_id} ({display.get('handle')}) is held "
+            return {"error": f"ATTACH REFUSED: {seat_id} ({display.get('handle')}) is held "
                              f"LIVE by {holder['agent_id']}. Two minds in one seat is the "
                              "collision class the ceremony exists to kill; nothing was bound."}
         claimed = await pool.execute(
@@ -2639,12 +2638,12 @@ async def attach_session(
             again = await pool.fetchrow(
                 "SELECT used_by FROM seat_tokens WHERE token=$1", token)
             if again is None or again["used_by"] != job_dir:
-                return {"error": "ATTACH REFUSED — token claimed concurrently by another "
+                return {"error": "ATTACH REFUSED: token claimed concurrently by another "
                                  "session; nothing was bound."}
     bound = await pool.execute(
         "UPDATE agent_mounts SET seat_id=$2 WHERE job_dir=$1", job_dir, seat_id)
     if bound.rsplit(" ", 1)[-1] == "0":
-        return {"error": "ATTACH REFUSED — no durable mount row for this session yet; the "
+        return {"error": "ATTACH REFUSED: no durable mount row for this session yet; the "
                          "binding needs the mount to exist first (automount runs it in "
                          "order). Nothing was bound."}
     # the holds link: the previous holder's heals (valid_until), never deleted
@@ -2759,12 +2758,12 @@ async def correct_house(actions: Actions, agent_id: str, new_house: str, *, sour
         return {"error": "a house needs a name"}
     bound = await held_seat(actions.pool, agent_id)
     if bound is None:
-        return {"error": f"{agent_id} holds no seat — house-correct is a seat's own act, "
+        return {"error": f"{agent_id} holds no seat, house-correct is a seat's own act, "
                          "never done on another's behalf"}
     seat_id = bound["seat_id"]
     manager = await manager_of_seat(actions.pool, seat_id)
     if manager is not None:
-        return {"error": f"{seat_id} is managed_by {manager} — not a head. A non-head "
+        return {"error": f"{seat_id} is managed_by {manager}, not a head. A non-head "
                          f"derives its house through the chain (currently {bound['house']!r}); "
                          "only a head's own stamp is ever read, so only a head may correct "
                          "one. Nothing to do here."}
@@ -2826,10 +2825,10 @@ async def resync_seat_house_third_party(
     confirming the correct value is not the same act as invalidating a stale one."""
     if new_house is not None:
         new_house = new_house.strip() or None
-    stored = new_house or ""  # the NOT NULL-safe encoding of "unset" — see the note above
+    stored = new_house or ""  # the NOT NULL-safe encoding of "unset", see the note above
     if not reason.strip():
         return {"error": "a correction with no reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this system rules against, refusing"}
     # The existence check: this call used to reach straight for create_or_find_object
     # below with no check the seat existed at all, so a nonexistent-seat "safe"
     # invocation would silently mint a stray Seat rather than refuse, unlike
@@ -2898,7 +2897,7 @@ async def resync_seat_project(
     never guesses)."""
     if not reason.strip():
         return {"error": "a correction with no reason is exactly the silent overwrite "
-                         "719ed5b1 rules against — refusing"}
+                         "this system rules against, refusing"}
     seat_row = await actions.pool.fetchrow(
         "SELECT id FROM objects WHERE canonical=$1 AND type='Seat' AND status='active'",
         seat_id)
@@ -2908,10 +2907,10 @@ async def resync_seat_project(
 
     governed = await charter_of(actions.pool, seat_id)
     if not governed:
-        return {"error": f"{seat_id} has no charter — nothing to derive a project from"}
+        return {"error": f"{seat_id} has no charter, nothing to derive a project from"}
     if len(governed) > 1:
         return {"error": f"{seat_id}'s charter governs {len(governed)} projects "
-                         f"({', '.join(governed)}) — ambiguous, no single project to "
+                         f"({', '.join(governed)}), ambiguous, no single project to "
                          "derive"}
     # The current name, never the canonical: governed[0] is charter_of's own
     # frozen-at-mint canonical label, and a project renamed since would stamp the
@@ -3001,24 +3000,24 @@ async def fold_seat(
     signature); either label unknown or not a Seat; dupe==into; dupe already folded."""
     dupe, into = (dupe or "").strip(), (into or "").strip()
     if not (evidence or "").strip():
-        return {"error": "a fold without evidence is an auto-merge wearing a signature — "
+        return {"error": "a fold without evidence is an auto-merge wearing a signature, "
                          "cite what proves these are one seat"}
     if not dupe or not into:
         return {"error": "fold_seat needs both labels: dupe and into"}
     if dupe == into:
-        return {"error": "dupe and into name the same seat — nothing to fold"}
+        return {"error": "dupe and into name the same seat, nothing to fold"}
     rows = await actions.pool.fetch(
         "SELECT id, canonical, status FROM objects WHERE canonical = ANY($1::text[]) "
         "AND type='Seat'", [dupe, into])
     by_label = {r["canonical"]: r for r in rows}
     if dupe not in by_label or into not in by_label:
         missing = [x for x in (dupe, into) if x not in by_label]
-        return {"error": f"unknown seat(s): {', '.join(missing)} — a fold never invents "
+        return {"error": f"unknown seat(s): {', '.join(missing)}, a fold never invents "
                          "either side"}
     if by_label[dupe]["status"] == "merged":
-        return {"error": f"{dupe} is already folded — nothing to do"}
+        return {"error": f"{dupe} is already folded, nothing to do"}
     if by_label[into]["status"] == "merged":
-        return {"error": f"{into} is itself folded — fold into the living seat instead"}
+        return {"error": f"{into} is itself folded, fold into the living seat instead"}
     dupe_oid, into_oid = by_label[dupe]["id"], by_label[into]["id"]
     # The estate, seat-shaped: active holders move first, the point of this verb, where
     # fold_agent refuses instead (bind_holder's own succession law converges a
@@ -3061,24 +3060,24 @@ async def reconcile_seat_fold(
     if not dupe or not into:
         return {"error": "reconcile_seat_fold needs both labels: dupe and into"}
     if dupe == into:
-        return {"error": "dupe and into name the same seat — nothing to reconcile"}
+        return {"error": "dupe and into name the same seat, nothing to reconcile"}
     row = await actions.pool.fetchrow(
         "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Seat'",
         dupe)
     if row is None:
-        return {"error": f"no such seat: {dupe!r} — reconcile never invents a label"}
+        return {"error": f"no such seat: {dupe!r}, reconcile never invents a label"}
     if row["status"] != "merged":
-        return {"error": f"{dupe} is {row['status']}, not merged — reconcile_seat_fold "
+        return {"error": f"{dupe} is {row['status']}, not merged. reconcile_seat_fold "
                          "only repairs an ALREADY-completed fold; use merge to fold it in "
                          "the first place"}
     into_row = await actions.pool.fetchrow(
         "SELECT id, status FROM objects WHERE canonical=$1 AND type='Seat'", into)
     if into_row is None:
-        return {"error": f"no such seat: {into!r} — reconcile never invents a label"}
+        return {"error": f"no such seat: {into!r}, reconcile never invents a label"}
     if into_row["id"] != row["merged_into"]:
         actual = await actions.pool.fetchval(
             "SELECT canonical FROM objects WHERE id=$1", row["merged_into"])
-        return {"error": f"{dupe} is merged into {actual}, not {into} — "
+        return {"error": f"{dupe} is merged into {actual}, not {into}. "
                          "reconcile_seat_fold never redirects to a different pair"}
     if into_row["status"] != "active":
         return {"error": f"{into} is {into_row['status']}, not active"}
@@ -3113,7 +3112,7 @@ async def unfold_seat(
 
     dupe, because = (dupe or "").strip(), (because or "").strip()
     if not because:
-        return {"error": "an unfold without a because is an un-audited reversal — cite "
+        return {"error": "an unfold without a because is an un-audited reversal, cite "
                          "the evidence/ruling that proves the fold was wrong"}
     if not dupe:
         return {"error": "unfold_seat needs a dupe label"}
@@ -3121,9 +3120,9 @@ async def unfold_seat(
         "SELECT id, status, merged_into FROM objects WHERE canonical=$1 AND type='Seat'",
         dupe)
     if row is None:
-        return {"error": f"unknown seat: {dupe} — an unfold never invents a label"}
+        return {"error": f"unknown seat: {dupe}, an unfold never invents a label"}
     if row["status"] != "merged":
-        return {"error": f"{dupe} is not folded (status={row['status']}) — nothing to "
+        return {"error": f"{dupe} is not folded (status={row['status']}), nothing to "
                          "unfold"}
     into_id = row["merged_into"]
     into_canon = await actions.pool.fetchval(
@@ -3165,11 +3164,11 @@ async def unfold_seat(
         "plan": plan,
         "estate_unreturnable": {
             "mail": unreturnable_mail,
-            "note": ("pre-fold UPDATEs overwrote to_agent in place — these predate the "
+            "note": ("pre-fold UPDATEs overwrote to_agent in place: these predate the "
                      "fold and still sit on the living seat, but nothing proves they were "
                      "ever addressed to dupe rather than already into's own; read them "
                      "and judge by hand, never auto-moved") if unreturnable_mail else
-                    "none found — no pre-fold mail sits unclaimed on the living seat",
+                    "none found, no pre-fold mail sits unclaimed on the living seat",
         },
         "execute": execute,
     }
@@ -3193,7 +3192,7 @@ async def unfold_seat(
     report.update({
         "unmerged": True, "holders_restored": len(holders),
         "managed_by_restored": len(managing_out) + len(managing_in),
-        "note": (f"{dupe} is active again — provenance for the folded era stays on the "
+        "note": (f"{dupe} is active again, provenance for the folded era stays on the "
                  "record (the merge event and same_as link are witnesses, never erased). "
                  + (f"{len(holders)} holder(s) restored. " if holders else "")
                  + (f"{len(managing_out) + len(managing_in)} managed_by edge(s) restored. "
@@ -3239,17 +3238,17 @@ async def retire_seat(actions: Actions, seat_id: str, *, reason: str = "", actor
     if row is None:
         return {"error": f"no such seat: {seat_id!r}"}
     if row["status"] != "active":
-        return {"error": f"{seat_id} is already {row['status']} — nothing to retire"}
+        return {"error": f"{seat_id} is already {row['status']}, nothing to retire"}
     holder = await actions.pool.fetchval(
         "SELECT f.canonical FROM links l JOIN objects f ON f.id=l.from_id "
         "WHERE l.to_id=$1 AND l.type='holds' "
         "AND (l.valid_until IS NULL OR l.valid_until > now()) LIMIT 1", row["id"])
     if holder:
-        return {"error": f"{seat_id} is actively held by {holder} — retire_seat never "
+        return {"error": f"{seat_id} is actively held by {holder}, retire_seat never "
                          "evicts a live mind; transfer or vacate the seat first"}
     peer = await _active_peer(actions.pool, row["id"])
     if peer is not None:
-        return {"error": f"{seat_id} is peered with {peer['peer']} — retiring it would "
+        return {"error": f"{seat_id} is peered with {peer['peer']}, retiring it would "
                          "strand that bond pointing at a dead seat forever; unpeer first"}
     await actions.assert_property(row["id"], "retired", "true", actor, datetime.now(UTC),
                                   _CONF, evidence_class=_EC)
@@ -3282,7 +3281,7 @@ async def vacate_holder(
     set_seat_attended already holds: a seat's occupancy changing this way belongs on the
     record), or a seat with no active holder (nothing to vacate)."""
     if not because.strip():
-        return {"error": "because is required — vacating a seat's holder is a deliberate "
+        return {"error": "because is required: vacating a seat's holder is a deliberate "
                          "act on the record"}
     seat_id = (seat_id or "").strip()
     row = await actions.pool.fetchrow(
@@ -3290,7 +3289,7 @@ async def vacate_holder(
     if row is None:
         return {"error": f"no such seat: {seat_id!r}"}
     if row["status"] != "active":
-        return {"error": f"{seat_id} is already {row['status']} — nothing to vacate"}
+        return {"error": f"{seat_id} is already {row['status']}, nothing to vacate"}
     now = datetime.now(UTC)
     holders = await actions.pool.fetch(
         "SELECT f.id AS fid, f.canonical AS holder FROM links l "
@@ -3298,7 +3297,7 @@ async def vacate_holder(
         "WHERE l.to_id=$1 AND l.type='holds' AND f.type='Agent' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
     if not holders:
-        return {"error": f"{seat_id} has no active holder — nothing to vacate"}
+        return {"error": f"{seat_id} has no active holder, nothing to vacate"}
     for h in holders:
         await actions.invalidate_link(h["fid"], row["id"], "holds", actor, now)
     await actions.assert_property(row["id"], "vacated_because", because.strip(), actor, now,
@@ -3440,7 +3439,7 @@ async def peer_seats(
     survives contact)."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — peering two seats is a deliberate act on "
+        return {"error": "because is required: peering two seats is a deliberate act on "
                          "the record"}
     seat_a = (seat_a or "").strip()
     seat_b = (seat_b or "").strip()
@@ -3456,11 +3455,11 @@ async def peer_seats(
         existing_a = await _active_peer(actions.pool, row_a["id"])
         if existing_a is not None:
             return {"error": f"{row_a['canonical']} already has a peer "
-                             f"({existing_a['peer']}) — v1 is pairs only, no chains"}
+                             f"({existing_a['peer']}), v1 is pairs only, no chains"}
         existing_b = await _active_peer(actions.pool, row_b["id"])
         if existing_b is not None:
             return {"error": f"{row_b['canonical']} already has a peer "
-                             f"({existing_b['peer']}) — v1 is pairs only, no chains"}
+                             f"({existing_b['peer']}), v1 is pairs only, no chains"}
         now = datetime.now(UTC)
         await actions.create_link(row_a["id"], row_b["id"], "peer_of", actor, now, _CONF,
                                   properties={"because": because}, evidence_class=_EC)
@@ -3480,7 +3479,7 @@ async def unpeer(
     active peer_of edge between the named pair."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — unpeering two seats is a deliberate act "
+        return {"error": "because is required: unpeering two seats is a deliberate act "
                          "on the record"}
     row_a = await _resolve_active_seat(actions.pool, seat_a)
     if row_a is None:
@@ -3524,12 +3523,12 @@ async def hold_action(
     act = (act or "").strip()
     because = (because or "").strip()
     if not act:
-        return {"error": "act is required — name the specific act being held"}
+        return {"error": "act is required: name the specific act being held"}
     if not because:
-        return {"error": "because is required — holding a peer's act is a deliberate act "
+        return {"error": "because is required: holding a peer's act is a deliberate act "
                          "on the record"}
     if hours <= 0:
-        return {"error": "hours must be positive — a hold is time-boxed, never indefinite"}
+        return {"error": "hours must be positive, a hold is time-boxed, never indefinite"}
     holder = (holder or "").strip()
     held = (held or "").strip()
     if holder == held:
@@ -3543,7 +3542,7 @@ async def hold_action(
     holder, held = row_holder["canonical"], row_held["canonical"]
     peer = await peer_of_seat(actions.pool, holder)
     if peer != held:
-        return {"error": f"{holder!r} and {held!r} are not an active peer_of pair — a "
+        return {"error": f"{holder!r} and {held!r} are not an active peer_of pair, a "
                          "hold is a peer's own power, not a stranger's"}
     now = datetime.now(UTC)
     deadline = now + timedelta(hours=hours)
@@ -3560,8 +3559,8 @@ async def hold_action(
                                       evidence_class=_EC)
     return {"held": str(thread_id), "holder": holder, "held_seat": held, "act": act,
             "deadline": deadline.isoformat(),
-            "note": "resolve_thread on this id when it's respected/resolved — the "
-                    "auto-escalation half is not built yet (decision e85d3040)"}
+            "note": "resolve_thread on this id when it's respected/resolved. The "
+                    "auto-escalation half is not built yet"}
 
 
 async def detach_seat(
@@ -3579,7 +3578,7 @@ async def detach_seat(
     edge out of it (nothing to detach)."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — detaching a seat from its manager is a "
+        return {"error": "because is required: detaching a seat from its manager is a "
                          "deliberate act on the record"}
     row = await _resolve_active_seat(actions.pool, seat)
     if row is None:
@@ -3589,7 +3588,7 @@ async def detach_seat(
         "JOIN objects t ON t.id=l.to_id WHERE l.from_id=$1 AND l.type='managed_by' "
         "AND (l.valid_until IS NULL OR l.valid_until > now())", row["id"])
     if link is None:
-        return {"error": f"{row['canonical']} has no active manager — nothing to detach"}
+        return {"error": f"{row['canonical']} has no active manager, nothing to detach"}
     now = datetime.now(UTC)
     await actions.invalidate_link(link["from_id"], link["to_id"], "managed_by", actor, now)
     await actions.assert_property(row["id"], "detached_because", because, actor, now, _CONF,
@@ -3618,7 +3617,7 @@ async def attach_seat(
     alone; detach first, then attach, if that's what's meant)."""
     evidence = (evidence or "").strip()
     if not evidence:
-        return {"error": "evidence is required — attaching a seat to a manager is a "
+        return {"error": "evidence is required: attaching a seat to a manager is a "
                          "deliberate act on the record"}
     worker_row = await _resolve_active_seat(actions.pool, worker)
     if worker_row is None:
@@ -3634,7 +3633,7 @@ async def attach_seat(
         "AND (l.valid_until IS NULL OR l.valid_until > now())", worker_row["id"])
     if existing is not None:
         return {"error": f"{worker_row['canonical']} already has an active manager "
-                         f"({existing['manager']}) — detach_seat first, then attach"}
+                         f"({existing['manager']}), detach_seat first, then attach"}
     now = datetime.now(UTC)
     await actions.create_link(worker_row["id"], manager_row["id"], "managed_by", actor, now,
                               _CONF, evidence_class=_EC)
@@ -3679,7 +3678,7 @@ async def promote_seat(
     'bonded' | 'already-managed' | 'refused: <why>'."""
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — promoting a seat over workers is a "
+        return {"error": "because is required: promoting a seat over workers is a "
                          "deliberate act on the record"}
     target = (target or "").strip()
     target_row = await _resolve_active_seat(actions.pool, target)
@@ -3696,7 +3695,7 @@ async def promote_seat(
             caller_desc = (f"{actor} (seat {caller_seat_id})" if caller_seat_id
                           else f"{actor} (holds no seat)")
             return {"error": f"{caller_desc} is not authorized to promote {target_canonical} "
-                             "over workers — this runs by the promoted seat's OWN body or "
+                             "over workers, this runs by the promoted seat's OWN body or "
                              "the operator, never a coordinator acting on another's behalf"}
 
     manifest: dict[str, str] = {}
