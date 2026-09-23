@@ -44,12 +44,13 @@ edge types store the same `(child, parent)` shape and the pure resolver never in
 which one built its `parent_of` map: a successor restating its ancestor's claim is a
 relay (clamped unless it looked), a disagreeing successor is a dispute, and a successor
 with its own observation act stands. The
-session-miner now SOURCES each extraction to the ORIGINATING agent (`agent:<session>`, DERIVED,
-with `session-miner` as the actor — see ingest/sessions.emit_yield), so a mined fact carries the
-agent's own identity and sits IN this tree: the clamp reaches it, and the miner is no longer the
-universal re-teller that laundered a sub-agent's words under its own source. (This closes the
-feeder tracked as the miner over-read, f34c572c; the read-side write-time dedup lives with the
-miner.)
+session-miner (ingest/sessions.emit_yield, ruling ceae1604 — THE SPEAKER IS THE ADVERSARY, THE
+AGENT IS THE SUBJECT) now SOURCES every mined extraction to the literal actor `session-miner`
+itself, never to the originating agent's own canonical; the mined agent rides separately as
+`about_agent` (the subject the miner read, not the speaker). A mined fact's `source_id` is
+therefore never `agent:*` — it does NOT sit in the spawned_by/succeeded_from tree this clamp
+walks, and the clamp does not reach it today. (The miner-over-read feeder, f34c572c, closes a
+different way: the read-side write-time dedup already inside emit_yield, not via this clamp.)
 
 CONSUMER AUDIT (the winning_props→credence convergence question, closed by classification):
 every remaining `winning_props` read was examined for whether agent sources can co-assert the
