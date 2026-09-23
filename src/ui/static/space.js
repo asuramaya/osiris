@@ -383,6 +383,29 @@ export async function initSpace(container) {
   // (camera move, data, focus, label pick); the loop stops scheduling itself entirely once
   // idle rather than polling at 20fps forever.
   let dirty = true, running = true, rafPending = false;
+  // THE SETTINGS PANE FOLLOW-UP (thread ea9aedba, Thoth mail 13404, live Chrome review):
+  // positionLabels' own declutter state used to sit right next to positionLabels itself,
+  // far below markDirty/renderIfDirty/forceRender -- all of which CAN reach positionLabels
+  // (forceRender directly; markDirty via its requestAnimationFrame(renderIfDirty) chain).
+  // `positionLabels`/`overlapsPlaced` are function declarations (hoisted, callable from
+  // anywhere in this scope from the first line), but `_placed` was a `const` -- in the
+  // temporal dead zone until ITS OWN line ran. An early forceRender() call (or, in a
+  // headless/fake-timer test harness, an rAF firing sooner than a real browser's next
+  // paint) reached positionLabels() before that line executed and threw "Cannot access
+  // '_placed' before initialization" at its very first statement. Hoisted here, before
+  // every path that can reach positionLabels, closes that window for good.
+  const _placed = []; // [x0,y0,x1,y1] boxes already shown this frame
+  const LABEL_W = 90, LABEL_H = 16, LABEL_GAP = 4;
+  // `w` defaults to LABEL_W for any caller that doesn't have a real measured width handy
+  // (e.g. a synthetic probe) -- every real call site below always passes the label's own
+  // cached labelWidths entry.
+  function overlapsPlaced(x, y, w = LABEL_W) {
+    const x0 = x - w / 2, x1 = x + w / 2, y0 = y - LABEL_H, y1 = y;
+    for (const b of _placed) {
+      if (x0 < b[2] + LABEL_GAP && x1 > b[0] - LABEL_GAP && y0 < b[3] + LABEL_GAP && y1 > b[1] - LABEL_GAP) return true;
+    }
+    return false;
+  }
   function markDirty() {
     dirty = true;
     if (!running || rafPending) return;
@@ -3386,19 +3409,9 @@ export async function initSpace(container) {
   // nearest-to-camera-first (from pickLabels' own sort), so a plain greedy pass — show a
   // label unless its screen box would overlap one already placed this frame — keeps the
   // closest/most-relevant labels and silently drops the rest, rather than stacking dozens
-  // of overlapping strings into an unreadable wall of text.
-  const _placed = []; // [x0,y0,x1,y1] boxes already shown this frame
-  const LABEL_W = 90, LABEL_H = 16, LABEL_GAP = 4;
-  // `w` defaults to LABEL_W for any caller that doesn't have a real measured width handy
-  // (e.g. a synthetic probe) -- every real call site below always passes the label's own
-  // cached labelWidths entry.
-  function overlapsPlaced(x, y, w = LABEL_W) {
-    const x0 = x - w / 2, x1 = x + w / 2, y0 = y - LABEL_H, y1 = y;
-    for (const b of _placed) {
-      if (x0 < b[2] + LABEL_GAP && x1 > b[0] - LABEL_GAP && y0 < b[3] + LABEL_GAP && y1 > b[1] - LABEL_GAP) return true;
-    }
-    return false;
-  }
+  // of overlapping strings into an unreadable wall of text. _placed/overlapsPlaced
+  // themselves are declared much earlier in this function now (thread ea9aedba, Thoth
+  // mail 13404) -- see that declaration's own comment for why.
   function positionLabels() {
     _placed.length = 0;
     // THE LAST RENDERER: object titles show at every zoom now, no tier gate -- the same

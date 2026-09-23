@@ -963,7 +963,8 @@ function renderKeyPanelHtml(s) {
     : '';
   var warn = s.recovery_warning
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + esc(s.recovery_warning) +
-      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal, or' + enrollBtn +
+      ' — run <code>osiris soul-key enroll-recovery</code> in your terminal' +
+      (enrollBtn ? ', or' + enrollBtn : '.') +
       '</div>' : '';
   var legacy = (s.legacy_plaintext_rows != null && s.legacy_plaintext_rows > 0)
     ? '<div style="color:#e5534b;margin:8px 0">⚠ ' + s.legacy_plaintext_rows +
