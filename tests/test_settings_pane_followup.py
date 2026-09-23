@@ -90,3 +90,27 @@ def test_position_labels_own_body_is_unchanged_by_the_hoist() -> None:
     # test file's own split-on-"function positionLabels()" anchor) must still work.
     body = _SPACE_JS.split("function positionLabels() {", 1)[1][:200]
     assert "_placed.length = 0;" in body
+
+
+# --- the same TDZ class hit labeledNodes too (live console finding, a real console
+# exception on first render: "Cannot access 'labeledNodes' before initialization" at
+# positionLabels, reached via renderIfDirty before pickLabels' own scope had run) --------
+
+def test_labeled_nodes_and_friends_are_declared_before_mark_dirty() -> None:
+    labeled_at = _SPACE_JS.index("let labeledNodes = []")
+    mark_dirty_at = _SPACE_JS.index("function markDirty()")
+    assert labeled_at < mark_dirty_at
+
+
+def test_labeled_nodes_is_declared_before_every_path_that_can_reach_position_labels() -> None:
+    labeled_at = _SPACE_JS.index("let labeledNodes = []")
+    force_render_at = _SPACE_JS.index(
+        "forceRender: () => { renderScene(); positionLabels(); }")
+    window_space_at = _SPACE_JS.index("window.__space = api;")
+    assert labeled_at < force_render_at < window_space_at
+
+
+def test_pick_labels_own_body_is_unchanged_by_the_labeled_nodes_hoist() -> None:
+    body = _SPACE_JS.split("function pickLabels() {", 1)[1][:2500]
+    assert "labeledNodes = pool.concat(projectPool, communityPool)" in body
+    assert ".slice(0, N_LABELS);" in body

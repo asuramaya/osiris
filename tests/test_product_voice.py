@@ -46,7 +46,10 @@ whole-file text scan (matching the census that sized this problem) over ten dire
 buckets: src/ui/static, src/cli.py, src/mcp_server.py, src/api, src/orchestrator,
 src/ingest, src/config, scripts, tests, docs -- baselined PER DIRECTORY, not per file,
 because the cleanup lands module by module and a per-directory number is what a single
-module's cleanup commit can honestly claim to lower. Tier 2 only ratchets against
+module's cleanup commit can honestly claim to lower. src/ui/static's own vendor/
+subdirectory (unmodified third-party libraries) is excluded from the scan entirely
+(_TIER2_EXCLUDE_DIRS): it is not our prose, and its minified constants and ordinary
+words only ever false-positive against the six patterns. Tier 2 only ratchets against
 regrowth, same growth-only shape as tier 1. A separate coinage count (in-session
 phrases like "the ... door", "hot path", "the ladder") is measured and printed on regen
 but asserts nothing -- reported, not yet
@@ -90,6 +93,11 @@ _TIER2_BUCKETS: list[tuple[str, list[str] | None]] = [
     ("docs", ["*.md"]),
 ]
 
+# Vendored third-party code is not our prose: src/ui/static/vendor/ carries unmodified
+# libraries (marked.min.js, three.core.js, three.module.js) whose minified constants and
+# ordinary words ("atlas" as a Three.js term) false-positive against the six-pattern scan.
+_TIER2_EXCLUDE_DIRS = {"vendor"}
+
 
 def _tier2_bucket_files(rel: str, patterns: list[str] | None) -> list[Path]:
     base = ROOT / rel
@@ -98,7 +106,7 @@ def _tier2_bucket_files(rel: str, patterns: list[str] | None) -> list[Path]:
     files: list[Path] = []
     for pattern in patterns:
         files.extend(sorted(base.rglob(pattern)))
-    return files
+    return [f for f in files if not _TIER2_EXCLUDE_DIRS & set(f.relative_to(base).parts)]
 
 
 def _names_re() -> re.Pattern[str]:
