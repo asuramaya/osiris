@@ -1084,6 +1084,23 @@ select.field:focus, input.field:focus { border-color: var(--border-focus); }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* THE SETTINGS PANE FOLLOW-UP (thread ea9aedba, Thoth mail 13404, live Chrome review):
+   button/select/input/textarea's own global rule (top of this file) sets `color` but
+   never `background` -- every editable cell an ee-table renders (the Offload Targets
+   panel's own row editor, the Registry panel's own field inputs) inherited the plain
+   browser default (white) under the theme's near-white text, unreadable. Same visual
+   language `.filter` already establishes elsewhere in the console. */
+.ee-table input:not([type="checkbox"]), .ee-table select {
+  background: var(--panel2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 3px 6px;
+  color: var(--text);
+}
+.ee-table input:not([type="checkbox"]):focus, .ee-table select:focus {
+  border-color: var(--border-focus);
+  outline: none;
+}
 .ee-type-pill {
   display: inline-flex;
   align-items: center;

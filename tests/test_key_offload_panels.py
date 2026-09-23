@@ -37,7 +37,7 @@ def test_key_panel_degrades_to_a_plain_notice_on_404_not_an_error() -> None:
 
 
 def test_key_panel_status_card_shows_backend_path_and_recovery_paths() -> None:
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2000]
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:2100]
     assert "keyBackendLabel(s.backend)" in body
     assert "s.path" in body
     assert "keyAgeProse(s.created_age_seconds)" in body
