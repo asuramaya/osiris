@@ -24,15 +24,18 @@ def test_offload_section_loads_the_restic_credential_widget() -> None:
 
 
 def test_restic_credential_widget_offers_init_only_when_absent() -> None:
-    body = _CONSOLE_JS.split("function renderResticCredentialHtml(s) {", 1)[1][:400]
+    body = _CONSOLE_JS.split("function renderResticCredentialHtml(s) {", 1)[1][:900]
     assert "s.present ? ''" in body
     assert "initResticKey()" in body
 
 
-def test_init_restic_key_posts_the_new_route() -> None:
+def test_init_restic_key_reads_the_inline_backend_select_no_prompt() -> None:
+    # PRODUCT VOICE (ruling 1e2ef5c3): an inline <select> next to the button, never a
+    # browser prompt() dialog.
     body = _CONSOLE_JS.split("async function initResticKey() {", 1)[1][:600]
+    assert "$('restic-init-backend')" in body
+    assert "prompt(" not in body
     assert "'/restic-key/init'" in body
-    assert "backend: backend" in body
     assert "renderResticCredentialWidget();" in body
 
 
@@ -73,18 +76,22 @@ def test_backup_status_fetch_is_its_own_reusable_function() -> None:
 
 # --- item 3: soul-key init restarts the daemons ----------------------------------------
 
-def test_init_key_sends_restart_true() -> None:
+def test_init_key_sends_the_inline_restart_checkbox_state() -> None:
+    # PRODUCT VOICE (ruling 1e2ef5c3): an inline checkbox (default checked, rendered
+    # in renderKeyPanelHtml's own "not present" actions block) replaces the old
+    # confirm() dialog -- initKey reads its state directly, never a browser prompt.
     body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1100]
-    assert "restart: true" in body
-
-
-def test_init_key_confirms_before_restarting_the_daemons() -> None:
-    # restarting osiris-mcp mid-request is consequential (the console itself runs
-    # on it) -- same confirm() gate rotateKey's own consequential action already uses.
-    body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1100]
-    assert "if (!confirm(" in body
+    assert "$('key-init-restart')" in body
+    assert "restart: restart" in body
+    assert "confirm(" not in body
 
 
 def test_init_key_surfaces_the_restart_hint() -> None:
     body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1400]
     assert "res.restart_hint" in body
+
+
+def test_key_panel_offers_an_inline_restart_checkbox_when_not_present() -> None:
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:3000]
+    assert "id=\"key-init-restart\" checked" in body
+    assert "Restart the services now" in body

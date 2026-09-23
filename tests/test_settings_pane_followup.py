@@ -63,7 +63,7 @@ def test_recovery_warning_ends_with_a_period_when_no_enroll_button_applies() -> 
     # status's own law: warn whenever <=1 enrolled) but enrollBtn is deliberately empty
     # (the server refuses a second enrollment) -- the sentence must still read cleanly.
     body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1200]
-    assert "in your terminal'" in body
+    assert "in a terminal'" in body
     assert "enrollBtn ? ', or' + enrollBtn : '.')" in body
 
 

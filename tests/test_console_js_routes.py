@@ -379,29 +379,32 @@ def test_settings_panel_path_and_schedule_round_trip_an_empty_box_to_null() -> N
 
 
 def test_settings_panel_secret_ref_never_gets_a_save_button() -> None:
-    body = _JS.split("function renderSettingsPanelHtml(items)", 1)[1].split(
-        "\nfunction ", 1)[0]
+    body = _JS.split("function settingsActionCell(it)", 1)[1][:900]
     assert "it.type === 'secret_ref'" in body
 
 
-def test_settings_panel_secret_ref_gets_a_rotate_button_instead() -> None:
-    """SECRETS ROTATE ACT (thread f4498ab304e4's own follow-up, Thoth mail 10441): the
-    empty cell `secret_ref` used to render (a Save button would silently no-op — that
-    door refused outright until this pass) is now a Rotate button wired to its own
-    confirm-then-POST function, not saveSetting's own value-reading path."""
-    body = _JS.split("function renderSettingsPanelHtml(items)", 1)[1].split(
-        "\nfunction ", 1)[0]
+def test_settings_panel_secret_ref_gets_a_replace_button_instead() -> None:
+    """PRODUCT VOICE (ruling 1e2ef5c3): the secret_ref cell's own action is a Replace
+    button, gated on an inline confirm checkbox (settingsUpdateButtonState) plus its
+    own inline password <input> (settingsFieldInput's own secret_ref branch) --
+    never a browser confirm()/prompt() dialog, never saveSetting's own value-reading
+    path."""
+    body = _JS.split("function settingsActionCell(it)", 1)[1][:900]
     assert "rotateSecret(" in body
-    assert ">Rotate<" in body
+    assert '>Replace</button>' in body
 
 
 def test_rotate_secret_function_exists_and_never_reads_settingsfieldvalue() -> None:
     assert "async function rotateSecret(key)" in _JS
     body = _JS.split("async function rotateSecret(key)", 1)[1].split(
         "\nasync function ", 1)[0]
-    assert "settingsFieldValue" not in body  # no <input> exists for a secret to read
+    assert "settingsFieldValue" not in body  # reads the inline <input> directly instead
     assert "fetch('/settings'" in body
-    assert "confirm(" in body  # unconditional, never gated on item.consequence
+    # PRODUCT VOICE: no browser dialog -- gated on the inline confirm checkbox instead,
+    # unconditional (never keyed off item.consequence, same law the old confirm() held).
+    assert "confirm(" not in body
+    assert "$('setting-confirm-' + key)" in body
+    assert "!confirmEl || !confirmEl.checked" in body
 
 
 def test_settings_panel_shows_a_live_value_only_when_the_backend_sends_one() -> None:
@@ -413,10 +416,15 @@ def test_settings_panel_shows_a_live_value_only_when_the_backend_sends_one() -> 
 
 
 def test_settings_panel_confirms_before_a_high_consequence_save() -> None:
-    body = _JS.split("async function saveSetting(key)", 1)[1].split(
+    # PRODUCT VOICE: an inline checkbox gates the button (settingsActionCell), never a
+    # browser confirm() dialog; saveSetting itself re-checks the checkbox's own state.
+    action_body = _JS.split("function settingsActionCell(it)", 1)[1][:900]
+    assert "it.consequence === 'high'" in action_body
+    save_body = _JS.split("async function saveSetting(key)", 1)[1].split(
         "\n// ── ", 1)[0]
-    assert "item.consequence === 'high'" in body
-    assert "confirm(" in body
+    assert "item.consequence === 'high'" in save_body
+    assert "confirm(" not in save_body
+    assert "$('setting-confirm-' + key)" in save_body
 
 
 def test_settings_panel_because_is_only_prompted_when_the_spec_requires_it() -> None:

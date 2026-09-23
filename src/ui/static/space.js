@@ -469,10 +469,10 @@ export async function initSpace(container) {
   renderer.domElement.addEventListener("webglcontextlost", (ev) => {
     ev.preventDefault();
     pause();
-    setStatus("WebGL context lost — recovering…");
+    setStatus("Graphics context lost. Recovering…");
   }, false);
   renderer.domElement.addEventListener("webglcontextrestored", () => {
-    setStatus("WebGL context restored — rebuilding…");
+    setStatus("Graphics context restored. Rebuilding…");
     if (idToNode.length) {
       buildScene(idToNode, edges);
       fitToNodes(idToNode);
@@ -960,7 +960,7 @@ export async function initSpace(container) {
       const div = document.createElement("div");
       div.className = "lod-glyph-label";
       const nd = idById.get(lm.id);
-      div.textContent = `${nd ? labelTextFor(nd) : lm.id} — ${lm.count} ${t}`;
+      div.textContent = `${nd ? labelTextFor(nd) : lm.id}: ${lm.count} ${t}`;
       labelsEl.appendChild(div);
       highDegreeBadgeEntries.push({ id: lm.id, type: t, div });
     }

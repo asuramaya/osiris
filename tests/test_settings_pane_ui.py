@@ -41,12 +41,18 @@ def test_old_panel_renderers_still_exist_nothing_deleted() -> None:
 # --- the shell: five sections, loaded in parallel, each degrading independently -------
 
 def test_pane_shell_builds_all_five_sections() -> None:
+    # PRODUCT VOICE (ruling 1e2ef5c3, thread ... layout item 3): Readiness ("The Box"
+    # renamed) moved up to right after Backup & Offload, before Registry.
     body = _CONSOLE_JS.split("async function renderSettingsPane() {", 1)[1][:600]
     assert "settingsSectionShell('key', 'Key')" in body
     assert "settingsSectionShell('offload', 'Backup &amp; Offload')" in body
+    assert "settingsSectionShell('box', 'Readiness')" in body
     assert "settingsSectionShell('registry', 'Registry')" in body
     assert "settingsSectionShell('desk', 'Operator Desk')" in body
-    assert "settingsSectionShell('box', 'The Box')" in body
+    offload_at = body.index("settingsSectionShell('offload'")
+    box_at = body.index("settingsSectionShell('box'")
+    registry_at = body.index("settingsSectionShell('registry'")
+    assert offload_at < box_at < registry_at
 
 
 def test_pane_shell_loads_sections_independently_via_promise_all() -> None:
@@ -91,7 +97,7 @@ def test_backup_status_shows_offload_target_presence_and_last_offload() -> None:
     body = _CONSOLE_JS.split("function renderBackupStatusHtml(status) {", 1)[1][:1500]
     assert "status.offbox && status.offbox.offload_targets" in body
     assert "t.last_successful_offload" in body
-    assert "reachability is a network fact this door never checks by design" in body
+    assert "Connection is not checked automatically" in body
 
 
 # --- section 3: REGISTRY --------------------------------------------------------------
@@ -140,7 +146,7 @@ def test_merge_candidates_show_a_copy_line_never_auto_execute() -> None:
     # never wire a click directly to a merge write, only to REJECT and to a copy line
     # the operator pastes themselves.
     body = _CONSOLE_JS.split("function renderMergeCandidatesHtml(list) {", 1)[1][:1100]
-    assert "merges stay the operator" in body
+    assert "Merging is a deliberate step you run yourself" in body
     assert "copyMergeLine(this)" in body
     assert "rejectMergeCandidate(this)" in body
     assert "'/merge-candidates/" not in body
@@ -167,7 +173,7 @@ def test_box_never_probes_restic_reachability_live() -> None:
     body = _CONSOLE_JS.split(
         "function renderBoxHtml(soulKey, resticKey, backupSettings, deployStatus) {", 1)[1][:1700]
     assert "kind === 'restic'" in body
-    assert "reachability is never probed live by design" in body
+    assert "Connection is not checked automatically" in body
 
 
 def test_box_shows_deploy_snapshot_in_sync_state() -> None:

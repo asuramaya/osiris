@@ -97,7 +97,8 @@ def test_a_high_degree_targets_incoming_edge_is_excluded_from_lines_folded_into_
     assert "if (lm && e.target === lm.id) {" in edge_body
     assert "if (!highDegreeBadgesHiddenByLens) return false;" in edge_body
     badge_body = _SPACE_JS.split("function buildHighDegreeBadges()", 1)[1][:900]
-    assert "div.textContent = `${nd ? labelTextFor(nd) : lm.id} — ${lm.count} ${t}`;" \
+    # PRODUCT VOICE (ruling 1e2ef5c3): em dash replaced with a colon.
+    assert "div.textContent = `${nd ? labelTextFor(nd) : lm.id}: ${lm.count} ${t}`;" \
         in badge_body
 
 

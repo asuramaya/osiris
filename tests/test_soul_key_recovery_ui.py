@@ -152,7 +152,7 @@ def test_recover_posts_the_resolved_path_from_soul_key_status_not_a_client_guess
 # --- the Key panel offers both buttons at the right times, never a duplicate enroll ----
 
 def test_recover_button_only_offered_when_no_key_is_present() -> None:
-    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1300]
+    body = _CONSOLE_JS.split("function renderKeyPanelHtml(s) {", 1)[1][:1800]
     assert "!s.present" in body
     assert "recoverKeyBrowser()" in body
 
