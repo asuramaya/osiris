@@ -1,8 +1,8 @@
-"""Object Set Service — REST read/query surface over the typed graph (DESIGN §2.4).
+"""Object Set Service: REST read/query surface over the typed graph (DESIGN §2.4).
 
 Powers the Cytoscape/MapLibre UI: object search, an object's current (multi-source)
 properties, an N-hop subgraph for the canvas, the helpers available on an object
-(from the manifest registry, not hardcoded — DESIGN §8 UI), the handoff + merge
+(from the manifest registry, not hardcoded, DESIGN §8 UI), the handoff + merge
 review trays, and time-travel snapshots ("what did we know on Tuesday", §12) which
 the event-sourced design makes a bounded query.
 
@@ -86,15 +86,14 @@ _INBOX_STATIC_DIR = Path(__file__).resolve().parent / "inbox" / "static"
 
 
 class _RevalidatingStaticFiles(StaticFiles):
-    """THE LEGIBILITY PASS review, flaw #4 (Thoth mail 10752): after every /ui deploy this
-    whole session, a plain reload could still serve a STALE osiris.css/console.js/space.js —
-    Thoth's own adversarial review measured the canvas controls still bottom-anchored on a
-    freshly-deployed build (the exact rect a stale cached stylesheet renders), and this agent
-    hit the identical symptom live-verifying an earlier tip, fixed only by a hard reload.
+    """A plain reload could still serve a STALE osiris.css/console.js/space.js after a /ui
+    deploy: an adversarial review measured the canvas controls still bottom-anchored on a
+    freshly-deployed build (the exact rect a stale cached stylesheet renders), reproduced
+    live while verifying an earlier change, fixed only by a hard reload.
     Starlette's own StaticFiles sends ETag/Last-Modified but no Cache-Control, so a browser's
     HEURISTIC cache can reuse a plain-reload response without even a conditional request.
     `no-cache` forces revalidation on every load (a 304 on an unchanged file, a real refetch
-    on a changed one) without disabling caching outright -- the actual fix for a codebase
+    on a changed one) without disabling caching outright: the actual fix for a codebase
     whose static assets change every few minutes during active development."""
 
     def file_response(self, *args: object, **kwargs: object) -> Response:
@@ -143,9 +142,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         app.state.pool = pool or await create_pool(
             settings.database_url, max_size=settings.osiris_api_pool_size,
             application_name="osiris-console")
-        # the Type catalog (task #97): schema.py's declared types as graph objects.
+        # the Type catalog: schema.py's declared types as graph objects.
         # ensure_type's keep-prior-on-omission contract makes this safe to run on
-        # every boot — idempotent, never blanks an already-richer Type.
+        # every boot, idempotent, never blanking an already-richer Type.
         await seed_catalog(Actions(app.state.pool))
         # manifests = file helpers + search-engine dorking + osint4all suggest sources
         searches = search_manifests()
@@ -153,15 +152,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         app.state.connectors = {**CONNECTORS, **{hid: searxng_search for hid in searches}}
         app.state.redis = create_redis(settings.redis_url)
         # the Arq queue: the API ENQUEUES heavy jobs (e.g. case expansion) onto the
-        # worker via this pool instead of running them inline — the worker⊥surface cut.
+        # worker via this pool instead of running them inline, keeping the worker cut
+        # cleanly from the request-serving surface.
         app.state.arq = await create_arq_pool(RedisSettings.from_dsn(settings.redis_url))
-        # triggers are a projection of manifests (#5) — (re)project on startup so a
+        # triggers are a projection of manifests: (re)project on startup so a
         # fresh deployment actually fires helpers (else Expand finds no triggers).
-        # THE ASGI APP MUST ALWAYS BIND (Thoth mail 10214, a live incident): a
-        # concurrent pg_dump held a lock project_triggers' own TRUNCATE needed, hanging
-        # startup. project_triggers no longer takes that lock and sets its own bounded
+        # THE APP MUST ALWAYS BIND: a live incident found a concurrent pg_dump holding a
+        # lock project_triggers' own TRUNCATE needed, hanging startup.
+        # project_triggers no longer takes that lock and sets its own bounded
         # `lock_timeout`, so this can only still raise LockNotAvailableError against some
-        # OTHER exclusive-lock holder neither of us anticipated — caught here rather than
+        # OTHER exclusive-lock holder nobody anticipated. Caught here rather than
         # left to hang the lifespan forever: log once, leave the previous projection in
         # place, and let the console come up regardless (a stale trigger set is a much
         # smaller failure than a console that never binds).
@@ -170,8 +170,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except asyncpg.exceptions.LockNotAvailableError:
             _log.warning(
                 "project_triggers timed out waiting for a lock on `triggers` (likely a "
-                "concurrent pg_dump or similar) — leaving the previous projection in "
-                "place; the console still binds")
+                "concurrent pg_dump or similar); leaving the previous projection in "
+                "place, the console still binds")
         try:
             yield
         finally:
@@ -182,13 +182,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 await app.state.pool.close()
 
     app = FastAPI(title="Osiris Object Set Service", lifespan=lifespan)
-    # THE CONSOLE GRACEFUL SHUTDOWN (thread 0be2f790's own deploy-reliability follow-up,
-    # Thoth DM 10653): an SSE generator's `while not await request.is_disconnected()`
-    # loop never notices the SERVER shutting down — only a client-initiated disconnect,
-    # which an operator's browser holding a stream open across a restart never sends.
-    # Every SSE route below also checks this event, set the instant uvicorn's shutdown
-    # sequence reaches the lifespan above (right after `yield` returns, before the
-    # pool/redis/arq teardown that follows) — a stalled stream now exits on its own
+    # THE CONSOLE GRACEFUL SHUTDOWN: an SSE generator's `while not await
+    # request.is_disconnected()` loop never notices the SERVER shutting down, only a
+    # client-initiated disconnect, which a browser holding a stream open across a restart
+    # never sends. Every SSE route below also checks this event, set the instant uvicorn's
+    # shutdown sequence reaches the lifespan above (right after `yield` returns, before the
+    # pool/redis/arq teardown that follows), so a stalled stream now exits on its own
     # within one `keep-alive` tick instead of holding the process open until systemd's
     # TimeoutStopSec SIGKILLs it. Set HERE, not inside the lifespan closure: a test
     # fixture building `create_app()` without ever driving its lifespan (tests/
@@ -215,7 +214,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/schema")
     async def get_schema() -> dict[str, Any]:
-        """The semantic layer — the declared Object-Type + Link-Type catalog. Every
+        """The semantic layer: the declared Object-Type + Link-Type catalog. Every
         surface reads its types/colours/shapes from here (one source of truth)."""
         return ontology_catalog()
 
@@ -242,9 +241,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     @app.post("/cases/{case_id}/expand")
     async def case_expand(case_id: uuid.UUID, request: Request) -> dict[str, Any]:
         """ENQUEUE the case expansion onto the worker and return immediately. The
-        heavy crawl never runs in the API's event loop (the worker⊥surface cut), so a
-        runaway expansion can't block or crash the console. The SSE stream surfaces
-        progress, reading the same Postgres the worker writes to."""
+        heavy crawl never runs in the API's event loop, so a runaway expansion can't
+        block or crash the console. The SSE stream surfaces progress, reading the same
+        Postgres the worker writes to."""
         job = await request.app.state.arq.enqueue_job("expand_case_job", str(case_id))
         return {"started": True, "job_id": job.job_id if job else None}
 
@@ -276,7 +275,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/cases")
     async def list_cases(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        """Analyses (never room-scoped — see the ROOM'S REST SURFACE note below)."""
+        """Analyses (never room-scoped; see the room-retirement note below)."""
         rows = await p.fetch(
             "SELECT c.id, c.name, c.owner, count(DISTINCT co.object_id) AS object_count "
             "FROM cases c LEFT JOIN case_objects co ON co.case_id = c.id "
@@ -285,27 +284,25 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         return [dict(r) for r in rows]
 
-    # ROOM'S REST SURFACE IS DELETED, NOT RENAMED (WAVE 28, ruling 70c001ec/decision
-    # a47a0c7f, Thoth dispatch 12310/12807): GET/POST /rooms, the `?room=` READ filter on
-    # /cases and /compositions, and every last piece of JS plumbing that built one are all
-    # gone now — "end to end" turned out to mean this too, not just the mint/list doors
-    # removed earlier this wave. UNTOUCHED, per the same ruling: the underlying
-    # orchestrator.compositions.create_room/list_rooms functions, the `rooms` table itself
-    # (migration 0070_room_retirement's own law — "REVERSIBLE, NOT A DELETE... stays as
-    # read-only history"), room_id columns, and save_composition's own room_id fallback-
-    # assignment machinery (ruling 89e67c49) on the WRITE side — a separate, deeper piece
-    # this dispatch's own "read-scope on ?room=" wording never named.
+    # ROOM'S REST SURFACE IS DELETED, NOT RENAMED: GET/POST /rooms, the `?room=` READ
+    # filter on /cases and /compositions, and every last piece of JS plumbing that built
+    # one are all gone now, not just the earlier mint/list routes. UNTOUCHED: the
+    # underlying orchestrator.compositions.create_room/list_rooms functions, the `rooms`
+    # table itself (a reversible retirement, not a delete: it stays as read-only history),
+    # room_id columns, and save_composition's own room_id fallback-assignment machinery
+    # on the WRITE side remain, a separate, deeper piece this cleanup's own read-scope
+    # rewrite never touched.
 
     @app.get("/search")
     async def knowledge_search(
         q: str, limit: int = Query(12, le=50),
         p: asyncpg.Pool = Depends(get_pool),
     ) -> dict[str, Any]:
-        """ONE ENGINE (thread 0deaec4f rung 1, closed): the console search bar rides the
-        SAME fn_search as the MCP tool — grade × recency ranking, testimony per hit, and
-        the search lands in search_log so console searches feed the retrieval telemetry
-        instead of being invisible to it. /objects?q= below remains the object BROWSER's
-        typed filter (a different job: enumerate by type, not rank knowledge)."""
+        """ONE ENGINE: the console search bar rides the SAME fn_search as the MCP tool,
+        grade times recency ranking, testimony per hit, and the search lands in
+        search_log so console searches feed the retrieval telemetry instead of being
+        invisible to it. /objects?q= below remains the object BROWSER's typed filter (a
+        different job: enumerate by type, not rank knowledge)."""
         out = await run_spec(
             p, {"op": "function", "name": "search",
                 "args": {"q": q, "limit": limit, "caller": "console"}},
@@ -321,14 +318,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         project: list[str] | None = Query(None),
         exclude_types: str | None = None,
     ) -> dict[str, Any]:
-        """The cheap aggregate the browse surface's own count/scope chrome needs (#196,
-        Thoth msg 5600) — a per-type census over the SAME live scope `/objects` enumerates
-        (same status filter, same case/project scoping), instead of the shell inferring
-        counts from a capped `/objects?limit=1500` fetch (silently wrong the moment a type
-        or scope exceeds the cap — exactly the 31,189-objects-Agent-10,617 shape the
-        dispatch's own measurement named). Not row-identical to `/objects`'s per-type
-        300-cap window — this is the TRUE count, uncapped, the number the cap itself needs
-        to be honest about."""
+        """The cheap aggregate the browse surface's own count/scope chrome needs: a
+        per-type census over the SAME live scope `/objects` enumerates (same status
+        filter, same case/project scoping), instead of the shell inferring counts from a
+        capped `/objects?limit=1500` fetch (silently wrong the moment a type or scope
+        exceeds the cap, as measured on a real 31,189-object, 10,617-Agent graph). Not
+        row-identical to `/objects`'s per-type 300-cap window: this is the TRUE count,
+        uncapped, the number the cap itself needs to be honest about."""
         excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
             if exclude_types else None
         proj_canons, proj_names = _project_filter_arrays(project)
@@ -356,20 +352,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/projects")
     async def list_projects(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        """THE PROJECT INDEX (#93, Thoth msg 5631, operator ruling 2026-07-30/d82650ec):
-        the front door over every SoftwareProject — "the rest of the projects/repos need
-        to land in the front." Measured first (ruling a87dd5c1): 91 SoftwareProject rows
-        ever minted, 42 active (31 retired + 18 merged), of which 41 carry at least one
-        live link. NEVER collapses the status dimension to one number — every status this
-        graph actually has among SoftwareProjects is returned, `status` on each row lets
-        the caller pick "what's live" vs "what has ever existed" without a second call
-        needing a different shape.
+        """THE PROJECT INDEX: one endpoint over every SoftwareProject, bringing every
+        project and repo onto one page rather than leaving them scattered across other
+        surfaces. Measured first: 91 SoftwareProject rows ever minted, 42 active (31
+        retired + 18 merged), of which 41 carry at least one live link. NEVER collapses
+        the status dimension to one number: every status this graph actually has among
+        SoftwareProjects is returned, `status` on each row lets the caller pick "what's
+        live" vs "what has ever existed" without a second call needing a different shape.
 
-        Reuses, never re-derives (#138 — no second notion of a graph's own health):
+        Reuses, never re-derives (no second notion of a graph's own health):
         `fetch_label_props`/`resolve_label` for the display name (same chain /objects
-        itself uses — the operator's own ruling: "project", never "repo", the `repo:`
+        itself uses; the display name is always "project", never "repo", the `repo:`
         canonical prefix must not leak into the UI); the `triage` composition Function
-        (buckets mode) for `links`/`last_touch`/`bucket`/`contradicted_on` — the SAME
+        (buckets mode) for `links`/`last_touch`/`bucket`/`contradicted_on`, the SAME
         identity-disagreement and connectivity classification `graph_lint`/the object
         browser already trust, not a bespoke health check invented for this one page.
         `object_count`/`object_counts_by_type` are a fresh grouped query (one query for
@@ -381,13 +376,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         if not rows:
             return []
-        # WORKTREES NESTED UNDER THEIR PARENT (thread 922d920c/55992ca9, Sekhmet's own
-        # Worktree/worktree_of shape, deferred to avoid colliding with this same page's
-        # concurrent badge/unnamed lane): one query for every active worktree_of link,
-        # never a call per project — same "one query for all, not one per row" discipline
-        # object_count/bucket already follow above. A worktree with no resolvable parent
-        # (the census's own `refused` case) never reaches here at all — worktree_of is
-        # only ever written once the parent is known.
+        # WORKTREES NESTED UNDER THEIR PARENT: one query for every active worktree_of
+        # link, never a call per project, the same "one query for all, not one per row"
+        # discipline object_count/bucket already follow above. A worktree with no
+        # resolvable parent never reaches here at all: worktree_of is only ever written
+        # once the parent is known.
         worktree_rows = await p.fetch(
             "SELECT w.id, w.canonical, proj.id AS parent_id, "
             " (SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=w.id "
@@ -419,8 +412,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         counts_by_project: dict[uuid.UUID, dict[str, int]] = {}
         for r in count_rows:
             counts_by_project.setdefault(r["project_id"], {})[r["type"]] = r["n"]
-        # one triage(mode='buckets') call per status actually present — never a second,
-        # bespoke bucket/health notion for this one page (#138)
+        # one triage(mode='buckets') call per status actually present, never a second,
+        # bespoke bucket/health notion for this one page
         bucket_by_canonical: dict[str, dict[str, Any]] = {}
         for status_val in sorted({r["status"] for r in rows}):
             out = await run_spec(
@@ -434,8 +427,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         for r in rows:
             resolved = resolve_label(
                 "SoftwareProject", label_props.get(r["id"], {}), r["canonical"])
-            # UNNAMED, HONESTLY (console thread, 2026-09-07): `.source == "canonical"` is
-            # already resolve_label's own exact signal for "nothing better was found" —
+            # UNNAMED, HONESTLY: `.source == "canonical"` is
+            # already resolve_label's own exact signal for "nothing better was found",
             # never re-derived here. A project falling to that tier showed its RAW
             # canonical, `repo:` prefix and all, as if it were a chosen name; strip the
             # scheme so at least the bare id shows (`operator`, not `repo:operator`), and
@@ -476,32 +469,31 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         before_id: uuid.UUID | None = None,
     ) -> list[dict[str, Any]]:
         # exclude_types (comma list): the shell's default set drops the 900 dead Agent
-        # hulls (10 live of 920 measured 2026-07-11) — agents belong to the fleet lens;
+        # hulls (10 live of 920 measured on 2026-07-11); agents belong to the fleet lens;
         # a toggle brings them back deliberately
         excl = [t.strip() for t in exclude_types.split(",") if t.strip()] \
             if exclude_types else None
-        # THE EXTRACTION (Thoth dispatch 9838, 588148bb's Browse tab cutover): this route's
-        # own scoping/search/pagination SQL moved to compositions.list_objects_scoped, so the
-        # composition system's `select` op can gain the exact same capability as a set of
-        # opt-in args rather than a second, drifting copy of this query. Pure refactor —
-        # same params, same defaults, same two-branch (keyset vs. capped) behavior.
+        # THE EXTRACTION (Browse tab cutover): this route's own scoping/search/pagination
+        # SQL moved to compositions.list_objects_scoped, so the composition system's
+        # `select` op can gain the exact same capability as a set of opt-in args rather
+        # than a second, drifting copy of this query. Pure refactor: same params, same
+        # defaults, same two-branch (keyset vs. capped) behavior.
         #
-        # THE TABLE FILTER QUERY SHAPE (thread 0be2f790's own operator-finding follow-up,
-        # Thoth DM 10711): `types` (repeatable) is the multi-select sibling of the legacy
-        # singular `type` — a caller passing both gets `types`, matching the browse table's
-        # own multi-pill filter bar; `status` is an extra equality narrowing, layered on top
-        # of (never replacing) list_objects_scoped's own unconditional terminal-status
-        # exclusion.
+        # THE TABLE FILTER QUERY SHAPE: `types` (repeatable) is the multi-select sibling
+        # of the legacy singular `type`. A caller passing both gets `types`, matching the
+        # browse table's own multi-pill filter bar; `status` is an extra equality
+        # narrowing, layered on top of (never replacing) list_objects_scoped's own
+        # unconditional terminal-status exclusion.
         rows = await list_objects_scoped(
             p, case_id=case_id, object_type=type, object_types=types, status=status,
             q=q, exclude_types=excl, project=project,
             limit=limit, before_created_at=before_created_at, before_id=before_id,
         )
-        # task #97 workstream 3 (ruling 52daab71): `name` used to be a raw SQL COALESCE
-        # (_OBJ_LABEL) — chain-only, no per-type RULE tier. resolve_label per row (one
-        # batched property fetch, not N) plus disambiguate_labels across the whole
-        # returned set — this IS the sidebar/table's own object list, the surface the
-        # reported collision bug (three rows truncating to one string) is most visible on.
+        # `name` used to be a raw SQL COALESCE (_OBJ_LABEL), chain-only, no per-type RULE
+        # tier. resolve_label per row (one batched property fetch, not N) plus
+        # disambiguate_labels across the whole returned set: this IS the sidebar/table's
+        # own object list, the surface a reported collision bug (three rows truncating
+        # to one string) was most visible on.
         props_by_id = await fetch_label_props(p, [r["id"] for r in rows])
         items = [
             {"id": r["id"], "type": r["type"], "canonical": r["canonical"],
@@ -521,15 +513,15 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def object_edge_counts(
         ids: str, p: asyncpg.Pool = Depends(get_pool),
     ) -> dict[str, int]:
-        """WAVE A item 7 (graph visualizer, thread 8839): a batched edge-count lookup for
-        Browse's own tiles (an "N links" badge) — kept as its OWN endpoint rather than a
-        per-row COUNT joined into `list_objects`'s already-complex query, which the browse
-        surface calls for up to 2000 rows at once; this is a second, cheap, opt-in fetch
-        the client makes for whatever page it actually rendered. `ids` is a comma-separated
-        list of object uuids; blank/malformed entries are skipped, never a 400 — a stray
-        bad id in a client-built list shouldn't blank the whole badge row. UNION ALL over
-        both `links_from_idx`/`links_to_idx` (migration 0001) rather than a single OR
-        query, so each half stays index-only."""
+        """A batched edge-count lookup for Browse's own tiles (an "N links" badge), kept
+        as its OWN endpoint rather than a per-row COUNT joined into `list_objects`'s
+        already-complex query, which the browse surface calls for up to 2000 rows at
+        once; this is a second, cheap, opt-in fetch the client makes for whatever page
+        it actually rendered. `ids` is a comma-separated list of object uuids;
+        blank/malformed entries are skipped, never a 400: a stray bad id in a
+        client-built list shouldn't blank the whole badge row. UNION ALL over both
+        `links_from_idx`/`links_to_idx` (migration 0001) rather than a single OR query,
+        so each half stays index-only."""
         id_list: list[uuid.UUID] = []
         for raw in ids.split(","):
             raw = raw.strip()
@@ -582,11 +574,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                     excl_ids.append(uuid.UUID(raw))
                 except ValueError:
                     continue
-        # NAVIGABLE SPACE piece 2 (thread 71c4ca0d): `degree` (live link count, both
-        # directions) drives the space view's own size-by-connectivity growth on top of a
-        # per-type base size — additive field, reuses _LIVE_LINK_COUNTS (the same shared
-        # CTE /graph/supernodes and /graph/clusters already join for their own orphan
-        # counts), never a second drifting degree query.
+        # `degree` (live link count, both directions) drives the space view's own
+        # size-by-connectivity growth on top of a per-type base size; additive field,
+        # reuses _LIVE_LINK_COUNTS (the same shared CTE /graph/supernodes and
+        # /graph/clusters already join for their own orphan counts), never a second
+        # drifting degree query.
         rows = await p.fetch(
             f"WITH lc AS {_LIVE_LINK_COUNTS} "
             "SELECT o.id, o.type, o.canonical, gx.v AS x, gy.v AS y, COALESCE(lc.n, 0) AS degree "
@@ -679,14 +671,14 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  FROM current_assertions WHERE name='graph_y') gy ON gy.object_id = pm.object_id "
             "GROUP BY pm.project_id, pm.project_canonical"
         )
-        # NAME, NEVER THE RAW repo: CANONICAL (Thoth dispatch 9563/9769, browse's own graph
-        # mode standing lane): the retired Atlas showed `project_canonical` verbatim — the
-        # operator's own ruling elsewhere ("project never repo") never reached this endpoint.
-        # Reuses the SAME resolve_label chain /objects and the projects composition already
-        # use, never a second name notion; a genuinely unnamed project falls to its own
-        # canonical here exactly as resolve_label always does for any other type — no
-        # bespoke repo:-stripping in this shared function (that policy lives on the
-        # projects composition's own `name_fallback` column, not the graph endpoints).
+        # NAME, NEVER THE RAW repo: CANONICAL: the retired project map view showed
+        # `project_canonical` verbatim, before the display convention (project, never
+        # repo) reached this endpoint. Reuses the SAME resolve_label chain /objects and
+        # the projects composition already use, never a second name notion; a genuinely unnamed
+        # project falls to its own canonical here exactly as resolve_label always does
+        # for any other type: no bespoke repo:-stripping in this shared function (that
+        # policy lives on the projects composition's own `name_fallback` column, not the
+        # graph endpoints).
         label_props = await fetch_label_props(p, [r["project_id"] for r in rows])
         supernodes = [
             {"id": str(r["project_id"]),
@@ -717,16 +709,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             {"source": str(r["p1"]), "target": str(r["p2"]), "weight": int(r["weight"])}
             for r in edge_rows
         ]
-        # UNFILED, positioned and reconciled against the census (the design note on
-        # 7175ef92, built per Thoth DM 9019): a project MEMBER can never itself be
-        # orphan (membership requires an in_repo edge), so the true orphan population
-        # graph_lint's own census measures necessarily concentrates entirely here --
-        # this is the one place on the Atlas the eye should go. `abstained` mirrors
-        # compositions.orphan_census's own `derivation_abstained_%`-without-`resolved`
-        # predicate (Khnum's stale-abstention catch, DM 8855) so the count matches the
-        # census exactly, never a second drifting definition. Centroid position comes
-        # from the SAME heartbeat-stored graph_x/graph_y as every project supernode --
-        # sized and placed like a project, never a bespoke layout of its own.
+        # UNFILED, positioned and reconciled against the census: a project MEMBER can
+        # never itself be orphan (membership requires an in_repo edge), so the true
+        # orphan population graph_lint's own census measures necessarily concentrates
+        # entirely here; this is the one place on the project map view the eye should go.
+        # `abstained` mirrors compositions.orphan_census's own
+        # `derivation_abstained_%`-without-`resolved` predicate (matching a known
+        # stale-abstention pattern) so the count matches the census exactly, never a
+        # second drifting definition. Centroid position comes from the SAME
+        # heartbeat-stored graph_x/graph_y as every project supernode: sized and placed
+        # like a project, never a bespoke layout of its own.
         unfiled = await p.fetchrow(
             f"WITH lc AS {_LIVE_LINK_COUNTS} "
             "SELECT count(*) AS n, "
@@ -801,11 +793,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/graph/stream")
     async def graph_stream_snapshot(p: asyncpg.Pool = Depends(get_pool)) -> Response:
-        """NAVIGABLE SPACE, THE SERVER, piece B (rulings f832c3a4 + 0a3d6719, thread
-        b6cb1d7c0b36): the whole graph as typed arrays, shape agreed by DM with Seshat
-        (mail 10439/10449/10451) before this was frozen. See
-        src.orchestrator.graph_stream's own module docstring for the exact wire format
-        -- this route is a thin wrapper: `fetch_snapshot` does the whole query+encode."""
+        """NAVIGABLE SPACE, THE SERVER: the whole graph as typed arrays, a shape agreed
+        on and frozen before this route landed. See
+        src.orchestrator.graph_stream's own module docstring for the exact wire format:
+        this route is a thin wrapper, `fetch_snapshot` does the whole query+encode."""
         from src.orchestrator.graph_stream import fetch_snapshot
 
         data = await fetch_snapshot(p)
@@ -815,22 +806,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def graph_stream_deltas(
         request: Request, since: int | None = Query(None),
     ) -> StreamingResponse:
-        """SSE: pushes graph deltas (moved/added/retired, keyed by object id -- see the
+        """SSE: pushes graph deltas (moved/added/retired, keyed by object id, see the
         module docstring for why not array index) since the last poll, over the SAME
         poll-and-diff loop /cases/{id}/stream and /console/stream already use.
 
-        THE DELTA CURSOR FIX (thread fa3a4d42, Thoth mail 10664): a fresh connection
-        NEVER starts from cursor 0 any more -- that scanned the whole outbox (5.3M+
-        rows and growing) on every page load, reconnect, or deploy restart, measured
-        pinning the console at 84-87% CPU for minutes. The starting cursor is, in
-        order: the `since` query param (a client passes /graph/stream's own response
-        header `watermark`, since it just fetched the full snapshot and wants only
-        what changed after it), else the standard SSE `Last-Event-ID` reconnect
-        header (each event below carries `id: <cursor>`, so a browser's native
-        EventSource auto-reconnect resumes exactly where it left off with zero client
-        code), else -- and only then -- `outbox_watermark(pool)`: "now", not the
-        backlog. A client that genuinely wants the full backlog fetches /graph/stream
-        first, exactly like before; this endpoint itself never replays it."""
+        THE DELTA CURSOR FIX: a fresh connection NEVER starts from cursor 0 any more.
+        That scanned the whole outbox (5.3M+ rows and growing) on every page load,
+        reconnect, or deploy restart, measured pinning the console at 84-87% CPU for
+        minutes. The starting cursor is, in order: the `since` query param (a client
+        passes /graph/stream's own response header `watermark`, since it just fetched
+        the full snapshot and wants only what changed after it), else the standard SSE
+        `Last-Event-ID` reconnect header (each event below carries `id: <cursor>`, so a
+        browser's native EventSource auto-reconnect resumes exactly where it left off
+        with zero client code), else, and only then, `outbox_watermark(pool)`: "now",
+        not the backlog. A client that genuinely wants the full backlog fetches
+        /graph/stream first, exactly like before; this endpoint itself never replays it."""
         from src.orchestrator.graph_stream import deltas_since, resolve_deltas_start_cursor
 
         cursor = await resolve_deltas_start_cursor(
@@ -868,10 +858,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         )
         label_props = (await fetch_label_props(p, [object_id])).get(object_id, {})
         name = resolve_label(obj["type"], label_props, obj["canonical"]).label
-        # NAVIGABLE SPACE piece 2 (thread 71c4ca0d): the space view's search-pick fly-to
-        # needs a position for an arbitrary object id, and no endpoint returned one before
-        # this — additive only (two more scalar reads off the same graph_x/graph_y heartbeat
-        # every other graph endpoint already reads), never a new route.
+        # the space view's search-pick fly-to needs a position for an arbitrary object
+        # id, and no endpoint returned one before this; additive only (two more scalar
+        # reads off the same graph_x/graph_y heartbeat every other graph endpoint
+        # already reads), never a new route.
         pos = await p.fetchrow(
             "SELECT (SELECT (value #>> '{}')::float8 FROM current_assertions "
             "  WHERE object_id=$1 AND name='graph_x') AS x, "
@@ -879,11 +869,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             "  WHERE object_id=$1 AND name='graph_y') AS y",
             object_id,
         )
-        # PROVENANCE PIECE 3(b) (thread b4477e9e): the browse object view is a DIFFERENT
-        # route than /dossier and bypassed credence entirely before this — same
-        # agreement/distinct_upstreams/disputed shape dossier.py's entity_dossier already
-        # carries, from the SAME shared helper, so a reader sees the independence signal
-        # here too, not only on the separate dossier panel most sessions never open.
+        # the browse object view is a DIFFERENT route than /dossier and bypassed
+        # credence entirely before this; same agreement/distinct_upstreams/disputed
+        # shape dossier.py's entity_dossier already carries, from the SAME shared
+        # helper, so a reader sees the independence signal here too, not only on the
+        # separate dossier panel most sessions never open.
         by_name: dict[str, list[Any]] = {}
         for r in props:
             by_name.setdefault(r["name"], []).append(r)
@@ -926,17 +916,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def resolve_canonicals(
         body: ResolveCanonicalsBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """THE CANONICAL-RESOLVE DOOR (Thoth mail 12231, backlog view's seat-handle follow-
-        up to mail 12120): a batch of raw canonicals -> {canonical, uuid, handle_or_name}
-        each, ONE call, so any table cell showing a bare `seat:xxxx`/`agent:xxxx`/`repo:xxxx`
-        can render the reader-facing handle with the canonical on hover instead of the
-        canonical itself. Composes the SAME resolve_label/fetch_label_props two-tier
-        machinery every other object-identity surface already uses (get_object, above) —
-        never a second labelling rule. A canonical this project's own objects table has
-        never seen (deleted, mistyped, or from a different graph entirely) comes back with
-        `uuid`/`handle_or_name` both null rather than dropped from the list — the caller's
-        own canonical is always the key it gets an answer back under, requested order
-        preserved, duplicates in the request answered identically without a second query."""
+        """THE CANONICAL-RESOLVE ENDPOINT: a batch of raw canonicals ->
+        {canonical, uuid, handle_or_name} each, ONE call, so any table cell showing a
+        bare `seat:xxxx`/`agent:xxxx`/`repo:xxxx` can render the reader-facing handle
+        with the canonical on hover instead of the canonical itself. Composes the SAME
+        resolve_label/fetch_label_props two-tier machinery every other object-identity
+        surface already uses (get_object, above), never a second labelling rule. A
+        canonical this project's own objects table has never seen (deleted, mistyped, or
+        from a different graph entirely) comes back with `uuid`/`handle_or_name` both
+        null rather than dropped from the list: the caller's own canonical is always the
+        key it gets an answer back under, requested order preserved, duplicates in the
+        request answered identically without a second query."""
         seen: list[str] = []
         for c in body.canonicals[:500]:
             if c not in seen:
@@ -961,7 +951,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def object_content(
         object_id: uuid.UUID, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """The renderable CONTENT of a node — the document-viewer primitive. A Commit returns
+        """The renderable CONTENT of a node: the document-viewer primitive. A Commit returns
         its `git show` DIFF (the git backbone made readable); a Reference / any object with a
         `body` returns its markdown; a PDF source returns a url. Generic, no per-type UI code."""
         row = await p.fetchrow(
@@ -1047,7 +1037,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         share a name/handle (asuramaya ↔ asuramaya), but CAN'T infer that a real name and a
         handle are the same person (hector ↔ asuramaya share no key). That's a human call.
         The first claim TAGS a Person as the canonical operator identity ('self'); a later
-        claim MERGES that identity into the self — so you unify across repos by asserting it.
+        claim MERGES that identity into the self, so you unify across repos by asserting it.
         Merge is event-sourced + reversible; the loser's commits re-attribute to the winner."""
         actor = get_settings().osiris_actor
         row = await p.fetchrow(
@@ -1080,7 +1070,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         each endpoint named. Complements the `who-is-this` composition (the footprint/
         tier lens)."""
         # The graph view renders this as a node's full neighborhood (module docstring,
-        # dossier.py) — unlike the MCP tool, this console-facing endpoint keeps the
+        # dossier.py). Unlike the MCP tool, this console-facing endpoint keeps the
         # pre-diet default of every relationship row, not the collapsed count+sample.
         dossier = await entity_dossier(p, object_id, want_relationships=True)
         if not dossier:
@@ -1129,12 +1119,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             list(seen),
         )
         node_props = await fetch_label_props(p, [r["id"] for r in node_rows])
-        # WAVE A item 4 (graph visualizer, thread 8839): agents painted with the fleet
-        # view's own live/idle/dead states, not a bare type color — the same LIVE_SECS
-        # window seats.py's own occupancy read uses (900s), plus an IDLE tier (seen in the
-        # last day) so a body that stepped away reads differently from one that never will
-        # again. Looked up by CANONICAL (agent:<id>), the same string agent_mounts.agent_id
-        # stores — an Agent object's `id` (uuid) is never what a mount row keys on.
+        # agents painted with the fleet view's own live/idle/dead states, not a bare
+        # type color: the same LIVE_SECS window seats.py's own occupancy read uses
+        # (900s), plus an IDLE tier (seen in the last day) so a body that stepped away
+        # reads differently from one that never will again. Looked up by CANONICAL
+        # (agent:<id>), the same string agent_mounts.agent_id stores: an Agent object's
+        # `id` (uuid) is never what a mount row keys on.
         agent_ids = [r["canonical"] for r in node_rows if r["type"] == "Agent" and r["canonical"]]
         agent_state: dict[str, str] = {}
         if agent_ids:
@@ -1267,7 +1257,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/cases/{case_id}/stream")
     async def case_stream(case_id: uuid.UUID, request: Request) -> StreamingResponse:
-        """SSE: push case stats as they change (DESIGN §4 — one-way, SSE). The UI
+        """SSE: push case stats as they change (DESIGN §4, one-way, SSE). The UI
         watches this so the graph/badges update live as the cascade expands."""
         async def gen() -> AsyncIterator[str]:
             last = ""
@@ -1312,7 +1302,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         p: asyncpg.Pool = Depends(get_pool),
     ) -> dict[str, Any]:
         """Objects in the case that existed at time `at` (ISO-8601), with their
-        property values as of then — a bounded query over the append-only ledger."""
+        property values as of then: a bounded query over the append-only ledger."""
         try:
             as_of = datetime.fromisoformat(at)
         except ValueError as exc:
@@ -1329,7 +1319,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.post("/federate")
     async def federate(body: FederateBody, request: Request) -> dict[str, Any]:
-        """Query a source against an object IN PLACE — returns a preview, no writes."""
+        """Query a source against an object IN PLACE: returns a preview, no writes."""
         manifest, connector, input_object = await _federation_ctx(request, body)
         result = await federated_query(
             request.app.state.pool, connector, manifest.parser, input_object,
@@ -1354,7 +1344,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             selected=body.selected,
         )
 
-    # --- watermark: auto-refresh's whole mechanism (ruling cf9286b2) — poll THIS, never
+    # --- watermark: auto-refresh's whole mechanism. Poll THIS, never
     # the composition. See src/orchestrator/watermark.py's own docstring for the four
     # markers, why they're separate rather than combined, and the measured cost.
     @app.get("/watermark")
@@ -1363,7 +1353,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/pulse")
     async def pulse_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
-        """Ambient surface segments for console header and live telemetry (ruling e9ef7373)."""
+        """Ambient surface segments for console header and live telemetry."""
         from src.orchestrator import mounts, surface
         seg = await surface.fetch(p)
         line = await mounts.fleet_pulse(p)
@@ -1379,17 +1369,17 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     # --- compositions: the composer's primitive (lenses + watches as one) ----
     @app.get("/compositions")
     async def list_compositions_route(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        """Saved compositions (lens + watch) — never room-scoped on read any more (see the
-        ROOM'S REST SURFACE note near /cases). list_compositions's own room_id parameter
+        """Saved compositions (lens + watch): never room-scoped on read any more (see the
+        room-retirement note near /cases). list_compositions's own room_id parameter
         is untouched (still a real, general-purpose filter no caller happens to use with a
-        real value today) — this route just never binds a query param to it any more."""
+        real value today); this route just never binds a query param to it any more."""
         return await list_compositions(p)
 
     @app.post("/compositions")
     async def save_composition_route(
         body: CompositionBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """Save (or fork) a composition — a named op-tree the substrate runs. Authoring is
+        """Save (or fork) a composition: a named op-tree the substrate runs. Authoring is
         usually Claude-over-MCP; this is the human save/fork channel."""
         cid = await save_composition(p, body.name, body.spec, body.kind, room_id=body.room_id)
         return {"id": str(cid), "name": body.name}
@@ -1399,10 +1389,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         name: str, body: RunCompositionBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
         """Run a saved composition (the LENS execution), optionally against a subject.
-        Returns its Result — objects / values / rows / data — for the generic renderer."""
+        Returns its Result (objects / values / rows / data) for the generic renderer."""
         subject = uuid.UUID(body.subject) if body.subject else None
         try:
-            # the console is the OPERATOR'S surface (6c18709f): its lenses see every house
+            # the console is the operator's own surface: its lenses see every house
             return await run_composition(p, name, subject, caller="console")
         except ValueError as exc:  # e.g. a Function that needs a subject, or a bad op
             return {"error": str(exc)}
@@ -1411,7 +1401,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def run_spec_route(
         body: RunSpecBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """Run an EPHEMERAL op-tree (the inline composer's working spec — W4). The chips
+        """Run an EPHEMERAL op-tree (the inline composer's working spec). The chips
         edit a working spec and re-run it here without saving; 'Save as' persists it."""
         subject = uuid.UUID(body.subject) if body.subject else None
         try:
@@ -1420,21 +1410,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except ValueError as exc:
             return {"error": str(exc)}
 
-    # THE TRIAGE VERBS (ruling 923c380f — the operator's own word amends the read-only
-    # console): deliberate clicks write through the Actions waist, signed analyst:operator —
-    # the highest-grade testimony in the system. resolve closes; obligation/question/task
-    # reclassify WITHOUT touching status (untouched ≠ resolved, 758ded94). Bulk-capable:
-    # the echo pile drains by stories, not one call per click.
+    # THE TRIAGE VERBS: deliberate clicks write through the Actions waist, signed
+    # analyst:operator, the highest-grade testimony in the system. resolve closes;
+    # obligation/question/task reclassify WITHOUT touching status (untouched is not the
+    # same as resolved). Bulk-capable: the echo pile drains by stories, not one call
+    # per click.
     @app.post("/threads/triage")
     async def triage_threads(
         body: ThreadTriageBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        # THE FOUR DOORS OFF THE DESK (operator, 2026-07-11 — "it snowballs into infinity"):
-        # a debt used to have two exits, do-it or rot, so everything he was ever cc'd on piled
-        # up on him. resolve = done · assign = NOT MINE (hand it back to the project that owes
-        # it; orient puts it on THEIR wall) · defer = mine, not now (hidden at the lens until
-        # its date) · obligation/question/task = it isn't what it claims to be. Only `resolve`
-        # touches status — the other three never lie about state (758ded94).
+        # THE FOUR EXITS OFF THE DESK: a debt used to have two exits, do-it or rot, so
+        # everything the operator was ever cc'd on piled up on him. resolve = done,
+        # assign = NOT MINE (hand it back to the project that owes it; orient puts it on
+        # THEIR wall), defer = mine, not now (hidden at the lens until its date),
+        # obligation/question/task = it isn't what it claims to be. Only `resolve`
+        # touches status; the other three never lie about state.
         from src.orchestrator.capture import (
             assign_thread,
             defer_thread,
@@ -1445,7 +1435,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         if body.verb not in verbs:
             return {"error": f"verb must be one of {' | '.join(verbs)}"}
         if body.verb == "assign" and not (body.owner or "").strip():
-            return {"error": "assign needs an owner — a project name, 'agent:<id>', or 'operator'"}
+            return {"error": "assign needs an owner: a project name, 'agent:<id>', or 'operator'"}
         acts = Actions(p)
         out: list[dict[str, str]] = []
         for ref in body.ids[:200]:
@@ -1468,13 +1458,13 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return {"verb": body.verb, "acted": done, "missed": len(out) - done,
                 "results": out, "by": "analyst:operator"}
 
-    # THE BACKUP CONFIG PANEL'S WRITE DOOR (Wave 21, thread f04cce36 piece 3b): the
-    # console's own REST door onto write_backup_settings, mirroring the MCP
-    # `backup_settings(action=...)` tool one-for-one — both wrap the SAME orchestrator
-    # function, never one calling the other, same split `/threads/triage` and the
-    # `thread(action=...)` MCP tool already keep. The console is the operator's own
-    # surface (6c18709f) — every write here is `analyst:operator`, an operator actor
-    # by construction, so it never needs a ruling citation the way a fleet worker would.
+    # THE BACKUP CONFIG PANEL'S WRITE ENDPOINT: the console's own REST route onto
+    # write_backup_settings, mirroring the MCP `backup_settings(action=...)` tool
+    # one-for-one; both wrap the SAME orchestrator function, never one calling the
+    # other, same split `/threads/triage` and the `thread(action=...)` MCP tool already
+    # keep. The console is the operator's own surface, so every write here is
+    # `analyst:operator`, an operator actor by construction, and never needs a
+    # provenance citation the way a fleet worker's own write would.
     @app.get("/backup-settings")
     async def get_backup_settings_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Return the current backup configuration: vault path, timer schedule,
@@ -1504,11 +1494,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return await write_backup_settings(
             p, actor="analyst:operator", because=body.because, **fields)
 
-    # THE SETTINGS MENU'S OWN REST DOOR (thread f4498ab304e4 piece 1) — mirrors the MCP
-    # `settings(action=...)` tool one-for-one, same split as /backup-settings above:
-    # both wrap the SAME orchestrator functions, never one calling the other. Every
-    # write here is `analyst:operator` for the identical reason /backup-settings's own
-    # comment gives — the console has no other identity to offer today.
+    # THE SETTINGS MENU'S OWN REST ENDPOINT: mirrors the MCP `settings(action=...)`
+    # tool one-for-one, same split as /backup-settings above: both wrap the SAME
+    # orchestrator functions, never one calling the other. Every write here is
+    # `analyst:operator` for the identical reason /backup-settings's own comment gives:
+    # the console has no other identity to offer today.
     @app.get("/settings")
     async def list_settings_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         from src.orchestrator.settings_service import list_settings
@@ -1525,16 +1515,16 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             p, body.key, body.value, actor="analyst:operator", because=body.because,
             scope_id=body.scope_id)
 
-    # THE KEY DOOR'S OWN REST ROUTES (Thoth mail 12810/12830, wave 17) — mirror
-    # `osiris soul-key <action>` one-for-one, both calling `src.orchestrator.
-    # soul_key`'s own three functions directly, never one wrapping the other (same
-    # split /backup-settings and /settings above already hold). OPERATOR-ONLY
-    # AUTHORITY LAW: the console is localhost and the operator's own hands (same
-    # reasoning /backup-settings's own comment gives) — there is deliberately no
-    # MCP tool for any of this (an agent minting/rotating the soul-store key, or
-    # reading its filesystem facts, is exactly the shape this whole door exists to
-    # refuse; see soul_crypto.py's own module docstring). `/soul-key/init` alone
-    # never touches Postgres (`soul_key_init` is pool-free by design).
+    # THE KEY ENDPOINT'S OWN REST ROUTES: mirror `osiris soul-key <action>`
+    # one-for-one, both calling `src.orchestrator.soul_key`'s own three functions
+    # directly, never one wrapping the other (same split /backup-settings and
+    # /settings above already hold). OPERATOR-ONLY AUTHORITY LAW: the console is
+    # localhost and the operator's own hands (same reasoning /backup-settings's own
+    # comment gives); there is deliberately no MCP tool for any of this (an agent
+    # minting/rotating the soul-store key, or reading its filesystem facts, is exactly
+    # the shape this whole endpoint exists to refuse; see soul_crypto.py's own module
+    # docstring). `/soul-key/init` alone never touches Postgres (`soul_key_init` is
+    # pool-free by design).
     @app.get("/soul-key/status")
     async def soul_key_status_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Return the status of the encryption key that protects the data
@@ -1596,11 +1586,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return await soul_key_restore_drill(p, repo_url=body.repo_url)
 
-    # THE BROWSER RECOVERY MATERIAL DOOR (Thoth mail 13002, THE KEY PANEL piece 2) —
-    # NEW routes only, no edits to Khnum's own soul-key routes above; see
+    # THE BROWSER RECOVERY MATERIAL ENDPOINTS: NEW routes only, no edits to the
+    # soul-key routes above; see
     # src/orchestrator/soul_key_recovery_material.py's own module docstring for the
-    # full design. Same OPERATOR-ONLY AUTHORITY LAW the KEY DOOR routes above state
-    # (console is localhost, the operator's own hands) — no MCP tool for any of this
+    # full design. Same OPERATOR-ONLY AUTHORITY LAW the key endpoints above state
+    # (console is localhost, the operator's own hands); no MCP tool for any of this
     # either, same reason.
     @app.post("/soul-key/recovery-material")
     async def soul_key_recovery_material_route(
@@ -1650,11 +1640,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             raw_key_b64=body.raw_key, key_fingerprint=body.key_fingerprint,
             resolved_path=body.resolved_path, backend=body.backend)
 
-    # THE RESTIC-KEY STATUS ROUTE (Thoth mail 13350, THE SETTINGS PANE's own BOX
-    # section) — a genuinely thin door: no REST route existed at all for `osiris
+    # THE RESTIC-KEY STATUS ROUTE (the Settings pane's own Readiness section): a
+    # genuinely thin endpoint. No REST route existed at all for `osiris
     # restic-key status`'s own facts before this (only the CLI, src/cli.py's own
-    # cmd_restic_key). Same OPERATOR-ONLY AUTHORITY LAW the KEY DOOR routes above
-    # state (console is localhost, the operator's own hands) — NEVER the password
+    # cmd_restic_key). Same OPERATOR-ONLY AUTHORITY LAW the key endpoints above
+    # state (console is localhost, the operator's own hands); NEVER the password
     # bytes themselves, restic_key_status's own docstring guarantee.
     @app.get("/restic-key/status")
     async def restic_key_status_route() -> dict[str, Any]:
@@ -1665,11 +1655,11 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return restic_key_status()
 
-    # THE RESTIC-KEY INIT ROUTE (thread dd11ab34, GUI PARITY — the operator's own
-    # "can I do it all from the GUI?") — mirrors `osiris restic-key init` exactly
-    # (same restic_credential.restic_key_init, same custody ladder, same refusal
-    # when a credential already exists, same receipt shape). Same OPERATOR-ONLY
-    # AUTHORITY LAW as every other /soul-key* and /restic-key* route.
+    # THE RESTIC-KEY INIT ROUTE: matches the console's own GUI parity goal of doing
+    # every key/backup operation from the browser, not just the CLI. Mirrors `osiris
+    # restic-key init` exactly (same restic_credential.restic_key_init, same custody
+    # chain, same refusal when a credential already exists, same receipt shape). Same
+    # OPERATOR-ONLY AUTHORITY LAW as every other /soul-key* and /restic-key* route.
     @app.post("/restic-key/init")
     async def restic_key_init_route(body: ResticKeyInitBody) -> dict[str, Any]:
         """Create the backup encryption credential used by the backup tool.
@@ -1678,14 +1668,14 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return restic_key_init(path=body.path, backend=body.backend)
 
-    # THE OFFLOAD-RUNNER TICK ROUTE (thread dd11ab34, GUI PARITY) — the SAME tick
-    # `osiris-offload.timer`'s own ExecStart runs (`run_offload_tick`), on demand
-    # from the console's own "Run offload now" button. Bounded (every restic call
-    # underneath carries its own subprocess timeout), never blocks on an absent
-    # target, never fails the caller — same law the timer's own tick already holds.
+    # THE OFFLOAD-RUNNER TICK ROUTE: the SAME tick `osiris-offload.timer`'s own
+    # ExecStart runs (`run_offload_tick`), on demand from the console's own "Run
+    # offload now" button. Bounded (every restic call underneath carries its own
+    # subprocess timeout), never blocks on an absent target, never fails the caller,
+    # same behavior the timer's own tick already holds.
     # No `because`/`actor` to carry: this EXECUTES the already-configured targets,
     # it never reconfigures anything (the CLI's own cmd_offload_runner carries
-    # neither either) — the write door that DOES need `because` is /backup-settings
+    # neither either); the write route that DOES need `because` is /backup-settings
     # itself (offload_targets), already gated there.
     @app.post("/offload-runner/tick")
     async def offload_runner_tick_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
@@ -1696,8 +1686,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return await run_offload_tick(p)
 
-    # THE DEPLOY-STATUS ROUTE (Thoth mail 13350, BOX section) — no read door existed
-    # for "deploy snapshot sha vs deployed.sha" before this; see
+    # THE DEPLOY-STATUS ROUTE: no read endpoint existed for "deploy snapshot sha vs
+    # deployed.sha" before this; see
     # src/orchestrator/deploy_status.py's own module docstring for the full design.
     @app.get("/deploy-status")
     async def deploy_status_route() -> dict[str, Any]:
@@ -1708,23 +1698,23 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
         return await get_deploy_status()
 
-    # THE OPERATOR DESK, AS JSON (Thoth mail 13350, THE SETTINGS PANE's own OPERATOR
-    # DESK section) — the EXISTING /desk route (above) only ever served server-rendered
-    # HTML (the old chrome surface); `read_desk`'s own dict was always plain-JSON-able,
-    # just never exposed that way. A genuinely new route, not a rewrite of /desk (that
-    # page stays exactly as it is for whoever still opens it directly).
+    # THE OPERATOR DESK, AS JSON (for the Settings pane's own Operator Desk section):
+    # the EXISTING /desk route (above) only ever served server-rendered HTML (the old
+    # chrome surface); `read_desk`'s own dict was always plain-JSON-able, just never
+    # exposed that way. A genuinely new route, not a rewrite of /desk (that page stays
+    # exactly as it is for whoever still opens it directly).
     @app.get("/operator/desk")
     async def operator_desk_json_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         from src.orchestrator.mailbox import read_desk
 
         return await read_desk(p)
 
-    # THE OPERATOR'S OWN REPLY DOOR (Thoth mail 13350) — no REST route let the operator
-    # SEND a mail reply before this (only /pane/{agent}/reply, a different door entirely:
-    # a live seat's own session transcript, never the graph mailbox). Wraps
-    # `mailbox.send_message` exactly as the MCP `send(reply_to=...)` tool does, `from_
-    # agent=OPERATOR_ADDR` hardcoded here (never trusted from the request body) — the
-    # SAME "his click, his signature" law /desk/settle's own docstring states.
+    # THE OPERATOR'S OWN REPLY ENDPOINT: no REST route let the operator SEND a mail
+    # reply before this (only /pane/{agent}/reply, a different endpoint entirely: a
+    # live seat's own session transcript, never the graph mailbox). Wraps
+    # `mailbox.send_message` exactly as the MCP `send(reply_to=...)` tool does,
+    # `from_agent=OPERATOR_ADDR` hardcoded here (never trusted from the request body),
+    # the SAME "his click, his signature" law /desk/settle's own docstring states.
     @app.post("/operator/desk/reply")
     async def operator_desk_reply_route(
         body: OperatorDeskReplyBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1738,14 +1728,14 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         except ValueError as exc:
             return {"error": str(exc)}
 
-    # THE REPAIRS PANEL'S OWN REST DOOR (thread c89a9873, wave 22) — mirrors the
-    # `backfill` MCP tool and the `osiris backfill` CLI command one-for-one, all three
-    # calling orchestrator.backfill.run_backfill, never one wrapping another. A dry-run
-    # request (the panel's own default) is never authority-gated (read-only, no write);
-    # an apply request (`dry_run=False`) runs `check_apply_authority` first — the same
-    # operator_or_ruling shape /settings' own write door uses, PLUS the operator_charter
-    # carve-out (refused here regardless of caller authority, never merely hidden in the
-    # UI — see that function's own docstring).
+    # THE REPAIRS PANEL'S OWN REST ENDPOINT: mirrors the `backfill` MCP tool and the
+    # `osiris backfill` CLI command one-for-one, all three calling
+    # orchestrator.backfill.run_backfill, never one wrapping another. A dry-run request
+    # (the panel's own default) is never authority-gated (read-only, no write); an
+    # apply request (`dry_run=False`) runs `check_apply_authority` first, the same
+    # operator_or_ruling shape /settings' own write route uses, PLUS the
+    # operator_charter carve-out (refused here regardless of caller authority, never
+    # merely hidden in the UI; see that function's own docstring).
     @app.post("/backfill")
     async def backfill_route(
         body: BackfillBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1767,18 +1757,18 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
                 return {"error": auth_error}
             because = (body.because or "").strip()
             if not because:
-                return {"error": "because is required to apply — a backfill write is "
-                                 "testimony, same discipline every other repair door "
+                return {"error": "because is required to apply: a backfill write is "
+                                 "testimony, same discipline every other repair route "
                                  "in this house holds"}
         return await run_backfill(
             p, body.target, actor="analyst:operator", dry_run=body.dry_run,
             because=body.because or None, only_bases=body.only_bases)
 
-    # THE MIGRATION DOOR (Thoth mail 10609, product law: every action has a door) --
-    # mirrors the `layout_migrate` MCP tool and the `osiris layout --migrate` CLI
-    # command one-for-one, all three calling graph_layout.run_layout_migrate, never
-    # one wrapping another. Synchronous (the whole migration is a bounded loop over
-    # cheap batches, not a background job) -- refuses if the heartbeat is mid-tick.
+    # THE MIGRATION ENDPOINT: mirrors the `layout_migrate` MCP tool and the
+    # `osiris layout --migrate` CLI command one-for-one, all three calling
+    # graph_layout.run_layout_migrate, never one wrapping another. Synchronous (the
+    # whole migration is a bounded loop over cheap batches, not a background job);
+    # refuses if the heartbeat is mid-tick.
     @app.post("/layout/migrate")
     async def layout_migrate_route(
         body: LayoutMigrateBody, p: asyncpg.Pool = Depends(get_pool)
@@ -1798,9 +1788,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         body: DeskSettleBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
         """DISMISS briefs from the operator's desk. The membrane holds in the only way that
-        matters: an AGENT still cannot settle this desk (dim_brief annotates, never clears) —
-        this route exists solely so the HUMAN'S OWN CLICK can, without him having to summon a
-        mind to run inbox(ack=[…]) for him. His hand, his signature."""
+        matters: an AGENT still cannot settle this desk (dim_brief annotates, never clears).
+        This route exists solely so the HUMAN'S OWN CLICK can, without him having to summon a
+        mind to run inbox(ack=[...]) for him. His hand, his signature."""
         from src.orchestrator.mailbox import OPERATOR_ADDR, ack_messages
         ids = body.ids[:200]
         out = await ack_messages(p, OPERATOR_ADDR, ids, reader_agent=OPERATOR_ADDR)
@@ -1810,25 +1800,25 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.post("/act")
     async def act(body: ActBody, p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
-        """THE GENERIC ACTION-BINDING INVOCATION (ruling c5b184cd, thread d56e7073/#44) — any
-        composition-rendered row carrying `_action` fires here through ONE shared route,
-        instead of one bespoke endpoint per verb family (/threads/triage, /desk/settle).
-        Same write-safety those two already established, just no longer per-route: `action`
-        is looked up in a CLOSED registry (actions.ACTION_VERBS) — an unknown name refuses,
-        never falls through to anything dynamic; each registry entry reads only its own
-        named `args` keys and hardcodes `source="analyst:operator"` itself — this route
-        never trusts the request body for WHO is acting, only WHAT."""
+        """THE GENERIC ACTION-BINDING INVOCATION: any composition-rendered row carrying
+        `_action` fires here through ONE shared route, instead of one bespoke endpoint
+        per verb family (/threads/triage, /desk/settle). Same write-safety those two
+        already established, just no longer per-route: `action` is looked up in a
+        CLOSED registry (actions.ACTION_VERBS), an unknown name refuses, never falls
+        through to anything dynamic; each registry entry reads only its own named
+        `args` keys and hardcodes `source="analyst:operator"` itself: this route never
+        trusts the request body for WHO is acting, only WHAT."""
         from src.api.actions import ACTION_VERBS
         verb = ACTION_VERBS.get(body.action)
         if verb is None:
-            return {"error": f"unknown action {body.action!r} — "
+            return {"error": f"unknown action {body.action!r}: "
                              f"must be one of {sorted(ACTION_VERBS)}"}
         return await verb(p, body.args)
 
-    # ---- the shared console cursor (real-time Claude↔front sync) -------------
+    # ---- the shared console cursor (real-time Claude/front sync) -------------
     @app.get("/console")
     async def console_get(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
-        """The current shared cursor — room / composition / view / focused object."""
+        """The current shared cursor: room / composition / view / focused object."""
         return await get_console(p)
 
     @app.post("/console")
@@ -1861,10 +1851,10 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
 
     @app.get("/pane/live")
     async def pane_live_agents(p: asyncpg.Pool = Depends(get_pool)) -> list[dict[str, Any]]:
-        """THE PICK half of the read-only pane (Thoth dispatch 9378, lane B piece 2): the
-        same live/seated fold chrome.fleet_data already computes for /fleet, narrowed to
-        the fields a picker needs (agent_id to open the stream, seat/project to label the
-        row) — no new liveness logic, just a leaner slice of an existing read."""
+        """THE PICK half of the read-only pane: the same live/seated fold
+        chrome.fleet_data already computes for /fleet, narrowed to the fields a picker
+        needs (agent_id to open the stream, seat/project to label the row); no new
+        liveness logic, just a leaner slice of an existing read."""
         from src.api.chrome import fleet_data
 
         data = await fleet_data(p)
@@ -1876,19 +1866,19 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def pane_transcript_stream(
         agent_id: str, request: Request, p: asyncpg.Pool = Depends(get_pool)
     ) -> StreamingResponse:
-        """SSE: THE READ-ONLY PANE (Thoth dispatch 9378, lane B piece 2, thread 9d2aaf4d) —
-        a composer-shell pane tails a live seat's own transcript, no writes, no new spawn
-        path. Reuses sessions.py's byte-offset chunk reader (the SAME primitive the
-        session miner already polls in production) against the transcript file
-        locate_current_transcript/locate_transcript_by_cwd already resolve for identity;
-        this route only adds the interval-poll-and-push wrapper `distill()` already turns
-        into role-tagged dialogue text (OPERATOR:/CLAUDE:), skipping tool noise/thinking/
-        sidechains the same way the miner does. STARTS AT THE CURRENT FILE SIZE, not byte
-        0 — a live pane watches what happens FROM HERE, never replays a whole transcript's
-        history in one SSE burst. CLAUDE-CODE JSONL ONLY FOR NOW (dsh/crush's own live-tail
-        is a graceful degrade for later, matching harness_process.py's own refuse-by-name
-        discipline elsewhere) — a picked agent whose transcript can't be found gets an
-        honest error event, never a silent empty pane."""
+        """SSE: THE READ-ONLY PANE: a composer-shell pane tails a live seat's own
+        transcript, no writes, no new spawn path. Reuses sessions.py's byte-offset chunk
+        reader (the SAME primitive the session miner already polls in production)
+        against the transcript file locate_current_transcript/locate_transcript_by_cwd
+        already resolve for identity; this route only adds the interval-poll-and-push
+        wrapper `distill()` already turns into role-tagged dialogue text
+        (OPERATOR:/CLAUDE:), skipping tool noise/thinking/sidechains the same way the
+        miner does. STARTS AT THE CURRENT FILE SIZE, not byte 0: a live pane watches
+        what happens FROM HERE, never replays a whole transcript's history in one SSE
+        burst. CLAUDE-CODE JSONL ONLY FOR NOW (dsh/crush's own live-tail is a graceful
+        degrade for later, matching harness_process.py's own refuse-by-name discipline
+        elsewhere); a picked agent whose transcript can't be found gets an honest error
+        event, never a silent empty pane."""
         async def gen() -> AsyncIterator[str]:
             row = await p.fetchrow(
                 "SELECT cwd, job_dir FROM agent_mounts WHERE agent_id=$1 "
@@ -1930,22 +1920,22 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def pane_reply(
         agent_id: str, body: PaneReplyBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """THE REPLY DOOR (Thoth dispatch 9378, lane B piece 3, thread 9d2aaf4d): a turn
-        typed in the pane goes through the seat's own ProcessAdapter.reply() — harness-
-        agnostic by construction (resolve_process_adapter() picks claude/dsh/crush the same
-        way every other door already does), so the pane talks to whatever harness the box
-        is actually running, never assumes claude. A non-claude adapter's reply() already
-        self-refuses by name (harness_process.py's own capability contract) — this route
+        """THE REPLY ENDPOINT: a turn typed in the pane goes through the seat's own
+        ProcessAdapter.reply(), harness-agnostic by construction
+        (resolve_process_adapter() picks claude/dsh/crush the same way every other
+        endpoint already does), so the pane talks to whatever harness the session is
+        actually running, never assumes claude. A non-claude adapter's reply() already
+        self-refuses by name (harness_process.py's own capability contract); this route
         adds no second refusal mechanism, just surfaces whatever the adapter says.
 
-        SPAWNS NOTHING NEW (the ruling's own words: "spawn only through launch's admission
-        with the spend gate from (1)") — reply is a ONE-SHOT headless turn against the
-        seat's OWN already-running session (resume_session=), the same lane wake_worker's
-        own reply dispatch already uses; this route only picks the target session via
-        list_sessions(cwd=...) rather than minting a body. Still a REAL billed turn, so it
-        carries the SAME may_spend gate piece 1 gave every other hand-birth path — a new
-        call site with no gate is exactly the bug piece 1 existed to close, and this would
-        have been a fifth one."""
+        SPAWNS NOTHING NEW: spawning only ever happens through launch's own admission
+        path, with its own spend gate. Reply is a ONE-SHOT headless turn against the
+        seat's OWN already-running session (resume_session=), the same lane
+        wake_worker's own reply dispatch already uses; this route only picks the
+        target session via list_sessions(cwd=...) rather than minting a body. Still a
+        REAL billed turn, so it carries the SAME may_spend gate every other hand-birth
+        path uses; a new call site with no gate would be exactly the bug that spend
+        gate exists to close."""
         row = await p.fetchrow(
             "SELECT cwd, job_dir FROM agent_mounts WHERE agent_id=$1 "
             "ORDER BY last_seen DESC LIMIT 1", agent_id)
@@ -1978,7 +1968,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def create_subscription_route(
         body: SubscriptionBody, p: asyncpg.Pool = Depends(get_pool)
     ) -> dict[str, Any]:
-        """Save a WATCH — a kind='watch' composition whose `select` spec is the beat. The
+        """Save a WATCH: a kind='watch' composition whose `select` spec is the beat. The
         same spec runs as a lens (current members) and drives the tripwire (alert on a new
         member). The posted criteria (object_type + where) become that select spec."""
         wid = await save_watch(
@@ -2044,7 +2034,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     ) -> list[dict[str, Any]]:
         """The FEED for a watch: the objects currently matching its criteria, each
         rendered GENERICALLY as a sourced card (type · graded properties · provenance).
-        Type-driven, not vertical — a Property reads like a foreclosure lead and an
+        Type-driven, not vertical: a Property reads like a foreclosure lead and an
         Organization like a company because the DATA is, never because this surface
         knows the words. The same console serves any beat over the public record."""
         spec = _coerce_json(
@@ -2077,7 +2067,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def demo_foreclosure_seed(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
         """Demo LOADER (clearly namespaced /demo/). Ingests the SYNTHETIC Harris County
         notices and ensures one demo watch so the generic feed has something to show. The
-        foreclosure vertical lives ONLY here — the watch console and /matches never name it."""
+        foreclosure vertical lives ONLY here: the watch console and /matches never name it."""
         watch_id = await save_watch(
             p, "Harris County foreclosures (demo)", "Property",
             [{"property": "county", "op": "eq", "value": "Harris"}],
@@ -2087,14 +2077,14 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         fired = await evaluate_watches(p)  # also raise alerts (the bell), prospectively
         return {"ingested": ingested, "alerts_fired": fired, "watch_id": str(watch_id)}
 
-    # THE MEMBRANE ROUTE IS RETIRED (task #71, ruling 0b3dd431, msg 1811/1818): THE INBOX
-    # (src/api/inbox/) is :8011's new front door, mounted below. render_membrane's own
-    # module (src/api/membrane.py) stayed in the tree, unrouted, for one deploy cycle per
-    # Thoth's explicit instruction — that cycle has long since passed; the module and its
-    # test are gone (task #92's residual, thread 0aa9debf7c04), its three still-live names
-    # (_CSS/_age/_e) folded directly into chrome.py, which was already their only caller.
+    # THE MEMBRANE ROUTE IS RETIRED: THE INBOX (src/api/inbox/) is :8011's new primary
+    # entry point, mounted below. render_membrane's own module (src/api/membrane.py)
+    # stayed in the tree, unrouted, for one deploy cycle deliberately, so nothing depended
+    # on it live before removal; that cycle has long since passed; the module and its
+    # test are gone, its three still-live names (_CSS/_age/_e) folded directly into
+    # chrome.py, which was already their only caller.
 
-    # THE CHROME OPENED (operator, 2026-07-11): /desk /mail /fleet — clickable, openable,
+    # THE CHROME OPENED: /desk /mail /fleet, clickable, openable,
     # ~4s-fresh lenses so the human looks WITHOUT calling an agent. Same read-only
     # constitution the old /membrane page held; ?partial=1 serves just the content div for
     # the poller.
@@ -2103,13 +2093,12 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         partial: int = 0, p_: str | None = Query(None, alias="p"),
         p: asyncpg.Pool = Depends(get_pool),
     ) -> Response:
-        """THE DESK, PER PROJECT (operator, 2026-07-11: "the desk is better off as a
-        per-project thing, like the mail. the overwhelming kill here is that i get flooded
-        with my entire fleet worth of backlog on one tab").
+        """THE DESK, PER PROJECT: a per-project view, like the mail, rather than the
+        operator's entire fleet-wide backlog flooding one tab.
 
-        No arg → the ROSTER: one line per project (owed · asked · age). `?p=<project>` walks
-        into one — its debts with the four doors, and the briefs that asked. Reading leases
-        nothing; the WRITES are the human's own clicks (ruling 923c380f), signed
+        No arg: the ROSTER, one line per project (owed / asked / age). `?p=<project>`
+        walks into one: its debts across the four exit paths, and the briefs that asked.
+        Reading leases nothing; the WRITES are the human's own clicks, signed
         analyst:operator through the Actions waist."""
         from src.orchestrator.mailbox import read_desk
         desk = await read_desk(p)
@@ -2124,8 +2113,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def mail_page(
         box: str | None = None, partial: int = 0, p: asyncpg.Pool = Depends(get_pool)
     ) -> Response:
-        """The fleet's mail, walkable: all mailboxes → one box's conversations, threads
-        opening in place. Raw reads — a glance here never leases anyone's mail."""
+        """The fleet's mail, walkable: all mailboxes to one box's conversations, threads
+        opening in place. Raw reads: a glance here never leases anyone's mail."""
         if box:
             inner = chrome.render_mail_box(box, await chrome.mail_threads(p, box))
         else:
@@ -2133,8 +2122,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return Response(inner if partial else chrome.page("mail", "mail", inner),
                         media_type="text/html")
 
-    # /live-desk RETIRED (ruling d42c543b): its own docstring already said "this page has
-    # no bespoke filtering of its own, only the composition + the generic renderer" — a pure
+    # /live-desk RETIRED: its own docstring already said "this page has
+    # no bespoke filtering of its own, only the composition + the generic renderer", a pure
     # duplicate of the "live-desk" composition already roomed in /ui, through the SAME
     # chrome.render_composition. Verified live before deletion: opened "live-desk" in /ui,
     # confirmed the owed/decisions/drift-alarm bands and real `_action` buttons render there
@@ -2152,21 +2141,21 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         return Response(inner if partial else chrome.page("fleet", "fleet", inner),
                         media_type="text/html")
 
-    # /roadmap RETIRED (ruling d42c543b): a thin wrapper over the "roadmap" composition
+    # /roadmap RETIRED: a thin wrapper over the "roadmap" composition
     # through chrome.render_composition, no bespoke logic of its own beyond a `?p=` project
-    # default/lookup — verified live before deletion: focused the "osiris" SoftwareProject
+    # default/lookup. Verified live before deletion: focused the "osiris" SoftwareProject
     # in /ui, ran "roadmap", confirmed the same open/resolved-by-arc/owner bands this route
     # produced. Losing the auto-default-to-osiris convenience (a manual focus click in /ui
     # replaces it) is a UX nuance, not a filter/scope/band/count the composition itself lacks.
 
-    # /canon RETIRED (task #96, the deletion wave — Thoth LXV, 2026-07-30). The route had
-    # become a pure pass-through — run_composition("docs") → render_composition → page() —
+    # /canon RETIRED. The route had become a pure pass-through
+    # (run_composition("docs") then render_composition then page())
     # with no bespoke logic left. Its `?p=` param was already decorative: the "docs"
     # composition is not project-scoped, so every project rendered the identical canon. Its
     # one real capability, the fixed topic order, became ENGINE VOCABULARY in DOCS's own
-    # `sequence` (commit 5987df5) rather than a route-level re-sort, and Seshat verified that
-    # order live in /ui before this deletion. Deleting it also retires
-    # chrome.render_composition and its whole _comp_* helper chain — a SECOND generic
+    # `sequence` (commit 5987df5) rather than a route-level re-sort, verified live in /ui
+    # before this deletion. Deleting it also retires
+    # chrome.render_composition and its whole _comp_* helper chain, a SECOND generic
     # composition renderer in Python, duplicating osiris.js client-side, counted as debt by
     # the render-hygiene ratchet and never to be revived. The lens lives in /ui, the
     # vocabulary lives in the op-tree, and nothing here rendered anything unique.
@@ -2175,9 +2164,9 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     async def overhead_page(
         partial: int = 0, p: asyncpg.Pool = Depends(get_pool),
     ) -> Response:
-        """THE OVERHEAD LENS (neo's eye, task #34): what the harness itself costs —
-        hidden channels, cache vs fresh, reminder injections, compaction churn — read
-        from the transcript store. Below it, the retained-telemetry forensics (task #35)."""
+        """THE OVERHEAD LENS: what the harness itself costs, hidden channels, cache vs
+        fresh, reminder injections, compaction churn, read from the transcript store.
+        Below it, the retained-telemetry forensics."""
         from src.ingest.telemetry import TelemetryStore
         from src.ingest.transcript_store import TranscriptStore
         data = await TranscriptStore(p).overhead_fleet(top=20)
@@ -2189,7 +2178,7 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
     if _UI_DIR.is_dir():
         app.mount("/ui", _RevalidatingStaticFiles(directory=str(_UI_DIR), html=True), name="ui")
 
-    # THE INBOX (task #71, ruling 0b3dd431): :8011's new front door, replacing /membrane
+    # THE INBOX: :8011's new primary entry point, replacing /membrane
     # (retired above). Frozen static assets (vendored datastar.js, app.css) mounted
     # separately from /ui (that mount is the OLD Cytoscape/MapLibre SPA, unrelated).
     from src.api.inbox.app import router as inbox_router
@@ -2224,7 +2213,7 @@ async def _git_show(sha: str) -> str | None:
 
 
 async def _git_file(ref: str) -> str | None:
-    """`git show <ref>` for a file (e.g. HEAD:README.md) — the repo node's own doc."""
+    """`git show <ref>` for a file (e.g. HEAD:README.md): the repo node's own doc."""
     if not re.match(r"^[\w./:-]+$", ref):
         return None
     try:
@@ -2238,7 +2227,7 @@ async def _git_file(ref: str) -> str | None:
     return out.decode("utf-8", "replace")[:200_000] if proc.returncode == 0 else None
 
 
-# Friendly labels for provenance display — generic over every source/class, no vertical.
+# Friendly labels for provenance display: generic over every source/class, no vertical.
 _SOURCE_LABELS = {
     "harris_county_clerk": "Harris County Clerk",
     "edgar": "SEC EDGAR", "harris_county_clerk_demo": "Harris County Clerk",
@@ -2259,7 +2248,7 @@ _EC_STRENGTH = {"co_occurrence": 0, "derived": 1, "direct_observation": 2,
 async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] | None:
     """Render ANY object as a generic sourced card: its type, a title, its current
     graded properties as key/values, and a provenance block (sources · how · date ·
-    confidence). The renderer is type-driven — it knows nothing about foreclosures or
+    confidence). The renderer is type-driven: it knows nothing about foreclosures or
     any vertical; the domain shows through entirely from the data."""
     o = await p.fetchrow("SELECT type, canonical FROM objects WHERE id=$1", object_id)
     if o is None:
@@ -2313,7 +2302,7 @@ async def _object_card(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, Any] 
 
 
 async def _label(p: asyncpg.Pool, object_id: uuid.UUID) -> dict[str, str]:
-    """An object's display label (resolve_label's rule/chain/canonical) + type — for
+    """An object's display label (resolve_label's rule/chain/canonical) + type, for
     review/list rendering."""
     r = await p.fetchrow("SELECT o.type, o.canonical FROM objects o WHERE o.id=$1", object_id)
     if r is None:
@@ -2409,7 +2398,7 @@ class ThreadTriageBody(BaseModel):
 
 
 class DeskSettleBody(BaseModel):
-    """The operator DISMISSING briefs from his own desk — his click, his signature."""
+    """The operator DISMISSING briefs from his own desk: his click, his signature."""
     ids: list[int]
 
 
@@ -2425,7 +2414,7 @@ class BackupSettingsBody(BaseModel):
 
 
 class SettingsWriteBody(BaseModel):
-    """THE SETTINGS MENU's own write body (thread f4498ab304e4 piece 1) — one key at a
+    """THE SETTINGS MENU's own write body: one key at a
     time, generalizing BackupSettingsBody's own partial-update shape over the
     registry. `because` is optional here (some specs opt out via
     `requires_because=False`); `write_setting` itself enforces the spec's own rule."""
@@ -2436,9 +2425,9 @@ class SettingsWriteBody(BaseModel):
 
 
 class BackfillBody(BaseModel):
-    """THE REPAIRS PANEL's own body (thread c89a9873, wave 22) — one of the seven
+    """THE REPAIRS PANEL's own body: one of the seven
     backfill targets, dry-run by default. `dry_run=False` (apply) is refused outright
-    for `operator_charter` at the orchestrator layer regardless of `ruling`/authority —
+    for `operator_charter` at the orchestrator layer regardless of `ruling`/authority;
     see `backfill.check_apply_authority`'s own docstring."""
     target: str
     dry_run: bool = True
@@ -2509,7 +2498,7 @@ class SoulKeyRecoverFromBrowserBody(BaseModel):
 
 
 class OperatorDeskReplyBody(BaseModel):
-    """THE OPERATOR'S OWN REPLY DOOR (Thoth mail 13350, THE SETTINGS PANE) — `id` is the
+    """THE OPERATOR'S OWN REPLY ENDPOINT's own body: `id` is the
     desk card's own message id (a folded card's LEAD id; `send_message`'s own reply
     routing settles the whole thread), `body` the operator's own reply text."""
     id: int
@@ -2525,14 +2514,14 @@ class ResticKeyInitBody(BaseModel):
 
 
 class LayoutMigrateBody(BaseModel):
-    """THE MIGRATION DOOR's own body (Thoth mail 10609) — `limit` overrides the live
+    """THE MIGRATION ENDPOINT's own body: `limit` overrides the live
     `layout.batch_size` setting for this one run; omit it to use the setting."""
     limit: int | None = None
 
 
 class ResolveCanonicalsBody(BaseModel):
-    """THE CANONICAL-RESOLVE DOOR (Thoth mail 12231): a raw canonical string
-    (`seat:xxxx`, `agent:xxxx`, `repo:xxxx`, ...) is an id, not a name — a console table
+    """THE CANONICAL-RESOLVE ENDPOINT: a raw canonical string
+    (`seat:xxxx`, `agent:xxxx`, `repo:xxxx`, ...) is an id, not a name. A console table
     showing one bare has nowhere to get the reader-facing handle from without this.
     `canonicals` is capped at 500 per call (a reader-facing table's own row count, never
     a bulk-export shape) and deduped server-side before querying."""
@@ -2540,11 +2529,11 @@ class ResolveCanonicalsBody(BaseModel):
 
 
 class ActBody(BaseModel):
-    """The generic action-binding invocation (ruling c5b184cd, thread d56e7073/#44) — a
+    """The generic action-binding invocation: a
     composition-declared control's own click, POSTed exactly as `_action` named it. `action`
     is looked up in `actions.ACTION_VERBS` (a closed registry); `args` is whatever that
     specific row's own `row_action` template resolved to server-side (see
-    `compositions._table`) — the client never constructs `args` itself, only echoes what the
+    `compositions._table`). The client never constructs `args` itself, only echoes what the
     row it clicked already carried."""
     action: str
     args: dict[str, Any] = {}

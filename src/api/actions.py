@@ -1,27 +1,26 @@
-"""ACTION_VERBS — the declarative write registry (ruling c5b184cd, thread d56e7073/#44, the
-composition abstraction's WRITE leg). A composition row can carry `{"action":<name>,
-"args":{...}}` (see `compositions._table`'s `row_action`); the generic renderer turns that
-into a button, and one click POSTs `{action, args}` to `/act` (app.py). This module is what
-`/act` looks the action name up in.
+"""ACTION_VERBS: the declarative write registry, the composition abstraction's WRITE leg.
+A composition row can carry `{"action":<name>, "args":{...}}` (see `compositions._table`'s
+`row_action`); the generic renderer turns that into a button, and one click POSTs
+`{action, args}` to `/act` (app.py). This module is what `/act` looks the action name up in.
 
 Grounded in the two write routes that already do this correctly today, just per-route-
-hardcoded — `/threads/triage` and `/desk/settle` (app.py) — this generalizes their exact
-shape rather than inventing one:
+hardcoded (`/threads/triage` and `/desk/settle` in app.py): this generalizes their exact
+shape rather than inventing one.
 
   - AUTHORITY FROM THE SURFACE, NEVER A CLIENT-SUPPLIED FIELD. Every adapter below hardcodes
     `source="analyst:operator"` itself; nothing in `args` is ever read as "who's acting."
   - NEVER RE-IMPLEMENTS A GUARD. Each adapter calls the REAL verb (capture.py/mailbox.py)
-    plainly — it is pure dispatch, reading only the specific `args` keys it names, exactly
-    the same explicit-getter discipline `/threads/triage` already uses (never `**args`
-    forwarded blindly; an unread key is silently ignored, never an injection surface).
+    plainly. It is pure dispatch, reading only the specific `args` keys it names, the same
+    explicit-getter discipline `/threads/triage` already uses (never `**args` forwarded
+    blindly; an unread key is silently ignored, never an injection surface).
   - IDEMPOTENT BY THE VERB'S OWN CONSTRUCTION, not a mechanism built here. resolve_thread/
-    assign_thread/reclassify_thread/ack_messages are event-sourced — re-asserting the same
+    assign_thread/reclassify_thread/ack_messages are event-sourced, so re-asserting the same
     value twice is a no-op, not a second effect. The client's own disable-on-click (chrome.py's
     `_ACTIONS` JS) is the UI-level safeguard against a double-fire during one request; no new
     generic dedup token is built until a real action verb needs one.
 
-A registry entry is a function `(pool, args) -> receipt`, not the raw graph verb directly —
-the raw verbs take heterogeneous shapes (`Actions` vs a bare pool, `ref` vs `ids`, one
+A registry entry is a function `(pool, args) -> receipt`, not the raw graph verb directly.
+The raw verbs take heterogeneous shapes (`Actions` vs a bare pool, `ref` vs `ids`, one
 `because` vs none); each adapter here is the thin, explicit seam that normalizes ONE verb to
 the same call shape `/act` needs, and nothing more."""
 from __future__ import annotations

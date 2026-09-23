@@ -1336,7 +1336,7 @@ async def _operator_queue(pool: asyncpg.Pool, limit: int = 100) -> list[dict[str
         "  IS DISTINCT FROM 'obligation', o.created_at DESC LIMIT $1", limit)
     today = datetime.now(UTC).date().isoformat()
     return [{"id": str(r["id"])[:8], "summary": (r["s"] or "")[:200],
-             "project": r["proj"] or "—", "born": r["created_at"].isoformat(),
+             "project": r["proj"] or "-", "born": r["created_at"].isoformat(),
              "guessed": r["ec"] == "derived",  # the miner INFERRED this duty; nobody asked
              **({"kind": r["k"]} if r["k"] else {})}
             for r in rows if r["s"] and not (r["d"] and r["d"] > today)]
@@ -1463,9 +1463,9 @@ def _group_by_project(
         return projects.setdefault(name, {"project": name, "debts": [], "asks": []})
 
     for d in debts:
-        slot(d.get("project") or "—")["debts"].append(d)
+        slot(d.get("project") or "-")["debts"].append(d)
     for a in asks:
-        slot(a.get("from_project") or "—")["asks"].append(a)
+        slot(a.get("from_project") or "-")["asks"].append(a)
     out = list(projects.values())
     for p in out:
         p["owed"] = len(p["debts"])
