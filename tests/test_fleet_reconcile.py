@@ -1,6 +1,6 @@
-"""FLEET RECONCILE — the reaper's dry-run sweep (task #59). Every test proves ONE bucket
+"""FLEET RECONCILE: the reaper's dry-run sweep. Every test proves ONE bucket
 lands the right row for the right reason, and that reconcile_dry_run() writes nothing beyond
-what find_agent_fold_candidates already writes on its own (proposal rows — review-gated,
+what find_agent_fold_candidates already writes on its own (proposal rows, review-gated,
 never executed by this module).
 """
 from __future__ import annotations
@@ -27,7 +27,7 @@ async def _mk_agent(actions: Actions, label: str, project: str = "reconhouse") -
 
 
 def _bodies(*cwds: str) -> Any:
-    """A fake live_bodies_by_cwd: real OS bodies at exactly these cwds — every OTHER test's
+    """A fake live_bodies_by_cwd: real OS bodies at exactly these cwds. Every OTHER test's
     synthetic mount rows would otherwise all ghost-flag against the REAL OS census (which
     genuinely backs none of them), so any test whose row must clear its OWN classification
     (not land in ghost_gap by construction) injects this for its own cwd(s)."""
@@ -36,9 +36,9 @@ def _bodies(*cwds: str) -> Any:
 
 
 def _blind() -> Any:
-    """A fake live_bodies_by_cwd reporting the census itself failed (pgrep unavailable) —
-    None, never an empty dict; the two must stay distinguishable (sweep_ghost_doors' own
-    law, reused here)."""
+    """A fake live_bodies_by_cwd reporting the census itself failed (pgrep unavailable):
+    None, never an empty dict; the two must stay distinguishable, same rule
+    sweep_ghost_doors follows itself."""
     return lambda: None
 
 
@@ -68,7 +68,7 @@ async def test_high_confidence_view_alias_lands_in_bulk_fold_swarm(
     assert mine[0]["class"] == "view-alias"
     assert "0.75" in mine[0]["rule"]
     assert out["counts"]["bulk_fold_swarm"] == 1
-    # nothing folded — the row is a proposal, not an executed merge
+    # nothing folded: the row is a proposal, not an executed merge
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
     assert st == "active"
 
@@ -105,7 +105,7 @@ async def test_charter_match_lands_in_rollup_office_remount(
 async def test_nuanced_multi_seat_charter_match_leaves_for_human(
     actions: Actions, tmp_path,
 ) -> None:
-    """score 0.55 (several seats share the room) must NOT bulk-act — same bar
+    """score 0.55 (several seats share the room) must NOT bulk-act: same bar
     find_agent_fold_candidates already draws for itself, reused here."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -140,8 +140,8 @@ async def test_nuanced_multi_seat_charter_match_leaves_for_human(
 async def test_mount_against_a_retired_project_lands_in_drop_ephemeral_test_cwd(
     actions: Actions,
 ) -> None:
-    """The exact live specimen (decision c62bf333 — cc-test-target and 17 siblings): a
-    project already retired via retire_project, with a mount row still sitting under it —
+    """A real production shape (cc-test-target and 17 siblings): a
+    project already retired via retire_project, with a mount row still sitting under it,
     residue, never a fold candidate, since the sweep never even looks at dead projects."""
     p = actions.pool
     proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
@@ -166,9 +166,9 @@ async def test_mount_against_a_retired_project_lands_in_drop_ephemeral_test_cwd(
 async def test_mount_against_a_merged_project_never_lands_in_drop_ephemeral_test_cwd(
     actions: Actions,
 ) -> None:
-    """THE LIVE FALSE-DROP CATCH (found running this exact dry run against production
-    before trusting it, #59's first firing): a project consolidated via a MERGE, not a
-    retirement, still has an ACTIVE successor — repo:ByeByte merged into repo:bytebye, the
+    """A real production shape found while running this exact dry run before trusting
+    it: a project consolidated via a MERGE, not a
+    retirement, still has an ACTIVE successor, repo:ByeByte merged into repo:bytebye, the
     live specimen. A mount whose own works_in/governs edges already migrated to the
     successor must never be judged dead off its plain-text agent_mounts.project column,
     which nothing updates on a rename. A merge is not a death."""
@@ -179,28 +179,28 @@ async def test_mount_against_a_merged_project_never_lands_in_drop_ephemeral_test
                                                    "repo:ByeByte")
     await actions.merge_objects(survivor, renamed, "test: consolidated under one name",
                                "agent:test-actor")
-    await save_mount(p, job_dir="/tmp/jobs/werner01", agent_id="agent:werner01",
-                     project="ByeByte", cwd="/home/asuramaya/.osiris/seats/werner",
-                     model=None, session_key="whisper:werner01")
+    await save_mount(p, job_dir="/tmp/jobs/juniper01", agent_id="agent:juniper01",
+                     project="ByeByte", cwd="/home/asuramaya/.osiris/seats/juniper",
+                     model=None, session_key="whisper:juniper01")
 
     out = await reconcile_dry_run(
-        p, live_bodies_by_cwd=_bodies("/home/asuramaya/.osiris/seats/werner"))
+        p, live_bodies_by_cwd=_bodies("/home/asuramaya/.osiris/seats/juniper"))
 
-    assert not any(r.get("agent_id") == "agent:werner01"
+    assert not any(r.get("agent_id") == "agent:juniper01"
                   for r in out["buckets"]["drop_ephemeral_test_cwd"])
-    assert not any(r.get("agent_id") == "agent:werner01"
+    assert not any(r.get("agent_id") == "agent:juniper01"
                   for r in out["buckets"]["ghost_gap"])
     still_there = await p.fetchval(
-        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:werner01'")
+        "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:juniper01'")
     assert still_there == 1
 
 
 async def test_seatless_anon_in_a_dead_project_gets_one_verdict_not_two(
     actions: Actions, tmp_path,
 ) -> None:
-    """The exact live specimen (agent:357a3407 in cc-test-target, found running this
-    module for real): a seatless-and-dead project must land ONLY in
-    drop_ephemeral_test_cwd — the more specific verdict — never ALSO in leave_for_human
+    """A real production shape found running this module for real, in cc-test-target: a
+    seatless-and-dead project must land ONLY in
+    drop_ephemeral_test_cwd, the more specific verdict, never ALSO in leave_for_human
     via the seatless signal. One row, one bucket, one rule."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -225,14 +225,14 @@ async def test_seatless_anon_in_a_dead_project_gets_one_verdict_not_two(
                   for r in out["buckets"]["leave_for_human"])
 
 
-# ── ghost_gap (thread 04ad4bb8, Thoth DM 2813's hard acceptance gate) ──────────────────
+# ── ghost_gap (a hard acceptance gate) ──────────────────
 
 
 async def test_a_graph_live_mount_with_no_os_body_lands_in_ghost_gap(actions: Actions) -> None:
     """THE FIFTH CLASS itself: a mount row with a fresh last_seen (graph-live) but no real
-    OS process backing its cwd — the ballgem specimen (thread 04ad4bb8) — must appear
+    OS process backing its cwd, the ballgem specimen, must appear
     somewhere, not vanish. No fold candidate here at all (no Agent object minted for this
-    label), no dead project either — before this fix, the row was examined by NOTHING."""
+    label), no dead project either: before this fix, the row was examined by NOTHING."""
     p = actions.pool
     await save_mount(p, job_dir="/tmp/jobs/phantom1", agent_id="agent:phantom1",
                      project="ballgem", cwd="/w/ballgem", model=None,
@@ -251,7 +251,7 @@ async def test_a_ghost_flagged_fold_candidate_overrides_bulk_fold_swarm(
 ) -> None:
     """A row that WOULD have cleared bulk_fold_swarm's own 0.75 bar (the exact fixture
     from test_high_confidence_view_alias_lands_in_bulk_fold_swarm) must land in ghost_gap
-    instead when no OS body backs it — a phantom's other signals cannot be trusted either,
+    instead when no OS body backs it: a phantom's other signals cannot be trusted either,
     once the one independently-checkable signal has already failed."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -269,7 +269,7 @@ async def test_a_ghost_flagged_fold_candidate_overrides_bulk_fold_swarm(
                      session_key="sid:conn")
 
     out = await reconcile_dry_run(p, projects_root=root, jobs_home=jobs,
-                                  live_bodies_by_cwd=_bodies())  # no body — both are ghosts
+                                  live_bodies_by_cwd=_bodies())  # no body, both are ghosts
 
     assert not any(r["dupe"] == "agent:a11a5000"
                   for r in out["buckets"]["bulk_fold_swarm"])
@@ -284,8 +284,8 @@ async def test_a_ghost_flagged_dead_project_mount_overrides_drop_ephemeral(
 ) -> None:
     """The exact fixture from test_mount_against_a_retired_project_lands_in_drop_ephemeral_
     test_cwd, but bodyless: drop_ephemeral_test_cwd's own bar is cleared, and ghost status
-    still overrides it — the row that was ACTUALLY dropped live this session
-    (agent:357a3407) was exactly this shape, verified bodyless by hand before the drop."""
+    still overrides it. A row dropped for real in one production run was exactly this
+    shape, verified bodyless by hand before the drop."""
     p = actions.pool
     proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
                                                 "repo:deadstub")
@@ -318,9 +318,10 @@ async def test_a_body_backed_mount_never_ghost_flags(actions: Actions) -> None:
 async def test_a_blind_census_holds_every_auto_act_row_in_leave_for_human(
     actions: Actions, tmp_path,
 ) -> None:
-    """SWEEP_GHOST_DOORS' OWN LAW, reused: 'could not look' must never read as 'no ghosts'.
+    """Same rule sweep_ghost_doors follows itself, reused: could not look must never read
+    as no ghosts.
     When the OS census itself fails (pgrep unavailable), every row that would have cleared
-    an auto-act bucket is held in leave_for_human instead, named as blind-held — proven
+    an auto-act bucket is held in leave_for_human instead, named as blind-held, proven
     against BOTH auto-act classes at once (a fold candidate and a dead-project mount)."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -361,7 +362,7 @@ async def test_a_blind_census_holds_every_auto_act_row_in_leave_for_human(
 async def test_reconcile_execute_never_acts_while_the_census_is_blind(
     actions: Actions, tmp_path,
 ) -> None:
-    """The acting half needs no code of its own to stay safe here — it only ever reads
+    """The acting half needs no code of its own to stay safe here: it only ever reads
     reconcile_dry_run's own buckets, so a blind census holding everything in
     leave_for_human upstream is sufficient. Proven at the execute layer, not just the
     dry-run layer, since that is the layer that would actually have written something."""
@@ -386,7 +387,7 @@ async def test_reconcile_execute_never_acts_while_the_census_is_blind(
 
     assert out["folded"] == [] and out["dropped"] == []
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
-    assert st == "active"  # never folded — the blind census held it back
+    assert st == "active"  # never folded, the blind census held it back
 
 
 async def test_active_project_mount_never_lands_in_drop_bucket(actions: Actions) -> None:
@@ -461,7 +462,7 @@ async def test_execute_default_is_plan_only_and_writes_nothing(
     assert any(f["dupe"] == "agent:a11a5000" for f in plan["would_fold"])
     assert "folded" not in plan and "dropped" not in plan
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:a11a5000'")
-    assert st == "active"  # unfolded — a plan writes nothing
+    assert st == "active"  # unfolded, a plan writes nothing
 
 
 async def test_execute_true_folds_the_high_confidence_view_alias(
@@ -482,8 +483,8 @@ async def test_execute_true_folds_the_high_confidence_view_alias(
                      project="reconhouse", cwd="/w/swarm-repo", model=None,
                      session_key="sid:conn")
 
-    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
-    # fold — reconcile_execute forwards `actor` unchanged
+    # fold_agent's own gate requires a real operator actor for a real
+    # fold, reconcile_execute forwards `actor` unchanged
     out = await reconcile_execute(actions, actor="operator", execute=True,
                                   projects_root=root, jobs_home=jobs,
                                   live_bodies_by_cwd=_bodies("/w/swarm-repo"))
@@ -514,7 +515,7 @@ async def test_execute_true_drops_the_dead_project_mount_leaves_the_agent_alone(
     assert out["dropped"][0]["rows_deleted"] == 1
     assert await p.fetchval(
         "SELECT count(*) FROM agent_mounts WHERE agent_id='agent:ghost0001'") == 0
-    # a drop releases the RESIDUE ROW only — no Agent object was ever minted here, and
+    # a drop releases the RESIDUE ROW only, no Agent object was ever minted here, and
     # this proves reconcile_execute never mints or touches one on its own
     st = await p.fetchval("SELECT status FROM objects WHERE canonical='agent:ghost0001'")
     assert st is None
@@ -553,7 +554,7 @@ async def test_scheduled_tick_is_dark_by_default_and_writes_nothing(
     actions: Actions,
 ) -> None:
     """osiris_fleet_reconcile_enabled defaults False (Settings()'s own default, matching
-    the field declared in settings.py) — the scheduled leg is inert out of the box, no
+    the field declared in settings.py): the scheduled leg is inert out of the box, no
     override needed to prove it."""
     p = actions.pool
     proj = await actions.create_or_find_object("SoftwareProject", "repo:deadstub",
@@ -594,13 +595,13 @@ async def test_scheduled_tick_acts_once_the_flag_is_flipped_on(actions: Actions)
 async def test_scheduled_tick_can_fold_because_its_own_actor_is_sanctioned(
     actions: Actions, tmp_path,
 ) -> None:
-    """POSITIVE CONTROL for fold_agent's operator-actor gate (census a5e53ed8): the
+    """POSITIVE CONTROL for fold_agent's operator-actor gate: the
     scheduled leg passes `actor="cron:fleet_reconcile_heartbeat"`, not an operator
-    sentinel — if fold_agent's gate only recognized `seats._OPERATOR_ACTORS`, the
+    sentinel. If fold_agent's gate only recognized `seats._OPERATOR_ACTORS`, the
     already-gated cron tick would ALSO start refusing every fold it tries, breaking a
     working feature to fix an authority hole. This proves the sanctioned exception
     (`folds._SANCTIONED_AUTO_FOLD_ACTOR`) actually lands a fold, not just a drop, through
-    the real scheduled path — `osiris_fleet_reconcile_enabled=True` is this tick's own,
+    the real scheduled path: `osiris_fleet_reconcile_enabled=True` is this tick's own,
     separate authorization; no other actor should be trusted the same way."""
     p = actions.pool
     root = tmp_path / "projects"
@@ -633,7 +634,7 @@ async def test_scheduled_tick_can_fold_because_its_own_actor_is_sanctioned(
 
 
 async def test_scheduled_tick_is_dark_names_its_own_state(actions: Actions) -> None:
-    """`state` is returned even when the flag is off — DARK, not inferred from `enabled`
+    """`state` is returned even when the flag is off: DARK, not inferred from `enabled`
     alone (task #108, ruling 2889's own acceptance test)."""
     out = await reconcile_scheduled_tick(actions, settings=Settings())
     assert out["enabled"] is False
@@ -661,8 +662,8 @@ async def test_desk_receipt_fires_with_before_after_counts_when_a_tick_acts(
                      project="reconhouse", cwd="/w/swarm-repo", model=None,
                      session_key="sid:conn")
 
-    # fold_agent's own gate (census a5e53ed8) requires the operator's actor for a real
-    # fold — reconcile_execute forwards `actor` unchanged
+    # fold_agent's own gate requires a real operator actor for a real
+    # fold, reconcile_execute forwards `actor` unchanged
     out = await reconcile_execute(actions, actor="operator", execute=True,
                                   projects_root=root, jobs_home=jobs,
                                   live_bodies_by_cwd=_bodies("/w/swarm-repo"))
@@ -680,7 +681,7 @@ async def test_batch_cap_holds_the_whole_tick_and_fires_a_decision_brief(
     actions: Actions,
 ) -> None:
     """task #108 piece 2: a tick whose actionable rows exceed `_BATCH_CAP` refuses to act
-    on ANY of them — not a partial drain — and holds the whole batch to leave_for_human
+    on ANY of them, not a partial drain, and holds the whole batch to leave_for_human
     through the SAME `_held()` every other reason routes through, firing a
     `desk_kind='decision'` brief instead of the plain FYI: an anomalous batch is the
     signature of a bug in the classifier, not a thing to bulk-act on unwitnessed."""
@@ -741,9 +742,9 @@ async def test_scheduled_tick_over_cap_state_never_drops_a_row(actions: Actions)
 async def test_consecutive_blind_alarm_opens_on_first_blind_tick_and_resolves_on_recovery(
     actions: Actions,
 ) -> None:
-    """task #108 piece 3: no counter, no state row — `open_thread`'s own idempotency on
+    """task #108 piece 3: no counter, no state row. `open_thread`'s own idempotency on
     the alarm's fixed summary text does the dedup, and the thread's own age is the
-    darkness duration. The next tick the census recovers resolves the SAME thread —
+    darkness duration. The next tick the census recovers resolves the SAME thread,
     deliberately unlike `alarm_schema_drift`, which never auto-resolves."""
     out1 = await reconcile_scheduled_tick(
         actions, settings=Settings(osiris_fleet_reconcile_enabled=True),

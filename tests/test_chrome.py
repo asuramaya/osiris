@@ -1,4 +1,4 @@
-"""/desk /mail /fleet — the chrome opened (operator, 2026-07-11). Renderers are pure;
+"""/desk /mail /fleet: the chrome opened. Renderers are pure;
 these feed them fixtures. The data functions get one live-graph test each via `actions`."""
 from __future__ import annotations
 
@@ -60,13 +60,13 @@ def _desk() -> dict:
 
 
 def test_desk_lands_on_a_roster_never_the_whole_backlog() -> None:
-    """THE FLOOD CURE (operator, 2026-07-11: "the desk is better off as a per-project thing,
-    like the mail. the overwhelming kill here is that i get flooded with my entire fleet worth
-    of backlog on one tab"). The landing page is COUNTS ONLY — one line per project, linked.
+    """THE FLOOD CURE: the desk is better off as a per-project thing, like the mail.
+    Showing an operator their entire fleet's worth of backlog on one tab floods them.
+    The landing page is COUNTS ONLY: one line per project, linked.
     No brief bodies, no debt summaries: a page that shows everything shows nothing."""
     html = render_desk(_desk())
     assert "YOU OWE <b>1</b>" in html and "letters <b>1</b>" in html
-    # a roster of links, critical first — and NOT the contents
+    # a roster of links, critical first, and NOT the contents
     assert '<a href="/desk?p=coldspot">' in html and '<a href="/desk?p=sibling-three">' in html
     assert html.index("/desk?p=coldspot") < html.index("/desk?p=sibling-three")
     assert 'class="crit"' in html
@@ -80,7 +80,7 @@ def test_desk_lands_on_a_roster_never_the_whole_backlog() -> None:
 
 def test_walking_into_one_project_opens_its_debts_and_the_four_doors() -> None:
     """?p=<project> is the sitting: that project's debts, each with its exits, and the briefs
-    that asked — together, because that is the unit of work."""
+    that asked, together, because that is the unit of work."""
     html = render_desk_project(_desk(), "sibling-three")
     assert '<a href="/desk">← all projects</a>' in html
     assert "refill the gemini key" in html
@@ -99,7 +99,7 @@ def test_walking_into_one_project_opens_its_debts_and_the_four_doors() -> None:
 
 def test_only_the_desk_arms_the_write_handler() -> None:
     """The console constitution, precisely: reads are free everywhere, and exactly one page
-    may write — the operator's own desk (ruling 923c380f). A page that can write must also
+    may write: the operator's own desk. A page that can write must also
     SAY it can; the read-only lenses must not ship the handler at all."""
     assert 'data-act' in page("desk", "desk", "<p>x</p>", actions=True)
     assert "your clicks write (signed operator)" in page("desk", "desk", "x", actions=True)
@@ -124,7 +124,7 @@ def test_mail_overview_links_boxes_and_flags_unsettled() -> None:
         {"project": "osiris",
          "room": {"box": "osiris", "msgs": 12, "unsettled": 0,
                   "last_at": "2026-07-11 19:49:56"},
-         "souls": [{"box": "@agent:ad1a1cb0-g40-iv", "soul": "Thoth XLI", "msgs": 3,
+         "souls": [{"box": "@agent:ad1a1cb0-g40-iv", "soul": "Vireo XLI", "msgs": 3,
                     "unsettled": 1, "last_at": "2026-07-11 19:50:00"}],
          "last_at": "2026-07-11 19:50:00"},
         {"project": "sibling-two",
@@ -134,7 +134,7 @@ def test_mail_overview_links_boxes_and_flags_unsettled() -> None:
     ])
     assert '<a href="/mail?box=osiris">' in html
     assert "3 unsettled" in html and "settled" in html
-    assert "@Thoth XLI" in html                      # the soul wears its name...
+    assert "@Vireo XLI" in html                      # the soul wears its name...
     assert 'box=%40agent%3Aad1a1cb0-g40-iv' in html or \
         'box=@agent:ad1a1cb0-g40-iv' in html         # ...and links to its lane
 
@@ -144,7 +144,7 @@ def test_mail_box_renders_threads_with_messages_inside() -> None:
         {"thread": 228, "between": ["osiris", "sibling-eight"], "unsettled": 1,
          "last_at": "2026-07-11 19:54:12",
          "msgs": [
-             {"id": 301, "from_agent": "agent:ra", "from_project": "sibling-eight",
+             {"id": 301, "from_agent": "agent:rx", "from_project": "sibling-eight",
               "to_agent": None, "body": "grievances <b>bold</b>",
               "created_at": "2026-07-11 19:54:12", "settled": False},
          ]}])
@@ -155,7 +155,7 @@ def test_mail_box_renders_threads_with_messages_inside() -> None:
 def test_fleet_renders_live_dots_and_wake_ledger() -> None:
     html = render_fleet({
         "mounts": [
-            {"agent_id": "agent:ad1a1cb0-xx", "handle": "Thoth", "seat": "Thoth XX",
+            {"agent_id": "agent:ad1a1cb0-xx", "handle": "Vireo", "seat": "Vireo XX",
              "project": "osiris", "model": "claude-fable-5", "cwd": "/home/x/osiris",
              "last_seen": None, "age_secs": 30.0, "live": True},
             {"agent_id": "agent:old", "handle": None, "seat": None, "project": "neo",
@@ -167,19 +167,20 @@ def test_fleet_renders_live_dots_and_wake_ledger() -> None:
         "wakes_hour": 21, "wake_budget": 30,
     })
     assert "1 live · 1 soul · 1 unreconciled" in html and "wakes 21 / 30/h" in html
-    assert "Thoth XX" in html and '<span class="live">●</span>' in html
+    assert "Vireo XX" in html and '<span class="live">●</span>' in html
     assert 'href="/mail?box=osiris"' in html    # a seat's project opens its mail
     assert "mint" in html and "msg 7" in html
-    # CONFESSED, NOT VERIFIED (door census item 2): the dot's own meaning is disclosed —
+    # CONFESSED, NOT VERIFIED: the dot's own meaning is disclosed,
     # an operator reading it should never mistake a 15-minute cache read for a harness fact.
     assert "not a harness/proc-verified fact" in html
 
 
 async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
-    """THE FOLD (operator, 2026-07-16: 'why is there 2 thoth XL agents... the agent hash
-    should be a row'): an agent with many mount rows — its durable anchor plus a tab
-    viewing it — renders ONCE; the realest row testifies for the card (a view's stale
-    model label never wins over the session's own row), and ×N confesses the bodies."""
+    """THE FOLD: an agent's mount rows should fold to one card keyed on the agent
+    identity, not one card per row. An agent with many mount rows (its durable anchor
+    plus a tab viewing it) renders ONCE; the realest row testifies for the card (a view's
+    stale model label never wins over the session's own row), and ×N confesses the
+    bodies."""
     from src.api.chrome import fleet_data, render_fleet
     from src.orchestrator.mounts import save_mount
 
@@ -198,11 +199,11 @@ async def test_fleet_folds_one_soul_to_one_row(actions: Actions) -> None:
     assert mine[0]["model"] == "claude-opus-4-8"   # the real row testifies
     assert mine[0]["sessions"] == 2 and mine[0]["live"] is True
     html = render_fleet(data)
-    # the doors are explained LEANLY (operator, 2026-07-16, third pass: '1 agent' is the
-    # invariant, never said; the life is the roman in the name, never repeated)
+    # the doors are explained LEANLY: '1 agent' is the
+    # invariant, never said; the life is the roman in the name, never repeated
     assert "(2 doors)" in html and "1 agent" not in html
-    assert "tab → aaaa0001" in html                # the view door, one short line
-    assert "session aaaa0001" in html              # the real door, one short line
+    assert "tab → aaaa0001" in html                # the view entry, one short line
+    assert "session aaaa0001" in html              # the real entry, one short line
 
 
 async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -> None:
@@ -212,8 +213,8 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
     from src.orchestrator.mailbox import read_desk, send_message
 
     p = actions.pool
-    # send_message refuses a to_project nobody has ever mounted under (f6f3e43e, shape 3 of
-    # #117) -- alive=False registers 'neo' as existing without a live pulse, matching
+    # send_message refuses a to_project nobody has ever mounted under (see #117,
+    # shape 3) -- alive=False registers 'neo' as existing without a live pulse, matching
     # test_mailbox.py's/test_trigger.py's own already-fixed seed idiom.
     await save_mount(p, job_dir="/test/seed/neo", agent_id="agent:seed-neo",
                      project="neo", cwd="/test", model=None, session_key=None, alive=False)
@@ -223,7 +224,7 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
                        to_project="neo", body="lateral note")
     desk = await read_desk(p)
     html = render_desk(desk)
-    # the LANDING page is the ROSTER: osiris appears with one ask — and the body does NOT.
+    # the LANDING page is the ROSTER: osiris appears with one ask, and the body does NOT.
     # That is the flood cure; contents live behind the click.
     assert '<a href="/desk?p=osiris">' in html and "decide something" not in html
     assert "decide something" in render_desk_project(desk, "osiris")
@@ -236,19 +237,19 @@ async def test_desk_and_fleet_data_round_trip_the_live_graph(actions: Actions) -
 
 
 async def test_a_miner_guess_is_never_debt(actions: Actions) -> None:
-    """THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE (operator, 2026-07-12: "the desk says this
-    session owes 6, accurate or bug?" — bug; five of the six were the miner's inferences and
-    two were provably false).
+    """THE MINER MAY NOTICE, BUT MUST NEVER OBLIGE: a real incident found the desk
+    reporting the operator owed 6 things when it was a bug; five of the six were the
+    miner's inferences and two were provably false.
 
     A DERIVED thread owned by 'operator' is an LLM's guess that the human owes something.
-    Nobody asked him. It stays on the desk — some guesses are real — but it must never enter
+    Nobody asked him. It stays on the desk (some guesses are real) but it must never enter
     `owed`, because a red number he cannot trust is one he learns to ignore, and that is how
-    the desk reached a scary red 11 in the first place.
+    the desk reached a scary red count in the first place.
     """
     from src.orchestrator.mailbox import read_desk
 
     p = actions.pool
-    asked = await open_thread(actions, "ship the release — needs your key", owner="operator",
+    asked = await open_thread(actions, "ship the release, needs your key", owner="operator",
                               repo="osiris")
     assert asked
     guess = await actions.create_or_find_object("Thread", "thread:mined-guess", "session-miner")
@@ -270,9 +271,9 @@ async def test_a_miner_guess_is_never_debt(actions: Actions) -> None:
 
 
 async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -> None:
-    """THE SOUL IS THE LINEAGE (operator, 2026-07-16: 'metron ix, viii, vii all show up
-    as separate seats, but the ancestors are superseded'): generations fold UNDER the
-    freshest one — the head is the face, ancestors render as past lives inside the
+    """THE SOUL IS THE LINEAGE: a real incident showed several generations of the same
+    seat listed as separate agents instead of superseded ancestors. Generations fold UNDER
+    the freshest one: the head is the face, ancestors render as past lives inside the
     unfold, never as peer rows."""
     from datetime import UTC, datetime
 
@@ -307,8 +308,8 @@ async def test_fleet_folds_generations_under_the_living_head(actions: Actions) -
 
 
 async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -> None:
-    """A restart can re-mint the ID BASE mid-lineage (Metron IX rode a new base while
-    VIII and VII kept the old) — the NAME is the soul, so the fold spans bases when a
+    """A restart can re-mint the ID BASE mid-lineage (a real specimen rode a new base while
+    its two ancestors kept the old). The NAME is the soul, so the fold spans bases when a
     handle exists: one row, the freshest generation as the face."""
     from datetime import UTC, datetime
 
@@ -331,15 +332,16 @@ async def test_fleet_folds_a_name_across_rebased_id_lineages(actions: Actions) -
 
     data = await fleet_data(p)
     mine = [m for m in data["mounts"] if (m.get("handle") == "Metrix")]
-    assert len(mine) == 1                              # one NAME, one row — across bases
+    assert len(mine) == 1                              # one NAME, one row, across bases
     assert mine[0]["agent_id"] == "agent:4e60ba5e"     # the freshest life is the face
     assert len(mine[0]["ancestors"]) == 1              # the old base is a past life
 
 
 async def test_fleet_counts_seated_minds_never_passing_strangers(actions: Actions) -> None:
-    """SEATED ONLY (operator, 2026-07-17: 'chrome shows fleet 5 but there are only 3 agents
-    up'): the whisper's own echo — agent id derived from the session id, no active object
-    behind it (a bg-pty host, a spare) — is a stranger's door. Real, live, confessed beside
+    """SEATED ONLY: a real incident showed chrome reporting fleet 5 when only 3 agents
+    were actually up. The whisper's own echo (agent id derived from the session id, no
+    active object behind it: a bg-pty host, a spare) is a visiting stranger's entry, not
+    a seat. Real, live, confessed beside
     the number as a visitor; never counted inside it. A sid-derived id that EARNED an object
     is seated (the visitor gate's other witness)."""
     from src.api.chrome import fleet_data, render_fleet
@@ -354,7 +356,7 @@ async def test_fleet_counts_seated_minds_never_passing_strangers(actions: Action
     await save_mount(p, job_dir="/jobs/feed0002", agent_id="agent:feed0002",
                      project="atlas", cwd="/w/atlas", model=None,
                      session_key="whisper:feed0002")
-    # the earned name: sid-derived base but a real active object — seated
+    # the earned name: sid-derived base but a real active object, seated
     await actions.create_or_find_object("Agent", "agent:ca11ab1e", "agent:ca11ab1e")
     await save_mount(p, job_dir="/jobs/ca11ab1e", agent_id="agent:ca11ab1e",
                      project="kast", cwd="/w/kast", model=None,
@@ -437,23 +439,23 @@ def test_render_overhead_telemetry_band() -> None:
     assert "retained telemetry" not in render_overhead(_overhead_data(), None)
 
 
-# ── /roadmap — render_roadmap RETIRED (ruling c5b184cd, thread d56e7073/#44) ───────────────
+# ── /roadmap: render_roadmap RETIRED ───────────────
 # /roadmap now reads compositions.ROADMAP through the generic composition renderer (osiris.js's
-# table()/renderResult) — its own tests live in test_compositions.py (the composition end to
+# table()/renderResult); its own tests live in test_compositions.py (the composition end to
 # end). chrome.py's own render_composition + _comp_* chain, once the Python-side generic
-# renderer, retired with /canon (task #96, second cut) — its tests retired with it.
+# renderer, retired with /canon (second cut); its tests retired with it.
 
-# ── /docs — render_docs RETIRED (ruling c5b184cd, thread d56e7073/#44); /canon (its route)
-# and render_composition (its renderer) both RETIRED (task #96, 2026-07-30) — the composition
+# ── /docs: render_docs RETIRED; /canon (its route)
+# and render_composition (its renderer) both RETIRED, the composition
 # end-to-end tests live in test_compositions.py.
 
 
 def test_page_shell_has_no_dead_nav_links() -> None:
     """Retired routes must leave the nav, not just the router. A dead nav link is a worse
-    bug than the duplication it was pointing at — the reader clicks it and gets a 404 with
+    bug than the duplication it was pointing at: the reader clicks it and gets a 404 with
     no explanation, where before they got a redundant-but-working page."""
     html = page("overhead", "overhead", "<p>x</p>")
-    # /roadmap retired (ruling d42c543b), /canon retired (task #96, 2026-07-30) — both pure
+    # /roadmap retired, /canon retired, both pure
     # pass-throughs to compositions already roomed in /ui.
     assert 'href="/roadmap"' not in html
     assert 'href="/canon"' not in html

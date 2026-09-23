@@ -1,14 +1,14 @@
-"""chaos.py — crash replay as a gate (Thoth msg 5338, 2026-08-18). Every test here drives
-`chaos_replay` through INJECTED kill/restart/fire_storm/automount_probe — never a real
+"""chaos.py: crash replay as a gate. Every test here drives
+`chaos_replay` through INJECTED kill/restart/fire_storm/automount_probe, never a real
 `systemctl` call, never a real network round-trip. `_real_fire_storm` is the one function
 exercised for real (against the test DB pool), since it never touches a live daemon.
 
 #186 (dispatch 5690): `test_chaos_replay_all_green_against_isolated_real_daemons` below IS
-the real thing — real SIGKILL, real subprocess restart, real /automount round-trips —
+the real thing: real SIGKILL, real subprocess restart, real /automount round-trips,
 against a REAL but ISOLATED osiris-mcp + osiris-worker pair (`isolated_chaos_daemons`
 fixture): their own free port, this worker's own testcontainer Postgres (`pg_dsn`) and
 Redis (`redis_url`), never the production systemd units, never the production DB/queue.
-This is what makes `chaos_replay`'s own real kill/restart safe to run IN THE SUITE — the
+This is what makes `chaos_replay`'s own real kill/restart safe to run IN THE SUITE: the
 production daemons four other seats may be mid-turn on are never touched."""
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
 def _agents_json_sequence(calls: list[list[dict[str, Any]]]) -> Any:
-    """One list of rows PER CALL, consumed in order; the last list repeats once exhausted —
+    """One list of rows PER CALL, consumed in order; the last list repeats once exhausted:
     `registry_census` is called twice by `chaos_replay` (baseline, then post-recovery), and
     a test needs to script them independently to construct a rowless-growth specimen."""
     state = {"n": 0}
@@ -76,19 +76,19 @@ async def _noop_sleep(secs: float) -> None:
 
 
 def _tripped_only_by_advisory_lock_noise(report: dict[str, Any]) -> bool:
-    """#01c08600 (Thoth mail 12808 item 2): `test_chaos_replay_all_green`'s own guard —
+    """`test_chaos_replay_all_green`'s own guard.
     `_stable_advisory_lock_count`'s min-across-samples resampling narrows but does not
     eliminate cross-worker advisory-lock noise under real `-n4` contention (this module's
     own `ADVISORY_LOCK_NOISE_TOLERANCE` docstring already documents a 2/6 reproduction
     even WITH the min-sampling fix in place, and this test injects `sleep=_noop_sleep`, so
-    `_stable_advisory_lock_count`'s own `gap_secs` never actually elapses here — its three
+    `_stable_advisory_lock_count`'s own `gap_secs` never actually elapses here: its three
     samples land back-to-back rather than usefully time-separated). Every OTHER sub-check
     `chaos_replay` runs is fully injected/deterministic in this specific test (fake kill/
-    restart/storm/automount, all instant, all success) — the advisory-lock check against
+    restart/storm/automount, all instant, all success). The advisory-lock check against
     the REAL shared `pg_locks` is the one genuinely environment-dependent piece left, so
     it is also the only finding that can EVER legitimately appear here as load noise
     rather than a real regression. True only when `findings` is EXACTLY one item and that
-    item is the advisory-lock finding beyond tolerance — never for a kill/restart/recovery/
+    item is the advisory-lock finding beyond tolerance, never for a kill/restart/recovery/
     flapping/stranger-mint finding, which stay real failures regardless of load."""
     findings = report.get("findings") or []
     if len(findings) != 1:
@@ -107,7 +107,7 @@ async def test_advisory_lock_count_is_a_plain_read(actions: Actions) -> None:
     assert isinstance(n, int) and n >= 0
 
 
-# --- _real_fire_storm — the one real-DB side effect this module has ------------------------
+# --- _real_fire_storm: the one real-DB side effect this module has ------------------------
 
 async def test_real_fire_storm_seeds_and_cleans_up_after_itself(actions: Actions) -> None:
     fired = await _real_fire_storm(actions.pool, n=5)
@@ -135,7 +135,7 @@ async def test_stranger_mints_flags_a_seat_that_changed_hands(actions: Actions) 
     seat = (await ensure_seat(actions, house="demo", handle="ChaosVictim",
                               source="test"))["seat_id"]
     await bind_holder(actions, seat_id=seat, agent_id="agent:chaosvictim")
-    # BASELINE resolved BEFORE the takeover — mirrors chaos_replay's own ordering (the
+    # BASELINE resolved BEFORE the takeover: mirrors chaos_replay's own ordering (the
     # original agent's `held_seat` reverses to None the instant a stranger takes over, so
     # this resolution must happen first, never re-derived after the fact).
     baseline = await _baseline_seat_map(
@@ -157,18 +157,18 @@ async def test_stranger_mints_skips_a_body_with_no_seat(actions: Actions) -> Non
 # --- isolated real daemons (#186) -----------------------------------------------------------
 
 def _free_port() -> int:
-    """An ephemeral port nobody else is bound to right now — bind-and-release, the
+    """An ephemeral port nobody else is bound to right now: bind-and-release, the
     standard OS-assigned-port trick (a TOCTOU window exists in principle; in practice the
     OS does not hand out the same free port to two concurrent binds often enough to matter
     for a test fixture, and this is never used for anything security-sensitive)."""
-    # unbounded-wait-ok: bind+getsockname only, never connect/accept/recv — cannot block
+    # unbounded-wait-ok: bind+getsockname only, never connect/accept/recv, cannot block
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
 class _IsolatedDaemons:
-    """Real `osiris-mcp` + `osiris-worker` subprocesses — the SAME entrypoints the
+    """Real `osiris-mcp` + `osiris-worker` subprocesses: the SAME entrypoints the
     systemd units run (`python -m src.mcp_server`, the venv's own `arq` console script),
     pointed at an ISOLATED port/DB/queue via env vars, never the production ones. This is
     the whole reason a REAL `chaos_replay` (real SIGKILL, real restart) is safe to run
@@ -199,7 +199,7 @@ class _IsolatedDaemons:
 
     async def _whisper_probe(self) -> tuple[bool, str]:
         """The SAME real probe `cmd_deploy`'s own whisper check uses
-        (`_real_check_whisper_probe`/`_synthetic_automount_probe`, src/cli.py) — reused,
+        (`_real_check_whisper_probe`/`_synthetic_automount_probe`, src/cli.py), reused,
         never re-implemented, against THIS instance's own isolated port."""
         base = f"http://127.0.0.1:{self.port}"
         async with httpx.AsyncClient(base_url=base, timeout=5.0) as client:
@@ -251,7 +251,7 @@ async def isolated_chaos_daemons(
     actions: Actions, pg_dsn: str, redis_url: str,
 ) -> AsyncIterator[_IsolatedDaemons]:
     """Depends on `actions` (not just `pg_dsn`) so the reset+catalog-seed already ran
-    before these subprocesses boot against the same database — a fresh daemon pair must
+    before these subprocesses boot against the same database: a fresh daemon pair must
     see the state the test itself set up, not race its own seeding."""
     daemons = _IsolatedDaemons(port=_free_port(), dsn=pg_dsn, redis_url=redis_url)
     await daemons.start_all()
@@ -264,12 +264,12 @@ async def isolated_chaos_daemons(
 # --- chaos_replay (full orchestration, every side effect injected) -------------------------
 
 async def test_chaos_replay_all_green(actions: Actions) -> None:
-    """#01c08600: this used to fail as a bare `assert False is True` whenever the ONE
+    """This used to fail as a bare `assert False is True` whenever the ONE
     genuinely load-sensitive sub-check (`_stable_advisory_lock_count` against the real,
-    server-wide `pg_locks`) tripped under real `-n4` contention from other worker suites
-    — a finding this test's own environment cannot control, not a regression in the code
+    server-wide `pg_locks`) tripped under real `-n4` contention from other worker suites,
+    a finding this test's own environment cannot control, not a regression in the code
     under test. Skips, naming the guard, instead of failing opaque; any OTHER finding
-    (kill/restart/recovery/flapping/stranger-mint — every one of them fully injected and
+    (kill/restart/recovery/flapping/stranger-mint, every one of them fully injected and
     deterministic here) still fails for real, exactly as before."""
     report = await chaos_replay(
         actions.pool, kill=_ok_kill, restart=_ok_restart, fire_storm=_no_storm,
@@ -285,10 +285,9 @@ async def test_chaos_replay_all_green(actions: Actions) -> None:
 
 
 def test_advisory_lock_noise_guard_recognizes_the_tripped_shape() -> None:
-    """SIMULATES THE GUARD TRIPPING (Thoth mail 12808 item 2's own ask): a synthetic
-    report shaped exactly like `chaos_replay`'s real output when ONLY the advisory-lock
-    check fired beyond tolerance — `test_chaos_replay_all_green` must skip on this, not
-    fail bare."""
+    """SIMULATES THE GUARD TRIPPING: a synthetic report shaped exactly like
+    `chaos_replay`'s real output when ONLY the advisory-lock check fired beyond tolerance.
+    `test_chaos_replay_all_green` must skip on this, not fail bare."""
     report = {
         "ok": False,
         "findings": [
@@ -304,7 +303,7 @@ def test_advisory_lock_noise_guard_recognizes_the_tripped_shape() -> None:
 
 
 def test_advisory_lock_noise_guard_never_swallows_a_real_finding() -> None:
-    """A kill failure alongside the SAME inflated lock count must still hard-fail — the
+    """A kill failure alongside the SAME inflated lock count must still hard-fail: the
     guard only ever excuses the load-noise shape by itself, never as cover for a real
     regression that happens to ride along with it."""
     report = {
@@ -355,16 +354,15 @@ async def test_chaos_replay_reports_a_restart_failure(actions: Actions) -> None:
 async def test_chaos_replay_tolerates_automount_failures_before_first_recovery(
     actions: Actions,
 ) -> None:
-    """INVARIANT #4's SPLIT (chaos.py's own module docstring, Thoth ruling msg 5702,
-    2026-08-26): failures strictly BEFORE the first confirmed recovery are EXPECTED,
-    bounded unavailability — no un-replicated process can guarantee zero downtime across
-    a real SIGKILL — so this exact scenario, which used to be a hard finding, is
-    correctly GREEN now. REAL timing, deliberately (not the no-op `sleep` fake): the
-    concurrent poller (`poll_interval_secs=0.01`) needs actual wall-clock gaps during
-    `kill`/`restart` to get scheduled at all — the first few probes (from WHICHEVER
-    caller reaches them first, the poller or the recovery-wait) fail, then it recovers;
-    deterministic regardless of exact interleaving because every EARLY call fails, not
-    just one specific caller's."""
+    """INVARIANT #4's SPLIT (chaos.py's own module docstring): failures strictly BEFORE
+    the first confirmed recovery are EXPECTED, bounded unavailability. No un-replicated
+    process can guarantee zero downtime across a real SIGKILL, so this exact scenario,
+    which used to be a hard finding, is correctly GREEN now. REAL timing, deliberately
+    (not the no-op `sleep` fake): the concurrent poller (`poll_interval_secs=0.01`) needs
+    actual wall-clock gaps during `kill`/`restart` to get scheduled at all. The first few
+    probes (from WHICHEVER caller reaches them first, the poller or the recovery-wait)
+    fail, then it recovers; deterministic regardless of exact interleaving because every
+    EARLY call fails, not just one specific caller's."""
     import asyncio
 
     calls: list[int] = []
@@ -398,10 +396,10 @@ async def test_chaos_replay_reports_automount_flapping_after_recovery(
 ) -> None:
     """INVARIANT #4's OTHER HALF: a probe that succeeds on the very FIRST call (instant
     recovery) but fails on every call thereafter is, by construction, failing entirely
-    AFTER `first_recovery_at` — the post-recovery poll window chaos.py adds specifically
+    AFTER `first_recovery_at`. The post-recovery poll window chaos.py adds specifically
     so this class of regression stays observable (`min(poll_interval_secs * 3, 4.0)`)
     is what makes those later failures land inside the measurement at all. This is the
-    REAL regression invariant #4 exists to catch (task #179's own shape) — unlike its
+    REAL regression invariant #4 exists to catch (task #179's own shape); unlike its
     sibling test above, this one must stay red."""
     calls: list[int] = []
 
@@ -458,14 +456,14 @@ async def test_chaos_replay_reports_a_stranger_minted_over_a_listed_body(
                               source="test"))["seat_id"]
     await bind_holder(actions, seat_id=seat, agent_id="agent:chaoslive")
     # THE MATCH KEY IS EXACTLY 8 CHARS (registry_census keys agent_mounts.job_dir's own
-    # basename against sessionId[:8]) — "chaoslv1", not "chaoslive" (9 chars), or the two
+    # basename against sessionId[:8]): "chaoslv1", not "chaoslive" (9 chars), or the two
     # never line up and baseline_census["matched"] silently comes back empty.
     await mounts.save_mount(
         actions.pool, job_dir="/x/jobs/chaoslv1", agent_id="agent:chaoslive",
         project="osiris", cwd="/code/osiris", model=None, session_key="whisper:chaoslv1")
 
     async def _restart_that_reassigns(units: list[str]) -> tuple[int, str]:
-        # the chaos window itself is when the fork would happen — simulated here since a
+        # the chaos window itself is when the fork would happen: simulated here since a
         # real fork attempt needs the full launch/dispatch machinery this test isn't
         # exercising; the invariant under test is that chaos_replay NOTICES the reassignment.
         await bind_holder(actions, seat_id=seat, agent_id="agent:chaosforked")
@@ -485,13 +483,13 @@ async def test_chaos_replay_reports_a_stranger_minted_over_a_listed_body(
 
 async def test_chaos_replay_reports_an_advisory_lock_leak(actions: Actions) -> None:
     """`_advisory_lock_count` reads `pg_locks` SERVER-WIDE, by its own documented design
-    (it accounts for concurrent-fleet noise via a baseline diff, never scopes by key) — but
+    (it accounts for concurrent-fleet noise via a baseline diff, never scopes by key), but
     under THIS SUITE's own xdist parallelism, every worker shares ONE physical Postgres
     server (separate databases, same instance; see conftest.py's own `pg_dsn` docstring),
     so `pg_locks` is genuinely visible cross-worker. A single leaked lock can occasionally
     be masked by an unrelated worker's own transient advisory-lock traffic (e.g.
     test_seats.py's wedge-cancellation specimens) landing in the same narrow measurement
-    window — leaking TEN distinct keys instead of one keeps the signal solidly above that
+    window, so leaking TEN distinct keys instead of one keeps the signal solidly above that
     noise floor without weakening `chaos_replay`'s own real, unscoped comparison."""
     leaked_conn: list[Any] = []
     keys = list(range(999999001, 999999011))
@@ -501,9 +499,9 @@ async def test_chaos_replay_reports_an_advisory_lock_leak(actions: Actions) -> N
         leaked_conn.append(conn)
         for key in keys:
             await conn.execute("SELECT pg_advisory_lock($1)", key)
-        # deliberately never released, never returned to the pool — a real leak. The test's
+        # deliberately never released, never returned to the pool: a real leak. The test's
         # own cleanup below unlocks and releases it via the SAME connection object
-        # (pg_advisory_unlock_all() only ever releases the CALLING session's own locks —
+        # (pg_advisory_unlock_all() only ever releases the CALLING session's own locks,
         # a fresh connection from the pool cannot clean up another connection's hold).
         return 0, "restarted"
 
@@ -527,57 +525,56 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
 ) -> None:
     """THE ISOLATION HALF OF #186 (dispatch 5690) IS BUILT AND WORKS: real SIGKILL, real
     subprocess restart, real /automount round-trips through a REAL osiris-mcp +
-    osiris-worker pair — own port, own testcontainer Postgres (`pg_dsn`), own
+    osiris-worker pair: own port, own testcontainer Postgres (`pg_dsn`), own
     testcontainer Redis (`redis_url`), never the production systemd units or DB/queue.
     `agents_json` stays the SAME empty-baseline fake the fully-mocked tests above use,
     deliberately: `registry_census`'s own fleet-agent census is about the HOST's real
     Claude Code sessions, unrelated to this isolated daemon pair.
 
-    THE WALL THIS TEST NAMED, AND HOW IT CLOSED (#186 follow-up, Thoth ruling msg 5702,
-    2026-08-26): measured directly (a standalone script, real production DSN) a freshly
-    spawned `python -m src.mcp_server` takes ~1.5-2s of genuine connection-refused before
-    it accepts its first HTTP request — cold Python + FastMCP + settings + DB-pool init,
-    inherent to the process, not an artifact of this harness. Invariant #4 used to flag
-    ANY probe failure during the WHOLE kill-to-recovery window as a hard finding, which
-    made this unavailability — expected of any un-replicated process across a real
-    SIGKILL — indistinguishable from a genuine regression. Thoth's ruling adopted this
-    test's own proposed fix shape: chaos.py's invariant #4 now SPLITS pre-first-recovery
-    failures (expected, bounded — invariant #5 already tracks that bound) from
-    post-recovery FLAPPING (a real regression, the shape task #179 fixed once). With that
-    split landed, this test can finally assert the invariant for real, not route around
-    it: the isolated real daemon pair's own cold-start unavailability no longer needs a
-    carve-out, because chaos_replay itself now correctly doesn't count it as a finding.
+    THE WALL THIS TEST NAMED, AND HOW IT CLOSED (#186 follow-up): measured directly (a
+    standalone script, real production DSN) a freshly spawned `python -m src.mcp_server`
+    takes ~1.5-2s of genuine connection-refused before it accepts its first HTTP request,
+    cold Python + FastMCP + settings + DB-pool init, inherent to the process, not an
+    artifact of this harness. Invariant #4 used to flag ANY probe failure during the
+    WHOLE kill-to-recovery window as a hard finding, which made this unavailability,
+    expected of any un-replicated process across a real SIGKILL, indistinguishable from
+    a genuine regression. This fix adopted the proposed shape: chaos.py's invariant #4
+    now SPLITS pre-first-recovery failures (expected, bounded: invariant #5 already
+    tracks that bound) from post-recovery FLAPPING (a real regression, the shape task
+    #179 fixed once). With that split landed, this test can finally assert the invariant
+    for real, not route around it: the isolated real daemon pair's own cold-start
+    unavailability no longer needs a carve-out, because chaos_replay itself now
+    correctly doesn't count it as a finding.
 
     THE OTHER HALF OF THIS SEGMENT'S FLAKE (root-caused live, reproduced twice under a
     real `-n4` full-suite run): `_advisory_lock_count` reads `pg_locks` SERVER-WIDE
-    (`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring names this — every
+    (`test_chaos_replay_reports_an_advisory_lock_leak`'s own docstring names this: every
     xdist worker shares ONE physical Postgres instance), so an unrelated worker's own
     transient lock landing in the narrow post-recovery sampling instant could false-
     positive as a leak; `ADVISORY_LOCK_NOISE_TOLERANCE` (chaos.py) now absorbs that
     measured noise without masking the leak-reproduction test's own deliberate 10-key
     signal.
 
-    A THIRD TIMING DEPENDENCY (WAVE 26 item 2, thread 01c08600, Thoth DM 11536 — this
-    still failed a full gate under load and passed alone even with both fixes above):
-    this call tightened `recovery_ceiling_secs` to 30.0, below `chaos_replay`'s own
-    60.0 default, purely to make the ordinary (quiet-box) case of this test faster.
-    The poll backoff (2, 4, 8, 8, 8...) sums to exactly 30 at 5 iterations — so with
-    that override, this test carried almost NO margin beyond the ~1.5-2s cold-start
-    baseline the comment above measured under UNCONTENDED conditions. Real `-n4`
-    full-suite load competes for the same CPU/IO the freshly SIGKILL-restarted
+    A THIRD TIMING DEPENDENCY (this still failed a full gate under load and passed alone
+    even with both fixes above): this call tightened `recovery_ceiling_secs` to 30.0,
+    below `chaos_replay`'s own 60.0 default, purely to make the ordinary (quiet-box) case
+    of this test faster. The poll backoff (2, 4, 8, 8, 8...) sums to exactly 30 at 5
+    iterations, so with that override, this test carried almost NO margin beyond the
+    ~1.5-2s cold-start baseline the comment above measured under UNCONTENDED conditions.
+    Real `-n4` full-suite load competes for the same CPU/IO the freshly SIGKILL-restarted
     `osiris-mcp`/`osiris-worker` subprocesses need to cold-start, and that contention
     (not a hang, not a regression) is exactly what a tight, test-local ceiling has no
     room to absorb. Fixed by dropping the override and inheriting chaos_replay's own
-    already-proven 60.0s default — a longer wait bound that is still bounded, not a
+    already-proven 60.0s default: a longer wait bound that is still bounded, not a
     skip: a genuine non-recovery still fails this test, just with the same headroom
     every OTHER caller of chaos_replay already gets."""
-    # #c46a9264 (Thoth mail 13353 item 1): this call — unlike `test_chaos_replay_all_green`
-    # above — takes NO `sleep=` override, so `_stable_advisory_lock_count`'s own gap_secs
-    # elapses for real between samples; under real `-n4` full-suite load, that's still the
-    # one genuinely environment-dependent sub-check (server-wide `pg_locks`, same root cause
-    # as #01c08600), so this sibling earns the identical narrow skip rather than a bare
-    # hard-fail. Every OTHER invariant here (real kill/restart/storm/automount, all deter-
-    # ministic once they resolve) still fails for real on any other finding.
+    # This call, unlike `test_chaos_replay_all_green` above, takes NO `sleep=` override, so
+    # `_stable_advisory_lock_count`'s own gap_secs elapses for real between samples; under
+    # real `-n4` full-suite load, that's still the one genuinely environment-dependent
+    # sub-check (server-wide `pg_locks`, same root cause as above), so this sibling earns
+    # the identical narrow skip rather than a bare hard-fail. Every OTHER invariant here
+    # (real kill/restart/storm/automount, all deterministic once they resolve) still fails
+    # for real on any other finding.
     report = await chaos_replay(
         actions.pool, units=DEFAULT_CHAOS_UNITS,
         kill=isolated_chaos_daemons.kill, restart=isolated_chaos_daemons.restart,
@@ -594,9 +591,9 @@ async def test_chaos_replay_all_green_against_isolated_real_daemons(
 
 def test_advisory_lock_noise_guard_recognizes_the_tripped_shape_alongside_a_storm_report(
 ) -> None:
-    """#c46a9264: the guard `test_chaos_replay_all_green_against_isolated_real_daemons` now
+    """The guard `test_chaos_replay_all_green_against_isolated_real_daemons` now
     shares is the SAME `_tripped_only_by_advisory_lock_noise` helper the fully-mocked sibling
-    already has three simulated-trip tests for above — this one confirms the shared helper
+    already has three simulated-trip tests for above; this one confirms the shared helper
     still recognizes the tripped shape when the report also carries `storm_fired` (present
     only on the real-daemon call's own report, never on the mocked sibling's), so the guard
     genuinely extends to this call site rather than only happening to work by accident."""

@@ -1,11 +1,11 @@
-"""Live spawn provenance — the sidechain impersonation kill (2026-07-10).
+"""Live spawn provenance, fixing sidechain impersonation (2026-07-10).
 
 A sub-agent shares its parent's $CLAUDE_JOB_DIR and MCP connection, so every osiris call it
-made resolved as the PARENT: a probe child was greeted 'you are Thoth XVII, writes attributed
-to you' (live repro). The anchor hook now stamps sidechain calls with the harness's own
-agent_id, and these tests drive the server half: the stamp attributes writes to the CHILD —
-registered spawned_by its parent under the miner's keying — and the parent's away-fold names
-its spawns instead of leaving it surprised.
+made resolved as the PARENT: a probe child was greeted as if it were the parent, with writes
+attributed to the parent (live repro). The anchor hook now stamps sidechain calls with the
+harness's own agent_id, and these tests drive the server half: the stamp attributes writes to
+the CHILD, registered spawned_by its parent under the miner's keying, and the parent's
+away-fold names its spawns instead of leaving it surprised.
 """
 from __future__ import annotations
 
@@ -29,7 +29,7 @@ def _reset_spawn_skip_cache() -> None:
     reset, and `_actor_for` writes the child's properties ONLY inside its TTL guard
     (mcp_server.py:888) while returning the child id UNCONDITIONALLY. So a cache entry left
     by any earlier test in this xdist worker's process makes `register_spawn` a no-op while
-    the id still resolves — the object reads as present and its `agent_type` reads as None,
+    the id still resolves: the object reads as present and its `agent_type` reads as None,
     which is exactly the CI-only failure of
     test_actor_for_attributes_the_stamped_child_never_the_seat (assert None == 'code-reviewer',
     actor assertion on the line above PASSING). THE CACHE CAN CLAIM "REGISTERED" WHILE THE DB
@@ -38,13 +38,13 @@ def _reset_spawn_skip_cache() -> None:
     Cleared at SETUP, not only in each test's own `finally`: teardown-shaped cleanup of
     module-global state only works if every predecessor behaved, and a test that aborts before
     its `finally` poisons whatever runs next. Setup GUARANTEES the precondition instead of
-    depending on the neighbours. Same class as obligation 7bde8729 (test_manager.py's catalog
-    seeding) — second specimen of "this file passes only because of what ran before it".
+    depending on the neighbours. Same class as a known catalog-seeding leak in
+    test_manager.py: another specimen of "this file passes only because of what ran before it".
 
     Deliberately does NOT reproduce the CI failure locally: it never reproduced here across
-    three attempts under CI-matching conditions (Khnum, decision 102c4035). This closes the
-    branch by construction rather than by chasing a race, and if CI still fails afterwards the
-    cache hypothesis is REFUTED — which is itself worth knowing.
+    three attempts under CI-matching conditions. This closes the branch by construction rather
+    than by chasing a race, and if CI still fails afterwards the cache hypothesis is REFUTED,
+    which is itself worth knowing.
     """
     from src import mcp_server as srv
 
@@ -59,7 +59,7 @@ async def _prop(actions: Actions, canonical: str, name: str) -> str | None:
 
 
 def test_normalize_spawn_id_converges_hook_and_miner_keying() -> None:
-    """Hook payloads say 'agent-a932dd…', transcript filenames key the bare handle — both
+    """Hook payloads say 'agent-a932dd…', transcript filenames key the bare handle: both
     must land on the same Agent object."""
     assert normalize_spawn_id("agent-a932dd550cb8c9a30") == "a932dd550cb8c9a30"
     assert normalize_spawn_id("a932dd550cb8c9a30") == "a932dd550cb8c9a30"
@@ -99,10 +99,10 @@ async def test_register_spawn_wires_child_parent_and_authority(actions: Actions)
 async def test_register_spawn_resolves_an_existing_project_by_name_not_canonical(
     actions: Actions,
 ) -> None:
-    """PROJECT IDENTITY DRIFT (operator ruling b5663511): a bare create_or_find_object
-    on `repo:<project>` matches only the canonical, frozen at whatever label first
-    minted it — a project renamed since (canonical stays repo:<old> forever) must be
-    FOUND by its current name here, never re-minted as a fresh stub twin."""
+    """PROJECT IDENTITY DRIFT: a bare create_or_find_object on `repo:<project>` matches
+    only the canonical, frozen at whatever label first minted it. A project renamed since
+    (canonical stays repo:<old> forever) must be FOUND by its current name here, never
+    re-minted as a fresh stub duplicate."""
     await actions.create_or_find_object("Agent", "agent:par00002", "agent:par00002")
     existing = await actions.create_or_find_object(
         "SoftwareProject", "repo:rsp-oldcanonical", "test")
@@ -125,13 +125,12 @@ async def test_register_spawn_resolves_an_existing_project_by_name_not_canonical
 async def test_register_spawn_refuses_a_path_shaped_project_but_still_registers_the_child(
     actions: Actions, caplog: pytest.LogCaptureFixture,
 ) -> None:
-    """task #162/thread db14d8be: register_spawn used to mint a SoftwareProject from
-    whatever `project` it was handed, with none of task #107's guard (capture.py's
-    `_validate_repo_name`) — the only mint site in the codebase without it. A raw cwd or
-    placeholder minted a phantom. The child registration itself must still succeed and the
-    caller's claim stays on the record (the `project` property), only the phantom mint is
-    refused — and refused ALOUD (Thoth's ruling, msg 4023): a silent skip is indistinguishable
-    from a clean pass, so the refusal is logged, not swallowed."""
+    """register_spawn used to mint a SoftwareProject from whatever `project` it was handed,
+    with none of the usual guard (capture.py's `_validate_repo_name`): the only mint site in
+    the codebase without it. A raw cwd or placeholder minted a phantom. The child registration
+    itself must still succeed and the caller's claim stays on the record (the `project`
+    property), only the phantom mint is refused, and refused ALOUD: a silent skip is
+    indistinguishable from a clean pass, so the refusal is logged, not swallowed."""
     with caplog.at_level("WARNING"):
         child = await register_spawn(
             Actions(actions.pool), "agent-kid00003", agent_type="Explore",
@@ -151,7 +150,7 @@ async def test_register_spawn_refuses_a_path_shaped_project_but_still_registers_
 async def test_register_spawn_stop_reads_the_childs_own_model(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """SubagentStop hands the child's transcript — its OWN model lands (the whole point of
+    """SubagentStop hands the child's transcript: its OWN model lands (the whole point of
     the swarm layer: a Haiku child never records as its Opus parent), plus the done stamp."""
     t = tmp_path / "agent-kid00002.jsonl"
     t.write_text(json.dumps({"type": "assistant",
@@ -164,40 +163,39 @@ async def test_register_spawn_stop_reads_the_childs_own_model(
 
 
 @pytest.mark.xfail(
-    reason="CI-ONLY, CAUSE UNKNOWN — obligation 7bde8729's sibling, NOT a known-broken "
-           "feature. Fails ONLY on GitHub Actions, deterministically, every run; NEVER "
-           "reproduced locally across NINE attempts by three agents now (alone, whole-file "
-           "-n4, full suite -n4 3879/4110-passed, after clearing the spawn skip-cache at "
-           "setup, and — thread 6122's own addition — 15x whole-file plus 2x full-suite "
-           "runs under `taskset -c 0,1`/`-c 0` deliberate CPU starvation, matching or "
-           "exceeding ci.yml's own ubuntu-latest 4-vCPU/-n4 ratio). The failure is always "
+    reason="CI-ONLY, CAUSE UNKNOWN, sibling of another known flaky-catalog case, NOT a "
+           "known-broken feature. Fails ONLY on GitHub Actions, deterministically, every "
+           "run; NEVER reproduced locally across NINE attempts by three agents now (alone, "
+           "whole-file -n4, full suite -n4 3879/4110-passed, after clearing the spawn "
+           "skip-cache at setup, and 15x whole-file plus 2x full-suite runs under "
+           "`taskset -c 0,1`/`-c 0` deliberate CPU starvation, matching or exceeding "
+           "ci.yml's own ubuntu-latest 4-vCPU/-n4 ratio). The failure is always "
            "`assert None == 'code-reviewer'` on the agent_type line while the actor "
            "assertion ABOVE it passes. THREE HYPOTHESES RAISED, ALL REFUTED BY EXPERIMENT: "
-           "(1) Khnum's `_spawns_seen` module-global surviving the per-test DB reset "
-           "(decision 102c4035) — the setup-clear fixture above closed that branch by "
-           "construction and CI failed IDENTICALLY at 6ec8d78; (2) a differing CI pytest "
-           "invocation — ci.yml runs the same `uv run pytest -q` / `-n 4`; (3) 'a genuinely "
-           "fresh database is what CI has and a local run does not' (thread 6122's own "
-           "framing at dispatch) — FALSE: conftest.py provisions a fresh testcontainers "
-           "Postgres 16 per pytest SESSION locally too (tests/conftest.py:304), and CI's "
-           "own ci.yml uses the identical testcontainers mechanism, not a services: "
-           "container — 'fresh vs warm DB' is not a real difference between the two "
-           "environments and should stop being treated as the discriminator. "
-           "STILL UNKNOWN, NOT YET EVEN NARROWED: CI's ubuntu-latest runner is 4-vCPU "
-           "against the same `-n 4`, so the local under-provisioned stress runs above are "
-           "not even a faithful resource-pressure match — genuinely UNPROVISIONED to test. "
-           "The likeliest remaining candidate is xdist's own dynamic (non-deterministic) "
-           "load-balancing occasionally co-locating this test in the same worker process, "
-           "in the same run, as some OTHER test this file's own autouse fixture cannot "
-           "reach — never confirmed, only unexcluded. "
-           "DIAGNOSTIC INSTRUMENTATION ADDED (thread 6122) below, unconditional, not "
-           "gated on failure: prints the spawn skip-cache's exact contents, the worker id, "
-           "the pid, and the live `srv._pool`/`actions.pool` identity right before the "
-           "vulnerable read — so the NEXT CI red run's own captured stdout, not another "
-           "guess, names the actual state. "
+           "(1) the `_spawns_seen` module-global surviving the per-test DB reset: the "
+           "setup-clear fixture above closed that branch by construction and CI failed "
+           "IDENTICALLY at 6ec8d78; (2) a differing CI pytest invocation: ci.yml runs the "
+           "same `uv run pytest -q` / `-n 4`; (3) the claim that a genuinely fresh database "
+           "is what CI has and a local run does not, which is FALSE: conftest.py provisions "
+           "a fresh testcontainers Postgres 16 per pytest SESSION locally too "
+           "(tests/conftest.py:304), and CI's own ci.yml uses the identical testcontainers "
+           "mechanism, not a services: container, so 'fresh vs warm DB' is not a real "
+           "difference between the two environments and should stop being treated as the "
+           "discriminator. STILL UNKNOWN, NOT YET EVEN NARROWED: CI's ubuntu-latest runner "
+           "is 4-vCPU against the same `-n 4`, so the local under-provisioned stress runs "
+           "above are not even a faithful resource-pressure match, genuinely UNPROVISIONED "
+           "to test. The likeliest remaining candidate is xdist's own dynamic "
+           "(non-deterministic) load-balancing occasionally co-locating this test in the "
+           "same worker process, in the same run, as some OTHER test this file's own "
+           "autouse fixture cannot reach: never confirmed, only unexcluded. "
+           "DIAGNOSTIC INSTRUMENTATION ADDED below, unconditional, not gated on failure: "
+           "prints the spawn skip-cache's exact contents, the worker id, the pid, and the "
+           "live `srv._pool`/`actions.pool` identity right before the vulnerable read, so "
+           "the NEXT CI red run's own captured stdout, not another guess, names the actual "
+           "state. "
            "strict=False DELIBERATELY: if the real cause is fixed elsewhere this must go "
            "green without failing the suite, and we do not yet know enough to assert it "
-           "always fails. THIS MAY STILL BE A REAL BUG, not test noise — that is exactly "
+           "always fails. THIS MAY STILL BE A REAL BUG, not test noise, which is exactly "
            "why the row stays open rather than the test being deleted or re-muted with "
            "only a better comment. Do not remove this marker without reading a NEXT CI "
            "failure's diagnostic print, or without a real repro either way.",
@@ -217,9 +215,9 @@ async def test_actor_for_attributes_the_stamped_child_never_the_seat(
     try:
         actor = await srv._actor_for(None, "agent-kid00003", "code-reviewer")
         agent_type = await _prop(actions, actor, "agent_type")
-        # UNCONDITIONAL diagnostic (thread 6122) — printed every run, pass or fail, so the
-        # captured stdout of the NEXT CI failure carries the actual state rather than
-        # requiring a tenth guess. Cheap: one query already done, three cheap reads.
+        # UNCONDITIONAL diagnostic: printed every run, pass or fail, so the captured stdout
+        # of the NEXT CI failure carries the actual state rather than requiring a tenth
+        # guess. Cheap: one query already done, three cheap reads.
         print(
             f"[thread-6122-diagnostic] pid={os.getpid()} "
             f"xdist_worker={os.environ.get('PYTEST_XDIST_WORKER')!r} "
@@ -251,7 +249,7 @@ async def test_mount_by_a_spawn_never_takes_the_seat(actions: Actions, tmp_path:
     job_dir = str(tmp_path / "jobs" / "beef0001")
     await mounts.save_mount(actions.pool, job_dir=job_dir, agent_id="agent:beef0001",
                             project="osiris", cwd=str(tmp_path), model=None,
-                            session_key=None)  # the PARENT's row — must stay untouched
+                            session_key=None)  # the PARENT's row: must stay untouched
     saved_pool = srv._pool
     srv._pool = actions.pool
     agents_before = dict(srv._agents)
@@ -270,7 +268,7 @@ async def test_mount_by_a_spawn_never_takes_the_seat(actions: Actions, tmp_path:
 
 async def test_spawn_inbox_is_peek_only(actions: Actions, tmp_path: Path) -> None:
     """A spawn reading its parent's mailbox must never LEASE (a dying child's lease blocks
-    redelivery) nor SETTLE (that is the seat's duty) — peek is FORCED, ack dropped."""
+    redelivery) nor SETTLE (that is the seat's duty): peek is FORCED, ack dropped."""
     from types import SimpleNamespace
 
     from src import mcp_server as srv
@@ -306,7 +304,7 @@ async def test_spawn_inbox_is_peek_only(actions: Actions, tmp_path: Path) -> Non
 
 
 async def test_dm_to_a_spawn_warns_of_the_dead_letter(actions: Actions, tmp_path: Path) -> None:
-    """A DM addressed to an ephemeral spawn may never be read — send() says so at send time
+    """A DM addressed to an ephemeral spawn may never be read: send() says so at send time
     and points at the parent seat."""
     from types import SimpleNamespace
 
@@ -338,10 +336,10 @@ async def test_dm_to_a_spawn_warns_of_the_dead_letter(actions: Actions, tmp_path
 async def test_register_spawn_never_testifies_above_what_it_witnessed(
     actions: Actions, tmp_path: Path
 ) -> None:
-    """The ghost-spawn law (ruling 708a972d): the harness announces sidechains whose
-    transcript never materializes. A named-but-absent transcript stamps the spawn
-    unwitnessed; the file appearing (Stop) upgrades it; an observed ACT (witnessed=True)
-    is never un-witnessed by an unflushed file."""
+    """The ghost-spawn rule: the harness announces sidechains whose transcript never
+    materializes. A named-but-absent transcript stamps the spawn unwitnessed; the file
+    appearing (Stop) upgrades it; an observed ACT (witnessed=True) is never un-witnessed
+    by an unflushed file."""
     ghost_path = tmp_path / "agent-ghost0001.jsonl"  # announced, never materialized
     child = await register_spawn(Actions(actions.pool), "ghost0001", agent_type="claude",
                                  transcript=ghost_path)
@@ -368,8 +366,8 @@ async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
     actions: Actions, tmp_path: Path
 ) -> None:
     """The away-fold's warning is reserved for WITNESSED hands: when the only arrivals are
-    unwitnessed harness sidechains, the note says so calmly instead of 'another hand may
-    have worn your face' (Maat's identity scare, bug 75c59aad)."""
+    unwitnessed harness sidechains, the note says so calmly instead of warning that another
+    hand may have worn your face, a false-alarm case seen in production."""
     since = datetime.now(UTC) - timedelta(hours=1)
     await actions.create_or_find_object("Agent", "agent:par00009", "agent:par00009")
     await register_spawn(Actions(actions.pool), "ghost0009", agent_type="claude",
@@ -396,13 +394,13 @@ async def test_while_away_calms_the_ghost_and_keeps_the_warning_for_hands(
 
 
 async def test_while_away_names_your_spawns(actions: Actions) -> None:
-    """The surprise kill: a returning parent's away-fold lists the children its lineage
-    spawned since its last sign of life — type, model, when."""
+    """A returning parent's away-fold lists the children its lineage spawned since its
+    last sign of life: type, model, when."""
     since = datetime.now(UTC) - timedelta(hours=1)
     await actions.create_or_find_object("Agent", "agent:par00005-ii", "agent:par00005-ii")
     await register_spawn(Actions(actions.pool), "kid00005", agent_type="Plan",
                          parent_agent="agent:par00005-ii", project="demo")
-    # the CALLER is a later generation — the fold still finds the base lineage's children
+    # the CALLER is a later generation, but the fold still finds the base lineage's children
     away = await mounts.while_away(actions.pool, "demo", "agent:par00005-iii", since)
     assert away is not None
     spawns = away.get("spawns") or []
@@ -410,10 +408,9 @@ async def test_while_away_names_your_spawns(actions: Actions) -> None:
 
 
 async def test_register_spawn_mints_the_patronym(actions: Actions) -> None:
-    """THE PATRONYM (operator ruling, 2026-07-16): a hand wears its parent's own
-    displayed name plus a birth ordinal — 'Patro V.1', 'Patro V.2' — the roman numeral
-    belongs to the parent; children ride it dotted. Anonymous parents mint nothing, and
-    a re-fire never renumbers."""
+    """THE PATRONYM: a hand wears its parent's own displayed name plus a birth ordinal,
+    e.g. 'Patro V.1', 'Patro V.2'. The roman numeral belongs to the parent; children ride
+    it dotted. Anonymous parents mint nothing, and a re-fire never renumbers."""
     parent = await actions.create_or_find_object("Agent", "agent:pa77e001", "agent:pa77e001")
     await actions.assert_property(parent, "handle", "Patro", "agent:pa77e001", NOW, 0.9,
                                   evidence_class=_SD)
@@ -428,17 +425,17 @@ async def test_register_spawn_mints_the_patronym(actions: Actions) -> None:
     assert await _prop(actions, c1, "patronym") == "Patro V.1"
     assert await _prop(actions, c1, "name") == "Patro V.1 · Explore"
     assert await _prop(actions, c2, "patronym") == "Patro V.2"
-    # a re-fire converges — the ordinal never drifts
+    # a re-fire converges, the ordinal never drifts
     await register_spawn(Actions(actions.pool), "hand0001", agent_type="Explore",
                          parent_agent="agent:pa77e001", project="demo")
     assert await _prop(actions, c1, "patronym") == "Patro V.1"
-    # an anonymous parent mints nothing — the backfill names those at fold/claim time
+    # an anonymous parent mints nothing, the backfill names those at fold/claim time
     anon_kid = await register_spawn(Actions(actions.pool), "hand0003",
                                     parent_agent="agent:ffff7777", project="demo")
     assert await _prop(actions, anon_kid, "patronym") is None
 
 
-# ═══ THE SUBAGENT FILING ORGAN (ruling 0f76458c, extending 977f1abd, 2026-07-28) ═══
+# ═══ SUBAGENT FILING (2026-07-28) ═══
 
 
 async def test_file_subagent_names_an_existing_edge_and_flips_a_dead_parent(
@@ -447,7 +444,7 @@ async def test_file_subagent_names_an_existing_edge_and_flips_a_dead_parent(
     from src.orchestrator.lineage import file_subagent
 
     parent = await actions.create_or_find_object("Agent", "agent:fso00001", "agent:fso00001")
-    await actions.assert_property(parent, "handle", "Ferryman", "agent:fso00001", NOW, 0.9,
+    await actions.assert_property(parent, "handle", "Carrier", "agent:fso00001", NOW, 0.9,
                                   evidence_class=_SD)
     await actions.assert_property(parent, "seat_generation", "1", "agent:fso00001", NOW, 0.9,
                                   evidence_class=_SD)
@@ -455,15 +452,15 @@ async def test_file_subagent_names_an_existing_edge_and_flips_a_dead_parent(
                                                  "fleet-observer")
     await actions.create_link(child, parent, "spawned_by", "fleet-observer", NOW, 0.6,
                               evidence_class="direct_observation")
-    # no agent_mounts row at all for the parent — it is not live
+    # no agent_mounts row at all for the parent: it is not live
     out = await file_subagent(actions, subagent_id="agent:aabbcc00112233445", actor="test")
     assert out["parent"] == "agent:fso00001"
-    assert out["named"] == "Ferryman I.1"
+    assert out["named"] == "Carrier I.1"
     assert out["already_named"] is False
     assert out["parent_live"] is False
     assert out["status_flipped_historical"] is True
-    assert await _prop(actions, "agent:aabbcc00112233445", "patronym") == "Ferryman I.1"
-    assert await _prop(actions, "agent:aabbcc00112233445", "name") == "Ferryman I.1"
+    assert await _prop(actions, "agent:aabbcc00112233445", "patronym") == "Carrier I.1"
+    assert await _prop(actions, "agent:aabbcc00112233445", "name") == "Carrier I.1"
     assert await actions.pool.fetchval(
         "SELECT status FROM objects WHERE canonical='agent:aabbcc00112233445'") == "historical"
 
@@ -474,7 +471,7 @@ async def test_file_subagent_names_an_existing_edge_and_flips_a_dead_parent(
 
 
 async def test_file_subagent_never_flips_a_live_parent(actions: Actions) -> None:
-    """A mind's own research agents mid-work must not be buried — filed (attributed +
+    """A mind's own research agents mid-work must not be buried: filed (attributed +
     named), never status-flipped, while the parent is live."""
     from src.orchestrator.lineage import file_subagent
 
@@ -498,8 +495,8 @@ async def test_file_subagent_never_flips_a_live_parent(actions: Actions) -> None
 async def test_file_subagent_falls_back_to_session_when_no_spawned_by_edge(
     actions: Actions,
 ) -> None:
-    """The 7-of-2,679 fleet-wide stragglers: no spawned_by edge, only a `session` property —
-    the root agent id it derives to."""
+    """The 7-of-2,679 fleet-wide stragglers: no spawned_by edge, only a `session` property,
+    which is the root agent id it derives to."""
     from src.orchestrator.lineage import file_subagent
 
     child = await actions.create_or_find_object("Agent", "agent:acddee00112233445",
@@ -527,8 +524,8 @@ async def test_file_subagent_refuses_when_genuinely_unattributable(actions: Acti
 async def test_resolve_subagent_parent_flags_an_unregistered_session_fallback_unverified(
     actions: Actions,
 ) -> None:
-    """Thread 329236eb: identify_agent/doors() does real existence resolution and would
-    report ZERO matches for a raw session id nobody has ever registered as an Agent object —
+    """identify_agent/doors() does real existence resolution and would report ZERO matches
+    for a raw session id nobody has ever registered as an Agent object.
     _resolve_subagent_parent's session fallback used to hand that same synthesized id back
     with no way to tell it apart from a real, edge-backed parent. A spawned_by edge is always
     verified; the session fallback is verified only when that Agent object genuinely exists."""
@@ -552,7 +549,7 @@ async def test_resolve_subagent_parent_flags_an_unregistered_session_fallback_un
     assert verified is False  # no Agent object with that canonical exists anywhere
 
     # once that same id IS registered as a real Agent object, the identical session fallback
-    # verifies true — the check is genuine existence, not a heuristic on the string shape
+    # verifies true: the check is genuine existence, not a heuristic on the string shape
     await actions.create_or_find_object("Agent", "agent:neverregistered", "fleet-observer")
     parent, verified = await _resolve_subagent_parent(actions, unregistered_session_child)
     assert parent == "agent:neverregistered" and verified is True
@@ -562,10 +559,10 @@ async def test_file_subagents_dry_run_flags_unverified_session_fallback_parents(
     actions: Actions,
 ) -> None:
     """The sweep's own dry-run report (file_subagents) must surface the same unverified
-    signal per-candidate — identify_agent-grade honesty, not a new refusal: the candidate
-    stays in `attributable` and would still be filed on a live pass (file_subagent's own
-    mint-on-demand contract for this exact straggler case), but the report no longer hides
-    that its parent id is a guess, never independently confirmed to exist."""
+    signal per-candidate: the same honesty identify_agent applies, not a new refusal. The
+    candidate stays in `attributable` and would still be filed on a live pass (file_subagent's
+    own mint-on-demand contract for this exact straggler case), but the report no longer
+    hides that its parent id is a guess, never independently confirmed to exist."""
     from src.orchestrator.lineage import file_subagents
 
     kid = await actions.create_or_find_object("Agent", "agent:aa44aa00112233445",
@@ -633,7 +630,7 @@ async def test_file_subagents_live_pass_never_collides_sibling_ordinals(
     actions: Actions,
 ) -> None:
     """THE BUG THIS SWEEP EXISTS TO AVOID: patronym_for's own count-based ordinal is every
-    spawned_by edge into the parent, named or not — if two unnamed siblings were each filed
+    spawned_by edge into the parent, named or not. If two unnamed siblings were each filed
     by a naive call to patronym_for, both would compute the SAME total and collide on one
     name. The sweep must hand them 1 and 2, not 2 and 2."""
     from src.orchestrator.lineage import file_subagents

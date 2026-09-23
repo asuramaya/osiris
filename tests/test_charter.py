@@ -1,11 +1,12 @@
-"""THE CHARTER — a house is what a seat RULES, not where it sits (Phase 1 §4.1, `dd47c1da`).
+"""THE CHARTER: a house is what a seat RULES, not where it sits (Phase 1 section 4.1).
 
-RE-KEYED ONTO THE SEAT (operator ruling 1db1ff41): set_charter/charter_of mint and read
-`governs` links (Seat → SoftwareProject), never Agent → SoftwareProject — these tests prove
+RE-KEYED ONTO THE SEAT: set_charter/charter_of mint and read
+`governs` links (Seat -> SoftwareProject), never Agent -> SoftwareProject. These tests prove
 the mint, the read-back, the heal, AND the two things the old agent-keyed model got wrong:
 a successor couldn't heal an ancestor's grant (dissolved here, one seat/one link/no
-generations), and a self-declared string alone could mint a fake repo (atlas's garbled
-charter) — set_charter now refuses any name the graph has no independent evidence for.
+generations), and a self-declared string alone could mint a fake repo (a garbled
+charter from a bad rename). set_charter now refuses any name the graph has no
+independent evidence for.
 """
 from __future__ import annotations
 
@@ -26,7 +27,7 @@ async def _seat(actions: Actions, handle: str) -> str:
 
 
 async def _seated(actions: Actions, agent_id: str, handle: str) -> str:
-    """An Agent bound to a fresh Seat via `holds` — returns the seat_id."""
+    """An Agent bound to a fresh Seat via `holds`. Returns the seat_id."""
     from src.orchestrator.seats import bind_holder
 
     seat_id = await _seat(actions, handle)
@@ -39,15 +40,15 @@ async def _agent(actions: Actions, canonical: str) -> None:
 
 
 async def _repo(actions: Actions, name: str) -> None:
-    """Pre-mint a SoftwareProject — simulates 'the graph already has independent evidence
-    this repo is real' (a prior git ingest, in production; a bare mint here in tests)."""
+    """Pre-mint a SoftwareProject, simulating a repo the graph already has independent
+    evidence for (a prior git ingest, in production; a bare mint here in tests)."""
     await actions.create_or_find_object("SoftwareProject", f"repo:{name}", "test")
 
 
 async def _operator_charters(actions: Actions, *repos: str) -> None:
-    """Mints `governs` links from `person:operator` over the named (already-real) repos —
-    the test-side stand-in for `backfill_operator_charter` (thread 1d5b9773, "authority by
-    charter"), so a test can prove the operator's OWN charter now gates its bypass."""
+    """Mints `governs` links from `person:operator` over the named (already-real) repos.
+    The test-side stand-in for `backfill_operator_charter`, so a test can prove the
+    operator's OWN charter now gates its bypass."""
     from src.orchestrator.capture import ensure_operator_person
 
     person_id = await ensure_operator_person(actions, source="test")
@@ -66,7 +67,7 @@ async def test_set_charter_mints_governs_links(actions: Actions) -> None:
     assert out["added"] == ["bytebye", "osiris"]
     assert out["removed"] == []
     assert await charter_of(actions.pool, seat_id) == ["bytebye", "osiris"]
-    # real graph edges, not a property — governs, Seat -> SoftwareProject, active
+    # real graph edges, not a property: governs, Seat -> SoftwareProject, active
     links = await actions.pool.fetch(
         "SELECT p.canonical, l.valid_until FROM links l "
         "JOIN objects s ON s.id=l.from_id AND s.canonical=$1 "
@@ -79,15 +80,15 @@ async def test_set_charter_mints_governs_links(actions: Actions) -> None:
 async def test_set_charter_is_idempotent_when_declared_by_a_renamed_display_name(
     actions: Actions,
 ) -> None:
-    """Thread fba386dc: `_resolve_repo` matches a project's `name` PROPERTY too, not just
-    its canonical — so a seat chartering a repo by whatever it's CURRENTLY called (a
+    """`_resolve_repo` matches a project's `name` PROPERTY too, not just
+    its canonical, so a seat chartering a repo by whatever it's CURRENTLY called (a
     post-rename display name, or a differently-cased spelling of the same repo) used to
     diff the caller's own raw string against `charter_of`'s canonical-derived set, never
     settling: every call invalidated the prior canonical-spelled grant and minted a
-    twin under the caller's own spelling, which the NEXT identical call then invalidated
-    again — perpetual churn, never idempotent. Every candidate now resolves to its own
-    project's stable canonical before the diff, so a name-property match is exactly as
-    idempotent as an exact-canonical match."""
+    second, duplicate link under the caller's own spelling, which the NEXT identical call
+    then invalidated again, perpetual churn, never idempotent. Every candidate now resolves
+    to its own project's stable canonical before the diff, so a name-property match is
+    exactly as idempotent as an exact-canonical match."""
     from src.parsers.base import EvidenceClass
 
     seat_id = await _seated(actions, "agent:renamed-owner", "RenamedOwner")
@@ -116,8 +117,8 @@ async def test_set_charter_is_idempotent_when_declared_by_a_renamed_display_name
 async def test_set_charter_receipt_charter_field_is_the_committed_read_back(
     actions: Actions,
 ) -> None:
-    """Thread fba386dc: the receipt's `charter` field is read back from the graph AFTER
-    the write commits, never the pre-write `wanted` computation — it can never claim a
+    """The receipt's `charter` field is read back from the graph AFTER
+    the write commits, never the pre-write `wanted` computation, so it can never claim a
     charter state the graph doesn't actually hold. A mixed call (one real add, one
     rejected unknown name) proves the receipt reflects only what actually landed."""
     seat_id = await _seated(actions, "agent:readback", "Readback")
@@ -136,15 +137,15 @@ async def test_set_charter_receipt_charter_field_is_the_committed_read_back(
 async def test_set_charter_swapping_a_renamed_labels_old_for_new_leaves_exactly_one_edge(
     actions: Actions,
 ) -> None:
-    """THE SAME-OBJECT SELF-CANCELLATION (found building the rename cascade verb,
-    dispatch 2589353a; live specimen repo:xxit/handlingtheloop). A project's `repo:`
-    canonical never moves on a rename (project_identity.rename_project) — only its
-    `name` property does — so `_resolve_repo` resolves BOTH the pre-rename label and
+    """THE SAME-OBJECT SELF-CANCELLATION (found building the rename cascade verb;
+    live specimen repo:xxit/handlingtheloop). A project's `repo:`
+    canonical never moves on a rename (project_identity.rename_project); only its
+    `name` property does, so `_resolve_repo` resolves BOTH the pre-rename label and
     the post-rename one to the IDENTICAL object. Swapping a charter's declared list
     from the old label to the new one therefore resolves `added` and `removed` to the
     same object id: before the fix, the unconditional `create_link` (added) then
     `invalidate_link` (removed) sequence left ZERO live edges where there should be
-    exactly one — a real governance loss, not a display quirk."""
+    exactly one, a real governance loss, not a display quirk."""
     seat_id = await _seated(actions, "agent:swapster", "Swapster")
     proj = await actions.create_or_find_object("SoftwareProject", "repo:oldlabel", "test")
     await set_charter(actions, seat_id, ["oldlabel"], actor="agent:swapster")
@@ -154,7 +155,7 @@ async def test_set_charter_swapping_a_renamed_labels_old_for_new_leaves_exactly_
         "AND (l.valid_until IS NULL OR l.valid_until > now())", seat_id, proj)
     assert n_before == 1
 
-    # simulate rename_project: canonical stays repo:oldlabel, only `name` changes —
+    # simulate rename_project: canonical stays repo:oldlabel, only `name` changes.
     # `_resolve_repo`'s own name-property fallback now answers "newlabel" too.
     await actions.assert_property(proj, "name", "newlabel", "test", NOW, 0.95,
                                   evidence_class="self_declared")
@@ -181,7 +182,7 @@ async def test_set_charter_is_idempotent(actions: Actions) -> None:
 
 
 async def test_set_charter_removal_heals_by_compensating_event(actions: Actions) -> None:
-    """A repo dropped from the charter is healed (valid_until stamped), never deleted — the
+    """A repo dropped from the charter is healed (valid_until stamped), never deleted. The
     row survives, readable, exactly like every other retraction in this graph."""
     seat_id = await _seated(actions, "agent:steward3", "Steward3")
     for r in ("osiris", "sibling-two", "bytebye"):
@@ -192,7 +193,7 @@ async def test_set_charter_removal_heals_by_compensating_event(actions: Actions)
     assert amend["added"] == []
     assert amend["removed"] == ["sibling-two"]
     assert await charter_of(actions.pool, seat_id) == ["bytebye", "osiris"]
-    # the dropped repo's link STILL EXISTS — healed, not deleted
+    # the dropped repo's link STILL EXISTS: healed, not deleted
     row = await actions.pool.fetchrow(
         "SELECT l.valid_until FROM links l "
         "JOIN objects s ON s.id=l.from_id AND s.canonical=$1 "
@@ -202,12 +203,12 @@ async def test_set_charter_removal_heals_by_compensating_event(actions: Actions)
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects s ON s.id=l.from_id "
         "WHERE s.canonical=$1 AND l.type='governs'", seat_id)
-    assert n == 3  # nothing deleted — all three rows remain
+    assert n == 3  # nothing deleted, all three rows remain
 
 
 async def test_set_charter_readd_after_removal_mints_a_fresh_link(actions: Actions) -> None:
     """A repo that left the charter and returns gets a NEW governs link (a fresh grant), not a
-    resurrection of the healed one — the old row's heal stays true forever."""
+    resurrection of the healed one. The old row's heal stays true forever."""
     seat_id = await _seated(actions, "agent:steward4", "Steward4")
     await _repo(actions, "osiris")
     await set_charter(actions, seat_id, ["osiris"], actor="agent:steward4")
@@ -231,15 +232,15 @@ def test_schema_declares_governs() -> None:
     from src.ontology.schema import LINK_TYPES
 
     assert "governs" in LINK_TYPES
-    # WIDENED TO Person (thread 1d5b9773, "authority by charter"): an operator governs
-    # projects the same way a Seat does.
+    # WIDENED TO Person, so authority by charter can flow through an operator's own
+    # grants too: an operator governs projects the same way a Seat does.
     assert LINK_TYPES["governs"].domain == ("Seat", "Person")
     assert LINK_TYPES["governs"].range == ("SoftwareProject",)
 
 
 async def test_operator_charter_of_mirrors_charter_of_for_a_person(actions: Actions) -> None:
-    """operator_charter_of (thread 1d5b9773) is charter_of's own query shape, joined on
-    Person instead of Seat — empty for an unchartered Person, populated by active
+    """operator_charter_of is charter_of's own query shape, joined on
+    Person instead of Seat: empty for an unchartered Person, populated by active
     `governs` links exactly the same way."""
     from src.orchestrator.charter import operator_charter_of
 
@@ -255,8 +256,8 @@ async def test_operator_charter_of_mirrors_charter_of_for_a_person(actions: Acti
 async def test_second_operator_person_is_authoritative_only_over_its_own_charter(
     actions: Actions,
 ) -> None:
-    """AUTHORITY BY CHARTER, the multi-operator scoping test (thread 1d5b9773): two real
-    Person objects, each governing a DISJOINT set of projects — proves operator_charter_of
+    """AUTHORITY BY CHARTER, the multi-operator scoping test: two real
+    Person objects, each governing a DISJOINT set of projects. Proves operator_charter_of
     scopes strictly to each Person's own governs links, never leaking into the other's,
     independent of any _OPERATOR_ACTORS string-recognition question (multiple recognized
     operator SENTINELS are out of scope for this piece; the SCOPING mechanism itself is
@@ -280,8 +281,8 @@ async def test_second_operator_person_is_authoritative_only_over_its_own_charter
     assert await operator_charter_of(actions.pool, "person:operator-b") == ["beta-repo"]
 
 
-# ═══ repo-name validation (Thoth's design constraint, msg 2402): a charter is SELF_DECLARED
-# evidence and must never be the first and only witness that a repo exists — set_charter
+# ═══ repo-name validation: a charter is SELF_DECLARED
+# evidence and must never be the first and only witness that a repo exists. set_charter
 # refuses any name the graph has no independent evidence for, rather than minting it. ═══
 
 
@@ -297,7 +298,7 @@ async def test_set_charter_refuses_an_unknown_repo_name(actions: Actions) -> Non
 
 
 async def test_set_charter_partial_apply_when_one_name_is_unknown(actions: Actions) -> None:
-    """One bad item never sinks the whole batch — the same discipline settle() runs."""
+    """One bad item never sinks the whole batch, the same discipline settle() runs."""
     seat_id = await _seated(actions, "agent:validate2", "Validate2")
     await _repo(actions, "osiris")
     out = await set_charter(actions, seat_id, ["osiris", "vector"], actor="agent:validate2")
@@ -308,8 +309,8 @@ async def test_set_charter_partial_apply_when_one_name_is_unknown(actions: Actio
 
 
 async def test_set_charter_a_near_miss_caps_variant_is_not_conflated(actions: Actions) -> None:
-    """RAMstein/ramstein, ByeByte/byebyte (Thoth's named cases): exact match only, no fuzzy
-    resolution — a caps-variant of a real repo is a DIFFERENT, unknown string."""
+    """RAMstein/ramstein, ByeByte/byebyte: exact match only, no fuzzy
+    resolution. A caps-variant of a real repo is a DIFFERENT, unknown string."""
     seat_id = await _seated(actions, "agent:validate3", "Validate3")
     await _repo(actions, "bytebyte")
     out = await set_charter(actions, seat_id, ["ByteByte"], actor="agent:validate3")
@@ -324,10 +325,10 @@ async def test_set_charter_refuses_for_an_unknown_seat(actions: Actions) -> None
 
 
 async def test_set_charter_resolves_by_handle_not_just_canonical(actions: Actions) -> None:
-    """Thread c851c81b (Tantra): a caller supplying the seat's HANDLE, not its canonical,
+    """A caller supplying the seat's HANDLE, not its canonical,
     used to read back 'no such active seat' even though the seat was active and held that
-    exact handle — a seventh specimen of the exact-canonical-only gap _resolve_active_seat
-    (seats.py, thread 8673ddb7) was built to close. The output's own 'seat' field reports
+    exact handle: one more specimen of the exact-canonical-only gap _resolve_active_seat
+    (seats.py) was built to close. The output's own 'seat' field reports
     the resolved canonical, never the handle it was called with, so charter_of/create_link
     downstream never silently miss on a still-unresolved handle string."""
     seat_id = await _seated(actions, "agent:handlecaller", "Handleford")
@@ -339,8 +340,8 @@ async def test_set_charter_resolves_by_handle_not_just_canonical(actions: Action
     assert await charter_of(actions.pool, seat_id) == ["osiris"]
 
 
-# ═══ succession dissolves invalidate_link's exact-from_id limitation (Thoth's explicit gate,
-# msg 2402): one seat, one link, no generations — a successor re-declaring now heals the SAME
+# ═══ succession dissolves invalidate_link's exact-from_id limitation: one seat, one link,
+# no generations. A successor re-declaring now heals the SAME
 # row an ancestor generation minted, not a duplicate the ancestor's row survives alongside. ═══
 
 
@@ -356,7 +357,7 @@ async def test_set_charter_a_successor_heals_the_link_its_ancestor_declared(
     link_row = await actions.pool.fetchrow(
         "SELECT l.id FROM links l JOIN objects p ON p.id=l.to_id "
         "AND p.canonical='repo:bytebye' WHERE l.type='governs'")
-    # a SUCCESSOR takes the same seat — the ancestor's holds link heals, a new one binds
+    # a SUCCESSOR takes the same seat: the ancestor's holds link heals, a new one binds
     await bind_holder(actions, seat_id=seat_id, agent_id="agent:succ-ii")
     dropped = await set_charter(actions, seat_id, ["osiris"], actor="agent:succ-ii")
     assert dropped["removed"] == ["bytebye"]
@@ -368,10 +369,10 @@ async def test_set_charter_a_successor_heals_the_link_its_ancestor_declared(
     n = await actions.pool.fetchval(
         "SELECT count(*) FROM links l JOIN objects s ON s.id=l.from_id "
         "WHERE s.canonical=$1 AND l.type='governs'", seat_id)
-    assert n == 2  # osiris (still active) + the one healed bytebye row — no duplicate
+    assert n == 2  # osiris (still active) + the one healed bytebye row, no duplicate
 
 
-# ═══ migrate_charter_to_seat — the one-time migration off the old Agent-keyed model ═══
+# ═══ migrate_charter_to_seat: the one-time migration off the old Agent-keyed model ═══
 
 
 async def test_migrate_charter_to_seat_dry_run_writes_nothing(actions: Actions) -> None:
@@ -417,9 +418,9 @@ async def test_migrate_charter_to_seat_moves_a_single_agents_charter(actions: Ac
 
 
 async def test_migrate_charter_to_seat_unions_across_generations(actions: Actions) -> None:
-    """The exact accumulation bug this ruling closes: generation I declared osiris+bytebye,
-    generation II (a re-declaration the old model couldn't heal) declared osiris+sibling —
-    migration must union what the LINEAGE ever actively declared, not just one generation."""
+    """The exact accumulation bug this fix closes: generation I declared osiris+bytebye,
+    generation II (a re-declaration the old model couldn't heal) declared osiris+sibling.
+    Migration must union what the LINEAGE ever actively declared, not just one generation."""
     from src.orchestrator.seats import bind_holder
 
     await _agent(actions, "agent:mig3")
@@ -453,7 +454,7 @@ async def test_migrate_charter_to_seat_reports_and_skips_an_unseated_agent(
     actions: Actions,
 ) -> None:
     """An agent whose lineage holds NO seat (never attached/claimed) is reported, never
-    guessed — its link is left untouched, a named residual."""
+    guessed. Its link is left untouched, a named residual."""
     await _agent(actions, "agent:mig4")
     await _repo(actions, "osiris")
     a_oid = await actions.pool.fetchval("SELECT id FROM objects WHERE canonical='agent:mig4'")
@@ -469,7 +470,7 @@ async def test_migrate_charter_to_seat_reports_and_skips_an_unseated_agent(
 async def test_migrate_charter_to_seat_negative_control_undeclared_seat_stays_empty(
     actions: Actions,
 ) -> None:
-    """A seat that never declared anything reports none afterward — a migration run must
+    """A seat that never declared anything reports none afterward. A migration run must
     never invent a charter for a seat that was never party to any legacy governs link."""
     seat_id = await _seated(actions, "agent:mig5", "Mig5")
     await migrate_charter_to_seat(actions, dry_run=False, only_seats={seat_id})
@@ -556,7 +557,7 @@ async def test_migrate_charter_to_seat_dry_run_plan_names_what_was_already_decla
     assert await charter_of(actions.pool, seat_id) == ["postrekey"]  # dry-run wrote nothing
 
 
-# ═══ mcp_server.py integration — orient()/charter() resolve the caller's SEAT first ═══
+# ═══ mcp_server.py integration: orient()/charter() resolve the caller's SEAT first ═══
 
 
 class _Ctx:
@@ -568,9 +569,9 @@ class _Ctx:
 async def test_charter_tool_a_stranger_declares_its_own_charter_unaided(
     actions: Actions,
 ) -> None:
-    """THE ACCEPTANCE BAR (operator, ruling 1db1ff41): a seat arriving fresh, with no batch
+    """THE ACCEPTANCE BAR: a seat arriving fresh, with no batch
     and no operator, must declare and be right on its FIRST call. A bare attach (bind_holder,
-    the same primitive the daemon's birth ceremony runs) is enough — no claim_name, no prior
+    the same primitive the daemon's own startup runs) is enough: no claim_name, no prior
     charter, no lineage history."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -592,8 +593,8 @@ async def test_charter_tool_a_stranger_declares_its_own_charter_unaided(
 
 
 async def test_charter_tool_refuses_an_unseated_identity(actions: Actions) -> None:
-    """An identity that holds no seat at all is refused, plainly — never silently keyed on
-    the bare Agent id, which is the exact bug ruling 1db1ff41 closes."""
+    """An identity that holds no seat at all is refused, plainly, never silently keyed on
+    the bare Agent id, which is the exact bug this fix closes."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
 
@@ -613,7 +614,7 @@ async def test_charter_tool_refuses_an_unseated_identity(actions: Actions) -> No
 
 async def test_charter_tool_reads_through_a_re_seated_successor(actions: Actions) -> None:
     """Integration: a DIFFERENT Agent generation bound to the SAME seat sees the SAME
-    charter — succession transparency now falls out of seat-keying for free, no lineage
+    charter. Succession transparency now falls out of seat-keying for free, no lineage
     walk needed at the mcp_server layer at all."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -642,8 +643,8 @@ async def test_charter_tool_reads_through_a_re_seated_successor(actions: Actions
 
 
 async def test_orient_tool_surfaces_the_seats_charter(actions: Actions) -> None:
-    """Integration: orient()'s own charter line — the exact live case Lane C proved (a
-    seat's CLAUDE.md says 'You govern: X' but orient() showed nothing) — now resolved via
+    """Integration: orient()'s own charter line, the exact live case Lane C proved (a
+    seat's CLAUDE.md says 'You govern: X' but orient() showed nothing), now resolved via
     held_seat instead of a lineage-string walk."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -672,8 +673,8 @@ async def test_orient_tool_surfaces_the_seats_charter(actions: Actions) -> None:
 async def test_orient_tool_names_an_undeclared_charter_instead_of_staying_silent(
     actions: Actions,
 ) -> None:
-    """TASK #157 PIECE 2, specimen 14 of ruling 60bc15db: orient() used to fold the charter
-    key in with `if charter else {}` — copied from swap/pin_warn, where falsy means fine and
+    """orient() used to fold the charter
+    key in with `if charter else {}`, copied from swap/pin_warn, where falsy means fine and
     omission is correct. For charter, falsy IS the alarm, so the same idiom silently rendered
     'chartered, all fine' and 'never declared' as the identical missing key. A SEATED agent
     with no charter now gets told plainly, once, never a repeated banner."""
@@ -700,9 +701,9 @@ async def test_orient_tool_stays_silent_on_charter_for_a_seatless_identity(
     actions: Actions,
 ) -> None:
     """The other half of the same fix: a session holding NO seat at all has nothing to
-    charter, and must not be told UNDECLARED as if it were a seat that skipped a step — that
-    would turn one alarm into universal noise, exactly the failure Thoth's own build
-    instruction warned against ('honest, not noisy'). Gated on charter_seat is not None, not
+    charter, and must not be told UNDECLARED as if it were a seat that skipped a step. That
+    would turn one alarm into universal noise, exactly the failure the original design
+    intended to avoid: honest, not noisy. Gated on charter_seat is not None, not
     on charter truthiness."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -722,7 +723,7 @@ async def test_orient_tool_stays_silent_on_charter_for_a_seatless_identity(
     assert "charter" not in out
 
 
-# ═══ charter_for — the manager-invoked sibling (thread 2446): a seat may declare its own
+# ═══ charter_for, the manager-invoked sibling: a seat may declare its own
 # charter, its manager may declare for it, the operator is every seat's ultimate manager. ═══
 
 
@@ -744,9 +745,9 @@ async def test_charter_for_the_manager_declares_successfully(actions: Actions) -
 async def test_charter_for_the_manager_declares_by_the_worker_s_handle(
     actions: Actions,
 ) -> None:
-    """The Tantra specimen (thread c851c81b) one level up: set_charter's own seat_id
+    """One level up from the handle-resolution fix above: set_charter's own seat_id
     resolves by canonical/handle/id, but charter_for's AUTHORIZATION check ran
-    manager_of_seat against the caller's raw, unresolved spelling — a worker referenced
+    manager_of_seat against the caller's raw, unresolved spelling. A worker referenced
     by its bare handle (never its full `seat:...` canonical) read as having "no manager
     on record" even though attach_seat's own bond was live, because manager_of_seat's
     exact-canonical lookup never matched a handle."""
@@ -796,9 +797,9 @@ async def test_charter_for_refuses_an_unmanaged_seat_from_a_non_manager(
 
 
 async def test_charter_for_succeeds_for_an_operator_actor(actions: Actions) -> None:
-    """AUTHORITY BY CHARTER (thread 1d5b9773): an operator actor whose OWN charter covers
+    """AUTHORITY BY CHARTER: an operator actor whose OWN charter covers
     every repo being declared is authorized regardless of managed_by (the operator is
-    every seat's ultimate manager, over what it actually governs) — no longer an
+    every seat's ultimate manager, over what it actually governs). No longer an
     unconditional bypass by the bare literal alone."""
     from src.orchestrator.charter import charter_for
 
@@ -813,8 +814,8 @@ async def test_charter_for_succeeds_for_an_operator_actor(actions: Actions) -> N
 async def test_charter_for_refuses_when_the_operator_s_charter_does_not_cover_the_repo(
     actions: Actions,
 ) -> None:
-    """AUTHORITY BY CHARTER (thread 1d5b9773): the operator sentinel alone no longer
-    bypasses the manager check for a project outside the operator's OWN charter — it
+    """AUTHORITY BY CHARTER: the operator sentinel alone no longer
+    bypasses the manager check for a project outside the operator's OWN charter. It
     falls through and refuses exactly like a non-operator caller with no manager bond."""
     from src.orchestrator.charter import charter_for
 
@@ -839,8 +840,8 @@ async def test_charter_for_refuses_blank_because(actions: Actions) -> None:
 
 
 async def test_charter_for_ruling_bypasses_the_manager_check(actions: Actions) -> None:
-    """Thoth mail 9382 item 3 (93b25ddc): a stranger — neither the seat's manager nor an
-    operator actor — cites a standing ruling that actually names charter_for, and acts
+    """A stranger, neither the seat's manager nor an
+    operator actor, cites a standing ruling that actually names charter_for, and acts
     under it instead."""
     from src.orchestrator.capture import record_decision
     from src.orchestrator.charter import charter_for
@@ -873,7 +874,7 @@ async def test_charter_for_ruling_refuses_a_nonexistent_decision(actions: Action
 
 async def test_charter_for_ruling_refuses_a_non_ruling_decision(actions: Actions) -> None:
     """A decision that names charter_for but is kind='decision', not 'ruling', is NOT
-    standing authority — kind is checked, not inferred from content alone."""
+    standing authority. Kind is checked, not inferred from content alone."""
     from src.orchestrator.capture import record_decision
     from src.orchestrator.charter import charter_for
 
@@ -912,9 +913,9 @@ async def test_charter_for_ruling_refuses_a_ruling_that_never_names_the_write(
 async def test_charter_for_never_touches_a_legacy_agent_origin_governs_edge(
     actions: Actions,
 ) -> None:
-    """Seshat's blocker 2, carried into the design (thread 2446): a seat with pre-existing
+    """A known blocker, carried into the design: a seat with pre-existing
     Agent-origin governs links (the un-migrated shape) must see charter_for act ONLY on
-    the Seat-origin side — the legacy row stays exactly as it was, neither healed nor
+    the Seat-origin side. The legacy row stays exactly as it was, neither healed nor
     duplicated, because set_charter's own SQL can never match it at all."""
     from src.orchestrator.charter import charter_for
 
@@ -935,7 +936,7 @@ async def test_charter_for_never_touches_a_legacy_agent_origin_governs_edge(
     legacy_still_active = await actions.pool.fetchval(
         "SELECT valid_until FROM links WHERE from_id=$1 AND to_id=$2 AND type='governs'",
         a_oid, legacy_repo)
-    assert legacy_still_active is None  # untouched — never healed
+    assert legacy_still_active is None  # untouched, never healed
     assert await charter_of(actions.pool, worker_seat) == ["newrepo"]  # legacy invisible here
 
 
@@ -996,8 +997,8 @@ async def test_charter_for_tool_refuses_a_stranger_through_the_wrapper(
 
 
 async def test_charter_for_seat_dispatcher_forwards_ruling(actions: Actions) -> None:
-    """The live door (`seat(action='charter_for', ruling=...)`, `_seat_impl` underneath
-    — the deprecated standalone `charter_for` tool above never carries `ruling` at all,
+    """The live entry point (`seat(action='charter_for', ruling=...)`, `_seat_impl` underneath;
+    the deprecated standalone `charter_for` tool above never carries `ruling` at all,
     on purpose) actually threads `ruling` through to the orchestrator function, proving
     the dispatcher-level plumbing (schema, _SEAT_ACTION_PARAMS, the forward call) works
     end to end, not just the orchestrator function in isolation."""
@@ -1030,8 +1031,8 @@ async def test_charter_for_seat_dispatcher_forwards_ruling(actions: Actions) -> 
 
 
 def test_charter_tool_stays_self_declaration_only() -> None:
-    """charter() must never widen to accept a target — that would break the STRANGER
-    acceptance bar this whole ruling was built on (ruling 1db1ff41)."""
+    """charter() must never widen to accept a target: that would break the STRANGER
+    acceptance bar this whole design was built on."""
     import inspect
 
     from src import mcp_server as srv
@@ -1040,8 +1041,8 @@ def test_charter_tool_stays_self_declaration_only() -> None:
     assert params == {"repos", "ctx"}
 
 
-# ═══ Wave 4 (thread 5ec2b82d, Soundwave's #1 defect): get_thread_list/get_decision_list
-# are CHARTER-AWARE — a multi-repo seat asking about one repo it governs gets its whole
+# ═══ get_thread_list/get_decision_list
+# are CHARTER-AWARE: a multi-repo seat asking about one repo it governs gets its whole
 # charter's items, never a leak past that seat's own governs set. ═══
 
 
@@ -1110,8 +1111,8 @@ async def test_get_decision_list_spans_the_callers_multi_repo_charter(
 async def test_get_decision_list_never_duplicates_a_decision_with_a_retracted_in_repo_link(
     actions: Actions,
 ) -> None:
-    """The same JOIN-onto-links bug fixed for get_thread_list (thread 1ba9d9be) applied
-    identically here — same copy-paste origin, same missing `valid_until` filter."""
+    """The same JOIN-onto-links bug fixed for get_thread_list applied
+    identically here: same copy-paste origin, same missing `valid_until` filter."""
     from datetime import UTC, datetime
 
     from src import mcp_server as srv
@@ -1140,8 +1141,8 @@ async def test_get_decision_list_never_duplicates_a_decision_with_a_retracted_in
 async def test_get_thread_list_never_widens_past_the_callers_own_charter(
     actions: Actions,
 ) -> None:
-    """THE ACL BOUNDARY (#42's reflection ACL): a chartered seat asking about a repo it
-    does NOT govern must get exactly that repo's own items — never widened, and never
+    """THE ACL BOUNDARY: a chartered seat asking about a repo it
+    does NOT govern must get exactly that repo's own items, never widened, and never
     leaking the caller's OWN charter siblings into an unrelated project's results
     either. Two separate houses' data must never cross."""
     from src import mcp_server as srv
@@ -1154,7 +1155,7 @@ async def test_get_thread_list_never_widens_past_the_callers_own_charter(
     seat_id = await _seated(actions, "agent:soundwave3", "Soundwave3")
     await set_charter(actions, seat_id, ["chronohorn", "decepticons"],
                       actor="agent:soundwave3")
-    await open_thread(actions, "not soundwave's own charter", repo="anotherhouse")
+    await open_thread(actions, "not the caller's own charter", repo="anotherhouse")
     await open_thread(actions, "a ruling filed under chronohorn", repo="chronohorn")
 
     ctx = _Ctx()
@@ -1169,13 +1170,13 @@ async def test_get_thread_list_never_widens_past_the_callers_own_charter(
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
     summaries = {t["summary"] for t in out["threads"]}
-    assert summaries == {"not soundwave's own charter"}
+    assert summaries == {"not the caller's own charter"}
     assert out["total"] == 1
     assert "charter_repos" not in out
 
 
 async def test_get_thread_list_a_single_repo_charter_does_not_widen(actions: Actions) -> None:
-    """A charter of exactly one repo has nothing to span — the widening branch must be a
+    """A charter of exactly one repo has nothing to span. The widening branch must be a
     no-op, not a size-1 array wrapped around the same single project."""
     from src import mcp_server as srv
     from src.orchestrator.agents import AgentIdentity
@@ -1204,8 +1205,9 @@ async def test_get_thread_list_a_single_repo_charter_does_not_widen(actions: Act
 async def test_get_thread_list_an_unmounted_caller_gets_the_unwidened_view(
     actions: Actions,
 ) -> None:
-    """No ctx, no ident, no seat to consult — the exact pre-Wave-4 behavior, unchanged.
-    Never widen on behalf of a caller this tool cannot attribute to any seat."""
+    """No ctx, no ident, no seat to consult: the exact behavior from before charter-aware
+    listing was added, unchanged. Never widen on behalf of a caller this tool cannot
+    attribute to any seat."""
     from src import mcp_server as srv
     from src.orchestrator.capture import open_thread
 
