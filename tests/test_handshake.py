@@ -936,6 +936,42 @@ async def test_office_seat_still_refuses_when_the_fresh_row_is_harness_confirmed
     assert seat is None                       # confirmed live: the seat stays taken
 
 
+async def test_office_seat_finds_a_sleeping_holder_neither_deed_nor_mount_row_names(
+    actions: Actions, tmp_path: Path,
+) -> None:
+    """THE RESUME-AT-OFFICE SHAPE: a seat's real holder can go quiet for days (no fresh
+    agent_mounts row survives that long against the ordinary mount-drop sweeps) while
+    never having filed an 'office' deed assertion at all (offices deeded before the deed
+    existed, or a deed whose cwd string has since drifted from a symlink/trailing-slash
+    variant -- file_office_deed's own docstring names both). Neither of office_seat's first
+    two lookups sees a holder in that state, so a session resuming at that live office used
+    to fall straight through the caller's own office_claim into a genuinely fresh, unrelated
+    mint (an incident on a real seat: a DM-wake resume with no deed match and no fresh
+    mount row landed as a stranger, over and over, one per wake). The seat's own `holds`
+    link never goes stale this way; office_seat now asks it directly as a last resort
+    before giving up the office as vacant."""
+    from src.orchestrator.handshake import office_seat
+
+    offices = tmp_path / "seats"
+    office = offices / "dormant"
+    office.mkdir(parents=True)
+    o = await actions.create_or_find_object("Agent", "agent:dorm0001", "agent:dorm0001")
+    await actions.assert_property(o, "handle", "Dormant", "agent:dorm0001",
+                                  datetime.now(UTC), 0.9, evidence_class="self_declared")
+    seat = await ensure_seat(actions, house="osiris", handle="Dormant", source="test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:dorm0001",
+                      source="test")
+    # no 'office' deed assertion filed, and no agent_mounts row at all: the holder is
+    # visible only through the seat's own active holds link
+
+    async def _empty_agents_json(**kw: Any) -> list[dict[str, Any]]:
+        return []
+
+    resolved = await office_seat(actions, cwd=str(office), office_root=offices,
+                                 agents_json=_empty_agents_json)
+    assert resolved == "agent:dorm0001"          # the sleeping incumbent, never a stranger
+
+
 async def test_a_stub_at_the_office_is_never_crowned(
     actions: Actions, tmp_path: Path
 ) -> None:

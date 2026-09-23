@@ -353,6 +353,25 @@ async def office_seat(
             "JOIN current_assertions h ON h.object_id=ho.id AND h.name='handle' "
             "WHERE m.cwd=$1 AND lower(h.value #>> '{}') = $2 "
             "ORDER BY m.last_seen DESC LIMIT 1", cwd, p.name.lower())
+    if head is None:
+        # THE SEAT'S OWN WORD, last resort: the two lookups above both depend on evidence
+        # that can go missing out from under a live holder (the deed's cwd string drifting
+        # from a symlink/trailing-slash variant, or the holder's own agent_mounts rows all
+        # aging past every mount-drop sweep while it slept). Neither absence means the
+        # office is vacant; `binding_of_handle` reads the graph's own authoritative "who
+        # holds the seat named for this office" fact directly off the active `holds` link,
+        # the same record `bind_holder`/`rehold_seat` themselves write and the one thing a
+        # currently-seated lineage can never lose track of. A session resuming at a live
+        # seat's office with nothing else pointing back to it must find the incumbent here,
+        # never fall through to the fresh mint below (the exact shape that minted a
+        # stranger onto a sleeping seat's office on every DM-wake resume: neither lookup
+        # above ever matched the dormant lineage, and nothing stood between that miss and
+        # a birth).
+        from src.orchestrator.seats import binding_of_handle
+
+        binding = await binding_of_handle(actions.pool, p.name)
+        if binding:
+            head = binding["holder"]
     if not head:
         return None
     base = _generation(str(head))[0]
