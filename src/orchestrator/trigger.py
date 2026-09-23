@@ -2668,6 +2668,57 @@ def _marker_landed_sync(root: Path, sid_prefix: str, marker: str) -> bool:
     return False
 
 
+async def _poll_landed_then_renudge(
+    pool: asyncpg.Pool, *, target_seat: str, marker: str, msg_id: int, sender: str,
+    settings: Settings, sleep: Any, attempts: int = 3, delay_secs: float = 2.0,
+    spawn: Any = None, windows: Any = None, poke: Any = None, jobs: Any = None,
+    nudge: Any = None,
+) -> dict[str, Any]:
+    """DOOR 2 (thread 39741694 item 2, Nebbercracker's finding ec7167a7): wake()'s own
+    outcome-read used to be a SINGLE immediate check — a marker not yet in the transcript
+    the instant `dispatch_dm` returned reported honestly as "queued ... NOT YET
+    CONFIRMED", but nothing ever looked again. The brief could land a second later and
+    the receipt would never know; it could also genuinely stall forever with nobody
+    telling the caller a second push was worth trying. Same law as launch()'s own
+    `_verify_brief_reached_a_turn` (w384): a BOUNDED poll (never unbounded — `sleep` is
+    injected, same as every other harness wait in this file), and if the window closes
+    with nothing landed, ONE re-nudge through the SAME `dispatch_dm` mail ladder every
+    other DM escalation here already uses — never a second, differently-shaped push.
+    `spawn`/`windows`/`poke`/`jobs`/`nudge` are forwarded straight through to that
+    re-nudge's own `dispatch_dm` call, the SAME injectables `wake_worker`'s own FIRST
+    dispatch_dm call already takes — a test hermetic for the first nudge must stay
+    hermetic for the second one too, never fall through to a real subprocess spawn.
+
+    Returns `{"observed": True}` the moment `_verify_landed` sees the marker land. Still
+    absent after `attempts`: re-nudges and returns `{"observed": False, "renudge":
+    <dispatch_dm's own receipt>}` — honest about what was tried, never a claim of
+    delivery this function did not confirm.
+
+    A DISCLOSED ASYMMETRY WITH LAUNCH'S OWN VERSION: launch's opening brief rides the
+    passive mail→poke lane (never actively dispatched before its own nudge), so w384's
+    `_verify_brief_reached_a_turn` re-nudge is genuinely that message's FIRST live push.
+    `wake_worker` calls `dispatch_dm` on `msg_id` unconditionally at the top, BEFORE this
+    function ever runs — so by the time `status == "delivered"` (the only case this
+    function is called for), a `dm-reply`/`dm-resume`/`dm-poke` ledger row already exists
+    for `msg_id`, and `dispatch_dm`'s own once-per-message brake (`agent_wakes`) will
+    refuse this re-nudge outright (`mode: "skipped-once-per-message"`) — proven live by
+    `test_wake_reports_queued_when_the_marker_never_lands`. That refusal is still real,
+    still useful signal (the system correctly never double-wakes the identical message —
+    a "not yet observed" here means the marker's write is merely lagging its own already-
+    confirmed push, never that nothing was ever tried), and still reported honestly rather
+    than silently dropped or smoothed into a fake retry — which is what this function
+    actually promises: an honest account of what was tried, not a guarantee the nudge
+    landed on fresh ground."""
+    for _ in range(attempts):
+        if await _verify_landed(pool, target_seat, marker, settings):
+            return {"observed": True}
+        await sleep(delay_secs)
+    renudge_result = await dispatch_dm(
+        pool, addressee=target_seat, msg_id=msg_id, sender=sender, settings=settings,
+        spawn=spawn, windows=windows, poke=poke, jobs=jobs, nudge=nudge)
+    return {"observed": False, "renudge": renudge_result}
+
+
 async def _verify_landed(
     pool: asyncpg.Pool, target_seat: str, marker: str, settings: Settings | None,
 ) -> bool:
@@ -2761,7 +2812,8 @@ _WAKE_STATUS = {
 async def wake_worker(
     actions: Actions, *, caller: str, target: str, message: str,
     settings: Settings | None = None, spawn: Any = None, windows: Any = None,
-    poke: Any = None, jobs: Any = None, nudge: Any = None,
+    poke: Any = None, jobs: Any = None, nudge: Any = None, sleep: Any = None,
+    landed_poll_attempts: int = 3, landed_poll_delay_secs: float = 2.0,
 ) -> dict[str, Any]:
     """Knock on the other half of `caller`'s OWN managed_by pair. Refuses LOUDLY (nothing
     sent) when no active managed_by edge exists between the two seats in either direction —
@@ -2778,11 +2830,22 @@ async def wake_worker(
     dispatch_dm, the exact path send() uses for every DM. A "delivered" status is only ever
     returned once the marker is CONFIRMED landed as a submitted turn in the target's own
     transcript — a queued injection that hasn't (yet, or ever) been seen reports honestly
-    as "queued", never as an effect nobody observed."""
+    as "queued", never as an effect nobody observed.
+
+    DOOR 2 (thread 39741694 item 2, Nebbercracker's finding ec7167a7): a dispatch_dm mode
+    that counted as "delivered" used to get exactly ONE immediate landing check —
+    `_poll_landed_then_renudge` now gives it the SAME bounded-poll-then-nudge shape
+    launch()'s own opening brief got in w384 (never unbounded; `sleep` is injected).
+    `observed` in the receipt names the FINAL outcome after that window, and `renudge`
+    (present only when the window closed with nothing landed) carries the second
+    dispatch_dm attempt's own receipt — honest about what was tried, never a claim of
+    delivery this function did not confirm."""
     from src.orchestrator.agents import project_of
     from src.orchestrator.seats import held_seat
 
     pool = actions.pool
+    if sleep is None:
+        sleep = asyncio.sleep
     caller_held = await held_seat(pool, caller)
     caller_seat = (caller_held or {}).get("seat_id")
     if caller_seat is None:
@@ -2831,13 +2894,24 @@ async def wake_worker(
     out: dict[str, Any] = {"message_id": res["id"], "seat": target_seat, "raw_mode": mode,
                            "status": status, "detail": d.get("detail", mode)}
     if status == "delivered":
-        observed = await _verify_landed(pool, target_seat, marker, settings)
-        out["observed"] = observed
-        if not observed:
+        # DOOR 2 (thread 39741694 item 2): a bounded poll for the marker's own landing,
+        # then ONE re-nudge if the window closes with nothing seen — never a single
+        # immediate check that then goes silent. `st`, not the raw `settings` param, per
+        # the SAME #aedf2aab law this file's own dispatch_dm call above already follows.
+        followup = await _poll_landed_then_renudge(
+            pool, target_seat=target_seat, marker=marker, msg_id=res["id"], sender=caller,
+            settings=st, sleep=sleep, attempts=landed_poll_attempts,
+            delay_secs=landed_poll_delay_secs, spawn=spawn, windows=windows, poke=poke,
+            jobs=jobs, nudge=nudge)
+        out["observed"] = followup["observed"]
+        if "renudge" in followup:
+            out["renudge"] = followup["renudge"]
+        if not followup["observed"]:
             out["status"] = "queued"
             out["detail"] = (f"{d.get('detail', mode)} — injected but NOT YET CONFIRMED as a "
-                             "submitted turn (a queued injection is not a seen one); it may "
-                             "still land, or may never have been submitted at all")
+                             "submitted turn after polling and one re-nudge (a queued "
+                             "injection is not a seen one); it may still land, or may never "
+                             "have been submitted at all")
     return out
 
 
@@ -3761,6 +3835,42 @@ async def _launch_target_setup(
             "current_holder": current_holder, "facts": facts}
 
 
+async def _deliver_brief_to_live_seat(
+    pool: asyncpg.Pool, *, target_seat: str, message: str, sender: str, settings: Settings,
+) -> dict[str, Any]:
+    """DOOR 1 (thread 39741694 item 1, Nebbercracker's finding ec7167a7): `launch_seat`'s
+    already-live path used to return straight from `_launch_target_setup` — the twin
+    refusal itself is correct (never minting a second body over a live one), but any
+    `message` the caller passed simply vanished, with no record it was ever tried. Sends
+    it as an ordinary grade='ask' DM (`send_message`, `to_agent=target_seat` — mail
+    addressed to a seat auto-resolves to its current holder, the same shape the fresh-
+    mint opening brief above already uses) then immediately pushes it through
+    `dispatch_dm` — the SAME mail ladder every other DM escalation in this house already
+    uses, never a second, differently-shaped nudge mechanism.
+
+    Reports `{"delivered_via": "dm", "message_id": ...}` only when `dispatch_dm`'s own
+    mode confirms a genuine live injection (`nudged`, `resumed`, or `poked` —
+    `_dispatch_dm_body`'s own docstring names these the three positively-confirmed
+    shapes). Every other mode (queued-*, mid-turn, braked, skipped-*, held, pull-only,
+    refused, trigger-dark, queued-human) is honestly reported as `{"brief_dropped":
+    True, "message_id": ..., "why": <dispatch_dm's own detail>}` — never smoothed into a
+    success-shaped claim this function did not confirm."""
+    from src.orchestrator.agents import project_of
+
+    sent = await send_message(
+        pool, from_agent=sender, from_project=await project_of(pool, sender),
+        to_agent=target_seat, body=message, grade="ask")
+    msg_id = sent.get("id")
+    if msg_id is None:
+        return {"brief_dropped": True, "why": f"send_message itself refused: {sent}"}
+    nudge_result = await dispatch_dm(
+        pool, addressee=target_seat, msg_id=msg_id, sender=sender, settings=settings)
+    if nudge_result.get("mode") in ("nudged", "resumed", "poked"):
+        return {"delivered_via": "dm", "message_id": msg_id}
+    return {"brief_dropped": True, "message_id": msg_id,
+            "why": nudge_result.get("detail") or nudge_result.get("mode", "unknown")}
+
+
 async def launch_seat(
     actions: Actions, *, caller: str, target: str, message: str = "",
     model: str | None = None, settings: Settings | None = None,
@@ -3814,6 +3924,16 @@ async def launch_seat(
         actions, caller=caller, target=target, agents_json=agents_json,
         operator_authorized=operator_authorized, occupied_status="already-live")
     if "target_seat" not in setup:
+        # DOOR 1 (thread 39741694 item 1): the twin refusal above is correct — a live
+        # body already holds this seat, never mint a second one — but a caller-supplied
+        # `message` used to just vanish here, with nothing in the receipt disclosing it
+        # was ever dropped. `setup["seat"]` is this branch's own resolved seat id (the
+        # already-live receipt shape uses "seat", never "target_seat" — see
+        # `_launch_target_setup`'s own already-live return).
+        if setup.get("status") == "already-live" and message.strip():
+            setup["brief_delivery"] = await _deliver_brief_to_live_seat(
+                pool, target_seat=setup["seat"], message=message, sender=caller,
+                settings=settings or get_settings())
         return setup
     target_seat, handle, house = setup["target_seat"], setup["handle"], setup["house"]
     office, tree_cwd = setup["office"], setup["tree_cwd"]
