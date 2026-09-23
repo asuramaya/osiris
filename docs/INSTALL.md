@@ -17,8 +17,8 @@ This guide takes you from an empty environment to a running Osiris instance with
   - Claude Code
   - Cursor, Windsurf, OpenDevin, or any standard MCP client
 - **Test-suite only** (not needed to run the service, only for `uv run pytest`):
-  - Node.js — `test_js_syntax.py` shells out to `node --check` on the static UI's `.js` files
-  - `zstd` — `test_dsh_adapter.py` builds its fixtures via a real `zstd`-compressed session
+  - Node.js: `test_js_syntax.py` shells out to `node --check` on the static UI's `.js` files
+  - `zstd`: `test_dsh_adapter.py` builds its fixtures via a real `zstd`-compressed session
 
 ---
 
@@ -115,21 +115,17 @@ plugins:
 ```
 
 #### 2. (Optional) Install the Native DSH Cordis Plugin
-To enable in-process auto-mounting and automatic context-seam settlement:
+To enable in-process auto-mounting and automatic context-seam settlement, install the
+plugin into your own DSH checkout (the plugin source lives in this repo, under
+`dsh-plugin/osiris-bridge/`, and is copied into the harness, never authored there):
 
 ```bash
-cd dsh-plugin
-npm install
-npm run build
+dsh-plugin/install.sh [/path/to/deepseek-harness] [/path/to/dsh/profile]
 ```
 
-Add the plugin to your Cordis configuration:
-```yaml
-plugins:
-  "osiris-dsh-plugin":
-    path: "/path/to/osiris/dsh-plugin"
-    mcpUrl: "http://127.0.0.1:8790/mcp"
-```
+Both arguments are optional; each defaults to the paths named in the script itself.
+Safe, and required, to re-run after every upstream harness pull. See
+`dsh-plugin/README.md` for what the script does and why.
 
 ---
 
@@ -186,7 +182,7 @@ cp deploy/user/*.service ~/.config/systemd/user/
 
 # Reload and enable units
 systemctl --user daemon-reload
-systemctl --user enable --now osiris-mcp osiris-worker osiris-pulse osiris-console
+systemctl --user enable --now osiris-mcp osiris-worker osiris-pulse osiris-console osiris-manager
 
 # Allow user units to persist after logout
 loginctl enable-linger "$USER"
@@ -194,7 +190,7 @@ loginctl enable-linger "$USER"
 
 Check status:
 ```bash
-systemctl --user status osiris-mcp osiris-worker
+systemctl --user status osiris-mcp osiris-worker osiris-manager
 ```
 
 ---
