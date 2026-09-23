@@ -498,6 +498,41 @@ async def test_rehold_seat_refuses_without_a_reason(actions: Actions) -> None:
     assert not await _active_holds(actions, "agent:rehold2-new", seat["seat_id"])
 
 
+async def test_rehold_seat_refuses_a_borrowed_job_dir_target(
+    actions: Actions,
+) -> None:
+    """THE JENNY/DUSTIN CROSSING, closed at the third-party rehold door too (thread
+    b33fa26b/17819e83, Nebbercracker findings ab59c731/a0fd7e5b): a target that is a
+    real Agent object (agent_row exists — the check just above this one passes) but is
+    ACTUALLY another agent's own live job_dir slug is never a legitimate rehold target
+    — this is exactly the shape that kept re-corrupting jenny's seat even after
+    _bind_before_spawn's own equivalent guard shipped, because rehold_seat is a
+    SEPARATE door reaching the same holds edge."""
+    from src.orchestrator import mounts as mounts_module
+    from src.orchestrator.seats import rehold_seat
+
+    seat = await ensure_seat(actions, house="osiris", handle="ReholdBorrowed", source="test")
+    await actions.create_or_find_object("Agent", "agent:reholdborrowed-old", "test")
+    await bind_holder(actions, seat_id=seat["seat_id"], agent_id="agent:reholdborrowed-old")
+    # a bare, self-mounted stranger id that happens to collide with ANOTHER real
+    # agent's own live job_dir slug
+    borrowed_id = "agent:borrowedslug1"
+    await actions.create_or_find_object("Agent", borrowed_id, "test")
+    await actions.create_or_find_object("Agent", "agent:realowner-vii", "test")
+    await mounts_module.save_mount(
+        actions.pool, job_dir="/home/asuramaya/.claude/jobs/borrowedslug1",
+        agent_id="agent:realowner-vii", project="osiris",
+        cwd="/home/asuramaya/code/osiris", model=None, session_key=None)
+
+    out = await rehold_seat(actions, seat_id=seat["seat_id"], agent_id=borrowed_id,
+                            because="test repair", actor="test")
+    assert "error" in out
+    assert "agent:realowner-vii" in out["error"]
+    # nothing moved — the old holder's own link stands, the borrowed id never gained one
+    assert await _active_holds(actions, "agent:reholdborrowed-old", seat["seat_id"])
+    assert not await _active_holds(actions, borrowed_id, seat["seat_id"])
+
+
 async def test_rehold_seat_refuses_on_a_live_holder_from_a_different_lineage(
     actions: Actions,
 ) -> None:

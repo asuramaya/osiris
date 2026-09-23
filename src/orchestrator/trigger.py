@@ -3020,12 +3020,16 @@ async def _trustworthy_fallback_ancestor(
     job_dir this way, so this check refuses only the borrowed-id shape and nothing
     else — it deliberately does NOT require `agent_id` to carry any provenance of its
     own (minted_because/handle/succeeded_from), since a real historical holder can
-    genuinely have none and still be exactly who the seat's own `holds` edge says."""
-    bare = agent_id.removeprefix("agent:")
-    borrowed = await pool.fetchval(
-        "SELECT 1 FROM agent_mounts WHERE job_dir LIKE '%/' || $1 AND agent_id <> $2 LIMIT 1",
-        bare, agent_id)
-    if borrowed:
+    genuinely have none and still be exactly who the seat's own `holds` edge says.
+
+    THE BORROWED-JOB_DIR CHECK ITSELF now lives in mounts.borrowed_job_dir_owner (moved
+    there, thread b33fa26b, so `seats.rehold_seat` and `compositions.seat_holder_census`
+    share the one fingerprint instead of three independently-drifting copies — the
+    jenny/dustin crossing kept recurring THROUGH THIS DOOR'S OWN FIX because the same
+    borrowed-id shape reaches a seat's holds edge through rehold_seat too, unguarded)."""
+    from src.orchestrator.mounts import borrowed_job_dir_owner
+
+    if await borrowed_job_dir_owner(pool, agent_id) is not None:
         return False
     other_seat = await pool.fetchval(
         "SELECT 1 FROM links hl "

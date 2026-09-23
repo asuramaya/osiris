@@ -1512,7 +1512,7 @@ _LINT_CHECK_NAMES = [
     "parallel-lives", "duplicate-works-in", "peer-silent", "held-past-deadline",
     "stale-off-head-link", "stale-current-flag", "kindless-open-thread",
     "unresolvable-owner", "zero-recipient-dm", "orphan", "untraceable-output",
-    "contested-summary", "unverified-citation", "project-identity",
+    "contested-summary", "unverified-citation", "project-identity", "seat-holders",
 ]
 
 
@@ -1740,6 +1740,49 @@ async def project_identity_census(pool: asyncpg.Pool) -> dict[str, Any]:
 
     return {"stub_collisions": stub_collisions, "not_singular": not_singular,
             "alias_conflicts": alias_conflicts}
+
+
+async def seat_holder_census(pool: asyncpg.Pool) -> dict[str, Any]:
+    """`osiris lint --check seat-holders` (thread b33fa26b, Thoth mail 13351 — the jenny/
+    dustin crossing, Nebbercracker findings ab59c731/a0fd7e5b): every ACTIVE seat's
+    CURRENT holder, checked against the two red flags the live specimen actually showed,
+    neither auto-healed here — this only ever flags.
+
+    BORROWED: the holder id is actually a DIFFERENT agent's own live job_dir slug
+    (`mounts.borrowed_job_dir_owner` — the same fingerprint `_bind_before_spawn`'s
+    fallback guard and `rehold_seat`'s own new guard already refuse at write time; this
+    census is what catches an edge that reached this shape through some OTHER door,
+    written before either guard existed or through one this fix doesn't yet cover).
+
+    UNPROVENANCED: the holder carries no real identity story of its own — never
+    minted (`minted_because`), never named (`handle`), never succeeded anything
+    (`succeeded_from`). Reported as a WARN, not proof of corruption: a genuine
+    pre-Seat-object holder (older than the Seat-object convention) can legitimately
+    have none of these and still be exactly who the seat's own `holds` edge says — this
+    surfaces it for a human's eyes, the same conservative "flag, verify, never auto-
+    fold" discipline every other census in this module already holds itself to."""
+    from src.orchestrator.mounts import borrowed_job_dir_owner
+
+    rows = await pool.fetch(
+        "SELECT s.canonical AS seat, hf.canonical AS holder "
+        "FROM links hl "
+        "JOIN objects s ON s.id=hl.to_id AND s.type='Seat' AND s.status='active' "
+        "JOIN objects hf ON hf.id=hl.from_id AND hf.type='Agent' "
+        "WHERE hl.type='holds' AND (hl.valid_until IS NULL OR hl.valid_until > now())")
+    borrowed: list[dict[str, Any]] = []
+    unprovenanced: list[dict[str, Any]] = []
+    for r in rows:
+        owner = await borrowed_job_dir_owner(pool, r["holder"])
+        if owner is not None:
+            borrowed.append({"seat": r["seat"], "holder": r["holder"], "borrowed_from": owner})
+            continue
+        has_provenance = await pool.fetchval(
+            "SELECT 1 FROM current_assertions a JOIN objects o ON o.id=a.object_id "
+            "WHERE o.canonical=$1 AND a.name IN ('minted_because', 'handle', 'succeeded_from') "
+            "LIMIT 1", r["holder"])
+        if not has_provenance:
+            unprovenanced.append({"seat": r["seat"], "holder": r["holder"]})
+    return {"borrowed": borrowed, "unprovenanced": unprovenanced}
 
 
 async def traceability_census(pool: asyncpg.Pool) -> dict[str, Any]:
@@ -3201,6 +3244,25 @@ async def _fn_lint(pool: asyncpg.Pool, subject: uuid.UUID | None, args: dict[str
                        f"{r['conflicts_with']} — an alias must name exactly one object; "
                        "fold or rename the squatter, never treat the alias as a second name"}
             for r in identity_result["alias_conflicts"]])
+
+        # SEAT-HOLDERS — thread b33fa26b, Thoth mail 13351, the jenny/dustin crossing.
+        # See seat_holder_census's own docstring for both halves.
+        holder_result = await seat_holder_census(pool)
+        land("seat-holders", "warn", [
+            {"subject": r["seat"],
+             "detail": f"holder {r['holder']} is not a real identity — it is "
+                       f"{r['borrowed_from']}'s own live job_dir slug, borrowed. "
+                       "rehold_seat(seat_id, agent_id=<the seat's real lineage>, "
+                       "because='...') corrects it; never auto-fold"}
+            for r in holder_result["borrowed"]
+        ] + [
+            {"subject": r["seat"],
+             "detail": f"holder {r['holder']} carries no provenance of its own (never "
+                       "minted, never named, never succeeded anything) — may be a "
+                       "genuine pre-Seat-object holder, or the same borrowed-id shape "
+                       "through a door this check's own fingerprint didn't catch; "
+                       "verify by hand"}
+            for r in holder_result["unprovenanced"]])
     except Exception as exc:  # noqa: BLE001 — isolate ONE broken check from every
         # other: a genuinely distinct could-not-evaluate state (ruling on thread
         # 04c651ce, Thoth dispatch msg 9123 item 2) rather than the whole lint call
