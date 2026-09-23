@@ -68,13 +68,18 @@ def test_section_key_embeds_the_shared_key_renderer() -> None:
 # --- section 2: BACKUP & OFFLOAD ------------------------------------------------------
 
 def test_section_offload_embeds_the_editable_panel_and_reads_backup_status() -> None:
-    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:850]
+    # THE GUI PARITY tip (thread dd11ab34) split the backup-status fetch into its own
+    # reusable renderBackupStatusSection() (the "Run offload now" button's own refresh
+    # calls it too) -- the section's own body just kicks off both in parallel now.
+    body = _CONSOLE_JS.split("async function renderSettingsSectionOffload() {", 1)[1][:900]
     assert "renderOffloadInto('settings-offload-targets')" in body
-    assert "'/compositions/run-spec'" in body
-    assert "name: 'backup_status'" in body
+    assert "renderBackupStatusSection()" in body
+    status_body = _CONSOLE_JS.split("async function renderBackupStatusSection() {", 1)[1][:700]
+    assert "'/compositions/run-spec'" in status_body
+    assert "name: 'backup_status'" in status_body
     # run_spec packages a Function's own output under `items`, never top-level -- a
     # bug this test would have caught: res.timers instead of res.items.timers.
-    assert "res.items || {}" in body
+    assert "res.items || {}" in status_body
 
 
 def test_backup_status_flags_a_schedule_configured_but_not_taken_effect() -> None:

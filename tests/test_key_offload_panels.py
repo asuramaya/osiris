@@ -65,7 +65,9 @@ def test_key_panel_never_renders_a_browser_enrollment_button() -> None:
 
 
 def test_init_key_posts_backend_only_no_invented_secret_reveal() -> None:
-    body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:700]
+    # GUI PARITY (thread dd11ab34) added a confirm() gate before the fetch (restart:
+    # true is consequential) -- window widened to clear it.
+    body = _CONSOLE_JS.split("async function initKey() {", 1)[1][:1400]
     assert "'/soul-key/init'" in body
     assert "backend: backend" in body
     assert "renderKeyInto(KEY_CONTAINER_ID);" in body

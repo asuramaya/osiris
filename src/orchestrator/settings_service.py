@@ -284,7 +284,21 @@ def _validate_value(spec: SettingSpec, value: Any) -> dict[str, str] | None:
                 fval = item[fname]
                 if ftype == "bool" and not isinstance(fval, bool):
                     return {"field": f"{spec.key}[{i}].{fname}", "message": "must be a boolean"}
-                if ftype == "str" and not isinstance(fval, str):
+                # BUG FOUND AND FIXED IN PASSING (thread dd11ab34, GUI PARITY): a `None`
+                # value used to be rejected here unconditionally for EVERY "str"-typed
+                # record field, even one a spec's own custom `validate` callback treats
+                # as legitimately nullable (backup.offload_targets' own
+                # expected_mountpoint: required for kind='local', must be null for
+                # kind='restic' -- see _validate_offload_targets, settings_registry.py).
+                # The generic check ran BEFORE spec.validate and refused first, so the
+                # custom validator's own correct per-kind nullability rule never got a
+                # chance to run at all -- every restic-kind offload_targets write has
+                # been refused since this field existed. `None` is skipped here now,
+                # same as the top-level 'path'/'schedule' types already special-case it
+                # (a field a spec never made nullable still gets caught by its own
+                # custom validate(), which _validate_value already runs unconditionally
+                # right after this loop).
+                if ftype == "str" and fval is not None and not isinstance(fval, str):
                     return {"field": f"{spec.key}[{i}].{fname}", "message": "must be a string"}
     if t == "json" and not isinstance(value, (dict, list)):
         return {"field": spec.key, "message": "must be a JSON object or array"}

@@ -1494,6 +1494,8 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
             fields["timer_schedules"] = body.timer_schedules
         if body.offbox_repositories is not None:
             fields["offbox_repositories"] = body.offbox_repositories
+        if body.offload_targets is not None:
+            fields["offload_targets"] = body.offload_targets
         return await write_backup_settings(
             p, actor="analyst:operator", because=body.because, **fields)
 
@@ -1629,6 +1631,32 @@ def create_app(pool: asyncpg.Pool | None = None) -> FastAPI:
         from src.orchestrator.restic_credential import restic_key_status
 
         return restic_key_status()
+
+    # THE RESTIC-KEY INIT ROUTE (thread dd11ab34, GUI PARITY — the operator's own
+    # "can I do it all from the GUI?") — mirrors `osiris restic-key init` exactly
+    # (same restic_credential.restic_key_init, same custody ladder, same refusal
+    # when a credential already exists, same receipt shape). Same OPERATOR-ONLY
+    # AUTHORITY LAW as every other /soul-key* and /restic-key* route.
+    @app.post("/restic-key/init")
+    async def restic_key_init_route(body: ResticKeyInitBody) -> dict[str, Any]:
+        from src.orchestrator.restic_credential import restic_key_init
+
+        return restic_key_init(path=body.path, backend=body.backend)
+
+    # THE OFFLOAD-RUNNER TICK ROUTE (thread dd11ab34, GUI PARITY) — the SAME tick
+    # `osiris-offload.timer`'s own ExecStart runs (`run_offload_tick`), on demand
+    # from the console's own "Run offload now" button. Bounded (every restic call
+    # underneath carries its own subprocess timeout), never blocks on an absent
+    # target, never fails the caller — same law the timer's own tick already holds.
+    # No `because`/`actor` to carry: this EXECUTES the already-configured targets,
+    # it never reconfigures anything (the CLI's own cmd_offload_runner carries
+    # neither either) — the write door that DOES need `because` is /backup-settings
+    # itself (offload_targets), already gated there.
+    @app.post("/offload-runner/tick")
+    async def offload_runner_tick_route(p: asyncpg.Pool = Depends(get_pool)) -> dict[str, Any]:
+        from src.orchestrator.offload_runner import run_offload_tick
+
+        return await run_offload_tick(p)
 
     # THE DEPLOY-STATUS ROUTE (Thoth mail 13350, BOX section) — no read door existed
     # for "deploy snapshot sha vs deployed.sha" before this; see
@@ -2347,11 +2375,24 @@ class DeskSettleBody(BaseModel):
 class BackupSettingsBody(BaseModel):
     """The backup config panel's write half (thread f04cce36 piece 3) — a partial
     update, only given fields change. `because` is required, same testimony
-    discipline `/threads/triage` runs for a deliberate operator act."""
+    discipline `/threads/triage` runs for a deliberate operator act.
+
+    BUG FOUND AND FIXED IN PASSING (thread dd11ab34, GUI PARITY): `offload_targets`
+    (THE BACKUP TOPOLOGY / INTERMITTENT TARGETS, Thoth mail 12812) was never added
+    here when it replaced `offbox_repositories` as the canonical field — Pydantic
+    silently drops an unrecognized body key by default, so every POST /backup-
+    settings the Offload Targets panel's own Save button has ever made (since it
+    shipped, THE KEY PANEL + OFFLOAD TARGETS PANEL piece 1) wrote NOTHING for
+    offload_targets and reported success anyway (the response is just a fresh
+    get_backup_settings() read, unchanged). Caught building a genuinely new
+    end-to-end API test for /offload-runner/tick that needed a real target to
+    exist — a source-pin test alone (proving the JS sends the right JSON) could
+    never have caught a server-side field the route silently ignored."""
     because: str
     vault_path: str | None = None
     timer_schedules: dict[str, str] | None = None
     offbox_repositories: list[dict[str, Any]] | None = None
+    offload_targets: list[dict[str, Any]] | None = None
 
 
 class SettingsWriteBody(BaseModel):
@@ -2449,6 +2490,14 @@ class OperatorDeskReplyBody(BaseModel):
     routing settles the whole thread), `body` the operator's own reply text."""
     id: int
     body: str
+
+
+class ResticKeyInitBody(BaseModel):
+    """THE RESTIC-KEY INIT ROUTE's own body (thread dd11ab34, GUI PARITY) — mirrors
+    `osiris restic-key init`'s own `--path`/`--backend` flags exactly; both optional,
+    same auto-selection as soul-key's own init when `backend` is omitted."""
+    path: str | None = None
+    backend: str | None = None
 
 
 class LayoutMigrateBody(BaseModel):
