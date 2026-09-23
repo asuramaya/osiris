@@ -278,6 +278,57 @@ set_status(object_id, status, justification, actor) -> None
 All idempotent (find-or-create on canonical); background work claims via an atomic
 partial-unique index on `helper_runs`; mutations flow to a durable `outbox`.
 
+## The console's Settings pane
+
+`Ctrl+K` → *Settings*, or the gear icon in the console's own header. One pane, five
+sections, each loaded independently (`src/ui/static/console.js`, `renderSettingsPane`) —
+one section failing to load never blanks the other four:
+
+| Section | Shows | Backed by |
+|---------|-------|-----------|
+| **Key** | soul-key custody status (present/backend/path/age/recovery paths) + Init/Rotate/Restore-drill/Recover/Enroll-recovery buttons | `GET /soul-key/status`, `POST /soul-key/init\|rotate\|restore-drill` — see [`KEYS.md`](KEYS.md) |
+| **Backup & Offload** | the editable offload-targets panel + a read-only `osiris backup-status` view (timers, targets, presence, last successful offload) | `GET/POST /backup-settings`, the `backup_status` composition Function — see [`BACKUP.md`](BACKUP.md) |
+| **Registry** | every registered setting, read/write | `GET /settings`, `POST /settings` |
+| **Operator Desk** | desk cards in bands (Needs decision / Blocked on hands / FYI / Your queue / Dimmed), each with Ack, and a Reply box on the decision band; a fold-candidates sub-band (a copy-pasteable `/merge` line + Reject — merges are never auto-executed from this UI) | `GET /operator/desk`, `POST /operator/desk/reply`, `GET /merge-candidates` |
+| **The Box** | a hands-on-the-machine readiness checklist — see below | `GET /soul-key/status`, `/restic-key/status`, `/backup-settings`, `/deploy-status` |
+
+**The Box** means the physical/deployed machine Osiris actually runs on. Each row is a
+readiness light plus a detail line:
+
+- ● (green) — confirmed OK
+- ○ (faint) — confirmed NOT ok
+- ? (red/orange) — unknown; nothing checked it live
+
+Rows: soul key present, restic credential present, one row per `local` offload target
+("mounted?" — `null`/`?` only when the target has no `expected_mountpoint` to check), one
+row per `restic` offload target ("reachable?" — **always** `?`, deliberately never probed
+live; watch last-successful-offload in the Backup & Offload section instead), and "deploy
+snapshot matches running code" (compares the running process's own git HEAD against
+`~/.local/share/osiris/deployed`'s pinned sha — see [`DEPLOY.md`](DEPLOY.md#the-deploy-snapshot-localbinosiris-never-runs-a-gates-candidate-tree)).
+
+### REST API routes (operator console, localhost-only)
+
+Every route below is a bare path on the console's own FastAPI app (no `/api` or other
+prefix) — the console binds to `localhost` only, so these are never reachable off-box, and
+none of them are exposed as MCP tools (an agent has no door onto any of this).
+
+| Route | Method | Does |
+|-------|--------|------|
+| `/soul-key/status` | GET | soul-key custody facts (never key bytes) |
+| `/soul-key/init` | POST | mint the first soul key (`{owner?, path?, backend?, print_recovery?, restart?}`) |
+| `/soul-key/rotate` | POST | rotate the soul key (`{finish?, print_recovery?}`) |
+| `/soul-key/restore-drill` | POST | run the off-box restore drill (`{repo_url?}`) |
+| `/soul-key/recovery-material` | POST | step 1 of browser-based FIDO2 enrollment — issues single-use key material, held server-side ≤60s |
+| `/soul-key/recovery-material/complete` | POST | step 2 — writes the recovery blob the browser just wrapped |
+| `/soul-key/recovery-blob` | GET | read the (non-secret) wrapped recovery blob, to start a browser recovery |
+| `/soul-key/recover-from-browser` | POST | complete recovery after the browser unwraps the key locally via WebAuthn PRF |
+| `/restic-key/status` | GET | restic-password custody facts (never the password) |
+| `/deploy-status` | GET | `{running_sha, deploy_snapshot_sha, in_sync}` — this process's own git HEAD vs. the pinned deploy snapshot |
+| `/operator/desk` | GET | the JSON form of the operator's mail desk (`/desk` is the pre-existing HTML render; this is the same data, structured) |
+| `/operator/desk/reply` | POST | reply to a desk card as the operator (`{id, body}`) — `from_agent` is always hardcoded to the operator address, never trusted from the request |
+| `/backup-settings` | GET / POST | read/write the backup configuration — see [`BACKUP.md`](BACKUP.md) |
+| `/settings` | GET / POST | read/write the generic settings registry |
+
 ## Repo map
 
 ```
