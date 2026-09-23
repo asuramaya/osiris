@@ -10,14 +10,14 @@ under the CURRENT key, and a row that already opens is skipped, never re-encrypt
 Batched (default 2000 rows/UPDATE), keyset-paginated so a box still ingesting live
 sessions during the run is never at risk of a skipped or duplicated row.
 
---APPLY READINESS (TIP B, ruling 2c01e222's own follow-up thread): a genuinely missing
-key now refuses with the exact `osiris soul-key init`/`--restart` remedy instead of an
-uncaught SoulKeyMissing traceback — the same honesty every other soul-key-aware door in
-this house already gives (soul_crypto.py's own docstrings). Live progress prints per
-hot-tier batch (a box measured at 1,255,671 rows once already — a silent multi-minute
---apply with nothing on stdout reads as a hang, not progress). A structured JSON receipt
-(counts, elapsed_secs, completion status) prints at the end AND is what `run()` returns,
-durable evidence an operator can paste straight into a decision/thread.
+--APPLY READINESS: a genuinely missing key now refuses with the exact `osiris soul-key
+init`/`--restart` remedy instead of an uncaught SoulKeyMissing traceback, the same
+clarity every other soul-key-aware door in this codebase already gives (soul_crypto.py's
+own docstrings). Live progress prints per hot-tier batch (a box measured at 1,255,671
+rows once already, so a silent multi-minute --apply with nothing on stdout reads as a
+hang, not progress). A structured JSON receipt (counts, elapsed_secs, completion status)
+prints at the end AND is what `run()` returns, durable evidence an operator can paste
+straight into a written record.
 
 Usage: .venv/bin/python scripts/osiris_encrypt_soul_lines.py [--apply] [--batch-size N]
 """
@@ -50,7 +50,7 @@ async def run(apply: bool, batch_size: int) -> dict[str, Any]:
     started_at = time.monotonic()
 
     def _progress(migrated_so_far: int, already_so_far: int, batch_number: int) -> None:
-        # ONE LINE PER BATCH, never a silent multi-minute run — a human watching an
+        # One line per batch, never a silent multi-minute run: a human watching an
         # --apply against a real box's own million-row table needs to see it's alive.
         print(f"  batch {batch_number}: {migrated_so_far} migrated, "
               f"{already_so_far} already encrypted so far "
@@ -60,8 +60,8 @@ async def run(apply: bool, batch_size: int) -> dict[str, Any]:
         out = await encrypt_existing_soul_lines(
             pool, batch_size=batch_size, dry_run=not apply, on_batch=_progress)
     except SoulKeyMissing as exc:
-        # THE SAME HONESTY EVERY OTHER SOUL-KEY DOOR GIVES (soul_crypto.py) — never an
-        # uncaught traceback naming an internal function an operator never called.
+        # The same clarity every other soul-key-aware door gives (soul_crypto.py):
+        # never an uncaught traceback naming an internal function an operator never called.
         print(f"osiris_encrypt_soul_lines: {exc}", file=sys.stderr)
         print("run `osiris soul-key init` (or the console's Init button) first, then "
               "restart osiris-mcp/osiris-worker (--restart does this), then re-run this "

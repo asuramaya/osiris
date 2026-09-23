@@ -189,21 +189,20 @@ async def startup(ctx: dict[str, Any]) -> None:
     # service, and the live hand-installed dev unit once updated) — never inferred from
     # cwd or branch ancestry, which is exactly the guessing #113 was refused for tonight.
     if settings.osiris_worker_role == "primary":
-        # THE SOUL-KEY BOOT GATE, GENUINE REFUSAL AGAIN (TIP B, ruling 2c01e222 —
-        # un-superseding TIP A's own temporary bootstrap tolerance now that the
-        # operator has actually minted the key through the normal CLI, per Thoth mail
-        # 13065's own two-tip split: TIP A made this degrade instead of refuse SO THAT
-        # `osiris soul-key init` could be run at all on a fresh box through the
-        # ALREADY-DEPLOYED CLI/console; that bootstrap window is now closed — a worker
-        # with no soul key cannot correctly read or write soul_lines/soul_lines_cold at
-        # all, so starting it anyway only defers the failure to a worse moment, exactly
-        # this gate's own original law (Thoth DM 9194/9245, wave 17) before TIP A's
-        # temporary relaxation. Scoped to the real primary worker only, same reasoning
-        # as the deploy-ordering guard just below — an ad hoc dev `arq` invocation
-        # never carries this role and is never blocked by it either way.
+        # Soul-key boot gate, a genuine refusal again: the operator has now minted the
+        # key through the normal CLI, so the earlier degrade-not-fatal tolerance (which
+        # existed only so `osiris soul-key init` could run at all on a fresh box, before
+        # the already-deployed CLI/console had a worker or MCP unit up to serve it) has
+        # done its job and is retired. A worker with no soul key cannot correctly read
+        # or write soul_lines/soul_lines_cold at all, so starting it anyway only defers
+        # the failure to a worse moment: the original requirement this gate enforced
+        # before that temporary bootstrap window opened. Scoped to the real primary
+        # worker only, same reasoning as the deploy-ordering guard just below: an ad
+        # hoc dev `arq` invocation never carries this role and is never blocked by it
+        # either way.
         # get_soul_fernet() raises SoulKeyMissing (naming the exact `osiris soul-key
-        # init` command) when neither OSIRIS_SOUL_KEY nor the key file is present —
-        # left UNCAUGHT here on purpose, propagating out of startup() to crash the boot.
+        # init` command) when neither OSIRIS_SOUL_KEY nor the key file is present,
+        # left uncaught here on purpose, propagating out of startup() to crash the boot.
         from src.ingest.soul_crypto import get_soul_fernet
 
         get_soul_fernet()

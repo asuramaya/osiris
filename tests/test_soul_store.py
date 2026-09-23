@@ -2333,8 +2333,8 @@ async def test_encrypt_existing_soul_lines_is_idempotent(
 async def test_encrypt_existing_soul_lines_reports_batches_progress_and_elapsed(
     store: SoulStore, tmp_path: Path,
 ) -> None:
-    """TIP B's own --apply readiness pass (ruling 2c01e222's follow-up thread): a
-    genuinely long `--apply` run against a real box's own million-row table needs
+    """The --apply readiness pass: a genuinely long `--apply` run against a real
+    box's own million-row table needs
     live progress, never a silent multi-minute hang, and the final receipt needs
     enough shape (batch count, elapsed time) to be worth pasting into a decision.
     `batch_size=2` over 5 rows forces 3 hot-tier pages, so `on_batch` firing exactly

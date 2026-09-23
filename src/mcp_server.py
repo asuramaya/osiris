@@ -12728,7 +12728,8 @@ def main() -> None:
         # retired. At the same scope `_boot_check` already holds (the persistent systemd
         # osiris-mcp unit only, never a per-session stdio subprocess), `get_soul_fernet()`'s
         # `SoulKeyMissing` is left uncaught: it propagates out and crashes the boot, the
-        # original law this gate enforced before that temporary bootstrap window opened.
+        # original requirement this gate enforced before that temporary bootstrap window
+        # opened.
         from src.ingest.soul_crypto import get_soul_fernet
 
         get_soul_fernet()

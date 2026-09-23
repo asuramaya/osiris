@@ -2135,12 +2135,12 @@ async def encrypt_existing_soul_lines(
 
     `dry_run=True` (the default) counts what WOULD migrate without writing.
 
-    `on_batch=` (TIP B's own readiness pass, ruling 2c01e222's follow-up thread): fired
-    after EVERY hot-tier page, live progress — `(migrated_so_far, already_so_far,
-    batch_number)` — for a caller running this against a box that measured 1,255,671
-    rows once already (this function's own docstring, above): a silent multi-minute
-    `--apply` with nothing on stdout reads as a hang, not progress. None (the default)
-    is a no-op — every existing caller keeps its own current silence."""
+    `on_batch=` (the --apply readiness pass): fired after EVERY hot-tier page with live
+    progress, `(migrated_so_far, already_so_far, batch_number)`, for a caller running
+    this against a box that measured 1,255,671 rows once already (this function's own
+    docstring, above): a silent multi-minute `--apply` with nothing on stdout reads as a
+    hang, not progress. None (the default) is a no-op: every existing caller keeps its
+    own current silence."""
     import time
 
     started_at = time.monotonic()

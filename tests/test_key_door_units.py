@@ -57,9 +57,9 @@ def test_unit_uses_import_credential_never_the_old_hard_path_shape(
         f"exists: {load_cred}")
 
 
-# --- TIP B (ruling 2c01e222): THE SOUL-KEY BOOT GATE IS A GENUINE REFUSAL AGAIN, not
-# TIP A's own temporary degrade-and-warn — un-superseded now that the operator has
-# actually minted the key through the normal CLI. -----------------------------------
+# --- THE SOUL-KEY BOOT GATE IS A GENUINE REFUSAL AGAIN, not the earlier temporary
+# degrade-and-warn tolerance, now that the operator has actually minted the key
+# through the normal CLI. ------------------------------------------------------------
 
 _SRC_DIR = Path(__file__).resolve().parent.parent / "src"
 _BOOT_GATE_FILES = (
@@ -71,20 +71,20 @@ _BOOT_GATE_FILES = (
 @pytest.mark.parametrize("src_path", _BOOT_GATE_FILES, ids=lambda p: p.name)
 def test_soul_key_boot_gate_never_catches_soul_key_missing(src_path: Path) -> None:
     """`get_soul_fernet()` must be left UNCAUGHT at the primary worker's/MCP server's
-    own boot gate — a `try/except SoulKeyMissing` there is exactly TIP A's own
-    temporary bootstrap-tolerance shape, which TIP B un-supersedes now that the
-    operator has actually minted the key. A real catch elsewhere in either of these
-    two large files (neither currently has one for any OTHER reason) would also be
-    a real, if accidental, regression back to the degraded law — caught the same way
-    whether it is this gate's own code or something new appended near it."""
+    own boot gate: a `try/except SoulKeyMissing` there is exactly the earlier temporary
+    bootstrap-tolerance shape, now retired, since the operator has actually minted the
+    key. A real catch elsewhere in either of these two large files (neither currently
+    has one for any OTHER reason) would also be a real, if accidental, regression back
+    to the degraded behavior: caught the same way whether it is this gate's own code or
+    something new appended near it."""
     lines = src_path.read_text().splitlines()
     directive_lines = [ln for ln in lines if not ln.lstrip().startswith("#")]
     catches = [ln for ln in directive_lines if "except SoulKeyMissing" in ln]
     assert catches == [], (
         f"{src_path.name} still catches SoulKeyMissing somewhere (not just a comment "
-        f"mentioning it) — TIP B (ruling 2c01e222) requires the boot gate to refuse "
-        f"outright again, never degrade-and-warn: {catches}")
+        f"mentioning it): the boot gate must refuse outright again, never "
+        f"degrade-and-warn: {catches}")
     imports = [ln for ln in directive_lines if "SoulKeyMissing" in ln and "import" in ln]
     assert imports == [], (
-        f"{src_path.name} still imports SoulKeyMissing at all — nothing in this file "
+        f"{src_path.name} still imports SoulKeyMissing at all: nothing in this file "
         f"should need to name the exception class once it is never caught: {imports}")
