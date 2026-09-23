@@ -283,7 +283,7 @@ async def test_record_decision_protocol_nag_collapses_to_a_code(actions: Actions
 
     assert "protocol_nag" not in out
     assert out["nags"] == ["protocol"]
-    assert described["code"] == "protocol" and "MEASUREMENT" in described["text"]
+    assert described["code"] == "protocol" and "measurement" in described["text"]
     receipt_bytes = _receipt_bytes(out)
     # RATCHET: measured exact value, 251 bytes (the old protocol_nag prose alone ran
     # ~330 bytes on its own, on top of everything else in the receipt). Raise only with

@@ -91,7 +91,7 @@ async def test_mount_verbose_restores_the_linked_note(actions: Actions, tmp_path
     try:
         out = await srv.mount(cwd=str(tmp_path / "trsprojb"),
                               job_dir=str(tmp_path / "jobs" / "trsb0001"), verbose=True)
-        assert out["note"] == "linked — writes now attributed to you; call orient() next"
+        assert out["note"] == "linked. Writes now attributed to you; call orient() next."
     finally:
         srv._pool = saved
 
@@ -220,7 +220,7 @@ async def test_orient_unmounted_terse_keeps_its_note_in_both_modes(actions: Acti
     try:
         terse = await srv.orient()
         verbose = await srv.orient(verbose=True)
-        assert terse["note"].startswith("un-mounted →")
+        assert terse["note"].startswith("unmounted:")
         assert terse == verbose
     finally:
         srv._pool = saved

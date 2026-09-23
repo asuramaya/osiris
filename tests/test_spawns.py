@@ -259,7 +259,7 @@ async def test_mount_by_a_spawn_never_takes_the_seat(actions: Actions, tmp_path:
         out = await srv.mount(cwd=str(tmp_path), job_dir=job_dir,
                               subagent_id="agent-kid00004", subagent_type="Explore")
         assert out["agent"] == "agent:kid00004"
-        assert "SPAWN" in out["note"]
+        assert "spawn" in out["note"]
         rec = await mounts.find_mount(actions.pool, job_dir=job_dir)
         assert rec is not None and rec.agent_id == "agent:beef0001"  # seat untouched
         assert dict(srv._agents) == agents_before                    # cache untouched
@@ -293,7 +293,7 @@ async def test_spawn_inbox_is_peek_only(actions: Actions, tmp_path: Path) -> Non
     try:
         out = await srv.inbox(peek=False, ack=[int(msg["id"])],
                               subagent_id="agent-kid00006", ctx=ctx)
-        assert "spawn read" in out["note"] and "peek FORCED" in out["note"]
+        assert "spawn read" in out["note"] and "peek forced" in out["note"]
         assert "settled" not in out                       # the ack was dropped, not honored
         leased = await actions.pool.fetchval(
             "SELECT count(*) FROM message_recipients WHERE message_id=$1 "
@@ -325,7 +325,7 @@ async def test_dm_to_a_spawn_warns_of_the_dead_letter(actions: Actions, tmp_path
     srv._pool = actions.pool
     try:
         out = await srv.send("are you there?", to_agent="agent:kid00007", ctx=ctx)
-        assert out.get("sent") and "SPAWN" in out.get("warning", "")
+        assert out.get("sent") and "spawn" in out.get("warning", "")
         # a DM to a real (non-spawn) agent stays warning-free
         out2 = await srv.send("hello seat", to_agent="agent:beef0009", ctx=ctx)
         assert out2.get("sent") and "warning" not in out2

@@ -66,7 +66,7 @@ async def test_describe_seat_colon_verb_returns_the_full_text(actions: Actions) 
 
     out = await srv.describe("seat:launch")
     assert out["verb"] == "launch"
-    assert "TWO BACKENDS" in out["text"]
+    assert "two deliberate backends" in out["text"]
 
 
 async def test_describe_seat_colon_unknown_verb_says_so_honestly(actions: Actions) -> None:
