@@ -656,7 +656,7 @@ def main(argv: list[str] | None = None) -> int:
 
     def _office_root() -> Path:
         if args.seat_root is not None:
-            return args.seat_root
+            return Path(args.seat_root)
         from src.orchestrator.offices import _default_office_root
         return _default_office_root()
 
@@ -674,8 +674,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.apply_if_clear:
-        mid, reason = asyncio.run(find_clear_manifest())
-        if mid is None:
+        existing_mid, reason = asyncio.run(find_clear_manifest())
+        if existing_mid is None:
             print(f"REFUSING — {reason}", file=sys.stderr)
             return 1
         plans, chain_plan, wal_plan, legacy_plan = _compute_plans(args.backups, args.vault)
