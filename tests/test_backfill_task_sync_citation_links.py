@@ -1,7 +1,7 @@
-"""WAVE 2 LANE A (thread 5f47e23d, decision a55b1014): task_sync's own "TASK/THREAD
+"""Lane A: task_sync's own "TASK/THREAD
 DISAGREEMENT" / "THREAD SIDE ORPHAN" obligation Threads cite the disputed Thread in their
 own summary prose but were minted before `open_thread` grew its door-side prose-citation
-mint (task #189) — link the citation, via Lane 0's `derive_or_abstain`, never a guess.
+mint (task #189), link the citation, via Lane 0's `derive_or_abstain`, never a guess.
 """
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from src.orchestrator.task_sync import backfill_task_sync_citation_links
 
 async def _disagreement_thread(actions: Actions, disputed_short_id: str) -> uuid.UUID:
     """The real `tier2_mints` disagreement summary shape, cited BEFORE the target Thread
-    exists (below) — the exact ordering that leaves this Thread zero-live-link today: the
+    exists (below), the exact ordering that leaves this Thread zero-live-link today: the
     live door-side prose-citation mint (task #189) runs once, at THIS Thread's own birth,
     finds nothing to resolve yet, and never retries. That is what this lane's own backfill
     exists to repair, so every test constructs the real orphan condition rather than one
@@ -24,7 +24,7 @@ async def _disagreement_thread(actions: Actions, disputed_short_id: str) -> uuid
         f"TASK/THREAD DISAGREEMENT: Thread {disputed_short_id} carries "
         f"property_status='open', disputed by 1 citing task(s): task 7 (store ?) "
         f"says status='completed'. task_sync never resolves this automatically "
-        f"(Tier 3) — needs a human/agent look."
+        f"(Tier 3), needs a human/agent look."
     )
     return await open_thread(actions, summary, kind="obligation", source="test")
 
@@ -32,7 +32,7 @@ async def _disagreement_thread(actions: Actions, disputed_short_id: str) -> uuid
 async def _orphan_thread(actions: Actions, orphan_short_id: str) -> uuid.UUID:
     summary = (
         f"THREAD SIDE ORPHAN: Thread {orphan_short_id} carries kind=task but no harness "
-        f"task cites it (task_sync dry run). Stale, or the harness lost track of it — "
+        f"task cites it (task_sync dry run). Stale, or the harness lost track of it, "
         f"task_sync never auto-closes an orphan, needs a human/agent look."
     )
     return await open_thread(actions, summary, kind="obligation", source="test")
@@ -40,7 +40,7 @@ async def _orphan_thread(actions: Actions, orphan_short_id: str) -> uuid.UUID:
 
 async def _thread_with_short_id(actions: Actions, short_id: str, summary: str) -> uuid.UUID:
     """Inserts a Thread whose id starts with the exact 8-hex prefix a test wants
-    `_find_thread`'s short-id leg to match later — direct SQL, not `open_thread`, so
+    `_find_thread`'s short-id leg to match later, direct SQL, not `open_thread`, so
     minting it never itself triggers a door-side citation mint back onto the obligation
     Thread that already cited this prefix (the race this whole lane exists to close)."""
     oid = uuid.UUID(f"{short_id}-0000-0000-0000-000000000000")
@@ -122,10 +122,10 @@ async def test_backfill_abstains_when_the_cited_thread_does_not_exist(
 async def test_backfill_abstains_on_an_ambiguous_short_id_never_guessing(
     actions: Actions,
 ) -> None:
-    """Two Threads sharing the same 8-char id prefix — `_find_thread`'s own RefAmbiguous —
+    """Two Threads sharing the same 8-char id prefix, `_find_thread`'s own RefAmbiguous,
     must abstain, candidate ids kept, rather than pick one. Both targets are minted BEFORE
     the citing obligation Thread here (unlike the clean-mint tests above) precisely so the
-    live door-side mint ALSO sees the ambiguity and skips it the same way — an ambiguous
+    live door-side mint ALSO sees the ambiguity and skips it the same way: an ambiguous
     citation is refused at every stage, never just this backfill's own."""
     aaa1 = await _thread_with_short_id(actions, "aaaaaaaa", "target one")
     aaa2_id = uuid.UUID("aaaaaaaa-0000-0000-0000-000000000002")
@@ -153,7 +153,7 @@ async def test_backfill_abstains_on_an_ambiguous_short_id_never_guessing(
 
 async def test_backfill_abstains_when_the_summary_has_no_citation(actions: Actions) -> None:
     obligation = await open_thread(
-        actions, "TASK/THREAD DISAGREEMENT: no thread named here at all — malformed",
+        actions, "TASK/THREAD DISAGREEMENT: no thread named here at all, malformed",
         kind="obligation", source="test")
     out = await backfill_task_sync_citation_links(
         actions, actor="test", dry_run=False, because="test authorization")
@@ -169,7 +169,7 @@ async def test_backfill_abstains_when_the_summary_has_no_citation(actions: Actio
 async def test_backfill_never_touches_a_thread_that_already_has_a_link(
     actions: Actions,
 ) -> None:
-    """Scoped to zero-live-link orphans only — a disagreement thread someone already
+    """Scoped to zero-live-link orphans only, a disagreement thread someone already
     linked (by hand or a prior pass) is out of this repair's population entirely."""
     obligation = await _disagreement_thread(actions, "b76a1fef")
     disputed = await _thread_with_short_id(actions, "b76a1fef", "the disputed thing")
@@ -183,7 +183,7 @@ async def test_backfill_never_touches_a_thread_that_already_has_a_link(
 async def test_backfill_ignores_threads_outside_the_task_sync_shape(actions: Actions) -> None:
     """A zero-live-link Thread that merely mentions a (nonexistent, so the live door-side
     mint leaves it unlinked) short id in unrelated prose is not this lane's population at
-    all — only task_sync's own two fixed summary prefixes qualify."""
+    all, only task_sync's own two fixed summary prefixes qualify."""
     await open_thread(actions, "unrelated note about thread ffffffff", kind="task",
                       source="test")
     out = await backfill_task_sync_citation_links(actions, actor="test", dry_run=True)

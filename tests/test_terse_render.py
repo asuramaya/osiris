@@ -1,14 +1,14 @@
-"""TERSE-RENDER (task #55, thread 9092ed51) — a verbosity dial on MCP tool receipts. Terse
+"""TERSE-RENDER: a verbosity dial on MCP tool receipts. Terse
 (verbose=False, the default) drops guidance PROSE from mount()/orient(); every structured
-fact a caller could parse (counts, ids, lists — fleet_open_threads_total, co_agents.live,
+fact a caller could parse (counts, ids, lists, fleet_open_threads_total, co_agents.live,
 open_threads_more) survives in BOTH modes. The regression guard throughout: verbose's
-payload is always a strict superset of terse's — remove exactly the declared keys from
+payload is always a strict superset of terse's, remove exactly the declared keys from
 verbose and you get terse back, byte-for-byte, nothing else moves (the additive-only golden
 shape, mirroring surface.py's own byte-exact convention).
 
-TASK #60 (thread b81b0fac) extends the same discipline to DATA, not prose: _terse() only
+This also extends the same discipline to DATA, not prose: _terse() only
 ever deletes a whole key, but the byte measurement found open_threads/recent_decisions
-summaries are 96-98% of orient()'s bytes — a fact no key-deletion could touch. _cap_text()
+summaries are 96-98% of orient()'s bytes, a fact no key-deletion could touch. _cap_text()
 truncates those summaries to 160 chars in terse mode (an explicit '…' marks it, unlike the
 existing but silent [:160]/[:800] precedents elsewhere in this file); every decision now
 also carries `id` so a capped summary stays addressable via verbose=True or search().
@@ -22,7 +22,7 @@ from src.actions.core import Actions
 from src.orchestrator.capture import open_thread
 from src.orchestrator.mounts import save_mount
 
-# ═══ _terse() — the mechanism itself, tested in isolation before any tool uses it ═══════
+# ═══ _terse(): the mechanism itself, tested in isolation before any tool uses it ═══════
 
 
 def test_terse_strips_a_top_level_key() -> None:
@@ -53,7 +53,7 @@ def test_terse_is_a_no_op_on_a_path_this_payload_never_populated() -> None:
 
 def test_terse_never_touches_an_undeclared_key_even_a_long_one() -> None:
     """The whole point of an explicit allowlist over a length/heuristic strip (the
-    reachability().detail lesson, thread aeae9977): a long string NOT named in the
+    reachability().detail lesson): a long string NOT named in the
     allowlist survives untouched, because some other function may consume it as data."""
     from src.mcp_server import _terse
 
@@ -99,8 +99,8 @@ async def test_mount_verbose_restores_the_linked_note(actions: Actions, tmp_path
 async def test_mount_terse_keeps_co_agents_note_in_both_modes(
     actions: Actions, tmp_path: Path,
 ) -> None:
-    """CORRECTION (Thoth's review, DM 1238, thread 1233): co_agents.note is the shared-tree
-    SAFETY WARNING ('never git add -A, stage your own hunks') — the `live` list says WHO is
+    """CORRECTION: co_agents.note is the shared-tree
+    SAFETY WARNING ('never git add -A, stage your own hunks'). The `live` list says WHO is
     here, this says WHAT TO DO about it. Not redundant guidance; stays in BOTH modes, same
     class as the identity-safety banners already left untouched."""
     from src import mcp_server as srv
@@ -133,7 +133,7 @@ async def test_mount_terse_keeps_co_agents_note_in_both_modes(
 async def test_orient_terse_drops_the_scoped_note_but_keeps_the_same_count(
     actions: Actions,
 ) -> None:
-    """orient()'s top-level note is 100% redundant with fleet_open_threads_total — the
+    """orient()'s top-level note is 100% redundant with fleet_open_threads_total, the
     biggest single site by call-frequency×weight (every normal scoped call). Both terse and
     verbose must report the SAME count; only the sentence explaining it drops."""
     from src import mcp_server as srv
@@ -157,7 +157,7 @@ async def test_orient_terse_keeps_co_agents_note_in_both_modes(
     actions: Actions, tmp_path: Path,
 ) -> None:
     """Same correction as mount()'s: co_agents.note is safety guidance, not redundant
-    prose — present in both terse and verbose."""
+    prose, present in both terse and verbose."""
     from src import mcp_server as srv
 
     proj = "trsorntd"
@@ -184,10 +184,10 @@ async def test_orient_terse_promotes_open_threads_more_as_a_structured_sibling(
     actions: Actions,
 ) -> None:
     """The one genuinely NEW field this build adds: open_threads_note (prose) is redundant
-    with open_threads_more (a plain int) once that sibling exists — so the fact ('N more not
+    with open_threads_more (a plain int) once that sibling exists, so the fact ('N more not
     shown') survives terse mode even though the sentence explaining it doesn't. Without the
     sibling, stripping the note would have been a silent regression (the reachability().detail
-    lesson) — this proves the promotion, not just the strip."""
+    lesson); this proves the promotion, not just the strip."""
     from src import mcp_server as srv
     from src.orchestrator.compositions import ORIENT_OPEN_THREADS
 
@@ -208,9 +208,9 @@ async def test_orient_terse_promotes_open_threads_more_as_a_structured_sibling(
 
 
 async def test_orient_unmounted_terse_keeps_its_note_in_both_modes(actions: Actions) -> None:
-    """CORRECTION (Thoth's review, DM 1238, thread 1233): a pre-existing test
+    """CORRECTION: a pre-existing test
     (test_unmounted_orient_is_a_bounded_map_never_the_firehose) asserts this note
-    unconditionally — restoring the tested contract rather than re-litigating it inside
+    unconditionally, restoring the tested contract rather than re-litigating it inside
     the same fix that caught the co_agents.note regression. Terse and verbose are
     identical for the un-mounted branch; nothing here was terse-safe to strip after all."""
     from src import mcp_server as srv
@@ -226,7 +226,7 @@ async def test_orient_unmounted_terse_keeps_its_note_in_both_modes(actions: Acti
         srv._pool = saved
 
 
-# ═══ _cap_text() — the DATA-VOLUME mechanism (task #60, thread b81b0fac) ═════════════════
+# ═══ _cap_text(): the DATA-VOLUME mechanism ═════════════════
 
 
 def test_cap_text_truncates_and_marks_a_long_value() -> None:
@@ -238,7 +238,7 @@ def test_cap_text_truncates_and_marks_a_long_value() -> None:
 
 
 def test_cap_text_leaves_a_short_value_unmarked() -> None:
-    """A value AT or under the limit is never touched — no marker on something that isn't
+    """A value AT or under the limit is never touched, no marker on something that isn't
     actually truncated, or a caller can't trust the marker's own meaning."""
     from src.mcp_server import _cap_text
 
@@ -257,8 +257,8 @@ def test_cap_text_ignores_a_missing_or_non_string_key() -> None:
 
 def test_cap_text_exempts_a_row_carrying_is_handoff_true(
 ) -> None:
-    """Thoth DM 3090: a record written to be read exactly once, by exactly one reader, at
-    the moment they have the least context — the cap must skip it entirely, not merely
+    """A record written to be read exactly once, by exactly one reader, at
+    the moment they have the least context; the cap must skip it entirely, not merely
     raise its limit. An ordinary row (no flag, or the flag absent/false) still caps."""
     from src.mcp_server import _cap_text
 
@@ -270,10 +270,10 @@ def test_cap_text_exempts_a_row_carrying_is_handoff_true(
     out = _cap_text(items, "summary", limit=160, exempt_when_true="is_handoff")
     assert out[0]["summary"] == "x" * 200  # exempt, untouched, no "…" marker
     assert out[1]["summary"] == "y" * 160 + "…"
-    assert out[2]["summary"] == "z" * 160 + "…"  # "false" is not "true" — still capped
+    assert out[2]["summary"] == "z" * 160 + "…"  # "false" is not "true", still capped
 
 
-# ═══ orient() data-volume — the tool-level integration ═══════════════════════════════════
+# ═══ orient() data-volume: the tool-level integration ═══════════════════════════════════
 
 
 async def test_orient_terse_caps_a_long_decision_summary_and_carries_its_id(
@@ -324,9 +324,9 @@ async def test_orient_terse_caps_a_long_thread_summary(actions: Actions) -> None
 
 
 async def test_orient_never_caps_a_decision_carrying_is_handoff(actions: Actions) -> None:
-    """THE LIVE SPECIMEN (Thoth DM 3090): his predecessor's confessed-mistakes handoff was
-    correctly filed, durable, and orient() still handed him a 160-char stub — he dispatched
-    off the fragment and repeated the exact mistake it confessed. `is_handoff:true` now
+    """THE LIVE SPECIMEN: a predecessor's confessed-mistakes handoff was
+    correctly filed, durable, and orient() still handed the successor a 160-char stub; they
+    dispatched off the fragment and repeated the exact mistake it confessed. `is_handoff:true` now
     exempts the record from the cap entirely; an ORDINARY long decision in the SAME
     briefing still caps, proving this isn't a blanket cap removal."""
     from src import mcp_server as srv
@@ -359,12 +359,12 @@ async def test_orient_never_caps_a_decision_carrying_is_handoff(actions: Actions
         o_row = next(r for r in terse["recent_decisions"] if r["id"] == str(ordinary)[:8])
     finally:
         srv._pool = saved
-    assert h_row["summary"] == long_handoff  # whole, no "…" marker — the acceptance test
+    assert h_row["summary"] == long_handoff  # whole, no "…" marker; the acceptance test
     assert o_row["summary"] == long_ordinary[:160] + "…"  # an ordinary sibling still caps
 
 
 async def test_orient_never_caps_a_thread_carrying_is_handoff(actions: Actions) -> None:
-    """Same fix, the Thread shape — settle()'s own handoff box wants a Thread, Thoth's own
+    """Same fix, the Thread shape: settle()'s own handoff box wants a Thread, this fix's own
     live specimen was a Decision; whatever carries the flag is exempt regardless of type."""
     from src import mcp_server as srv
 
@@ -390,7 +390,7 @@ async def test_orient_never_caps_a_thread_carrying_is_handoff(actions: Actions) 
 
 async def test_orient_recent_decisions_more_only_past_a_full_page(actions: Actions) -> None:
     """Symmetry with open_threads_more (task #55): the composition's own take(n=15) means a
-    full page MAY hide more — count for real rather than assume, and stay silent under a
+    full page MAY hide more, count for real rather than assume, and stay silent under a
     full page (nothing hidden, nothing to report)."""
     from src import mcp_server as srv
     from src.orchestrator.compositions import seed_default_compositions

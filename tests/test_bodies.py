@@ -1,4 +1,4 @@
-"""BodyProvider — the LOCAL tier (`7ff54707`: the default product tier, not a test double) and
+"""BodyProvider: the LOCAL tier (the default product tier, not a test double) and
 the StubRaProvider seam that keeps Phase 3 (Ra/Xen) tested before its metal exists.
 
 Never real systemd in a unit test: the ProcessRunner seam is a constructor param precisely so
@@ -37,7 +37,7 @@ _RECEIPT_KEYS = {
 NOW = datetime(2026, 7, 15, 12, 0, 0, tzinfo=UTC)
 
 
-# --- systemd-run command construction (pure — no subprocess at all) ---
+# --- systemd-run command construction (pure, no subprocess at all) ---
 
 def test_systemd_run_argv_carries_hard_and_soft_ceilings() -> None:
     argv = _systemd_run_argv("osiris-body-abc123", None, 2 * 2**30, ["claude", "-p", "hi"])
@@ -52,9 +52,9 @@ def test_systemd_run_argv_carries_hard_and_soft_ceilings() -> None:
 
 
 def test_systemd_run_argv_bounds_io_so_a_body_cannot_starve_the_box() -> None:
-    """Warp's lesson as architecture (1460e590): the envelope caps I/O, not just RAM+CPU. A
-    body's scope gets IOAccounting (turns the io controller on) and a LOW IOWeight so it yields
-    disk bandwidth under contention — it can never peg the SSD out from under foreground work."""
+    """The envelope caps I/O, not just RAM+CPU. A body's scope gets IOAccounting (turns
+    the io controller on) and a LOW IOWeight so it yields disk bandwidth under
+    contention, it can never peg the SSD out from under foreground work."""
     argv = _systemd_run_argv("osiris-body-io", None, 10**9, ["true"])
     assert "IOAccounting=yes" in argv                 # the weight is inert without the controller
     assert "IOWeight=50" in argv                      # below systemd's default 100 → yields first
@@ -86,7 +86,7 @@ def test_read_cgroup_stats_parses_real_cgroup_v2_files(tmp_path: Path) -> None:
 
 def test_read_cgroup_stats_degrades_to_zero_when_files_are_missing(tmp_path: Path) -> None:
     """An already-collected scope (or a kernel with no memory.peak) must never crash the
-    receipt — an honest zero beats a fabricated number, same law as ceiling.py's `blind`."""
+    receipt, an honest zero beats a fabricated number, same law as ceiling.py's `blind`."""
     cg = tmp_path / "gone"  # never created
     core_seconds, ram_peak, oom_kill = _read_cgroup_stats(cg)
     assert (core_seconds, ram_peak, oom_kill) == (0.0, 0, 0)
@@ -135,7 +135,7 @@ def test_write_receipt_fsyncs_before_the_atomic_rename(
 def test_write_receipt_cleans_up_tmp_file_on_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A crash mid-write must never leave a truncated receipt at the REAL path — only an
+    """A crash mid-write must never leave a truncated receipt at the REAL path, only an
     orphaned tmp file (or nothing), and this proves the tmp file is removed too."""
     def _boom(fd: int) -> None:
         raise OSError("disk gone")
@@ -153,7 +153,7 @@ def test_build_receipt_matches_the_v1_schema_exactly() -> None:
         handle="h3", provider="local", kind="claude", ram_envelope_bytes=2 * 2**30,
         exit_cause="exit:0", started_at=NOW, ended_at=NOW, seat_anchor="/tmp/jobs/wake-demo",
         repo_ref="/repo/demo", budget_usd=1.5, core_seconds=3.0, ram_peak_bytes=1234)
-    assert set(r) == _RECEIPT_KEYS   # exactly this shape — the meter parses it verbatim
+    assert set(r) == _RECEIPT_KEYS   # exactly this shape, the meter parses it verbatim
     assert r["v"] == 1 and r["provider"] == "local"
     assert r["wall_seconds"] == 0.0                 # started == ended in this fixture
     assert r["ram_gib_seconds"] == 0.0              # wall_seconds is 0 → the product is 0
@@ -228,7 +228,7 @@ def _fake_runner(cgroup_dir: Path, payload_returncode: int = 0) -> Any:
             return _FakeCompletedProc(str(cgroup_dir).encode())
         if argv[:3] == ["systemctl", "--user", "stop"]:
             return _FakeCompletedProc()
-        # the systemd-run payload call itself — run something REAL and short-lived
+        # the systemd-run payload call itself: run something REAL and short-lived
         code = "0" if payload_returncode == 0 else str(payload_returncode)
         return await asyncio.create_subprocess_exec(
             "sh", "-c", f"exit {code}", stdout=asyncio.subprocess.DEVNULL,
@@ -255,7 +255,7 @@ async def test_local_provider_summon_dissolve_round_trip(tmp_path: Path) -> None
         "claude", None, 2 * 2**30, "/repo/demo", "/tmp/jobs/wake-demo", None,
         command=["claude", "-p", "hi"], env={"CLAUDE_JOB_DIR": "/tmp/jobs/wake-demo"})
 
-    # summon() sent exactly ONE systemd-run and ONE ControlGroup probe — no stop yet
+    # summon() sent exactly ONE systemd-run and ONE ControlGroup probe, no stop yet
     kinds = [c[0] for c in runner.calls]
     assert kinds == ["systemd-run", "systemctl"]
     # the payload rides INSIDE the metering trampoline: python3 -c <code> <statsfile> <payload>
@@ -300,12 +300,12 @@ async def test_local_provider_maps_oom_kill_over_the_exit_code(tmp_path: Path) -
 async def test_local_provider_prefers_the_trampoline_snapshot(tmp_path: Path) -> None:
     """You cannot meter a corpse: by dissolve time a naturally-exited scope's cgroup and unit
     bookkeeping are BOTH gone (systemd 259, probed 2026-07-15), so the trampoline's inside-the-
-    body snapshot is the PRIMARY reading — the cgroup dir is only the fallback. Here both exist
+    body snapshot is the PRIMARY reading, the cgroup dir is only the fallback. Here both exist
     with different numbers; the snapshot must win, and its wait_rc (the payload's true wait
     status) must beat the wrapper's flattened exit code."""
     cgroup = tmp_path / "cgroup"
     cgroup.mkdir()
-    (cgroup / "cpu.stat").write_text("usage_usec 1\n")     # the WRONG numbers — must lose
+    (cgroup / "cpu.stat").write_text("usage_usec 1\n")     # the WRONG numbers, must lose
     (cgroup / "memory.peak").write_text("1\n")
     (cgroup / "memory.events").write_text("oom_kill 0\n")
 
@@ -333,7 +333,7 @@ async def test_local_provider_prefers_the_trampoline_snapshot(tmp_path: Path) ->
 def test_trampoline_snapshots_before_it_dies(tmp_path: Path) -> None:
     """The trampoline's contract, exercised for REAL but without systemd: wraps the payload,
     propagates its exit status, and fsync-renames a snapshot of its own cgroup as its last act.
-    (Under a scope the cgroup is the body's own; here it is the test session's — the mechanics
+    (Under a scope the cgroup is the body's own; here it is the test session's, the mechanics
     are identical.)"""
     import subprocess
 
@@ -349,7 +349,7 @@ def test_trampoline_snapshots_before_it_dies(tmp_path: Path) -> None:
 
 def test_trampoline_keeps_the_true_signal_status(tmp_path: Path) -> None:
     """A signalled payload exits the wrapper as 128+N (an exit code cannot go negative), but
-    the snapshot's wait_rc carries the REAL wait status — that is where signal:N comes from."""
+    the snapshot's wait_rc carries the REAL wait status, that is where signal:N comes from."""
     import subprocess
 
     stats = tmp_path / "stats.json"
@@ -362,7 +362,7 @@ def test_trampoline_keeps_the_true_signal_status(tmp_path: Path) -> None:
 
 async def test_dissolve_stops_the_scope_not_a_phantom_service(tmp_path: Path) -> None:
     """THE SILENT NO-OP STOP (caught live, 2026-07-15): `systemctl stop osiris-body-X` defaults
-    the suffix to `.service` — a unit that does not exist — and the "not loaded" complaint dies
+    the suffix to `.service`, a unit that does not exist, and the "not loaded" complaint dies
     in a DEVNULL'd stderr. The payload loops on, dissolve hangs on wait() forever. The stop must
     name `.scope`, exactly as the ControlGroup probe already does."""
     cgroup = tmp_path / "cgroup"
@@ -414,7 +414,7 @@ async def test_local_provider_receipt_is_none_before_dissolve(tmp_path: Path) ->
 def test_default_receipts_dir_reads_the_module_global_at_construction(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Constructor injection AND the module-global patch idiom both work — the same discipline
+    """Constructor injection AND the module-global patch idiom both work, the same discipline
     tests/test_trigger.py relies on for `trigger.RECEIPTS`, never the real home directory."""
     monkeypatch.setattr(bodies, "RECEIPTS", tmp_path / "patched")
     provider = LocalProvider()
@@ -424,7 +424,7 @@ def test_default_receipts_dir_reads_the_module_global_at_construction(
 # --- _spawn_in_body: env/anchor discipline, matching _spawn_claude's ---
 
 class _FakeBodyProvider:
-    """Captures exactly what _spawn_in_body hands to summon() — no process, no systemd."""
+    """Captures exactly what _spawn_in_body hands to summon(), no process, no systemd."""
 
     def __init__(self) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -472,8 +472,8 @@ async def test_spawn_in_body_seats_the_anchor_on_resume_when_there_is_no_job_dir
 
 
 async def test_spawn_in_body_refuses_an_anchorless_summon() -> None:
-    """path=identity is the root bug (dd47c1da): with neither job_dir nor resume_session the
-    only anchor left would be the bare repo path — two bodies in one repo sharing an accounting
+    """path=identity is the root bug: with neither job_dir nor resume_session the
+    only anchor left would be the bare repo path, two bodies in one repo sharing an accounting
     identity. Refused loudly, never defaulted."""
     provider = _FakeBodyProvider()
     with pytest.raises(ValueError, match="anchor"):
@@ -533,7 +533,7 @@ async def _loaded_body_units() -> str:
 @pytest.mark.skipif(not _SYSTEMD_AVAILABLE, reason="systemd-run/systemctl not on PATH")
 async def test_real_body_natural_exit_still_meters_cpu(tmp_path: Path) -> None:
     """THE CORPSE-METERING PROOF (the review's hole): a body that exits NATURALLY, before
-    dissolve is ever called, must still produce non-zero CPU accounting — by dissolve time its
+    dissolve is ever called, must still produce non-zero CPU accounting, by dissolve time its
     scope's cgroup and unit bookkeeping are both gone, so only the trampoline's inside-the-body
     snapshot can carry the numbers out. A receipt asserting shape but not substance would have
     passed with core_seconds == 0; this one cannot."""
@@ -548,7 +548,7 @@ async def test_real_body_natural_exit_still_meters_cpu(tmp_path: Path) -> None:
     assert receipt is not None
     assert set(receipt) == _RECEIPT_KEYS
     assert receipt["exit_cause"] == "exit:0"
-    assert receipt["core_seconds"] > 0.1       # ~0.3s of real burn — NOT an honestly-zeroed corpse
+    assert receipt["core_seconds"] > 0.1       # ~0.3s of real burn, NOT an honestly-zeroed corpse
     assert receipt["ram_peak_bytes"] > 0
     assert receipt["wall_seconds"] > 0.0
     assert f"osiris-body-{handle}" not in await _loaded_body_units()  # no unit left loaded

@@ -1,4 +1,4 @@
-"""THE DECLARE-OR-REFUSE GATE (task #189, ruling 5ac06206, decision 7ea187b9). Two
+"""THE DECLARE-OR-REFUSE GATE (task #189). Two
 layers: the mechanism itself (`capture._enforce_required_links`, proven against a
 throwaway test-only Type so nothing here touches the real Decision/Thread catalog
 entries other tests may rely on), and the real wiring through record_decision/
@@ -39,7 +39,7 @@ async def test_enforce_required_links_refuses_and_rolls_back_when_nothing_satisf
             await capture._enforce_required_links(
                 a, oid, "GateWidget", kinds_in_scope=("repo",),
                 unlinked_because=None, source="test", observed=datetime.now(UTC))
-    # THE ROLLBACK, not just the raise: nothing this transaction touched persisted —
+    # THE ROLLBACK, not just the raise: nothing this transaction touched persisted,
     # a real refuse-at-door, never a post-hoc alarm on an object already committed.
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE type='GateWidget'") == 0
@@ -65,7 +65,7 @@ async def test_enforce_required_links_passes_when_a_self_declared_link_exists(
 async def test_enforce_required_links_a_direct_observation_link_never_satisfies_it(
     actions: Actions,
 ) -> None:
-    """Seshat's own instruction (msg 5790): a mount-derived/observed link must never be
+    """A mount-derived/observed link must never be
     laundered into satisfying a caller's own declaration requirement."""
     await ensure_type(actions, name="GateWidget3", kind="object", actor="test",
                       required_link_kinds=["repo"])
@@ -115,8 +115,8 @@ async def test_enforce_required_links_never_checks_an_unenforced_type(
 async def test_enforce_required_links_records_unlinked_because_even_when_unenforced(
     actions: Actions,
 ) -> None:
-    """The hatch is a DECLARATION a caller can offer, not just a refusal-avoider (Thoth
-    msg 5858, its first real user — the boot-alarm watchdog): a caller who already knows
+    """The hatch is a DECLARATION a caller can offer, not just a refusal-avoider (its
+    first real user, the boot-alarm watchdog): a caller who already knows
     it has no repo should get to say so honestly whether or not this type currently
     enforces anything, so the confession survives arming later rather than needing to be
     re-declared."""
@@ -138,7 +138,7 @@ async def test_enforce_required_links_ignores_a_kind_outside_this_doors_scope(
 ) -> None:
     """A type requiring 'grounds' but checked by a door whose kinds_in_scope is only
     ('repo',) (open_thread's own scope) must not refuse over a kind it cannot even
-    attest to — a different door's problem, not this call's."""
+    attest to, a different door's problem, not this call's."""
     await ensure_type(actions, name="GateWidget6", kind="object", actor="test",
                       required_link_kinds=["grounds"])
     async with actions.atomic() as a:
@@ -199,9 +199,9 @@ async def test_record_decision_passes_when_repo_is_caller_declared(
 async def test_record_decision_extension_link_only_write_gets_a_distinct_machine_reason(
     actions: Actions, decision_requires_repo: None,
 ) -> None:
-    """Thoth's condition 2 (msg 5802/5811): a Decision whose ONLY requested connectivity
+    """Condition 2: a Decision whose ONLY requested connectivity
     is an extension-link param (implements=, here) mints outside record_decision's own
-    atomic block and can't satisfy the gate at its own commit — so it falls into the
+    atomic block and can't satisfy the gate at its own commit, so it falls into the
     hatch, but with a MACHINE-SET reason, never indistinguishable from a genuinely
     standalone caller-typed one. Exercises the real mcp_server.py wrapper, the layer
     that actually knows whether an extension-link param was requested."""
@@ -223,7 +223,7 @@ async def test_record_decision_extension_link_only_write_gets_a_distinct_machine
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
         "AND a.name='unlinked_because'", uuid.UUID(child["id"]))
     assert recorded == _EXTENSION_LINK_PENDING_REASON
-    # thread 20b06fbb: the STRUCTURAL companion lands in the SAME transaction — this is
+    # The STRUCTURAL companion lands in the SAME transaction, this is
     # what adoption_meter._hatch_counts reads now, never a re-parse of the prose above.
     kind = await actions.pool.fetchval(
         "SELECT a.value #>> '{}' FROM current_assertions a WHERE a.object_id=$1 "
@@ -236,7 +236,7 @@ async def test_record_decision_extension_link_present_but_gate_already_satisfied
 ) -> None:
     """The other half of condition 2: a caller who ALSO gave a satisfying repo= must
     NEVER see the machine-set reason land, even though an extension-link param was
-    requested too — the hatch count would otherwise be inflated by writes that never
+    requested too, the hatch count would otherwise be inflated by writes that never
     needed it."""
     from src import mcp_server as srv
 
@@ -260,7 +260,7 @@ async def test_record_decision_extension_link_present_but_gate_already_satisfied
 async def test_record_decision_mount_defaulted_repo_does_not_satisfy_the_gate(
     actions: Actions, decision_requires_repo: None,
 ) -> None:
-    """The exact laundering Seshat's tier fix (6c3c647) exists to prevent: a
+    """The exact laundering the tier fix exists to prevent: a
     server-observed, mount-defaulted repo= must not count as a caller's declaration."""
     with pytest.raises(ValueError, match="unlinked_because"):
         await capture.record_decision(
@@ -302,23 +302,23 @@ async def test_open_thread_passes_when_repo_is_caller_declared(
 async def test_record_decision_with_no_declared_requirement_is_unaffected(
     actions: Actions,
 ) -> None:
-    """No fixture here — Decision's REAL, shipped required_link_kinds is empty in this
+    """No fixture here, Decision's REAL, shipped required_link_kinds is empty in this
     pass. Every existing caller of record_decision (thousands, fleet-wide) must keep
     working exactly as before; this is the negative control proving the gate is a
-    no-op until Khnum's content pass turns it on."""
+    no-op until the content pass turns it on."""
     d = await capture.record_decision(actions, "an ordinary unlinked decision, today")
     assert await actions.pool.fetchval(
         "SELECT count(*) FROM objects WHERE id=$1", d) == 1
 
 
-# --- obligation ce12d2ef: implements/confirms/rediscovers/bears_on now mint INSIDE ---
-# --- record_decision's own atomic transaction — proven by making the whole write ----
+# --- implements/confirms/rediscovers/bears_on now mint INSIDE ---
+# --- record_decision's own atomic transaction, proven by making the whole write ----
 # --- roll back and checking those links never landed either. ------------------------
 
 async def test_record_decision_implements_link_rolls_back_with_a_refused_write(
     actions: Actions, decision_requires_repo: None,
 ) -> None:
-    """The whole point of obligation ce12d2ef: implements= now mints in the SAME
+    """The whole point of this obligation: implements= now mints in the SAME
     transaction as the object, so when the gate refuses (no repo/grounds/resolves and
     no unlinked_because), the implements link it already wrote is NOT left behind
     orphaned on a decision that itself never committed."""
@@ -342,7 +342,7 @@ async def test_record_decision_bears_on_link_rolls_back_with_a_refused_write(
         "SELECT count(*) FROM links WHERE type='answers' AND to_id=$1", thread) == 0
 
 
-# --- THE WIDENED GATE (Thoth's ruling, DM 8919/thread 8861 — THE ORPHAN LAWS item 2) ---
+# --- THE WIDENED GATE (THE ORPHAN LAWS item 2) ---
 # --- dual-write: the hatch now ALSO writes derivation_abstained_<link_type>, and the ---
 # --- gate is wired onto two more doors: ingest_reference and record_practice. ---------
 
@@ -375,7 +375,7 @@ async def test_enforce_required_links_hatch_dual_writes_even_when_type_unenforce
     actions: Actions,
 ) -> None:
     """The SAME 'arming later never retroactively silences an already-confessed gap'
-    principle `unlinked_because` itself already follows applies to the dual-write too —
+    principle `unlinked_because` itself already follows applies to the dual-write too,
     exercised via the early 'not required' branch (no required_link_kinds declared at
     all for this type)."""
     await ensure_type(actions, name="GateWidget9", kind="object", actor="test")
@@ -393,7 +393,7 @@ async def test_enforce_required_links_hatch_dual_writes_even_when_type_unenforce
 
 
 async def test_enforce_required_links_no_hatch_no_dual_write(actions: Actions) -> None:
-    """Negative control: a satisfied gate (real link, no hatch) writes no abstention —
+    """Negative control: a satisfied gate (real link, no hatch) writes no abstention,
     the dual-write is a hatch-only companion, never an unconditional stamp."""
     await ensure_type(actions, name="GateWidget10", kind="object", actor="test",
                       required_link_kinds=["repo"])
@@ -469,7 +469,7 @@ async def test_ingest_reference_unlinked_because_hatch_dual_writes(
 async def test_ingest_reference_with_no_declared_requirement_is_unaffected(
     actions: Actions,
 ) -> None:
-    """Negative control: Reference's REAL, shipped required_link_kinds is empty — every
+    """Negative control: Reference's REAL, shipped required_link_kinds is empty, every
     existing caller (repo-less references included) must keep working exactly as
     before."""
     ref, _ = await capture.ingest_reference(actions, "an ordinary unlinked reference, today")
@@ -523,7 +523,7 @@ async def test_record_practice_unlinked_because_hatch_dual_writes(
 async def test_record_practice_with_no_declared_requirement_is_unaffected(
     actions: Actions,
 ) -> None:
-    """Negative control: Practice's REAL, shipped required_link_kinds is empty — the
+    """Negative control: Practice's REAL, shipped required_link_kinds is empty, the
     gate is inert by default, exactly as designed (a Practice is deliberately
     repo-agnostic)."""
     p = await capture.record_practice(actions, "an ordinary unlinked practice, today")
@@ -535,7 +535,7 @@ async def test_record_practice_implements_gate_inside_its_own_atomic_block(
     actions: Actions, practice_requires_repo: None,
 ) -> None:
     """record_practice now runs inside `actions.atomic()` (it didn't before this
-    widening) — a refused mint must roll back its OWN writes (statement/witnesses)
+    widening), a refused mint must roll back its OWN writes (statement/witnesses)
     too, the same discipline record_decision/open_thread already prove."""
     thread = await capture.open_thread(actions, "evidence a refused practice witnesses")
     with pytest.raises(ValueError, match="unlinked_because"):
@@ -562,7 +562,7 @@ async def test_record_decision_implements_and_bears_on_land_together_when_satisf
     actions: Actions, decision_requires_repo: None,
 ) -> None:
     """Positive control: the same four-param fold, but the write actually satisfies
-    the gate (repo= given) — implements/confirms/rediscovers/bears_on all land in the
+    the gate (repo= given), implements/confirms/rediscovers/bears_on all land in the
     one transaction alongside the object itself."""
     parent = await capture.record_decision(actions, "another standing parent ruling",
                                             repo="osiris")

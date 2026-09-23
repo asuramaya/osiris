@@ -26,7 +26,7 @@ def test_no_color_env_beats_a_real_tty(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def test_dumb_terminal_beats_force_color(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Both are set; TERM=dumb is checked first ON PURPOSE — a terminal that cannot render
+    """Both are set; TERM=dumb is checked first ON PURPOSE: a terminal that cannot render
     escapes must win over a caller merely asking for colour."""
     monkeypatch.delenv("NO_COLOR", raising=False)
     monkeypatch.setenv("TERM", "dumb")
@@ -80,7 +80,7 @@ def test_every_scalar_key_survives_the_render(monkeypatch: pytest.MonkeyPatch) -
 
 
 def test_a_row_with_an_extra_column_does_not_lose_it() -> None:
-    """Columns are the UNION of every row's keys, not the first row's — the bug a
+    """Columns are the UNION of every row's keys, not the first row's: the bug a
     first-row-wins implementation would ship and nobody would notice until a real
     heterogeneous result arrived."""
     rows = [{"a": 1, "b": 2}, {"a": 3, "b": 4, "surprise": 5}]
@@ -104,7 +104,7 @@ def test_empty_collection_is_reported_not_omitted(monkeypatch: pytest.MonkeyPatc
 
 def test_colour_does_not_shear_column_alignment() -> None:
     """Escape sequences occupy zero columns. If _visible_len were wrong every coloured cell
-    would over-pad and the table would stagger — invisible in a diff, obvious on screen."""
+    would over-pad and the table would stagger, invisible in a diff, obvious on screen."""
     rows = [{"status": "ok", "name": "aaa"}, {"status": "failed", "name": "b"}]
     plain = r.table(rows, r.Paint(False), 120)
     fancy = r.table(rows, r.Paint(True), 120)
@@ -171,18 +171,18 @@ def test_none_and_false_are_distinguishable() -> None:
 
 def test_already_live_reads_as_a_state_not_a_refusal() -> None:
     """DIAGNOSED LIVE: `osiris launch <occupied-seat>` was the ONLY outcome in cmd_launch
-    printing a refusal-shaped line to STDOUT and returning 0 — its two siblings (missing
+    printing a refusal-shaped line to STDOUT and returning 0, its two siblings (missing
     tree_cwd, resident-unknown) both go to stderr and return 1. So it read as a complaint to
     a human AND as an ordinary success to a script: one channel, two meanings, #151's disease.
 
     THE LAW, symmetric across the pair: each verb exits 0 when the world is ALREADY in the
-    state it was asked for — launch => a body exists, stop => none does. This asserts the
+    state it was asked for, launch => a body exists, stop => none does. This asserts the
     source states that law, so a later edit that flips the exit code has to argue with it.
 
-    LIVES IN THE SHARED GUARD NOW (operator ruling 60c78788's verb split, thread
-    bc11a2d3's family): `_cmd_launch_harness` composes `_resolve_and_guard_launch`
-    rather than carrying this check inline — both `osiris launch` and `osiris resume`
-    share this one occupancy gate, never two copies (#48's lesson)."""
+    LIVES IN THE SHARED GUARD NOW (the verb split ruling's family): `_cmd_launch_harness`
+    composes `_resolve_and_guard_launch` rather than carrying this check inline, both
+    `osiris launch` and `osiris resume` share this one occupancy gate, never two copies
+    (#48's lesson)."""
     import inspect
 
     from src.cli import _resolve_and_guard_launch
@@ -193,7 +193,7 @@ def test_already_live_reads_as_a_state_not_a_refusal() -> None:
     assert "stderr" in src[idx:idx + 400], "the how-we-know line must not pollute stdout"
 
 
-# --- paint_text: colorizing the SERVER's own text, never re-deriving it (thread bad45d61) --
+# --- paint_text: colorizing the SERVER's own text, never re-deriving it --------------------
 
 def test_paint_text_is_a_noop_when_color_is_disabled() -> None:
     text = "osiris:\n  ● Thoth (agent:x) — governs: osiris"
@@ -242,8 +242,8 @@ def test_paint_text_colors_verdict_words_in_place() -> None:
 
 
 def test_paint_text_preserves_an_empty_state_line_content() -> None:
-    """Not literally unstyled — 'active' is a real verdict word (_GOOD) and gets colored
-    like anywhere else, correctly — but the sentence itself survives intact underneath."""
+    """Not literally unstyled: 'active' is a real verdict word (_GOOD) and gets colored
+    like anywhere else, correctly, but the sentence itself survives intact underneath."""
     import re as _re
 
     text = "roster: no active seats"
@@ -254,8 +254,8 @@ def test_paint_text_preserves_an_empty_state_line_content() -> None:
 def test_emit_with_text_paints_instead_of_reconstructing_from_data(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The one choke point's new door (thread bad45d61): when `text` is given and
-    `as_json` is False, `emit` prints the painted text VERBATIM — it must never fall
+    """The one choke point's new door: when `text` is given and
+    `as_json` is False, `emit` prints the painted text VERBATIM, it must never fall
     through to the generic `render()` reconstruction of `data`, even though `data` is
     still passed (json mode needs it)."""
     data = {"rows": [{"a": 1, "b": 2}] * 50}  # would render very differently via render()

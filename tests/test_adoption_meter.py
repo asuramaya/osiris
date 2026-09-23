@@ -1,10 +1,10 @@
-"""adoption_meter(pool) — the #189 acceptance instrument (Thoth msg 5825/5866). The old
-headline metric (population-wide `median_links` snapshot, obligation 8d510875) was retired
-as structurally unreachable (Khnum's decision b71e1e0dcadf — a Thread/Reference cannot
+"""adoption_meter(pool): the #189 acceptance instrument. The old
+headline metric (population-wide `median_links` snapshot) was retired
+as structurally unreachable (a Thread/Reference cannot
 declare a forward link at birth, so their connectivity is entirely later-accrued and a
 snapshot of an always-young population never moves). Replaced with cohort-aged
 connectivity: does a birth-week cohort's own median link count climb between birth and
-day 30 — a FIXED historical fact once a cohort has genuinely aged 30 days, needing no
+day 30, a FIXED historical fact once a cohort has genuinely aged 30 days, needing no
 persisted baseline (see the module's own docstring)."""
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ from src.orchestrator.adoption_meter import (
     render_adoption_line,
 )
 
-# LIVE, NOT FROZEN (corrected 2026-08-31, thread 1ef3a6e1). This was
-# `datetime(2026, 8, 27, tzinfo=UTC)` — a fixed instant — while every eligibility gate in
+# LIVE, NOT FROZEN (corrected 2026-08-31). This was
+# `datetime(2026, 8, 27, tzinfo=UTC)`, a fixed instant, while every eligibility gate in
 # adoption_meter.py compares against the DATABASE's own now(). So the fixture aged
 # backwards from a frozen August 27 while the code measured against real time, and every
 # `born_days_ago` in this file silently meant something older with each day that passed.
 # It went RED on 2026-08-31 with no code change at all: a decision declared 2 days old was
 # 6 days old by the gate's reckoning, and the UTC week rollover tipped it over the line.
 # THE TEST WAS DRIFTING, NOT THE CODE. A fixture clock that does not advance with the
-# clock the subject reads is a detector with a duty cycle — it fired one day in seven and
+# clock the subject reads is a detector with a duty cycle, it fired one day in seven and
 # would have gone quiet again by Tuesday on its own.
 NOW = datetime.now(UTC)
 
@@ -46,10 +46,10 @@ async def _aged_decision(
     later_link_at_days: int | None = None,
 ) -> None:
     """A Decision born `born_days_ago` days ago, linked to a fresh Thread at birth
-    (`birth_links` copies — only 0 or 1 meaningful here, since one link is enough to prove
+    (`birth_links` copies, only 0 or 1 meaningful here, since one link is enough to prove
     the birth checkpoint counts it), and optionally a SECOND link added
     `later_link_at_days` after birth (still within the object's own life, whatever that
-    means for the test) — the growth this metric exists to detect."""
+    means for the test), the growth this metric exists to detect."""
     born = NOW - timedelta(days=born_days_ago)
     dec = await actions.create_or_find_object("Decision", canonical, "test")
     await _backdate_object(actions, dec, born)
@@ -98,7 +98,7 @@ async def test_cohort_excludes_a_link_that_lands_after_the_30_day_window(
 
 
 async def test_a_cohort_not_yet_30_days_old_is_absent_not_zero(actions: Actions) -> None:
-    """A recently-born object must never render as a bad (flat/zero) 30-day figure — it
+    """A recently-born object must never render as a bad (flat/zero) 30-day figure, it
     simply has not aged into eligibility yet, and this must read as absence, not failure.
     The only Decision in this test's own isolated DB is 10 days old, so no cohort has
     reached the 30-day checkpoint at all."""
@@ -151,14 +151,14 @@ async def test_orphan_birth_rate_is_unmoved_by_a_link_landing_after_the_7_day_wi
     actions: Actions,
 ) -> None:
     """The whole point of the bound: a LATER backfill (any lane) minting a link on an
-    already-eligible cohort must never revise that cohort's own reported rate — a fixed
+    already-eligible cohort must never revise that cohort's own reported rate, a fixed
     historical fact, same discipline as `_cohort_connectivity`'s own 30-day checkpoint."""
     await _aged_decision(actions, "decision:obr-backfilled1", born_days_ago=45,
                           birth_links=0, later_link_at_days=30)
 
     meter = await adoption_meter(actions.pool)
     dec = meter["orphan_birth_rate"]["Decision"]
-    assert dec["n_orphan"] == 1  # still counted orphan — the day-30 link is outside 7d
+    assert dec["n_orphan"] == 1  # still counted orphan, the day-30 link is outside 7d
     assert dec["rate"] == 1.0
 
 
@@ -208,7 +208,7 @@ def test_render_reports_orphan_birth_absence_honestly_when_no_cohort_is_eligible
 
 def test_render_orphan_birth_degrades_honestly_when_the_key_is_entirely_absent() -> None:
     """A meter dict built before this instrument existed (or a caller that only wants the
-    old two fields) must not crash the renderer — same "absence, not failure" contract
+    old two fields) must not crash the renderer, same "absence, not failure" contract
     as the cohort half already has."""
     line = render_adoption_line({
         "cohorts": {},
@@ -220,8 +220,8 @@ def test_render_orphan_birth_degrades_honestly_when_the_key_is_entirely_absent()
 
 def test_render_names_the_hatch_split_as_all_time_not_a_window(
 ) -> None:
-    """Lane C (Thoth XC msg 6143): a number printed on every deploy with no window WILL
-    be misread as a per-deploy or per-period figure — it happened live, one deploy after
+    """Lane C: a number printed on every deploy with no window WILL
+    be misread as a per-deploy or per-period figure, it happened live, one deploy after
     the split first shipped. The terse line now says so inline, not just in the fuller
     dict's own `note`."""
     line = render_adoption_line({
@@ -236,7 +236,7 @@ def test_render_names_the_hatch_split_as_all_time_not_a_window(
 
 
 async def test_hatch_reads_a_real_zero_when_nothing_has_hatched(actions: Actions) -> None:
-    """No `unlinked_because` assertions exist anywhere in a fresh test DB — the real
+    """No `unlinked_because` assertions exist anywhere in a fresh test DB, the real
     fail-honest path, never a fabricated schema-missing flag."""
     meter = await adoption_meter(actions.pool)
     assert meter["hatch"]["total"] == 0
@@ -247,7 +247,7 @@ async def test_hatch_reads_a_real_zero_when_nothing_has_hatched(actions: Actions
 async def test_hatch_counts_a_real_assertion_and_splits_against_the_live_constant(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """`unlinked_because` is an ordinary property assertion (Imhotep msg 5828) — this
+    """`unlinked_because` is an ordinary property assertion, this
     writes one for real via `assert_property`, then monkeypatches
     `src.mcp_server._EXTENSION_LINK_PENDING_REASON` (imported live, per this module's own
     docstring) to prove the split actually separates the two populations."""
@@ -272,8 +272,8 @@ async def test_hatch_counts_a_real_assertion_and_splits_against_the_live_constan
 async def test_hatch_split_reads_the_structural_kind_field_not_the_live_prose(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """thread 20b06fbb: a row carrying `unlinked_because_kind` classifies from THAT field
-    alone — even when its `unlinked_because` prose matches NEITHER the live
+    """A row carrying `unlinked_because_kind` classifies from THAT field
+    alone, even when its `unlinked_because` prose matches NEITHER the live
     `_EXTENSION_LINK_PENDING_REASON` constant NOR any legacy wording, proving the split no
     longer depends on prose at all once the structural field is present."""
     import src.mcp_server as srv
@@ -295,7 +295,7 @@ async def test_hatch_split_reads_the_structural_kind_field_not_the_live_prose(
 async def test_hatch_split_falls_back_to_the_closed_legacy_set_for_pre_fix_rows(
     actions: Actions, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A row written BEFORE thread 20b06fbb carries no `unlinked_because_kind` at all —
+    """A row written before this fix carries no `unlinked_because_kind` at all,
     it must still classify correctly via `_LEGACY_EXTENSION_REASON_STRINGS`, the closed,
     git-verified enumeration, with no backfill and no live-constant match needed."""
     import src.mcp_server as srv
@@ -306,7 +306,7 @@ async def test_hatch_split_falls_back_to_the_closed_legacy_set_for_pre_fix_rows(
     await actions.assert_property(
         obj, "unlinked_because", legacy_wording, "test", NOW, 0.9,
         evidence_class="self_declared")
-    # the LIVE constant has moved on since this row was written — proving the fallback
+    # the LIVE constant has moved on since this row was written, proving the fallback
     # does not depend on it matching today's wording.
     monkeypatch.setattr(srv, "_EXTENSION_LINK_PENDING_REASON",
                         "today's completely different wording", raising=False)
@@ -337,7 +337,7 @@ def test_render_reports_absence_honestly_when_no_cohort_is_eligible_yet() -> Non
 
 
 def test_render_degrades_to_unsplit_when_the_reason_constant_is_gone() -> None:
-    """The `split is None` branch is NOT dead code — it is what this instrument does on a
+    """The `split is None` branch is NOT dead code, it is what this instrument does on a
     build where the constant was renamed or removed. Rendered from a synthetic meter
     rather than by breaking the real import, so it stays a test of the RENDERER."""
     line = render_adoption_line({
