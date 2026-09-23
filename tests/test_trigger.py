@@ -4195,8 +4195,8 @@ def test_gate_name_reads_the_same_prose_the_gates_already_produce() -> None:
     any other text this function was never meant to parse."""
     gate_name = trigger_module._gate_name
     assert gate_name("found a candidate, but its tail after the last compaction boundary "
-                     "is only 12 byte(s) (1 line(s)) — it closed at or near the seam "
-                     "itself, with nothing real to resume into") == "compaction"
+                     "is only 12 byte(s) (1 line(s)), closed at or near the compaction "
+                     "boundary itself, with nothing real to resume into") == "compaction"
     # CORRECTED 2026-09-08: the ceiling refusal's
     # own prose changed: occupancy-shaped (the primary ceiling now) or
     # catastrophic-corruption-shaped (`_verdict_from_diagnostics`'s narrowed ceiling check),
@@ -6426,7 +6426,7 @@ async def test_resume_seat_refuses_a_tail_closed_at_the_seam(
     assert len(d["resume_check"]) == 1
     reason = d["resume_check"][0]
     assert "gen 1" in reason and f"session {FULL_SID[:8]}" in reason
-    assert "seam itself" in reason
+    assert "compaction boundary itself" in reason
     assert "min_tail_bytes=1000" in d["detail"]
 
 

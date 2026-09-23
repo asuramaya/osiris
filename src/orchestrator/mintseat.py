@@ -202,17 +202,17 @@ async def _scaffold_office(
     if not orders.exists() or not agents.exists():
         if manager_seat_id is not None:
             role, charter_block = "worker", (
-                "Your charter was never formally declared — it lives only in prose. First "
+                "Your charter was never formally declared. It lives only in prose. First "
                 "act: `charter(repos=[...])` naming the repos you actually govern. A house "
                 "is what a seat GOVERNS, not where it sits.")
         else:
             role, charter_block = "coordinator", (
-                "Your charter was never formally declared — it lives only in prose. First "
-                "act: `charter(repos=[...])` naming the project you actually own — this "
+                "Your charter was never formally declared. It lives only in prose. First "
+                "act: `charter(repos=[...])` naming the project you actually own. This "
                 "seat has no manager, so nobody else will do it for you.")
         body = await compile_managed_body(
             actions, seat_id=seat_id, handle=handle, house=house, office=str(office),
-            seat_line=" — not yet seated: your next claim binds you (the on-ramp).",
+            seat_line=", not yet seated: your next claim binds you (the on-ramp).",
             charter_block=charter_block,
             # a FRESH mint can never yet carry a peer_of edge (offices.py's own
             # establish_office is where a peer bonded later gets picked up live)
@@ -263,9 +263,9 @@ async def mint_seat(
     manager_seat_id = await _resolve_seat_ref(actions.pool, manager)
     if manager_seat_id is None:
         if await _person_collision(actions.pool, manager):
-            return {"error": f"{manager!r} names a Person record, not a Seat — mint_seat "
+            return {"error": f"{manager!r} names a Person record, not a Seat. mint_seat "
                              "never treats a case entity as an org-chart role"}
-        return {"error": f"no such manager seat: {manager!r} — mint_seat never invents "
+        return {"error": f"no such manager seat: {manager!r}. mint_seat never invents "
                          "who is minting"}
     manager_facts = await seat_facts(actions.pool, manager_seat_id)
     manager_house = manager_facts.get("house")
@@ -275,7 +275,7 @@ async def mint_seat(
         return {"error": "a worker seat needs a handle"}
     person = await _person_collision(actions.pool, handle)
     if person:
-        return {"error": f"{handle!r} names a Person record ({person}), not a seat — "
+        return {"error": f"{handle!r} names a Person record ({person}), not a seat. "
                          "mint_seat never mints or adopts a case entity as a worker"}
 
     now = datetime.now(UTC)
@@ -299,10 +299,10 @@ async def mint_seat(
         # invented here.
         occ = await seat_occupancy(actions.pool, worker_seat_id)
         if occ["state"] == "occupied":
-            return {"error": f"cannot adopt {handle!r} ({worker_seat_id}) — it is LIVE "
+            return {"error": f"cannot adopt {handle!r} ({worker_seat_id}); it is LIVE "
                              f"right now (holder {occ['holder']}). Adopting a live seat "
                              "would move its office out from under a running session, "
-                             "splitting the session's history between two homes — the "
+                             "splitting the session's history between two homes, the "
                              "same rule establish_office enforces. Close its tab first, "
                              "then mint_seat or establish_office; it wakes up in the "
                              "office"}
@@ -311,21 +311,21 @@ async def mint_seat(
         seat_minted = False
     else:
         if adopt:
-            return {"error": f"adopt=True but no living seat exactly matches {handle!r} "
-                             "— minting would be the lie the caller explicitly refused"}
+            return {"error": f"adopt=True but no living seat exactly matches {handle!r}; "
+                             "minting would contradict what the caller explicitly asked for"}
         if not force:
             near = await _near_miss(actions.pool, handle)
             if near:
-                return {"error": f"near-miss twin refused: living seat {near!r} "
-                                 f"normalizes to the same name as {handle!r} — pass the "
+                return {"error": f"near-miss duplicate refused: living seat {near!r} "
+                                 f"normalizes to the same name as {handle!r}. Pass the "
                                  f"exact handle {near!r} to adopt it, or force=True to "
                                  "mint a distinct seat anyway"}
         resolved_house = house or manager_house
         if house and manager_house and house != manager_house \
                 and not await is_operator_actor(actions.pool, actor or ""):
             return {"error": f"cross-house mint refused: {manager!r} (house "
-                             f"{manager_house!r}) may not mint a seat in house {house!r} — "
-                             "only the operator's own hand crosses a house boundary"}
+                             f"{manager_house!r}) may not mint a seat in house {house!r}. "
+                             "Only the operator's own hand crosses a house boundary"}
         # LINEAGE IS PER SEAT, NOT PER ACTOR: the SAME defect found_seat had, where two
         # seats minted under the same manager/actor share that actor's own id as their
         # `handle` assertion source, which _seat_lineage_ancestor later trusts as each
@@ -413,18 +413,18 @@ async def mint_seat(
     # be correct for both, so this is two strings, not a rewording: `next_step` keeps its
     # MCP-native form unchanged; `next_step_cli` is the terminal-appropriate counterpart.
     next_step = {
-        "vacant": "no session has ever attached — furniture until a body sits in it; "
-                 f"launch(target={handle!r}) to body it, or start a session in the "
+        "vacant": "no session has ever attached, furniture until a session occupies it; "
+                 f"launch(target={handle!r}) to start one, or start a session in the "
                  "office and have it claim_name itself",
-        "occupied": "already live — no next step, someone's home",
-        "cold": "held, but nobody's live right now — its holder resumes on its own "
+        "occupied": "already live, no next step, someone's home",
+        "cold": "held, but nobody's live right now, its holder resumes on its own "
                "next mount; no outside hand needed",
     }[occ["state"]]
     next_step_cli = {
-        "vacant": "no session has ever attached — furniture until a body sits in it; run "
-                 f"`osiris launch {handle}` to body it",
-        "occupied": "already live — no next step, someone's home",
-        "cold": "held, but nobody's live right now — its holder resumes on its own "
+        "vacant": "no session has ever attached, furniture until a session occupies it; run "
+                 f"`osiris launch {handle}` to start it",
+        "occupied": "already live, no next step, someone's home",
+        "cold": "held, but nobody's live right now, its holder resumes on its own "
                "next mount; no outside hand needed",
     }[occ["state"]]
 
@@ -525,7 +525,7 @@ async def found_seat(
         return {"error": "a self-managed seat needs a handle"}
     person = await _person_collision(actions.pool, handle)
     if person:
-        return {"error": f"{handle!r} names a Person record ({person}), not a seat — "
+        return {"error": f"{handle!r} names a Person record ({person}), not a seat. "
                          "found_seat never mints or adopts a case entity as a worker"}
 
     root = office_root or _default_office_root()
@@ -559,7 +559,7 @@ async def found_seat(
         existing_manager = await manager_of_seat(actions.pool, existing_seat_id)
         if existing_manager is not None:
             return {"error": f"{handle!r} ({existing_seat_id}) already names a MANAGED "
-                             f"seat (manager {existing_manager}) — found_seat only founds "
+                             f"seat (manager {existing_manager}). found_seat only founds "
                              "or converges on a self-managed one; pick a different handle, "
                              "or work with the existing seat through its own manager"}
         worker_seat_id = existing_seat_id
@@ -569,8 +569,8 @@ async def found_seat(
     else:
         near = await _near_miss(actions.pool, handle)
         if near:
-            return {"error": f"near-miss twin refused: living seat {near!r} normalizes to "
-                             f"the same name as {handle!r} — pass the exact handle {near!r} "
+            return {"error": f"near-miss duplicate refused: living seat {near!r} normalizes to "
+                             f"the same name as {handle!r}. Pass the exact handle {near!r} "
                              "to work with it, or choose a distinct one"}
         # LINEAGE IS PER SEAT, NOT PER ACTOR (see seats.py's own _FOUNDER_SOURCE_PREFIX
         # docstring): the handle assertion's source is what _seat_lineage_ancestor later
@@ -619,9 +619,9 @@ async def found_seat(
             workspace = Path(real_trees[0][1])
             tree_derivation = f"charter:{real_trees[0][0]}"
         else:
-            tree_derivation = "unset — no path given and no single real governed tree"
+            tree_derivation = "unset: no path given and no single real governed tree"
 
-    workspace_pin_state = "not applicable — no workspace resolved"
+    workspace_pin_state = "not applicable: no workspace resolved"
     tree: dict[str, Any] | None = None
     if workspace is not None:
         workspace.mkdir(parents=True, exist_ok=True)
@@ -655,10 +655,10 @@ async def found_seat(
     # cmd_new. No `launch(target=...)` MCP-syntax clause belongs here at all (an earlier
     # version of this text was copy-pasted from mint_seat's own, wrong audience).
     next_step = {
-        "vacant": "no session has ever attached — furniture until a body sits in it; run "
-                 f"`osiris launch {handle}` to body it",
-        "occupied": "already live — no next step, someone's home",
-        "cold": "held, but nobody's live right now — its holder resumes on its own next "
+        "vacant": "no session has ever attached, furniture until a session occupies it; run "
+                 f"`osiris launch {handle}` to start it",
+        "occupied": "already live, no next step, someone's home",
+        "cold": "held, but nobody's live right now, its holder resumes on its own next "
                "mount; no outside hand needed",
     }[occ["state"]]
 

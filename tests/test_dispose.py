@@ -81,7 +81,7 @@ async def test_a_drop_must_NAME_ITS_CLASS_or_it_is_refused(actions: Actions) -> 
     why = await actions.pool.fetchval(
         "SELECT value #>> '{}' FROM current_assertions WHERE object_id=$1 "
         "AND name='retracted_because'", t)
-    assert why.startswith("STALE — ") and "same session" in why
+    assert why.startswith("STALE: ") and "same session" in why
 
 
 async def test_a_drop_is_a_compensating_event_and_the_rug_is_TRANSPARENT(actions: Actions) -> None:

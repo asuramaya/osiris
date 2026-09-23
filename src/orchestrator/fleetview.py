@@ -74,8 +74,8 @@ def _short(model: str | None) -> str:
 
 
 def _id_label(canon: str, nodes: dict[str, Node]) -> str:
-    """A canonical id, with its claimed seat beside it, e.g. 'agent:c0ffee (Ra V)', wherever
-    one is claimed, and its binding anchored beside that, e.g. '(Ra V ⚓seat:ab12cd34)',
+    """A canonical id, with its claimed seat beside it, e.g. 'agent:c0ffee (Worker V)', wherever
+    one is claimed, and its binding anchored beside that, e.g. '(Worker V ⚓seat:ab12cd34)',
     wherever the agent actively holds a Seat object (the declared identity shown beside the
     inferred one). An agent with neither renders exactly as before: the id, alone."""
     seat = nodes[canon].get("seat")
@@ -232,7 +232,7 @@ def render_fleet_tree(
         proj_roots = _sort_roots(groups[project], nodes)
         live_n = sum(1 for r in proj_roots if _any_live(r, nodes, kids))
         swarm_n = sum(len(_subtree(r, kids)) - 1 for r in proj_roots)
-        head = f"▸ {project} — {live_n} live · {len(proj_roots)} sessions"
+        head = f"▸ {project} · {live_n} live · {len(proj_roots)} sessions"
         if swarm_n:
             head += f" · swarm {swarm_n}"
         if os_bodies is not None:

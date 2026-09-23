@@ -1143,7 +1143,7 @@ async def test_correct_project_name_is_a_noop_on_an_already_settled_name(
     out = await correct_project_name(actions, project="settled", actor="agent:test")
 
     assert out == {"project": "repo:settled", "corrected": False,
-                   "note": "already a single value — nothing to correct"}
+                   "note": "already a single value; nothing to correct"}
 
 
 async def test_correct_project_name_refuses_unknown_project(actions: Actions) -> None:

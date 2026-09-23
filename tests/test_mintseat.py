@@ -53,7 +53,7 @@ async def test_a_fresh_mint_creates_seat_office_model_and_edge(
     # Seat object this call just minted). The receipt now says so plainly, reusing
     # establish_office's own text verbatim instead of staying silent about it: the exact
     # gap that let 26 of 33 live seats go unchartered with nothing on record ever saying so.
-    assert out["charter"].startswith("UNDECLARED — call charter(repos=[...])")
+    assert out["charter"].startswith("UNDECLARED: call charter(repos=[...])")
 
     office = offices / "rook"
     assert office.is_dir()
@@ -776,7 +776,7 @@ async def test_found_seat_leaves_project_and_tree_unset_with_no_path_and_no_char
     assert out["project"] is None
     assert out["workspace"] is None
     assert out["tree_cwd"] is None
-    assert out["tree_derivation"] == "unset — no path given and no single real governed tree"
+    assert out["tree_derivation"] == "unset: no path given and no single real governed tree"
     office_pin = (tmp_path / "seats" / "aster" / ".osiris").read_text()
     assert "project" not in office_pin
     assert 'model = "claude-sonnet-5"' in office_pin
@@ -916,7 +916,7 @@ async def test_found_seat_refuses_a_near_miss_handle(
     out = await found_seat(actions, handle="bramble 1", path=str(tmp_path / "ws2"),
                            actor="console", office_root=tmp_path / "seats2")
 
-    assert "error" in out and "near-miss twin refused" in out["error"]
+    assert "error" in out and "near-miss duplicate refused" in out["error"]
 
 
 async def test_found_seat_never_overwrites_an_existing_workspace_pin(

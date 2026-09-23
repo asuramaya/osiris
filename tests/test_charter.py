@@ -128,7 +128,7 @@ async def test_set_charter_receipt_charter_field_is_the_committed_read_back(
                             actor="agent:readback")
     assert out["charter"] == await charter_of(actions.pool, seat_id) == ["realrepo"]
     assert out["rejected"] == [{"repo": "no-such-repo",
-                                "error": "not a known repo — the graph has no independent "
+                                "error": "not a known repo. the graph has no independent "
                                         "evidence it's real (no git ingest, no prior "
                                         "record); ingest it or confirm it exists, then "
                                         "declare your charter over it"}]
@@ -693,7 +693,7 @@ async def test_orient_tool_names_an_undeclared_charter_instead_of_staying_silent
     finally:
         srv._pool = saved_pool
         srv._agents.pop(srv._conn_key(ctx), None)
-    assert out.get("charter", "").startswith("UNDECLARED — call charter(repos=[...])")
+    assert out.get("charter", "").startswith("UNDECLARED: call charter(repos=[...])")
     assert seat_id  # the seat exists and IS what orient() is being honest about
 
 

@@ -1,4 +1,4 @@
-"""The membrane: the operator's window into the autonomous fleet.
+"""The operator's window into the autonomous fleet.
 
 Authority flows down the fleet; results, accountability, and danger flow back up to the
 operator. This is that return path made visible: a stateless rolling-window digest that
@@ -19,20 +19,20 @@ surfaces, with no new writes:
     carried a fact above its origin grade (the citogenesis the credence floor exists to catch).
   * DISPUTES: the same live pass, its other half: an ancestor whose value materially differs
     from its subtree's origin is disagreeing, not relaying. The value-blind clamp would bury it
-    as false laundering; the membrane shows the disagreement instead of flattening it.
+    as false laundering; this view shows the disagreement instead of flattening it.
   * CONVERSATIONS: the lateral mail threads, reconstructed straight from fleet_messages: who
     talked to whom, how much, how recently, and whether it settled. This is the
     compliance-free half of the upward lane: an agent that shirks its report-up duty is still
-    visible, because the membrane reads the substrate, not the self-reports.
+    visible, because this reads the underlying data, not the self-reports.
   * OPERATOR INBOX: mail addressed to the operator's desk (send(to='operator')): the count and
     the freshest briefs, so the human sees what the fleet initiated upward.
-  * COST: what the inference seam spent in the window (llm_usage): a `spend` head plus a
+  * COST: what inference calls spent in the window (llm_usage): a `spend` head plus a
     `costs` stream (per purpose/model/day). Rendered honestly: only the session-miner's
     extract path is metered today, so a `coverage` note names exactly what is (and isn't)
     counted.
   * BODIES: the meter's other dimension: core-seconds/RAM-gib-seconds off `body_usage`,
     grouped by provider/exit_cause, beside `costs` in the same report shape, the
-    hypervisor/cgroup receipt sitting next to the vendor's dollar. Visibility only; the
+    hypervisor/cgroup record sitting next to the vendor's dollar. Visibility only; the
     ceiling's dollar gate is untouched.
   * PROPOSALS: made/accepted/rejected/expired-in-effect per (miner, owner) pair, off the
     Proposal objects proposals.py already mints. Counts only; dollar cost is deliberately not
@@ -337,13 +337,13 @@ async def _resolve_since(
 # today; wake sessions, interactive tabs, and the document-extract path are unmetered (see
 # the parked cost-levers thread for the plan to close that gap). A spend figure without this
 # caveat would read as total burn.
-_COST_COVERAGE = ("session-extract only — wake sessions, interactive tabs and "
+_COST_COVERAGE = ("session-extract only, wake sessions, interactive tabs and "
                   "document-extract are unmetered (cost-levers thread)")
 _COST_COVERAGE_SUBSCRIPTION = (
-    "token counts are real; DOLLARS OMITTED — this house runs on a subscription, where the CLI's "
-    "per-call cost is a NOTIONAL figure the vendor prints, not a billed amount. Showing it as "
-    "spend would be the same phantom the daily ceiling used to false-stop on (spend_is_metered "
-    "False; Thoth LIII 2026-07-21)")
+    "token counts are real; DOLLARS OMITTED, this deployment runs on a subscription, where "
+    "the CLI's per-call cost is a NOTIONAL figure the vendor prints, not a billed amount. "
+    "Showing it as spend would be the same phantom the daily ceiling used to false-stop on "
+    "(spend_is_metered False)")
 
 
 async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
@@ -374,13 +374,13 @@ async def _costs(actions: Actions, since: datetime) -> dict[str, Any]:
 
 
 _BODY_COVERAGE = ("body_usage rows arrive via meter_bodies (src/ingest/wake_cost.py), swept from "
-                  "~/.osiris/body-receipts — zero here until a BodyProvider mints receipts and "
+                  "~/.osiris/body-receipts, zero here until a BodyProvider writes records and "
                   "a periodic tick sweeps them; visibility only, the daily $ ceiling is untouched")
 
 
 async def _bodies(actions: Actions, since: datetime) -> dict[str, Any]:
     """The resource-second stream: body_usage aggregated over the window, grouped by
-    (provider, exit_cause), heaviest first. Hypervisor/cgroup receipts are recorded uniformly
+    (provider, exit_cause), heaviest first. Hypervisor/cgroup usage is tracked uniformly
     across provider tiers, surfaced here beside `costs`' vendor dollars, same report shape,
     the meter's other dimension: a resource you cannot cost is a resource you cannot govern.
     This is visibility only: it invents no enforcement, the ceiling's dollar gate
@@ -679,7 +679,7 @@ async def fleet_digest(
     actions: Actions, *, since: datetime | None = None, mark_seen: bool = False,
     lease_secs: int = 900,
 ) -> dict[str, Any]:
-    """The membrane: the upward streams over the window, with a summary head.
+    """The upward streams over the window, with a summary head.
 
     `since` given: an ad-hoc rolling window. `since=None`: watermark mode, the window opens at
     the stored operator watermark (24h fallback). Reading is a peek; it never advances the
@@ -747,7 +747,7 @@ async def fleet_digest(
             "unseen": len(unseen), "swapped_unseen": len(swapped_unseen),
         },
         "roster": shown,
-        "roster_scope": (f"{len(shown)} of {len(roster)} agents — those seen since "
+        "roster_scope": (f"{len(shown)} of {len(roster)} agents: those seen since "
                          f"{effective_since.isoformat()}, plus any carrying a health flag "
                          f"(unresolved identity, or a swap we cannot rule out as historical)"),
         "activity": activity,

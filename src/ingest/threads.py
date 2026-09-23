@@ -100,7 +100,7 @@ async def mine_threads(
     NOTHING ELSE, so one sentence appearing in two repos would collapse into ONE thread object
     noted_in both, an accidental cross-repo identity merge. Measured before touching it: it has
     happened ZERO times (commit prose is distinctive). Re-keying the canonical would change the
-    identity of every existing thread, including the one a mind has actually TOUCHED, trading a
+    identity of every existing thread, including the one an agent has actually TOUCHED, trading a
     hazard that has never fired for a merge that certainly would. So the canonical stands, a thread
     may honestly carry two `in_repo` links if it ever truly spans two repos, and the collision is
     now VISIBLE rather than silent.

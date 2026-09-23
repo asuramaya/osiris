@@ -1553,7 +1553,7 @@ async def test_cmd_launch_harness_falls_through_with_a_named_reason_when_not_res
     assert out == 1  # refused, never spawns anything, fresh or otherwise
     out_text = buf.getvalue()
     assert "nothing resumable" in out_text
-    assert "seam itself" in out_text
+    assert "compaction boundary itself" in out_text
     assert "min_tail_bytes=1000" in out_text
 
 

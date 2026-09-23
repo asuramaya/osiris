@@ -72,7 +72,7 @@ def test_an_unrecognized_revision_reads_as_the_blocking_db_ahead_shape() -> None
     out = schema_drift("0099_unmerged", "0045", db_version_known=False)
     assert out is not None
     assert out.startswith("DB_AHEAD_OF_TREE")
-    assert "8d3f5e2d" in out
+    assert "another branch likely ran" in out
     assert "0099_unmerged" in out
     assert "Do NOT run" in out
 
@@ -1523,7 +1523,7 @@ async def test_merge_claim_hygiene_verifies_a_real_merge(small_repo: Path) -> No
     _git(small_repo, "checkout", "-q", "-")
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
     note = await merge_claim_hygiene(small_repo)
-    assert note == ("merge claim: HEAD 'feature-x' verified — its current tip is an "
+    assert note == ("merge claim: HEAD 'feature-x' verified: its current tip is an "
                     "ancestor of the merge")
 
 
@@ -1540,7 +1540,7 @@ async def test_merge_claim_hygiene_catches_a_false_claim(small_repo: Path) -> No
     _commit(small_repo, "merge feature-y: claims the merge, never happened")
     note = await merge_claim_hygiene(small_repo)
     assert note == ("merge claim: HEAD ⚠ subject claims a merge of 'feature-y' but this "
-                    "commit has only 1 parent(s) — not a real merge, the fd3a703 shape "
+                    "commit has only 1 parent(s), not a real merge, the fd3a703 shape "
                     "confirmed structurally (needs no branch or cited sha to prove)")
 
 
@@ -1631,7 +1631,7 @@ async def test_merge_claim_hygiene_case_insensitive_capital_m_merge_verifies(
     _git(small_repo, "merge", "--no-ff", "-m", "Merge feature-cap: did the thing",
         "feature-cap")
     note = await merge_claim_hygiene(small_repo)
-    assert note == ("merge claim: HEAD 'feature-cap' verified — its current tip is an "
+    assert note == ("merge claim: HEAD 'feature-cap' verified: its current tip is an "
                     "ancestor of the merge")
 
 
@@ -1730,7 +1730,7 @@ async def test_merge_claim_hygiene_unknown_since_degrades_to_head_only(
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-x: did the thing", "feature-x")
 
     note = await merge_claim_hygiene(small_repo, since="0" * 40)
-    assert note == ("merge claim: HEAD 'feature-x' verified — its current tip is an "
+    assert note == ("merge claim: HEAD 'feature-x' verified: its current tip is an "
                     "ancestor of the merge")
 
 
@@ -1746,7 +1746,7 @@ async def test_merge_claim_hygiene_since_equals_head_falls_back_to_head_only(
     _git(small_repo, "merge", "--no-ff", "-m", "merge feature-y: landed", "feature-y")
 
     note = await merge_claim_hygiene(small_repo, since=_head(small_repo))
-    assert note == ("merge claim: HEAD 'feature-y' verified — its current tip is an "
+    assert note == ("merge claim: HEAD 'feature-y' verified: its current tip is an "
                     "ancestor of the merge")
 
 

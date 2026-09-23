@@ -141,7 +141,7 @@ async def migrate_repo_seats_fix(
     Idempotent: a repeat call finds no "seats"-stamped agents and no live edges
     into repo:seats (already retired) left to touch."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     seats_row = await pool.fetchrow(
@@ -153,7 +153,7 @@ async def migrate_repo_seats_fix(
         "SELECT id FROM objects WHERE canonical='repo:osiris' AND type='SoftwareProject' "
         "AND status='active'")
     if osiris_id is None:
-        return {"error": "repo:osiris is not an active SoftwareProject — refusing to "
+        return {"error": "repo:osiris is not an active SoftwareProject. Refusing to "
                          "re-file into a target that isn't there"}
 
     agent_rows = await pool.fetch(
@@ -220,7 +220,7 @@ async def migrate_repo_seats_fix(
                 r["id"], "project", "osiris", actor, now, _CONF,
                 because=f"{because} (migrate_repo_seats_fix: cross-source collapse of "
                         "the agent's prior 'seats' self-declaration -- project is "
-                        "single-valued per object, ruling 1335332e)",
+                        "single-valued per object, per standing ruling)",
                 evidence_class=_EC, actor=actor)
         for r in edge_rows:
             await actions.invalidate_link(
@@ -420,7 +420,7 @@ async def migrate_file_the_unfiled(
     filed (a still-unfiled tie/empty object stays a legitimate candidate for a
     later run, once more links exist to break the tie)."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     now = datetime.now(UTC)
@@ -622,7 +622,7 @@ async def migrate_assertion_links(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     now = datetime.now(UTC)
@@ -773,7 +773,7 @@ async def migrate_owned_by_second_pass(
 
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     now = datetime.now(UTC)
@@ -862,7 +862,7 @@ async def migrate_file_the_residual(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds no Message left both unfiled and resolvable by this rule."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     now = datetime.now(UTC)
@@ -963,7 +963,7 @@ async def migrate_commits_to_agents(
     a repeat call only ever considers Commits still missing committed_by; a real write
     here can never re-mint or duplicate."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     from src.ingest.gitlog import _seat_holder_at, _worktree_seat
 
@@ -1070,7 +1070,7 @@ async def migrate_house_to_project(
     Idempotent: a repeat call finds every already-repaired seat's house matching its
     charter and skips it."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     from src.orchestrator.charter import charter_of, project_current_name
     from src.orchestrator.seats import resync_seat_project
@@ -1192,7 +1192,7 @@ async def migrate_holds_sandwich(
     sandwich left among the ones it wrote (the middle and third rows read zero-width,
     never matching the three-consecutive-rows shape again)."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
 
@@ -1373,7 +1373,7 @@ async def migrate_project_name_singular(
     DRY RUN IS THE DEFAULT. `dry_run=False` REQUIRES a non-blank `because`. Idempotent:
     a repeat call finds no SoftwareProject left with more than one current `name`."""
     if not dry_run and not (because or "").strip():
-        return {"error": "migrating without a because is an un-audited repair — cite "
+        return {"error": "migrating without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     dupes = await pool.fetch(
@@ -1397,7 +1397,7 @@ async def migrate_project_name_singular(
             await actions.assert_singular_property(
                 r["oid"], "name", winner, actor, datetime.now(UTC), _CONF,
                 because=f"{because} (migrate_project_name_singular: collapsed "
-                        f"{len(names)} competing current names — highest-confidence/"
+                        f"{len(names)} competing current names, highest-confidence/"
                         "newest value wins)",
                 evidence_class=_EC)
     return {

@@ -290,8 +290,8 @@ async def test_compile_managed_body_coordinator_names_its_team_by_handle_and_pro
         charter_block="You govern: none.", peer_block="\n", role="coordinator")
 
     assert "## Your team" in body
-    assert f"**TeamWorkerA** ({worker_a}) — governs `team-proj-a`" in body
-    assert f"**TeamWorkerB** ({worker_b}) — governs no charter yet" in body
+    assert f"**TeamWorkerA** ({worker_a}): governs `team-proj-a`" in body
+    assert f"**TeamWorkerB** ({worker_b}): governs no charter yet" in body
 
 
 async def test_compile_managed_body_coordinator_with_no_team_has_no_team_section(
@@ -377,7 +377,7 @@ def test_scaffold_boot_file_writes_only_when_absent(tmp_path: Path) -> None:
     assert state == "written"
     assert path.read_text() == "compiled content\n"
     state2 = scaffold_boot_file(path, "different content\n", label="a file")
-    assert state2 == "left in place — the office already has a file"
+    assert state2 == "left in place: the office already has a file"
     assert path.read_text() == "compiled content\n"  # untouched, never overwritten
 
 
@@ -1072,7 +1072,7 @@ async def test_migrate_identity_moves_real_hand_written_content(
 
     charter_after = charter_path.read_text()
     assert charter_after.startswith("<!-- osiris:identity-migrated:v1 -->")
-    assert "## Identity (migrated from CLAUDE.md, task #141)" in charter_after
+    assert "## Identity (migrated from CLAUDE.md)" in charter_after
     assert "WHY YOU EXIST" in charter_after
     assert "specific reason, hand-written long ago." in charter_after
     # (f) charter.md's own pre-existing content survives byte-for-byte below the new block

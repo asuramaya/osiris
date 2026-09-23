@@ -1,17 +1,18 @@
 """Cross-channel recovery: the harness's OWN cross-session messaging (the SendMessage
-tool) lifted out of soul-stored transcripts into typed, attributed, time-threaded rows.
+tool) lifted out of transcripts captured by SoulStore into typed, attributed,
+time-threaded rows.
 A past measurement found that during a routing defect, two agents sent 3 messages
 through Osiris and about 24 through the harness's own socket: 90% of a day's
 reasoning existed only in two jsonl files, invisible to orient()/search()/fleet(). This
 module is the recovery side: `extract_harness_sends` is the pure parser (soul_lines'
 raw_line already carries everything, this only reads it); `recover_harness_exchanges` is
-the dry-run-first repair verb (same shape as restore_attribution/unwire_informs_fanout)
+the dry-run-first repair function (same shape as restore_attribution/unwire_informs_fanout)
 that lands the parse into `harness_messages`; `adoption_share` answers "how much of this
 seat's real traffic did osiris actually see" by comparing osiris's own `fleet_messages`
 against this table, per anchor_sid.
 
-Reuses the soul store rather than re-parsing transcripts from disk: a session must
-already be soul-stored (SoulStore.ingest_path) before it can be recovered; this module
+Reuses SoulStore's captured transcripts rather than re-parsing from disk: a session must
+already be ingested (SoulStore.ingest_path) before it can be recovered; this module
 never touches a jsonl file directly.
 
 Attribution is keyed on the SEAT, never `job_dir` fragments: testing confirmed that
@@ -121,29 +122,29 @@ async def _held_by_at(pool: asyncpg.Pool, seat: str, observed_at: datetime) -> s
 async def recover_harness_exchanges(
     pool: asyncpg.Pool, anchor_sid: str, *, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """THE REPAIR VERB: dry-run-first, same shape as `restore_attribution`/
-    `unwire_informs_fanout`. Reads `anchor_sid`'s already-soul-stored lines
+    """THE REPAIR FUNCTION: dry-run-first, same shape as `restore_attribution`/
+    `unwire_informs_fanout`. Reads `anchor_sid`'s already-ingested lines
     (`SoulStore.raw_lines`; this session must be ingested first, this function never
     touches disk), extracts every SendMessage block, and reports (dry_run=True) or
     WRITES (dry_run=False) the ones not already recovered (idempotent per
     (anchor_sid, turn_index): re-running costs nothing once complete). `dry_run=False`
     REQUIRES a non-blank `because`: landing a day's worth of cross-session traffic into
     the graph for the first time is a deliberate act on the record, never silent, same
-    discipline every other repair verb here holds.
+    discipline every other repair function here holds.
 
-    `{"error": ...}` when nothing has been soul-stored for `anchor_sid`: recovery
+    `{"error": ...}` when nothing has been ingested for `anchor_sid`: recovery
     cannot invent what was never ingested. Otherwise: `{found, already_recovered,
     would_write / written, sample}`. `sample` is up to 3 {turn_index, to, summary}
     previews, never the full message bodies (kept short on purpose; the full row lands
-    in the table, not the receipt)."""
+    in the table, not the summary)."""
     if not dry_run and not (because or "").strip():
-        return {"error": "dry_run=False requires a non-blank `because` — recovery is a "
+        return {"error": "dry_run=False requires a non-blank `because`: recovery is a "
                          "deliberate act on the record, never silent"}
     from src.ingest.soul_store import SoulStore
 
     lines = await SoulStore(pool).raw_lines(anchor_sid)
     if lines is None:
-        return {"error": f"no soul_lines ingested for {anchor_sid!r} — soul-store this "
+        return {"error": f"no soul_lines ingested for {anchor_sid!r}: ingest this "
                          "session first (SoulStore.ingest_path), recovery cannot invent "
                          "what was never ingested"}
     found = extract_harness_sends(lines)
@@ -189,7 +190,7 @@ async def adoption_share(
     """Per-agent traffic split: how many of its exchanges went through osiris
     (`fleet_messages`) versus the harness's own socket (`harness_messages`, RECOVERED
     only, never inferred). `anchor_sid=None` (no live/recent session to key off of, or
-    nothing soul-stored) reports `harness_count: None`, meaning "unknown", never a silent zero
+    nothing ingested) reports `harness_count: None`, meaning "unknown", never a silent zero
     that would misread as perfect adoption. `share` is osiris / (osiris + harness),
     omitted whenever harness_count is unknown or both counts are zero (nothing to
     divide)."""

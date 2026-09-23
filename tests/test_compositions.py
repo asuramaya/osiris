@@ -2342,7 +2342,7 @@ async def test_desk_project_debt_row_carries_the_three_triage_actions(
          "args": {"ref": short, "because": "operator: done"}},
         {"label": "not mine", "action": "assign_thread",
          "args": {"ref": short, "owner": "neo",
-                  "because": "operator: not mine — neo owns this"}},
+                  "because": "operator: not mine, neo owns this"}},
         {"label": "later", "action": "defer_thread",
          "args": {"ref": short, "days": 30, "because": "operator: not now"}},
     ]
@@ -3676,7 +3676,7 @@ async def test_fn_project_decisions_includes_an_uncited_ruling(actions: Actions)
                           repo="proj1")
 
     out = await _fn_project(actions.pool, None, {"repo": "proj1"})
-    decisions = out["proj1 — decisions"]
+    decisions = out["proj1: decisions"]
     assert any("uncited ruling" in (d["decision"] or "") for d in decisions)
 
 
@@ -3696,7 +3696,7 @@ async def test_fn_project_decisions_still_finds_one_reachable_only_via_its_commi
     await actions.create_link(decision, commit, "decided_in", "session", NOW, 0.9)
 
     out = await _fn_project(actions.pool, None, {"repo": "proj2"})
-    decisions = out["proj2 — decisions"]
+    decisions = out["proj2: decisions"]
     assert any("cited via its commit only" in (d["decision"] or "") for d in decisions)
 
 

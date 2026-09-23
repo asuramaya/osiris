@@ -24,11 +24,11 @@ enumerate every store, that gap should be flagged upstream rather than worked ar
 
 THE BINDING RULE, UNCHANGED SINCE EARLY DESIGN: refuse, never guess. A citation is found in
 a task's own prose (today's only bridge, e.g. "Graph thread 5da19aa6, ruling 10f4058b"),
-resolved through the exact same strict ladder every other short-id caller in this codebase
-uses (`_find_thread`, `require_identifier=True`, no free-text/summary-substring leg, the
-guess this feature exists to refuse). A citation that resolves to more than one Thread
-(RefAmbiguous, now understood to often mean one multi-source-touched object, not two) or to
-none is UNRESOLVABLE, reported by its exact string, never silently dropped and never
+resolved through the exact same strict resolution order every other short-id caller in this
+codebase uses (`_find_thread`, `require_identifier=True`, no free-text/summary-substring
+leg, the guess this feature exists to refuse). A citation that resolves to more than one
+Thread (RefAmbiguous, now understood to often mean one multi-source-touched object, not two)
+or to none is UNRESOLVABLE, reported by its exact string, never silently dropped and never
 silently bound to a best guess.
 
 FIVE BUCKETS, NEVER A BARE COUNT STANDING IN FOR THEM: bound / bound_partial (some
@@ -367,14 +367,14 @@ def tier2_mints(report: dict[str, Any]) -> list[dict[str, Any]]:
             f"TASK/THREAD DISAGREEMENT: Thread {tid[:8]} carries "
             f"property_status={thread_property_status!r}, disputed by "
             f"{len(citations)} citing task(s): {citing_desc}. task_sync never resolves "
-            f"this automatically (Tier 3) — needs a human/agent look."
+            f"this automatically (Tier 3); needs a human/agent look."
         )
         mints.append({"kind": "obligation", "summary": summary, "rows": citations})
     for o in report["thread_side_orphans"]:
         summary = (
             f"THREAD SIDE ORPHAN: Thread {o['thread_id'][:8]} carries kind=task but no "
             f"harness task cites it (task_sync dry run). Stale, or the harness lost track "
-            f"of it — task_sync never auto-closes an orphan, needs a human/agent look."
+            f"of it; task_sync never auto-closes an orphan, needs a human/agent look."
         )
         mints.append({"kind": "obligation", "summary": summary, "rows": [o]})
     return mints
@@ -424,7 +424,7 @@ async def mint_tier2_threads(
 # TaskGet already cross for reads. Routing through it sidesteps (b) entirely. Checked
 # directly against TaskUpdate's own tool contract: status is one of pending / in_progress /
 # completed / deleted, and deleted "permanently removes the task", its own words, not an
-# inference. THERE IS NO ARCHIVE VERB. The only way to make a completed row stop recurring
+# inference. THERE IS NO ARCHIVE OPERATION. The only way to make a completed row stop recurring
 # in every injection is to delete it forever; leaving it "completed" is the status quo this
 # whole lane exists to improve on. So the real choice was never "archive vs. leave it", it
 # is "delete it permanently vs. leave it", and an agent-triggered irreversible deletion of
@@ -442,7 +442,7 @@ async def mint_tier2_threads(
 # ask than this lane was ever authorized for, and the win it would buy is smaller than
 # believed when the lane opened. `archive_eligible_targets` stays as a pure, tested
 # function with no consumer, correct to keep (idle code costs nothing and the underlying
-# convergence logic may matter again if the harness ever grows a real archive verb), wrong
+# convergence logic may matter again if the harness ever grows a real archive operation), wrong
 # to wire to anything.
 #
 # THE DISAGREEMENT QUESTION ("which side wins") IS ANSWERED BY REFUSING IT: neither side
@@ -554,7 +554,7 @@ async def backfill_task_sync_citation_links(
     from src.orchestrator.capture import RefAmbiguous, _find_thread, derive_or_abstain
 
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair. Cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     rows = await pool.fetch(_TASK_SYNC_ORPHAN_SQL)

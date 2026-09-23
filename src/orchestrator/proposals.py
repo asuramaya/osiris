@@ -1,6 +1,6 @@
 """Miners as last resort: miners exist to clean up what nothing else caught, and if
 they aren't treated as a last resort they make a mess and leave the graph worse than
-they found it. Order of the graph's own self-healing: write-time laws refuse first,
+they found it. Order of the graph's own self-healing: write-time rules refuse first,
 mechanical sweeps (`derive_or_abstain`) derive-or-abstain second, and only what is left
 as a durable abstention is a miner's to look at. A miner never mints directly again: it
 proposes, and a human accepts or rejects.
@@ -10,17 +10,17 @@ in this kernel. `evidence_pointer` names the exact abstention it answers, `candi
 names the object/link it would create if accepted, `confidence` is capped at the
 derived tier (0.4) regardless of what the caller passes (a miner's own guess is never
 graded above what a mechanical sweep already earns), `owner` is resolved via the one
-owner law (`resolve_owner_seat`) at write time, unresolvable refuses the whole call,
+owner rule (`resolve_owner_seat`) at write time, unresolvable refuses the whole call,
 never mints an orphaned Proposal. `status` starts 'proposed'; `expires_at` is stamped
 once, mint_time + 14 days.
 
-The last-resort law: propose() refuses unless `evidence_pointer` names a
+The last-resort rule: propose() refuses unless `evidence_pointer` names a
 `from_id`/`link_type` pair whose current `derivation_abstained_<link_type>` property
 does not carry a `resolved` key. A successful mint supersedes a live abstention via
 `supersede_assertion`, writing `{"link_type", "resolved": True, "resolved_to": <id>}`
 as the new current value under the same name, so a resolved abstention is a settled
 question, not a genuine gap. This is the "may only propose against an existing
-abstention record" law, verbatim.
+abstention record" rule, verbatim.
 
 Invisible to orient/backlog/desk bands/every count, by omission: none of those
 surfaces' own queries allowlist 'Proposal', so a caller extending any of them to a new
@@ -44,15 +44,15 @@ linearly, `_NEW_PAIR_STARTER_BUDGET` for a pair with no resolved history yet (ne
 the full trust of a proven record nor the total silence of zero). A 7-day window with
 rejections but zero acceptances hard-stops the budget to zero regardless of the 30-day
 rate, a pair actively producing nothing but rejections right now doesn't get to coast
-on an old good record, and fires a receipt (a Thread, kind='fyi', owner=the Proposal
+on an old good record, and fires a notice (a Thread, kind='fyi', owner=the Proposal
 owner) naming the rejection count that triggered it. `open_thread`'s own
-idempotency-on-summary-hash is the dedup: the receipt's summary embeds the day, so it
+idempotency-on-summary-hash is the dedup: the notice's summary embeds the day, so it
 fires at most once per (miner, owner, day) without a second piece of state to track it.
 
 Telemetry: made/accepted/rejected/expired-in-effect per (miner, owner) lives in
 digest.py's own `_proposal_telemetry` (the per-project/per-seat summary convention
 `fleet_digest` already holds), not here. This module carries only
-`guarded_miner_tick`, the "a miner tick that raises writes a failure receipt first"
+`guarded_miner_tick`, the "a miner tick that raises writes a failure notice first"
 discipline a future miner's own periodic tick wraps itself in. Dollar cost is
 deliberately not re-derived per pair: digest.py's own `costs` stream already reads the
 measured vendor figure, and llm_usage carries no owner dimension to split it by pair.
@@ -108,7 +108,7 @@ def _validate_candidate(candidate: dict[str, Any]) -> str | None:
 async def _live_abstention_exists(
     pool: asyncpg.Pool, from_id: uuid.UUID, link_type: str,
 ) -> bool:
-    """The last-resort law's own precondition: the same predicate
+    """The last-resort rule's own precondition: the same predicate
     `backfill_lineage_repo_links` already runs (capture.py) to find a stale abstention
     still worth retiring: a current `derivation_abstained_<link_type>` property on
     `from_id` whose value carries no `resolved` key. A row that has a `resolved` key
@@ -203,31 +203,31 @@ async def propose(
 ) -> dict[str, Any]:
     """Mint a Proposal, never a real graph write. Refuses (nothing minted) when:
       (1) no live `derivation_abstained_<link_type>` property exists on `from_id`
-          (the last-resort law: a miner proposes only against an existing, unresolved
+          (the last-resort rule: a miner proposes only against an existing, unresolved
           abstention, never freehand);
       (2) `owner` does not resolve via `resolve_owner_seat` to an active Seat or the
-          literal 'operator' (the one owner law, applied here exactly as it is on
+          literal 'operator' (the one owner rule, applied here exactly as it is on
           every other durable object this house mints);
       (3) `candidate` is not one of the two legal shapes (`kind`: 'link' or 'object');
       (4) the (miner, owner) pair's own daily budget is spent (the throttle in
           `_throttle_status`, which scales with the pair's trailing 30-day acceptance
           rate, hard-stopped to zero on a 7-day window of rejections with no
-          acceptances, and also fires a receipt Thread to the owner naming why).
+          acceptances, and also fires a notice Thread to the owner naming why).
     `confidence` is capped at the derived tier (0.4) regardless of what's passed, since
     a miner's own guess is never graded above what a mechanical sweep already earns.
-    Returns `{"error": ...}` on any refusal, naming which law refused it; otherwise
+    Returns `{"error": ...}` on any refusal, naming which rule refused it; otherwise
     the minted Proposal's own canonical, status, and expiry."""
     if not await _live_abstention_exists(actions.pool, from_id, link_type):
         return {"error": f"no live (unresolved) derivation_abstained_{link_type} "
-                         f"property on {from_id} — a miner may only propose against "
-                         "an existing abstention, never freehand (the last-resort law)"}
+                         f"property on {from_id}: a miner may only propose against "
+                         "an existing abstention, never freehand (the last-resort rule)"}
     candidate_error = _validate_candidate(candidate)
     if candidate_error is not None:
         return {"error": candidate_error}
     resolved_owner = await resolve_owner_seat(actions.pool, owner)
     if resolved_owner is None:
         return {"error": f"owner {owner!r} does not resolve to an active seat or "
-                         "'operator' — a Proposal is never minted ownerless"}
+                         "'operator': a Proposal is never minted ownerless"}
     now = datetime.now(UTC)
     throttle = await _throttle_status(actions.pool, miner, resolved_owner)
     if throttle["throttled"]:
@@ -240,9 +240,9 @@ async def propose(
             f"{window_days} days with zero acceptances (as of {today})",
             kind="fyi", owner=resolved_owner, source=miner)
         return {"error": f"{miner} is throttled to zero proposals for {resolved_owner} "
-                         f"— {throttle['rejected_7d']} rejection(s) in the trailing "
-                         f"{window_days} days with zero acceptances "
-                         "(the last-resort budget's own hard stop); a receipt Thread "
+                         f"({throttle['rejected_7d']} rejection(s) in the trailing "
+                         f"{window_days} days with zero acceptances), "
+                         "the last-resort budget's own hard stop; a notice Thread "
                          "was opened for the owner"}
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     spent_today = await _proposals_made_since(actions.pool, miner, resolved_owner, day_start)
@@ -250,7 +250,7 @@ async def propose(
         return {"error": f"{miner}'s daily budget for {resolved_owner} is "
                          f"{throttle['budget']} and {spent_today} proposal(s) already "
                          "made today (trailing 30-day acceptance rate "
-                         f"{throttle['acceptance_rate']!r}) — try again tomorrow"}
+                         f"{throttle['acceptance_rate']!r}); try again tomorrow"}
     capped_confidence = min(confidence, _CONFIDENCE_CAP)
     expires_at = (now + timedelta(days=_EXPIRY_DAYS)).isoformat()
     canonical = f"proposal:{uuid.uuid4()}"
@@ -313,10 +313,10 @@ async def accept(
     if row is None:
         return {"error": f"no such Proposal: {proposal!r}"}
     if row["status"] != "proposed":
-        return {"error": f"{proposal} is {row['status']!r}, not 'proposed' — nothing "
+        return {"error": f"{proposal} is {row['status']!r}, not 'proposed': nothing "
                          "to accept"}
     if datetime.fromisoformat(row["expires_at"]) <= datetime.now(UTC):
-        return {"error": f"{proposal} expired at {row['expires_at']} — nothing to accept"}
+        return {"error": f"{proposal} expired at {row['expires_at']}: nothing to accept"}
     candidate = row["candidate"]
     now = datetime.now(UTC)
     conf = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -354,13 +354,13 @@ async def reject(
     where the same miner can read it on its own next tick, the signal the
     budget-throttle above reads. Refuses on anything but status='proposed'."""
     if not reason.strip():
-        return {"error": "reason is required — a rejection is testimony the miner "
+        return {"error": "reason is required: a rejection is testimony the miner "
                          "reads back, never a silent drop"}
     row = await _proposal_row(actions.pool, proposal)
     if row is None:
         return {"error": f"no such Proposal: {proposal!r}"}
     if row["status"] != "proposed":
-        return {"error": f"{proposal} is {row['status']!r}, not 'proposed' — nothing "
+        return {"error": f"{proposal} is {row['status']!r}, not 'proposed': nothing "
                          "to reject"}
     now = datetime.now(UTC)
     conf = confidence_for(EvidenceClass.SELF_DECLARED)
@@ -408,7 +408,7 @@ async def proposals_band(pool: asyncpg.Pool) -> dict[str, Any]:
 async def guarded_miner_tick(
     actions: Actions, miner: str, fn: Callable[[], Awaitable[Any]],
 ) -> Any:
-    """The tick discipline: a miner tick that raises writes a failure receipt first,
+    """The tick discipline: a miner tick that raises writes a failure notice first,
     before the exception is allowed to propagate or the tick is otherwise abandoned, so
     a crashed tick is a durable, queryable fact, never silent. Reuses
     `open_or_annotate_persisting_alarm` (capture.py) rather than a new alarm shape, the

@@ -1,4 +1,4 @@
-"""Backfill the missing provenance dimension on history (task #21).
+"""Backfill the missing provenance dimension on history.
 
 source_model, which Claude authored a write, is stamped at write time only on the
 session-miner path (`ingest/sessions.py`). A fleet agent that captures deliberately

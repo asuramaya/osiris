@@ -502,7 +502,7 @@ async def test_discover_trees_includes_a_project_with_no_activity_at_all(
     assert row["commits"] == 0
     assert row["activity"] == 0
     assert row["path"] is None
-    assert row["reason"] == "no on_disk_path registered — the disk census hasn't found it yet"
+    assert row["reason"] == "no on_disk_path registered: the disk census hasn't found it yet"
 
 
 async def test_discover_trees_reads_the_stored_path_never_guesses_one(
@@ -557,4 +557,4 @@ async def test_discover_trees_names_ticked_but_still_empty(actions: Actions) -> 
     assert row["commits"] == 0
     assert row["last_ingested_at"] is not None
     assert row["reason"] == (
-        "ingest has run and found nothing — the path may no longer be a git repo")
+        "ingest has run and found nothing: the path may no longer be a git repo")

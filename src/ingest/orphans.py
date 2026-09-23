@@ -13,8 +13,9 @@ If the live agent could settle its own session, osiris or a miner would not be n
 whole point of a separate reader is that it catches what the live agent forgets, and the live agent
 cannot audit itself for that same reason.
 
-A crashed session left NOBODY holding the context. There is no mind to ask what it forgot; the mind
-is gone. Only an outside reader can recover it, which is the entire thesis, in its purest form.
+A crashed session left NOBODY holding the context. There is no one left to ask what it forgot;
+that understanding is gone. Only an outside reader can recover it, which is the entire thesis,
+in its purest form.
 
 THIS IS NOT A CRAWL, AND THE DIFFERENCE IS THE WHOLE POINT:
 
@@ -41,10 +42,10 @@ import asyncpg
 
 from src.ingest.scope import scope_match, sense_scopes
 
-# A session is ENDED when its transcript has been still this long. Generous on purpose: a mind
-# heads-down for twenty minutes is ALIVE, measured directly after a day spent learning that the
-# hard way, and sweeping a live session would mine a conversation mid-thought, which is the
-# crawl's whole disease. We would rather be late than wrong.
+# A session is ENDED when its transcript has been still this long. Generous on purpose: an
+# agent heads-down for twenty minutes is ALIVE, measured directly after a day spent learning
+# that the hard way, and sweeping a live session would mine a conversation mid-thought, which is
+# the crawl's whole disease. We would rather be late than wrong.
 QUIET_SECS = 45 * 60
 
 # Per tick. The backlog is finite and shrinking by construction, so it does not have to be cleared

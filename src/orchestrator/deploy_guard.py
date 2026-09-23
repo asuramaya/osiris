@@ -15,12 +15,12 @@ as every other net in this codebase (mark_swept, sweep_route, the miner's own he
 
 THE REBOOT LEG: on 2026-07-28 09:17 CDT the machine slept and woke, and systemd brought
 osiris-mcp/worker/console up on whatever HEAD happened to be checked out. Three commits HELD
-for executive review went live with no review, no gates, no smoke, no receipt. `osiris
+for executive review went live with no review, no gates, no smoke, no record. `osiris
 deploy`'s own discipline (dirty-tree guard, migration gate, tool-delta narration) only runs
 inside `osiris deploy`; a raw service restart or a reboot bypasses all of it. Two candidate
 fixes were named: pin services to a deployed ref (a checkout/worktree `osiris deploy`
 advances), or a boot-time guard that confesses the gap. THIS LEG IS THE CONFESSION ONLY,
-cheap, ships first, never blocks. The ref-pin is a deliberate, un-closed SEAM: nothing here
+cheap, ships first, never blocks. The ref-pin is a deliberate, un-closed gap: nothing here
 prevents an unreviewed boot from serving, it only makes sure nobody can miss that it
 happened."""
 from __future__ import annotations
@@ -74,7 +74,7 @@ def schema_drift(
     revision at all, meaning some OTHER branch ran a migration against this shared database
     before merging, the shape that blocked a whole deploy on 2026-08-13). Defaulting an
     undeterminable `db_version_known` to the CALM reading, never the alarm, matches this
-    module's own fail-open law: a check that cannot tell direction must not manufacture the
+    module's own fail-open discipline: a check that cannot tell direction must not manufacture the
     scarier one."""
     if not db_version or not code_head:
         return None
@@ -82,14 +82,14 @@ def schema_drift(
         return None
     if db_version_known is False:
         return (f"DB_AHEAD_OF_TREE: DB is at revision {db_version!r}, which this tree's own "
-               f"migrations do not recognize — another branch likely ran `alembic upgrade`/"
-               f"`osiris migrate` against this shared database before merging (decision "
-               f"8d3f5e2d). Do NOT run `alembic upgrade head`; find and merge the branch "
+               f"migrations do not recognize, meaning another branch likely ran "
+               f"`alembic upgrade`/`osiris migrate` against this shared database before "
+               f"merging. Do NOT run `alembic upgrade head`; find and merge the branch "
                f"that owns revision {db_version!r}, or the divergence persists.")
     return (f"CODE_AHEAD_OF_DB: code expects migration head {code_head!r}, DB is at "
-           f"{db_version!r} — benign, the ordinary gap between a merge and the next "
+           f"{db_version!r}, benign, the ordinary gap between a merge and the next "
            "`alembic upgrade head` (already migrate-before-restart guarded on `osiris "
-           "deploy`, decision cda0866cba0a).")
+           "deploy`).")
 
 
 async def check_schema_drift(pool: asyncpg.Pool) -> str | None:
@@ -150,7 +150,7 @@ async def alarm_schema_drift(pool: asyncpg.Pool, drift: str, *, service: str) ->
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(
             pool, from_agent=f"system:{service}", from_project="osiris", to_project="operator",
-            body=f"{service} booted with a drifted schema — {drift}",
+            body=f"{service} booted with a drifted schema: {drift}",
             dedup_window_secs=86400,
         )
 
@@ -160,7 +160,7 @@ def _git_head(repo_root: Path) -> str | None:
     (that one takes a str path for a developer-persona sensor over arbitrary dev repos; this
     one is deploy_guard's own copy, scoped to a Path, so this module has no import-time
     dependency on `src.orchestrator.pulse`). None on any git failure, never raised:
-    deploy_guard's fail-open law applies here too."""
+    deploy_guard's fail-open discipline applies here too."""
     try:
         return subprocess.run(
             ["git", "-C", str(repo_root), "rev-parse", "HEAD"],
@@ -216,7 +216,7 @@ def diverged_since_last_deploy(
         return None
     return (f"HISTORY DIVERGED SINCE THE LAST DEPLOY: {last_deployed!r} (what `osiris "
             f"deploy` last recorded) is no longer an ancestor of the current HEAD "
-            f"{running_head!r} — this branch was rewritten, reset, or force-moved sideways, "
+            f"{running_head!r}. This branch was rewritten, reset, or force-moved sideways, "
             f"not just advanced. If nobody meant to rewrite history, find out who else "
             f"touched this ref before trusting this deploy.")
 
@@ -225,7 +225,7 @@ def _is_ancestor(repo_root: Path, older: str, newer: str) -> bool | None:
     """True/False from `git merge-base --is-ancestor <older> <newer>`, exit 0 means
     `older` IS an ancestor of `newer` (a normal fast-forward), exit 1 means it is NOT (a
     rewrite/reset/force-move). Any OTHER outcome, git missing, not a repo, either sha
-    unknown to this checkout (exit 128), is None, 'unknown', same fail-open law as every
+    unknown to this checkout (exit 128), is None, 'unknown', same fail-open discipline as every
     other check in this module: a check that cannot complete must never be read as a
     confident mismatch."""
     try:
@@ -244,7 +244,7 @@ def _is_ancestor(repo_root: Path, older: str, newer: str) -> bool | None:
 
 def _merge_parents(repo_root: Path, sha: str) -> list[str] | None:
     """A commit's own parent shas, oldest-recorded-first (`git log -1 --format=%P`), None
-    only on a git failure (fail open, same law as `_is_ancestor`), never mistaken for
+    only on a git failure (fail open, same discipline as `_is_ancestor`), never mistaken for
     'confirmed zero parents'. THE STRONGEST POSSIBLE PROOF a merge claim is genuine: a
     commit's parent list is written into its own sha at creation, and unlike a branch ref
     (which moves, gets reused, gets deleted) it cannot be rewritten
@@ -349,7 +349,7 @@ async def alarm_unreviewed_boot(
     await open_or_annotate_persisting_alarm(
         actions,
         f"UNREVIEWED BOOT: running HEAD {running_head!r} was never recorded by `osiris "
-        "deploy`. A service came up on code that never went through `osiris deploy` — "
+        "deploy`. A service came up on code that never went through `osiris deploy`, "
         "most likely a raw service restart or a machine reboot picking up the working "
         "tree as-is, bypassing the dirty-tree guard and migration gate. Nothing was "
         "blocked; review what's actually running before trusting it, then run `osiris "
@@ -365,7 +365,7 @@ async def alarm_unreviewed_boot(
     with contextlib.suppress(Exception):  # the desk being unreachable must not compound the alarm
         await send_message(
             pool, from_agent=f"system:{service}", from_project="osiris", to_project="operator",
-            body=f"{service} booted on an unreviewed ref — {drift}{src_note}. Review before "
+            body=f"{service} booted on an unreviewed ref: {drift}{src_note}. Review before "
                  "trusting it, then `osiris deploy` to re-sync the ledger.",
             dedup_window_secs=86400,
         )
@@ -405,7 +405,7 @@ async def check_and_alarm_unreviewed_boot(
         `running_head`-keyed dedup already handles the case where a ref that WAS already
         alarmed gets superseded (`resolve_alarms_superseded_by_clean_boot`).
 
-    Best-effort, not a strict distributed lock (same fail-open law as every check in this
+    Best-effort, not a strict distributed lock (same fail-open discipline as every check in this
     module), a narrow race between two services crossing the grace threshold in the same
     instant could in principle both see the pre-flip state and both alarm; a spurious
     extra brief is a strictly smaller cost than the 42-fold noise this exists to cure, so
@@ -448,7 +448,7 @@ async def check_and_alarm_unreviewed_boot(
 async def alarm_withheld_deploy_record(
     pool: asyncpg.Pool, *, running_head: str, reason: str,
 ) -> None:
-    """THE WITHHELD-RECORD CONFESSION (the house's own standing law: the ledger's default
+    """THE WITHHELD-RECORD CONFESSION (the house's own standing rule: the ledger's default
     failure is not rot, it is unrecorded completion). `cmd_deploy`'s halcyon gate
     (`_real_check_false_mint_live`) can CORRECTLY refuse to record a deploy; a live
     specimen proved the code was genuinely restarted, healthy, and serving while the
@@ -486,8 +486,8 @@ async def alarm_withheld_deploy_record(
     await open_or_annotate_persisting_alarm(
         actions,
         f"DEPLOY RECORD WITHHELD: HEAD {running_head!r} deployed successfully (restarted, "
-        "healthy, whisper-probed clean) but `osiris deploy` refused to record it in the "
-        f"ledger. Reason: {reason} The ledger's last recorded deploy is now stale — a "
+        "healthy, liveness-probed clean) but `osiris deploy` refused to record it in the "
+        f"ledger. Reason: {reason} The ledger's last recorded deploy is now stale, so a "
         "reader who trusts it alone will wrongly conclude this HEAD never shipped. It did. "
         "Reconcile the flagged anomaly, then either re-run `osiris deploy` (a no-op restart "
         "will still re-check and, once clean, record) or correct the watermark by hand so "
@@ -499,7 +499,7 @@ async def alarm_withheld_deploy_record(
         await send_message(
             pool, from_agent="system:osiris-deploy", from_project="osiris", to_project="operator",
             body=f"osiris deploy withheld its ledger record for HEAD {running_head} even "
-                 f"though the code deployed cleanly — {reason} The ledger is stale until "
+                 f"though the code deployed cleanly: {reason} The ledger is stale until "
                  "this is reconciled.",
             dedup_window_secs=86400,
         )
@@ -580,7 +580,7 @@ async def resolve_alarms_superseded_by_deploy(
     confession is stale. ANCESTRY, not equality or timestamp (measured live in the
     backlog's own dry run): time-ordering alone falsely marks a
     divergent-branch alarm as superseded; `_is_ancestor` is the only test that doesn't.
-    `dry_run=True` (hard default, same law as `resolve_threads_bulk`): previews {resolved:
+    `dry_run=True` (hard default, same discipline as `resolve_threads_bulk`): previews {resolved:
     [...], kept_open: [...]} and writes nothing; pass `dry_run=False` to actually close.
     Fail-open past this function's own boundary, a single bad row is skipped, logged, never
     raised, but WITHIN it, closes are exact: no thread is touched without a proven ancestry
@@ -593,7 +593,7 @@ async def resolve_alarms_superseded_by_deploy(
     failed: list[str] = []
     try:
         rows = await _open_boot_alarms(pool)
-    except Exception as exc:  # noqa: BLE001, same fail-open law as every check in this module
+    except Exception as exc:  # noqa: BLE001, same fail-open rule as every check in this module
         _log.warning("resolve_alarms_superseded_by_deploy: could not enumerate alarms: %r", exc)
         return {"dry_run": dry_run, "resolved": resolved, "kept_open": kept_open,
                 "failed": failed}
@@ -670,7 +670,7 @@ async def resolve_alarms_superseded_by_clean_boot(
     failed: list[str] = []
     try:
         rows = await _open_boot_alarms(pool, actor=f"boot:{service}")
-    except Exception as exc:  # noqa: BLE001, same fail-open law as every check in this module
+    except Exception as exc:  # noqa: BLE001, same fail-open rule as every check in this module
         _log.warning("resolve_alarms_superseded_by_clean_boot: could not enumerate for %s: %r",
                      service, exc)
         return {"dry_run": dry_run, "resolved": resolved, "failed": failed}
@@ -716,7 +716,7 @@ async def check_and_resolve_clean_boot(
     `resolve_alarms_superseded_by_clean_boot` when both are known AND equal, 'unknown' or
     'still drifted' must never resolve anything. `dry_run=False` default (unlike its two
     building blocks) because this IS the production call site; a caller wanting a preview
-    passes `dry_run=True` explicitly. Fail-open, same law as `check_unreviewed_boot`."""
+    passes `dry_run=True` explicitly. Fail-open, same discipline as `check_unreviewed_boot`."""
     try:
         from src.orchestrator.monitor import get_cursor
 
@@ -726,7 +726,7 @@ async def check_and_resolve_clean_boot(
             return {"dry_run": dry_run, "resolved": [], "reason": "not a confirmed clean boot"}
         return await resolve_alarms_superseded_by_clean_boot(
             pool, service=service, running_head=running, dry_run=dry_run)
-    except Exception as exc:  # noqa: BLE001, same fail-open law as check_unreviewed_boot
+    except Exception as exc:  # noqa: BLE001, same fail-open discipline as check_unreviewed_boot
         _log.warning("check_and_resolve_clean_boot failed for %s: %r", service, exc)
         return {"dry_run": dry_run, "resolved": [], "reason": f"check failed: {exc!r}"}
 
@@ -750,7 +750,7 @@ async def resolve_schema_drift_alarms_on_clean_check(
     pool: asyncpg.Pool, *, service: str, dry_run: bool = False,
 ) -> dict[str, Any]:
     """SCHEMA DRIFT'S OWN SUPERSESSION RULE (a deliberate, explicit amendment of the
-    earlier house law that this alarm never auto-resolves): a
+    earlier house rule that this alarm never auto-resolves): a
     LATER boot-time check of the SAME SERVICE reporting NO drift (migration head now
     matches) is itself the ground truth that supersedes every older still-open SCHEMA DRIFT
     alarm that service minted, the gap it confessed has since closed, whether by an
@@ -758,7 +758,7 @@ async def resolve_schema_drift_alarms_on_clean_check(
     itself (same IO `check_schema_drift` already does) rather than trusting a caller-passed
     verdict, so a stale caller-side read can never wrongly resolve a still-live drift.
     `dry_run=False` default, same shape as `check_and_resolve_clean_boot`, this IS the
-    production call site. Fail-open, same law as every check in this module; per-row
+    production call site. Fail-open, same discipline as every check in this module; per-row
     failures are caught individually so one bad row cannot truncate the rest."""
     try:
         drift = await check_schema_drift(pool)
@@ -766,7 +766,7 @@ async def resolve_schema_drift_alarms_on_clean_check(
             return {"dry_run": dry_run, "resolved": [], "failed": [],
                     "reason": "still drifted, nothing to resolve"}
         rows = await _open_schema_drift_alarms(pool, service=service)
-    except Exception as exc:  # noqa: BLE001, same fail-open law as check_schema_drift
+    except Exception as exc:  # noqa: BLE001, same fail-open discipline as check_schema_drift
         _log.warning("resolve_schema_drift_alarms_on_clean_check failed for %s: %r",
                      service, exc)
         return {"dry_run": dry_run, "resolved": [], "failed": [],
@@ -816,7 +816,7 @@ async def origin_visibility(repo_root: Path) -> str:
     TWO INDEPENDENT READS, deliberately not one: `git ls-remote --heads origin` names
     every reachable branch, the actual blast radius of whatever has already been pushed,
     not what any seat MEANT to push. GitHub's own unauthenticated repos API confesses
-    `private` directly; `ls-remote` alone cannot answer "can a stranger see this" because
+    `private` directly; `ls-remote` alone cannot answer "can an outsider see this" because
     it succeeds identically whether the repo is public or merely one we hold credentials
     for. READ-ONLY BY CONSTRUCTION: no fetch, no clone, no write, a bare listing of what
     the network already advertises."""
@@ -830,7 +830,7 @@ async def origin_visibility(repo_root: Path) -> str:
         subprocess.run, ["git", "ls-remote", "--heads", "origin"], cwd=repo_root,
         capture_output=True, text=True, timeout=15, check=False)
     if ls.returncode != 0:
-        return (f"origin: ls-remote failed ({ls.stderr.strip()[:200]!r}) — "
+        return (f"origin: ls-remote failed ({ls.stderr.strip()[:200]!r}), "
                 "branches/visibility UNKNOWN, not assumed clean")
     branches = sorted(
         line.split("refs/heads/", 1)[1] for line in ls.stdout.splitlines()
@@ -852,7 +852,7 @@ async def origin_visibility(repo_root: Path) -> str:
         except Exception as exc:  # noqa: BLE001, an unreachable check is UNKNOWN, never a silent PRIVATE
             visibility = f"unknown ({exc})"
 
-    names = f" — {', '.join(branches)}" if branches else ""
+    names = f": {', '.join(branches)}" if branches else ""
     return f"origin: {visibility}, {len(branches)} branch(es) reachable{names}"
 
 
@@ -889,7 +889,7 @@ async def local_ref_hygiene(repo_root: Path) -> str:
         subprocess.run, ["git", "for-each-ref", "--format=%(refname)"], cwd=repo_root,
         capture_output=True, text=True, timeout=15, check=False)
     if all_refs.returncode != 0:
-        return (f"ref hygiene: for-each-ref failed ({all_refs.stderr.strip()[:200]!r}) — "
+        return (f"ref hygiene: for-each-ref failed ({all_refs.stderr.strip()[:200]!r}), "
                 "UNKNOWN, not assumed clean")
     refs = [line for line in all_refs.stdout.splitlines() if line]
     _ordinary = ("refs/heads/", "refs/tags/", "refs/remotes/")
@@ -914,7 +914,7 @@ async def local_ref_hygiene(repo_root: Path) -> str:
             extra = n_all - n_intended
             counts_note = (
                 f"{n_all} commits reachable from ALL local refs, {n_intended} from "
-                f"heads+tags+remotes — {extra} extra reachable only via a stray ref"
+                f"heads+tags+remotes, {extra} extra reachable only via a stray ref"
                 if extra else f"{n_all} commits reachable, all of it via heads+tags+remotes")
 
     stray_note = (f"{len(stray)} ref(s) outside refs/heads|tags|remotes: {', '.join(stray)}"
@@ -979,20 +979,20 @@ async def venv_import_hygiene(repo_root: Path) -> str:
     try:
         resolved_src_root = await asyncio.to_thread(_resolve_imported_src_root)
     except Exception as exc:  # noqa: BLE001, an import failure is UNKNOWN, never a refusal
-        return (f"venv import: could not import `src` to check ({exc!r}) — unknown, "
+        return (f"venv import: could not import `src` to check ({exc!r}), unknown, "
                 "not assumed clean")
 
     try:
         resolved_repo_root = await asyncio.to_thread(_resolve_path, repo_root)
     except OSError as exc:
-        return f"venv import: could not resolve repo_root ({exc!r}) — unknown, not assumed clean"
+        return f"venv import: could not resolve repo_root ({exc!r}), unknown, not assumed clean"
 
     if resolved_src_root == resolved_repo_root:
-        return (f"venv import: clean — `src` resolves inside the deploying tree "
+        return (f"venv import: clean, `src` resolves inside the deploying tree "
                 f"({resolved_src_root})")
     return (f"venv import: ⚠ `src` resolves to {resolved_src_root}, NOT the deploying tree "
-            f"{resolved_repo_root} — the venv's editable-install pointer names a different "
-            "checkout (the exact shape of the Imhotep-worktree specimen, decision 6fc0c082); "
+            f"{resolved_repo_root}. The venv's editable-install pointer names a different "
+            "checkout (the same shape as a prior cross-worktree venv-drift incident); "
             "every daemon sharing this venv is running THAT tree's code, not this one's")
 
 
@@ -1032,7 +1032,7 @@ async def _verify_one_merge_claim(
     parents = await asyncio.to_thread(_merge_parents, repo_root, sha)
     if parents is not None and len(parents) < 2:
         return (f"{sha[:8]} ⚠ subject claims a merge of {branch!r} but this commit has "
-                f"only {len(parents)} parent(s) — not a real merge, the fd3a703 shape "
+                f"only {len(parents)} parent(s), not a real merge, the fd3a703 shape "
                 "confirmed structurally (needs no branch or cited sha to prove)")
     second_parent = parents[1] if parents else None
 
@@ -1051,12 +1051,12 @@ async def _verify_one_merge_claim(
         cwd=repo_root, capture_output=True, text=True, timeout=5, check=False)
     if exists.returncode != 0:
         if second_parent is not None:
-            return (f"{sha[:8]} names {branch!r} (branch no longer exists locally) — the "
+            return (f"{sha[:8]} names {branch!r} (branch no longer exists locally), the "
                     f"merge itself is structurally real (2 parents, incorporated "
                     f"{second_parent[:8]}); the NAME can't be confirmed without the branch "
-                    "or a cited sha, but this is not the fd3a703 shape either — "
+                    "or a cited sha, but this is not the fd3a703 shape either, "
                     "unverifiable, not assumed false")
-        return (f"{sha[:8]} names {branch!r} but that branch no longer exists locally — "
+        return (f"{sha[:8]} names {branch!r} but that branch no longer exists locally, "
                 "unverifiable, not assumed false")
     old_proof = await asyncio.to_thread(_is_ancestor, repo_root, branch, sha)
     new_proof = (await asyncio.to_thread(_is_ancestor, repo_root, second_parent, branch)
@@ -1067,15 +1067,15 @@ async def _verify_one_merge_claim(
         else:
             assert second_parent is not None  # new_proof is only ever True when it was set
             basis = f"a descendant of what this merge actually incorporated ({second_parent[:8]})"
-        return f"{sha[:8]} {branch!r} verified — its current tip is {basis}"
+        return f"{sha[:8]} {branch!r} verified: its current tip is {basis}"
     if old_proof is False and new_proof is False:
         assert second_parent is not None  # new_proof is only ever False when it was set
         return (f"{sha[:8]} ⚠ names {branch!r} but its current tip is neither an ancestor "
                 f"of the merge nor a descendant of what it actually incorporated "
-                f"({second_parent[:8]}) — a genuine mismatch")
+                f"({second_parent[:8]}), a genuine mismatch")
     if old_proof is False and new_proof is None:
         return f"{sha[:8]} ⚠ names {branch!r} but it is NOT an ancestor"
-    return f"{sha[:8]} names {branch!r} — ancestry check inconclusive, unknown, not assumed"
+    return f"{sha[:8]} names {branch!r}: ancestry check inconclusive, unknown, not assumed"
 
 
 async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> str:
@@ -1147,26 +1147,26 @@ async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> s
             cwd=repo_root, capture_output=True, text=True, timeout=15, check=False)
         if log.returncode != 0:
             return (f"merge claim: could not walk {since[:8]}..{head_sha[:8]} "
-                    f"({log.stderr.strip()[:150]!r}) — unknown, not assumed clean")
+                    f"({log.stderr.strip()[:150]!r}), unknown, not assumed clean")
         commits = [line.split("\x1f", 1) for line in log.stdout.splitlines() if line]
         claims = [(sha, m.group(1), m.group(2)) for sha, subj in commits
                  if (m := _MERGE_SUBJECT_BRANCH.match(subj))]
         if not claims:
             return (f"merge claim: {len(commits)} commit(s) since last deploy "
-                    f"({since[:8]}..{head_sha[:8]}) — none matched the expected `merge "
+                    f"({since[:8]}..{head_sha[:8]}), none matched the expected `merge "
                     "<branch>` subject shape (CONFESSION, not a clean bill: this could be "
                     "genuinely merge-free history, or a convention this parser can no "
-                    "longer recognize — the exact gap the case-sensitivity drift left open "
+                    "longer recognize, the exact gap the case-sensitivity drift left open "
                     "before 2026-09-01)")
         results = [await _verify_one_merge_claim(repo_root, sha, branch, cited)
                   for sha, branch, cited in claims]
         failed = [r for r in results if "⚠" in r]
         if failed:
             return (f"merge claim: {len(claims)} merge claim(s) since last deploy "
-                    f"({since[:8]}..{head_sha[:8]}) — ⚠ {len(failed)} FAILED: "
+                    f"({since[:8]}..{head_sha[:8]}), ⚠ {len(failed)} FAILED: "
                     + "; ".join(failed))
         return (f"merge claim: {len(claims)} merge claim(s) since last deploy "
-                f"({since[:8]}..{head_sha[:8]}) — " + "; ".join(results))
+                f"({since[:8]}..{head_sha[:8]}): " + "; ".join(results))
 
     # No usable `since` (no prior deploy recorded, or the caller has no better answer):
     # the original HEAD-only check, now sharing `_verify_one_merge_claim` with the ranged
@@ -1180,7 +1180,7 @@ async def merge_claim_hygiene(repo_root: Path, *, since: str | None = None) -> s
         return (f"merge claim: HEAD's subject ({subject[:80]!r}) did not match the expected "
                 "`merge <branch>` shape (CONFESSION, not a clean bill: this could be a "
                 "genuinely non-merge HEAD, or a convention this parser can no longer "
-                "recognize) — nothing checked")
+                "recognize), nothing checked")
     branch, cited = match.group(1), match.group(2)
     result = await _verify_one_merge_claim(repo_root, head_sha, branch, cited)
     # every _verify_one_merge_claim return starts "{sha[:8]} " (8 hex chars, one space);
@@ -1337,7 +1337,7 @@ async def landing_audit(actions: Actions, repo_root: Path) -> dict[str, Any]:
         # STABLE TEXT, OR THE IDEMPOTENCY ABOVE IS A LIE (operator 2026-09-06: 70 open
         # threads for six branches, one per hourly run, the old summary embedded
         # `~{age}h`, so every run read as a new specimen and open_thread's own dedup on the
-        # summary never fired). The age stays in this function's receipt, never in the key.
+        # summary never fired). The age stays in this function's summary text, never in the key.
         summary = (f"LANDING AUDIT: branch {s['branch']!r} has sat unmerged into main for "
                   "longer than the 48h stale window with no open held-work claim naming it")
         with contextlib.suppress(Exception):

@@ -53,7 +53,7 @@ _MODEL_EVENT_TYPES = frozenset({"request/header", "request/context"})
 # Turn-level events (not system/streaming noise)
 _TURN_MSG_TYPES = frozenset({"user/message", "assistant/message"})
 
-# System-reminder regex (neo's, task #34)
+# System-reminder regex
 _REMINDER_RE = re.compile(
     r"<system-reminder>.*?</system-reminder>", re.IGNORECASE | re.DOTALL
 )

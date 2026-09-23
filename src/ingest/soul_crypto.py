@@ -68,13 +68,13 @@ refuses in user scope ("Selected key not available in --uid= scoped mode, refusi
       enrolled path loses the data).
 
 There is no OS-keyring branch (amended off the original design): the original
-env-override -> OS-keyring -> file ladder mirrored
+env-override -> OS-keyring -> file resolution order mirrored
 `src.connectors.leases.get_lease_key`, but a closer read of that branch found it
 non-deterministic under systemd: a login session with D-Bus still live would silently
 mint the key into the OS keyring instead of the file, invisible to the file-reading
 worker, and would re-mint a second key (a second disclosure) the next time something hit
 the file branch instead. It was dropped entirely: `OSIRIS_SOUL_KEY` env override always
-wins (tests, emergency operator override), then the resolution ladder above, nothing
+wins (tests, emergency operator override), then the resolution order above, nothing
 else.
 
 `get_soul_key`/`get_soul_fernet` never generate. A missing key is a hard, named refusal
@@ -86,10 +86,10 @@ mint a key, both routing through `_generate_key`; whether either discloses it as
 printed recovery secret is the caller's own `print_recovery` choice, never automatic.
 
 `scope`: both key functions accept a `scope` parameter that the operator is weighing
-widening later (per-tenant keys, one store becoming several), a seam at this one lookup
-point rather than every call site, so a future change never touches soul_store.py's own
-encrypt/decrypt call sites. Today there is exactly one store and `scope` does not vary
-the lookup at all.
+widening later (per-tenant keys, one store becoming several), a single extension point
+at this lookup rather than every call site, so a future change never touches
+soul_store.py's own encrypt/decrypt call sites. Today there is exactly one store and
+`scope` does not vary the lookup at all.
 """
 from __future__ import annotations
 
@@ -144,7 +144,7 @@ def is_encrypted(raw: bytes) -> bool:
     still a real, named break (wrong or rotated-out key, or corruption): this only
     ever widens what counts as 'not encrypted', never what counts as 'a genuine
     decryption failure'. This check can retire as a follow-up once a migration
-    receipt reports zero legacy rows remaining across every deployment."""
+    report shows zero legacy rows remaining across every deployment."""
     return raw.startswith(_FERNET_TOKEN_PREFIX)
 
 
@@ -179,7 +179,7 @@ def _installed_user_unit_env_value(env_name: str) -> str | None:
 
 
 def _key_file_path(*, explicit: str | None = None) -> Path:
-    """Resolution ladder for the key path: an explicit `--path` always wins; else
+    """Resolution order for the key path: an explicit `--path` always wins; else
     `OSIRIS_SOUL_KEY_FILE` if the calling process already has it (a running
     daemon's own env, or an operator who exported it by hand); else, for an
     unprivileged caller, the path an installed --user unit actually uses
@@ -226,7 +226,7 @@ def _credential_path(key_path: Path, *, explicit: bool = False) -> Path:
     documented override for a non-standard layout (a test, a scratch
     directory) that was never going through `ImportCredential=` anyway.
 
-    Strictly one or the other, never both checked: the same single-ladder
+    Strictly one or the other, never both checked: the same single-resolution
     discipline `_key_file_path` itself already holds for the logical name.
     Every caller here threads `explicit=path is not None` off its own `path=`
     parameter, so two calls that pass the same `path=` (or both omit it)
@@ -291,10 +291,10 @@ def read_key_bytes_at(resolved: Path, *, explicit: bool = False) -> bytes:
     explicit=explicit)`, decrypted, when it exists; the legacy plaintext file at
     `resolved` itself otherwise. For a caller (`src.orchestrator.soul_key`'s own
     status census) that already has an explicit resolved path in hand and needs
-    its real bytes, `get_soul_key()`'s own env-first resolution ladder is the
+    its real bytes, `get_soul_key()`'s own env-first resolution order is the
     wrong tool here: it ignores any `path=` a caller resolved by hand. `explicit`
     must match whatever `path=` the caller's own resolution used to arrive at
-    `resolved` (`path is not None`), the same single-ladder discipline
+    `resolved` (`path is not None`), the same single-resolution discipline
     `_credential_path` itself holds, never both locations checked. Raises
     `FileNotFoundError` if neither exists; callers that already called
     `soul_key_status` first (checking `present`) never hit that."""
@@ -321,10 +321,10 @@ def read_legacy_key_bytes(resolved: Path) -> bytes:
 
 def _init_command_hint(path: Path) -> str:
     return (
-        f"no soul-store encryption key found at {path} (and OSIRIS_SOUL_KEY is unset) — "
+        f"no soul-store encryption key found at {path} (and OSIRIS_SOUL_KEY is unset). "
         "run `osiris soul-key init` ONCE, in your own terminal, as whichever user the "
         f"worker/MCP service actually runs as (the {_SERVICE_USER!r} account for the "
-        "system-unit deploy shape, or your own login user for a systemd --user deploy — "
+        "system-unit deploy shape, or your own login user for a systemd --user deploy, "
         "the shape osiris-worker/osiris-mcp use today), before starting either unit; "
         "or, running as root for the system-unit shape, with --owner <that user> to "
         "chown the key into place")
@@ -343,7 +343,7 @@ def _deploy_note(path: Path) -> str:
     if os.getuid() == 0:
         if str(path) == _DEFAULT_KEY_FILE:
             return (
-                "this is already the default path — no env change needed for a "
+                "this is already the default path, no env change needed for a "
                 "system-unit deploy (deploy/osiris-worker.service/osiris-mcp.service "
                 "already assume it); restart both units to pick up the new key")
         return (
@@ -353,7 +353,7 @@ def _deploy_note(path: Path) -> str:
     if _installed_user_unit_env_value("OSIRIS_SOUL_KEY_FILE") == str(path):
         return (
             "this already matches the installed osiris-mcp/osiris-worker --user "
-            "unit(s) own OSIRIS_SOUL_KEY_FILE — no env change needed; restart both "
+            "unit(s) own OSIRIS_SOUL_KEY_FILE, no env change needed; restart both "
             "(`systemctl --user restart osiris-mcp osiris-worker`) to pick up the "
             "new key")
     return (
@@ -380,9 +380,9 @@ def _disclose_recovery_secret(key: bytes, where: str) -> None:
     A crash between this print and the persist step still leaves the operator
     holding the only copy that matters, never the reverse."""
     print(
-        "osiris soul-store encryption key GENERATED — THIS IS THE ONLY TIME THIS KEY "
-        f"PRINTS (persisting to {where}). Copy it now to OFFLINE custody — a password "
-        "manager entry, a printed copy — kept OUTSIDE this box and OUTSIDE any backup "
+        "osiris soul-store encryption key GENERATED. THIS IS THE ONLY TIME THIS KEY "
+        f"PRINTS (persisting to {where}). Copy it now to OFFLINE custody, a password "
+        "manager entry, a printed copy, kept OUTSIDE this box and OUTSIDE any backup "
         "target (a backed-up copy sitting next to the ciphertext it protects defeats "
         "the whole point). Losing BOTH this printed copy and the live file makes every "
         "stored transcript permanently, irrecoverably unreadable.\n"
@@ -390,7 +390,7 @@ def _disclose_recovery_secret(key: bytes, where: str) -> None:
         flush=True)
 
 
-def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 (the lookup seam, see module docstring)
+def get_soul_key(scope: str = "default") -> bytes:  # noqa: ARG001 (extension point, see docstring)
     """Resolve the primary Fernet key. Never generates; raises `SoulKeyMissing`
     (naming the exact `soul-key init` command) when nothing below resolves.
 
@@ -512,18 +512,18 @@ def soul_key_init(
     opt-in; the new default recovery path is `soul_key_enroll_recovery`
     (FIDO2), run as a separate, deliberate second step.
 
-    `path=` overrides `_key_file_path`'s own resolution ladder entirely: the
+    `path=` overrides `_key_file_path`'s own resolution order entirely: the
     escape hatch for a genuinely unusual layout. Every ordinary caller leaves
     it None and gets the same path an installed --user unit already uses,
     resolved without exporting anything."""
     resolved = _key_file_path(explicit=path)
     if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
-        return {"error": f"a key already exists at {resolved} — soul-key init never "
+        return {"error": f"a key already exists at {resolved}. soul-key init never "
                          "overwrites an existing key in place; `osiris soul-key "
-                         "rotate` is the door for replacing a live key"}
+                         "rotate` is the command for replacing a live key"}
     current_user = getpass.getuser()
     if os.getuid() == 0 and owner is None:
-        return {"error": "refusing — running as root with no --owner given. Root has no "
+        return {"error": "refusing: running as root with no --owner given. Root has no "
                          "natural owner for the key file: pass --owner <user>, naming "
                          "whichever user the worker/MCP service actually runs as (the "
                          f"{_SERVICE_USER!r} account for the system-unit deploy shape, "
@@ -606,10 +606,10 @@ def soul_key_status(*, path: str | None = None) -> dict[str, Any]:
         "rotation_in_flight": _legacy_key_file_path(resolved).exists(),
         "recovery_paths_enrolled": recovery_paths,
         "recovery_warning": (
-            "0 recovery paths enrolled — losing this key's own live file/credential "
+            "0 recovery paths enrolled: losing this key's own live file/credential "
             "makes every stored transcript permanently unreadable; run `osiris "
             "soul-key enroll-recovery`" if not recovery_paths else
-            "only 1 recovery path enrolled — a second FIDO2 key, or a printed copy "
+            "only 1 recovery path enrolled: a second FIDO2 key, or a printed copy "
             "via `soul-key rotate --print-recovery`, is recommended"
             if len(recovery_paths) <= 1 else None),
     }
@@ -643,22 +643,22 @@ def soul_key_rotate_begin(
     resolved = _key_file_path(explicit=path)
     status = soul_key_status(path=path)
     if not status["present"]:
-        return {"error": f"no key exists at {resolved} yet — `osiris soul-key init` "
+        return {"error": f"no key exists at {resolved} yet. `osiris soul-key init` "
                          "first, there is nothing to rotate away from"}
     legacy_path = _legacy_key_file_path(resolved)
     if legacy_path.exists():
-        return {"error": f"a rotation is already in flight ({legacy_path} exists) — "
+        return {"error": f"a rotation is already in flight ({legacy_path} exists). "
                          "re-run `osiris soul-key rotate` to continue re-wrapping "
                          "rows onto the key already generated, or `--finish` once "
-                         "the receipt reports zero rows remain under the old key"}
+                         "the report shows zero rows remain under the old key"}
     old_backend = status["backend"]
     old_carrier = (
         resolved if old_backend == "file"
         else _credential_path(resolved, explicit=path is not None))
     if not old_carrier.exists():
         return {"error": f"the primary key at {resolved} is not backed by a file this "
-                         "door can rotate (OSIRIS_SOUL_KEY set to a bare value with no "
-                         "file behind it?) — rotate that key by hand"}
+                         "command can rotate (OSIRIS_SOUL_KEY set to a bare value with "
+                         "no file behind it?). rotate that key by hand"}
     # Decoded from `old_carrier_bytes` itself (systemd-creds blob or plaintext,
     # whichever `old_backend` actually is), not get_soul_key(), which ignores
     # this function's own `path=`/`explicit=` entirely and would silently
@@ -691,27 +691,27 @@ def soul_key_rotate_begin(
         "systemd_note": (
             "restart osiris-mcp and osiris-worker now to pick up the new primary "
             "key. Any row either daemon writes BEFORE its own restart still "
-            "encrypts under the OLD key in its own cached process memory — safe "
+            "encrypts under the OLD key in its own cached process memory, safe "
             "(the old key stays valid to decrypt until `--finish`), but re-run "
             "`osiris soul-key rotate` (idempotent) after both have restarted to "
             "sweep those rows onto the new key too, before `--finish`. If you "
             "enrolled FIDO2 recovery, re-run `osiris soul-key enroll-recovery` "
-            "too — the old recovery blob still wraps the OLD key."),
+            "too: the old recovery blob still wraps the OLD key."),
     }
 
 
 def soul_key_rotate_finish(*, path: str | None = None) -> dict[str, Any]:
     """Step 2 of 2: removes the `.legacy` key (and its own meta sidecar, if any)
     once the caller has already confirmed (via `soul_store.
-    rewrap_soul_lines_key`'s own dry-run receipt) that zero rows remain
+    rewrap_soul_lines_key`'s own dry-run report) that zero rows remain
     encrypted under it. This function itself does not re-check the row count
     (pool-free by design, see module docstring); `cmd_soul_key` refuses to call
-    this at all until that receipt is clean. Refuses if no rotation is in
+    this at all until that report is clean. Refuses if no rotation is in
     flight (nothing to finish)."""
     resolved = _key_file_path(explicit=path)
     legacy_path = _legacy_key_file_path(resolved)
     if not legacy_path.exists():
-        return {"error": f"no rotation in flight — {legacy_path} does not exist, "
+        return {"error": f"no rotation in flight: {legacy_path} does not exist, "
                          "nothing to finish"}
     legacy_path.unlink()
     legacy_meta_path = _meta_path(legacy_path)
@@ -720,7 +720,7 @@ def soul_key_rotate_finish(*, path: str | None = None) -> dict[str, Any]:
     return {
         "path": str(resolved),
         "note": "old key removed. OSIRIS_SOUL_KEY_LEGACY (if you had exported it "
-                "anywhere) is no longer needed — the old key is gone, and can never "
+                "anywhere) is no longer needed: the old key is gone, and can never "
                 "decrypt anything again.",
     }
 
@@ -762,7 +762,7 @@ def _find_fido2_device() -> Any | None:
 def _cli_user_interaction() -> Any:
     """The CLI's own `fido2.client.UserInteraction`: prints what's needed before
     blocking on the physical touch, and reads the PIN from the terminal (never
-    logged, never returned in any receipt). Subclasses the real
+    logged, never returned in any result). Subclasses the real
     `fido2.client.UserInteraction` at call time (never at import time, since this
     module must import with no `fido2` installed at all, matching soul_crypto's
     own pool-free/dependency-light design everywhere else) so `Fido2Client`'s own
@@ -834,16 +834,16 @@ def soul_key_enroll_recovery(
     resolved = _key_file_path(explicit=path)
     status = soul_key_status(path=path)
     if not status["present"]:
-        return {"error": f"no key exists at {resolved} yet — `osiris soul-key init` "
+        return {"error": f"no key exists at {resolved} yet. `osiris soul-key init` "
                          "first, there is nothing to enroll recovery for"}
     recovery_path = _recovery_path(resolved)
     if recovery_path.exists():
-        return {"error": f"a recovery enrollment already exists at {recovery_path} — "
+        return {"error": f"a recovery enrollment already exists at {recovery_path}. "
                          "this refuses to overwrite it silently; remove it by hand "
                          "first if you genuinely mean to re-enroll a different key"}
     device = _find_fido2_device()
     if device is None:
-        return {"error": "no FIDO2 security key detected — plug it in and try again"}
+        return {"error": "no FIDO2 security key detected, plug it in and try again"}
     # read_key_bytes_at, not get_soul_key(): the latter ignores this function's
     # own `path=`/`explicit=` entirely and ignores an explicit path, the same
     # defect class caught in soul_key_rotate_begin while this function was built.
@@ -901,7 +901,7 @@ def _enroll_and_wrap(device: Any, raw_key: bytes, *, rp_id: str) -> dict[str, An
     salt = _os.urandom(_PRF_SALT_LEN)
     prf_output = _prf_eval(client, credential_id, salt, rp_id=rp_id)
     if prf_output is None:
-        return {"error": "this Security Key did not return a PRF/hmac-secret output — "
+        return {"error": "this Security Key did not return a PRF/hmac-secret output, "
                          "it may not support the extension (needs FIDO2, not U2F-only)"}
     wrap_fernet = _hkdf_wrap_key(prf_output)
     wrapped_key = wrap_fernet.encrypt(raw_key)
@@ -970,9 +970,9 @@ def soul_key_recover(
     have a live key and just want a new one)."""
     resolved = _key_file_path(explicit=path)
     if resolved.exists() or _credential_path(resolved, explicit=path is not None).exists():
-        return {"error": f"a key already exists at {resolved} — soul-key recover is "
+        return {"error": f"a key already exists at {resolved}. soul-key recover is "
                          "for restoring onto a box with NO live key; `osiris soul-key "
-                         "rotate` is the door once you already have one"}
+                         "rotate` is the command once you already have one"}
     recovery_path = _recovery_path(resolved)
     if not recovery_path.exists():
         return {"error": f"no recovery enrollment found at {recovery_path}"}
@@ -983,7 +983,7 @@ def soul_key_recover(
     effective_rp_id = blob.get("rp_id") or rp_id
     device = _find_fido2_device()
     if device is None:
-        return {"error": "no FIDO2 security key detected — plug in the SAME key you "
+        return {"error": "no FIDO2 security key detected, plug in the SAME key you "
                          "enrolled recovery with, and try again"}
     client = _fido2_client(device, rp_id=effective_rp_id)
     credential_id = base64.urlsafe_b64decode(blob["credential_id"])
@@ -994,17 +994,17 @@ def soul_key_recover(
         raise SoulKeyRecoveryError(f"FIDO2 recovery failed: {exc}") from exc
     if prf_output is None:
         return {"error": "this Security Key did not return a PRF/hmac-secret output "
-                         "for the enrolled credential — wrong key plugged in?"}
+                         "for the enrolled credential, wrong key plugged in?"}
     wrap_fernet = _hkdf_wrap_key(prf_output)
     wrapped_key = base64.urlsafe_b64decode(blob["wrapped_key"])
     try:
         raw_key = wrap_fernet.decrypt(wrapped_key)
     except InvalidToken:
-        return {"error": "recovery blob failed to decrypt — wrong Security Key, or the "
+        return {"error": "recovery blob failed to decrypt: wrong Security Key, or the "
                          "blob is corrupted"}
     if hashlib.sha256(raw_key).hexdigest()[:16] != blob["key_fingerprint"]:
         return {"error": "recovered key's own fingerprint does not match the recovery "
-                         "blob's recorded one — refusing to seal a possibly-tampered "
+                         "blob's recorded one, refusing to seal a possibly-tampered "
                          "key; this is a real break, not a retryable glitch"}
     resolved.parent.mkdir(parents=True, exist_ok=True)
     effective_backend = _resolve_backend(backend)

@@ -169,7 +169,7 @@ async def ingest_log(
     THE DECLARE-OR-REFUSE GATE WIDENS HERE: `repo` used to be silently optional. This was
     the exact gap `resolve_reference_orphans` (capture.py) already found and named: every
     one of its 56 real orphans carried a bare `topic` with no project signal in its own
-    data at all, because this door let them through with neither a link nor a confession.
+    data at all, because this gap let them through with neither a link nor a confession.
     Now REQUIRES `repo=` or `unlinked_because=` before a SINGLE entry is minted, checked
     once, call-scoped rather than per-entry (one call names one project, or one gap, for
     every entry it produces; refusing up front avoids a partial-ingest orphan the same way
@@ -177,7 +177,7 @@ async def ingest_log(
     needing a per-entry transaction here)."""
     if not repo and not (unlinked_because or "").strip():
         raise ValueError(
-            "Reference refused: no repo= given and no unlinked_because= hatch either — "
+            "Reference refused: no repo= given and no unlinked_because= hatch either, "
             "link one, or pass unlinked_because=<reason> to record the gap as a "
             "countable hatch")
     ec = EvidenceClass.SELF_DECLARED
@@ -221,14 +221,14 @@ async def ingest_reference_doc(
 
     `repo` links the doc `in_repo` to its project when the caller has one (2026-08-27, same
     reasoning as `ingest_log`'s own `repo`: an essay only gets ingested because someone was
-    working a project, and that context must not be thrown away at the door).
+    working a project, and that context must not be thrown away in the process).
 
     THE DECLARE-OR-REFUSE GATE WIDENS HERE too, same shape and same reason as `ingest_log`'s
     own widening just above: REQUIRES `repo=` or `unlinked_because=` before minting, never a
     silent omission."""
     if not repo and not (unlinked_because or "").strip():
         raise ValueError(
-            "Reference refused: no repo= given and no unlinked_because= hatch either — "
+            "Reference refused: no repo= given and no unlinked_because= hatch either, "
             "link one, or pass unlinked_because=<reason> to record the gap as a "
             "countable hatch")
     doc = parse_doc(_read(path))
@@ -286,7 +286,7 @@ async def ingest_canon(
 
     `project` defaults to "osiris", the only real caller (`src/init.py`'s own docstring says
     to run it from the repo root, always against this repo's own docs), but is a real
-    parameter, not a hardcode with no door out, so a future non-osiris canon ingest is not
+    parameter, not a hardcode with no escape hatch, so a future non-osiris canon ingest is not
     structurally blocked. See `_wire_informs`.
 
     `repo=project` now threads through both ingest calls below (`ingest_reference_doc`/
@@ -374,7 +374,7 @@ async def unwire_informs_fanout(
     actions: Actions, *, project: str = "osiris", actor: str, dry_run: bool = True,
     because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the pre-fix `_wire_informs` cross-join: every live `informs` edge
+    """Repair function for the pre-fix `_wire_informs` cross-join: every live `informs` edge
     stamped `source_id=ref:osiris` (the fan-out's own signature, never touches an informs
     edge asserted by anything else) whose target is NOT the one real `project` is noise
     from the old unscoped wiring, not a genuine grounding claim.
@@ -388,7 +388,7 @@ async def unwire_informs_fanout(
         return {"error": "unwire_informs_fanout needs a project"}
     if not dry_run and not (because or "").strip():
         return {"error": "unwiring the fan-out without a because is an un-audited "
-                         "reversal — cite the evidence/ruling that authorizes it"}
+                         "reversal, cite the evidence/ruling that authorizes it"}
     pool = actions.pool
     repo_id = await pool.fetchval(
         "SELECT id FROM objects WHERE type='SoftwareProject' AND status='active' "
@@ -425,7 +425,7 @@ async def unwire_informs_fanout(
             from_id, to_id, _INFORMS_FANOUT_SRC)
         if other_sources:
             skipped.append({**item, "reason": "a genuine, non-fan-out edge shares this "
-                                              "triple — invalidate_link can't remove one "
+                                              "triple, invalidate_link can't remove one "
                                               "without the other, refusing"})
             continue
         await actions.invalidate_link(from_id, to_id, "informs", actor, now)
@@ -439,11 +439,11 @@ async def unwire_informs_fanout(
 async def backfill_bootstrap_orphan_references(
     actions: Actions, *, actor: str, dry_run: bool = True, because: str | None = None,
 ) -> dict[str, Any]:
-    """Repair verb for the bootstrap_project door-gap (2026-08-27): a doc splitter or doc
+    """Repair function for the bootstrap_project onboarding gap (2026-08-27): a doc splitter or doc
     import running in the context of a project means the resulting document was relevant
     to that project, and losing that link at ingest time was a bug worth fixing.
     `ingest_log`/`ingest_reference_doc` now take `repo=` and `bootstrap_project` now
-    threads it through (this fix landed first); this verb is ONLY for the ~105 References
+    threads it through (this fix landed first); this function is ONLY for the ~105 References
     already on the floor from before that fix shipped.
 
     MECHANICAL AND CONSERVATIVE ON PURPOSE: a derived link that is wrong is worse than an
@@ -470,7 +470,7 @@ async def backfill_bootstrap_orphan_references(
     observation. Idempotent: a Reference that already carries a live link of any kind no
     longer matches the WHERE clause on a re-run."""
     if not dry_run and not (because or "").strip():
-        return {"error": "backfilling without a because is an un-audited repair — cite "
+        return {"error": "backfilling without a because is an un-audited repair, cite "
                          "the evidence/ruling that authorizes it"}
     pool = actions.pool
     projects = await pool.fetch(

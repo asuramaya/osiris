@@ -110,8 +110,9 @@ async def live_fetch(cursor: str | None) -> list[dict[str, Any]]:  # pragma: no 
 
 # The LIVE collector, registered as a satellite kind. THE WALL: `live_fetch` raises until a
 # satellite runs it on a box with portal access (FRCL_R.aspx is an ASPX postback / antibot
-# form). The seam is real and the whole pipeline past it (parse→grade→lead→alert) works; the
-# placeful last mile is the operator's vantage, dispatched as a collection job.
+# form). The integration point is real and the whole pipeline past it (parse→grade→lead→
+# alert) works; the placeful last mile is the operator's vantage, dispatched as a
+# collection job.
 harris_collector = make_harris_collector(fetch=live_fetch)
 
 
@@ -121,42 +122,42 @@ harris_collector = make_harris_collector(fetch=live_fetch)
 # person is in foreclosure.
 SAMPLE_NOTICES: list[dict[str, Any]] = [
     {"doc_id": "DEMO-0001", "address": "18330 Olive Leaf Dr, Houston, TX",
-     "zip": "77084", "owner": "DEMO — Rivera Family Trust",
+     "zip": "77084", "owner": "DEMO: Rivera Family Trust",
      "lienholder": "Cornerstone Mortgage Co.", "trustee": "Buckley Bala Wilson Mann LLC",
      "sale_date": "2026-07-07", "opening_bid": "248000", "filed_date": "2026-06-16",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0002", "address": "5102 Bellaire Blvd, Houston, TX",
-     "zip": "77401", "owner": "DEMO — Okafor Holdings LLC",
+     "zip": "77401", "owner": "DEMO: Okafor Holdings LLC",
      "lienholder": "Gulf Coast Educators FCU", "trustee": "Hughes Watters Askanase",
      "sale_date": "2026-07-07", "opening_bid": "612500", "filed_date": "2026-06-19",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0003", "address": "2207 Engelmohr St, Houston, TX",
-     "zip": "77054", "owner": "DEMO — J. Castillo",
+     "zip": "77054", "owner": "DEMO: J. Castillo",
      "lienholder": "PennyMac Loan Services", "trustee": "Codilis & Stawiarski",
      "sale_date": "2026-07-07", "opening_bid": "189900", "filed_date": "2026-06-20",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0004", "address": "14411 Cypress North Houston Rd, Cypress, TX",
-     "zip": "77429", "owner": "DEMO — Nguyen Investments",
+     "zip": "77429", "owner": "DEMO: Nguyen Investments",
      "lienholder": "Rocket Mortgage", "trustee": "Mackie Wolf Zientz & Mann",
      "sale_date": "2026-07-07", "opening_bid": "327000", "filed_date": "2026-06-22",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0005", "address": "9015 Long Point Rd, Houston, TX",
-     "zip": "77055", "owner": "DEMO — Patel Enterprises",
+     "zip": "77055", "owner": "DEMO: Patel Enterprises",
      "lienholder": "Wells Fargo Bank NA", "trustee": "Barrett Daffin Frappier",
      "sale_date": "2026-07-07", "opening_bid": "455000", "filed_date": "2026-06-23",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0006", "address": "3320 Dixie Dr, Houston, TX",
-     "zip": "77021", "owner": "DEMO — M. Thompson",
+     "zip": "77021", "owner": "DEMO: M. Thompson",
      "lienholder": "Freedom Mortgage Corp.", "trustee": "Marinosci Law Group",
      "sale_date": "2026-07-07", "opening_bid": "164500", "filed_date": "2026-06-24",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0007", "address": "1207 Magnolia Bend Dr, Katy, TX",
-     "zip": "77494", "owner": "DEMO — Sandoval Family Trust",
+     "zip": "77494", "owner": "DEMO: Sandoval Family Trust",
      "lienholder": "Cardinal Financial Co.", "trustee": "Power Default Services",
      "sale_date": "2026-07-07", "opening_bid": "289900", "filed_date": "2026-06-25",
      "notice_url": _PORTAL, "demo": True},
     {"doc_id": "DEMO-0008", "address": "7706 Antoine Dr, Houston, TX",
-     "zip": "77088", "owner": "DEMO — Greenline Properties LLC",
+     "zip": "77088", "owner": "DEMO: Greenline Properties LLC",
      "lienholder": "Lakeview Loan Servicing", "trustee": "Robertson Anschutz Schneid",
      "sale_date": "2026-07-07", "opening_bid": "132750", "filed_date": "2026-06-26",
      "notice_url": _PORTAL, "demo": True},

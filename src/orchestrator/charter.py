@@ -238,7 +238,7 @@ async def set_charter(
     now = datetime.now(UTC)
     seat_row = await _resolve_active_seat(actions.pool, seat_id)
     if seat_row is None:
-        return {"error": f"no such active seat: {seat_id!r} — a charter is declared BY a "
+        return {"error": f"no such active seat: {seat_id!r}. A charter is declared BY a "
                          "seat, and this one doesn't exist (or isn't active)"}
     seat_oid, seat_id = seat_row["id"], seat_row["canonical"]
     candidates = sorted({r.strip().removeprefix("repo:") for r in repos if r and r.strip()})
@@ -249,7 +249,7 @@ async def set_charter(
     for name in candidates:
         proj_id = await _resolve_repo(actions.pool, name)
         if proj_id is None:
-            rejected.append({"repo": name, "error": "not a known repo — the graph has no "
+            rejected.append({"repo": name, "error": "not a known repo. the graph has no "
                              "independent evidence it's real (no git ingest, no prior record); "
                              "ingest it or confirm it exists, then declare your charter over it"})
             continue
@@ -338,7 +338,7 @@ async def charter_for(
 
     because = (because or "").strip()
     if not because:
-        return {"error": "because is required — a charter declared on another seat's "
+        return {"error": "because is required. A charter declared on another seat's "
                          "behalf is testimony, same discipline rename_seat runs"}
     ruling_id = None
     # AUTHORITY BY CHARTER: an operator actor's bypass is no longer
@@ -371,7 +371,7 @@ async def charter_for(
             # how the target was spelled.
             target_row = await _resolve_active_seat(actions.pool, seat_id)
             if target_row is None:
-                return {"error": f"no such active seat: {seat_id!r} — a charter is "
+                return {"error": f"no such active seat: {seat_id!r}. A charter is "
                                  "declared for a seat, and this one doesn't exist (or "
                                  "isn't active)"}
             resolved_seat_id = str(target_row["canonical"])
@@ -383,7 +383,7 @@ async def charter_for(
                               else f"{actor} (holds no seat)")
                 manager_desc = manager_seat_id or "no manager on record"
                 return {"error": f"{caller_desc} is not authorized to declare a "
-                                 f"charter for {resolved_seat_id} — its manager is "
+                                 f"charter for {resolved_seat_id}. Its manager is "
                                  f"{manager_desc}, and {actor} is neither that manager "
                                  "nor an operator actor (cite a standing ruling via "
                                  "ruling=<decision id> to act under operator authority "
@@ -448,7 +448,7 @@ async def migrate_charter_to_seat(
         bound = await held_seat(actions.pool, agent_id)
         if bound is None:
             unresolved.append({"agent_id": agent_id, "repo": repo,
-                               "note": "no seat currently held by this agent's lineage — "
+                               "note": "no seat currently held by this agent's lineage, "
                                        "left untouched"})
             continue
         seat_id = str(bound["seat_id"])

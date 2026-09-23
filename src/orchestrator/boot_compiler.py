@@ -102,7 +102,7 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
     compile must never crash on a data gap) gets an honest placeholder instead of a
     fabricated name."""
     if manager_seat_id is None:
-        return ("\nYour manager of record is not yet linked — flag this as a bug if "
+        return ("\nYour manager of record is not yet linked: flag this as a bug if "
                 "you're seeing it; mint_seat's own managed_by edge should have set "
                 "one.\n", "your manager")
     handle = await pool.fetchval(
@@ -110,7 +110,7 @@ async def _manager_block(pool: asyncpg.Pool, manager_seat_id: str | None) -> tup
         "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
         "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", manager_seat_id)
     who = handle or manager_seat_id
-    return (f"\nYour manager of record is **{who}** — the `managed_by` edge is live "
+    return (f"\nYour manager of record is **{who}**: the `managed_by` edge is live "
             f"in the graph.\n", who)
 
 
@@ -139,7 +139,7 @@ async def _team_block(pool: asyncpg.Pool, manager_seat_id: str) -> str:
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", worker_seat_id)
         repos = await charter_display_labels(pool, await charter_of(pool, worker_seat_id))
         repo_text = ", ".join(f"`{r}`" for r in repos) if repos else "no charter yet"
-        lines.append(f"- **{handle or worker_seat_id}** ({worker_seat_id}) — governs "
+        lines.append(f"- **{handle or worker_seat_id}** ({worker_seat_id}): governs "
                      f"{repo_text}")
     return "\n## Your team\n" + "\n".join(lines) + "\n"
 
@@ -221,14 +221,14 @@ async def _practice_block(pool: asyncpg.Pool, role: str) -> str:
         return ""
     lines = "\n".join(
         f"- **{p['statement']}**"
-        + (f" — {p['failure_prevented']}" if p["failure_prevented"] else "")
+        + (f": {p['failure_prevented']}" if p["failure_prevented"] else "")
         + f" (confirmed: {p['confirmed']})"
-        + (f" — AMENDED: {_render_amendment(p['latest_amendment'])}"
+        + (f": AMENDED: {_render_amendment(p['latest_amendment'])}"
            if p["latest_amendment"] else "")
         for p in practices)
     return (
         "\n## Standing Practices\n"
-        "(engineering lessons proven across the fleet — `practices()` for the rest)\n"
+        "(engineering lessons proven across the fleet, `practices()` for the rest)\n"
         f"{lines}\n")
 
 
@@ -317,7 +317,7 @@ def scaffold_boot_file(
     text as a side effect of sharing this helper."""
     if path.exists():
         return existing_note if existing_note is not None else (
-            f"left in place — the office already has {label}")
+            f"left in place: the office already has {label}")
     path.write_text(wrapped)
     return "written"
 
@@ -355,12 +355,12 @@ async def _mirror_agents_md(
         if not leading_duplicate:
             return {"changed": False,
                     "error": "AGENTS.md already carries managed-section marker text and "
-                             "no leading duplicate header sits before it — left untouched"}
+                             "no leading duplicate header sits before it: left untouched"}
     if not adopt:
         try:
             locate_managed_section(text)
         except MarkerError as exc:
-            return {"changed": False, "error": f"AGENTS.md: {exc} — left untouched"}
+            return {"changed": False, "error": f"AGENTS.md: {exc}: left untouched"}
     if adopt:
         header_match = _office_header_re(handle).search(text)
         if header_match is not None:
@@ -372,7 +372,7 @@ async def _mirror_agents_md(
         b_start, _b_end, _e_start, e_end, _old_version = locate_managed_section(text)
         new_text = text[:b_start] + wrapped + text[e_end:]
     if new_text == text:
-        return {"changed": False, "note": "no change — already matches"}
+        return {"changed": False, "note": "no change: already matches"}
     path.write_text(new_text)
     return {"changed": True, "note": "recompiled"}
 
@@ -389,23 +389,23 @@ def locate_managed_section(text: str) -> tuple[int, int, int, int, str]:
     begins = list(_MARKER_BEGIN_RE.finditer(text))
     ends = list(_MARKER_END_RE.finditer(text))
     if not begins and not ends:
-        raise MarkerError("no managed section found — this office has never been "
+        raise MarkerError("no managed section found: this office has never been "
                            "compiled")
     if len(begins) > 1:
-        raise MarkerError(f"found {len(begins)} BEGIN markers, expected exactly 1 — "
+        raise MarkerError(f"found {len(begins)} BEGIN markers, expected exactly 1: "
                            "a duplicated marker, not a reissue target")
     if len(ends) > 1:
-        raise MarkerError(f"found {len(ends)} END markers, expected exactly 1 — "
+        raise MarkerError(f"found {len(ends)} END markers, expected exactly 1: "
                            "a duplicated marker, not a reissue target")
     if not begins:
-        raise MarkerError("found an END marker with no matching BEGIN — a mangled "
+        raise MarkerError("found an END marker with no matching BEGIN: a mangled "
                            "managed section")
     if not ends:
-        raise MarkerError("found a BEGIN marker with no matching END — a mangled "
+        raise MarkerError("found a BEGIN marker with no matching END: a mangled "
                            "managed section")
     b, e = begins[0], ends[0]
     if e.start() < b.end():
-        raise MarkerError("found an END marker before its BEGIN — a mangled managed "
+        raise MarkerError("found an END marker before its BEGIN: a mangled managed "
                            "section")
     return b.start(), b.end(), e.start(), e.end(), b.group(1)
 
@@ -425,9 +425,9 @@ def locate_managed_section(text: str) -> tuple[int, int, int, int, str]:
 # into charter.md, so the thing `identity_anchor` already points at actually carries the
 # identity.
 _IDENTITY_MIGRATION_MARKER = "<!-- osiris:identity-migrated:v1 -->"
-_IDENTITY_MIGRATION_HEADER = "## Identity (migrated from CLAUDE.md, task #141)"
+_IDENTITY_MIGRATION_HEADER = "## Identity (migrated from CLAUDE.md)"
 _IDENTITY_POINTER_NOTE = (
-    "Your identity content has moved to charter.md (task #141) — read it there; this "
+    "Your identity content has moved to charter.md: read it there; this "
     "file's own compiled section below still governs role/gates/practices.\n")
 
 
@@ -454,7 +454,7 @@ async def migrate_identity_to_charter(
     `claude_md_pointer`) without writing to disk or the graph, required before this ever
     runs against a real seat's live office files."""
     if not because.strip():
-        return {"error": "because is required — a migration is testimony, same as a "
+        return {"error": "because is required: a migration is testimony, same as a "
                          "reissue"}
     from src.orchestrator.seats import seat_facts
 
@@ -468,13 +468,13 @@ async def migrate_identity_to_charter(
     anchor = facts.get("anchor_cwd")
     tree = facts.get("tree_cwd")
     if not handle or not anchor:
-        return {"error": f"{seat_id!r} has no handle or no office on record — "
+        return {"error": f"{seat_id!r} has no handle or no office on record: "
                          "migration only ever moves content out of an EXISTING office"}
 
     tree_bound = bool(tree) and tree != anchor
     if not tree_bound:
         return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
-                "reason": "not tree-bound (tree_cwd unset or equal to anchor_cwd) — "
+                "reason": "not tree-bound (tree_cwd unset or equal to anchor_cwd): "
                           "CLAUDE.md is already read directly, nothing to migrate"}
 
     office = Path(anchor)
@@ -488,19 +488,19 @@ async def migrate_identity_to_charter(
         b_start, _b_end, _e_start, e_end, _version = locate_managed_section(text)
     except MarkerError:
         return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
-                "reason": "no compiled managed section yet — nothing to migrate from "
+                "reason": "no compiled managed section yet: nothing to migrate from "
                           "(adopt=True first, some other path)"}
 
     hand_written = text[:b_start]
     if not hand_written.strip():
         return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
-                "reason": "hand-written span is empty/whitespace-only — nothing worth "
+                "reason": "hand-written span is empty/whitespace-only: nothing worth "
                           "migrating"}
 
     charter_text = charter_path.read_text() if charter_path.exists() else ""
     if _IDENTITY_MIGRATION_MARKER in charter_text:
         return {"seat": seat_id, "handle": handle, "migrated": False, "dry_run": dry_run,
-                "reason": "already migrated — idempotency marker already present in "
+                "reason": "already migrated: idempotency marker already present in "
                           "charter.md"}
 
     migrated_block = (f"{_IDENTITY_MIGRATION_MARKER}\n"
@@ -514,7 +514,7 @@ async def migrate_identity_to_charter(
               "orders_path": str(orders_path),
               "prepended_to_charter": migrated_block,
               "claude_md_pointer": _IDENTITY_POINTER_NOTE,
-              "note": ("would migrate identity content to charter.md (dry run — "
+              "note": ("would migrate identity content to charter.md (dry run: "
                        "nothing written)" if dry_run else
                        "identity content migrated to charter.md")}
     if dry_run:
@@ -573,7 +573,7 @@ async def reissue_office(
     nothing is safe to replace, and the whole file is preserved with the fresh section
     appended at the end."""
     if not because.strip():
-        return {"error": "because is required — a reissue is testimony, same as a rename"}
+        return {"error": "because is required: a reissue is testimony, same as a rename"}
     from src.orchestrator.charter import charter_of
     from src.orchestrator.offices import _peer_addendum
     from src.orchestrator.project_identity import charter_display_labels
@@ -588,13 +588,13 @@ async def reissue_office(
     handle = facts.get("handle")
     anchor = facts.get("anchor_cwd")
     if not handle or not anchor:
-        return {"error": f"{seat_id!r} has no handle or no office on record — reissue "
+        return {"error": f"{seat_id!r} has no handle or no office on record: reissue "
                          "only ever recompiles an EXISTING office"}
     office = Path(anchor)
     orders_path = office / "CLAUDE.md"
     if not orders_path.exists():
         return {"error": f"{handle} ({seat_id}) has no CLAUDE.md on disk at "
-                         f"{orders_path} — establish_office/mint_seat scaffolds the "
+                         f"{orders_path}: establish_office/mint_seat scaffolds the "
                          "first one; reissue only recompiles an existing managed "
                          "section"}
 
@@ -629,14 +629,14 @@ async def reissue_office(
         if not leading_duplicate:
             return {"error": f"{handle} ({seat_id}) already carries managed-section "
                              "marker text and no leading duplicate header sits before "
-                             "it — adopt=True is only for a first-time compile or a "
+                             "it: adopt=True is only for a first-time compile or a "
                              "self-heal of a leading duplicate; omit it to reissue "
                              "normally, or fix the marker by hand first if it's malformed"}
     if not adopt:
         try:
             locate_managed_section(text)
         except MarkerError as exc:
-            return {"error": f"{handle} ({seat_id}): {exc} — refusing to guess; fix "
+            return {"error": f"{handle} ({seat_id}): {exc}: refusing to guess; fix "
                              "the marker by hand, or pass adopt=True if this office "
                              "genuinely predates the compiler"}
 
@@ -649,7 +649,7 @@ async def reissue_office(
     display_repos = await charter_display_labels(actions.pool, repos)
     charter_block = (
         "You govern: " + ", ".join(f"`{r}`" for r in display_repos) + "." if repos else
-        "Your charter was never formally declared — it lives only in prose. First "
+        "Your charter was never formally declared; it lives only in prose. First "
         "act: `charter(repos=[...])` naming the repos you actually govern. A house "
         "is what a seat GOVERNS, not where it sits.")
     peer_seat = await peer_of_seat(actions.pool, seat_id)
@@ -660,7 +660,7 @@ async def reissue_office(
             "ON a.object_id=o.id AND a.name='handle' WHERE o.canonical=$1 "
             "ORDER BY a.confidence DESC, a.observed_at DESC LIMIT 1", peer_seat)
         peer_block = _peer_addendum(peer_seat, peer_handle)
-    seat_line = f" — durable identity `{seat_id}`."
+    seat_line = f", durable identity `{seat_id}`."
 
     body = await compile_managed_body(
         actions, seat_id=seat_id, handle=handle, house=facts.get("house") or "",
@@ -695,11 +695,11 @@ async def reissue_office(
     if new_text == text:
         return {"seat": seat_id, "handle": handle, "version": version,
                 "because": because, "changed": False,
-                "note": "no change — the compiled section already matches",
+                "note": "no change: the compiled section already matches",
                 "identity_migration": identity_migration, "agents_md": agents_md}
     orders_path.write_text(new_text)
-    # TESTIMONY, DURABLE (a reissue is testimony, per this verb's own docstring): the
-    # version and why land on the Seat object itself, not just in this call's receipt,
+    # TESTIMONY, DURABLE (a reissue is testimony, per this function's own docstring): the
+    # version and why land on the Seat object itself, not just in this call's return value,
     # so a janitor or a future drift-check reads this instead of re-parsing the file.
     await actions.assert_property(row["id"], "boot_compiled_version", version, actor,
                                   datetime.now(UTC), _CONF, evidence_class=_EC)
@@ -791,9 +791,9 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
     exists to replace."""
     fixes = {
         "never_compiled": "run `reissue_office(adopt=True)`",
-        "malformed": "markers are damaged — needs a hand fix before any reissue",
-        "no_claude_md": "no CLAUDE.md on disk — needs establish_office/mint_seat first",
-        "no_office": "no handle or anchor_cwd on record — not an adopt target",
+        "malformed": "markers are damaged: needs a hand fix before any reissue",
+        "no_claude_md": "no CLAUDE.md on disk: needs establish_office/mint_seat first",
+        "no_office": "no handle or anchor_cwd on record: not an adopt target",
         "no_agents_md": "run `reissue_office`",
     }
     lines = []
@@ -803,10 +803,10 @@ def boot_rollout_gap_notes(gaps: list[dict[str, str]]) -> list[str]:
             # is fine here, only its vendor-neutral mirror is missing, a narrower claim
             # that would be false if folded into the generic phrasing above).
             lines.append(f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) "
-                        f"has no AGENTS.md — {fixes['no_agents_md']}")
+                        f"has no AGENTS.md: {fixes['no_agents_md']}")
         else:
             lines.append(f"boot: {g['handle'] or g['seat_id']} ({g.get('house') or 'no house'}) "
-                        f"has no compiled section — {fixes[g['reason']]}")
+                        f"has no compiled section: {fixes[g['reason']]}")
     return lines
 
 
@@ -870,13 +870,13 @@ async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[
     errors: list[dict[str, str]] = []
     for g in gaps:
         summary = (
-            f"{g['handle']}'s boot orders are stale — compiled against template "
+            f"{g['handle']}'s boot orders are stale: compiled against template "
             f"v{g['stamped_version']}, current is v{g['current_version']}. "
             "reissue_office(adopt=True) would refresh the managed section.")
         try:
             # OWNER IS THE SEAT'S OWN CANONICAL, NEVER ITS BARE HANDLE (capture.py's own
             # open_thread comment: "an owner is a seat id or 'operator', never a bare
-            # handle"). The stored value must already satisfy the law itself, not just
+            # handle"). The stored value must already satisfy the requirement itself, not just
             # look plausible; a bare handle would only get canonicalized later by
             # migration_0060's own normalization pass, so stamping the canonical
             # directly here is correct on the first write, not a style choice.
@@ -892,7 +892,7 @@ async def apply_boot_drift_nudge_sweep(actions: Actions, *, actor: str) -> dict[
 async def sweep_stacked_office_headers(
     actions: Actions, *, actor: str,
     because: str = "classification_laws_heartbeat: stacked-header office self-heal "
-                   "sub-sweep (thread 658c2152, folded into wave 8's 07ca68ca)",
+                   "sub-sweep",
 ) -> dict[str, Any]:
     """THE STACKED-HEADER SUB-SWEEP: 21 of 30 offices were found with a leading
     duplicate header before their own compiled marker span. Two of them were healed by
@@ -956,7 +956,7 @@ async def sweep_stacked_office_headers(
         healed.append({"seat": handle, "seat_id": seat_id, "result": result})
     return {
         "healed": healed, "skipped": skipped, "clean": clean, "seats_scanned": len(rows),
-        "note": "STACKED-HEADER OFFICE SUB-SWEEP — every active seat's CLAUDE.md checked "
+        "note": "STACKED-HEADER OFFICE SUB-SWEEP: every active seat's CLAUDE.md checked "
                 "for a leading duplicate header before its own compiled marker span; each "
                 "match healed through reissue_office(adopt=True).",
     }

@@ -1,5 +1,5 @@
-"""MIGRATION 0064, THE EVENT LOG COLD PARTITION (thread THE VAULT BUILD, dispatch wave
-12): the live-data archiver paired with alembic/versions/0064_assertions_hot_cold.py's
+"""MIGRATION 0064, THE EVENT LOG COLD PARTITION (the vault-build dispatch): the
+live-data archiver paired with alembic/versions/0064_assertions_hot_cold.py's
 own schema half (read that file's docstring first -- it has the full A-vs-B reasoning
 for why this is a hot/cold table split behind an updatable view, not native declarative
 partitioning).
@@ -55,8 +55,8 @@ THE RECEIPT is the final, loud, count-preserving assertion: before = hot+cold at
 start, after = hot+cold at the end. They must be equal -- this function RAISES if they
 are not, rather than returning a receipt that quietly says otherwise.
 
-RUN-START-SCOPED RECONCILIATION (fixed after a production false positive, wave 12's own
-run: 4,034,150 rows moved correctly across 807 batches, then the final check raised
+RUN-START-SCOPED RECONCILIATION (fixed after a production false positive, on a
+production run: 4,034,150 rows moved correctly across 807 batches, then the final check raised
 anyway because the rest of the live fleet wrote 2,996 brand-new rows into assertions_hot
 during the ~7 minute run): a naive before/after snapshot of `count(hot)+count(cold)`
 cannot distinguish "a row went missing" from "the rest of the world kept writing while

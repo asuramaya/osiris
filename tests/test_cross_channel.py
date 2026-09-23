@@ -108,7 +108,7 @@ async def _seed_soul(
 async def test_recover_reports_an_error_when_nothing_is_soul_stored(actions: Actions) -> None:
     out = await recover_harness_exchanges(actions.pool, "neverIngested")
     assert "error" in out
-    assert "soul-store" in out["error"]
+    assert "ingest this" in out["error"]
 
 
 async def test_recover_dry_run_finds_without_writing(actions: Actions) -> None:

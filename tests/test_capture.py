@@ -56,9 +56,9 @@ from src.orchestrator.compositions import _props, run_composition, seed_default_
 from src.parsers.base import EvidenceClass
 from src.parsers.evidence import confidence_for
 
-_DECISION_LOG = "Decisions — the project's WHY (mined from commit rationale)"
-_OPEN = "The wall — what's genuinely unresolved"
-_RESOLVED = "Resolved — self-healed by later commits"
+_DECISION_LOG = "Decisions: the project's WHY (mined from commit rationale)"
+_OPEN = "The wall: what's genuinely unresolved"
+_RESOLVED = "Resolved: self-healed by later commits"
 
 
 class _MountedCtx:
@@ -672,7 +672,7 @@ async def test_resolve_threads_bulk_refuses_without_a_because() -> None:
 
 async def test_resolve_threads_bulk_refuses_an_empty_ref_list(actions: Actions) -> None:
     out = await resolve_threads_bulk(actions, [], because="test sweep")
-    assert out == {"ok": False, "reason": "empty ref list — nothing to do"}
+    assert out == {"ok": False, "reason": "empty ref list, nothing to do"}
 
 
 async def _thread_resolved_in_test_helper(actions: Actions, tid: object) -> str | None:
